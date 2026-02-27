@@ -181,6 +181,7 @@ async def _get_predictions_for_date(
 ) -> List[PredictionDetail]:
     result = await session.execute(
         select(Prediction)
+        .options(selectinload(Prediction.result))
         .join(Game, Game.id == Prediction.game_id)
         .where(Game.date == target_date)
         .order_by(Prediction.confidence.desc().nulls_last())
@@ -250,6 +251,7 @@ async def get_best_bets(
     # Get top predictions by edge for today
     result = await session.execute(
         select(Prediction)
+        .options(selectinload(Prediction.result))
         .join(Game, Game.id == Prediction.game_id)
         .where(Game.date == today, Prediction.recommended == True)
         .order_by(
@@ -265,6 +267,7 @@ async def get_best_bets(
     if not top_preds:
         result = await session.execute(
             select(Prediction)
+            .options(selectinload(Prediction.result))
             .join(Game, Game.id == Prediction.game_id)
             .where(Game.date == today)
             .order_by(
@@ -273,6 +276,37 @@ async def get_best_bets(
             .limit(3)
         )
         top_preds = result.scalars().all()
+
+    # If still no predictions, auto-generate them
+    if not top_preds:
+        try:
+            await _try_generate_predictions(session, target_date=today)
+            await session.flush()
+            result = await session.execute(
+                select(Prediction)
+                .options(selectinload(Prediction.result))
+                .join(Game, Game.id == Prediction.game_id)
+                .where(Game.date == today, Prediction.recommended == True)
+                .order_by(
+                    Prediction.best_bet.desc(),
+                    Prediction.edge.desc().nulls_last(),
+                    Prediction.confidence.desc().nulls_last(),
+                )
+                .limit(3)
+            )
+            top_preds = result.scalars().all()
+            if not top_preds:
+                result = await session.execute(
+                    select(Prediction)
+                    .options(selectinload(Prediction.result))
+                    .join(Game, Game.id == Prediction.game_id)
+                    .where(Game.date == today)
+                    .order_by(Prediction.confidence.desc().nulls_last())
+                    .limit(3)
+                )
+                top_preds = result.scalars().all()
+        except HTTPException:
+            pass
 
     best_bets: List[BestBet] = []
     for pred in top_preds:

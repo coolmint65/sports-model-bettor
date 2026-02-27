@@ -573,13 +573,16 @@ class PredictionManager:
     # ------------------------------------------------------------------ #
 
     @staticmethod
-    def _parse_date(date_str: Optional[str]) -> date:
-        """Parse a date string or return today's date."""
-        if date_str:
-            try:
-                return date.fromisoformat(date_str)
-            except (ValueError, TypeError):
-                logger.warning(
-                    "Invalid date format '%s', using today", date_str
-                )
+    def _parse_date(date_str) -> date:
+        """Parse a date string, date object, or return today's date."""
+        if date_str is None:
+            return date.today()
+        if isinstance(date_str, date):
+            return date_str
+        try:
+            return date.fromisoformat(str(date_str))
+        except (ValueError, TypeError):
+            logger.warning(
+                "Invalid date format '%s', using today", date_str
+            )
         return date.today()
