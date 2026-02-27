@@ -1,0 +1,36 @@
+import axios from 'axios';
+
+const api = axios.create({
+  baseURL: '/api',
+  timeout: 30000,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    console.error('API Error:', error.response?.data || error.message);
+    return Promise.reject(error);
+  }
+);
+
+// Schedule endpoints
+export const fetchTodaySchedule = () => api.get('/schedule/today');
+export const fetchScheduleByDate = (date) => api.get(`/schedule/${date}`);
+export const fetchGameDetails = (gameId) => api.get(`/games/${gameId}`);
+
+// Prediction endpoints
+export const fetchTodayPredictions = () => api.get('/predictions/today');
+export const fetchBestBets = () => api.get('/predictions/best-bets');
+export const fetchPredictionHistory = () => api.get('/predictions/history');
+export const fetchPredictionStats = () => api.get('/predictions/stats');
+
+// Stats endpoints
+export const fetchAllTeams = () => api.get('/stats/teams');
+
+// Data management
+export const triggerDataSync = () => api.post('/data/sync/all');
+
+export default api;

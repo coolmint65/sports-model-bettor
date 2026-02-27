@@ -1,0 +1,104 @@
+"""
+Async SQLAlchemy database setup with aiosqlite.
+
+Provides the async engine, session factory, and database initialization
+utilities. Uses SQLAlchemy 2.0 async style throughout.
+"""
+
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator
+
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+
+from app.config import settings
+
+# Create the async engine
+engine = create_async_engine(
+    settings.database_url,
+    echo=settings.debug,
+    future=True,
+    connect_args={"check_same_thread": False},
+)
+
+# Create the async session factory
+async_session_factory = async_sessionmaker(
+    engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+)
+
+
+async def get_session() -> AsyncGenerator[AsyncSession, None]:
+    """
+    Dependency that provides an async database session.
+
+    Usage with FastAPI:
+        @router.get("/items")
+        async def get_items(session: AsyncSession = Depends(get_session)):
+            ...
+
+    The session is automatically closed when the request completes.
+    """
+    async with async_session_factory() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+        finally:
+            await session.close()
+
+
+@asynccontextmanager
+async def get_session_context() -> AsyncGenerator[AsyncSession, None]:
+    """
+    Context manager for obtaining an async database session outside of
+    FastAPI dependency injection (e.g., in scrapers, scheduled tasks).
+
+    Usage:
+        async with get_session_context() as session:
+            result = await session.execute(select(Team))
+    """
+    async with async_session_factory() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+        finally:
+            await session.close()
+
+
+async def init_db() -> None:
+    """
+    Initialize the database by creating all tables defined in the models.
+
+    This imports the Base metadata from the models and issues CREATE TABLE
+    statements for any tables that do not yet exist. Existing tables are
+    left unchanged.
+    """
+    # Ensure the data directory exists
+    settings.db_dir.mkdir(parents=True, exist_ok=True)
+
+    # Import Base so all model metadata is registered
+    from app.models.base import Base
+
+    # Import all models to ensure they are registered with Base.metadata
+    import app.models.team  # noqa: F401
+    import app.models.player  # noqa: F401
+    import app.models.game  # noqa: F401
+    import app.models.prediction  # noqa: F401
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+
+async def close_db() -> None:
+    """Dispose of the database engine and release all connections."""
+    await engine.dispose()
