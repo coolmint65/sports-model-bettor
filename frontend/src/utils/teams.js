@@ -38,6 +38,11 @@ export function confidencePct(value) {
 export function parseAsUTC(dateStr) {
   if (!dateStr) return null;
   let s = String(dateStr);
+  // Python's str(datetime) uses space separator; normalize to ISO 'T'
+  // e.g., "2026-02-28 00:00:00+00:00" → "2026-02-28T00:00:00+00:00"
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:/.test(s)) {
+    s = s.replace(' ', 'T');
+  }
   // If it has a 'T' (ISO datetime) but no timezone indicator, treat as UTC
   if (s.includes('T') && !s.includes('+') && !s.includes('Z') && !s.includes('-', s.indexOf('T'))) {
     s += 'Z';

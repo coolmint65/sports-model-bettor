@@ -279,15 +279,18 @@ class FeatureEngine:
             last5_save_pct, last5_gaa, last10_save_pct, last10_gaa,
             games_started_season.
         """
-        # Find the most likely starter: goalie with the most recent start
+        # Find the most likely starter: goalie with the most recent game
+        # GameGoalieStats doesn't have team_id/starter columns, so we
+        # join through Game to filter by team and use decision to find starters.
         recent_start_stmt = (
             select(GameGoalieStats)
             .join(Game, GameGoalieStats.game_id == Game.id)
+            .join(Player, GameGoalieStats.player_id == Player.id)
             .where(
                 and_(
-                    GameGoalieStats.team_id == team_id,
-                    GameGoalieStats.starter == True,  # noqa: E712
+                    Player.team_id == team_id,
                     Game.status == "final",
+                    GameGoalieStats.decision.isnot(None),
                 )
             )
             .order_by(desc(Game.date))
@@ -321,14 +324,14 @@ class FeatureEngine:
         season_gaa = season_stats.gaa if season_stats and season_stats.gaa else 3.00
         games_started = season_stats.games_started if season_stats else 0
 
-        # Get recent game-level goalie stats (last 10 starts)
+        # Get recent game-level goalie stats (last 10 games with a decision)
         recent_games_stmt = (
             select(GameGoalieStats)
             .join(Game, GameGoalieStats.game_id == Game.id)
             .where(
                 and_(
                     GameGoalieStats.player_id == goalie_id,
-                    GameGoalieStats.starter == True,  # noqa: E712
+                    GameGoalieStats.decision.isnot(None),
                     Game.status == "final",
                 )
             )
@@ -382,17 +385,21 @@ class FeatureEngine:
         games_with_periods = 0
 
         for game in games:
-            period_data = self._parse_period_scores(game.period_scores)
-            if period_data is None:
+            # Use per-period score columns instead of JSON period_scores
+            if game.home_score_p1 is None:
                 continue
 
             is_home = game.home_team_id == team_id
-            team_periods = period_data.get("home" if is_home else "away", [])
-            opp_periods = period_data.get("away" if is_home else "home", [])
-
-            # Ensure we have at least 3 periods of data
-            if len(team_periods) < 3 or len(opp_periods) < 3:
-                continue
+            team_periods = [
+                (game.home_score_p1 or 0) if is_home else (game.away_score_p1 or 0),
+                (game.home_score_p2 or 0) if is_home else (game.away_score_p2 or 0),
+                (game.home_score_p3 or 0) if is_home else (game.away_score_p3 or 0),
+            ]
+            opp_periods = [
+                (game.away_score_p1 or 0) if is_home else (game.home_score_p1 or 0),
+                (game.away_score_p2 or 0) if is_home else (game.home_score_p2 or 0),
+                (game.away_score_p3 or 0) if is_home else (game.home_score_p3 or 0),
+            ]
 
             games_with_periods += 1
 
@@ -453,7 +460,7 @@ class FeatureEngine:
         ot_wins = 0
 
         for game in games:
-            if game.overtime or game.shootout:
+            if game.went_to_overtime:
                 ot_games += 1
                 is_home = game.home_team_id == team_id
                 gf = game.home_score if is_home else game.away_score
@@ -529,25 +536,27 @@ class FeatureEngine:
             if total % 2 == 1:
                 odd_total_count += 1
 
-            # First goal (check period_scores for first goal info)
-            period_data = self._parse_period_scores(game.period_scores)
-            if period_data:
-                team_key = "home" if is_home else "away"
-                opp_key = "away" if is_home else "home"
-                team_p = period_data.get(team_key, [])
-                opp_p = period_data.get(opp_key, [])
-                if team_p and opp_p:
-                    # Check who scored first by period
-                    for pi in range(min(len(team_p), len(opp_p))):
-                        if team_p[pi] > 0 and opp_p[pi] == 0:
-                            first_goal_count += 1
-                            break
-                        elif opp_p[pi] > 0 and team_p[pi] == 0:
-                            break
-                        elif team_p[pi] > 0 and opp_p[pi] > 0:
-                            # Both scored in same period - 50/50 approximation
-                            first_goal_count += 0.5
-                            break
+            # First goal (check per-period score columns)
+            if game.home_score_p1 is not None:
+                team_p = [
+                    (game.home_score_p1 or 0) if is_home else (game.away_score_p1 or 0),
+                    (game.home_score_p2 or 0) if is_home else (game.away_score_p2 or 0),
+                    (game.home_score_p3 or 0) if is_home else (game.away_score_p3 or 0),
+                ]
+                opp_p = [
+                    (game.away_score_p1 or 0) if is_home else (game.home_score_p1 or 0),
+                    (game.away_score_p2 or 0) if is_home else (game.home_score_p2 or 0),
+                    (game.away_score_p3 or 0) if is_home else (game.home_score_p3 or 0),
+                ]
+                for pi in range(3):
+                    if team_p[pi] > 0 and opp_p[pi] == 0:
+                        first_goal_count += 1
+                        break
+                    elif opp_p[pi] > 0 and team_p[pi] == 0:
+                        break
+                    elif team_p[pi] > 0 and opp_p[pi] > 0:
+                        first_goal_count += 0.5
+                        break
 
         if games_counted == 0:
             return {

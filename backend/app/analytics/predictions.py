@@ -317,7 +317,7 @@ class PredictionManager:
             "game_id": game.id,
             "external_id": game.external_id,
             "game_date": str(game.date),
-            "start_time": str(game.start_time) if game.start_time else None,
+            "start_time": game.start_time.isoformat() if game.start_time else None,
             "home_team": features.get("home_team_name", "Unknown"),
             "away_team": features.get("away_team_name", "Unknown"),
             "home_abbr": features.get("home_team_abbr", "UNK"),

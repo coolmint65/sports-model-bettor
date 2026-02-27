@@ -232,10 +232,10 @@ async def _get_head_to_head(
         games_played=h2h.games_played,
         team1_wins=h2h.team1_wins,
         team2_wins=h2h.team2_wins,
-        draws=h2h.draws,
+        draws=0,
         team1_goals=h2h.team1_goals,
         team2_goals=h2h.team2_goals,
-        last_meeting=h2h.last_meeting,
+        last_meeting=h2h.last_meeting_date,
     )
 
 
@@ -405,7 +405,7 @@ async def get_game_details(
         id=game.id,
         external_id=game.external_id,
         game_date=game.date,
-        start_time=str(game.start_time) if game.start_time else None,
+        start_time=game.start_time.isoformat() if game.start_time else None,
         venue=game.venue,
         status=game.status,
         game_type=game.game_type,
