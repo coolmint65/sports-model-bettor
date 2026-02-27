@@ -66,7 +66,7 @@ class DataStatusResponse(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
-async def _get_scraper(session: AsyncSession):
+def _get_scraper():
     """
     Import and instantiate the NHLScraper.
 
@@ -75,7 +75,7 @@ async def _get_scraper(session: AsyncSession):
     try:
         from app.scrapers.nhl_api import NHLScraper
 
-        return NHLScraper(session)
+        return NHLScraper()
     except ImportError:
         raise HTTPException(
             status_code=503,
@@ -114,9 +114,9 @@ async def sync_all(
     Perform a full data synchronisation: teams, rosters, schedule, and
     game results. Delegates to NHLScraper.sync_all().
     """
-    scraper = await _get_scraper(session)
+    scraper = _get_scraper()
     try:
-        await scraper.sync_all()
+        await scraper.sync_all(session)
         return SyncResult(
             success=True,
             message="Full data sync completed successfully.",
@@ -127,6 +127,8 @@ async def sync_all(
             status_code=502,
             detail=f"Full sync failed: {exc}",
         )
+    finally:
+        await scraper.close()
 
 
 @router.post(
@@ -138,9 +140,9 @@ async def sync_teams(
     session: AsyncSession = Depends(get_session),
 ):
     """Fetch and upsert the latest team data from the NHL API."""
-    scraper = await _get_scraper(session)
+    scraper = _get_scraper()
     try:
-        await scraper.sync_teams()
+        await scraper.sync_teams(session)
         return SyncResult(
             success=True,
             message="Teams synced successfully.",
@@ -150,6 +152,8 @@ async def sync_teams(
             status_code=502,
             detail=f"Team sync failed: {exc}",
         )
+    finally:
+        await scraper.close()
 
 
 @router.post(
@@ -161,9 +165,9 @@ async def sync_schedule(
     session: AsyncSession = Depends(get_session),
 ):
     """Fetch and upsert the latest schedule data from the NHL API."""
-    scraper = await _get_scraper(session)
+    scraper = _get_scraper()
     try:
-        await scraper.sync_schedule()
+        await scraper.sync_schedule(session)
         return SyncResult(
             success=True,
             message="Schedule synced successfully.",
@@ -173,6 +177,8 @@ async def sync_schedule(
             status_code=502,
             detail=f"Schedule sync failed: {exc}",
         )
+    finally:
+        await scraper.close()
 
 
 @router.post(
@@ -184,9 +190,9 @@ async def sync_results(
     session: AsyncSession = Depends(get_session),
 ):
     """Fetch and update game results (scores, stats) from the NHL API."""
-    scraper = await _get_scraper(session)
+    scraper = _get_scraper()
     try:
-        await scraper.sync_game_results()
+        await scraper.sync_recent_results(session)
         return SyncResult(
             success=True,
             message="Game results synced successfully.",
@@ -196,6 +202,8 @@ async def sync_results(
             status_code=502,
             detail=f"Results sync failed: {exc}",
         )
+    finally:
+        await scraper.close()
 
 
 @router.get(
@@ -242,13 +250,13 @@ async def get_data_status(
 
     # Today's games
     today_total_result = await session.execute(
-        select(func.count(Game.id)).where(Game.game_date == today)
+        select(func.count(Game.id)).where(Game.date == today)
     )
     games_today = today_total_result.scalar() or 0
 
     today_final_result = await session.execute(
         select(func.count(Game.id)).where(
-            Game.game_date == today, Game.status == "final"
+            Game.date == today, Game.status == "final"
         )
     )
     games_final_today = today_final_result.scalar() or 0

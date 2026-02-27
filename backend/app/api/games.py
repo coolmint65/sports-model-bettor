@@ -101,14 +101,13 @@ class GamePredictionBrief(BaseModel):
     """Compact prediction info embedded in game details."""
 
     id: int
-    prediction_type: Optional[str] = None
-    predicted_winner_id: Optional[int] = None
+    bet_type: Optional[str] = None
+    prediction_value: Optional[str] = None
     confidence: Optional[float] = None
-    predicted_home_score: Optional[float] = None
-    predicted_away_score: Optional[float] = None
-    predicted_total: Optional[float] = None
     edge: Optional[float] = None
-    result: Optional[str] = None
+    recommended: bool = False
+    best_bet: bool = False
+    reasoning: Optional[str] = None
     created_at: Optional[str] = None
 
     model_config = {"from_attributes": True}
@@ -296,9 +295,9 @@ async def _compute_period_scoring(
         select(Game).where(
             or_(Game.home_team_id == team_id, Game.away_team_id == team_id),
             Game.status == "final",
-            Game.period_scores.isnot(None),
+            Game.home_score_p1.isnot(None),
         )
-        .order_by(Game.game_date.desc())
+        .order_by(Game.date.desc())
         .limit(20)
     )
     games = result.scalars().all()
@@ -309,17 +308,14 @@ async def _compute_period_scoring(
     period_totals = [0.0, 0.0, 0.0]
     counted = 0
     for game in games:
-        try:
-            data = json.loads(game.period_scores) if isinstance(game.period_scores, str) else game.period_scores
-        except (json.JSONDecodeError, TypeError):
-            continue
-
-        side = "home" if game.home_team_id == team_id else "away"
-        scores = data.get(side, [])
-        if len(scores) >= 3:
-            for i in range(3):
-                period_totals[i] += scores[i]
-            counted += 1
+        is_home = game.home_team_id == team_id
+        p1 = (game.home_score_p1 if is_home else game.away_score_p1) or 0
+        p2 = (game.home_score_p2 if is_home else game.away_score_p2) or 0
+        p3 = (game.home_score_p3 if is_home else game.away_score_p3) or 0
+        period_totals[0] += p1
+        period_totals[1] += p2
+        period_totals[2] += p3
+        counted += 1
 
     if counted == 0:
         return PeriodScoring()
@@ -345,15 +341,14 @@ async def _get_game_predictions(
         briefs.append(
             GamePredictionBrief(
                 id=p.id,
-                prediction_type=getattr(p, "prediction_type", None),
-                predicted_winner_id=getattr(p, "predicted_winner_id", None),
-                confidence=getattr(p, "confidence", None),
-                predicted_home_score=getattr(p, "predicted_home_score", None),
-                predicted_away_score=getattr(p, "predicted_away_score", None),
-                predicted_total=getattr(p, "predicted_total", None),
-                edge=getattr(p, "edge", None),
-                result=getattr(p, "result", None),
-                created_at=str(p.created_at) if hasattr(p, "created_at") else None,
+                bet_type=p.bet_type,
+                prediction_value=p.prediction_value,
+                confidence=p.confidence,
+                edge=p.edge,
+                recommended=p.recommended,
+                best_bet=p.best_bet,
+                reasoning=p.reasoning,
+                created_at=str(p.created_at) if p.created_at else None,
             )
         )
     return briefs
@@ -391,18 +386,25 @@ async def get_game_details(
     away_goalies = await _get_team_goalies(game.away_team_id, session)
     predictions = await _get_game_predictions(game.id, session)
 
-    # Parse period_scores JSON if present
+    # Build period scores from individual columns
     parsed_period_scores = None
-    if game.period_scores:
-        try:
-            parsed_period_scores = json.loads(game.period_scores) if isinstance(game.period_scores, str) else game.period_scores
-        except (json.JSONDecodeError, TypeError):
-            parsed_period_scores = None
+    if game.home_score_p1 is not None:
+        parsed_period_scores = {
+            "home": [game.home_score_p1 or 0, game.home_score_p2 or 0, game.home_score_p3 or 0],
+            "away": [game.away_score_p1 or 0, game.away_score_p2 or 0, game.away_score_p3 or 0],
+        }
+        if game.home_score_ot is not None:
+            parsed_period_scores["home"].append(game.home_score_ot)
+            parsed_period_scores["away"].append(game.away_score_ot or 0)
+
+    total_goals = None
+    if game.home_score is not None and game.away_score is not None:
+        total_goals = game.home_score + game.away_score
 
     return GameDetailResponse(
         id=game.id,
         external_id=game.external_id,
-        game_date=game.game_date,
+        game_date=game.date,
         start_time=str(game.start_time) if game.start_time else None,
         venue=game.venue,
         status=game.status,
@@ -410,9 +412,9 @@ async def get_game_details(
         season=game.season,
         home_score=game.home_score,
         away_score=game.away_score,
-        total_goals=game.total_goals,
-        overtime=game.overtime,
-        shootout=game.shootout,
+        total_goals=total_goals,
+        overtime=game.went_to_overtime or False,
+        shootout=False,
         period_scores=parsed_period_scores,
         home_team_form=home_form,
         away_team_form=away_form,
@@ -462,8 +464,8 @@ async def get_game_features(
     try:
         from app.analytics.features import FeatureEngine
 
-        engine = FeatureEngine(session)
-        features = await engine.build_game_features(game.id)
+        engine = FeatureEngine()
+        features = await engine.build_game_features(session, game.id)
         return FeatureResponse(game_id=game_id, features=features)
     except (ImportError, AttributeError):
         pass
@@ -480,7 +482,7 @@ async def get_game_features(
 
     features: Dict[str, Any] = {
         "game_id": game.id,
-        "game_date": str(game.game_date),
+        "game_date": str(game.date),
         "home_team_id": game.home_team_id,
         "away_team_id": game.away_team_id,
         "home_wins": home_form.wins,
