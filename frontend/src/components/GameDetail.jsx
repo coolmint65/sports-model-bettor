@@ -15,7 +15,7 @@ import { format, parseISO } from 'date-fns';
 import { fetchGameDetails } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import PredictionCard from './PredictionCard';
-import { teamName, teamAbbrev } from '../utils/teams';
+import { teamName, teamAbbrev, parseAsUTC } from '../utils/teams';
 
 const TABS = [
   { id: 'overview', label: 'Overview', icon: BarChart3 },
@@ -34,9 +34,10 @@ function getConfidenceColor(confidence) {
 
 function formatGameDateTime(game) {
   try {
-    const dateStr = game.start_time || game.datetime || game.date;
+    const dateStr = game.start_time || game.datetime;
     if (!dateStr) return 'TBD';
-    const date = typeof dateStr === 'string' ? parseISO(dateStr) : new Date(dateStr);
+    const date = parseAsUTC(dateStr);
+    if (!date || isNaN(date.getTime())) return 'TBD';
     return format(date, 'EEEE, MMM d, yyyy - h:mm a');
   } catch {
     return game.time || 'TBD';

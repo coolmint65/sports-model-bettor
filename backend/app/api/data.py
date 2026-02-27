@@ -6,8 +6,11 @@ Provides endpoints for triggering various data synchronisation operations
 of synced data in the database.
 """
 
+import logging
 from datetime import datetime, timezone
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -117,11 +120,6 @@ async def sync_all(
     scraper = _get_scraper()
     try:
         await scraper.sync_all(session)
-        return SyncResult(
-            success=True,
-            message="Full data sync completed successfully.",
-            details="Synced teams, rosters, schedule, and game results.",
-        )
     except Exception as exc:
         raise HTTPException(
             status_code=502,
@@ -129,6 +127,23 @@ async def sync_all(
         )
     finally:
         await scraper.close()
+
+    # Auto-generate predictions for today after sync
+    pred_count = 0
+    try:
+        from app.analytics.predictions import PredictionManager
+
+        manager = PredictionManager()
+        results = await manager.get_best_bets(session)
+        pred_count = len(results) if results else 0
+    except Exception as exc:
+        logger.warning("Prediction generation after sync failed: %s", exc)
+
+    return SyncResult(
+        success=True,
+        message=f"Full data sync completed. Generated {pred_count} best bet predictions.",
+        details="Synced teams, rosters, schedule, and game results.",
+    )
 
 
 @router.post(

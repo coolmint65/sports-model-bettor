@@ -1,8 +1,8 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Clock, MapPin, ChevronRight, TrendingUp } from 'lucide-react';
-import { format, parseISO } from 'date-fns';
-import { teamName, teamAbbrev, confidencePct } from '../utils/teams';
+import { format } from 'date-fns';
+import { teamName, teamAbbrev, confidencePct, parseAsUTC } from '../utils/teams';
 
 function getConfidenceColor(confidence) {
   if (confidence >= 75) return '#00ff88';
@@ -38,9 +38,10 @@ function getStatusDisplay(game) {
 
 function formatGameTime(game) {
   try {
-    const dateStr = game.start_time || game.datetime || game.date;
+    const dateStr = game.start_time || game.datetime;
     if (!dateStr) return 'TBD';
-    const date = typeof dateStr === 'string' ? parseISO(dateStr) : new Date(dateStr);
+    const date = parseAsUTC(dateStr);
+    if (!date || isNaN(date.getTime())) return 'TBD';
     return format(date, 'h:mm a');
   } catch {
     return game.time || 'TBD';

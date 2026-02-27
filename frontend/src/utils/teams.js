@@ -26,3 +26,21 @@ export function confidencePct(value) {
   if (value > 1) return value;
   return value * 100;
 }
+
+/**
+ * Parse a datetime string from the API as UTC.
+ *
+ * SQLite drops timezone info, so the backend may return datetimes
+ * like "2026-02-28T00:00:00" without a timezone suffix.
+ * The NHL API times are always UTC, so we append 'Z' if missing
+ * to ensure correct local-time conversion in the browser.
+ */
+export function parseAsUTC(dateStr) {
+  if (!dateStr) return null;
+  let s = String(dateStr);
+  // If it has a 'T' (ISO datetime) but no timezone indicator, treat as UTC
+  if (s.includes('T') && !s.includes('+') && !s.includes('Z') && !s.includes('-', s.indexOf('T'))) {
+    s += 'Z';
+  }
+  return new Date(s);
+}

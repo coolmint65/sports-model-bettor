@@ -119,7 +119,7 @@ class FeatureEngine:
                     Game.status == "final",
                 )
             )
-            .order_by(desc(Game.game_date))
+            .order_by(desc(Game.date))
             .limit(last_n)
         )
         result = await db.execute(stmt)
@@ -198,7 +198,7 @@ class FeatureEngine:
                     ),
                 )
             )
-            .order_by(desc(Game.game_date))
+            .order_by(desc(Game.date))
             .limit(last_n)
         )
         result = await db.execute(stmt)
@@ -290,7 +290,7 @@ class FeatureEngine:
                     Game.status == "final",
                 )
             )
-            .order_by(desc(Game.game_date))
+            .order_by(desc(Game.date))
             .limit(1)
         )
         result = await db.execute(recent_start_stmt)
@@ -332,7 +332,7 @@ class FeatureEngine:
                     Game.status == "final",
                 )
             )
-            .order_by(desc(Game.game_date))
+            .order_by(desc(Game.date))
             .limit(10)
         )
         recent_result = await db.execute(recent_games_stmt)
@@ -687,7 +687,7 @@ class FeatureEngine:
         features = {
             # Game metadata
             "game_id": game.id,
-            "game_date": str(game.game_date),
+            "game_date": str(game.date),
             "home_team_id": home_id,
             "away_team_id": away_id,
             "home_team_name": home_team.name if home_team else "Unknown",
@@ -740,7 +740,7 @@ class FeatureEngine:
                     Game.status == "final",
                 )
             )
-            .order_by(desc(Game.game_date))
+            .order_by(desc(Game.date))
             .limit(last_n)
         )
         result = await db.execute(stmt)

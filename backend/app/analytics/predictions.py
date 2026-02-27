@@ -67,7 +67,7 @@ class PredictionManager:
             select(Game)
             .where(
                 and_(
-                    Game.game_date == game_date,
+                    Game.date == game_date,
                     Game.status.in_(["scheduled", "in_progress", "preview"]),
                 )
             )
@@ -314,7 +314,7 @@ class PredictionManager:
         game_info = {
             "game_id": game.id,
             "external_id": game.external_id,
-            "game_date": str(game.game_date),
+            "game_date": str(game.date),
             "start_time": str(game.start_time) if game.start_time else None,
             "home_team": features.get("home_team_name", "Unknown"),
             "away_team": features.get("away_team_name", "Unknown"),
@@ -504,7 +504,7 @@ class PredictionManager:
             return "yes" if home_score > 0 and away_score > 0 else "no"
 
         elif bet_type == "overtime":
-            return "yes" if game.overtime or game.shootout else "no"
+            return "yes" if game.went_to_overtime else "no"
 
         elif bet_type == "odd_even":
             return "odd" if total % 2 == 1 else "even"
