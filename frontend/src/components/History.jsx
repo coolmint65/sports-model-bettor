@@ -27,7 +27,7 @@ import { format, parseISO } from 'date-fns';
 import { fetchPredictionHistory, fetchPredictionStats } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import PredictionCard from './PredictionCard';
-import { teamName, confidencePct } from '../utils/teams';
+import { teamName, confidencePct, formatBetType, formatPredictionValue } from '../utils/teams';
 
 function StatCard({ icon: Icon, label, value, subValue, color, className }) {
   return (
@@ -263,7 +263,7 @@ function History() {
                   className={`filter-btn ${betTypeFilter === type ? 'filter-active' : ''}`}
                   onClick={() => setBetTypeFilter(type)}
                 >
-                  {type === 'all' ? 'All Bets' : type}
+                  {type === 'all' ? 'All Bets' : formatBetType(type)}
                 </button>
               ))}
             </div>
@@ -319,8 +319,8 @@ function History() {
                           {teamName(pred.away_team, '?')} @{' '}
                           {teamName(pred.home_team, '?')}
                         </span>
-                        <span className="col-type">{pred.bet_type || pred.type || '-'}</span>
-                        <span className="col-pick">{pred.prediction_value || pred.pick || pred.selection || '-'}</span>
+                        <span className="col-type">{formatBetType(pred.bet_type || pred.type)}</span>
+                        <span className="col-pick">{formatPredictionValue(pred.prediction_value || pred.pick || pred.selection)}</span>
                         <span className="col-confidence">
                           <span
                             className="confidence-dot"

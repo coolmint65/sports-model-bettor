@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Trophy, TrendingUp, Target, Star, ChevronRight } from 'lucide-react';
 import { fetchBestBets } from '../utils/api';
 import { useApi } from '../hooks/useApi';
-import { teamName, confidencePct } from '../utils/teams';
+import { teamName, confidencePct, formatBetType, formatPredictionValue } from '../utils/teams';
 
 function getConfidenceColor(confidence) {
   if (confidence >= 75) return '#00ff88';
@@ -61,11 +61,11 @@ function BestBetCard({ bet, rank, isFeatured }) {
 
         <div className="best-bet-pick">
           <Target size={16} />
-          <span className="pick-type">{bet.bet_type || bet.type || 'Prediction'}</span>
+          <span className="pick-type">{formatBetType(bet.bet_type || bet.type)}</span>
         </div>
 
         <div className="best-bet-selection">
-          {bet.prediction_value || bet.pick || bet.selection || 'N/A'}
+          {formatPredictionValue(bet.prediction_value || bet.pick || bet.selection)}
         </div>
 
         <div className="best-bet-metrics">

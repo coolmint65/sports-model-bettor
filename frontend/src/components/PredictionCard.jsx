@@ -1,6 +1,6 @@
 import React from 'react';
 import { Target, TrendingUp, Star, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
-import { confidencePct } from '../utils/teams';
+import { confidencePct, formatBetType, formatPredictionValue } from '../utils/teams';
 
 function getConfidenceColor(confidence) {
   if (confidence >= 75) return '#00ff88';
@@ -35,8 +35,8 @@ function PredictionCard({ prediction, showGame = false, compact = false }) {
   const confLabel = getConfidenceLabel(confidence);
   const isBestBet = prediction.is_best_bet || prediction.best_bet || false;
   const outcome = prediction.outcome || prediction.result || null;
-  const betType = prediction.bet_type || prediction.type || 'Prediction';
-  const pick = prediction.prediction_value || prediction.pick || prediction.selection || 'N/A';
+  const betType = formatBetType(prediction.bet_type || prediction.type);
+  const pick = formatPredictionValue(prediction.prediction_value || prediction.pick || prediction.selection);
   const reasoning = prediction.reasoning || prediction.reason || prediction.analysis || '';
 
   return (
