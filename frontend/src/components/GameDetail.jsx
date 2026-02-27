@@ -11,7 +11,7 @@ import {
   Activity,
   Layers,
 } from 'lucide-react';
-import { format, parseISO } from 'date-fns';
+import { format } from 'date-fns';
 import { fetchGameDetails } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import PredictionCard from './PredictionCard';
@@ -66,22 +66,18 @@ function StatComparison({ label, awayValue, homeValue, higherIsBetter = true, fo
 }
 
 function OverviewTab({ game }) {
-  const away = game.away_stats || game.away_team_stats || {};
-  const home = game.home_stats || game.home_team_stats || {};
-  const awayRecord = game.away_record || away.record || '';
-  const homeRecord = game.home_record || home.record || '';
+  const away = game.away_team_form || game.away_stats || game.away_team_stats || {};
+  const home = game.home_team_form || game.home_stats || game.home_team_stats || {};
+  const awayRecord = `${away.wins || 0}-${away.losses || 0}-${away.ot_losses || 0}`;
+  const homeRecord = `${home.wins || 0}-${home.losses || 0}-${home.ot_losses || 0}`;
 
   const stats = [
-    { label: 'Goals/Game', away: away.goals_per_game, home: home.goals_per_game, higher: true },
+    { label: 'Goals/Game', away: away.goals_for_per_game, home: home.goals_for_per_game, higher: true },
     { label: 'Goals Against/Game', away: away.goals_against_per_game, home: home.goals_against_per_game, higher: false },
-    { label: 'Power Play %', away: away.pp_pct || away.power_play_pct, home: home.pp_pct || home.power_play_pct, higher: true },
-    { label: 'Penalty Kill %', away: away.pk_pct || away.penalty_kill_pct, home: home.pk_pct || home.penalty_kill_pct, higher: true },
-    { label: 'Shots/Game', away: away.shots_per_game, home: home.shots_per_game, higher: true },
+    { label: 'Power Play %', away: away.power_play_pct, home: home.power_play_pct, higher: true },
+    { label: 'Penalty Kill %', away: away.penalty_kill_pct, home: home.penalty_kill_pct, higher: true },
+    { label: 'Shots/Game', away: away.shots_for_per_game, home: home.shots_for_per_game, higher: true },
     { label: 'Shots Against/Game', away: away.shots_against_per_game, home: home.shots_against_per_game, higher: false },
-    { label: 'Faceoff %', away: away.faceoff_pct, home: home.faceoff_pct, higher: true },
-    { label: 'Save %', away: away.save_pct, home: home.save_pct, higher: true },
-    { label: 'Corsi For %', away: away.corsi_for_pct || away.cf_pct, home: home.corsi_for_pct || home.cf_pct, higher: true },
-    { label: 'xGF/Game', away: away.xgf_per_game || away.expected_goals_for, home: home.xgf_per_game || home.expected_goals_for, higher: true },
   ];
 
   const hasAnyStats = stats.some(s => s.away != null || s.home != null);
@@ -148,74 +144,59 @@ function PredictionsTab({ game }) {
 }
 
 function H2HTab({ game }) {
-  const h2h = game.h2h || game.head_to_head || [];
-  const h2hSummary = game.h2h_summary || null;
+  const h2h = game.head_to_head || game.h2h || null;
+  const awayLabel = game.away_team_form?.team_name || 'Away';
+  const homeLabel = game.home_team_form?.team_name || 'Home';
 
-  return (
-    <div className="tab-content h2h-tab">
-      {h2hSummary && (
-        <div className="h2h-summary">
-          <div className="h2h-summary-grid">
-            {h2hSummary.total_games != null && (
-              <div className="h2h-stat-box">
-                <span className="h2h-stat-value">{h2hSummary.total_games}</span>
-                <span className="h2h-stat-label">Games</span>
-              </div>
-            )}
-            {h2hSummary.away_wins != null && (
-              <div className="h2h-stat-box">
-                <span className="h2h-stat-value">{h2hSummary.away_wins}</span>
-                <span className="h2h-stat-label">Away Wins</span>
-              </div>
-            )}
-            {h2hSummary.home_wins != null && (
-              <div className="h2h-stat-box">
-                <span className="h2h-stat-value">{h2hSummary.home_wins}</span>
-                <span className="h2h-stat-label">Home Wins</span>
-              </div>
-            )}
-            {h2hSummary.avg_total_goals != null && (
-              <div className="h2h-stat-box">
-                <span className="h2h-stat-value">{h2hSummary.avg_total_goals.toFixed(1)}</span>
-                <span className="h2h-stat-label">Avg Total Goals</span>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {h2h.length > 0 ? (
-        <div className="h2h-games-list">
-          <h3 className="subsection-title">Recent Meetings</h3>
-          <div className="h2h-table">
-            <div className="h2h-table-header">
-              <span>Date</span>
-              <span>Matchup</span>
-              <span>Score</span>
-            </div>
-            {h2h.map((meeting, index) => (
-              <div className="h2h-table-row" key={index}>
-                <span className="h2h-date">
-                  {meeting.date
-                    ? format(parseISO(meeting.date), 'MMM d, yyyy')
-                    : 'N/A'}
-                </span>
-                <span className="h2h-matchup">
-                  {teamName(meeting.away_team, 'Away')} @ {teamName(meeting.home_team, 'Home')}
-                </span>
-                <span className="h2h-score">
-                  {meeting.away_score ?? '-'} - {meeting.home_score ?? '-'}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : (
+  if (!h2h) {
+    return (
+      <div className="tab-content h2h-tab">
         <div className="empty-state">
           <Users size={48} />
           <p>No head-to-head history available.</p>
         </div>
-      )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="tab-content h2h-tab">
+      <div className="h2h-summary">
+        <div className="h2h-summary-grid">
+          {h2h.games_played != null && (
+            <div className="h2h-stat-box">
+              <span className="h2h-stat-value">{h2h.games_played}</span>
+              <span className="h2h-stat-label">Games Played</span>
+            </div>
+          )}
+          {h2h.team1_wins != null && (
+            <div className="h2h-stat-box">
+              <span className="h2h-stat-value">{h2h.team1_wins}</span>
+              <span className="h2h-stat-label">{homeLabel} Wins</span>
+            </div>
+          )}
+          {h2h.team2_wins != null && (
+            <div className="h2h-stat-box">
+              <span className="h2h-stat-value">{h2h.team2_wins}</span>
+              <span className="h2h-stat-label">{awayLabel} Wins</span>
+            </div>
+          )}
+          {h2h.team1_goals != null && h2h.team2_goals != null && h2h.games_played > 0 && (
+            <div className="h2h-stat-box">
+              <span className="h2h-stat-value">
+                {((h2h.team1_goals + h2h.team2_goals) / h2h.games_played).toFixed(1)}
+              </span>
+              <span className="h2h-stat-label">Avg Total Goals</span>
+            </div>
+          )}
+          {h2h.last_meeting && (
+            <div className="h2h-stat-box">
+              <span className="h2h-stat-value">{h2h.last_meeting}</span>
+              <span className="h2h-stat-label">Last Meeting</span>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -223,8 +204,8 @@ function H2HTab({ game }) {
 function FormTab({ game }) {
   const awayForm = game.away_form || game.away_recent || [];
   const homeForm = game.home_form || game.home_recent || [];
-  const awayTeamLabel = teamName(game.away_team, 'Away');
-  const homeTeamLabel = teamName(game.home_team, 'Home');
+  const awayTeamLabel = game.away_team_form?.team_name || teamName(game.away_team, 'Away');
+  const homeTeamLabel = game.home_team_form?.team_name || teamName(game.home_team, 'Home');
 
   const renderFormList = (form, label) => {
     if (!form || form.length === 0) {
@@ -314,9 +295,16 @@ function FormTab({ game }) {
 }
 
 function PeriodsTab({ game }) {
-  const periodData = game.period_analysis || game.period_scoring || game.periods || null;
-  const awayTeamLabel = teamName(game.away_team, 'Away');
-  const homeTeamLabel = teamName(game.home_team, 'Home');
+  const homePeriod = game.home_period_scoring || {};
+  const awayPeriod = game.away_period_scoring || {};
+  const hasPeriodData = homePeriod.period_1_avg != null || awayPeriod.period_1_avg != null;
+  const periodData = hasPeriodData ? [
+    { period: '1st', away: awayPeriod.period_1_avg, home: homePeriod.period_1_avg },
+    { period: '2nd', away: awayPeriod.period_2_avg, home: homePeriod.period_2_avg },
+    { period: '3rd', away: awayPeriod.period_3_avg, home: homePeriod.period_3_avg },
+  ] : (game.period_analysis || game.period_scoring || game.periods || null);
+  const awayTeamLabel = game.away_team_form?.team_name || teamName(game.away_team, 'Away');
+  const homeTeamLabel = game.home_team_form?.team_name || teamName(game.home_team, 'Home');
 
   if (!periodData) {
     return (
@@ -430,12 +418,14 @@ function GameDetail() {
     );
   }
 
-  const awayTeamLabel = teamName(game.away_team, 'Away');
-  const homeTeamLabel = teamName(game.home_team, 'Home');
-  const awayAbbr = teamAbbrev(game.away_team, 'AWY');
-  const homeAbbr = teamAbbrev(game.home_team, 'HME');
-  const awayRecord = game.away_record || game.away_stats?.record || '';
-  const homeRecord = game.home_record || game.home_stats?.record || '';
+  const awayForm = game.away_team_form || {};
+  const homeForm = game.home_team_form || {};
+  const awayTeamLabel = awayForm.team_name || teamName(game.away_team, 'Away');
+  const homeTeamLabel = homeForm.team_name || teamName(game.home_team, 'Home');
+  const awayAbbr = awayForm.abbreviation || teamAbbrev(game.away_team, 'AWY');
+  const homeAbbr = homeForm.abbreviation || teamAbbrev(game.home_team, 'HME');
+  const awayRecord = awayForm.wins != null ? `${awayForm.wins}-${awayForm.losses}-${awayForm.ot_losses}` : '';
+  const homeRecord = homeForm.wins != null ? `${homeForm.wins}-${homeForm.losses}-${homeForm.ot_losses}` : '';
   const venue = game.venue || game.arena || '';
 
   const renderTabContent = () => {

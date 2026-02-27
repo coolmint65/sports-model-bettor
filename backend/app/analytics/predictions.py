@@ -134,30 +134,32 @@ class PredictionManager:
         if not all_predictions:
             return []
 
-        # Flatten all individual predictions across all games
+        # Flatten all individual predictions across all games and persist ALL
+        all_flat: List[Dict[str, Any]] = []
         candidates: List[Dict[str, Any]] = []
         for game_data in all_predictions:
             game_info = game_data.get("game_info", {})
             for pred in game_data.get("predictions", []):
                 confidence = pred.get("confidence", 0)
-                # For now, assume implied probability of 0.5 for markets
-                # without odds data. Edge = confidence - implied_prob.
                 implied_prob = pred.get("implied_probability", 0.5)
                 edge = confidence - implied_prob
 
+                flat = {
+                    "game_id": game_data.get("game_id"),
+                    "game_info": game_info,
+                    "bet_type": pred["bet_type"],
+                    "prediction": pred["prediction"],
+                    "confidence": confidence,
+                    "probability": pred.get("probability", confidence),
+                    "edge": round(edge, 4),
+                    "implied_probability": implied_prob,
+                    "reasoning": pred.get("reasoning", ""),
+                    "is_best_bet": False,
+                }
+                all_flat.append(flat)
+
                 if confidence >= settings.min_confidence and edge >= settings.min_edge:
-                    candidates.append({
-                        "game_id": game_data.get("game_id"),
-                        "game_info": game_info,
-                        "bet_type": pred["bet_type"],
-                        "prediction": pred["prediction"],
-                        "confidence": confidence,
-                        "probability": pred.get("probability", confidence),
-                        "edge": round(edge, 4),
-                        "implied_probability": implied_prob,
-                        "reasoning": pred.get("reasoning", ""),
-                        "is_best_bet": False,
-                    })
+                    candidates.append(flat)
 
         # Sort by edge descending
         candidates.sort(key=lambda c: c["edge"], reverse=True)
@@ -169,9 +171,9 @@ class PredictionManager:
         if best_bets:
             best_bets[0]["is_best_bet"] = True
 
-        # Persist best bets to database
-        for bet in best_bets:
-            await self._persist_prediction(db, bet)
+        # Persist ALL predictions to database so they appear in game details
+        for pred_data in all_flat:
+            await self._persist_prediction(db, pred_data)
 
         try:
             await db.flush()
