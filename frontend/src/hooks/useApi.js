@@ -30,7 +30,9 @@ export function useApi(apiFunc, args = [], immediate = true) {
 
   useEffect(() => {
     if (immediate) {
-      execute(...args);
+      execute(...args).catch(() => {
+        // Error already captured in state via setError
+      });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [immediate]);

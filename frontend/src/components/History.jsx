@@ -27,6 +27,7 @@ import { format, parseISO } from 'date-fns';
 import { fetchPredictionHistory, fetchPredictionStats } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import PredictionCard from './PredictionCard';
+import { teamName, confidencePct } from '../utils/teams';
 
 function StatCard({ icon: Icon, label, value, subValue, color, className }) {
   return (
@@ -67,7 +68,7 @@ function History() {
   const [betTypeFilter, setBetTypeFilter] = useState('all');
 
   const stats = statsData || {};
-  const history = historyData?.predictions || historyData?.history || (Array.isArray(historyData) ? historyData : []);
+  const history = historyData?.entries || historyData?.predictions || historyData?.history || (Array.isArray(historyData) ? historyData : []);
 
   const betTypes = useMemo(() => {
     const types = new Set();
@@ -123,11 +124,14 @@ function History() {
       });
   }, [filteredHistory]);
 
-  const winRate = stats.win_rate || stats.overall_win_rate || 0;
-  const totalBets = stats.total_bets || stats.total_predictions || history.length || 0;
+  const rawWinRate = stats.hit_rate || stats.win_rate || stats.overall_win_rate || 0;
+  const winRate = rawWinRate <= 1 ? rawWinRate * 100 : rawWinRate;
+  const totalBets = stats.total_predictions || stats.total_bets || history.length || 0;
   const totalProfit = stats.total_profit || stats.profit || stats.total_units || 0;
-  const roi = stats.roi || stats.return_on_investment || 0;
-  const avgConfidence = stats.avg_confidence || stats.average_confidence || 0;
+  const rawRoi = stats.roi || stats.return_on_investment || 0;
+  const roi = rawRoi <= 1 && rawRoi !== 0 ? rawRoi * 100 : rawRoi;
+  const rawAvgConf = stats.avg_confidence || stats.average_confidence || 0;
+  const avgConfidence = rawAvgConf <= 1 ? rawAvgConf * 100 : rawAvgConf;
   const bestStreak = stats.best_streak || stats.longest_win_streak || 0;
 
   const loading = historyLoading || statsLoading;
@@ -294,12 +298,12 @@ function History() {
                     const isWin = outcome === 'win' || outcome === 'correct' || outcome === 'hit';
                     const isLoss = outcome === 'loss' || outcome === 'incorrect' || outcome === 'miss';
                     const profit = pred.profit || pred.units || 0;
-                    const confidence = pred.confidence || pred.confidence_pct || 0;
+                    const confidence = confidencePct(pred.confidence);
                     const dateStr = pred.date || pred.game_date || '';
                     let displayDate = dateStr;
                     try {
                       if (dateStr) {
-                        displayDate = format(parseISO(dateStr), 'MMM d');
+                        displayDate = format(parseISO(String(dateStr)), 'MMM d');
                       }
                     } catch {
                       // keep original
@@ -312,11 +316,11 @@ function History() {
                       >
                         <span className="col-date">{displayDate}</span>
                         <span className="col-game">
-                          {pred.away_team || pred.teams?.away || '?'} @{' '}
-                          {pred.home_team || pred.teams?.home || '?'}
+                          {teamName(pred.away_team, '?')} @{' '}
+                          {teamName(pred.home_team, '?')}
                         </span>
                         <span className="col-type">{pred.bet_type || pred.type || '-'}</span>
-                        <span className="col-pick">{pred.pick || pred.selection || pred.prediction || '-'}</span>
+                        <span className="col-pick">{pred.prediction_value || pred.pick || pred.selection || '-'}</span>
                         <span className="col-confidence">
                           <span
                             className="confidence-dot"
@@ -324,7 +328,7 @@ function History() {
                               backgroundColor: confidence >= 70 ? '#00ff88' : confidence >= 55 ? '#ffd700' : '#ff5252',
                             }}
                           ></span>
-                          {typeof confidence === 'number' ? `${confidence.toFixed(0)}%` : confidence}
+                          {confidence.toFixed(0)}%
                         </span>
                         <span className={`col-result ${isWin ? 'result-win' : isLoss ? 'result-loss' : 'result-pending'}`}>
                           {isWin && <CheckCircle size={14} />}

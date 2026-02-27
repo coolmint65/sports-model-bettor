@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Trophy, TrendingUp, Target, Star, ChevronRight } from 'lucide-react';
 import { fetchBestBets } from '../utils/api';
 import { useApi } from '../hooks/useApi';
+import { teamName, confidencePct } from '../utils/teams';
 
 function getConfidenceColor(confidence) {
   if (confidence >= 75) return '#00ff88';
@@ -20,9 +21,12 @@ function getConfidenceLabel(confidence) {
 
 function BestBetCard({ bet, rank, isFeatured }) {
   const navigate = useNavigate();
-  const confidence = bet.confidence || bet.confidence_pct || 0;
-  const edge = bet.edge || bet.edge_pct || 0;
+  const confidence = confidencePct(bet.confidence);
+  const edge = confidencePct(bet.edge);
   const confColor = getConfidenceColor(confidence);
+
+  const awayName = teamName(bet.away_team, 'Away');
+  const homeName = teamName(bet.home_team, 'Home');
 
   const handleClick = () => {
     if (bet.game_id) {
@@ -51,8 +55,7 @@ function BestBetCard({ bet, rank, isFeatured }) {
       <div className="best-bet-content">
         <div className="best-bet-matchup">
           <span className="best-bet-teams">
-            {bet.away_team || bet.teams?.away || 'Away'} @{' '}
-            {bet.home_team || bet.teams?.home || 'Home'}
+            {awayName} @ {homeName}
           </span>
         </div>
 
@@ -62,7 +65,7 @@ function BestBetCard({ bet, rank, isFeatured }) {
         </div>
 
         <div className="best-bet-selection">
-          {bet.pick || bet.selection || bet.prediction || 'N/A'}
+          {bet.prediction_value || bet.pick || bet.selection || 'N/A'}
         </div>
 
         <div className="best-bet-metrics">
@@ -72,7 +75,7 @@ function BestBetCard({ bet, rank, isFeatured }) {
               <div
                 className="confidence-bar"
                 style={{
-                  width: `${confidence}%`,
+                  width: `${Math.min(confidence, 100)}%`,
                   backgroundColor: confColor,
                 }}
               ></div>
@@ -92,9 +95,9 @@ function BestBetCard({ bet, rank, isFeatured }) {
           </div>
         </div>
 
-        {(bet.reasoning || bet.reason) && (
+        {bet.reasoning && (
           <p className="best-bet-reasoning">
-            {bet.reasoning || bet.reason}
+            {bet.reasoning}
           </p>
         )}
       </div>
@@ -155,7 +158,7 @@ function BestBets() {
         </div>
         <div className="empty-state">
           <Trophy size={48} />
-          <p>No best bets available yet. Check back closer to game time.</p>
+          <p>No best bets available yet. Click "Sync Data" to pull today's games, then predictions will be generated.</p>
         </div>
       </div>
     );
@@ -173,7 +176,7 @@ function BestBets() {
       <div className="best-bets-grid">
         {bets.slice(0, 3).map((bet, index) => (
           <BestBetCard
-            key={bet.id || bet.game_id || index}
+            key={bet.id || bet.prediction_id || bet.game_id || index}
             bet={bet}
             rank={index + 1}
             isFeatured={index === 0}

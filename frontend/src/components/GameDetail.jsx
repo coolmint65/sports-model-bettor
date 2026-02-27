@@ -15,6 +15,7 @@ import { format, parseISO } from 'date-fns';
 import { fetchGameDetails } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import PredictionCard from './PredictionCard';
+import { teamName, teamAbbrev } from '../utils/teams';
 
 const TABS = [
   { id: 'overview', label: 'Overview', icon: BarChart3 },
@@ -199,7 +200,7 @@ function H2HTab({ game }) {
                     : 'N/A'}
                 </span>
                 <span className="h2h-matchup">
-                  {meeting.away_team || 'Away'} @ {meeting.home_team || 'Home'}
+                  {teamName(meeting.away_team, 'Away')} @ {teamName(meeting.home_team, 'Home')}
                 </span>
                 <span className="h2h-score">
                   {meeting.away_score ?? '-'} - {meeting.home_score ?? '-'}
@@ -221,14 +222,14 @@ function H2HTab({ game }) {
 function FormTab({ game }) {
   const awayForm = game.away_form || game.away_recent || [];
   const homeForm = game.home_form || game.home_recent || [];
-  const awayTeam = game.away_team || 'Away';
-  const homeTeam = game.home_team || 'Home';
+  const awayTeamLabel = teamName(game.away_team, 'Away');
+  const homeTeamLabel = teamName(game.home_team, 'Home');
 
-  const renderFormList = (form, teamName) => {
+  const renderFormList = (form, label) => {
     if (!form || form.length === 0) {
       return (
         <div className="empty-state-small">
-          <p>No recent form data for {teamName}</p>
+          <p>No recent form data for {label}</p>
         </div>
       );
     }
@@ -299,12 +300,12 @@ function FormTab({ game }) {
     <div className="tab-content form-tab">
       <div className="form-teams-grid">
         <div className="form-team-section">
-          <h3 className="form-team-title">{awayTeam}</h3>
-          {renderFormList(awayForm, awayTeam)}
+          <h3 className="form-team-title">{awayTeamLabel}</h3>
+          {renderFormList(awayForm, awayTeamLabel)}
         </div>
         <div className="form-team-section">
-          <h3 className="form-team-title">{homeTeam}</h3>
-          {renderFormList(homeForm, homeTeam)}
+          <h3 className="form-team-title">{homeTeamLabel}</h3>
+          {renderFormList(homeForm, homeTeamLabel)}
         </div>
       </div>
     </div>
@@ -313,8 +314,8 @@ function FormTab({ game }) {
 
 function PeriodsTab({ game }) {
   const periodData = game.period_analysis || game.period_scoring || game.periods || null;
-  const awayTeam = game.away_team || 'Away';
-  const homeTeam = game.home_team || 'Home';
+  const awayTeamLabel = teamName(game.away_team, 'Away');
+  const homeTeamLabel = teamName(game.home_team, 'Home');
 
   if (!periodData) {
     return (
@@ -341,8 +342,8 @@ function PeriodsTab({ game }) {
       <div className="periods-table">
         <div className="periods-table-header">
           <span>Period</span>
-          <span>{awayTeam}</span>
-          <span>{homeTeam}</span>
+          <span>{awayTeamLabel}</span>
+          <span>{homeTeamLabel}</span>
         </div>
         {periods.map((p, index) => {
           const periodLabel = p.period || p.label || `Period ${index + 1}`;
@@ -428,10 +429,10 @@ function GameDetail() {
     );
   }
 
-  const awayTeam = game.away_team || game.teams?.away?.name || 'Away';
-  const homeTeam = game.home_team || game.teams?.home?.name || 'Home';
-  const awayAbbrev = game.away_abbreviation || game.teams?.away?.abbreviation || awayTeam.substring(0, 3).toUpperCase();
-  const homeAbbrev = game.home_abbreviation || game.teams?.home?.abbreviation || homeTeam.substring(0, 3).toUpperCase();
+  const awayTeamLabel = teamName(game.away_team, 'Away');
+  const homeTeamLabel = teamName(game.home_team, 'Home');
+  const awayAbbr = teamAbbrev(game.away_team, 'AWY');
+  const homeAbbr = teamAbbrev(game.home_team, 'HME');
   const awayRecord = game.away_record || game.away_stats?.record || '';
   const homeRecord = game.home_record || game.home_stats?.record || '';
   const venue = game.venue || game.arena || '';
@@ -463,8 +464,8 @@ function GameDetail() {
       {/* Game Header */}
       <div className="game-detail-header">
         <div className="game-detail-team away-team-detail">
-          <div className="detail-team-abbrev">{awayAbbrev}</div>
-          <div className="detail-team-name">{awayTeam}</div>
+          <div className="detail-team-abbrev">{awayAbbr}</div>
+          <div className="detail-team-name">{awayTeamLabel}</div>
           {awayRecord && <div className="detail-team-record">{awayRecord}</div>}
         </div>
 
@@ -485,8 +486,8 @@ function GameDetail() {
         </div>
 
         <div className="game-detail-team home-team-detail">
-          <div className="detail-team-abbrev">{homeAbbrev}</div>
-          <div className="detail-team-name">{homeTeam}</div>
+          <div className="detail-team-abbrev">{homeAbbr}</div>
+          <div className="detail-team-name">{homeTeamLabel}</div>
           {homeRecord && <div className="detail-team-record">{homeRecord}</div>}
         </div>
       </div>

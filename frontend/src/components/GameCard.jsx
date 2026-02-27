@@ -2,6 +2,7 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Clock, MapPin, ChevronRight, TrendingUp } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
+import { teamName, teamAbbrev, confidencePct } from '../utils/teams';
 
 function getConfidenceColor(confidence) {
   if (confidence >= 75) return '#00ff88';
@@ -51,14 +52,15 @@ function GameCard({ game }) {
   const gameId = game.game_id || game.id;
   const statusInfo = getStatusDisplay(game);
 
-  const awayTeam = game.away_team || game.teams?.away?.name || 'Away';
-  const homeTeam = game.home_team || game.teams?.home?.name || 'Home';
-  const awayAbbrev = game.away_abbreviation || game.teams?.away?.abbreviation || awayTeam.substring(0, 3).toUpperCase();
-  const homeAbbrev = game.home_abbreviation || game.teams?.home?.abbreviation || homeTeam.substring(0, 3).toUpperCase();
+  const awayName = teamName(game.away_team, 'Away');
+  const homeName = teamName(game.home_team, 'Home');
+  const awayAbbr = teamAbbrev(game.away_team, 'AWY');
+  const homeAbbr = teamAbbrev(game.home_team, 'HME');
   const awayScore = game.away_score ?? game.score?.away ?? null;
   const homeScore = game.home_score ?? game.score?.home ?? null;
   const venue = game.venue || game.arena || '';
-  const confidence = game.top_confidence || game.confidence || game.prediction_confidence || null;
+  const rawConf = game.top_confidence || game.confidence || game.prediction_confidence || null;
+  const confidence = rawConf != null ? confidencePct(rawConf) : null;
 
   const handleClick = () => {
     if (gameId) {
@@ -84,8 +86,8 @@ function GameCard({ game }) {
       <div className="game-card-body">
         {/* Away Team */}
         <div className="game-team">
-          <div className="team-abbrev">{awayAbbrev}</div>
-          <div className="team-name">{awayTeam}</div>
+          <div className="team-abbrev">{awayAbbr}</div>
+          <div className="team-name">{awayName}</div>
           {statusInfo.showScore && awayScore !== null && (
             <div className={`team-score ${awayScore > homeScore ? 'score-winning' : ''}`}>
               {awayScore}
@@ -107,8 +109,8 @@ function GameCard({ game }) {
 
         {/* Home Team */}
         <div className="game-team">
-          <div className="team-abbrev">{homeAbbrev}</div>
-          <div className="team-name">{homeTeam}</div>
+          <div className="team-abbrev">{homeAbbr}</div>
+          <div className="team-name">{homeName}</div>
           {statusInfo.showScore && homeScore !== null && (
             <div className={`team-score ${homeScore > awayScore ? 'score-winning' : ''}`}>
               {homeScore}
@@ -125,14 +127,14 @@ function GameCard({ game }) {
             <span>{venue}</span>
           </div>
         )}
-        {confidence && (
-          <div className="game-confidence" title={`Top prediction confidence: ${confidence}%`}>
+        {confidence != null && (
+          <div className="game-confidence" title={`Top prediction confidence: ${confidence.toFixed(0)}%`}>
             <TrendingUp size={12} />
             <span
               className="confidence-text"
               style={{ color: getConfidenceColor(confidence) }}
             >
-              {typeof confidence === 'number' ? `${confidence.toFixed(0)}%` : confidence}
+              {confidence.toFixed(0)}%
             </span>
           </div>
         )}

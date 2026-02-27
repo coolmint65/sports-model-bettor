@@ -1,5 +1,6 @@
 import React from 'react';
 import { Target, TrendingUp, Star, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
+import { confidencePct } from '../utils/teams';
 
 function getConfidenceColor(confidence) {
   if (confidence >= 75) return '#00ff88';
@@ -28,14 +29,14 @@ function getOutcomeIcon(outcome) {
 }
 
 function PredictionCard({ prediction, showGame = false, compact = false }) {
-  const confidence = prediction.confidence || prediction.confidence_pct || 0;
-  const edge = prediction.edge || prediction.edge_pct || 0;
+  const confidence = confidencePct(prediction.confidence);
+  const edge = confidencePct(prediction.edge);
   const confColor = getConfidenceColor(confidence);
   const confLabel = getConfidenceLabel(confidence);
   const isBestBet = prediction.is_best_bet || prediction.best_bet || false;
   const outcome = prediction.outcome || prediction.result || null;
   const betType = prediction.bet_type || prediction.type || 'Prediction';
-  const pick = prediction.pick || prediction.selection || prediction.prediction || 'N/A';
+  const pick = prediction.prediction_value || prediction.pick || prediction.selection || 'N/A';
   const reasoning = prediction.reasoning || prediction.reason || prediction.analysis || '';
 
   return (
@@ -62,7 +63,8 @@ function PredictionCard({ prediction, showGame = false, compact = false }) {
 
       {showGame && (prediction.away_team || prediction.home_team) && (
         <div className="prediction-game-info">
-          {prediction.away_team || 'Away'} @ {prediction.home_team || 'Home'}
+          {typeof prediction.away_team === 'object' ? prediction.away_team?.name : prediction.away_team || 'Away'} @{' '}
+          {typeof prediction.home_team === 'object' ? prediction.home_team?.name : prediction.home_team || 'Home'}
         </div>
       )}
 
