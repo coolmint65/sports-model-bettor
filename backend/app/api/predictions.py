@@ -6,8 +6,11 @@ predictions for NHL games, including best-bet recommendations and
 historical performance tracking.
 """
 
+import logging
 from datetime import date, datetime
 from typing import List, Optional
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -318,7 +321,11 @@ async def get_best_bets(
 
         odds_scraper = OddsScraper()
         try:
-            await odds_scraper.sync_odds(session)
+            matched = await odds_scraper.sync_odds(session)
+            logger.info(
+                "Odds sync matched %d games before prediction generation",
+                len(matched) if matched else 0,
+            )
             await session.flush()
             # Expire all cached objects so the prediction engine re-fetches
             # Game records with the freshly synced odds (moneyline, O/U,
@@ -327,16 +334,17 @@ async def get_best_bets(
             session.expire_all()
         finally:
             await odds_scraper.close()
-    except Exception:
-        pass  # Non-critical; proceed with existing odds
+    except Exception as exc:
+        logger.warning("Odds sync failed before best-bets generation: %s", exc)
 
     # Always regenerate predictions fresh so they use current sportsbook
     # lines instead of returning stale cached predictions.
     try:
-        await _try_generate_predictions(session, target_date=today)
+        pred_count = await _try_generate_predictions(session, target_date=today)
         await session.flush()
-    except HTTPException:
-        pass
+        logger.info("Regenerated %d predictions for best-bets", pred_count)
+    except HTTPException as exc:
+        logger.warning("Prediction generation failed: %s", exc.detail)
 
     # Exclude games that are already final — those bets can't be placed.
     FINAL_STATUSES = ("final", "completed", "off", "official")
@@ -364,8 +372,14 @@ async def get_best_bets(
         .limit(3)
     )
     top_preds = result.scalars().all()
+    logger.info(
+        "Best-bets primary query returned %d predictions with real odds",
+        len(top_preds),
+    )
 
-    # If no recommended preds with real odds, fall back to top confidence
+    # If no recommended preds with real odds, try without recommended filter
+    # but still require real odds — showing predictions without odds/edge
+    # is misleading and was the root cause of fake "Over 4.5" bets.
     if not top_preds:
         result = await session.execute(
             select(Prediction)
@@ -375,8 +389,10 @@ async def get_best_bets(
                 Game.date == today,
                 ~func.lower(Game.status).in_(FINAL_STATUSES),
                 Prediction.bet_type.in_(MARKET_BET_TYPES),
+                Prediction.odds_implied_prob.isnot(None),
             )
             .order_by(
+                Prediction.edge.desc().nulls_last(),
                 Prediction.confidence.desc().nulls_last(),
             )
             .limit(3)
