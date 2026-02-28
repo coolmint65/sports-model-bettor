@@ -249,12 +249,22 @@ async def get_best_bets(
 ):
     today = date.today()
 
+    # Only show bet types that have real market odds so we can calculate
+    # genuine edge.  Props (both_score/BTTS, first_goal, overtime, odd_even,
+    # period_winner, period_total) don't carry market odds and would show
+    # inflated/fake edges.
+    MARKET_BET_TYPES = ("ml", "total", "spread")
+
     # Get top predictions by edge for today
     result = await session.execute(
         select(Prediction)
         .options(selectinload(Prediction.result))
         .join(Game, Game.id == Prediction.game_id)
-        .where(Game.date == today, Prediction.recommended == True)
+        .where(
+            Game.date == today,
+            Prediction.recommended == True,
+            Prediction.bet_type.in_(MARKET_BET_TYPES),
+        )
         .order_by(
             Prediction.best_bet.desc(),
             Prediction.edge.desc().nulls_last(),
@@ -264,13 +274,16 @@ async def get_best_bets(
     )
     top_preds = result.scalars().all()
 
-    # If no recommended preds, fall back to top confidence
+    # If no recommended preds, fall back to top confidence (still filtered)
     if not top_preds:
         result = await session.execute(
             select(Prediction)
             .options(selectinload(Prediction.result))
             .join(Game, Game.id == Prediction.game_id)
-            .where(Game.date == today)
+            .where(
+                Game.date == today,
+                Prediction.bet_type.in_(MARKET_BET_TYPES),
+            )
             .order_by(
                 Prediction.confidence.desc().nulls_last(),
             )
@@ -287,7 +300,11 @@ async def get_best_bets(
                 select(Prediction)
                 .options(selectinload(Prediction.result))
                 .join(Game, Game.id == Prediction.game_id)
-                .where(Game.date == today, Prediction.recommended == True)
+                .where(
+                    Game.date == today,
+                    Prediction.recommended == True,
+                    Prediction.bet_type.in_(MARKET_BET_TYPES),
+                )
                 .order_by(
                     Prediction.best_bet.desc(),
                     Prediction.edge.desc().nulls_last(),
@@ -301,7 +318,10 @@ async def get_best_bets(
                     select(Prediction)
                     .options(selectinload(Prediction.result))
                     .join(Game, Game.id == Prediction.game_id)
-                    .where(Game.date == today)
+                    .where(
+                        Game.date == today,
+                        Prediction.bet_type.in_(MARKET_BET_TYPES),
+                    )
                     .order_by(Prediction.confidence.desc().nulls_last())
                     .limit(3)
                 )

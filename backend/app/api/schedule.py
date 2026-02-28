@@ -155,7 +155,10 @@ async def get_today_schedule(
     today = date.today()
     games = await _games_for_date(today, session)
 
-    if not games:
+    # Check if any games are live (in_progress) or if we have no games yet.
+    # In either case, re-sync from the NHL API so we get the latest scores.
+    has_live = any(g.status == "in_progress" for g in games)
+    if not games or has_live:
         try:
             await _try_sync_schedule(session, target_date=today)
             await session.flush()
