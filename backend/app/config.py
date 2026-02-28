@@ -9,11 +9,15 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from dotenv import load_dotenv
 from pydantic import BaseModel
 
 
 # Base directory is the backend/ folder
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Load .env from the backend/ directory
+load_dotenv(BASE_DIR / ".env")
 
 # Data directory for SQLite database and any local data files
 DATA_DIR = BASE_DIR / "data"
