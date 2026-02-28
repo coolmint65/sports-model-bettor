@@ -44,6 +44,8 @@ export const triggerDataSync = async (onProgress) => {
     if (onProgress) onProgress(data.step);
     if (!data.running) {
       if (data.error) throw new Error(data.error);
+      // Notify all listening components to refresh their data
+      window.dispatchEvent(new Event('data-synced'));
       return data;
     }
   }

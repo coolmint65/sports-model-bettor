@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Trophy, TrendingUp, Target, Star, ChevronRight, Radio } from 'lucide-react';
 import { fetchBestBets } from '../utils/api';
@@ -154,8 +154,15 @@ const TABS = [
 ];
 
 function BestBets() {
-  const { data, loading, error } = useApi(fetchBestBets);
+  const { data, loading, error, silentRefetch } = useApi(fetchBestBets);
   const [activeTab, setActiveTab] = useState('all');
+
+  // Refresh when a data sync completes
+  useEffect(() => {
+    const onSynced = () => silentRefetch();
+    window.addEventListener('data-synced', onSynced);
+    return () => window.removeEventListener('data-synced', onSynced);
+  }, [silentRefetch]);
 
   const allBets = data?.best_bets || data?.bets || (Array.isArray(data) ? data : []);
   const mlBets = data?.ml_bets || [];

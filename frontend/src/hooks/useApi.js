@@ -42,7 +42,21 @@ export function useApi(apiFunc, args = [], immediate = true) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [execute]);
 
-  return { data, loading, error, execute, refetch };
+  // Silent refetch: updates data without triggering the loading spinner.
+  // Used for background polling and post-sync refreshes.
+  const silentRefetch = useCallback(async () => {
+    try {
+      const response = await apiFunc(...args);
+      setData(response.data);
+      setError(null);
+      return response.data;
+    } catch (err) {
+      // Don't update error state on silent fails — keep showing stale data
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiFunc]);
+
+  return { data, loading, error, execute, refetch, silentRefetch };
 }
 
 export function useApiLazy(apiFunc) {

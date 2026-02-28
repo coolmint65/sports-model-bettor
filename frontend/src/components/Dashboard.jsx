@@ -14,6 +14,7 @@ function Dashboard() {
     loading: scheduleLoading,
     error: scheduleError,
     refetch,
+    silentRefetch,
   } = useApi(fetchTodaySchedule);
 
   const [liveGames, setLiveGames] = useState([]);
@@ -39,6 +40,7 @@ function Dashboard() {
   const hasAnyLive = liveGames.length > 0 || todayHasLive;
 
   // Poll both today's schedule and live games when anything is live
+  // Uses silentRefetch to avoid flashing the loading spinner
   const intervalRef = useRef(null);
   useEffect(() => {
     // Always fetch live games on mount
@@ -46,7 +48,7 @@ function Dashboard() {
 
     if (hasAnyLive) {
       intervalRef.current = setInterval(() => {
-        refetch();
+        silentRefetch();
         pollLive();
       }, LIVE_POLL_INTERVAL);
     }
@@ -56,7 +58,14 @@ function Dashboard() {
         intervalRef.current = null;
       }
     };
-  }, [hasAnyLive, refetch, pollLive]);
+  }, [hasAnyLive, silentRefetch, pollLive]);
+
+  // Refresh immediately when a data sync completes
+  useEffect(() => {
+    const onSynced = () => silentRefetch();
+    window.addEventListener('data-synced', onSynced);
+    return () => window.removeEventListener('data-synced', onSynced);
+  }, [silentRefetch]);
 
   // Deduplicate: remove live games that are already in today's schedule
   const todayGameIds = new Set(games.map((g) => g.id || g.game_id));
