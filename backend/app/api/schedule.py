@@ -297,17 +297,29 @@ async def get_today_schedule(
         except HTTPException:
             pass
 
-    # If any non-final games are missing a top pick, sync odds and
-    # generate predictions so every game card shows a real best bet.
-    # This mirrors what the best-bets endpoint does: sync odds first so
-    # predictions are calculated against real sportsbook lines (giving
-    # them a real edge), rather than showing inflated fake confidence.
+    # If any non-final games are missing a top pick OR missing odds
+    # data entirely, sync odds from sportsbooks and regenerate predictions.
     missing_picks = [g for g in games if g.top_pick is None and g.status not in ("final", "completed", "off")]
-    if missing_picks:
+
+    # Also directly check if any DB games are missing odds — this catches
+    # cases where predictions exist but lack edges because odds weren't
+    # available when they were generated.
+    needs_odds_result = await session.execute(
+        select(Game.id).where(
+            Game.date == today,
+            Game.status.notin_(["final", "completed", "off"]),
+            Game.home_moneyline.is_(None),
+        )
+    )
+    games_missing_odds = needs_odds_result.scalars().all()
+
+    if missing_picks or games_missing_odds:
         logger.info(
-            "Schedule: %d/%d games missing picks. Missing: %s",
-            len(missing_picks), len(games),
-            ", ".join(f"{g.away_team.abbreviation}@{g.home_team.abbreviation}(status={g.status})" for g in missing_picks),
+            "Schedule: %d games missing picks, %d games missing odds. "
+            "Missing picks: %s | Missing odds (game IDs): %s",
+            len(missing_picks), len(games_missing_odds),
+            ", ".join(f"{g.away_team.abbreviation}@{g.home_team.abbreviation}(status={g.status})" for g in missing_picks) or "none",
+            ", ".join(str(gid) for gid in games_missing_odds) or "none",
         )
         try:
             # Step 1: Sync fresh odds from sportsbook API
@@ -398,3 +410,45 @@ async def sync_schedule(
         message=f"Successfully synced {count} games from the NHL API.",
         games_synced=count,
     )
+
+
+@router.post("/sync-odds")
+async def force_sync_odds(
+    session: AsyncSession = Depends(get_session),
+):
+    """
+    Force-sync odds from all sportsbook sources and write to DB.
+
+    Unlike the schedule endpoint's automatic sync, this endpoint ALWAYS
+    runs the full odds pipeline regardless of prediction state.  Use this
+    when games are missing odds despite being available in sportsbooks.
+    """
+    from app.scrapers.odds_multi import MultiSourceOddsScraper
+
+    scraper = MultiSourceOddsScraper()
+    try:
+        matched = await scraper.sync_odds(session)
+        await session.flush()
+
+        # Also regenerate predictions so edges are computed with real odds
+        from app.api.predictions import _try_generate_predictions
+
+        today = date.today()
+        try:
+            pred_count = await _try_generate_predictions(session, target_date=today)
+            await session.flush()
+        except HTTPException:
+            pred_count = 0
+
+        matched_pairs = [
+            f"{m.get('away_abbrev', '')}@{m.get('home_abbrev', '')}"
+            for m in (matched or [])
+        ]
+        return {
+            "status": "ok",
+            "odds_matched": len(matched) if matched else 0,
+            "predictions_generated": pred_count,
+            "matched_games": matched_pairs,
+        }
+    finally:
+        await scraper.close()
