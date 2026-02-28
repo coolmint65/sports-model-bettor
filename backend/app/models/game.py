@@ -115,6 +115,12 @@ class Game(TimestampMixin, Base):
         Integer, ForeignKey("team.id"), nullable=True
     )
 
+    # Betting odds (American format, from The Odds API)
+    home_moneyline: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    away_moneyline: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    over_under_line: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    home_spread_line: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
     # Relationships
     home_team: Mapped["Team"] = relationship(
         "Team",

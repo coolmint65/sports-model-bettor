@@ -53,6 +53,36 @@ SPREAD_LINES = [-1.5, 1.5]
 POISSON_MAX_GOALS = 12
 
 
+def american_odds_to_implied_prob(odds: float) -> float:
+    """
+    Convert American odds to implied probability.
+
+    - Negative odds (favorite): implied = |odds| / (|odds| + 100)
+    - Positive odds (underdog): implied = 100 / (odds + 100)
+
+    Returns a probability between 0 and 1.
+    """
+    if odds < 0:
+        return abs(odds) / (abs(odds) + 100.0)
+    elif odds > 0:
+        return 100.0 / (odds + 100.0)
+    return 0.5  # Even money
+
+
+def implied_prob_to_american_odds(prob: float) -> float:
+    """
+    Convert implied probability to American odds.
+
+    Returns American odds (negative for favorites, positive for underdogs).
+    """
+    if prob <= 0 or prob >= 1:
+        return 0.0
+    if prob > 0.5:
+        return -(prob / (1 - prob)) * 100.0
+    else:
+        return ((1 - prob) / prob) * 100.0
+
+
 class BettingModel:
     """
     Statistical prediction model for NHL hockey betting.
@@ -626,6 +656,12 @@ class BettingModel:
         home_abbr = features.get("home_team_abbr", "HOM")
         away_abbr = features.get("away_team_abbr", "AWY")
 
+        # Extract betting odds for implied probability calculations
+        odds_data = features.get("odds", {})
+        home_ml = odds_data.get("home_moneyline")
+        away_ml = odds_data.get("away_moneyline")
+        ou_line = odds_data.get("over_under_line")
+
         # ---- Moneyline ----
         try:
             ml = await self.predict_moneyline(features)
@@ -649,11 +685,23 @@ class BettingModel:
                     f"Road team's form outweighs home ice advantage."
                 )
 
+            # Calculate implied probability and edge from real odds
+            ml_implied = None
+            ml_odds_display = None
+            if ml_pred == "home" and home_ml is not None:
+                ml_implied = american_odds_to_implied_prob(home_ml)
+                ml_odds_display = home_ml
+            elif ml_pred == "away" and away_ml is not None:
+                ml_implied = american_odds_to_implied_prob(away_ml)
+                ml_odds_display = away_ml
+
             predictions.append({
                 "bet_type": "ml",
                 "prediction": ml_pred,
                 "confidence": round(ml_prob, 4),
                 "probability": round(ml_prob, 4),
+                "implied_probability": round(ml_implied, 4) if ml_implied else None,
+                "odds": ml_odds_display,
                 "reasoning": ml_reason,
                 "details": ml,
             })
@@ -697,6 +745,8 @@ class BettingModel:
                     "prediction": best_total_pred,
                     "confidence": round(best_total_prob, 4),
                     "probability": round(best_total_prob, 4),
+                    "implied_probability": None,
+                    "odds": None,
                     "reasoning": total_reason,
                     "details": totals,
                 })
@@ -713,6 +763,8 @@ class BettingModel:
                             "prediction": ou_pred,
                             "confidence": round(ou_prob, 4),
                             "probability": round(ou_prob, 4),
+                            "implied_probability": None,
+                            "odds": None,
                             "reasoning": (
                                 f"Standard 5.5 line: {ou_pred.replace('_', ' ')} at {ou_prob:.1%}. "
                                 f"Projected total: {total_xg:.1f} goals."
@@ -750,6 +802,8 @@ class BettingModel:
                     "prediction": pred_val,
                     "confidence": round(prob_val, 4),
                     "probability": round(prob_val, 4),
+                    "implied_probability": None,
+                    "odds": None,
                     "reasoning": spread_reason,
                     "details": spread,
                 })
@@ -771,16 +825,18 @@ class BettingModel:
                     key=lambda x: x[1],
                 )
                 if best_period_outcome[1] > 0.38:
+                    po_team = home_name if best_period_outcome[0] == "home" else (away_name if best_period_outcome[0] == "away" else "Draw")
                     period_reason = (
-                        f"{period_num} winner: {best_period_outcome[0]} at "
-                        f"{best_period_outcome[1]:.1%}. "
-                        f"xG: {period_data['home_xg']:.2f} - {period_data['away_xg']:.2f}."
+                        f"{po_team} favored in {period_num} ({best_period_outcome[1]:.1%} confidence). "
+                        f"Expected goals: {home_abbr} {period_data['home_xg']:.2f} - {away_abbr} {period_data['away_xg']:.2f}."
                     )
                     predictions.append({
                         "bet_type": "period_winner",
                         "prediction": f"{period_key}_{best_period_outcome[0]}",
                         "confidence": round(best_period_outcome[1], 4),
                         "probability": round(best_period_outcome[1], 4),
+                        "implied_probability": None,
+                        "odds": None,
                         "reasoning": period_reason,
                         "details": {period_key: period_data},
                     })
@@ -791,14 +847,17 @@ class BettingModel:
                 if max(over_15, under_15) > 0.55:
                     pt_pred = f"{period_key}_over_1.5" if over_15 > under_15 else f"{period_key}_under_1.5"
                     pt_prob = max(over_15, under_15)
+                    pt_direction = "Over" if "over" in pt_pred else "Under"
                     predictions.append({
                         "bet_type": "period_total",
                         "prediction": pt_pred,
                         "confidence": round(pt_prob, 4),
                         "probability": round(pt_prob, 4),
+                        "implied_probability": None,
+                        "odds": None,
                         "reasoning": (
-                            f"{period_num} total: {pt_pred.split('_', 1)[1].replace('_', ' ')} "
-                            f"at {pt_prob:.1%}. Period xG: {period_data['total_xg']:.2f}."
+                            f"{pt_direction} 1.5 goals in {period_num} ({pt_prob:.1%} confidence). "
+                            f"Expected {period_data['total_xg']:.1f} goals in this period."
                         ),
                         "details": {period_key: period_data},
                     })
@@ -826,7 +885,9 @@ class BettingModel:
                 "prediction": fg_pred,
                 "confidence": round(fg_prob, 4),
                 "probability": round(fg_prob, 4),
-                "reasoning": f"{fg_team} projected to score first at {fg_prob:.1%}.",
+                "implied_probability": None,
+                "odds": None,
+                "reasoning": f"{fg_team} projected to score first ({fg_prob:.1%} confidence).",
                 "details": props,
             })
 
@@ -834,16 +895,25 @@ class BettingModel:
             btts = props["btts_prob"]
             btts_pred = "yes" if btts > 0.5 else "no"
             btts_conf = btts if btts > 0.5 else (1.0 - btts)
+            if btts_pred == "yes":
+                btts_reason = (
+                    f"Both teams expected to score ({btts_conf:.1%} confidence). "
+                    f"{home_name} has a {props['first_goal_home']:.0%} chance of scoring "
+                    f"and {away_name} has a {props['first_goal_away']:.0%} chance."
+                )
+            else:
+                btts_reason = (
+                    f"Shutout likely — one team may not score ({btts_conf:.1%} confidence). "
+                    f"Overtime probability is {props['overtime_prob']:.0%}."
+                )
             predictions.append({
                 "bet_type": "both_score",
                 "prediction": btts_pred,
                 "confidence": round(btts_conf, 4),
                 "probability": round(btts_conf, 4),
-                "reasoning": (
-                    f"Both teams to score: {btts_pred} at {btts_conf:.1%}. "
-                    f"P(home scores) = {1.0 - self._poisson_prob(0, 0):.1%}, "
-                    f"P(away scores) = {1.0 - self._poisson_prob(0, 0):.1%}."
-                ),
+                "implied_probability": None,
+                "odds": None,
+                "reasoning": btts_reason,
                 "details": props,
             })
 
@@ -851,12 +921,24 @@ class BettingModel:
             ot_prob = props["overtime_prob"]
             ot_pred = "yes" if ot_prob > 0.5 else "no"
             ot_conf = ot_prob if ot_prob > 0.5 else (1.0 - ot_prob)
+            if ot_pred == "yes":
+                ot_reason = (
+                    f"Game likely heads to OT ({ot_conf:.1%} confidence). "
+                    f"Both teams evenly matched in recent form."
+                )
+            else:
+                ot_reason = (
+                    f"Regulation finish expected ({ot_conf:.1%} confidence). "
+                    f"Clear separation in team quality suggests a decisive result."
+                )
             predictions.append({
                 "bet_type": "overtime",
                 "prediction": ot_pred,
                 "confidence": round(ot_conf, 4),
                 "probability": round(ot_conf, 4),
-                "reasoning": f"Overtime probability: {ot_prob:.1%}.",
+                "implied_probability": None,
+                "odds": None,
+                "reasoning": ot_reason,
                 "details": props,
             })
 
@@ -870,8 +952,10 @@ class BettingModel:
                 "prediction": oe_pred,
                 "confidence": round(oe_prob, 4),
                 "probability": round(oe_prob, 4),
+                "implied_probability": None,
+                "odds": None,
                 "reasoning": (
-                    f"Total goals {oe_pred} at {oe_prob:.1%} probability."
+                    f"Total goals projected to be {oe_pred} ({oe_prob:.1%} confidence)."
                 ),
                 "details": props,
             })

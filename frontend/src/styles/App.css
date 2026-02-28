@@ -601,6 +601,14 @@ a:hover {
   color: var(--accent-green);
 }
 
+.odds-value {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #ffd700;
+  font-family: var(--font-mono);
+}
+
 .confidence-bar-container {
   flex: 1;
   height: 6px;

@@ -141,7 +141,11 @@ class PredictionManager:
             game_info = game_data.get("game_info", {})
             for pred in game_data.get("predictions", []):
                 confidence = pred.get("confidence", 0)
-                implied_prob = pred.get("implied_probability", 0.5)
+                # Use real odds-based implied probability if available
+                implied_prob = pred.get("implied_probability")
+                odds = pred.get("odds")
+                if implied_prob is None:
+                    implied_prob = 0.5
                 edge = confidence - implied_prob
 
                 flat = {
@@ -152,16 +156,25 @@ class PredictionManager:
                     "confidence": confidence,
                     "probability": pred.get("probability", confidence),
                     "edge": round(edge, 4),
-                    "implied_probability": implied_prob,
+                    "implied_probability": round(implied_prob, 4),
+                    "odds": odds,
                     "reasoning": pred.get("reasoning", ""),
                     "is_best_bet": False,
                 }
                 all_flat.append(flat)
 
-                if confidence >= settings.min_confidence and edge >= settings.min_edge:
+                # Only consider bets with real positive edge as candidates.
+                # Skip bets with very high implied probability (heavy favorites
+                # like -1200) since even a correct prediction has poor ROI.
+                if (
+                    confidence >= settings.min_confidence
+                    and edge >= settings.min_edge
+                    and implied_prob < 0.85  # Skip extreme favorites
+                ):
                     candidates.append(flat)
 
-        # Sort by edge descending
+        # Sort by edge descending - this now reflects real value
+        # since edge = model_confidence - market_implied_probability
         candidates.sort(key=lambda c: c["edge"], reverse=True)
 
         # Take top 3
@@ -387,8 +400,14 @@ class PredictionManager:
         confidence = bet.get("confidence", 0.0)
         edge = bet.get("edge")
         implied_prob = bet.get("implied_probability")
+        odds = bet.get("odds")
         is_best = bet.get("is_best_bet", False)
         reasoning = bet.get("reasoning", "")
+
+        # Build reasoning with odds info if available
+        if odds is not None and reasoning:
+            odds_str = f"+{int(odds)}" if odds > 0 else str(int(odds))
+            reasoning = f"{reasoning} (Odds: {odds_str})"
 
         prediction = Prediction(
             game_id=game_id,

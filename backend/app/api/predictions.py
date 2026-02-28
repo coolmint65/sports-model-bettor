@@ -70,6 +70,7 @@ class BestBet(BaseModel):
     prediction_value: Optional[str] = None
     confidence: Optional[float] = None
     edge: Optional[float] = None
+    odds_implied_prob: Optional[float] = None
     reasoning: Optional[str] = None
 
 
@@ -322,6 +323,7 @@ async def get_best_bets(
                 prediction_value=detail.prediction_value,
                 confidence=detail.confidence,
                 edge=detail.edge,
+                odds_implied_prob=pred.odds_implied_prob,
                 reasoning=detail.reasoning,
             )
         )

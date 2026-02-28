@@ -5,9 +5,11 @@ Provides the async engine, session factory, and database initialization
 utilities. Uses SQLAlchemy 2.0 async style throughout.
 """
 
+import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -15,6 +17,8 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 # Create the async engine
 engine = create_async_engine(
@@ -97,6 +101,30 @@ async def init_db() -> None:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    # Add new columns to existing tables if they don't exist yet (SQLite)
+    await _migrate_add_columns()
+
+
+async def _migrate_add_columns() -> None:
+    """Add new columns to existing tables if they are missing (SQLite only)."""
+    new_columns = [
+        ("game", "home_moneyline", "FLOAT"),
+        ("game", "away_moneyline", "FLOAT"),
+        ("game", "over_under_line", "FLOAT"),
+        ("game", "home_spread_line", "FLOAT"),
+    ]
+
+    async with engine.begin() as conn:
+        for table, column, col_type in new_columns:
+            try:
+                await conn.execute(
+                    text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+                )
+                logger.info("Added column %s.%s", table, column)
+            except Exception:
+                # Column already exists
+                pass
 
 
 async def close_db() -> None:

@@ -169,7 +169,7 @@ class FeatureEngine:
         db: AsyncSession,
         team1_id: int,
         team2_id: int,
-        last_n: int = 10,
+        last_n: int = 20,
     ) -> Dict[str, Any]:
         """
         Calculate head-to-head record between two teams from recent games.
@@ -703,6 +703,13 @@ class FeatureEngine:
             "away_team_name": away_team.name if away_team else "Unknown",
             "home_team_abbr": home_team.abbreviation if home_team else "UNK",
             "away_team_abbr": away_team.abbreviation if away_team else "UNK",
+            # Betting odds (from The Odds API, American format)
+            "odds": {
+                "home_moneyline": getattr(game, "home_moneyline", None),
+                "away_moneyline": getattr(game, "away_moneyline", None),
+                "over_under_line": getattr(game, "over_under_line", None),
+                "home_spread_line": getattr(game, "home_spread_line", None),
+            },
             # Home team features
             "home_form_5": home_form_5,
             "home_form_10": home_form_10,

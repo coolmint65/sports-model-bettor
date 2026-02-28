@@ -1,9 +1,20 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Trophy, TrendingUp, Target, Star, ChevronRight } from 'lucide-react';
+import { Trophy, TrendingUp, Target, Star, ChevronRight, DollarSign } from 'lucide-react';
 import { fetchBestBets } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import { teamName, confidencePct, formatBetType, formatPredictionValue } from '../utils/teams';
+
+function formatOdds(impliedProb) {
+  if (!impliedProb || impliedProb <= 0 || impliedProb >= 1) return null;
+  if (impliedProb > 0.5) {
+    const odds = Math.round(-(impliedProb / (1 - impliedProb)) * 100);
+    return odds.toString();
+  } else {
+    const odds = Math.round(((1 - impliedProb) / impliedProb) * 100);
+    return `+${odds}`;
+  }
+}
 
 function getConfidenceColor(confidence) {
   if (confidence >= 75) return '#00ff88';
@@ -24,6 +35,8 @@ function BestBetCard({ bet, rank, isFeatured }) {
   const confidence = confidencePct(bet.confidence);
   const edge = confidencePct(bet.edge);
   const confColor = getConfidenceColor(confidence);
+  const impliedProb = bet.odds_implied_prob;
+  const oddsDisplay = formatOdds(impliedProb);
 
   const awayName = teamName(bet.away_team, 'Away');
   const homeName = teamName(bet.home_team, 'Home');
@@ -93,6 +106,16 @@ function BestBetCard({ bet, rank, isFeatured }) {
               {edge.toFixed(1)}%
             </span>
           </div>
+
+          {oddsDisplay && (
+            <div className="metric">
+              <span className="metric-label">Odds</span>
+              <span className="metric-value odds-value">
+                <DollarSign size={14} />
+                {oddsDisplay}
+              </span>
+            </div>
+          )}
         </div>
 
         {bet.reasoning && (

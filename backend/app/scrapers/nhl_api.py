@@ -1250,3 +1250,163 @@ class NHLScraper(BaseScraper):
                 )
 
         await db.flush()
+
+    # ------------------------------------------------------------------
+    # Sync historical seasons for H2H data
+    # ------------------------------------------------------------------
+
+    async def sync_historical_season(
+        self,
+        db: AsyncSession,
+        season: str,
+    ) -> int:
+        """
+        Sync a full past season's schedule and results to build H2H history.
+
+        Fetches the schedule for a previous season using team schedules,
+        creates Game records with final scores. This populates the Game
+        table with historical data so that H2H queries return richer results.
+
+        Args:
+            db: Async SQLAlchemy session.
+            season: Season string (e.g., "20242025" for 2024-25 season).
+
+        Returns:
+            Number of games synced.
+        """
+        logger.info("Syncing historical season: %s", season)
+
+        # Get all teams from DB
+        result = await db.execute(
+            select(Team).where(Team.sport == "nhl", Team.active == True)
+        )
+        teams = result.scalars().all()
+
+        if not teams:
+            logger.warning("No teams found; run sync_teams first.")
+            return 0
+
+        # Use a subset of teams' schedules to get broad coverage
+        # Each game appears on two teams' schedules, so 6 teams
+        # covers roughly 12/32 of the league (with overlap, ~300+ games)
+        seen_game_ids = set()
+        games_created = 0
+        sample_teams = teams[:8]
+
+        for team in sample_teams:
+            try:
+                season_games = await self.fetch_team_season_schedule(
+                    team.abbreviation, season
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to fetch %s schedule for season %s: %s",
+                    team.abbreviation, season, exc,
+                )
+                continue
+
+            for game_raw in season_games:
+                game_id = game_raw.get("id")
+                if not game_id or game_id in seen_game_ids:
+                    continue
+                seen_game_ids.add(game_id)
+
+                # Only regular season games
+                game_type = game_raw.get("gameType", 2)
+                if str(game_type) != "2":
+                    continue
+
+                # Only completed games
+                state = game_raw.get("gameState", "FUT")
+                if state not in ("OFF", "FINAL"):
+                    continue
+
+                game_ext_id = str(game_id)
+
+                # Skip if already in DB
+                existing = await db.execute(
+                    select(Game).where(Game.external_id == game_ext_id)
+                )
+                if existing.scalar_one_or_none():
+                    continue
+
+                # Parse teams
+                home_info = game_raw.get("homeTeam", {})
+                away_info = game_raw.get("awayTeam", {})
+                home_abbrev = self.safe_get(home_info, "abbrev")
+                away_abbrev = self.safe_get(away_info, "abbrev")
+
+                if not home_abbrev or not away_abbrev:
+                    continue
+
+                home_team = await self._get_or_create_team(
+                    db,
+                    abbrev=home_abbrev,
+                    name=self.safe_get(home_info, "placeName", "default") or home_abbrev,
+                    external_id=str(home_info.get("id", "")),
+                )
+                away_team = await self._get_or_create_team(
+                    db,
+                    abbrev=away_abbrev,
+                    name=self.safe_get(away_info, "placeName", "default") or away_abbrev,
+                    external_id=str(away_info.get("id", "")),
+                )
+
+                if not home_team or not away_team:
+                    continue
+
+                # Parse date
+                game_date_str = game_raw.get("gameDate", "")
+                try:
+                    game_date_val = date.fromisoformat(game_date_str)
+                except (ValueError, TypeError):
+                    continue
+
+                # Parse start time
+                start_time = None
+                start_str = game_raw.get("startTimeUTC")
+                if start_str:
+                    try:
+                        start_time = datetime.fromisoformat(
+                            start_str.replace("Z", "+00:00")
+                        )
+                    except (ValueError, TypeError):
+                        pass
+
+                home_score = home_info.get("score")
+                away_score = away_info.get("score")
+
+                # Determine winner
+                winning_team_id = None
+                if home_score is not None and away_score is not None:
+                    if home_score > away_score:
+                        winning_team_id = home_team.id
+                    elif away_score > home_score:
+                        winning_team_id = away_team.id
+
+                game = Game(
+                    external_id=game_ext_id,
+                    sport="nhl",
+                    season=season,
+                    game_type="regular",
+                    date=game_date_val,
+                    start_time=start_time,
+                    venue=self.safe_get(game_raw, "venue", "default")
+                    or self.safe_get(game_raw, "venue", "name"),
+                    status="final",
+                    home_team_id=home_team.id,
+                    away_team_id=away_team.id,
+                    home_score=home_score,
+                    away_score=away_score,
+                    winning_team_id=winning_team_id,
+                )
+                db.add(game)
+                games_created += 1
+
+        await db.flush()
+
+        logger.info(
+            "Historical season %s sync complete: %d new games",
+            season, games_created,
+        )
+        return games_created

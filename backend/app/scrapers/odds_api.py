@@ -419,13 +419,24 @@ class OddsScraper(BaseScraper):
                 )
                 continue
 
+            # Persist odds to the Game record
+            best_odds = odds.get("best_odds", {})
+            if best_odds.get("home_moneyline") is not None:
+                game.home_moneyline = best_odds["home_moneyline"]
+            if best_odds.get("away_moneyline") is not None:
+                game.away_moneyline = best_odds["away_moneyline"]
+            if best_odds.get("over_under") is not None:
+                game.over_under_line = best_odds["over_under"]
+            if best_odds.get("home_spread") is not None:
+                game.home_spread_line = best_odds["home_spread"]
+
             matched.append({
                 "game_id": game.id,
                 "game_external_id": game.external_id,
                 "home_abbrev": home_abbrev,
                 "away_abbrev": away_abbrev,
                 "game_date": str(game_date),
-                "best_odds": odds.get("best_odds", {}),
+                "best_odds": best_odds,
                 "bookmakers": odds.get("bookmakers", []),
             })
 

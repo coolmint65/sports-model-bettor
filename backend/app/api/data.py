@@ -128,6 +128,18 @@ async def sync_all(
     finally:
         await scraper.close()
 
+    # Sync betting odds from The Odds API
+    try:
+        from app.scrapers.odds_api import OddsScraper
+
+        odds_scraper = OddsScraper()
+        try:
+            await odds_scraper.sync_odds(session)
+        finally:
+            await odds_scraper.close()
+    except Exception as exc:
+        logger.warning("Odds sync failed (non-critical): %s", exc)
+
     # Auto-generate predictions for today after sync
     pred_count = 0
     try:
@@ -219,6 +231,89 @@ async def sync_results(
         )
     finally:
         await scraper.close()
+
+
+@router.post(
+    "/sync/odds",
+    response_model=SyncResult,
+    summary="Sync betting odds",
+)
+async def sync_odds(
+    session: AsyncSession = Depends(get_session),
+):
+    """Fetch and update current betting odds from The Odds API."""
+    try:
+        from app.scrapers.odds_api import OddsScraper
+
+        odds_scraper = OddsScraper()
+        try:
+            matched = await odds_scraper.sync_odds(session)
+            return SyncResult(
+                success=True,
+                message=f"Odds synced for {len(matched)} games.",
+                details=f"Updated moneyline, spread, and totals odds.",
+            )
+        finally:
+            await odds_scraper.close()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Odds sync failed: {exc}",
+        )
+
+
+@router.post(
+    "/sync/history",
+    response_model=SyncResult,
+    summary="Sync historical season data for H2H",
+)
+async def sync_historical(
+    seasons: int = 2,
+    session: AsyncSession = Depends(get_session),
+):
+    """
+    Sync previous seasons' game results to build head-to-head history.
+
+    Fetches completed regular season games from past seasons so the
+    prediction model has richer H2H data. Default syncs the last 2 seasons.
+
+    Args:
+        seasons: Number of past seasons to sync (1-3). Default 2.
+    """
+    scraper = _get_scraper()
+    seasons = max(1, min(3, seasons))
+
+    # Derive past season strings from current default season
+    # e.g., if default is "20252026", previous is "20242025"
+    try:
+        current = scraper.default_season
+        current_start = int(current[:4])
+    except (ValueError, IndexError):
+        current_start = 2025
+
+    total_games = 0
+    synced_seasons = []
+
+    try:
+        for i in range(1, seasons + 1):
+            start_year = current_start - i
+            season_str = f"{start_year}{start_year + 1}"
+            count = await scraper.sync_historical_season(session, season_str)
+            total_games += count
+            synced_seasons.append(season_str)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Historical sync failed: {exc}",
+        )
+    finally:
+        await scraper.close()
+
+    return SyncResult(
+        success=True,
+        message=f"Synced {total_games} historical games from {len(synced_seasons)} season(s).",
+        details=f"Seasons synced: {', '.join(synced_seasons)}",
+    )
 
 
 @router.get(
