@@ -176,13 +176,24 @@ class PredictionManager:
                 # Only consider bets where we have real market odds so we
                 # can calculate genuine edge. Props without odds data would
                 # get a fake 50% implied prob and dominate with inflated edges.
+                #
+                # Juice filter: exclude heavy favorites from best bets.
+                # A -278 puck line is terrible value even if the model likes
+                # it.  Best bets should have reasonable juice where the
+                # payout justifies the risk.
                 bet_type = pred["bet_type"]
+                odds_val = odds or 0
+                has_good_juice = (
+                    odds_val >= settings.best_bet_max_favorite  # e.g. >= -200
+                    or odds_val > 0  # all plus-money is fine
+                )
                 if (
                     bet_type in ODDS_BET_TYPES
                     and has_real_odds
+                    and has_good_juice
                     and confidence >= settings.min_confidence
                     and edge >= settings.min_edge
-                    and implied_prob < 0.85  # Skip extreme favorites
+                    and implied_prob < settings.best_bet_max_implied
                 ):
                     candidates.append(flat)
 
