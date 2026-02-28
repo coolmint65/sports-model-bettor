@@ -47,7 +47,8 @@ LEAGUE_AVG_GAA = 3.05
 
 # Common betting lines
 TOTAL_LINES = [4.5, 5.5, 6.5]
-SPREAD_LINES = [-1.5, 1.5]
+# Standard NHL puck line (favorite -1.5, underdog +1.5)
+PUCK_LINE = 1.5
 
 # Maximum number of goals to sum in Poisson calculations
 POISSON_MAX_GOALS = 12
@@ -434,12 +435,17 @@ class BettingModel:
         """
         Predict spread (puck line) probabilities.
 
-        Standard NHL puck line is -1.5 / +1.5.
-        P(home -1.5) = P(home wins by 2+)
-        P(away +1.5) = P(away loses by 1 or wins outright)
+        Computes four cover probabilities for the standard 1.5 puck line:
+          - home_-1.5: P(home wins by 2+)
+          - home_+1.5: P(home doesn't lose by 2+)
+          - away_-1.5: P(away wins by 2+)
+          - away_+1.5: P(away doesn't lose by 2+)
+
+        The actual bettable puck line pairs are:
+          - Favorite -1.5 vs Underdog +1.5 (complements)
 
         Returns:
-            dict with predicted_margin, spread probabilities for each line.
+            dict with predicted_margin, spread probabilities for each side.
         """
         home_xg, away_xg = self._calc_expected_goals(features)
         matrix = self._score_matrix(home_xg, away_xg)
@@ -447,39 +453,24 @@ class BettingModel:
 
         predicted_margin = round(home_xg - away_xg, 3)
 
-        # Include the actual sportsbook spread if available and different
-        odds_data = features.get("odds", {})
-        book_spread = odds_data.get("home_spread_line")
-        eval_spreads = list(SPREAD_LINES)
-        if book_spread is not None:
-            bv = float(book_spread)
-            if bv not in eval_spreads:
-                eval_spreads.append(bv)
-            abv = -bv
-            if abv not in eval_spreads:
-                eval_spreads.append(abv)
+        # Calculate all four spread probabilities for the 1.5 puck line.
+        # margin = home_score - away_score (positive = home winning)
+        home_minus_15 = 0.0  # P(home wins by 2+): margin > 1.5
+        away_minus_15 = 0.0  # P(away wins by 2+): margin < -1.5
+        for i in range(max_g + 1):
+            for j in range(max_g + 1):
+                margin = i - j
+                if margin > 1.5:
+                    home_minus_15 += matrix[i][j]
+                if margin < -1.5:
+                    away_minus_15 += matrix[i][j]
 
-        spreads = {}
-        for spread_line in eval_spreads:
-            # Home covers spread_line means:
-            # home_score - away_score > abs(spread_line) if spread_line < 0
-            # or away_score - home_score < spread_line if spread_line > 0
-            cover_prob = 0.0
-            for i in range(max_g + 1):
-                for j in range(max_g + 1):
-                    margin = i - j  # positive = home winning
-                    if spread_line < 0:
-                        # Home -1.5: home must win by more than 1.5 (i.e., 2+)
-                        if margin > abs(spread_line):
-                            cover_prob += matrix[i][j]
-                    else:
-                        # Away +1.5: away can lose by 1 or win
-                        # Equivalently, home margin < spread_line
-                        if margin < spread_line:
-                            cover_prob += matrix[i][j]
-
-            label = f"home_{spread_line}" if spread_line < 0 else f"away_+{spread_line}"
-            spreads[label] = round(cover_prob, 4)
+        spreads = {
+            "home_-1.5": round(home_minus_15, 4),
+            "home_+1.5": round(1.0 - away_minus_15, 4),
+            "away_-1.5": round(away_minus_15, 4),
+            "away_+1.5": round(1.0 - home_minus_15, 4),
+        }
 
         return {
             "predicted_margin": predicted_margin,
@@ -861,64 +852,76 @@ class BettingModel:
             spreads = spread.get("spreads", {})
             margin = spread["predicted_margin"]
 
-            # Pick the single best puck-line bet (the one aligned with the
-            # sportsbook line, or the one with the highest cover probability).
-            best_spread_pred = None
-            best_spread_prob = 0.0
+            # Determine which team is the favorite to assign the correct
+            # puck line.  In real sportsbooks:
+            #   - Favorite gets -1.5 (must win by 2+)
+            #   - Underdog gets +1.5 (can lose by 1 and still cover)
+            #
+            # We use the moneyline to determine favorite.  If moneyline
+            # data is missing, fall back to the predicted margin.
+            if home_ml is not None and away_ml is not None:
+                home_is_fav = home_ml < away_ml
+            else:
+                home_is_fav = margin > 0  # positive margin = home favored
 
-            for spread_key, cover_prob in spreads.items():
-                anti_prob = 1.0 - cover_prob
-                if cover_prob >= 0.5:
-                    pred_val = spread_key
-                    prob_val = cover_prob
-                else:
-                    # Flip to the other side
-                    if "-1.5" in spread_key:
-                        pred_val = "away_+1.5"
-                    else:
-                        pred_val = "home_-1.5"
-                    prob_val = anti_prob
+            if home_is_fav:
+                # Home is favorite: bettable lines are HOME -1.5 / AWAY +1.5
+                fav_abbr = home_abbr
+                fav_name = home_name
+                dog_abbr = away_abbr
+                dog_name = away_name
+                fav_cover_prob = spreads.get("home_-1.5", 0.0)
+                dog_cover_prob = spreads.get("away_+1.5", 0.0)
+                fav_price = home_spread_price
+                dog_price = away_spread_price
+            else:
+                # Away is favorite: bettable lines are AWAY -1.5 / HOME +1.5
+                fav_abbr = away_abbr
+                fav_name = away_name
+                dog_abbr = home_abbr
+                dog_name = home_name
+                fav_cover_prob = spreads.get("away_-1.5", 0.0)
+                dog_cover_prob = spreads.get("home_+1.5", 0.0)
+                fav_price = away_spread_price
+                dog_price = home_spread_price
 
-                # Only keep the best one
-                if prob_val > best_spread_prob:
-                    best_spread_prob = prob_val
-                    best_spread_pred = pred_val
+            # Pick the side with higher cover probability
+            if fav_cover_prob >= dog_cover_prob:
+                best_abbr = fav_abbr
+                best_spread_sign = "-1.5"
+                best_spread_prob = fav_cover_prob
+                sprd_price = fav_price
+            else:
+                best_abbr = dog_abbr
+                best_spread_sign = "+1.5"
+                best_spread_prob = dog_cover_prob
+                sprd_price = dog_price
 
-            if best_spread_pred:
-                # Replace home/away with team abbreviations
-                if best_spread_pred.startswith("home"):
-                    display_val = best_spread_pred.replace("home", home_abbr, 1)
-                    sprd_price = home_spread_price
-                elif best_spread_pred.startswith("away"):
-                    display_val = best_spread_pred.replace("away", away_abbr, 1)
-                    sprd_price = away_spread_price
-                else:
-                    display_val = best_spread_pred
-                    sprd_price = None
+            display_val = f"{best_abbr}_{best_spread_sign}"
 
-                spread_reason = (
-                    f"Predicted margin: {margin:+.2f} goals. "
-                    f"{display_val.replace('_', ' ')} covers at {best_spread_prob:.1%} probability."
-                )
-                # Use actual spread price if available
-                spread_implied = None
-                spread_odds_display = None
-                if sprd_price is not None and spread_line is not None:
-                    spread_odds_display = float(sprd_price)
-                    spread_implied = american_odds_to_implied_prob(spread_odds_display)
-                elif spread_line is not None:
-                    spread_odds_display = -110.0
-                    spread_implied = 0.524
-                predictions.append({
-                    "bet_type": "spread",
-                    "prediction": display_val,
-                    "confidence": round(best_spread_prob, 4),
-                    "probability": round(best_spread_prob, 4),
-                    "implied_probability": round(spread_implied, 4) if spread_implied else None,
-                    "odds": spread_odds_display,
-                    "reasoning": spread_reason,
-                    "details": spread,
-                })
+            spread_reason = (
+                f"Predicted margin: {margin:+.2f} goals. "
+                f"{best_abbr} {best_spread_sign} covers at {best_spread_prob:.1%} probability."
+            )
+            # Use actual spread price if available
+            spread_implied = None
+            spread_odds_display = None
+            if sprd_price is not None and spread_line is not None:
+                spread_odds_display = float(sprd_price)
+                spread_implied = american_odds_to_implied_prob(spread_odds_display)
+            elif spread_line is not None:
+                spread_odds_display = -110.0
+                spread_implied = 0.524
+            predictions.append({
+                "bet_type": "spread",
+                "prediction": display_val,
+                "confidence": round(best_spread_prob, 4),
+                "probability": round(best_spread_prob, 4),
+                "implied_probability": round(spread_implied, 4) if spread_implied else None,
+                "odds": spread_odds_display,
+                "reasoning": spread_reason,
+                "details": spread,
+            })
         except Exception as e:
             logger.error("Spread prediction failed: %s", e)
 

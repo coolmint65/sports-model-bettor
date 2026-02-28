@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.analytics.features import FeatureEngine
 from app.analytics.models import BettingModel
@@ -471,8 +472,12 @@ class PredictionManager:
         Returns:
             BetResult instance if graded, None if grading was not possible.
         """
-        # Fetch the game
-        game_stmt = select(Game).where(Game.id == prediction.game_id)
+        # Fetch the game with team relationships for spread grading
+        game_stmt = (
+            select(Game)
+            .options(selectinload(Game.home_team), selectinload(Game.away_team))
+            .where(Game.id == prediction.game_id)
+        )
         game_result = await db.execute(game_stmt)
         game = game_result.scalars().first()
 
@@ -594,15 +599,31 @@ class PredictionManager:
             return False
 
         elif bet_type == "spread":
-            # prediction_value e.g. "home_-1.5", actual_outcome e.g. "margin_2"
+            # prediction_value e.g. "EDM_-1.5" or "SJS_+1.5"
+            # actual_outcome e.g. "margin_2" (home_score - away_score)
             try:
                 actual_margin = int(actual_outcome.split("_")[1])
-                if "home_-" in prediction_value:
-                    line = float(prediction_value.split("_-")[1])
-                    return actual_margin > line
-                elif "away_+" in prediction_value:
-                    line = float(prediction_value.split("_+")[1])
-                    return actual_margin < line
+                # Determine if this prediction is for the home or away team
+                # by matching the team abbreviation prefix
+                pred_parts = prediction_value.split("_", 1)
+                team_abbr = pred_parts[0] if len(pred_parts) > 1 else ""
+                spread_str = pred_parts[1] if len(pred_parts) > 1 else prediction_value
+
+                # Check if the predicted team is the home team
+                home_team_obj = getattr(game, "home_team", None)
+                home_abbr = getattr(home_team_obj, "abbreviation", "") if home_team_obj else ""
+                is_home_team = (team_abbr == home_abbr) or ("home" in prediction_value.lower())
+
+                spread_val = float(spread_str)
+                if is_home_team:
+                    # Home team spread: covers if margin > |spread| (for -1.5)
+                    # or margin > -|spread| (for +1.5)
+                    return actual_margin > -spread_val if spread_val > 0 else actual_margin > abs(spread_val)
+                else:
+                    # Away team spread: covers if -margin > |spread| (for -1.5)
+                    # or -margin > -|spread| (for +1.5)
+                    away_margin = -actual_margin
+                    return away_margin > -spread_val if spread_val > 0 else away_margin > abs(spread_val)
             except (ValueError, IndexError):
                 pass
             return False
