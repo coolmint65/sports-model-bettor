@@ -15,7 +15,7 @@ import { format } from 'date-fns';
 import { fetchGameDetails } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import PredictionCard from './PredictionCard';
-import { teamName, teamAbbrev, parseAsUTC } from '../utils/teams';
+import { teamName, teamAbbrev, teamLogo, parseAsUTC } from '../utils/teams';
 
 const TABS = [
   { id: 'overview', label: 'Overview', icon: BarChart3 },
@@ -153,11 +153,18 @@ function H2HTab({ game }) {
       <div className="tab-content h2h-tab">
         <div className="empty-state">
           <Users size={48} />
-          <p>No head-to-head history available.</p>
+          <p>No head-to-head history available. Sync historical data to populate matchup records.</p>
         </div>
       </div>
     );
   }
+
+  // H2H records use team1_id = min(home_id, away_id) convention.
+  // Map team1/team2 back to the correct home/away labels.
+  const homeId = game.home_team_form?.team_id ?? game.home_team?.id;
+  const team1IsHome = h2h.team1_id === homeId;
+  const label1 = team1IsHome ? homeLabel : awayLabel;
+  const label2 = team1IsHome ? awayLabel : homeLabel;
 
   return (
     <div className="tab-content h2h-tab">
@@ -172,13 +179,13 @@ function H2HTab({ game }) {
           {h2h.team1_wins != null && (
             <div className="h2h-stat-box">
               <span className="h2h-stat-value">{h2h.team1_wins}</span>
-              <span className="h2h-stat-label">{homeLabel} Wins</span>
+              <span className="h2h-stat-label">{label1} Wins</span>
             </div>
           )}
           {h2h.team2_wins != null && (
             <div className="h2h-stat-box">
               <span className="h2h-stat-value">{h2h.team2_wins}</span>
-              <span className="h2h-stat-label">{awayLabel} Wins</span>
+              <span className="h2h-stat-label">{label2} Wins</span>
             </div>
           )}
           {h2h.team1_goals != null && h2h.team2_goals != null && h2h.games_played > 0 && (
@@ -428,6 +435,10 @@ function GameDetail() {
   const homeRecord = homeForm.wins != null ? `${homeForm.wins}-${homeForm.losses}-${homeForm.ot_losses}` : '';
   const venue = game.venue || game.arena || '';
 
+  // Team logos - check multiple possible sources
+  const awayLogoUrl = teamLogo(game.away_team) || teamLogo(game.away_team_form);
+  const homeLogoUrl = teamLogo(game.home_team) || teamLogo(game.home_team_form);
+
   const renderTabContent = () => {
     switch (activeTab) {
       case 'overview':
@@ -455,6 +466,16 @@ function GameDetail() {
       {/* Game Header */}
       <div className="game-detail-header">
         <div className="game-detail-team away-team-detail">
+          {awayLogoUrl && (
+            <img
+              className="detail-team-logo"
+              src={awayLogoUrl}
+              alt={awayTeamLabel}
+              width={56}
+              height={56}
+              onError={(e) => { e.target.style.display = 'none'; }}
+            />
+          )}
           <div className="detail-team-abbrev">{awayAbbr}</div>
           <div className="detail-team-name">{awayTeamLabel}</div>
           {awayRecord && <div className="detail-team-record">{awayRecord}</div>}
@@ -477,6 +498,16 @@ function GameDetail() {
         </div>
 
         <div className="game-detail-team home-team-detail">
+          {homeLogoUrl && (
+            <img
+              className="detail-team-logo"
+              src={homeLogoUrl}
+              alt={homeTeamLabel}
+              width={56}
+              height={56}
+              onError={(e) => { e.target.style.display = 'none'; }}
+            />
+          )}
           <div className="detail-team-abbrev">{homeAbbr}</div>
           <div className="detail-team-name">{homeTeamLabel}</div>
           {homeRecord && <div className="detail-team-record">{homeRecord}</div>}

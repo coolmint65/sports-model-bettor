@@ -1403,6 +1403,9 @@ class NHLScraper(BaseScraper):
                 db.add(game)
                 games_created += 1
 
+                # Build H2H record from this game's scores
+                await self._update_head_to_head(db, game)
+
         await db.flush()
 
         logger.info(

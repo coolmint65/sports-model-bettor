@@ -17,6 +17,15 @@ export function teamAbbrev(team, fallback = '???') {
 }
 
 /**
+ * Extract a team logo URL from a team object.
+ * Returns null if none is available.
+ */
+export function teamLogo(team) {
+  if (!team || typeof team === 'string') return null;
+  return team.logo_url || team.logo || team.team_logo || null;
+}
+
+/**
  * Normalise a confidence value to a 0-100 percentage.
  * The model stores confidence as 0-1 floats; the UI expects 0-100.
  */

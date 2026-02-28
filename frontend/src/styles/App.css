@@ -718,6 +718,11 @@ a:hover {
   gap: 12px;
 }
 
+/* Push content down so the absolute-positioned status badge doesn't overlap */
+.game-card-body.has-badge {
+  padding-top: 14px;
+}
+
 .game-team {
   display: flex;
   flex-direction: column;
@@ -726,6 +731,12 @@ a:hover {
   flex: 1;
   text-align: center;
   min-width: 0;
+}
+
+.team-logo {
+  border-radius: 4px;
+  object-fit: contain;
+  flex-shrink: 0;
 }
 
 .team-abbrev {
@@ -852,6 +863,11 @@ a:hover {
   gap: 6px;
   flex: 1;
   max-width: 220px;
+}
+
+.detail-team-logo {
+  border-radius: 6px;
+  object-fit: contain;
 }
 
 .detail-team-abbrev {

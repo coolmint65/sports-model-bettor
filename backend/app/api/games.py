@@ -288,9 +288,11 @@ async def _compute_period_scoring(
     """
     Compute average period-by-period scoring for a team from completed games.
 
-    Parses the JSON `period_scores` field stored on each Game. The expected
-    format is: {"home": [1, 2, 0], "away": [0, 1, 1]}.
+    First tries games with detailed per-period scores (from boxscore sync).
+    Falls back to estimating period averages from total scores and TeamStats
+    goals_for_per_game if no per-period data is available.
     """
+    # Try games with detailed per-period scores first
     result = await session.execute(
         select(Game).where(
             or_(Game.home_team_id == team_id, Game.away_team_id == team_id),
@@ -302,29 +304,58 @@ async def _compute_period_scoring(
     )
     games = result.scalars().all()
 
-    if not games:
-        return PeriodScoring()
+    if games:
+        period_totals = [0.0, 0.0, 0.0]
+        counted = 0
+        for game in games:
+            is_home = game.home_team_id == team_id
+            p1 = (game.home_score_p1 if is_home else game.away_score_p1) or 0
+            p2 = (game.home_score_p2 if is_home else game.away_score_p2) or 0
+            p3 = (game.home_score_p3 if is_home else game.away_score_p3) or 0
+            period_totals[0] += p1
+            period_totals[1] += p2
+            period_totals[2] += p3
+            counted += 1
 
-    period_totals = [0.0, 0.0, 0.0]
-    counted = 0
-    for game in games:
-        is_home = game.home_team_id == team_id
-        p1 = (game.home_score_p1 if is_home else game.away_score_p1) or 0
-        p2 = (game.home_score_p2 if is_home else game.away_score_p2) or 0
-        p3 = (game.home_score_p3 if is_home else game.away_score_p3) or 0
-        period_totals[0] += p1
-        period_totals[1] += p2
-        period_totals[2] += p3
-        counted += 1
+        if counted > 0:
+            return PeriodScoring(
+                period_1_avg=round(period_totals[0] / counted, 2),
+                period_2_avg=round(period_totals[1] / counted, 2),
+                period_3_avg=round(period_totals[2] / counted, 2),
+            )
 
-    if counted == 0:
-        return PeriodScoring()
-
-    return PeriodScoring(
-        period_1_avg=round(period_totals[0] / counted, 2),
-        period_2_avg=round(period_totals[1] / counted, 2),
-        period_3_avg=round(period_totals[2] / counted, 2),
+    # Fallback: estimate from total scores across completed games
+    result = await session.execute(
+        select(Game).where(
+            or_(Game.home_team_id == team_id, Game.away_team_id == team_id),
+            Game.status == "final",
+            Game.home_score.isnot(None),
+        )
+        .order_by(Game.date.desc())
+        .limit(20)
     )
+    games_total = result.scalars().all()
+
+    if games_total:
+        total_goals = 0.0
+        counted = 0
+        for game in games_total:
+            is_home = game.home_team_id == team_id
+            goals = (game.home_score if is_home else game.away_score) or 0
+            total_goals += goals
+            counted += 1
+
+        if counted > 0:
+            avg_per_game = total_goals / counted
+            # NHL scoring is roughly evenly distributed across periods
+            # with a slight uptick in the 3rd period
+            return PeriodScoring(
+                period_1_avg=round(avg_per_game * 0.32, 2),
+                period_2_avg=round(avg_per_game * 0.33, 2),
+                period_3_avg=round(avg_per_game * 0.35, 2),
+            )
+
+    return PeriodScoring()
 
 
 async def _get_game_predictions(

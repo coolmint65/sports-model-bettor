@@ -2,7 +2,7 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Clock, MapPin, ChevronRight, TrendingUp } from 'lucide-react';
 import { format } from 'date-fns';
-import { teamName, teamAbbrev, confidencePct, parseAsUTC } from '../utils/teams';
+import { teamName, teamAbbrev, teamLogo, confidencePct, parseAsUTC } from '../utils/teams';
 
 function getConfidenceColor(confidence) {
   if (confidence >= 75) return '#00ff88';
@@ -48,6 +48,22 @@ function formatGameTime(game) {
   }
 }
 
+function TeamLogo({ team, size = 36 }) {
+  const logo = teamLogo(team);
+  if (!logo) return null;
+  return (
+    <img
+      className="team-logo"
+      src={logo}
+      alt=""
+      width={size}
+      height={size}
+      loading="lazy"
+      onError={(e) => { e.target.style.display = 'none'; }}
+    />
+  );
+}
+
 function GameCard({ game }) {
   const navigate = useNavigate();
   const gameId = game.game_id || game.id;
@@ -62,6 +78,7 @@ function GameCard({ game }) {
   const venue = game.venue || game.arena || '';
   const rawConf = game.top_confidence || game.confidence || game.prediction_confidence || null;
   const confidence = rawConf != null ? confidencePct(rawConf) : null;
+  const hasBadge = !!statusInfo.label;
 
   const handleClick = () => {
     if (gameId) {
@@ -77,16 +94,17 @@ function GameCard({ game }) {
       tabIndex={0}
       onKeyDown={(e) => e.key === 'Enter' && handleClick()}
     >
-      {statusInfo.label && (
+      {hasBadge && (
         <div className={`game-status-badge ${statusInfo.className}`}>
           {statusInfo.label === 'LIVE' && <span className="live-dot"></span>}
           {statusInfo.label}
         </div>
       )}
 
-      <div className="game-card-body">
+      <div className={`game-card-body ${hasBadge ? 'has-badge' : ''}`}>
         {/* Away Team */}
         <div className="game-team">
+          <TeamLogo team={game.away_team} size={36} />
           <div className="team-abbrev">{awayAbbr}</div>
           <div className="team-name">{awayName}</div>
           {statusInfo.showScore && awayScore !== null && (
@@ -110,6 +128,7 @@ function GameCard({ game }) {
 
         {/* Home Team */}
         <div className="game-team">
+          <TeamLogo team={game.home_team} size={36} />
           <div className="team-abbrev">{homeAbbr}</div>
           <div className="team-name">{homeName}</div>
           {statusInfo.showScore && homeScore !== null && (
