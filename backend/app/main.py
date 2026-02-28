@@ -25,6 +25,9 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)-8s [%(name)s] %(message)s",
     datefmt="%H:%M:%S",
 )
+# Suppress noisy SQLAlchemy engine logs (SQL statements) so app-level
+# diagnostic messages (odds sync, predictions, etc.) are visible.
+logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 
 
 @asynccontextmanager

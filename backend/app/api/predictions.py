@@ -228,11 +228,16 @@ async def _try_generate_predictions(
 
         td = target_date or date.today()
 
-        # Delete stale predictions for today so fresh ones (with correct
-        # sportsbook lines) replace them.
-        today_game_ids = select(Game.id).where(Game.date == td)
+        # Delete stale predictions only for non-final games so fresh ones
+        # (with correct sportsbook lines) replace them.  Keep predictions
+        # for final/completed games — those are historical records and
+        # won't be regenerated (generate_predictions skips final games).
+        non_final_game_ids = select(Game.id).where(
+            Game.date == td,
+            Game.status.notin_(["final", "completed", "off"]),
+        )
         await session.execute(
-            delete(Prediction).where(Prediction.game_id.in_(today_game_ids))
+            delete(Prediction).where(Prediction.game_id.in_(non_final_game_ids))
         )
         await session.flush()
 

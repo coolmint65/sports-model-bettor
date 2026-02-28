@@ -304,6 +304,11 @@ async def get_today_schedule(
     # them a real edge), rather than showing inflated fake confidence.
     missing_picks = [g for g in games if g.top_pick is None and g.status not in ("final", "completed", "off")]
     if missing_picks:
+        logger.info(
+            "Schedule: %d/%d games missing picks. Missing: %s",
+            len(missing_picks), len(games),
+            ", ".join(f"{g.away_team.abbreviation}@{g.home_team.abbreviation}(status={g.status})" for g in missing_picks),
+        )
         try:
             # Step 1: Sync fresh odds from sportsbook API
             try:
@@ -312,7 +317,12 @@ async def get_today_schedule(
                 odds_scraper = MultiSourceOddsScraper()
                 try:
                     matched = await odds_scraper.sync_odds(session)
-                    logger.info("Schedule odds sync matched %d games", len(matched) if matched else 0)
+                    matched_pairs = [f"{m.get('away_abbrev','')}@{m.get('home_abbrev','')}" for m in (matched or [])]
+                    logger.info(
+                        "Schedule odds sync matched %d games: %s",
+                        len(matched) if matched else 0,
+                        ", ".join(matched_pairs) if matched_pairs else "none",
+                    )
                     await session.flush()
                     session.expire_all()
                 finally:
@@ -326,8 +336,15 @@ async def get_today_schedule(
             await _try_generate_predictions(session, target_date=today)
             await session.flush()
             games = await _games_for_date(today, session)
-            logger.info("Schedule triggered prediction generation; %d/%d games now have picks",
-                        sum(1 for g in games if g.top_pick is not None), len(games))
+
+            with_picks = [g for g in games if g.top_pick is not None]
+            without_picks = [g for g in games if g.top_pick is None and g.status not in ("final", "completed", "off")]
+            logger.info(
+                "Schedule prediction result: %d/%d games have picks. "
+                "Still missing: %s",
+                len(with_picks), len(games),
+                ", ".join(f"{g.away_team.abbreviation}@{g.home_team.abbreviation}" for g in without_picks) or "none",
+            )
         except HTTPException:
             pass
 

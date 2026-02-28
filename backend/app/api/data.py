@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.database import get_session, get_session_context
 from app.models.game import Game, GameGoalieStats, GamePlayerStats, HeadToHead
@@ -140,8 +141,8 @@ async def _run_full_sync():
                 await session.flush()
                 session.expire_all()
 
-                # 4. Predictions — delete stale predictions first so old
-                # fake-edge entries don't persist alongside real ones.
+                # 4. Predictions — delete stale predictions only for
+                # non-final games so final game predictions are preserved.
                 _sync_state["step"] = "Generating predictions..."
                 try:
                     from datetime import date as date_type
@@ -151,10 +152,13 @@ async def _run_full_sync():
                     from app.analytics.predictions import PredictionManager
 
                     today = date_type.today()
-                    today_game_ids = select(Game.id).where(Game.date == today)
+                    non_final_game_ids = select(Game.id).where(
+                        Game.date == today,
+                        Game.status.notin_(["final", "completed", "off"]),
+                    )
                     await session.execute(
                         sa_delete(Prediction).where(
-                            Prediction.game_id.in_(today_game_ids)
+                            Prediction.game_id.in_(non_final_game_ids)
                         )
                     )
                     await session.flush()
@@ -525,3 +529,140 @@ async def test_odds_sources():
         }
     finally:
         await scraper.close()
+
+
+@router.get(
+    "/odds/diagnose",
+    summary="Diagnose odds-to-game matching",
+)
+async def diagnose_odds_matching(
+    session: AsyncSession = Depends(get_session),
+):
+    """
+    Diagnostic endpoint: fetch odds and compare with DB games to show
+    exactly which games match and which don't (and why).
+
+    Returns today's DB games, the sportsbook odds, and match results.
+    """
+    from datetime import date as date_type, timedelta
+    from datetime import datetime as dt_cls
+    from datetime import timezone as tz
+
+    from app.scrapers.odds_multi import MultiSourceOddsScraper
+
+    today = date_type.today()
+
+    # 1. Get today's DB games
+    db_result = await session.execute(
+        select(Game)
+        .options(
+            selectinload(Game.home_team),
+            selectinload(Game.away_team),
+        )
+        .where(Game.date == today)
+    )
+    db_games = db_result.scalars().all()
+    db_games_info = []
+    for g in db_games:
+        db_games_info.append({
+            "id": g.id,
+            "date": str(g.date),
+            "status": g.status,
+            "home": g.home_team.abbreviation if g.home_team else "?",
+            "away": g.away_team.abbreviation if g.away_team else "?",
+            "has_moneyline": g.home_moneyline is not None,
+            "home_ml": g.home_moneyline,
+            "away_ml": g.away_moneyline,
+        })
+
+    # 2. Fetch odds
+    scraper = MultiSourceOddsScraper()
+    try:
+        odds_list = await scraper.fetch_best_odds()
+    finally:
+        await scraper.close()
+
+    # 3. Try matching each odds event
+    match_results = []
+    for odds in odds_list:
+        home_abbrev = odds.get("home_abbrev", "")
+        away_abbrev = odds.get("away_abbrev", "")
+        commence = odds.get("commence_time", "")
+
+        # Compute game_date the same way sync_odds does
+        game_date = None
+        date_debug = ""
+        if commence:
+            try:
+                if isinstance(commence, str):
+                    ct = commence.replace("Z", "+00:00")
+                    dt_val = dt_cls.fromisoformat(ct)
+                else:
+                    dt_val = commence
+                try:
+                    from zoneinfo import ZoneInfo
+                    dt_et = dt_val.astimezone(ZoneInfo("America/New_York"))
+                    game_date = dt_et.date()
+                    date_debug = f"UTC={dt_val.isoformat()} → ET={dt_et.isoformat()} → date={game_date}"
+                except Exception:
+                    dt_est = dt_val.astimezone(tz.utc) - timedelta(hours=5)
+                    game_date = dt_est.date()
+                    date_debug = f"UTC={dt_val.isoformat()} → EST_approx → date={game_date}"
+            except Exception as e:
+                date_debug = f"parse_error: {e}"
+
+        # Look up teams in DB
+        home_result = await session.execute(
+            select(Team).where(Team.abbreviation == home_abbrev)
+        )
+        home_team = home_result.scalar_one_or_none()
+        away_result = await session.execute(
+            select(Team).where(Team.abbreviation == away_abbrev)
+        )
+        away_team = away_result.scalar_one_or_none()
+
+        # Try to find matching game
+        matched_game = None
+        search_dates = []
+        if game_date and home_team and away_team:
+            for candidate_date in (game_date, game_date - timedelta(days=1), game_date + timedelta(days=1)):
+                search_dates.append(str(candidate_date))
+                game_result = await session.execute(
+                    select(Game).where(
+                        Game.home_team_id == home_team.id,
+                        Game.away_team_id == away_team.id,
+                        Game.date == candidate_date,
+                    )
+                )
+                matched_game = game_result.scalar_one_or_none()
+                if matched_game:
+                    break
+
+        match_results.append({
+            "matchup": f"{away_abbrev}@{home_abbrev}",
+            "commence_time": commence,
+            "date_conversion": date_debug,
+            "computed_game_date": str(game_date) if game_date else None,
+            "today": str(today),
+            "date_matches_today": game_date == today if game_date else False,
+            "home_team_found": home_team is not None,
+            "away_team_found": away_team is not None,
+            "searched_dates": search_dates,
+            "game_found": matched_game is not None,
+            "game_id": matched_game.id if matched_game else None,
+            "game_status": matched_game.status if matched_game else None,
+        })
+
+    matched_count = sum(1 for m in match_results if m["game_found"])
+    unmatched = [m for m in match_results if not m["game_found"]]
+
+    return {
+        "today": str(today),
+        "db_games_today": len(db_games_info),
+        "odds_events": len(odds_list),
+        "matched": matched_count,
+        "unmatched_count": len(unmatched),
+        "db_games": db_games_info,
+        "match_details": match_results,
+        "unmatched_details": unmatched,
+    }
