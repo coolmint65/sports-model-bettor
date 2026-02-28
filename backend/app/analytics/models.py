@@ -30,10 +30,10 @@ LEAGUE_AVG_GOALS = 3.05
 HOME_ICE_ADVANTAGE = 0.15
 
 # Weighting for form windows when computing expected goals
-# 60% last 5 games, 25% last 10 games, 15% season averages
-WEIGHT_FORM_5 = 0.60
-WEIGHT_FORM_10 = 0.25
-WEIGHT_SEASON = 0.15
+# 50% last 5 games, 30% last 10 games, 20% season averages
+WEIGHT_FORM_5 = 0.50
+WEIGHT_FORM_10 = 0.30
+WEIGHT_SEASON = 0.20
 
 # Head-to-head adjustment factor (scales the H2H deviation)
 H2H_FACTOR = 0.10
@@ -196,8 +196,8 @@ class BettingModel:
             away_xg = away_xg * 0.85 + split_off * 0.15
 
         # ---- Floor / ceiling ----
-        home_xg = max(1.5, min(5.5, home_xg))
-        away_xg = max(1.5, min(5.5, away_xg))
+        home_xg = max(1.5, min(4.5, home_xg))
+        away_xg = max(1.5, min(4.5, away_xg))
 
         return round(home_xg, 3), round(away_xg, 3)
 
@@ -220,10 +220,16 @@ class BettingModel:
 
         A team that allows more than league average has a factor > 1.0
         (making the opponent's xG higher), and vice versa.
+
+        The raw ratio is regressed 40% toward 1.0 to prevent compounding
+        when combined with form-weighted offense (which can already be
+        elevated during hot streaks).
         """
         if self.league_avg == 0:
             return 1.0
-        return goals_against_pg / self.league_avg
+        raw = goals_against_pg / self.league_avg
+        # Regress toward 1.0: take only 60% of the deviation
+        return 1.0 + (raw - 1.0) * 0.6
 
     def _apply_goalie_adjustment(
         self,

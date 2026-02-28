@@ -154,6 +154,8 @@ class PredictionManager:
                 if implied_prob is None:
                     implied_prob = 0.5
                 edge = confidence - implied_prob
+                # Cap edge at 25% — anything higher signals a model/data issue
+                edge = min(edge, 0.25)
 
                 flat = {
                     "game_id": game_data.get("game_id"),
