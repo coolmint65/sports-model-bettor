@@ -1454,7 +1454,6 @@ class MultiSourceOddsScraper:
                         game_date = dt_et.date()
                     except Exception:
                         # Fallback: subtract 5 hours (EST approximation)
-                        from datetime import timedelta
                         dt_est = dt.astimezone(timezone.utc) - timedelta(hours=5)
                         game_date = dt_est.date()
                 except (ValueError, TypeError, AttributeError):
@@ -1466,7 +1465,6 @@ class MultiSourceOddsScraper:
                             dt_et = dt.astimezone(ZoneInfo("America/New_York"))
                             game_date = dt_et.date()
                         except Exception:
-                            from datetime import timedelta
                             game_date = (dt - timedelta(hours=5)).date()
                     except (ValueError, TypeError, OverflowError):
                         continue
