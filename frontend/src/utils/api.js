@@ -31,6 +31,21 @@ export const fetchPredictionStats = () => api.get('/predictions/stats');
 export const fetchAllTeams = () => api.get('/stats/teams');
 
 // Data management
-export const triggerDataSync = () => api.post('/data/sync/all');
+export const startDataSync = () => api.post('/data/sync/all');
+export const fetchSyncStatus = () => api.get('/data/sync/status');
+
+export const triggerDataSync = async (onProgress) => {
+  await startDataSync();
+  // Poll until done
+  while (true) {
+    await new Promise((r) => setTimeout(r, 1500));
+    const { data } = await fetchSyncStatus();
+    if (onProgress) onProgress(data.step);
+    if (!data.running) {
+      if (data.error) throw new Error(data.error);
+      return data;
+    }
+  }
+};
 
 export default api;

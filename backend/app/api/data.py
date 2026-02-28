@@ -6,6 +6,7 @@ Provides endpoints for triggering various data synchronisation operations
 of synced data in the database.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -17,7 +18,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_session
+from app.database import get_session, get_session_context
 from app.models.game import Game, GameGoalieStats, GamePlayerStats, HeadToHead
 from app.models.player import GoalieStats, Player, PlayerStats
 from app.models.prediction import Prediction
@@ -36,6 +37,14 @@ class SyncResult(BaseModel):
     success: bool
     message: str
     details: Optional[str] = None
+
+
+class SyncStatusResponse(BaseModel):
+    """Current state of the background sync task."""
+
+    running: bool
+    step: str
+    error: Optional[str] = None
 
 
 class RecordCounts(BaseModel):
@@ -63,6 +72,91 @@ class DataStatusResponse(BaseModel):
     record_counts: RecordCounts
     games_today: int = 0
     games_final_today: int = 0
+
+
+# ---------------------------------------------------------------------------
+# Background sync state
+# ---------------------------------------------------------------------------
+
+_sync_state = {
+    "running": False,
+    "step": "idle",
+    "error": None,
+}
+
+
+async def _run_full_sync():
+    """Execute the full sync pipeline in the background."""
+    global _sync_state
+    _sync_state = {"running": True, "step": "Starting sync...", "error": None}
+
+    try:
+        from app.scrapers.nhl_api import NHLScraper
+
+        scraper = NHLScraper()
+        try:
+            async with get_session_context() as session:
+                # 1. Core sync: teams, rosters, schedule, game results
+                _sync_state["step"] = "Syncing teams, rosters, schedule..."
+                await scraper.sync_all(session)
+                await session.flush()
+
+                # 2. Historical H2H
+                _sync_state["step"] = "Syncing historical H2H data..."
+                try:
+                    current = scraper.default_season
+                    current_start = int(current[:4])
+                except (ValueError, IndexError):
+                    current_start = 2025
+
+                h2h_games = 0
+                try:
+                    for i in range(0, 3):
+                        start_year = current_start - i
+                        season_str = f"{start_year}{start_year + 1}"
+                        _sync_state["step"] = f"Syncing H2H season {season_str}..."
+                        h2h_games += await scraper.sync_historical_season(
+                            session, season_str
+                        )
+                except Exception as exc:
+                    logger.warning("Historical H2H sync failed (non-critical): %s", exc)
+
+                await session.flush()
+
+                # 3. Odds
+                _sync_state["step"] = "Syncing betting odds..."
+                try:
+                    from app.scrapers.odds_api import OddsScraper
+
+                    odds_scraper = OddsScraper()
+                    try:
+                        await odds_scraper.sync_odds(session)
+                    finally:
+                        await odds_scraper.close()
+                except Exception as exc:
+                    logger.warning("Odds sync failed (non-critical): %s", exc)
+
+                await session.flush()
+
+                # 4. Predictions
+                _sync_state["step"] = "Generating predictions..."
+                try:
+                    from app.analytics.predictions import PredictionManager
+
+                    manager = PredictionManager()
+                    await manager.get_best_bets(session)
+                except Exception as exc:
+                    logger.warning("Prediction generation failed (non-critical): %s", exc)
+
+        finally:
+            await scraper.close()
+
+        _sync_state = {"running": False, "step": "Complete", "error": None}
+        logger.info("Full background sync completed successfully.")
+
+    except Exception as exc:
+        logger.error("Background sync failed: %s", exc)
+        _sync_state = {"running": False, "step": "Failed", "error": str(exc)}
 
 
 # ---------------------------------------------------------------------------
@@ -110,59 +204,36 @@ async def _count(session: AsyncSession, model) -> int:
     response_model=SyncResult,
     summary="Full data sync",
 )
-async def sync_all(
-    session: AsyncSession = Depends(get_session),
-):
+async def sync_all():
     """
-    Perform a full data synchronisation: teams, rosters, schedule, and
-    game results. Delegates to NHLScraper.sync_all().
+    Kick off a full data sync in the background.
+
+    Returns immediately. Poll GET /sync/status to track progress.
     """
-    scraper = _get_scraper()
-    try:
-        await scraper.sync_all(session)
-        await session.flush()
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Full sync failed: {exc}",
+    if _sync_state["running"]:
+        return SyncResult(
+            success=True,
+            message="Sync already in progress.",
+            details=_sync_state["step"],
         )
-    finally:
-        await scraper.close()
 
-    # Sync betting odds from The Odds API
-    try:
-        from app.scrapers.odds_api import OddsScraper
-
-        odds_scraper = OddsScraper()
-        try:
-            await odds_scraper.sync_odds(session)
-        finally:
-            await odds_scraper.close()
-    except Exception as exc:
-        logger.warning("Odds sync failed (non-critical): %s", exc)
-
-    await session.flush()
-
-    # Auto-generate predictions for today after sync
-    pred_count = 0
-    try:
-        from app.analytics.predictions import PredictionManager
-
-        manager = PredictionManager()
-        results = await manager.get_best_bets(session)
-        pred_count = len(results) if results else 0
-    except Exception as exc:
-        logger.warning("Prediction generation after sync failed: %s", exc)
+    asyncio.get_event_loop().create_task(_run_full_sync())
 
     return SyncResult(
         success=True,
-        message=(
-            f"Full data sync completed. "
-            f"Generated {pred_count} best bet predictions."
-        ),
-        details="Synced teams, rosters, schedule, game results, and odds. "
-                "Use /sync/history for historical H2H data.",
+        message="Sync started.",
+        details="Poll /data/sync/status to track progress.",
     )
+
+
+@router.get(
+    "/sync/status",
+    response_model=SyncStatusResponse,
+    summary="Check sync progress",
+)
+async def sync_status():
+    """Return the current state of the background sync task."""
+    return SyncStatusResponse(**_sync_state)
 
 
 @router.post(

@@ -216,6 +216,15 @@ a:hover {
   background: var(--accent-red-bg);
 }
 
+.sync-progress {
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.06);
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ─── Buttons ───────────────────────────────────────────────── */
 .btn {
   display: inline-flex;

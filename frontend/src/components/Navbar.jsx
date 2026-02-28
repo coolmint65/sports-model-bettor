@@ -13,7 +13,9 @@ function Navbar() {
     setSyncing(true);
     setSyncMessage('');
     try {
-      await triggerDataSync();
+      await triggerDataSync((step) => {
+        setSyncMessage(step || 'Syncing...');
+      });
       setSyncMessage('Sync complete!');
       setTimeout(() => setSyncMessage(''), 3000);
     } catch (err) {
@@ -54,7 +56,13 @@ function Navbar() {
         <div className="navbar-actions">
           {syncMessage && (
             <span
-              className={`sync-message ${syncMessage.includes('failed') ? 'sync-error' : 'sync-success'}`}
+              className={`sync-message ${
+                syncMessage.includes('failed') || syncMessage.includes('Failed')
+                  ? 'sync-error'
+                  : syncMessage.includes('complete')
+                    ? 'sync-success'
+                    : 'sync-progress'
+              }`}
             >
               {syncMessage}
             </span>
