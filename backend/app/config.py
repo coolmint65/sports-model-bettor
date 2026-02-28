@@ -107,7 +107,7 @@ class Settings(BaseModel):
     # the juice makes them poor value even if the model is confident.
     # Favorites: no steeper than -200 (risk $200 to win $100)
     # Underdogs: no floor needed (all plus-money is fine)
-    best_bet_max_favorite: float = -200.0
+    best_bet_max_favorite: float = -160.0
     # Overall implied-probability ceiling for best-bet candidates.
     # Keeps heavy chalk out of the top picks.
     best_bet_max_implied: float = 0.68
