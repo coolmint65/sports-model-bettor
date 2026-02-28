@@ -661,6 +661,7 @@ class BettingModel:
         home_ml = odds_data.get("home_moneyline")
         away_ml = odds_data.get("away_moneyline")
         ou_line = odds_data.get("over_under_line")
+        spread_line = odds_data.get("home_spread_line")
 
         # ---- Moneyline ----
         try:
@@ -740,13 +741,22 @@ class BettingModel:
                     f"{away_abbr} xG {totals['away_xg']:.2f}."
                 )
 
+                # Standard O/U pricing is ~-110 each side (52.4% implied).
+                # Use the real line if available to indicate we have market data.
+                total_implied = None
+                total_odds_display = None
+                if ou_line is not None:
+                    # -110 standard juice → 52.4% implied for each side
+                    total_implied = 0.524
+                    total_odds_display = -110.0
+
                 predictions.append({
                     "bet_type": "total",
                     "prediction": best_total_pred,
                     "confidence": round(best_total_prob, 4),
                     "probability": round(best_total_prob, 4),
-                    "implied_probability": None,
-                    "odds": None,
+                    "implied_probability": round(total_implied, 4) if total_implied else None,
+                    "odds": total_odds_display,
                     "reasoning": total_reason,
                     "details": totals,
                 })
@@ -758,13 +768,18 @@ class BettingModel:
                     ou_pred = "over_5.5" if over_55 > under_55 else "under_5.5"
                     ou_prob = max(over_55, under_55)
                     if ou_pred != best_total_pred:
+                        ou55_implied = None
+                        ou55_odds = None
+                        if ou_line is not None:
+                            ou55_implied = 0.524
+                            ou55_odds = -110.0
                         predictions.append({
                             "bet_type": "total",
                             "prediction": ou_pred,
                             "confidence": round(ou_prob, 4),
                             "probability": round(ou_prob, 4),
-                            "implied_probability": None,
-                            "odds": None,
+                            "implied_probability": round(ou55_implied, 4) if ou55_implied else None,
+                            "odds": ou55_odds,
                             "reasoning": (
                                 f"Standard 5.5 line: {ou_pred.replace('_', ' ')} at {ou_prob:.1%}. "
                                 f"Projected total: {total_xg:.1f} goals."
@@ -797,13 +812,20 @@ class BettingModel:
                     f"Predicted margin: {margin:+.2f} goals. "
                     f"{pred_val.replace('_', ' ')} covers at {prob_val:.1%} probability."
                 )
+                # Standard puck line pricing varies; use real spread if available
+                spread_implied = None
+                spread_odds_display = None
+                if spread_line is not None:
+                    # Puck line is typically around -110 to -130 for each side
+                    spread_implied = 0.524
+                    spread_odds_display = -110.0
                 predictions.append({
                     "bet_type": "spread",
                     "prediction": pred_val,
                     "confidence": round(prob_val, 4),
                     "probability": round(prob_val, 4),
-                    "implied_probability": None,
-                    "odds": None,
+                    "implied_probability": round(spread_implied, 4) if spread_implied else None,
+                    "odds": spread_odds_display,
                     "reasoning": spread_reason,
                     "details": spread,
                 })

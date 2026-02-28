@@ -134,6 +134,12 @@ class PredictionManager:
         if not all_predictions:
             return []
 
+        # Bet types that have real market odds from The Odds API.
+        # Only these are eligible for "best bets" since we can calculate
+        # true edge. Props (BTTS, first_goal, overtime, odd_even) don't
+        # have market odds and would show inflated fake edges.
+        ODDS_BET_TYPES = {"ml", "total", "spread"}
+
         # Flatten all individual predictions across all games and persist ALL
         all_flat: List[Dict[str, Any]] = []
         candidates: List[Dict[str, Any]] = []
@@ -144,6 +150,7 @@ class PredictionManager:
                 # Use real odds-based implied probability if available
                 implied_prob = pred.get("implied_probability")
                 odds = pred.get("odds")
+                has_real_odds = implied_prob is not None
                 if implied_prob is None:
                     implied_prob = 0.5
                 edge = confidence - implied_prob
@@ -163,11 +170,14 @@ class PredictionManager:
                 }
                 all_flat.append(flat)
 
-                # Only consider bets with real positive edge as candidates.
-                # Skip bets with very high implied probability (heavy favorites
-                # like -1200) since even a correct prediction has poor ROI.
+                # Only consider bets where we have real market odds so we
+                # can calculate genuine edge. Props without odds data would
+                # get a fake 50% implied prob and dominate with inflated edges.
+                bet_type = pred["bet_type"]
                 if (
-                    confidence >= settings.min_confidence
+                    bet_type in ODDS_BET_TYPES
+                    and has_real_odds
+                    and confidence >= settings.min_confidence
                     and edge >= settings.min_edge
                     and implied_prob < 0.85  # Skip extreme favorites
                 ):
@@ -379,6 +389,13 @@ class PredictionManager:
         if not game_id or not bet_type or not prediction_value:
             return None
 
+        # Build reasoning text with odds info
+        reasoning = bet.get("reasoning", "")
+        odds = bet.get("odds")
+        if odds is not None and reasoning:
+            odds_str = f"+{int(odds)}" if odds > 0 else str(int(odds))
+            reasoning = f"{reasoning} (Odds: {odds_str})"
+
         # Check for existing prediction
         existing_stmt = select(Prediction).where(
             and_(
@@ -391,8 +408,21 @@ class PredictionManager:
         existing = existing_result.scalars().first()
 
         if existing:
+            # Update existing prediction with latest data
+            existing.confidence = bet.get("confidence", existing.confidence)
+            existing.odds_implied_prob = bet.get("implied_probability", existing.odds_implied_prob)
+            existing.edge = bet.get("edge", existing.edge)
+            existing.reasoning = reasoning or existing.reasoning
+            existing.recommended = (
+                existing.confidence >= settings.min_confidence
+                and (existing.edge or 0) >= settings.min_edge
+            )
+            existing.best_bet = (
+                bet.get("is_best_bet", False)
+                and (existing.edge or 0) >= settings.best_bet_edge
+            )
             logger.debug(
-                "Prediction already exists: game=%d, type=%s, value=%s",
+                "Updated existing prediction: game=%d, type=%s, value=%s",
                 game_id, bet_type, prediction_value,
             )
             return existing
@@ -400,14 +430,7 @@ class PredictionManager:
         confidence = bet.get("confidence", 0.0)
         edge = bet.get("edge")
         implied_prob = bet.get("implied_probability")
-        odds = bet.get("odds")
         is_best = bet.get("is_best_bet", False)
-        reasoning = bet.get("reasoning", "")
-
-        # Build reasoning with odds info if available
-        if odds is not None and reasoning:
-            odds_str = f"+{int(odds)}" if odds > 0 else str(int(odds))
-            reasoning = f"{reasoning} (Odds: {odds_str})"
 
         prediction = Prediction(
             game_id=game_id,
