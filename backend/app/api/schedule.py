@@ -5,6 +5,7 @@ Provides endpoints for retrieving NHL game schedules by date,
 including the ability to sync schedule data from the NHL API.
 """
 
+import logging
 from datetime import date, datetime
 from typing import List, Optional
 
@@ -18,6 +19,8 @@ from app.database import get_session
 from app.models.game import Game
 from app.models.prediction import Prediction
 from app.models.team import Team, TeamStats
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/schedule", tags=["schedule"])
 
@@ -328,6 +331,23 @@ async def get_today_schedule(
             await _try_sync_schedule(session, target_date=today)
             await session.flush()
             games = await _games_for_date(today, session)
+        except HTTPException:
+            pass
+
+    # If any scheduled games are missing a top pick, generate predictions
+    # so every game card shows its best bet.  This covers the case where
+    # the schedule loads before the best-bets endpoint has triggered
+    # prediction generation.
+    missing_picks = [g for g in games if g.top_pick is None and g.status not in ("final", "completed", "off")]
+    if missing_picks:
+        try:
+            from app.api.predictions import _try_generate_predictions
+
+            await _try_generate_predictions(session, target_date=today)
+            await session.flush()
+            games = await _games_for_date(today, session)
+            logger.info("Schedule triggered prediction generation; %d games now have picks",
+                        sum(1 for g in games if g.top_pick is not None))
         except HTTPException:
             pass
 
