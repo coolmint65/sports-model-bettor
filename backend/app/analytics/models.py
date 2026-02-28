@@ -196,9 +196,17 @@ class BettingModel:
             split_off = away_splits.get("avg_goals_for", away_xg)
             away_xg = away_xg * 0.85 + split_off * 0.15
 
+        # ---- Regression toward league average ----
+        # Hot-streak form weights and weak-opponent defensive factors can
+        # compound to produce unrealistic xG values.  Regress 20% toward
+        # the league average to dampen extremes while preserving signal.
+        home_xg = home_xg * 0.80 + self.league_avg * 0.20
+        away_xg = away_xg * 0.80 + self.league_avg * 0.20
+
         # ---- Floor / ceiling ----
-        home_xg = max(1.5, min(4.5, home_xg))
-        away_xg = max(1.5, min(4.5, away_xg))
+        # No NHL team realistically projects above ~3.8 goals per game.
+        home_xg = max(1.8, min(3.8, home_xg))
+        away_xg = max(1.8, min(3.8, away_xg))
 
         return round(home_xg, 3), round(away_xg, 3)
 
@@ -803,46 +811,45 @@ class BettingModel:
                     "details": totals,
                 })
 
-            # Also find the best model line from the standard set
-            best_total_pred = None
-            best_total_prob = 0.0
-            for line_val in TOTAL_LINES:
-                over_key = f"over_{line_val}"
-                under_key = f"under_{line_val}"
-                over_p = lines.get(over_key, 0.5)
-                under_p = lines.get(under_key, 0.5)
+            # Only generate a model-line prediction if there is NO sportsbook
+            # O/U line.  When a book line exists the prediction above already
+            # targets the actual bettable line; adding a softer standard line
+            # (e.g., Over 4.5 when the book is 6.5) would dominate best-bets
+            # with inflated confidence on a non-existent bet.
+            if book_line_pred is None:
+                best_total_pred = None
+                best_total_prob = 0.0
+                for line_val in TOTAL_LINES:
+                    over_key = f"over_{line_val}"
+                    under_key = f"under_{line_val}"
+                    over_p = lines.get(over_key, 0.5)
+                    under_p = lines.get(under_key, 0.5)
 
-                if over_p > best_total_prob:
-                    best_total_prob = over_p
-                    best_total_pred = over_key
-                if under_p > best_total_prob:
-                    best_total_prob = under_p
-                    best_total_pred = under_key
+                    if over_p > best_total_prob:
+                        best_total_prob = over_p
+                        best_total_pred = over_key
+                    if under_p > best_total_prob:
+                        best_total_prob = under_p
+                        best_total_pred = under_key
 
-            # Only add the best model line if it's different from the book line
-            if best_total_pred and best_total_pred != book_line_pred:
-                direction = "over" if "over" in best_total_pred else "under"
-                line_num = best_total_pred.split("_", 1)[1]
-                total_implied = None
-                total_odds_display = None
-                if ou_line is not None:
-                    total_implied = 0.524
-                    total_odds_display = -110.0
-                predictions.append({
-                    "bet_type": "total",
-                    "prediction": best_total_pred,
-                    "confidence": round(best_total_prob, 4),
-                    "probability": round(best_total_prob, 4),
-                    "implied_probability": round(total_implied, 4) if total_implied else None,
-                    "odds": total_odds_display,
-                    "reasoning": (
-                        f"Model projects {total_xg:.1f} total goals. "
-                        f"{direction.capitalize()} {line_num} at {best_total_prob:.1%} probability. "
-                        f"Based on {home_abbr} xG {totals['home_xg']:.2f} + "
-                        f"{away_abbr} xG {totals['away_xg']:.2f}."
-                    ),
-                    "details": totals,
-                })
+                if best_total_pred:
+                    direction = "over" if "over" in best_total_pred else "under"
+                    line_num = best_total_pred.split("_", 1)[1]
+                    predictions.append({
+                        "bet_type": "total",
+                        "prediction": best_total_pred,
+                        "confidence": round(best_total_prob, 4),
+                        "probability": round(best_total_prob, 4),
+                        "implied_probability": None,
+                        "odds": None,
+                        "reasoning": (
+                            f"Model projects {total_xg:.1f} total goals. "
+                            f"{direction.capitalize()} {line_num} at {best_total_prob:.1%} probability. "
+                            f"Based on {home_abbr} xG {totals['home_xg']:.2f} + "
+                            f"{away_abbr} xG {totals['away_xg']:.2f}."
+                        ),
+                        "details": totals,
+                    })
         except Exception as e:
             logger.error("Total goals prediction failed: %s", e)
 
