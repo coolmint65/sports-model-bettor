@@ -450,6 +450,28 @@ a:hover {
   font-weight: 500;
 }
 
+/* ─── Live Games Section ────────────────────────────────────── */
+.live-section {
+  background: linear-gradient(135deg, rgba(255, 82, 82, 0.04), rgba(255, 82, 82, 0.01));
+  border: 1px solid rgba(255, 82, 82, 0.15);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+}
+
+.live-section-title {
+  color: var(--accent-red, #ff5252) !important;
+}
+
+.live-icon {
+  color: var(--accent-red, #ff5252);
+  animation: pulse-live 2s ease-in-out infinite;
+}
+
+.live-count {
+  background: rgba(255, 82, 82, 0.12);
+  color: var(--accent-red, #ff5252) !important;
+}
+
 /* ─── Best Bets Section ─────────────────────────────────────── */
 .best-bets-section {
   animation: slideUp 0.5s ease;

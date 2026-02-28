@@ -198,7 +198,7 @@ class OddsScraper(BaseScraper):
 
                     elif market_key == "spreads":
                         spread = self._parse_spread_market(
-                            outcomes, home_team
+                            outcomes, home_team, away_team
                         )
                         bm_parsed["markets"]["spreads"] = spread
                         all_spreads.append(spread)
@@ -250,7 +250,7 @@ class OddsScraper(BaseScraper):
 
     @staticmethod
     def _parse_spread_market(
-        outcomes: list, home_team: str
+        outcomes: list, home_team: str, away_team: str
     ) -> Dict[str, Any]:
         """Parse spread (puck line) market outcomes."""
         result: Dict[str, Any] = {
@@ -266,9 +266,11 @@ class OddsScraper(BaseScraper):
             if name == home_team:
                 result["home_spread"] = float(point)
                 result["home_price"] = float(price)
-            else:
+            elif name == away_team:
                 result["away_spread"] = float(point)
                 result["away_price"] = float(price)
+            else:
+                logger.debug("Spread outcome name '%s' didn't match home='%s' or away='%s'", name, home_team, away_team)
         return result
 
     @staticmethod
@@ -321,18 +323,42 @@ class OddsScraper(BaseScraper):
                 s for s in all_spreads if s.get("home_spread")
             ]
             if home_spreads:
-                # Find the most common spread value (mode)
+                # Find the most common absolute spread value (mode)
                 from collections import Counter
-                spread_counts = Counter(s["home_spread"] for s in home_spreads)
-                consensus_val = spread_counts.most_common(1)[0][0]
-                # Average prices across books offering the consensus spread
-                consensus_books = [s for s in home_spreads if s["home_spread"] == consensus_val]
-                best["home_spread"] = consensus_val
-                best["away_spread"] = consensus_books[0].get("away_spread", -consensus_val)
+                spread_counts = Counter(
+                    abs(s["home_spread"]) for s in home_spreads
+                )
+                consensus_abs = spread_counts.most_common(1)[0][0]
+                # Books at this absolute spread
+                consensus_books = [
+                    s for s in home_spreads
+                    if abs(s["home_spread"]) == consensus_abs
+                ]
+                # Average the signed spreads and prices from consensus books
+                avg_home_spread = sum(s["home_spread"] for s in consensus_books) / len(consensus_books)
+                avg_away_spread = sum(s.get("away_spread", -s["home_spread"]) for s in consensus_books) / len(consensus_books)
                 hp = [s.get("home_price", -110) for s in consensus_books]
                 ap = [s.get("away_price", -110) for s in consensus_books]
+
+                best["home_spread"] = round(avg_home_spread, 1)
+                best["away_spread"] = round(avg_away_spread, 1)
                 best["home_spread_price"] = round(sum(hp) / len(hp))
                 best["away_spread_price"] = round(sum(ap) / len(ap))
+
+                # Cross-check: if moneyline says home is favorite (more negative)
+                # then home_spread should be negative. If sign is wrong, flip.
+                home_ml = best.get("home_moneyline")
+                away_ml = best.get("away_moneyline")
+                if home_ml and away_ml and best["home_spread"] != 0:
+                    home_is_fav = (home_ml < away_ml)
+                    if home_is_fav and best["home_spread"] > 0:
+                        # Home is favorite but spread is positive — flip
+                        best["home_spread"], best["away_spread"] = -abs(best["home_spread"]), abs(best["away_spread"])
+                        best["home_spread_price"], best["away_spread_price"] = best["away_spread_price"], best["home_spread_price"]
+                    elif not home_is_fav and best["home_spread"] < 0:
+                        # Home is underdog but spread is negative — flip
+                        best["home_spread"], best["away_spread"] = abs(best["home_spread"]), -abs(best["away_spread"])
+                        best["home_spread_price"], best["away_spread_price"] = best["away_spread_price"], best["home_spread_price"]
 
         # Consensus total with averaged prices
         if all_totals:

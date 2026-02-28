@@ -157,6 +157,66 @@ async def _try_sync_schedule(
         )
 
 
+@router.get("/live", response_model=ScheduleResponse)
+async def get_live_games(
+    session: AsyncSession = Depends(get_session),
+):
+    """Return all currently in-progress games across any date."""
+    result = await session.execute(
+        select(Game)
+        .options(selectinload(Game.home_team), selectinload(Game.away_team))
+        .where(Game.status.in_(["in_progress", "live"]))
+        .order_by(Game.start_time.asc().nulls_last(), Game.id.asc())
+    )
+    games = result.scalars().all()
+
+    # Auto-sync if any live games to get latest scores/clock
+    if games:
+        try:
+            for game in games:
+                await _try_sync_schedule(session, target_date=game.date)
+            await session.flush()
+            # Re-query after sync
+            result = await session.execute(
+                select(Game)
+                .options(selectinload(Game.home_team), selectinload(Game.away_team))
+                .where(Game.status.in_(["in_progress", "live"]))
+                .order_by(Game.start_time.asc().nulls_last(), Game.id.asc())
+            )
+            games = result.scalars().all()
+        except HTTPException:
+            pass
+
+    schedule_games: List[ScheduleGame] = []
+    for game in games:
+        home_brief = await _build_team_brief(game.home_team, session)
+        away_brief = await _build_team_brief(game.away_team, session)
+        schedule_games.append(
+            ScheduleGame(
+                id=game.id,
+                external_id=game.external_id,
+                game_date=game.date,
+                start_time=game.start_time,
+                venue=game.venue,
+                status=game.status,
+                game_type=game.game_type,
+                season=game.season,
+                home_team=home_brief,
+                away_team=away_brief,
+                home_score=game.home_score,
+                away_score=game.away_score,
+                went_to_overtime=game.went_to_overtime or False,
+                period=getattr(game, "period", None),
+                period_type=getattr(game, "period_type", None),
+                clock=getattr(game, "clock", None),
+                clock_running=getattr(game, "clock_running", None),
+            )
+        )
+
+    today = date.today()
+    return ScheduleResponse(date=today, game_count=len(schedule_games), games=schedule_games)
+
+
 @router.get("/today", response_model=ScheduleResponse)
 async def get_today_schedule(
     session: AsyncSession = Depends(get_session),

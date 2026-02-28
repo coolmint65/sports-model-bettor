@@ -159,7 +159,7 @@ function OverviewTab({ game }) {
                 <span className="odds-label">Puck Line</span>
                 <div className="odds-values">
                   <div className="odds-team-line">
-                    <span className="odds-team-name">{away.abbreviation} {odds.away_spread_line > 0 ? '+' : ''}{odds.away_spread_line || '+1.5'}</span>
+                    <span className="odds-team-name">{away.abbreviation} {odds.away_spread_line != null ? (odds.away_spread_line > 0 ? '+' : '') + odds.away_spread_line : ''}</span>
                     <span className="odds-value">{formatAmericanOdds(odds.away_spread_price)}</span>
                   </div>
                   <div className="odds-team-line">

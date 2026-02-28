@@ -18,6 +18,7 @@ api.interceptors.response.use(
 
 // Schedule endpoints
 export const fetchTodaySchedule = () => api.get('/schedule/today');
+export const fetchLiveGames = () => api.get('/schedule/live');
 export const fetchScheduleByDate = (date) => api.get(`/schedule/${date}`);
 export const fetchGameDetails = (gameId) => api.get(`/games/${gameId}`);
 

@@ -1,9 +1,9 @@
-import React, { useEffect, useRef } from 'react';
-import { Calendar, TrendingUp } from 'lucide-react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { Calendar, TrendingUp, Radio } from 'lucide-react';
 import { format } from 'date-fns';
 import BestBets from './BestBets';
 import GameCard from './GameCard';
-import { fetchTodaySchedule } from '../utils/api';
+import { fetchTodaySchedule, fetchLiveGames } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 
 const LIVE_POLL_INTERVAL = 30_000; // 30 seconds
@@ -16,20 +16,38 @@ function Dashboard() {
     refetch,
   } = useApi(fetchTodaySchedule);
 
+  const [liveGames, setLiveGames] = useState([]);
+
+  const pollLive = useCallback(async () => {
+    try {
+      const res = await fetchLiveGames();
+      const games = res?.data?.games || res?.data || [];
+      setLiveGames(games);
+    } catch {
+      // Silently fail — live section just won't show
+    }
+  }, []);
+
   const today = format(new Date(), 'EEEE, MMMM d, yyyy');
   const games = scheduleData?.games || scheduleData || [];
 
-  // Auto-poll for live score updates when any game is in progress
-  const hasLive = games.some((g) => {
+  // Check if there are live games in either source
+  const todayHasLive = games.some((g) => {
     const s = (g.status || '').toLowerCase();
     return s === 'in_progress' || s === 'live' || s === 'active';
   });
+  const hasAnyLive = liveGames.length > 0 || todayHasLive;
 
+  // Poll both today's schedule and live games when anything is live
   const intervalRef = useRef(null);
   useEffect(() => {
-    if (hasLive) {
+    // Always fetch live games on mount
+    pollLive();
+
+    if (hasAnyLive) {
       intervalRef.current = setInterval(() => {
         refetch();
+        pollLive();
       }, LIVE_POLL_INTERVAL);
     }
     return () => {
@@ -38,7 +56,21 @@ function Dashboard() {
         intervalRef.current = null;
       }
     };
-  }, [hasLive, refetch]);
+  }, [hasAnyLive, refetch, pollLive]);
+
+  // Deduplicate: remove live games that are already in today's schedule
+  const todayGameIds = new Set(games.map((g) => g.id || g.game_id));
+  const extraLiveGames = liveGames.filter(
+    (g) => !todayGameIds.has(g.id) && !todayGameIds.has(g.game_id)
+  );
+  // Combine: live games from today's list + any extras from other dates
+  const allLive = [
+    ...games.filter((g) => {
+      const s = (g.status || '').toLowerCase();
+      return s === 'in_progress' || s === 'live' || s === 'active';
+    }),
+    ...extraLiveGames,
+  ];
 
   return (
     <div className="dashboard">
@@ -59,6 +91,26 @@ function Dashboard() {
       <section className="section">
         <BestBets />
       </section>
+
+      {/* Live Games Section — always visible when games are in progress */}
+      {allLive.length > 0 && (
+        <section className="section live-section">
+          <div className="section-header">
+            <h2 className="section-title live-section-title">
+              <Radio size={20} className="live-icon" />
+              Live Now
+            </h2>
+            <span className="game-count live-count">
+              {allLive.length} {allLive.length === 1 ? 'Game' : 'Games'}
+            </span>
+          </div>
+          <div className="games-grid">
+            {allLive.map((game) => (
+              <GameCard key={game.game_id || game.id} game={game} />
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Today's Schedule */}
       <section className="section">
