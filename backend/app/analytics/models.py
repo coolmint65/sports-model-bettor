@@ -312,6 +312,26 @@ class BettingModel:
     #  Prediction: Total Goals                                            #
     # ------------------------------------------------------------------ #
 
+    @staticmethod
+    def _normalize_total_line(line: float) -> float:
+        """Normalize a total line to a .5 increment.
+
+        NHL sportsbooks almost always post totals ending in .5 (e.g., 5.5,
+        6.5).  Some data sources return whole numbers (e.g., 6 or 7) due to
+        rounding or different conventions.  A whole-number total introduces a
+        push possibility that complicates probability calculations and
+        produces prediction labels like "Under 7.0" that don't match what
+        bettors actually see on the sportsbook.
+
+        Strategy: round down to the nearest .5 so that we err on the side
+        of the more probable "under" — e.g., a reported 7.0 becomes 6.5,
+        and a reported 6.0 becomes 5.5.
+        """
+        if line % 1 == 0.5:
+            return line  # already a .5 line
+        # Whole number or other non-.5 value → round down to nearest .5
+        return float(int(line) - 1) + 0.5
+
     async def predict_total_goals(
         self,
         features: Dict[str, Any],
@@ -337,13 +357,22 @@ class BettingModel:
         odds_data = features.get("odds", {})
         book_ou = odds_data.get("over_under_line")
         if book_ou is not None:
-            eval_lines.add(float(book_ou))
+            normalized = self._normalize_total_line(float(book_ou))
+            eval_lines.add(normalized)
+            # Update the odds data so downstream code uses the corrected line
+            if normalized != float(book_ou):
+                logger.info(
+                    "Normalized sportsbook O/U line %.1f → %.1f",
+                    float(book_ou), normalized,
+                )
+                odds_data["over_under_line"] = normalized
 
         lines = {}
         for line in sorted(eval_lines):
             over_prob = 0.0
             under_prob = 0.0
-            threshold = int(line)  # e.g., 5.5 -> 5; over means > 5 -> >= 6
+            # For .5 lines: int(5.5)=5, over means total>5 i.e. >=6. Correct.
+            threshold = int(line)
             for i in range(max_g + 1):
                 for j in range(max_g + 1):
                     total = i + j
@@ -764,6 +793,10 @@ class BettingModel:
             totals = await self.predict_total_goals(features)
             lines = totals.get("lines", {})
             total_xg = totals["total_xg"]
+
+            # Re-read ou_line after predict_total_goals may have normalized
+            # a whole-number line (e.g., 7.0 → 6.5) in odds_data.
+            ou_line = odds_data.get("over_under_line")
 
             # When we have a sportsbook O/U line, prioritise the book line
             # so best-bet recommendations match what the user can actually bet.

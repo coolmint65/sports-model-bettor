@@ -1442,7 +1442,12 @@ class MultiSourceOddsScraper:
             if best.get("away_moneyline"):
                 game.away_moneyline = best["away_moneyline"]
             if best.get("over_under"):
-                game.over_under_line = best["over_under"]
+                ou_raw = float(best["over_under"])
+                # Normalize whole-number lines to .5 (e.g., 7 → 6.5)
+                # NHL sportsbooks post .5 lines; some sources round to int.
+                if ou_raw % 1 != 0.5:
+                    ou_raw = float(int(ou_raw) - 1) + 0.5
+                game.over_under_line = ou_raw
             if best.get("home_spread") is not None:
                 game.home_spread_line = best["home_spread"]
             if best.get("away_spread") is not None:
