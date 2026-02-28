@@ -1314,6 +1314,15 @@ class MultiSourceOddsScraper:
             logger.info("No odds to sync")
             return []
 
+        logger.info(
+            "Odds sync starting: %d games from sportsbooks: %s",
+            len(odds_list),
+            ", ".join(
+                f"{o.get('away_abbrev','?')}@{o.get('home_abbrev','?')}"
+                for o in odds_list
+            ),
+        )
+
         matched: List[Dict[str, Any]] = []
 
         for odds in odds_list:
@@ -1321,6 +1330,12 @@ class MultiSourceOddsScraper:
             away_abbrev = odds.get("away_abbrev", "")
 
             if not home_abbrev or not away_abbrev:
+                logger.warning(
+                    "Odds sync: skipping event with missing abbreviation "
+                    "(home=%r, away=%r, raw_teams=%s vs %s)",
+                    home_abbrev, away_abbrev,
+                    odds.get("away_team", ""), odds.get("home_team", ""),
+                )
                 continue
 
             # Parse commence_time to the LOCAL game date.
@@ -1363,7 +1378,17 @@ class MultiSourceOddsScraper:
                     except (ValueError, TypeError, OverflowError):
                         continue
             else:
+                logger.warning(
+                    "Odds sync: no commence_time for %s@%s — skipping",
+                    away_abbrev, home_abbrev,
+                )
                 continue
+
+            logger.info(
+                "Odds sync: %s@%s commence=%s → game_date=%s",
+                away_abbrev, home_abbrev,
+                odds.get("commence_time", ""), game_date,
+            )
 
             # Find matching teams
             home_result = await db.execute(

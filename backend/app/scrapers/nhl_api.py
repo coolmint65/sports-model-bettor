@@ -48,28 +48,44 @@ class NHLScraper(BaseScraper):
         """
         Fetch the NHL schedule for a given date.
 
+        Uses the ``/score`` endpoint instead of ``/schedule`` because
+        ``/score`` includes live game data (period, clock, scores) that
+        ``/schedule`` omits.
+
         Args:
             date_str: Date in YYYY-MM-DD format, or None for today.
 
         Returns:
             List of game dicts with keys: id, start_time, home_team,
-            away_team, venue, status, season, game_type.
+            away_team, venue, status, season, game_type, period, clock.
         """
+        # /score has everything /schedule has, plus periodDescriptor
+        # and clock for live games.
         if date_str:
-            path = f"/schedule/{date_str}"
+            path = f"/score/{date_str}"
         else:
-            path = "/schedule/now"
+            path = "/score/now"
 
         data = await self.fetch_json(path)
         games: List[Dict[str, Any]] = []
 
-        game_week = data.get("gameWeek", [])
-        for day_entry in game_week:
-            day_date = day_entry.get("date", "")
-            for game_raw in day_entry.get("games", []):
+        # /score returns a top-level "games" array
+        games_list = data.get("games", [])
+        if games_list:
+            day_date = data.get("currentDate", date_str or "")
+            for game_raw in games_list:
                 game = self._parse_schedule_game(game_raw, day_date)
                 if game:
                     games.append(game)
+        else:
+            # Fallback: /schedule uses gameWeek > games
+            game_week = data.get("gameWeek", [])
+            for day_entry in game_week:
+                day_date = day_entry.get("date", "")
+                for game_raw in day_entry.get("games", []):
+                    game = self._parse_schedule_game(game_raw, day_date)
+                    if game:
+                        games.append(game)
 
         logger.info("Fetched %d games from schedule", len(games))
         return games
