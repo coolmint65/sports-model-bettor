@@ -375,8 +375,11 @@ async def get_today_schedule(
                 len(with_picks), len(games),
                 ", ".join(f"{g.away_team.abbreviation}@{g.home_team.abbreviation}" for g in without_picks) or "none",
             )
-        except HTTPException:
-            pass
+        except HTTPException as exc:
+            logger.warning(
+                "Schedule: odds sync / prediction generation failed: %s",
+                exc.detail,
+            )
 
     return ScheduleResponse(date=today, game_count=len(games), games=games)
 
@@ -429,26 +432,41 @@ async def force_sync_odds(
     try:
         matched = await scraper.sync_odds(session)
         await session.flush()
-
-        # Also regenerate predictions so edges are computed with real odds
-        from app.api.predictions import _try_generate_predictions
-
-        today = date.today()
-        try:
-            pred_count = await _try_generate_predictions(session, target_date=today)
-            await session.flush()
-        except HTTPException:
-            pred_count = 0
+        session.expire_all()
 
         matched_pairs = [
             f"{m.get('away_abbrev', '')}@{m.get('home_abbrev', '')}"
             for m in (matched or [])
         ]
+
+        # Also regenerate predictions so edges are computed with real odds
+        from app.api.predictions import _try_generate_predictions
+
+        today = date.today()
+        pred_count = 0
+        pred_error = None
+        try:
+            pred_count = await _try_generate_predictions(session, target_date=today)
+            await session.flush()
+        except HTTPException as exc:
+            pred_error = exc.detail
+            logger.warning("sync-odds: prediction generation failed: %s", exc.detail)
+        except Exception as exc:
+            pred_error = str(exc)
+            logger.warning("sync-odds: prediction generation error: %s", exc)
+
         return {
             "status": "ok",
             "odds_matched": len(matched) if matched else 0,
             "predictions_generated": pred_count,
+            "prediction_error": pred_error,
             "matched_games": matched_pairs,
         }
+    except Exception as exc:
+        logger.error("sync-odds endpoint failed: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Odds sync failed: {exc}",
+        )
     finally:
         await scraper.close()
