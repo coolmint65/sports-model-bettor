@@ -233,9 +233,14 @@ async def _try_generate_predictions(
             for pred in game_data.get("predictions", []):
                 confidence = pred.get("confidence", 0)
                 implied_prob = pred.get("implied_probability")
-                if implied_prob is None:
-                    implied_prob = 0.5
-                edge = round(confidence - implied_prob, 4)
+                has_real_odds = implied_prob is not None
+                # Only compute edge when we have real sportsbook odds.
+                # Without real odds there is no market to compare against,
+                # so edge is meaningless and should not be used for ranking.
+                if has_real_odds:
+                    edge = round(confidence - implied_prob, 4)
+                else:
+                    edge = None
 
                 await manager._persist_prediction(session, {
                     "game_id": game_id,
@@ -243,7 +248,7 @@ async def _try_generate_predictions(
                     "prediction": pred["prediction"],
                     "confidence": confidence,
                     "probability": pred.get("probability", confidence),
-                    "implied_probability": round(implied_prob, 4),
+                    "implied_probability": round(implied_prob, 4) if has_real_odds else None,
                     "odds": pred.get("odds"),
                     "edge": edge,
                     "reasoning": pred.get("reasoning", ""),
@@ -315,6 +320,11 @@ async def get_best_bets(
         try:
             await odds_scraper.sync_odds(session)
             await session.flush()
+            # Expire all cached objects so the prediction engine re-fetches
+            # Game records with the freshly synced odds (moneyline, O/U,
+            # spread) instead of getting stale None values from the
+            # SQLAlchemy identity map.
+            session.expire_all()
         finally:
             await odds_scraper.close()
     except Exception:
@@ -331,7 +341,10 @@ async def get_best_bets(
     # Exclude games that are already final — those bets can't be placed.
     FINAL_STATUSES = ("final", "completed", "off", "official")
 
-    # Get top predictions by edge for today (non-final games only)
+    # Get top predictions by edge for today (non-final games only).
+    # Only include predictions with real sportsbook odds so we can
+    # calculate genuine edge.  Predictions without odds_implied_prob
+    # had their edge set to None in _try_generate_predictions.
     result = await session.execute(
         select(Prediction)
         .options(selectinload(Prediction.result))
@@ -341,6 +354,7 @@ async def get_best_bets(
             ~func.lower(Game.status).in_(FINAL_STATUSES),
             Prediction.recommended == True,
             Prediction.bet_type.in_(MARKET_BET_TYPES),
+            Prediction.odds_implied_prob.isnot(None),
         )
         .order_by(
             Prediction.best_bet.desc(),
@@ -351,7 +365,7 @@ async def get_best_bets(
     )
     top_preds = result.scalars().all()
 
-    # If no recommended preds, fall back to top confidence (still filtered)
+    # If no recommended preds with real odds, fall back to top confidence
     if not top_preds:
         result = await session.execute(
             select(Prediction)
@@ -395,9 +409,9 @@ async def get_best_bets(
                     live_odds = game_obj.away_moneyline
             elif pred.bet_type == "total":
                 if pred.prediction_value and "over" in pred.prediction_value:
-                    live_odds = game_obj.over_price or -110.0
+                    live_odds = game_obj.over_price
                 else:
-                    live_odds = game_obj.under_price or -110.0
+                    live_odds = game_obj.under_price
             elif pred.bet_type == "spread":
                 # Check if it's home or away side spread
                 home_team_result = await session.execute(
@@ -405,9 +419,9 @@ async def get_best_bets(
                 )
                 home_team_obj = home_team_result.scalar_one_or_none()
                 if home_team_obj and pred.prediction_value and home_team_obj.abbreviation in pred.prediction_value:
-                    live_odds = game_obj.home_spread_price or -110.0
+                    live_odds = game_obj.home_spread_price
                 else:
-                    live_odds = game_obj.away_spread_price or -110.0
+                    live_odds = game_obj.away_spread_price
 
         best_bets.append(
             BestBet(
