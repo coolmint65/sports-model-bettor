@@ -304,7 +304,8 @@ class BettingModel:
         """
         Predict total goals using the Poisson model.
 
-        Calculates over/under probabilities for standard lines (4.5, 5.5, 6.5).
+        Calculates over/under probabilities for standard lines (4.5, 5.5, 6.5)
+        plus the actual sportsbook O/U line when available.
 
         Returns:
             dict with home_xg, away_xg, total_xg, and probabilities for
@@ -316,8 +317,15 @@ class BettingModel:
         matrix = self._score_matrix(home_xg, away_xg)
         max_g = POISSON_MAX_GOALS
 
+        # Build the set of lines to evaluate, including the actual book line
+        eval_lines = set(TOTAL_LINES)
+        odds_data = features.get("odds", {})
+        book_ou = odds_data.get("over_under_line")
+        if book_ou is not None:
+            eval_lines.add(float(book_ou))
+
         lines = {}
-        for line in TOTAL_LINES:
+        for line in sorted(eval_lines):
             over_prob = 0.0
             under_prob = 0.0
             threshold = int(line)  # e.g., 5.5 -> 5; over means > 5 -> >= 6
@@ -433,8 +441,20 @@ class BettingModel:
 
         predicted_margin = round(home_xg - away_xg, 3)
 
+        # Include the actual sportsbook spread if available and different
+        odds_data = features.get("odds", {})
+        book_spread = odds_data.get("home_spread_line")
+        eval_spreads = list(SPREAD_LINES)
+        if book_spread is not None:
+            bv = float(book_spread)
+            if bv not in eval_spreads:
+                eval_spreads.append(bv)
+            abv = -bv
+            if abv not in eval_spreads:
+                eval_spreads.append(abv)
+
         spreads = {}
-        for spread_line in SPREAD_LINES:
+        for spread_line in eval_spreads:
             # Home covers spread_line means:
             # home_score - away_score > abs(spread_line) if spread_line < 0
             # or away_score - home_score < spread_line if spread_line > 0
@@ -672,18 +692,24 @@ class BettingModel:
             if home_wp >= away_wp:
                 ml_pred = "home"
                 ml_prob = home_wp
+                odds_note = ""
+                if home_ml is not None:
+                    odds_str = f"+{int(home_ml)}" if home_ml > 0 else str(int(home_ml))
+                    odds_note = f" Sportsbook line: {odds_str}."
                 ml_reason = (
                     f"{home_name} ({home_abbr}) are favored with {home_wp:.1%} win probability "
-                    f"(xG: {ml['home_xg']:.2f} vs {ml['away_xg']:.2f}). "
-                    f"Home ice advantage and recent form support this pick."
+                    f"(xG: {ml['home_xg']:.2f} vs {ml['away_xg']:.2f}).{odds_note}"
                 )
             else:
                 ml_pred = "away"
                 ml_prob = away_wp
+                odds_note = ""
+                if away_ml is not None:
+                    odds_str = f"+{int(away_ml)}" if away_ml > 0 else str(int(away_ml))
+                    odds_note = f" Sportsbook line: {odds_str}."
                 ml_reason = (
                     f"{away_name} ({away_abbr}) projected to win at {away_wp:.1%} "
-                    f"(xG: {ml['away_xg']:.2f} vs {ml['home_xg']:.2f}). "
-                    f"Road team's form outweighs home ice advantage."
+                    f"(xG: {ml['away_xg']:.2f} vs {ml['home_xg']:.2f}).{odds_note}"
                 )
 
             # Calculate implied probability and edge from real odds
@@ -713,8 +739,46 @@ class BettingModel:
         try:
             totals = await self.predict_total_goals(features)
             lines = totals.get("lines", {})
+            total_xg = totals["total_xg"]
 
-            # Find the line with the strongest edge
+            # When we have a sportsbook O/U line, prioritise the book line
+            # so best-bet recommendations match what the user can actually bet.
+            book_line_pred = None
+            book_line_prob = 0.0
+
+            if ou_line is not None:
+                ou_val = float(ou_line)
+                over_key = f"over_{ou_val}"
+                under_key = f"under_{ou_val}"
+                over_p = lines.get(over_key, 0.5)
+                under_p = lines.get(under_key, 0.5)
+
+                if over_p >= under_p:
+                    book_line_pred = over_key
+                    book_line_prob = over_p
+                else:
+                    book_line_pred = under_key
+                    book_line_prob = under_p
+
+                direction = "over" if "over" in book_line_pred else "under"
+                predictions.append({
+                    "bet_type": "total",
+                    "prediction": book_line_pred,
+                    "confidence": round(book_line_prob, 4),
+                    "probability": round(book_line_prob, 4),
+                    "implied_probability": 0.524,   # standard -110 juice
+                    "odds": -110.0,
+                    "reasoning": (
+                        f"Model projects {total_xg:.1f} total goals. "
+                        f"{direction.capitalize()} {ou_val} (sportsbook line) at "
+                        f"{book_line_prob:.1%} probability. "
+                        f"Based on {home_abbr} xG {totals['home_xg']:.2f} + "
+                        f"{away_abbr} xG {totals['away_xg']:.2f}."
+                    ),
+                    "details": totals,
+                })
+
+            # Also find the best model line from the standard set
             best_total_pred = None
             best_total_prob = 0.0
             for line_val in TOTAL_LINES:
@@ -730,26 +794,15 @@ class BettingModel:
                     best_total_prob = under_p
                     best_total_pred = under_key
 
-            if best_total_pred:
-                total_xg = totals["total_xg"]
+            # Only add the best model line if it's different from the book line
+            if best_total_pred and best_total_pred != book_line_pred:
                 direction = "over" if "over" in best_total_pred else "under"
                 line_num = best_total_pred.split("_", 1)[1]
-                total_reason = (
-                    f"Model projects {total_xg:.1f} total goals. "
-                    f"{direction.capitalize()} {line_num} at {best_total_prob:.1%} probability. "
-                    f"Based on {home_abbr} xG {totals['home_xg']:.2f} + "
-                    f"{away_abbr} xG {totals['away_xg']:.2f}."
-                )
-
-                # Standard O/U pricing is ~-110 each side (52.4% implied).
-                # Use the real line if available to indicate we have market data.
                 total_implied = None
                 total_odds_display = None
                 if ou_line is not None:
-                    # -110 standard juice → 52.4% implied for each side
                     total_implied = 0.524
                     total_odds_display = -110.0
-
                 predictions.append({
                     "bet_type": "total",
                     "prediction": best_total_pred,
@@ -757,35 +810,14 @@ class BettingModel:
                     "probability": round(best_total_prob, 4),
                     "implied_probability": round(total_implied, 4) if total_implied else None,
                     "odds": total_odds_display,
-                    "reasoning": total_reason,
+                    "reasoning": (
+                        f"Model projects {total_xg:.1f} total goals. "
+                        f"{direction.capitalize()} {line_num} at {best_total_prob:.1%} probability. "
+                        f"Based on {home_abbr} xG {totals['home_xg']:.2f} + "
+                        f"{away_abbr} xG {totals['away_xg']:.2f}."
+                    ),
                     "details": totals,
                 })
-
-                # Also add the most common 5.5 line explicitly if different
-                over_55 = lines.get("over_5.5", 0.5)
-                under_55 = lines.get("under_5.5", 0.5)
-                if max(over_55, under_55) > 0.55:
-                    ou_pred = "over_5.5" if over_55 > under_55 else "under_5.5"
-                    ou_prob = max(over_55, under_55)
-                    if ou_pred != best_total_pred:
-                        ou55_implied = None
-                        ou55_odds = None
-                        if ou_line is not None:
-                            ou55_implied = 0.524
-                            ou55_odds = -110.0
-                        predictions.append({
-                            "bet_type": "total",
-                            "prediction": ou_pred,
-                            "confidence": round(ou_prob, 4),
-                            "probability": round(ou_prob, 4),
-                            "implied_probability": round(ou55_implied, 4) if ou55_implied else None,
-                            "odds": ou55_odds,
-                            "reasoning": (
-                                f"Standard 5.5 line: {ou_pred.replace('_', ' ')} at {ou_prob:.1%}. "
-                                f"Projected total: {total_xg:.1f} goals."
-                            ),
-                            "details": totals,
-                        })
         except Exception as e:
             logger.error("Total goals prediction failed: %s", e)
 

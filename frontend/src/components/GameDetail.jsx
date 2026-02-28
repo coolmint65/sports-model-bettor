@@ -72,20 +72,45 @@ function formatAmericanOdds(odds) {
   return rounded > 0 ? `+${rounded}` : `${rounded}`;
 }
 
+function RecordPill({ label, value }) {
+  if (!value) return null;
+  return (
+    <div className="record-pill">
+      <span className="record-pill-label">{label}</span>
+      <span className="record-pill-value">{value}</span>
+    </div>
+  );
+}
+
 function OverviewTab({ game }) {
-  const away = game.away_team_form || game.away_stats || game.away_team_stats || {};
-  const home = game.home_team_form || game.home_stats || game.home_team_stats || {};
+  const away = game.away_team_form || {};
+  const home = game.home_team_form || {};
   const awayRecord = `${away.wins || 0}-${away.losses || 0}-${away.ot_losses || 0}`;
   const homeRecord = `${home.wins || 0}-${home.losses || 0}-${home.ot_losses || 0}`;
   const odds = game.odds;
 
+  const awayLogo = away.logo_url || teamLogo(game.away_team) || teamLogo(game.away_team_form);
+  const homeLogo = home.logo_url || teamLogo(game.home_team) || teamLogo(game.home_team_form);
+
+  const fmtDiff = (v) => {
+    if (v == null) return '-';
+    return v > 0 ? `+${v}` : `${v}`;
+  };
+  const fmtPct = (v) => {
+    if (v == null) return '-';
+    return typeof v === 'number' ? `${(v * 100).toFixed(1)}%` : v;
+  };
+
   const stats = [
     { label: 'Goals/Game', away: away.goals_for_per_game, home: home.goals_for_per_game, higher: true },
     { label: 'Goals Against/Game', away: away.goals_against_per_game, home: home.goals_against_per_game, higher: false },
+    { label: 'Goal Differential', away: away.goal_diff, home: home.goal_diff, higher: true, fmt: fmtDiff },
     { label: 'Power Play %', away: away.power_play_pct, home: home.power_play_pct, higher: true },
     { label: 'Penalty Kill %', away: away.penalty_kill_pct, home: home.penalty_kill_pct, higher: true },
     { label: 'Shots/Game', away: away.shots_for_per_game, home: home.shots_for_per_game, higher: true },
     { label: 'Shots Against/Game', away: away.shots_against_per_game, home: home.shots_against_per_game, higher: false },
+    { label: 'Faceoff Win %', away: away.faceoff_win_pct, home: home.faceoff_win_pct, higher: true },
+    { label: 'Points %', away: away.points_pct, home: home.points_pct, higher: true, fmt: fmtPct },
   ];
 
   const hasAnyStats = stats.some(s => s.away != null || s.home != null);
@@ -131,13 +156,37 @@ function OverviewTab({ game }) {
         </div>
       )}
 
-      {awayRecord || homeRecord ? (
-        <div className="records-bar">
-          <span className="record-label">{awayRecord || 'N/A'}</span>
-          <span className="record-vs">Records</span>
-          <span className="record-label">{homeRecord || 'N/A'}</span>
+      {/* Team Records Section */}
+      <div className="overview-records-section">
+        <div className="overview-team-records">
+          <div className="overview-team-header">
+            {awayLogo && <img className="overview-team-logo" src={awayLogo} alt="" width={28} height={28} onError={(e) => { e.target.style.display = 'none'; }} />}
+            <span className="overview-team-name">{away.abbreviation || 'Away'}</span>
+            <span className="overview-team-record">{awayRecord}</span>
+          </div>
+          <div className="record-pills">
+            <RecordPill label="L5" value={away.record_last_5} />
+            <RecordPill label="L10" value={away.record_last_10} />
+            <RecordPill label="L20" value={away.record_last_20} />
+            <RecordPill label="Home" value={away.home_record} />
+            <RecordPill label="Away" value={away.away_record} />
+          </div>
         </div>
-      ) : null}
+        <div className="overview-team-records">
+          <div className="overview-team-header">
+            {homeLogo && <img className="overview-team-logo" src={homeLogo} alt="" width={28} height={28} onError={(e) => { e.target.style.display = 'none'; }} />}
+            <span className="overview-team-name">{home.abbreviation || 'Home'}</span>
+            <span className="overview-team-record">{homeRecord}</span>
+          </div>
+          <div className="record-pills">
+            <RecordPill label="L5" value={home.record_last_5} />
+            <RecordPill label="L10" value={home.record_last_10} />
+            <RecordPill label="L20" value={home.record_last_20} />
+            <RecordPill label="Home" value={home.home_record} />
+            <RecordPill label="Away" value={home.away_record} />
+          </div>
+        </div>
+      </div>
 
       {hasAnyStats ? (
         <div className="stat-comparison-table">
@@ -150,7 +199,7 @@ function OverviewTab({ game }) {
                   awayValue={stat.away}
                   homeValue={stat.home}
                   higherIsBetter={stat.higher}
-                  format={(v) => (v != null ? (typeof v === 'number' ? v.toFixed(2) : v) : '-')}
+                  format={stat.fmt || ((v) => (v != null ? (typeof v === 'number' ? v.toFixed(2) : v) : '-'))}
                 />
               )
           )}
@@ -206,8 +255,6 @@ function H2HTab({ game }) {
     );
   }
 
-  // H2H records use team1_id = min(home_id, away_id) convention.
-  // Map team1/team2 back to the correct home/away labels.
   const homeId = game.home_team_form?.team_id ?? game.home_team?.id;
   const team1IsHome = h2h.team1_id === homeId;
   const label1 = team1IsHome ? homeLabel : awayLabel;
@@ -236,12 +283,20 @@ function H2HTab({ game }) {
             </div>
           )}
           {h2h.team1_goals != null && h2h.team2_goals != null && h2h.games_played > 0 && (
-            <div className="h2h-stat-box">
-              <span className="h2h-stat-value">
-                {((h2h.team1_goals + h2h.team2_goals) / h2h.games_played).toFixed(1)}
-              </span>
-              <span className="h2h-stat-label">Avg Total Goals</span>
-            </div>
+            <>
+              <div className="h2h-stat-box">
+                <span className="h2h-stat-value">
+                  {((h2h.team1_goals + h2h.team2_goals) / h2h.games_played).toFixed(1)}
+                </span>
+                <span className="h2h-stat-label">Avg Total Goals</span>
+              </div>
+              <div className="h2h-stat-box">
+                <span className="h2h-stat-value">
+                  {(h2h.team1_goals / h2h.games_played).toFixed(1)} - {(h2h.team2_goals / h2h.games_played).toFixed(1)}
+                </span>
+                <span className="h2h-stat-label">Avg Goals ({label1} - {label2})</span>
+              </div>
+            </>
           )}
           {h2h.last_meeting && (
             <div className="h2h-stat-box">
@@ -256,8 +311,8 @@ function H2HTab({ game }) {
 }
 
 function FormTab({ game }) {
-  const awayForm = game.away_form || game.away_recent || [];
-  const homeForm = game.home_form || game.home_recent || [];
+  const awayForm = game.away_recent_games || game.away_form || game.away_recent || [];
+  const homeForm = game.home_recent_games || game.home_form || game.home_recent || [];
   const awayTeamLabel = game.away_team_form?.team_name || teamName(game.away_team, 'Away');
   const homeTeamLabel = game.home_team_form?.team_name || teamName(game.home_team, 'Home');
 
@@ -265,7 +320,7 @@ function FormTab({ game }) {
     if (!form || form.length === 0) {
       return (
         <div className="empty-state-small">
-          <p>No recent form data for {label}</p>
+          <p>No recent form data for {label}. Sync historical data to populate.</p>
         </div>
       );
     }
@@ -275,15 +330,21 @@ function FormTab({ game }) {
     const last20 = form.slice(0, 20);
 
     const calcRecord = (games) => {
-      const wins = games.filter((g) => g.result === 'W' || g.win).length;
-      const losses = games.filter((g) => g.result === 'L' || g.loss).length;
-      const otl = games.filter((g) => g.result === 'OTL' || g.otl).length;
+      const wins = games.filter((g) => g.result === 'W').length;
+      const losses = games.filter((g) => g.result === 'L').length;
+      const otl = games.filter((g) => g.result === 'OTL').length;
       return `${wins}-${losses}${otl > 0 ? `-${otl}` : ''}`;
     };
 
     const calcAvgGoals = (games) => {
       if (games.length === 0) return '0.0';
-      const total = games.reduce((sum, g) => sum + (g.goals_for || g.score || 0), 0);
+      const total = games.reduce((sum, g) => sum + (g.goals_for || 0), 0);
+      return (total / games.length).toFixed(1);
+    };
+
+    const calcAvgGA = (games) => {
+      if (games.length === 0) return '0.0';
+      const total = games.reduce((sum, g) => sum + (g.goals_against || 0), 0);
       return (total / games.length).toFixed(1);
     };
 
@@ -294,21 +355,21 @@ function FormTab({ game }) {
             <div className="form-period">
               <span className="form-period-label">Last 5</span>
               <span className="form-period-record">{calcRecord(last5)}</span>
-              <span className="form-period-goals">{calcAvgGoals(last5)} GF/G</span>
+              <span className="form-period-goals">{calcAvgGoals(last5)} GF/G | {calcAvgGA(last5)} GA/G</span>
             </div>
           )}
           {last10.length >= 6 && (
             <div className="form-period">
               <span className="form-period-label">Last 10</span>
               <span className="form-period-record">{calcRecord(last10)}</span>
-              <span className="form-period-goals">{calcAvgGoals(last10)} GF/G</span>
+              <span className="form-period-goals">{calcAvgGoals(last10)} GF/G | {calcAvgGA(last10)} GA/G</span>
             </div>
           )}
           {last20.length >= 11 && (
             <div className="form-period">
               <span className="form-period-label">Last 20</span>
               <span className="form-period-record">{calcRecord(last20)}</span>
-              <span className="form-period-goals">{calcAvgGoals(last20)} GF/G</span>
+              <span className="form-period-goals">{calcAvgGoals(last20)} GF/G | {calcAvgGA(last20)} GA/G</span>
             </div>
           )}
         </div>
@@ -316,14 +377,39 @@ function FormTab({ game }) {
         <div className="form-results-strip">
           {last10.map((g, i) => {
             const resultClass =
-              g.result === 'W' || g.win
+              g.result === 'W'
                 ? 'result-win'
-                : g.result === 'OTL' || g.otl
+                : g.result === 'OTL'
                   ? 'result-otl'
                   : 'result-loss';
+            const title = `${g.result} ${g.score_display || ''} ${g.home_away === 'home' ? 'vs' : '@'} ${g.opponent_abbrev || ''}${g.overtime ? ' (OT)' : ''}`;
             return (
-              <div key={i} className={`form-result-dot ${resultClass}`} title={`${g.result || (g.win ? 'W' : 'L')} ${g.score_display || ''}`}>
-                {g.result || (g.win ? 'W' : 'L')}
+              <div key={i} className={`form-result-dot ${resultClass}`} title={title}>
+                {g.result}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Recent Games Table */}
+        <div className="form-games-table">
+          <div className="form-games-header">
+            <span>Date</span>
+            <span>Opp</span>
+            <span>Score</span>
+            <span>Result</span>
+          </div>
+          {last10.map((g, i) => {
+            const resultClass =
+              g.result === 'W' ? 'result-win' : g.result === 'OTL' ? 'result-otl' : 'result-loss';
+            return (
+              <div key={i} className="form-games-row">
+                <span className="form-game-date">{g.game_date}</span>
+                <span className="form-game-opp">
+                  {g.home_away === 'away' ? '@' : 'vs'} {g.opponent_abbrev}
+                </span>
+                <span className="form-game-score">{g.score_display}{g.overtime ? ' OT' : ''}</span>
+                <span className={`form-game-result ${resultClass}`}>{g.result}</span>
               </div>
             );
           })}
@@ -483,8 +569,8 @@ function GameDetail() {
   const venue = game.venue || game.arena || '';
 
   // Team logos - check multiple possible sources
-  const awayLogoUrl = teamLogo(game.away_team) || teamLogo(game.away_team_form);
-  const homeLogoUrl = teamLogo(game.home_team) || teamLogo(game.home_team_form);
+  const awayLogoUrl = awayForm.logo_url || teamLogo(game.away_team) || teamLogo(game.away_team_form);
+  const homeLogoUrl = homeForm.logo_url || teamLogo(game.home_team) || teamLogo(game.home_team_form);
 
   const renderTabContent = () => {
     switch (activeTab) {

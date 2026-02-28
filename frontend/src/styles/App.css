@@ -1035,6 +1035,76 @@ a:hover {
   color: var(--text-muted);
 }
 
+/* ─── Overview Records Section ──────────────────────────────── */
+.overview-records-section {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.overview-team-records {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+}
+
+.overview-team-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.overview-team-logo {
+  border-radius: 4px;
+  object-fit: contain;
+}
+
+.overview-team-name {
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+}
+
+.overview-team-record {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-left: auto;
+}
+
+.record-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.record-pill {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-primary);
+  border-radius: 12px;
+  padding: 3px 10px;
+  font-size: 0.75rem;
+}
+
+.record-pill-label {
+  color: var(--text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.record-pill-value {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
 /* ─── Stat Comparison Table (Overview Tab) ──────────────────── */
 .records-bar {
   display: flex;
@@ -1501,6 +1571,78 @@ a:hover {
   background: var(--accent-gold-bg);
   color: var(--accent-gold);
   border: 1px solid rgba(255, 215, 0, 0.2);
+}
+
+/* ─── Form Games Table ─────────────────────────────────────── */
+.form-games-table {
+  margin-top: 16px;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.form-games-header {
+  display: grid;
+  grid-template-columns: 90px 80px 1fr 50px;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--bg-tertiary);
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
+.form-games-row {
+  display: grid;
+  grid-template-columns: 90px 80px 1fr 50px;
+  gap: 8px;
+  padding: 7px 14px;
+  font-size: 0.8rem;
+  border-top: 1px solid var(--border-primary);
+  align-items: center;
+}
+
+.form-games-row:hover {
+  background: var(--bg-card-hover);
+}
+
+.form-game-date {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.form-game-opp {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.form-game-score {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.form-game-result {
+  font-weight: 700;
+  font-size: 0.75rem;
+  text-align: center;
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
+.form-game-result.result-win {
+  color: var(--accent-green);
+}
+
+.form-game-result.result-loss {
+  color: var(--accent-red);
+}
+
+.form-game-result.result-otl {
+  color: var(--accent-gold);
 }
 
 /* ─── Periods Tab ───────────────────────────────────────────── */

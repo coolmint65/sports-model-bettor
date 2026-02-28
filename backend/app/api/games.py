@@ -35,12 +35,17 @@ class TeamForm(BaseModel):
     team_id: int
     team_name: str
     abbreviation: str
+    logo_url: Optional[str] = None
     wins: int = 0
     losses: int = 0
     ot_losses: int = 0
     points: int = 0
+    games_played: int = 0
+    points_pct: Optional[float] = None
+    goal_diff: Optional[int] = None
     record_last_5: Optional[str] = None
     record_last_10: Optional[str] = None
+    record_last_20: Optional[str] = None
     home_record: Optional[str] = None
     away_record: Optional[str] = None
     goals_for_per_game: Optional[float] = None
@@ -49,6 +54,7 @@ class TeamForm(BaseModel):
     penalty_kill_pct: Optional[float] = None
     shots_for_per_game: Optional[float] = None
     shots_against_per_game: Optional[float] = None
+    faceoff_win_pct: Optional[float] = None
 
     model_config = {"from_attributes": True}
 
@@ -113,6 +119,20 @@ class GamePredictionBrief(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class RecentGameResult(BaseModel):
+    """A single recent game result for a team."""
+
+    game_date: date
+    opponent_abbrev: str
+    opponent_name: str
+    home_away: str  # "home" or "away"
+    goals_for: int = 0
+    goals_against: int = 0
+    result: str  # "W", "L", "OTL"
+    score_display: str = ""  # e.g. "4-2"
+    overtime: bool = False
+
+
 class OddsInfo(BaseModel):
     """Current betting odds for a game."""
 
@@ -145,6 +165,9 @@ class GameDetailResponse(BaseModel):
 
     home_team_form: TeamForm
     away_team_form: TeamForm
+
+    home_recent_games: List[RecentGameResult] = []
+    away_recent_games: List[RecentGameResult] = []
 
     head_to_head: Optional[HeadToHeadRecord] = None
 
@@ -202,14 +225,21 @@ async def _get_team_form(team: Team, session: AsyncSession) -> TeamForm:
         team_id=team.id,
         team_name=team.name,
         abbreviation=team.abbreviation,
+        logo_url=team.logo_url,
     )
     if stats:
         form.wins = stats.wins
         form.losses = stats.losses
         form.ot_losses = stats.ot_losses
         form.points = stats.points
+        form.games_played = stats.games_played
+        gd = stats.goals_for - stats.goals_against if stats.goals_for and stats.goals_against else None
+        form.goal_diff = gd
+        total_possible = stats.games_played * 2 if stats.games_played else 0
+        form.points_pct = round(stats.points / total_possible, 3) if total_possible > 0 else None
         form.record_last_5 = stats.record_last_5
         form.record_last_10 = stats.record_last_10
+        form.record_last_20 = stats.record_last_20
         form.home_record = stats.home_record
         form.away_record = stats.away_record
         form.goals_for_per_game = stats.goals_for_per_game
@@ -218,44 +248,139 @@ async def _get_team_form(team: Team, session: AsyncSession) -> TeamForm:
         form.penalty_kill_pct = stats.penalty_kill_pct
         form.shots_for_per_game = stats.shots_for_per_game
         form.shots_against_per_game = stats.shots_against_per_game
+        form.faceoff_win_pct = stats.faceoff_win_pct
 
     return form
+
+
+async def _get_recent_games(
+    team_id: int, session: AsyncSession, limit: int = 10
+) -> List[RecentGameResult]:
+    """Return the last N completed games for a team, most recent first."""
+    FINISHED_STATUSES = ("final", "completed", "off")
+    result = await session.execute(
+        select(Game)
+        .options(selectinload(Game.home_team), selectinload(Game.away_team))
+        .where(
+            or_(Game.home_team_id == team_id, Game.away_team_id == team_id),
+            func.lower(Game.status).in_(FINISHED_STATUSES),
+            Game.home_score.isnot(None),
+        )
+        .order_by(Game.date.desc())
+        .limit(limit)
+    )
+    games = result.scalars().all()
+
+    results: List[RecentGameResult] = []
+    for game in games:
+        is_home = game.home_team_id == team_id
+        gf = game.home_score if is_home else game.away_score
+        ga = game.away_score if is_home else game.home_score
+        opponent = game.away_team if is_home else game.home_team
+        won = gf > ga
+        ot = bool(game.went_to_overtime)
+        if won:
+            res = "W"
+        elif ot:
+            res = "OTL"
+        else:
+            res = "L"
+
+        results.append(RecentGameResult(
+            game_date=game.date,
+            opponent_abbrev=opponent.abbreviation if opponent else "???",
+            opponent_name=opponent.name if opponent else "Unknown",
+            home_away="home" if is_home else "away",
+            goals_for=gf or 0,
+            goals_against=ga or 0,
+            result=res,
+            score_display=f"{gf}-{ga}",
+            overtime=ot,
+        ))
+    return results
 
 
 async def _get_head_to_head(
     team1_id: int, team2_id: int, session: AsyncSession
 ) -> Optional[HeadToHeadRecord]:
-    """Aggregate H2H records across ALL seasons (convention: team1_id < team2_id)."""
-    lo, hi = sorted([team1_id, team2_id])
-    result = await session.execute(
-        select(HeadToHead)
-        .where(HeadToHead.team1_id == lo, HeadToHead.team2_id == hi)
-        .order_by(HeadToHead.season.desc())
-    )
-    records = result.scalars().all()
-    if not records:
-        return None
+    """Compute H2H directly from completed Game records between the two teams.
 
-    # Aggregate across all seasons
-    total_gp = sum(r.games_played for r in records)
-    total_t1w = sum(r.team1_wins for r in records)
-    total_t2w = sum(r.team2_wins for r in records)
-    total_t1g = sum(r.team1_goals for r in records)
-    total_t2g = sum(r.team2_goals for r in records)
-    # Most recent season is first (ordered desc)
-    last_meeting = records[0].last_meeting_date
+    This is more accurate than the HeadToHead table because it includes
+    ALL games in the database regardless of how they were synced.
+    """
+    lo, hi = sorted([team1_id, team2_id])
+    FINISHED = ("final", "completed", "off")
+
+    result = await session.execute(
+        select(Game)
+        .where(
+            or_(
+                and_(Game.home_team_id == lo, Game.away_team_id == hi),
+                and_(Game.home_team_id == hi, Game.away_team_id == lo),
+            ),
+            func.lower(Game.status).in_(FINISHED),
+            Game.home_score.isnot(None),
+        )
+        .order_by(Game.date.desc())
+    )
+    games = result.scalars().all()
+
+    if not games:
+        # Fall back to the HeadToHead table if no Game records found
+        h2h_result = await session.execute(
+            select(HeadToHead)
+            .where(HeadToHead.team1_id == lo, HeadToHead.team2_id == hi)
+            .order_by(HeadToHead.season.desc())
+        )
+        records = h2h_result.scalars().all()
+        if not records:
+            return None
+
+        total_gp = sum(r.games_played for r in records)
+        total_t1w = sum(r.team1_wins for r in records)
+        total_t2w = sum(r.team2_wins for r in records)
+        total_t1g = sum(r.team1_goals for r in records)
+        total_t2g = sum(r.team2_goals for r in records)
+        last_meeting = records[0].last_meeting_date
+
+        return HeadToHeadRecord(
+            team1_id=lo, team2_id=hi, season="All Time",
+            games_played=total_gp, team1_wins=total_t1w,
+            team2_wins=total_t2w, draws=0,
+            team1_goals=total_t1g, team2_goals=total_t2g,
+            last_meeting=last_meeting,
+        )
+
+    # Compute directly from Game records
+    total_gp = len(games)
+    t1_wins = 0
+    t2_wins = 0
+    t1_goals = 0
+    t2_goals = 0
+
+    for game in games:
+        if game.home_team_id == lo:
+            g1, g2 = game.home_score, game.away_score
+        else:
+            g1, g2 = game.away_score, game.home_score
+        t1_goals += g1
+        t2_goals += g2
+        if g1 > g2:
+            t1_wins += 1
+        elif g2 > g1:
+            t2_wins += 1
 
     return HeadToHeadRecord(
         team1_id=lo,
         team2_id=hi,
         season="All Time",
         games_played=total_gp,
-        team1_wins=total_t1w,
-        team2_wins=total_t2w,
+        team1_wins=t1_wins,
+        team2_wins=t2_wins,
         draws=0,
-        team1_goals=total_t1g,
-        team2_goals=total_t2g,
-        last_meeting=last_meeting,
+        team1_goals=t1_goals,
+        team2_goals=t2_goals,
+        last_meeting=games[0].date,
     )
 
 
@@ -447,7 +572,7 @@ async def get_game_details(
     """
     game = await _get_game_or_404(game_id, session)
 
-    # Gather all analytics data concurrently (async-serial here, but logically separate)
+    # Gather all analytics data
     home_form = await _get_team_form(game.home_team, session)
     away_form = await _get_team_form(game.away_team, session)
     h2h = await _get_head_to_head(game.home_team_id, game.away_team_id, session)
@@ -456,6 +581,8 @@ async def get_game_details(
     home_goalies = await _get_team_goalies(game.home_team_id, session)
     away_goalies = await _get_team_goalies(game.away_team_id, session)
     predictions = await _get_game_predictions(game.id, session)
+    home_recent = await _get_recent_games(game.home_team_id, session, limit=20)
+    away_recent = await _get_recent_games(game.away_team_id, session, limit=20)
 
     # Build period scores from individual columns
     parsed_period_scores = None
@@ -500,6 +627,8 @@ async def get_game_details(
         odds=odds_info,
         home_team_form=home_form,
         away_team_form=away_form,
+        home_recent_games=home_recent,
+        away_recent_games=away_recent,
         head_to_head=h2h,
         home_period_scoring=home_period,
         away_period_scoring=away_period,
