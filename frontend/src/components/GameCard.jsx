@@ -191,8 +191,9 @@ function GameCard({ game }) {
           {statusInfo.isLive ? (
             <div className="live-divider">
               <span className="vs-label live-label">{periodInfo.label || 'LIVE'}</span>
-              {periodInfo.clock && (
-                <span className="live-clock">{periodInfo.clock}</span>
+              <span className="live-clock">{periodInfo.clock || '--:--'}</span>
+              {(game.home_shots != null || game.away_shots != null) && (
+                <span className="live-shots">SOG: {game.away_shots ?? 0}-{game.home_shots ?? 0}</span>
               )}
             </div>
           ) : statusInfo.showScore ? (

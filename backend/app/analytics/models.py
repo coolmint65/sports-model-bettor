@@ -687,6 +687,21 @@ class BettingModel:
         home_spread_price = odds_data.get("home_spread_price")
         away_spread_price = odds_data.get("away_spread_price")
 
+        # Validate spread sign against moneyline: favorite must have
+        # negative spread.  If they disagree, flip sign and prices.
+        if home_ml and away_ml and spread_line:
+            home_is_fav = home_ml < away_ml
+            if home_is_fav and spread_line > 0:
+                spread_line = -abs(spread_line)
+                odds_data["home_spread_line"] = spread_line
+                odds_data["away_spread_line"] = abs(spread_line)
+                home_spread_price, away_spread_price = away_spread_price, home_spread_price
+            elif not home_is_fav and spread_line < 0:
+                spread_line = abs(spread_line)
+                odds_data["home_spread_line"] = spread_line
+                odds_data["away_spread_line"] = -abs(spread_line)
+                home_spread_price, away_spread_price = away_spread_price, home_spread_price
+
         # ---- Moneyline ----
         try:
             ml = await self.predict_moneyline(features)
@@ -840,6 +855,11 @@ class BettingModel:
             spreads = spread.get("spreads", {})
             margin = spread["predicted_margin"]
 
+            # Pick the single best puck-line bet (the one aligned with the
+            # sportsbook line, or the one with the highest cover probability).
+            best_spread_pred = None
+            best_spread_prob = 0.0
+
             for spread_key, cover_prob in spreads.items():
                 anti_prob = 1.0 - cover_prob
                 if cover_prob >= 0.5:
@@ -853,20 +873,26 @@ class BettingModel:
                         pred_val = "home_-1.5"
                     prob_val = anti_prob
 
+                # Only keep the best one
+                if prob_val > best_spread_prob:
+                    best_spread_prob = prob_val
+                    best_spread_pred = pred_val
+
+            if best_spread_pred:
                 # Replace home/away with team abbreviations
-                if pred_val.startswith("home"):
-                    display_val = pred_val.replace("home", home_abbr, 1)
+                if best_spread_pred.startswith("home"):
+                    display_val = best_spread_pred.replace("home", home_abbr, 1)
                     sprd_price = home_spread_price
-                elif pred_val.startswith("away"):
-                    display_val = pred_val.replace("away", away_abbr, 1)
+                elif best_spread_pred.startswith("away"):
+                    display_val = best_spread_pred.replace("away", away_abbr, 1)
                     sprd_price = away_spread_price
                 else:
-                    display_val = pred_val
+                    display_val = best_spread_pred
                     sprd_price = None
 
                 spread_reason = (
                     f"Predicted margin: {margin:+.2f} goals. "
-                    f"{display_val.replace('_', ' ')} covers at {prob_val:.1%} probability."
+                    f"{display_val.replace('_', ' ')} covers at {best_spread_prob:.1%} probability."
                 )
                 # Use actual spread price if available
                 spread_implied = None
@@ -880,8 +906,8 @@ class BettingModel:
                 predictions.append({
                     "bet_type": "spread",
                     "prediction": display_val,
-                    "confidence": round(prob_val, 4),
-                    "probability": round(prob_val, 4),
+                    "confidence": round(best_spread_prob, 4),
+                    "probability": round(best_spread_prob, 4),
                     "implied_probability": round(spread_implied, 4) if spread_implied else None,
                     "odds": spread_odds_display,
                     "reasoning": spread_reason,

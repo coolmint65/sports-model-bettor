@@ -167,6 +167,14 @@ class GameDetailResponse(BaseModel):
     shootout: bool = False
     period_scores: Optional[Dict[str, Any]] = None
 
+    # Live game info
+    period: Optional[int] = None
+    period_type: Optional[str] = None  # REG, OT, SO
+    clock: Optional[str] = None  # e.g. "12:34"
+    clock_running: Optional[bool] = None
+    home_shots: Optional[int] = None
+    away_shots: Optional[int] = None
+
     odds: Optional[OddsInfo] = None
 
     home_team_form: TeamForm
@@ -581,6 +589,19 @@ async def get_game_details(
     """
     game = await _get_game_or_404(game_id, session)
 
+    # Auto-sync from NHL API if game is live to get latest scores/clock
+    if game.status in ("in_progress", "live"):
+        try:
+            from app.scrapers.nhl_api import NHLScraper
+
+            scraper = NHLScraper()
+            await scraper.sync_schedule(session, str(game.date))
+            await session.flush()
+            # Re-load game with fresh data
+            game = await _get_game_or_404(game_id, session)
+        except Exception:
+            pass  # non-critical — serve stale data if sync fails
+
     # Gather all analytics data
     home_form = await _get_team_form(game.home_team, session)
     away_form = await _get_team_form(game.away_team, session)
@@ -642,6 +663,12 @@ async def get_game_details(
         overtime=game.went_to_overtime or False,
         shootout=False,
         period_scores=parsed_period_scores,
+        period=getattr(game, "period", None),
+        period_type=getattr(game, "period_type", None),
+        clock=getattr(game, "clock", None),
+        clock_running=getattr(game, "clock_running", None),
+        home_shots=getattr(game, "home_shots", None),
+        away_shots=getattr(game, "away_shots", None),
         odds=odds_info,
         home_team_form=home_form,
         away_team_form=away_form,

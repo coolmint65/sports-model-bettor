@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -11,12 +11,15 @@ import {
   Activity,
   Layers,
   DollarSign,
+  Radio,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { fetchGameDetails } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import PredictionCard from './PredictionCard';
 import { teamName, teamAbbrev, teamLogo, parseAsUTC } from '../utils/teams';
+
+const LIVE_POLL_INTERVAL = 30_000;
 
 const TABS = [
   { id: 'overview', label: 'Overview', icon: BarChart3 },
@@ -529,12 +532,41 @@ function PeriodsTab({ game }) {
   );
 }
 
+function formatPeriodLabel(game) {
+  const period = game.period;
+  const periodType = game.period_type;
+  if (!period) return 'LIVE';
+  if (periodType === 'OT') return 'OT';
+  if (periodType === 'SO') return 'SO';
+  if (period === 1) return '1st';
+  if (period === 2) return '2nd';
+  if (period === 3) return '3rd';
+  return `${period}th`;
+}
+
 function GameDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('overview');
 
-  const { data: game, loading, error } = useApi(fetchGameDetails, [id]);
+  const { data: game, loading, error, refetch } = useApi(fetchGameDetails, [id]);
+
+  // Auto-poll for live games
+  const isLive = game && ['in_progress', 'live', 'active'].includes((game.status || '').toLowerCase());
+  const intervalRef = useRef(null);
+  useEffect(() => {
+    if (isLive) {
+      intervalRef.current = setInterval(() => {
+        refetch();
+      }, LIVE_POLL_INTERVAL);
+    }
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
+  }, [isLive, refetch]);
 
   if (loading) {
     return (
@@ -632,19 +664,68 @@ function GameDetail() {
         </div>
 
         <div className="game-detail-center">
-          <div className="game-detail-vs">VS</div>
-          <div className="game-detail-meta">
-            <span className="game-detail-time">
-              <Clock size={14} />
-              {formatGameDateTime(game)}
-            </span>
-            {venue && (
-              <span className="game-detail-venue">
-                <MapPin size={14} />
-                {venue}
-              </span>
-            )}
-          </div>
+          {isLive ? (
+            <div className="game-detail-live-center">
+              <div className="detail-live-badge">
+                <Radio size={14} className="live-icon-pulse" />
+                LIVE
+              </div>
+              <div className="detail-live-score">
+                <span className={`detail-score ${game.away_score > game.home_score ? 'score-winning' : ''}`}>
+                  {game.away_score ?? 0}
+                </span>
+                <span className="detail-score-sep">-</span>
+                <span className={`detail-score ${game.home_score > game.away_score ? 'score-winning' : ''}`}>
+                  {game.home_score ?? 0}
+                </span>
+              </div>
+              <div className="detail-live-period">
+                {formatPeriodLabel(game)} {game.clock || '--:--'}
+              </div>
+              {(game.away_shots != null || game.home_shots != null) && (
+                <div className="detail-live-shots">
+                  SOG: {game.away_shots ?? 0} - {game.home_shots ?? 0}
+                </div>
+              )}
+            </div>
+          ) : game.status === 'final' ? (
+            <div className="game-detail-final-center">
+              <div className="detail-final-badge">Final{game.overtime ? ' (OT)' : ''}</div>
+              <div className="detail-live-score">
+                <span className={`detail-score ${game.away_score > game.home_score ? 'score-winning' : ''}`}>
+                  {game.away_score ?? 0}
+                </span>
+                <span className="detail-score-sep">-</span>
+                <span className={`detail-score ${game.home_score > game.away_score ? 'score-winning' : ''}`}>
+                  {game.home_score ?? 0}
+                </span>
+              </div>
+              <div className="game-detail-meta">
+                {venue && (
+                  <span className="game-detail-venue">
+                    <MapPin size={14} />
+                    {venue}
+                  </span>
+                )}
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="game-detail-vs">VS</div>
+              <div className="game-detail-meta">
+                <span className="game-detail-time">
+                  <Clock size={14} />
+                  {formatGameDateTime(game)}
+                </span>
+                {venue && (
+                  <span className="game-detail-venue">
+                    <MapPin size={14} />
+                    {venue}
+                  </span>
+                )}
+              </div>
+            </>
+          )}
         </div>
 
         <div className="game-detail-team home-team-detail">

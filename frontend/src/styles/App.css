@@ -874,6 +874,14 @@ a:hover {
   letter-spacing: 0.3px;
 }
 
+.live-shots {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  letter-spacing: 0.2px;
+}
+
 .game-countdown {
   font-family: var(--font-mono);
   font-size: 0.7rem;
@@ -997,6 +1005,75 @@ a:hover {
   font-weight: 800;
   color: var(--text-dim);
   letter-spacing: 2px;
+}
+
+/* Live game detail center */
+.game-detail-live-center,
+.game-detail-final-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.detail-live-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--accent-red, #ff5252);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.detail-final-badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.live-icon-pulse {
+  animation: pulse-live 2s ease-in-out infinite;
+}
+
+.detail-live-score {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.detail-score {
+  font-size: 2rem;
+  font-weight: 800;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+.detail-score.score-winning {
+  color: var(--accent-green, #00ff88);
+}
+
+.detail-score-sep {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.detail-live-period {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--accent-red, #ff5252);
+}
+
+.detail-live-shots {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--text-muted);
 }
 
 .game-detail-meta {
