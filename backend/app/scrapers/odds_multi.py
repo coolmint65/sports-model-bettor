@@ -21,7 +21,7 @@ import asyncio
 import logging
 import math
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -1323,7 +1323,12 @@ class MultiSourceOddsScraper:
             if not home_abbrev or not away_abbrev:
                 continue
 
-            # Parse commence_time to date
+            # Parse commence_time to the LOCAL game date.
+            # The NHL API stores Game.date as the local (ET) calendar date,
+            # but commence_time from odds sources is UTC.  A 10:30 PM ET
+            # game is 3:30 AM UTC the next day — so we must convert to ET
+            # before extracting .date() to avoid a one-day mismatch for
+            # late-night games.
             commence = odds.get("commence_time", "")
             game_date = None
             if commence:
@@ -1333,12 +1338,28 @@ class MultiSourceOddsScraper:
                         dt = datetime.fromisoformat(ct)
                     else:
                         dt = commence
-                    game_date = dt.date()
+                    # Convert to US/Eastern so the date matches
+                    # the local game date stored in the DB.
+                    try:
+                        from zoneinfo import ZoneInfo
+                        dt_et = dt.astimezone(ZoneInfo("America/New_York"))
+                        game_date = dt_et.date()
+                    except Exception:
+                        # Fallback: subtract 5 hours (EST approximation)
+                        from datetime import timedelta
+                        dt_est = dt.astimezone(timezone.utc) - timedelta(hours=5)
+                        game_date = dt_est.date()
                 except (ValueError, TypeError, AttributeError):
                     # Try parsing as timestamp
                     try:
                         dt = datetime.fromtimestamp(float(commence) / 1000, tz=timezone.utc)
-                        game_date = dt.date()
+                        try:
+                            from zoneinfo import ZoneInfo
+                            dt_et = dt.astimezone(ZoneInfo("America/New_York"))
+                            game_date = dt_et.date()
+                        except Exception:
+                            from datetime import timedelta
+                            game_date = (dt - timedelta(hours=5)).date()
                     except (ValueError, TypeError, OverflowError):
                         continue
             else:
@@ -1362,19 +1383,24 @@ class MultiSourceOddsScraper:
                 )
                 continue
 
-            # Find the matching game
-            game_result = await db.execute(
-                select(Game).where(
-                    Game.home_team_id == home_team.id,
-                    Game.away_team_id == away_team.id,
-                    Game.date == game_date,
+            # Find the matching game.  Try exact date first, then
+            # adjacent day as a safety net for DST edge cases.
+            game = None
+            for candidate_date in (game_date, game_date - timedelta(days=1), game_date + timedelta(days=1)):
+                game_result = await db.execute(
+                    select(Game).where(
+                        Game.home_team_id == home_team.id,
+                        Game.away_team_id == away_team.id,
+                        Game.date == candidate_date,
+                    )
                 )
-            )
-            game = game_result.scalar_one_or_none()
+                game = game_result.scalar_one_or_none()
+                if game is not None:
+                    break
 
             if game is None:
                 logger.debug(
-                    "No game found for %s vs %s on %s",
+                    "No game found for %s vs %s on %s (±1 day)",
                     home_abbrev, away_abbrev, game_date,
                 )
                 continue
