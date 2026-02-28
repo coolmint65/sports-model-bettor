@@ -160,6 +160,43 @@ async def _games_for_date(
                     edge=pred.edge,
                 )
 
+        # Fallback: for games without edge-based picks, use highest confidence
+        missing_ids = [gid for gid in game_ids if gid not in top_picks]
+        if missing_ids:
+            max_conf_sub = (
+                select(
+                    Prediction.game_id,
+                    func.max(Prediction.confidence).label("max_conf"),
+                )
+                .where(
+                    Prediction.game_id.in_(missing_ids),
+                    Prediction.bet_type.in_(MARKET_BET_TYPES),
+                )
+                .group_by(Prediction.game_id)
+                .subquery()
+            )
+            fallback_result = await session.execute(
+                select(Prediction)
+                .join(
+                    max_conf_sub,
+                    and_(
+                        Prediction.game_id == max_conf_sub.c.game_id,
+                        Prediction.confidence == max_conf_sub.c.max_conf,
+                    ),
+                )
+                .where(
+                    Prediction.bet_type.in_(MARKET_BET_TYPES),
+                )
+            )
+            for pred in fallback_result.scalars().all():
+                if pred.game_id not in top_picks:
+                    top_picks[pred.game_id] = GameTopPick(
+                        bet_type=pred.bet_type,
+                        prediction_value=pred.prediction_value,
+                        confidence=pred.confidence,
+                        edge=pred.edge,
+                    )
+
     schedule_games: List[ScheduleGame] = []
     for game in games:
         home_brief = await _build_team_brief(game.home_team, session)
