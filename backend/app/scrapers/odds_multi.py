@@ -1377,9 +1377,12 @@ class MultiSourceOddsScraper:
             away_team = away_result.scalar_one_or_none()
 
             if not home_team or not away_team:
-                logger.debug(
-                    "Teams not found for odds: %s vs %s",
+                logger.warning(
+                    "Odds sync: team lookup failed for %s vs %s "
+                    "(home=%s, away=%s)",
                     home_abbrev, away_abbrev,
+                    "found" if home_team else "NOT FOUND",
+                    "found" if away_team else "NOT FOUND",
                 )
                 continue
 
@@ -1399,9 +1402,11 @@ class MultiSourceOddsScraper:
                     break
 
             if game is None:
-                logger.debug(
-                    "No game found for %s vs %s on %s (±1 day)",
+                logger.warning(
+                    "Odds sync: no DB game for %s vs %s on %s (±1 day) "
+                    "[commence=%s]",
                     home_abbrev, away_abbrev, game_date,
+                    odds.get("commence_time", ""),
                 )
                 continue
 
@@ -1437,8 +1442,17 @@ class MultiSourceOddsScraper:
                 "best_odds": best,
             })
 
-        logger.info(
-            "Multi-source odds sync complete: %d games matched from %d available",
-            len(matched), len(odds_list),
-        )
+        if len(matched) < len(odds_list):
+            matched_keys = {f"{m['home_abbrev']}v{m['away_abbrev']}" for m in matched}
+            all_keys = {f"{o.get('home_abbrev','')}v{o.get('away_abbrev','')}" for o in odds_list}
+            unmatched = all_keys - matched_keys
+            logger.warning(
+                "Odds sync: %d/%d games matched. Unmatched: %s",
+                len(matched), len(odds_list), ", ".join(sorted(unmatched)),
+            )
+        else:
+            logger.info(
+                "Odds sync: all %d games matched successfully",
+                len(matched),
+            )
         return matched
