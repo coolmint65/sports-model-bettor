@@ -84,23 +84,34 @@ class BestBetsResponse(BaseModel):
     date: date
     bet_count: int
     best_bets: List[BestBet]
+    ml_bets: List[BestBet] = []
+    spread_bets: List[BestBet] = []
+    total_bets: List[BestBet] = []
 
 
-class HistoryEntry(BaseModel):
-    date: date
-    total_predictions: int
-    correct: int
-    incorrect: int
-    pending: int
-    hit_rate: Optional[float] = None
+class HistoryBet(BaseModel):
+    id: int
+    game_id: int
+    game_date: Optional[date] = None
+    home_team: Optional[TeamSnapshot] = None
+    away_team: Optional[TeamSnapshot] = None
+    bet_type: Optional[str] = None
+    prediction_value: Optional[str] = None
+    confidence: Optional[float] = None
+    edge: Optional[float] = None
+    odds_display: Optional[float] = None
+    outcome: Optional[str] = None
+    profit: Optional[float] = None
 
 
 class HistoryResponse(BaseModel):
-    entries: List[HistoryEntry]
-    total_predictions: int
-    total_correct: int
-    total_incorrect: int
-    overall_hit_rate: Optional[float] = None
+    bets: List[HistoryBet]
+    total_bets: int
+    wins: int
+    losses: int
+    pending: int
+    win_rate: Optional[float] = None
+    total_profit: float = 0.0
 
 
 class GenerateResult(BaseModel):
@@ -360,57 +371,101 @@ async def get_best_bets(
     # implied prob ~0.735 which far exceeds our 0.63 ceiling.
     max_implied = settings.best_bet_max_implied
 
+    # Base filter conditions shared across all queries
+    base_conditions = [
+        Game.date == today,
+        ~func.lower(Game.status).in_(FINAL_STATUSES),
+        Prediction.odds_implied_prob.isnot(None),
+        Prediction.odds_implied_prob < max_implied,
+    ]
+
+    base_order = [
+        Prediction.best_bet.desc(),
+        Prediction.edge.desc().nulls_last(),
+        Prediction.confidence.desc().nulls_last(),
+    ]
+
+    # Query top bets per category (3 per type)
+    categorized: dict[str, list] = {"ml": [], "spread": [], "total": []}
+    for bet_type in MARKET_BET_TYPES:
+        result = await session.execute(
+            select(Prediction)
+            .options(selectinload(Prediction.result))
+            .join(Game, Game.id == Prediction.game_id)
+            .where(
+                *base_conditions,
+                Prediction.recommended == True,
+                Prediction.bet_type == bet_type,
+            )
+            .order_by(*base_order)
+            .limit(3)
+        )
+        preds = result.scalars().all()
+        # Fallback: without recommended filter
+        if not preds:
+            result = await session.execute(
+                select(Prediction)
+                .options(selectinload(Prediction.result))
+                .join(Game, Game.id == Prediction.game_id)
+                .where(
+                    *base_conditions,
+                    Prediction.bet_type == bet_type,
+                )
+                .order_by(*base_order)
+                .limit(3)
+            )
+            preds = result.scalars().all()
+        categorized[bet_type] = preds
+
+    # Overall top 3 for the legacy best_bets field
     result = await session.execute(
         select(Prediction)
         .options(selectinload(Prediction.result))
         .join(Game, Game.id == Prediction.game_id)
         .where(
-            Game.date == today,
-            ~func.lower(Game.status).in_(FINAL_STATUSES),
+            *base_conditions,
             Prediction.recommended == True,
             Prediction.bet_type.in_(MARKET_BET_TYPES),
-            Prediction.odds_implied_prob.isnot(None),
-            Prediction.odds_implied_prob < max_implied,
         )
-        .order_by(
-            Prediction.best_bet.desc(),
-            Prediction.edge.desc().nulls_last(),
-            Prediction.confidence.desc().nulls_last(),
-        )
+        .order_by(*base_order)
         .limit(3)
     )
     top_preds = result.scalars().all()
-    logger.info(
-        "Best-bets primary query returned %d predictions with real odds (implied < %.2f)",
-        len(top_preds),
-        max_implied,
-    )
-
-    # If no recommended preds with real odds, try without recommended filter
-    # but still require real odds and good juice — showing predictions
-    # without odds/edge is misleading and heavy chalk is poor value.
     if not top_preds:
         result = await session.execute(
             select(Prediction)
             .options(selectinload(Prediction.result))
             .join(Game, Game.id == Prediction.game_id)
             .where(
-                Game.date == today,
-                ~func.lower(Game.status).in_(FINAL_STATUSES),
+                *base_conditions,
                 Prediction.bet_type.in_(MARKET_BET_TYPES),
-                Prediction.odds_implied_prob.isnot(None),
-                Prediction.odds_implied_prob < max_implied,
             )
-            .order_by(
-                Prediction.edge.desc().nulls_last(),
-                Prediction.confidence.desc().nulls_last(),
-            )
+            .order_by(*base_order)
             .limit(3)
         )
         top_preds = result.scalars().all()
 
+    logger.info(
+        "Best-bets: ml=%d, spread=%d, total=%d, overall=%d",
+        len(categorized["ml"]),
+        len(categorized["spread"]),
+        len(categorized["total"]),
+        len(top_preds),
+    )
+
+    # Build all unique predictions that need detail resolution
+    all_preds = list(top_preds)
+    for preds in categorized.values():
+        for p in preds:
+            if p not in all_preds:
+                all_preds.append(p)
+
     best_bets: List[BestBet] = []
-    for pred in top_preds:
+    ml_bets: List[BestBet] = []
+    spread_bets: List[BestBet] = []
+    total_bets: List[BestBet] = []
+
+    async def _build_best_bet(pred: Prediction) -> BestBet:
         detail = await _build_prediction_detail(pred, session)
 
         # Fetch the game to get status and live odds
@@ -424,7 +479,6 @@ async def get_best_bets(
         live_odds = None
         if game_obj:
             if pred.bet_type == "ml":
-                # Figure out which side the prediction is for
                 home_team_result = await session.execute(
                     select(Team).where(Team.id == game_obj.home_team_id)
                 )
@@ -439,7 +493,6 @@ async def get_best_bets(
                 else:
                     live_odds = game_obj.under_price
             elif pred.bet_type == "spread":
-                # Check if it's home or away side spread
                 home_team_result = await session.execute(
                     select(Team).where(Team.id == game_obj.home_team_id)
                 )
@@ -449,101 +502,194 @@ async def get_best_bets(
                 else:
                     live_odds = game_obj.away_spread_price
 
-        best_bets.append(
-            BestBet(
-                prediction_id=detail.id,
-                game_id=detail.game_id,
-                game_date=detail.game_date,
-                home_team=detail.home_team,
-                away_team=detail.away_team,
-                bet_type=detail.bet_type,
-                prediction_value=detail.prediction_value,
-                confidence=detail.confidence,
-                edge=detail.edge,
-                odds_implied_prob=pred.odds_implied_prob,
-                reasoning=detail.reasoning,
-                game_status=game_status,
-                odds_display=live_odds,
-            )
+        return BestBet(
+            prediction_id=detail.id,
+            game_id=detail.game_id,
+            game_date=detail.game_date,
+            home_team=detail.home_team,
+            away_team=detail.away_team,
+            bet_type=detail.bet_type,
+            prediction_value=detail.prediction_value,
+            confidence=detail.confidence,
+            edge=detail.edge,
+            odds_implied_prob=pred.odds_implied_prob,
+            reasoning=detail.reasoning,
+            game_status=game_status,
+            odds_display=live_odds,
         )
 
+    # Build categorized lists
+    for pred in top_preds:
+        best_bets.append(await _build_best_bet(pred))
+    for bet_type, preds in categorized.items():
+        target = {"ml": ml_bets, "spread": spread_bets, "total": total_bets}[bet_type]
+        for pred in preds:
+            target.append(await _build_best_bet(pred))
+
     return BestBetsResponse(
-        date=today, bet_count=len(best_bets), best_bets=best_bets
+        date=today,
+        bet_count=len(best_bets),
+        best_bets=best_bets,
+        ml_bets=ml_bets,
+        spread_bets=spread_bets,
+        total_bets=total_bets,
     )
 
 
 @router.get("/history", response_model=HistoryResponse)
 async def get_prediction_history(
-    days: int = 30,
+    days: int = 90,
     session: AsyncSession = Depends(get_session),
 ):
-    result = await session.execute(
+    """Return the single best bet per game (highest edge) for recent games.
+
+    This shows the model's top pick per game along with its result and
+    profit/loss, giving a clear track record of the model's best calls.
+    """
+    MARKET_BET_TYPES = ("ml", "total", "spread")
+
+    from sqlalchemy import and_
+
+    # Subquery: max edge per game (only market bet types with real odds)
+    max_edge_sub = (
         select(
-            Game.date,
-            func.count(Prediction.id).label("total"),
+            Prediction.game_id,
+            func.max(Prediction.edge).label("max_edge"),
         )
+        .where(
+            Prediction.bet_type.in_(MARKET_BET_TYPES),
+            Prediction.edge.isnot(None),
+        )
+        .group_by(Prediction.game_id)
+        .subquery()
+    )
+
+    # Get the best prediction per game
+    result = await session.execute(
+        select(Prediction)
+        .options(selectinload(Prediction.result))
         .join(Game, Game.id == Prediction.game_id)
-        .group_by(Game.date)
-        .order_by(Game.date.desc())
+        .join(
+            max_edge_sub,
+            and_(
+                Prediction.game_id == max_edge_sub.c.game_id,
+                Prediction.edge == max_edge_sub.c.max_edge,
+            ),
+        )
+        .where(
+            Prediction.bet_type.in_(MARKET_BET_TYPES),
+            Prediction.edge.isnot(None),
+        )
+        .order_by(Game.date.desc(), Prediction.edge.desc())
         .limit(days)
     )
-    date_rows = result.all()
+    preds = result.scalars().all()
 
-    entries: List[HistoryEntry] = []
-    grand_total = 0
-    grand_correct = 0
-    grand_incorrect = 0
+    # Deduplicate: one prediction per game_id (keep highest edge)
+    seen_games = set()
+    unique_preds = []
+    for pred in preds:
+        if pred.game_id not in seen_games:
+            seen_games.add(pred.game_id)
+            unique_preds.append(pred)
 
-    for row in date_rows:
-        game_date = row[0]
-        total = row[1]
+    bets: List[HistoryBet] = []
+    wins = 0
+    losses = 0
+    pending = 0
+    total_profit = 0.0
 
-        # Count settled results for this date via BetResult join
-        correct_result = await session.execute(
-            select(func.count(BetResult.id))
-            .join(Prediction, Prediction.id == BetResult.prediction_id)
-            .join(Game, Game.id == Prediction.game_id)
-            .where(Game.date == game_date, BetResult.was_correct == True)
+    for pred in unique_preds:
+        # Resolve game info
+        game_result = await session.execute(
+            select(Game)
+            .options(selectinload(Game.home_team), selectinload(Game.away_team))
+            .where(Game.id == pred.game_id)
         )
-        correct = correct_result.scalar() or 0
+        game = game_result.scalar_one_or_none()
+        if not game:
+            continue
 
-        incorrect_result = await session.execute(
-            select(func.count(BetResult.id))
-            .join(Prediction, Prediction.id == BetResult.prediction_id)
-            .join(Game, Game.id == Prediction.game_id)
-            .where(Game.date == game_date, BetResult.was_correct == False)
-        )
-        incorrect = incorrect_result.scalar() or 0
+        home_team = None
+        away_team = None
+        if game.home_team:
+            home_team = TeamSnapshot(
+                id=game.home_team.id,
+                name=game.home_team.name,
+                abbreviation=game.home_team.abbreviation,
+            )
+        if game.away_team:
+            away_team = TeamSnapshot(
+                id=game.away_team.id,
+                name=game.away_team.name,
+                abbreviation=game.away_team.abbreviation,
+            )
 
-        pending = total - correct - incorrect
-        hit_rate = round(correct / (correct + incorrect), 4) if (correct + incorrect) > 0 else None
+        # Resolve the sportsbook odds for display
+        odds_display = None
+        if pred.bet_type == "ml":
+            if game.home_team and pred.prediction_value == game.home_team.abbreviation:
+                odds_display = game.home_moneyline
+            else:
+                odds_display = game.away_moneyline
+        elif pred.bet_type == "total":
+            if pred.prediction_value and "over" in pred.prediction_value:
+                odds_display = game.over_price
+            else:
+                odds_display = game.under_price
+        elif pred.bet_type == "spread":
+            if game.home_team and pred.prediction_value and game.home_team.abbreviation in pred.prediction_value:
+                odds_display = game.home_spread_price
+            else:
+                odds_display = game.away_spread_price
 
-        entries.append(
-            HistoryEntry(
-                date=game_date,
-                total_predictions=total,
-                correct=correct,
-                incorrect=incorrect,
-                pending=pending,
-                hit_rate=hit_rate,
+        # Determine outcome from BetResult
+        outcome = None
+        profit = None
+        if pred.result:
+            if pred.result.was_correct:
+                outcome = "Win"
+                wins += 1
+            else:
+                outcome = "Loss"
+                losses += 1
+            profit = pred.result.profit_loss
+            total_profit += profit or 0.0
+        else:
+            # Check if game is final — mark as pending
+            status_lower = (game.status or "").lower()
+            if status_lower in ("final", "completed", "off", "official"):
+                outcome = "Pending"
+            pending += 1
+
+        bets.append(
+            HistoryBet(
+                id=pred.id,
+                game_id=pred.game_id,
+                game_date=game.date,
+                home_team=home_team,
+                away_team=away_team,
+                bet_type=pred.bet_type,
+                prediction_value=pred.prediction_value,
+                confidence=pred.confidence,
+                edge=pred.edge,
+                odds_display=odds_display,
+                outcome=outcome,
+                profit=profit,
             )
         )
-        grand_total += total
-        grand_correct += correct
-        grand_incorrect += incorrect
 
-    overall_hit_rate = (
-        round(grand_correct / (grand_correct + grand_incorrect), 4)
-        if (grand_correct + grand_incorrect) > 0
-        else None
-    )
+    total_graded = wins + losses
+    win_rate = round(wins / total_graded, 4) if total_graded > 0 else None
 
     return HistoryResponse(
-        entries=entries,
-        total_predictions=grand_total,
-        total_correct=grand_correct,
-        total_incorrect=grand_incorrect,
-        overall_hit_rate=overall_hit_rate,
+        bets=bets,
+        total_bets=len(bets),
+        wins=wins,
+        losses=losses,
+        pending=pending,
+        win_rate=win_rate,
+        total_profit=round(total_profit, 2),
     )
 
 

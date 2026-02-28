@@ -1,23 +1,16 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Trophy, TrendingUp, Target, Star, ChevronRight, Radio } from 'lucide-react';
 import { fetchBestBets } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import { teamName, teamAbbrev, confidencePct, formatBetType, formatPredictionValue } from '../utils/teams';
 
-/**
- * Format American odds for display.
- * Accepts a raw American odds number (e.g., -110, +150).
- */
 function formatAmericanOdds(odds) {
   if (odds == null) return null;
   const v = Math.round(odds);
   return v > 0 ? `+${v}` : `${v}`;
 }
 
-/**
- * Fallback: derive American odds from implied probability.
- */
 function formatOddsFromProb(impliedProb) {
   if (!impliedProb || impliedProb <= 0 || impliedProb >= 1) return null;
   if (impliedProb > 0.5) {
@@ -49,7 +42,6 @@ function BestBetCard({ bet, rank, isFeatured }) {
   const confColor = getConfidenceColor(confidence);
   const live = isLiveGame(bet.game_status);
 
-  // Use live/actual American odds if available, fall back to implied prob conversion
   const oddsDisplay = bet.odds_display != null
     ? formatAmericanOdds(bet.odds_display)
     : formatOddsFromProb(bet.odds_implied_prob);
@@ -154,10 +146,36 @@ function BestBetCard({ bet, rank, isFeatured }) {
   );
 }
 
+const TABS = [
+  { key: 'all', label: 'Top Picks' },
+  { key: 'ml', label: 'Moneyline' },
+  { key: 'spread', label: 'Spread' },
+  { key: 'total', label: 'Totals' },
+];
+
 function BestBets() {
   const { data, loading, error } = useApi(fetchBestBets);
+  const [activeTab, setActiveTab] = useState('all');
 
-  const bets = data?.best_bets || data?.bets || (Array.isArray(data) ? data : []);
+  const allBets = data?.best_bets || data?.bets || (Array.isArray(data) ? data : []);
+  const mlBets = data?.ml_bets || [];
+  const spreadBets = data?.spread_bets || [];
+  const totalBets = data?.total_bets || [];
+
+  const currentBets = {
+    all: allBets,
+    ml: mlBets,
+    spread: spreadBets,
+    total: totalBets,
+  }[activeTab] || [];
+
+  // Count bets with content per tab for badge display
+  const tabCounts = {
+    all: allBets.length,
+    ml: mlBets.length,
+    spread: spreadBets.length,
+    total: totalBets.length,
+  };
 
   if (loading) {
     return (
@@ -192,7 +210,9 @@ function BestBets() {
     );
   }
 
-  if (bets.length === 0) {
+  const hasBets = allBets.length > 0 || mlBets.length > 0 || spreadBets.length > 0 || totalBets.length > 0;
+
+  if (!hasBets) {
     return (
       <div className="best-bets-section">
         <div className="section-header">
@@ -216,18 +236,40 @@ function BestBets() {
           <Trophy size={22} className="gold-icon" />
           Best Bets
         </h2>
-        <span className="bet-count">{bets.length} Pick{bets.length !== 1 ? 's' : ''}</span>
+        <span className="bet-count">{currentBets.length} Pick{currentBets.length !== 1 ? 's' : ''}</span>
       </div>
-      <div className="best-bets-grid">
-        {bets.slice(0, 3).map((bet, index) => (
-          <BestBetCard
-            key={bet.id || bet.prediction_id || bet.game_id || index}
-            bet={bet}
-            rank={index + 1}
-            isFeatured={index === 0}
-          />
+
+      <div className="best-bets-tabs">
+        {TABS.map((tab) => (
+          <button
+            key={tab.key}
+            className={`best-bets-tab ${activeTab === tab.key ? 'tab-active' : ''}`}
+            onClick={() => setActiveTab(tab.key)}
+          >
+            {tab.label}
+            {tabCounts[tab.key] > 0 && (
+              <span className="tab-count">{tabCounts[tab.key]}</span>
+            )}
+          </button>
         ))}
       </div>
+
+      {currentBets.length === 0 ? (
+        <div className="empty-state small">
+          <p>No {TABS.find(t => t.key === activeTab)?.label || ''} picks available today.</p>
+        </div>
+      ) : (
+        <div className="best-bets-grid">
+          {currentBets.slice(0, 3).map((bet, index) => (
+            <BestBetCard
+              key={bet.prediction_id || bet.id || bet.game_id || index}
+              bet={bet}
+              rank={index + 1}
+              isFeatured={index === 0}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

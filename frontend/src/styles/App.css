@@ -699,6 +699,73 @@ a:hover {
   color: var(--text-secondary);
 }
 
+/* ─── Best Bets Tabs ───────────────────────────────────────── */
+.best-bets-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+  padding: 4px;
+  border: 1px solid var(--border-primary);
+}
+
+.best-bets-tab {
+  flex: 1;
+  padding: 8px 16px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  font-family: var(--font-sans);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.best-bets-tab:hover {
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.best-bets-tab.tab-active {
+  background: var(--bg-card);
+  color: var(--accent-gold);
+  box-shadow: var(--shadow-sm);
+}
+
+.tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 0.7rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+}
+
+.tab-active .tab-count {
+  background: var(--accent-gold-bg);
+  color: var(--accent-gold);
+}
+
+.empty-state.small {
+  padding: 32px 20px;
+}
+
+.empty-state.small p {
+  font-size: 0.88rem;
+}
+
 /* ─── Games Grid ────────────────────────────────────────────── */
 .games-grid {
   display: grid;
@@ -913,6 +980,31 @@ a:hover {
   max-width: 160px;
 }
 
+.game-top-pick {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.top-pick-type {
+  text-transform: uppercase;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  color: var(--accent-blue);
+  font-size: 0.68rem;
+}
+
+.top-pick-value {
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
 .game-confidence {
   display: flex;
   align-items: center;
@@ -920,6 +1012,7 @@ a:hover {
   font-size: 0.8rem;
   font-weight: 600;
   font-family: var(--font-mono);
+  flex-shrink: 0;
 }
 
 .confidence-text {
@@ -2093,7 +2186,7 @@ a:hover {
 
 .history-table-header {
   display: grid;
-  grid-template-columns: 80px 1.4fr 0.9fr 1.2fr 80px 90px 80px;
+  grid-template-columns: 72px 1.3fr 0.8fr 1fr 70px 70px 80px 75px;
   padding: 12px 16px;
   font-size: 0.7rem;
   font-weight: 600;
@@ -2128,7 +2221,7 @@ a:hover {
 
 .history-table-row {
   display: grid;
-  grid-template-columns: 80px 1.4fr 0.9fr 1.2fr 80px 90px 80px;
+  grid-template-columns: 72px 1.3fr 0.8fr 1fr 70px 70px 80px 75px;
   padding: 10px 16px;
   font-size: 0.82rem;
   align-items: center;
@@ -2178,6 +2271,13 @@ a:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.col-odds {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 0.8rem;
+  color: var(--accent-gold);
 }
 
 .col-confidence {
@@ -2280,7 +2380,7 @@ a:hover {
 
   .history-table-header,
   .history-table-row {
-    grid-template-columns: 65px 1.2fr 0.8fr 1fr 70px 80px 70px;
+    grid-template-columns: 60px 1.2fr 0.7fr 1fr 60px 60px 70px 65px;
     font-size: 0.75rem;
     padding: 8px 12px;
   }
@@ -2382,18 +2482,34 @@ a:hover {
 
   .history-table-header,
   .history-table-row {
-    grid-template-columns: 55px 1fr 0.8fr 60px 65px;
+    grid-template-columns: 55px 1fr 60px 65px 60px;
     font-size: 0.7rem;
     padding: 6px 10px;
   }
 
   .col-type,
-  .col-pick {
+  .col-pick,
+  .col-odds {
     display: none;
   }
 
   .history-table-header .col-type,
-  .history-table-header .col-pick {
+  .history-table-header .col-pick,
+  .history-table-header .col-odds {
+    display: none;
+  }
+
+  .best-bets-tabs {
+    gap: 2px;
+    padding: 3px;
+  }
+
+  .best-bets-tab {
+    padding: 6px 8px;
+    font-size: 0.75rem;
+  }
+
+  .tab-count {
     display: none;
   }
 }

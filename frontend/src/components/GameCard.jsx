@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Clock, MapPin, ChevronRight, TrendingUp } from 'lucide-react';
+import { Clock, MapPin, ChevronRight, TrendingUp, Target } from 'lucide-react';
 import { format } from 'date-fns';
-import { teamName, teamAbbrev, teamLogo, confidencePct, parseAsUTC } from '../utils/teams';
+import { teamName, teamAbbrev, teamLogo, confidencePct, parseAsUTC, formatBetType, formatPredictionValue } from '../utils/teams';
 
 function getConfidenceColor(confidence) {
   if (confidence >= 75) return '#00ff88';
@@ -144,7 +144,8 @@ function GameCard({ game }) {
   const awayScore = game.away_score ?? game.score?.away ?? null;
   const homeScore = game.home_score ?? game.score?.home ?? null;
   const venue = game.venue || game.arena || '';
-  const rawConf = game.top_confidence || game.confidence || game.prediction_confidence || null;
+  const topPick = game.top_pick || null;
+  const rawConf = topPick?.confidence || game.top_confidence || game.confidence || game.prediction_confidence || null;
   const confidence = rawConf != null ? confidencePct(rawConf) : null;
   const hasBadge = !!statusInfo.label;
   const startTime = game.start_time || game.datetime;
@@ -224,14 +225,20 @@ function GameCard({ game }) {
         </div>
       </div>
 
-      {/* Footer: Venue + Confidence */}
+      {/* Footer: Top Pick or Venue + Confidence */}
       <div className="game-card-footer">
-        {venue && (
+        {topPick ? (
+          <div className="game-top-pick">
+            <Target size={12} />
+            <span className="top-pick-type">{formatBetType(topPick.bet_type)}</span>
+            <span className="top-pick-value">{formatPredictionValue(topPick.prediction_value)}</span>
+          </div>
+        ) : venue ? (
           <div className="game-venue">
             <MapPin size={12} />
             <span>{venue}</span>
           </div>
-        )}
+        ) : <div />}
         {confidence != null && (
           <div className="game-confidence" title={`Top prediction confidence: ${confidence.toFixed(0)}%`}>
             <TrendingUp size={12} />

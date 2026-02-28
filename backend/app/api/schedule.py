@@ -10,12 +10,13 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_session
 from app.models.game import Game
+from app.models.prediction import Prediction
 from app.models.team import Team, TeamStats
 
 router = APIRouter(prefix="/api/schedule", tags=["schedule"])
@@ -34,6 +35,13 @@ class TeamBrief(BaseModel):
     record: Optional[str] = None
 
     model_config = {"from_attributes": True}
+
+
+class GameTopPick(BaseModel):
+    bet_type: Optional[str] = None
+    prediction_value: Optional[str] = None
+    confidence: Optional[float] = None
+    edge: Optional[float] = None
 
 
 class ScheduleGame(BaseModel):
@@ -57,6 +65,8 @@ class ScheduleGame(BaseModel):
     clock_running: Optional[bool] = None
     home_shots: Optional[int] = None
     away_shots: Optional[int] = None
+    # Top prediction for this game
+    top_pick: Optional[GameTopPick] = None
 
     model_config = {"from_attributes": True}
 
@@ -108,6 +118,48 @@ async def _games_for_date(
     )
     games = result.scalars().all()
 
+    # Pre-fetch best prediction per game (highest edge, market types only)
+    MARKET_BET_TYPES = ("ml", "total", "spread")
+    game_ids = [g.id for g in games]
+    top_picks: dict[int, GameTopPick] = {}
+    if game_ids:
+        # Get the max edge per game
+        max_edge_sub = (
+            select(
+                Prediction.game_id,
+                func.max(Prediction.edge).label("max_edge"),
+            )
+            .where(
+                Prediction.game_id.in_(game_ids),
+                Prediction.bet_type.in_(MARKET_BET_TYPES),
+                Prediction.edge.isnot(None),
+            )
+            .group_by(Prediction.game_id)
+            .subquery()
+        )
+        pred_result = await session.execute(
+            select(Prediction)
+            .join(
+                max_edge_sub,
+                and_(
+                    Prediction.game_id == max_edge_sub.c.game_id,
+                    Prediction.edge == max_edge_sub.c.max_edge,
+                ),
+            )
+            .where(
+                Prediction.bet_type.in_(MARKET_BET_TYPES),
+                Prediction.edge.isnot(None),
+            )
+        )
+        for pred in pred_result.scalars().all():
+            if pred.game_id not in top_picks:
+                top_picks[pred.game_id] = GameTopPick(
+                    bet_type=pred.bet_type,
+                    prediction_value=pred.prediction_value,
+                    confidence=pred.confidence,
+                    edge=pred.edge,
+                )
+
     schedule_games: List[ScheduleGame] = []
     for game in games:
         home_brief = await _build_team_brief(game.home_team, session)
@@ -134,6 +186,7 @@ async def _games_for_date(
                 clock_running=getattr(game, "clock_running", None),
                 home_shots=getattr(game, "home_shots", None),
                 away_shots=getattr(game, "away_shots", None),
+                top_pick=top_picks.get(game.id),
             )
         )
     return schedule_games
