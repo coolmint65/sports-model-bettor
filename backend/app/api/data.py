@@ -126,7 +126,7 @@ async def sync_all(
             detail=f"Full sync failed: {exc}",
         )
 
-    # Sync historical seasons for H2H data (last 2 seasons)
+    # Sync historical seasons for H2H data (current + last 2 seasons)
     h2h_games = 0
     try:
         current = scraper.default_season
@@ -135,7 +135,8 @@ async def sync_all(
         current_start = 2025
 
     try:
-        for i in range(1, 3):
+        # Include the current season (completed games) + 2 prior seasons
+        for i in range(0, 3):
             start_year = current_start - i
             season_str = f"{start_year}{start_year + 1}"
             h2h_games += await scraper.sync_historical_season(session, season_str)
@@ -315,7 +316,8 @@ async def sync_historical(
     synced_seasons = []
 
     try:
-        for i in range(1, seasons + 1):
+        # Start from 0 to include current season's completed games
+        for i in range(0, seasons + 1):
             start_year = current_start - i
             season_str = f"{start_year}{start_year + 1}"
             count = await scraper.sync_historical_season(session, season_str)

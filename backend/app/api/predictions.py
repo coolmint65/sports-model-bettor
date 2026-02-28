@@ -11,7 +11,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -201,13 +201,23 @@ async def _try_generate_predictions(
 ) -> int:
     """Generate predictions and persist them to the database.
 
-    Uses ``PredictionManager.generate_predictions`` to build prediction
-    dicts for every game on *target_date*, then persists each one via
-    ``_persist_prediction`` so that subsequent DB queries (including the
-    best-bets endpoint's ``MARKET_BET_TYPES`` filter) can find them.
+    Deletes any stale predictions for the target date first, then uses
+    ``PredictionManager.generate_predictions`` to build fresh prediction
+    dicts for every game on *target_date* and persists each one via
+    ``_persist_prediction``.
     """
     try:
         from app.analytics.predictions import PredictionManager
+
+        td = target_date or date.today()
+
+        # Delete stale predictions for today so fresh ones (with correct
+        # sportsbook lines) replace them.
+        today_game_ids = select(Game.id).where(Game.date == td)
+        await session.execute(
+            delete(Prediction).where(Prediction.game_id.in_(today_game_ids))
+        )
+        await session.flush()
 
         manager = PredictionManager()
         results = await manager.generate_predictions(session, target_date)
@@ -293,6 +303,14 @@ async def get_best_bets(
     # inflated/fake edges.
     MARKET_BET_TYPES = ("ml", "total", "spread")
 
+    # Always regenerate predictions fresh so they use current sportsbook
+    # lines instead of returning stale cached predictions.
+    try:
+        await _try_generate_predictions(session, target_date=today)
+        await session.flush()
+    except HTTPException:
+        pass
+
     # Get top predictions by edge for today
     result = await session.execute(
         select(Prediction)
@@ -328,44 +346,6 @@ async def get_best_bets(
             .limit(3)
         )
         top_preds = result.scalars().all()
-
-    # If still no predictions, auto-generate them
-    if not top_preds:
-        try:
-            await _try_generate_predictions(session, target_date=today)
-            await session.flush()
-            result = await session.execute(
-                select(Prediction)
-                .options(selectinload(Prediction.result))
-                .join(Game, Game.id == Prediction.game_id)
-                .where(
-                    Game.date == today,
-                    Prediction.recommended == True,
-                    Prediction.bet_type.in_(MARKET_BET_TYPES),
-                )
-                .order_by(
-                    Prediction.best_bet.desc(),
-                    Prediction.edge.desc().nulls_last(),
-                    Prediction.confidence.desc().nulls_last(),
-                )
-                .limit(3)
-            )
-            top_preds = result.scalars().all()
-            if not top_preds:
-                result = await session.execute(
-                    select(Prediction)
-                    .options(selectinload(Prediction.result))
-                    .join(Game, Game.id == Prediction.game_id)
-                    .where(
-                        Game.date == today,
-                        Prediction.bet_type.in_(MARKET_BET_TYPES),
-                    )
-                    .order_by(Prediction.confidence.desc().nulls_last())
-                    .limit(3)
-                )
-                top_preds = result.scalars().all()
-        except HTTPException:
-            pass
 
     best_bets: List[BestBet] = []
     for pred in top_preds:

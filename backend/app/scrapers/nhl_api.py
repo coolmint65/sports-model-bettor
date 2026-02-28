@@ -1286,14 +1286,13 @@ class NHLScraper(BaseScraper):
             logger.warning("No teams found; run sync_teams first.")
             return 0
 
-        # Use a subset of teams' schedules to get broad coverage
-        # Each game appears on two teams' schedules, so 6 teams
-        # covers roughly 12/32 of the league (with overlap, ~300+ games)
+        # Fetch schedules for ALL teams to get complete coverage.
+        # Each game appears on two teams' schedules, but we deduplicate
+        # by game_id so no double-counting occurs.
         seen_game_ids = set()
         games_created = 0
-        sample_teams = teams[:8]
 
-        for team in sample_teams:
+        for team in teams:
             try:
                 season_games = await self.fetch_team_schedule(
                     team.abbreviation, season
