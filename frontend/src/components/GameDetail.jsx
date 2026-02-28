@@ -10,6 +10,7 @@ import {
   TrendingUp,
   Activity,
   Layers,
+  DollarSign,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { fetchGameDetails } from '../utils/api';
@@ -65,11 +66,18 @@ function StatComparison({ label, awayValue, homeValue, higherIsBetter = true, fo
   );
 }
 
+function formatAmericanOdds(odds) {
+  if (odds == null) return '-';
+  const rounded = Math.round(odds);
+  return rounded > 0 ? `+${rounded}` : `${rounded}`;
+}
+
 function OverviewTab({ game }) {
   const away = game.away_team_form || game.away_stats || game.away_team_stats || {};
   const home = game.home_team_form || game.home_stats || game.home_team_stats || {};
   const awayRecord = `${away.wins || 0}-${away.losses || 0}-${away.ot_losses || 0}`;
   const homeRecord = `${home.wins || 0}-${home.losses || 0}-${home.ot_losses || 0}`;
+  const odds = game.odds;
 
   const stats = [
     { label: 'Goals/Game', away: away.goals_for_per_game, home: home.goals_for_per_game, higher: true },
@@ -84,6 +92,45 @@ function OverviewTab({ game }) {
 
   return (
     <div className="tab-content overview-tab">
+      {odds && (
+        <div className="odds-section">
+          <h3 className="subsection-title">
+            <DollarSign size={16} />
+            Betting Odds
+          </h3>
+          <div className="odds-grid">
+            {(odds.home_moneyline != null || odds.away_moneyline != null) && (
+              <div className="odds-card">
+                <span className="odds-label">Moneyline</span>
+                <div className="odds-values">
+                  <span className="odds-value">{formatAmericanOdds(odds.away_moneyline)}</span>
+                  <span className="odds-vs">vs</span>
+                  <span className="odds-value">{formatAmericanOdds(odds.home_moneyline)}</span>
+                </div>
+              </div>
+            )}
+            {odds.over_under_line != null && (
+              <div className="odds-card">
+                <span className="odds-label">Over/Under</span>
+                <div className="odds-values">
+                  <span className="odds-value">{odds.over_under_line}</span>
+                </div>
+              </div>
+            )}
+            {odds.home_spread_line != null && (
+              <div className="odds-card">
+                <span className="odds-label">Puck Line</span>
+                <div className="odds-values">
+                  <span className="odds-value">
+                    {odds.home_spread_line > 0 ? '+' : ''}{odds.home_spread_line}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {awayRecord || homeRecord ? (
         <div className="records-bar">
           <span className="record-label">{awayRecord || 'N/A'}</span>

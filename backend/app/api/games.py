@@ -113,6 +113,15 @@ class GamePredictionBrief(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class OddsInfo(BaseModel):
+    """Current betting odds for a game."""
+
+    home_moneyline: Optional[float] = None
+    away_moneyline: Optional[float] = None
+    over_under_line: Optional[float] = None
+    home_spread_line: Optional[float] = None
+
+
 class GameDetailResponse(BaseModel):
     """Full game details response with analytics context."""
 
@@ -131,6 +140,8 @@ class GameDetailResponse(BaseModel):
     overtime: bool = False
     shootout: bool = False
     period_scores: Optional[Dict[str, Any]] = None
+
+    odds: Optional[OddsInfo] = None
 
     home_team_form: TeamForm
     away_team_form: TeamForm
@@ -214,28 +225,37 @@ async def _get_team_form(team: Team, session: AsyncSession) -> TeamForm:
 async def _get_head_to_head(
     team1_id: int, team2_id: int, session: AsyncSession
 ) -> Optional[HeadToHeadRecord]:
-    """Retrieve the most recent H2H record (convention: team1_id < team2_id)."""
+    """Aggregate H2H records across ALL seasons (convention: team1_id < team2_id)."""
     lo, hi = sorted([team1_id, team2_id])
     result = await session.execute(
         select(HeadToHead)
         .where(HeadToHead.team1_id == lo, HeadToHead.team2_id == hi)
         .order_by(HeadToHead.season.desc())
-        .limit(1)
     )
-    h2h = result.scalar_one_or_none()
-    if h2h is None:
+    records = result.scalars().all()
+    if not records:
         return None
+
+    # Aggregate across all seasons
+    total_gp = sum(r.games_played for r in records)
+    total_t1w = sum(r.team1_wins for r in records)
+    total_t2w = sum(r.team2_wins for r in records)
+    total_t1g = sum(r.team1_goals for r in records)
+    total_t2g = sum(r.team2_goals for r in records)
+    # Most recent season is first (ordered desc)
+    last_meeting = records[0].last_meeting_date
+
     return HeadToHeadRecord(
-        team1_id=h2h.team1_id,
-        team2_id=h2h.team2_id,
-        season=h2h.season,
-        games_played=h2h.games_played,
-        team1_wins=h2h.team1_wins,
-        team2_wins=h2h.team2_wins,
+        team1_id=lo,
+        team2_id=hi,
+        season="All Time",
+        games_played=total_gp,
+        team1_wins=total_t1w,
+        team2_wins=total_t2w,
         draws=0,
-        team1_goals=h2h.team1_goals,
-        team2_goals=h2h.team2_goals,
-        last_meeting=h2h.last_meeting_date,
+        team1_goals=total_t1g,
+        team2_goals=total_t2g,
+        last_meeting=last_meeting,
     )
 
 
@@ -288,15 +308,19 @@ async def _compute_period_scoring(
     """
     Compute average period-by-period scoring for a team from completed games.
 
-    First tries games with detailed per-period scores (from boxscore sync).
-    Falls back to estimating period averages from total scores and TeamStats
-    goals_for_per_game if no per-period data is available.
+    Tries three approaches in order:
+      1. Games with detailed per-period scores (from boxscore sync).
+      2. Games with total scores (from historical sync) — estimates period
+         breakdown using the typical NHL 32/33/35% distribution.
+      3. TeamStats ``goals_for_per_game`` as a final fallback.
     """
-    # Try games with detailed per-period scores first
+    FINISHED_STATUSES = ("final", "completed", "off")
+
+    # ---- Approach 1: per-period scores from boxscore data ----
     result = await session.execute(
         select(Game).where(
             or_(Game.home_team_id == team_id, Game.away_team_id == team_id),
-            Game.status == "final",
+            func.lower(Game.status).in_(FINISHED_STATUSES),
             Game.home_score_p1.isnot(None),
         )
         .order_by(Game.date.desc())
@@ -324,11 +348,11 @@ async def _compute_period_scoring(
                 period_3_avg=round(period_totals[2] / counted, 2),
             )
 
-    # Fallback: estimate from total scores across completed games
+    # ---- Approach 2: estimate from total game scores ----
     result = await session.execute(
         select(Game).where(
             or_(Game.home_team_id == team_id, Game.away_team_id == team_id),
-            Game.status == "final",
+            func.lower(Game.status).in_(FINISHED_STATUSES),
             Game.home_score.isnot(None),
         )
         .order_by(Game.date.desc())
@@ -354,6 +378,22 @@ async def _compute_period_scoring(
                 period_2_avg=round(avg_per_game * 0.33, 2),
                 period_3_avg=round(avg_per_game * 0.35, 2),
             )
+
+    # ---- Approach 3: fall back to TeamStats goals_for_per_game ----
+    ts_result = await session.execute(
+        select(TeamStats)
+        .where(TeamStats.team_id == team_id)
+        .order_by(TeamStats.season.desc())
+        .limit(1)
+    )
+    ts = ts_result.scalar_one_or_none()
+    if ts and ts.goals_for_per_game:
+        gf = ts.goals_for_per_game
+        return PeriodScoring(
+            period_1_avg=round(gf * 0.32, 2),
+            period_2_avg=round(gf * 0.33, 2),
+            period_3_avg=round(gf * 0.35, 2),
+        )
 
     return PeriodScoring()
 
@@ -432,6 +472,16 @@ async def get_game_details(
     if game.home_score is not None and game.away_score is not None:
         total_goals = game.home_score + game.away_score
 
+    # Build odds info from Game model fields (populated by OddsScraper)
+    odds_info = None
+    if any([game.home_moneyline, game.away_moneyline, game.over_under_line, game.home_spread_line]):
+        odds_info = OddsInfo(
+            home_moneyline=game.home_moneyline,
+            away_moneyline=game.away_moneyline,
+            over_under_line=game.over_under_line,
+            home_spread_line=game.home_spread_line,
+        )
+
     return GameDetailResponse(
         id=game.id,
         external_id=game.external_id,
@@ -447,6 +497,7 @@ async def get_game_details(
         overtime=game.went_to_overtime or False,
         shootout=False,
         period_scores=parsed_period_scores,
+        odds=odds_info,
         home_team_form=home_form,
         away_team_form=away_form,
         head_to_head=h2h,

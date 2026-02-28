@@ -977,6 +977,64 @@ a:hover {
   padding: 24px;
 }
 
+/* ─── Odds Section (Overview Tab) ───────────────────────────── */
+.odds-section {
+  margin-bottom: 20px;
+}
+
+.odds-section .subsection-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: var(--text-primary);
+  font-size: 0.95rem;
+}
+
+.odds-grid {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.odds-card {
+  flex: 1;
+  min-width: 120px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  padding: 12px 16px;
+  text-align: center;
+}
+
+.odds-label {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+.odds-values {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.odds-value {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 1.1rem;
+  color: #4fc3f7;
+}
+
+.odds-vs {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
 /* ─── Stat Comparison Table (Overview Tab) ──────────────────── */
 .records-bar {
   display: flex;

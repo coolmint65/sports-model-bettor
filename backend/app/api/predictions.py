@@ -199,12 +199,50 @@ async def _get_predictions_for_date(
 async def _try_generate_predictions(
     session: AsyncSession, target_date: Optional[date] = None
 ) -> int:
+    """Generate predictions and persist them to the database.
+
+    Uses ``PredictionManager.generate_predictions`` to build prediction
+    dicts for every game on *target_date*, then persists each one via
+    ``_persist_prediction`` so that subsequent DB queries (including the
+    best-bets endpoint's ``MARKET_BET_TYPES`` filter) can find them.
+    """
     try:
         from app.analytics.predictions import PredictionManager
 
         manager = PredictionManager()
         results = await manager.generate_predictions(session, target_date)
-        return len(results) if isinstance(results, list) else 0
+
+        # Persist every generated prediction to the database so that
+        # downstream queries (e.g. best-bets filtered by market type)
+        # can find them.
+        count = 0
+        for game_data in results or []:
+            game_id = game_data.get("game_id")
+            for pred in game_data.get("predictions", []):
+                confidence = pred.get("confidence", 0)
+                implied_prob = pred.get("implied_probability")
+                if implied_prob is None:
+                    implied_prob = 0.5
+                edge = round(confidence - implied_prob, 4)
+
+                await manager._persist_prediction(session, {
+                    "game_id": game_id,
+                    "bet_type": pred["bet_type"],
+                    "prediction": pred["prediction"],
+                    "confidence": confidence,
+                    "probability": pred.get("probability", confidence),
+                    "implied_probability": round(implied_prob, 4),
+                    "odds": pred.get("odds"),
+                    "edge": edge,
+                    "reasoning": pred.get("reasoning", ""),
+                    "is_best_bet": False,
+                })
+                count += 1
+
+        if count > 0:
+            await session.flush()
+
+        return count
     except ImportError:
         raise HTTPException(
             status_code=503,
