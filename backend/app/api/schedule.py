@@ -233,19 +233,21 @@ async def get_live_games(
     # Auto-sync if any live games to get latest scores/clock
     if games:
         try:
-            for game in games:
-                await _try_sync_schedule(session, target_date=game.date)
-            await session.flush()
-            # Re-query after sync
-            result = await session.execute(
-                select(Game)
-                .options(selectinload(Game.home_team), selectinload(Game.away_team))
-                .where(Game.status.in_(["in_progress", "live"]))
-                .order_by(Game.start_time.asc().nulls_last(), Game.id.asc())
-            )
-            games = result.scalars().all()
-        except HTTPException:
+            async with session.begin_nested():
+                for game in games:
+                    await _try_sync_schedule(session, target_date=game.date)
+                await session.flush()
+        except Exception:
             pass
+        # Always re-query to get fresh ORM objects (savepoint rollback
+        # expires identity-mapped objects, which breaks async lazy loading).
+        result = await session.execute(
+            select(Game)
+            .options(selectinload(Game.home_team), selectinload(Game.away_team))
+            .where(Game.status.in_(["in_progress", "live"]))
+            .order_by(Game.start_time.asc().nulls_last(), Game.id.asc())
+        )
+        games = result.scalars().all()
 
     schedule_games: List[ScheduleGame] = []
     for game in games:
@@ -291,10 +293,11 @@ async def get_today_schedule(
     has_live = any(g.status == "in_progress" for g in games)
     if not games or has_live:
         try:
-            await _try_sync_schedule(session, target_date=today)
-            await session.flush()
+            async with session.begin_nested():
+                await _try_sync_schedule(session, target_date=today)
+                await session.flush()
             games = await _games_for_date(today, session)
-        except HTTPException:
+        except Exception:
             pass
 
     # If any non-final games are missing a top pick OR missing odds
@@ -321,9 +324,9 @@ async def get_today_schedule(
             ", ".join(f"{g.away_team.abbreviation}@{g.home_team.abbreviation}(status={g.status})" for g in missing_picks) or "none",
             ", ".join(str(gid) for gid in games_missing_odds) or "none",
         )
+        # Step 1: Sync fresh odds from sportsbook API (isolated in savepoint)
         try:
-            # Step 1: Sync fresh odds from sportsbook API
-            try:
+            async with session.begin_nested():
                 from app.scrapers.odds_multi import MultiSourceOddsScraper
 
                 odds_scraper = MultiSourceOddsScraper()
@@ -357,29 +360,31 @@ async def get_today_schedule(
                             )
                 finally:
                     await odds_scraper.close()
-            except Exception as exc:
-                logger.warning("Schedule odds sync failed: %s", exc)
+        except Exception as exc:
+            logger.warning("Schedule odds sync failed: %s", exc)
 
-            # Step 2: Generate predictions with real odds
-            from app.api.predictions import _try_generate_predictions
+        # Step 2: Generate predictions with real odds (isolated in savepoint)
+        try:
+            async with session.begin_nested():
+                from app.api.predictions import _try_generate_predictions
 
-            await _try_generate_predictions(session, target_date=today)
-            await session.flush()
-            games = await _games_for_date(today, session)
-
-            with_picks = [g for g in games if g.top_pick is not None]
-            without_picks = [g for g in games if g.top_pick is None and g.status not in ("final", "completed", "off")]
-            logger.info(
-                "Schedule prediction result: %d/%d games have picks. "
-                "Still missing: %s",
-                len(with_picks), len(games),
-                ", ".join(f"{g.away_team.abbreviation}@{g.home_team.abbreviation}" for g in without_picks) or "none",
-            )
-        except HTTPException as exc:
+                await _try_generate_predictions(session, target_date=today)
+                await session.flush()
+        except Exception as exc:
             logger.warning(
-                "Schedule: odds sync / prediction generation failed: %s",
-                exc.detail,
+                "Schedule: prediction generation failed: %s",
+                getattr(exc, 'detail', str(exc)),
             )
+
+        games = await _games_for_date(today, session)
+        with_picks = [g for g in games if g.top_pick is not None]
+        without_picks = [g for g in games if g.top_pick is None and g.status not in ("final", "completed", "off")]
+        logger.info(
+            "Schedule prediction result: %d/%d games have picks. "
+            "Still missing: %s",
+            len(with_picks), len(games),
+            ", ".join(f"{g.away_team.abbreviation}@{g.home_team.abbreviation}" for g in without_picks) or "none",
+        )
 
     return ScheduleResponse(date=today, game_count=len(games), games=games)
 

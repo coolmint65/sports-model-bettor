@@ -305,10 +305,11 @@ async def get_today_predictions(
 
     if not predictions:
         try:
-            await _try_generate_predictions(session, target_date=today)
-            await session.flush()
+            async with session.begin_nested():
+                await _try_generate_predictions(session, target_date=today)
+                await session.flush()
             predictions = await _get_predictions_for_date(today, session)
-        except HTTPException:
+        except Exception:
             pass
 
     return TodayPredictionsResponse(
@@ -333,35 +334,39 @@ async def get_best_bets(
     # Refresh odds from The Odds API to get live/current lines before
     # generating predictions.  This ensures in-play games show live odds
     # and pre-match games always have the latest lines.
+    # Each sync step is isolated in a savepoint so that a failed flush
+    # (e.g. SQLite lock contention with the schedule endpoint) doesn't
+    # corrupt the session for subsequent queries.
     try:
-        from app.scrapers.odds_multi import MultiSourceOddsScraper
+        async with session.begin_nested():
+            from app.scrapers.odds_multi import MultiSourceOddsScraper
 
-        odds_scraper = MultiSourceOddsScraper()
-        try:
-            matched = await odds_scraper.sync_odds(session)
-            logger.info(
-                "Multi-source odds sync matched %d games before prediction generation",
-                len(matched) if matched else 0,
-            )
-            await session.flush()
-            # Expire all cached objects so the prediction engine re-fetches
-            # Game records with the freshly synced odds (moneyline, O/U,
-            # spread) instead of getting stale None values from the
-            # SQLAlchemy identity map.
-            session.expire_all()
-        finally:
-            await odds_scraper.close()
+            odds_scraper = MultiSourceOddsScraper()
+            try:
+                matched = await odds_scraper.sync_odds(session)
+                logger.info(
+                    "Multi-source odds sync matched %d games before prediction generation",
+                    len(matched) if matched else 0,
+                )
+                await session.flush()
+                session.expire_all()
+            finally:
+                await odds_scraper.close()
     except Exception as exc:
         logger.warning("Odds sync failed before best-bets generation: %s", exc)
 
     # Always regenerate predictions fresh so they use current sportsbook
     # lines instead of returning stale cached predictions.
     try:
-        pred_count = await _try_generate_predictions(session, target_date=today)
-        await session.flush()
-        logger.info("Regenerated %d predictions for best-bets", pred_count)
-    except HTTPException as exc:
-        logger.warning("Prediction generation failed: %s", exc.detail)
+        async with session.begin_nested():
+            pred_count = await _try_generate_predictions(session, target_date=today)
+            await session.flush()
+            logger.info("Regenerated %d predictions for best-bets", pred_count)
+    except Exception as exc:
+        logger.warning(
+            "Prediction generation failed: %s",
+            getattr(exc, 'detail', str(exc)),
+        )
 
     # Exclude games that are already final — those bets can't be placed.
     FINAL_STATUSES = ("final", "completed", "off", "official")
