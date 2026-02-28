@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 
 # DraftKings uses the city + mascot (same as Odds API mostly)
 _COMMON_TEAM_MAP: Dict[str, str] = {
+    # Full names (primary)
     "Anaheim Ducks": "ANA",
     "Arizona Coyotes": "ARI",
     "Boston Bruins": "BOS",
@@ -54,32 +55,49 @@ _COMMON_TEAM_MAP: Dict[str, str] = {
     "Edmonton Oilers": "EDM",
     "Florida Panthers": "FLA",
     "Los Angeles Kings": "LAK",
-    "LA Kings": "LAK",
     "Minnesota Wild": "MIN",
     "Montreal Canadiens": "MTL",
-    "Montréal Canadiens": "MTL",
     "Nashville Predators": "NSH",
     "New Jersey Devils": "NJD",
     "New York Islanders": "NYI",
-    "NY Islanders": "NYI",
     "New York Rangers": "NYR",
-    "NY Rangers": "NYR",
     "Ottawa Senators": "OTT",
     "Philadelphia Flyers": "PHI",
     "Pittsburgh Penguins": "PIT",
     "San Jose Sharks": "SJS",
     "Seattle Kraken": "SEA",
     "St. Louis Blues": "STL",
-    "St Louis Blues": "STL",
     "Tampa Bay Lightning": "TBL",
     "Toronto Maple Leafs": "TOR",
     "Utah Hockey Club": "UTA",
-    "Utah HC": "UTA",
     "Vancouver Canucks": "VAN",
     "Vegas Golden Knights": "VGK",
     "Washington Capitals": "WSH",
     "Winnipeg Jets": "WPG",
+    # Common sportsbook variants (city-only, short names, etc.)
+    "LA Kings": "LAK",
+    "L.A. Kings": "LAK",
+    "Montréal Canadiens": "MTL",
+    "NY Islanders": "NYI",
+    "NY Rangers": "NYR",
+    "N.Y. Islanders": "NYI",
+    "N.Y. Rangers": "NYR",
+    "St Louis Blues": "STL",
+    "Saint Louis Blues": "STL",
+    "Utah HC": "UTA",
+    "Utah": "UTA",
+    "Vegas": "VGK",
+    "Golden Knights": "VGK",
+    "Tampa Bay": "TBL",
+    "Lightning": "TBL",
+    "Maple Leafs": "TOR",
+    "Blue Jackets": "CBJ",
+    "Red Wings": "DET",
 }
+
+# Reverse lookup: 3-letter abbreviation → itself.  Handles cases where
+# sportsbooks return the abbreviation directly (e.g., "PIT", "NYR").
+_ABBREV_SET = set(_COMMON_TEAM_MAP.values())
 
 # Kambi uses English names, sometimes slightly different
 _KAMBI_TEAM_MAP: Dict[str, str] = {
@@ -89,25 +107,37 @@ _KAMBI_TEAM_MAP: Dict[str, str] = {
     "LA Kings": "LAK",
 }
 
+# Track unmapped names to log them (avoid flooding with duplicates)
+_unmapped_logged: set = set()
+
 
 def _map_team(name: str) -> str:
     """Resolve a team name to its 3-letter abbreviation."""
     if not name:
         return ""
+    stripped = name.strip()
+    # If the input IS already a 3-letter abbreviation, return it
+    upper = stripped.upper()
+    if upper in _ABBREV_SET:
+        return upper
     # Direct lookup
-    abbr = _COMMON_TEAM_MAP.get(name, "")
+    abbr = _COMMON_TEAM_MAP.get(stripped, "")
     if abbr:
         return abbr
     # Fuzzy: check if any known name is a substring
-    name_lower = name.lower()
+    name_lower = stripped.lower()
     for full_name, code in _COMMON_TEAM_MAP.items():
         if full_name.lower() in name_lower or name_lower in full_name.lower():
             return code
     # Try matching just the mascot (last word)
-    mascot = name.split()[-1] if name else ""
+    mascot = stripped.split()[-1] if stripped else ""
     for full_name, code in _COMMON_TEAM_MAP.items():
         if full_name.split()[-1].lower() == mascot.lower():
             return code
+    # Log unmapped name once per unique name for debugging
+    if stripped not in _unmapped_logged:
+        _unmapped_logged.add(stripped)
+        logger.warning("UNMAPPED TEAM NAME: %r — add to _COMMON_TEAM_MAP", stripped)
     return ""
 
 
@@ -291,8 +321,8 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
                 if eid:
                     home = ""
                     away = ""
-                    teams = ev.get("teamShortName1", "")
-                    teams2 = ev.get("teamShortName2", "")
+                    team_short1 = ev.get("teamShortName1", "")
+                    team_short2 = ev.get("teamShortName2", "")
                     name = ev.get("name", "")
 
                     # Try to extract from event name "Team1 @ Team2" or "Team1 vs Team2"
@@ -310,6 +340,20 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
                         idx = name.lower().index(" at ")
                         away = name[:idx].strip()
                         home = name[idx + 4:].strip()
+
+                    # Use teamShortName fields as fallback when name
+                    # parsing fails or mapping doesn't resolve.
+                    if not _map_team(home) and team_short1:
+                        home = team_short1
+                    if not _map_team(away) and team_short2:
+                        away = team_short2
+
+                    if not home or not away:
+                        logger.warning(
+                            "DraftKings: could not extract teams from event %s "
+                            "(name=%r, short1=%r, short2=%r)",
+                            eid, name, team_short1, team_short2,
+                        )
 
                     start_time = ev.get("startDate", "")
                     event_map[eid] = {
@@ -415,6 +459,10 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
             home = ev_info.get("home", "")
             away = ev_info.get("away", "")
             if not home or not away:
+                logger.warning(
+                    "DraftKings: dropping event %s — no team names (home=%r, away=%r)",
+                    eid, home, away,
+                )
                 continue
 
             event = OddsEvent(
@@ -434,11 +482,20 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
             )
             if event.home_abbr and event.away_abbr:
                 events.append(event)
+            else:
+                logger.warning(
+                    "DraftKings: dropping event — unmapped teams "
+                    "(home=%r→%r, away=%r→%r)",
+                    home, event.home_abbr, away, event.away_abbr,
+                )
 
     except Exception as exc:
         logger.warning("DraftKings parse error: %s", exc)
 
-    logger.info("DraftKings: fetched odds for %d events", len(events))
+    logger.info(
+        "DraftKings: fetched odds for %d events (from %d raw events)",
+        len(events), len(event_map),
+    )
     return events
 
 
@@ -629,6 +686,9 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
             home = ev_info.get("home", "")
             away = ev_info.get("away", "")
             if not home or not away:
+                logger.warning(
+                    "FanDuel: dropping event %s — no team names", eid,
+                )
                 continue
 
             event = OddsEvent(
@@ -648,11 +708,20 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
             )
             if event.home_abbr and event.away_abbr:
                 events.append(event)
+            else:
+                logger.warning(
+                    "FanDuel: dropping event — unmapped teams "
+                    "(home=%r→%r, away=%r→%r)",
+                    home, event.home_abbr, away, event.away_abbr,
+                )
 
     except Exception as exc:
         logger.warning("FanDuel parse error: %s", exc)
 
-    logger.info("FanDuel: fetched odds for %d events", len(events))
+    logger.info(
+        "FanDuel: fetched odds for %d events (from %d raw events)",
+        len(events), len(event_info),
+    )
     return events
 
 
@@ -812,6 +881,12 @@ async def _fetch_kambi(client: httpx.AsyncClient) -> List[OddsEvent]:
             )
             if event.home_abbr and event.away_abbr:
                 events.append(event)
+            else:
+                logger.warning(
+                    "Kambi: dropping event — unmapped teams "
+                    "(home=%r→%r, away=%r→%r)",
+                    home_name, event.home_abbr, away_name, event.away_abbr,
+                )
 
     except Exception as exc:
         logger.warning("Kambi parse error: %s", exc)
@@ -977,6 +1052,12 @@ async def _fetch_bovada(client: httpx.AsyncClient) -> List[OddsEvent]:
                 )
                 if event.home_abbr and event.away_abbr:
                     events.append(event)
+                else:
+                    logger.warning(
+                        "Bovada: dropping event — unmapped teams "
+                        "(home=%r→%r, away=%r→%r)",
+                        home_name, event.home_abbr, away_name, event.away_abbr,
+                    )
 
     except Exception as exc:
         logger.warning("Bovada parse error: %s", exc)
@@ -1112,6 +1193,12 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
         )
         if event.home_abbr and event.away_abbr:
             events.append(event)
+        else:
+            logger.warning(
+                "The Odds API: dropping event — unmapped teams "
+                "(home=%r→%r, away=%r→%r)",
+                home_team, event.home_abbr, away_team, event.away_abbr,
+            )
 
     logger.info("The Odds API: fetched odds for %d events", len(events))
     return events
@@ -1140,6 +1227,12 @@ def _merge_odds_events(
             if key not in matchup_odds:
                 matchup_odds[key] = []
             matchup_odds[key].append(ev)
+
+    logger.info(
+        "Odds merge: %d unique matchups from sources — %s",
+        len(matchup_odds),
+        ", ".join(sorted(matchup_odds.keys())),
+    )
 
     merged: List[Dict[str, Any]] = []
 

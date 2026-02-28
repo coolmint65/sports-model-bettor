@@ -163,43 +163,6 @@ async def _games_for_date(
                     edge=pred.edge,
                 )
 
-        # Fallback: for games with no edge-based pick (no sportsbook odds
-        # were available), show the highest-confidence market prediction so
-        # every game card still displays a pick.
-        missing_ids = [gid for gid in game_ids if gid not in top_picks]
-        if missing_ids:
-            fallback_sub = (
-                select(
-                    Prediction.game_id,
-                    func.max(Prediction.confidence).label("max_conf"),
-                )
-                .where(
-                    Prediction.game_id.in_(missing_ids),
-                    Prediction.bet_type.in_(MARKET_BET_TYPES),
-                )
-                .group_by(Prediction.game_id)
-                .subquery()
-            )
-            fb_result = await session.execute(
-                select(Prediction)
-                .join(
-                    fallback_sub,
-                    and_(
-                        Prediction.game_id == fallback_sub.c.game_id,
-                        Prediction.confidence == fallback_sub.c.max_conf,
-                    ),
-                )
-                .where(Prediction.bet_type.in_(MARKET_BET_TYPES))
-            )
-            for pred in fb_result.scalars().all():
-                if pred.game_id not in top_picks:
-                    top_picks[pred.game_id] = GameTopPick(
-                        bet_type=pred.bet_type,
-                        prediction_value=pred.prediction_value,
-                        confidence=pred.confidence,
-                        edge=pred.edge,
-                    )
-
     schedule_games: List[ScheduleGame] = []
     for game in games:
         home_brief = await _build_team_brief(game.home_team, session)
@@ -362,6 +325,24 @@ async def get_today_schedule(
                     )
                     await session.flush()
                     session.expire_all()
+
+                    # Log which games have/lack odds after sync
+                    odds_check = await session.execute(
+                        select(Game)
+                        .options(selectinload(Game.home_team), selectinload(Game.away_team))
+                        .where(Game.date == today)
+                    )
+                    for g in odds_check.scalars().all():
+                        has_ml = g.home_moneyline is not None
+                        has_ou = g.over_under_line is not None
+                        ha = g.home_team.abbreviation if g.home_team else "?"
+                        aa = g.away_team.abbreviation if g.away_team else "?"
+                        if not has_ml or not has_ou:
+                            logger.warning(
+                                "MISSING ODDS for %s@%s: ml=%s, ou=%s, spread=%s",
+                                aa, ha,
+                                g.home_moneyline, g.over_under_line, g.home_spread_line,
+                            )
                 finally:
                     await odds_scraper.close()
             except Exception as exc:

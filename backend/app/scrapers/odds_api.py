@@ -40,13 +40,17 @@ ODDS_API_TEAM_MAP: Dict[str, str] = {
     "Edmonton Oilers": "EDM",
     "Florida Panthers": "FLA",
     "Los Angeles Kings": "LAK",
+    "LA Kings": "LAK",
+    "L.A. Kings": "LAK",
     "Minnesota Wild": "MIN",
     "Montreal Canadiens": "MTL",
     "Montréal Canadiens": "MTL",
     "Nashville Predators": "NSH",
     "New Jersey Devils": "NJD",
     "New York Islanders": "NYI",
+    "NY Islanders": "NYI",
     "New York Rangers": "NYR",
+    "NY Rangers": "NYR",
     "Ottawa Senators": "OTT",
     "Philadelphia Flyers": "PHI",
     "Pittsburgh Penguins": "PIT",
@@ -54,9 +58,11 @@ ODDS_API_TEAM_MAP: Dict[str, str] = {
     "Seattle Kraken": "SEA",
     "St. Louis Blues": "STL",
     "St Louis Blues": "STL",
+    "Saint Louis Blues": "STL",
     "Tampa Bay Lightning": "TBL",
     "Toronto Maple Leafs": "TOR",
     "Utah Hockey Club": "UTA",
+    "Utah HC": "UTA",
     "Vancouver Canucks": "VAN",
     "Vegas Golden Knights": "VGK",
     "Washington Capitals": "WSH",
@@ -97,6 +103,27 @@ class OddsScraper(BaseScraper):
     @property
     def _has_key(self) -> bool:
         return bool(self.api_key)
+
+    @staticmethod
+    def _resolve_team(name: str) -> str:
+        """Resolve team name with direct + fuzzy matching."""
+        if not name:
+            return ""
+        # Direct lookup
+        abbr = ODDS_API_TEAM_MAP.get(name, "")
+        if abbr:
+            return abbr
+        # Fuzzy: check if any known name is a substring
+        name_lower = name.lower()
+        for full_name, code in ODDS_API_TEAM_MAP.items():
+            if full_name.lower() in name_lower or name_lower in full_name.lower():
+                return code
+        # Mascot matching
+        mascot = name.split()[-1] if name else ""
+        for full_name, code in ODDS_API_TEAM_MAP.items():
+            if full_name.split()[-1].lower() == mascot.lower():
+                return code
+        return ""
 
     # ------------------------------------------------------------------
     # Fetch odds
@@ -160,14 +187,13 @@ class OddsScraper(BaseScraper):
             home_team = event.get("home_team", "")
             away_team = event.get("away_team", "")
 
-            home_abbrev = ODDS_API_TEAM_MAP.get(home_team, "")
-            away_abbrev = ODDS_API_TEAM_MAP.get(away_team, "")
+            home_abbrev = self._resolve_team(home_team)
+            away_abbrev = self._resolve_team(away_team)
 
             if not home_abbrev or not away_abbrev:
-                logger.debug(
-                    "Could not map team names: home='%s', away='%s'",
-                    home_team,
-                    away_team,
+                logger.warning(
+                    "Odds API: UNMAPPED team — home=%r→%r, away=%r→%r",
+                    home_team, home_abbrev, away_team, away_abbrev,
                 )
 
             # Parse bookmaker odds
