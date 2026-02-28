@@ -1295,7 +1295,7 @@ class NHLScraper(BaseScraper):
 
         for team in sample_teams:
             try:
-                season_games = await self.fetch_team_season_schedule(
+                season_games = await self.fetch_team_schedule(
                     team.abbreviation, season
                 )
             except Exception as exc:
