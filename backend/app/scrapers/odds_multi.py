@@ -1,0 +1,1418 @@
+"""
+Multi-source odds scraper for NHL games.
+
+Fetches odds directly from sportsbook public CDN/API endpoints without
+requiring any API keys. These are the same endpoints the sportsbooks'
+own websites use to render odds to visitors.
+
+Sources:
+  1. DraftKings Sportsbook API  (US, primary)
+  2. FanDuel Sportsbook API     (US, secondary)
+  3. Kambi CDN                  (powers BetRivers, Unibet, 888sport)
+  4. The Odds API               (aggregator, API key optional, tertiary)
+
+The scraper tries each source in priority order.  If the primary source
+fails or returns no data, it falls through to the next.  Results from
+multiple sources are merged to compute the *best available* odds across
+all books — exactly what a sharp bettor needs to find +EV lines.
+"""
+
+import asyncio
+import logging
+import math
+from collections import Counter
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
+
+import httpx
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import settings
+from app.models.game import Game
+from app.models.team import Team
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Team-name normalisation maps (sportsbook name -> 3-letter NHL abbreviation)
+# ---------------------------------------------------------------------------
+
+# DraftKings uses the city + mascot (same as Odds API mostly)
+_COMMON_TEAM_MAP: Dict[str, str] = {
+    "Anaheim Ducks": "ANA",
+    "Arizona Coyotes": "ARI",
+    "Boston Bruins": "BOS",
+    "Buffalo Sabres": "BUF",
+    "Calgary Flames": "CGY",
+    "Carolina Hurricanes": "CAR",
+    "Chicago Blackhawks": "CHI",
+    "Colorado Avalanche": "COL",
+    "Columbus Blue Jackets": "CBJ",
+    "Dallas Stars": "DAL",
+    "Detroit Red Wings": "DET",
+    "Edmonton Oilers": "EDM",
+    "Florida Panthers": "FLA",
+    "Los Angeles Kings": "LAK",
+    "LA Kings": "LAK",
+    "Minnesota Wild": "MIN",
+    "Montreal Canadiens": "MTL",
+    "Montréal Canadiens": "MTL",
+    "Nashville Predators": "NSH",
+    "New Jersey Devils": "NJD",
+    "New York Islanders": "NYI",
+    "NY Islanders": "NYI",
+    "New York Rangers": "NYR",
+    "NY Rangers": "NYR",
+    "Ottawa Senators": "OTT",
+    "Philadelphia Flyers": "PHI",
+    "Pittsburgh Penguins": "PIT",
+    "San Jose Sharks": "SJS",
+    "Seattle Kraken": "SEA",
+    "St. Louis Blues": "STL",
+    "St Louis Blues": "STL",
+    "Tampa Bay Lightning": "TBL",
+    "Toronto Maple Leafs": "TOR",
+    "Utah Hockey Club": "UTA",
+    "Utah HC": "UTA",
+    "Vancouver Canucks": "VAN",
+    "Vegas Golden Knights": "VGK",
+    "Washington Capitals": "WSH",
+    "Winnipeg Jets": "WPG",
+}
+
+# Kambi uses English names, sometimes slightly different
+_KAMBI_TEAM_MAP: Dict[str, str] = {
+    **_COMMON_TEAM_MAP,
+    "Montréal Canadiens": "MTL",
+    "Montreal Canadiens": "MTL",
+    "LA Kings": "LAK",
+}
+
+
+def _map_team(name: str) -> str:
+    """Resolve a team name to its 3-letter abbreviation."""
+    if not name:
+        return ""
+    # Direct lookup
+    abbr = _COMMON_TEAM_MAP.get(name, "")
+    if abbr:
+        return abbr
+    # Fuzzy: check if any known name is a substring
+    name_lower = name.lower()
+    for full_name, code in _COMMON_TEAM_MAP.items():
+        if full_name.lower() in name_lower or name_lower in full_name.lower():
+            return code
+    # Try matching just the mascot (last word)
+    mascot = name.split()[-1] if name else ""
+    for full_name, code in _COMMON_TEAM_MAP.items():
+        if full_name.split()[-1].lower() == mascot.lower():
+            return code
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Odds conversion helpers
+# ---------------------------------------------------------------------------
+
+def decimal_to_american(decimal_odds: float) -> float:
+    """Convert decimal odds (e.g. 1.91) to American (e.g. -110)."""
+    if decimal_odds <= 1.0:
+        return 0.0
+    if decimal_odds >= 2.0:
+        return round((decimal_odds - 1) * 100, 0)
+    else:
+        return round(-100 / (decimal_odds - 1), 0)
+
+
+def american_to_implied(american: float) -> float:
+    """Convert American odds to implied probability (0-1)."""
+    if american == 0:
+        return 0.5
+    if american > 0:
+        return 100.0 / (american + 100.0)
+    else:
+        return abs(american) / (abs(american) + 100.0)
+
+
+# ---------------------------------------------------------------------------
+# Standardised odds event structure
+# ---------------------------------------------------------------------------
+
+class OddsEvent:
+    """Normalised odds for a single game from a single source."""
+
+    __slots__ = (
+        "source", "home_team", "away_team", "home_abbr", "away_abbr",
+        "commence_time", "home_ml", "away_ml",
+        "home_spread", "away_spread", "home_spread_price", "away_spread_price",
+        "total_line", "over_price", "under_price",
+    )
+
+    def __init__(
+        self,
+        source: str,
+        home_team: str,
+        away_team: str,
+        commence_time: Optional[str] = None,
+        home_ml: float = 0.0,
+        away_ml: float = 0.0,
+        home_spread: float = 0.0,
+        away_spread: float = 0.0,
+        home_spread_price: float = -110.0,
+        away_spread_price: float = -110.0,
+        total_line: float = 0.0,
+        over_price: float = -110.0,
+        under_price: float = -110.0,
+    ):
+        self.source = source
+        self.home_team = home_team
+        self.away_team = away_team
+        self.home_abbr = _map_team(home_team)
+        self.away_abbr = _map_team(away_team)
+        self.commence_time = commence_time
+        self.home_ml = home_ml
+        self.away_ml = away_ml
+        self.home_spread = home_spread
+        self.away_spread = away_spread
+        self.home_spread_price = home_spread_price
+        self.away_spread_price = away_spread_price
+        self.total_line = total_line
+        self.over_price = over_price
+        self.under_price = under_price
+
+    def has_moneyline(self) -> bool:
+        return self.home_ml != 0 and self.away_ml != 0
+
+    def has_spread(self) -> bool:
+        return self.home_spread != 0 or self.away_spread != 0
+
+    def has_total(self) -> bool:
+        return self.total_line > 0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "source": self.source,
+            "home_team": self.home_team,
+            "away_team": self.away_team,
+            "home_abbr": self.home_abbr,
+            "away_abbr": self.away_abbr,
+            "commence_time": self.commence_time,
+            "home_ml": self.home_ml,
+            "away_ml": self.away_ml,
+            "home_spread": self.home_spread,
+            "away_spread": self.away_spread,
+            "home_spread_price": self.home_spread_price,
+            "away_spread_price": self.away_spread_price,
+            "total_line": self.total_line,
+            "over_price": self.over_price,
+            "under_price": self.under_price,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Source-specific fetchers
+# ---------------------------------------------------------------------------
+
+async def _make_request(
+    client: httpx.AsyncClient,
+    url: str,
+    headers: Optional[Dict[str, str]] = None,
+    params: Optional[Dict[str, Any]] = None,
+    timeout: float = 15.0,
+) -> Optional[Any]:
+    """Make a GET request with error handling. Returns parsed JSON or None."""
+    try:
+        resp = await client.get(
+            url,
+            headers=headers or {},
+            params=params,
+            timeout=timeout,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+        logger.warning("HTTP %d from %s", resp.status_code, url)
+        return None
+    except Exception as exc:
+        logger.warning("Request failed for %s: %s", url, exc)
+        return None
+
+
+# ---- DraftKings ----
+
+async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
+    """
+    Fetch NHL odds from the DraftKings sportsbook public API.
+
+    DraftKings exposes a JSON API that their website uses.  The NHL
+    event group ID is 42133.  We request the main offer categories
+    which include moneyline, spread, and totals.
+    """
+    events: List[OddsEvent] = []
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json",
+    }
+
+    # DraftKings NHL event group ID: 42133
+    # Try multiple endpoint variants (DK changes these periodically)
+    urls = [
+        "https://sportsbook.draftkings.com/sites/US-SB/api/v5/eventgroups/42133?format=json",
+        "https://sportsbook-us-nj.draftkings.com/sites/US-NJ-SB/api/v5/eventgroups/42133?format=json",
+        "https://sportsbook-us-il.draftkings.com/sites/US-IL-SB/api/v5/eventgroups/42133?format=json",
+    ]
+    data = None
+    for url in urls:
+        data = await _make_request(client, url, headers=headers)
+        if data:
+            break
+
+    if not data:
+        logger.info("DraftKings: no data returned")
+        return events
+
+    try:
+        # Navigate the DK response structure
+        event_groups = data if isinstance(data, dict) else {}
+        offers = event_groups.get("eventGroup", {}).get("offerCategories", [])
+        if not offers:
+            # Try alternate structure
+            offers = event_groups.get("offerCategories", [])
+
+        dk_events = event_groups.get("eventGroup", {}).get("events", [])
+        if not dk_events:
+            dk_events = event_groups.get("events", [])
+
+        # Build event map for team names
+        event_map: Dict[int, Dict[str, str]] = {}
+        if isinstance(dk_events, list):
+            for ev in dk_events:
+                eid = ev.get("eventId")
+                if eid:
+                    home = ""
+                    away = ""
+                    teams = ev.get("teamShortName1", "")
+                    teams2 = ev.get("teamShortName2", "")
+                    name = ev.get("name", "")
+
+                    # Try to extract from event name "Team1 @ Team2" or "Team1 vs Team2"
+                    if " @ " in name:
+                        parts = name.split(" @ ")
+                        away = parts[0].strip()
+                        home = parts[1].strip()
+                    elif " vs " in name:
+                        parts = name.split(" vs ")
+                        home = parts[0].strip()
+                        away = parts[1].strip()
+                    elif " at " in name.lower():
+                        parts = name.lower().split(" at ")
+                        # Reconstruct with proper case from original
+                        idx = name.lower().index(" at ")
+                        away = name[:idx].strip()
+                        home = name[idx + 4:].strip()
+
+                    start_time = ev.get("startDate", "")
+                    event_map[eid] = {
+                        "home": home, "away": away, "start": start_time
+                    }
+
+        # Parse offer categories for odds
+        game_odds: Dict[int, Dict[str, Any]] = {}
+
+        for cat in offers if isinstance(offers, list) else []:
+            cat_name = (cat.get("name") or "").lower()
+            sub_cats = cat.get("offerSubcategoryDescriptors", [])
+            if not isinstance(sub_cats, list):
+                continue
+
+            for sub in sub_cats:
+                sub_name = (sub.get("name") or "").lower()
+                offer_list = sub.get("offerSubcategory", {}).get("offers", [])
+                if not isinstance(offer_list, list):
+                    continue
+
+                for offer_row in offer_list:
+                    if not isinstance(offer_row, list):
+                        offer_row = [offer_row]
+                    for offer in offer_row:
+                        eid = offer.get("eventId")
+                        if not eid:
+                            continue
+                        if eid not in game_odds:
+                            game_odds[eid] = {}
+
+                        outcomes = offer.get("outcomes", [])
+                        if not isinstance(outcomes, list):
+                            continue
+
+                        label = (offer.get("label") or "").lower()
+
+                        # Moneyline
+                        if "moneyline" in label or "money line" in label or "game" in sub_name and "line" not in label and "total" not in label:
+                            if len(outcomes) >= 2:
+                                for oc in outcomes:
+                                    odds_am = oc.get("oddsAmerican", "")
+                                    try:
+                                        odds_val = float(str(odds_am).replace("+", ""))
+                                    except (ValueError, TypeError):
+                                        continue
+                                    oc_label = (oc.get("label") or "").strip()
+                                    # Determine home/away
+                                    mapped = _map_team(oc_label)
+                                    ev_info = event_map.get(eid, {})
+                                    home_mapped = _map_team(ev_info.get("home", ""))
+                                    if mapped and mapped == home_mapped:
+                                        game_odds[eid]["home_ml"] = odds_val
+                                    elif mapped:
+                                        game_odds[eid]["away_ml"] = odds_val
+                                    elif oc.get("type") == "home" or oc_label == ev_info.get("home"):
+                                        game_odds[eid]["home_ml"] = odds_val
+                                    else:
+                                        game_odds[eid]["away_ml"] = odds_val
+
+                        # Spread / Puck Line
+                        elif "spread" in label or "puck" in label or "handicap" in label:
+                            for oc in outcomes:
+                                line = oc.get("line", 0)
+                                odds_am = oc.get("oddsAmerican", "")
+                                try:
+                                    odds_val = float(str(odds_am).replace("+", ""))
+                                    line_val = float(line)
+                                except (ValueError, TypeError):
+                                    continue
+                                oc_label = (oc.get("label") or "").strip()
+                                mapped = _map_team(oc_label)
+                                ev_info = event_map.get(eid, {})
+                                home_mapped = _map_team(ev_info.get("home", ""))
+                                if mapped and mapped == home_mapped:
+                                    game_odds[eid]["home_spread"] = line_val
+                                    game_odds[eid]["home_spread_price"] = odds_val
+                                elif mapped:
+                                    game_odds[eid]["away_spread"] = line_val
+                                    game_odds[eid]["away_spread_price"] = odds_val
+
+                        # Totals
+                        elif "total" in label or "over" in label:
+                            for oc in outcomes:
+                                line = oc.get("line", 0)
+                                odds_am = oc.get("oddsAmerican", "")
+                                try:
+                                    odds_val = float(str(odds_am).replace("+", ""))
+                                    line_val = float(line)
+                                except (ValueError, TypeError):
+                                    continue
+                                oc_label = (oc.get("label") or "").lower()
+                                if "over" in oc_label:
+                                    game_odds[eid]["total_line"] = line_val
+                                    game_odds[eid]["over_price"] = odds_val
+                                elif "under" in oc_label:
+                                    game_odds[eid]["total_line"] = line_val
+                                    game_odds[eid]["under_price"] = odds_val
+
+        # Build OddsEvent objects
+        for eid, odds in game_odds.items():
+            ev_info = event_map.get(eid, {})
+            home = ev_info.get("home", "")
+            away = ev_info.get("away", "")
+            if not home or not away:
+                continue
+
+            event = OddsEvent(
+                source="draftkings",
+                home_team=home,
+                away_team=away,
+                commence_time=ev_info.get("start", ""),
+                home_ml=odds.get("home_ml", 0),
+                away_ml=odds.get("away_ml", 0),
+                home_spread=odds.get("home_spread", 0),
+                away_spread=odds.get("away_spread", 0),
+                home_spread_price=odds.get("home_spread_price", -110),
+                away_spread_price=odds.get("away_spread_price", -110),
+                total_line=odds.get("total_line", 0),
+                over_price=odds.get("over_price", -110),
+                under_price=odds.get("under_price", -110),
+            )
+            if event.home_abbr and event.away_abbr:
+                events.append(event)
+
+    except Exception as exc:
+        logger.warning("DraftKings parse error: %s", exc)
+
+    logger.info("DraftKings: fetched odds for %d events", len(events))
+    return events
+
+
+# ---- FanDuel ----
+
+async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
+    """
+    Fetch NHL odds from the FanDuel sportsbook public API.
+
+    FanDuel uses a content-managed page API. NHL event type ID = 7524.
+    """
+    events: List[OddsEvent] = []
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json",
+    }
+
+    # FanDuel NHL page - try multiple states and page types
+    params_variants = [
+        {
+            "page": "CUSTOM",
+            "customPageId": "nhl",
+            "_ak": "FhMFpcPWXMeyZxOx",
+            "betexRegion": "GBR",
+            "capiJurisdiction": "intl",
+            "currencyCode": "USD",
+            "exchangeLocale": "en_US",
+            "language": "en",
+            "regionCode": "NAMERICA",
+        },
+        {
+            "page": "SPORT",
+            "eventTypeId": "7524",
+            "_ak": "FhMFpcPWXMeyZxOx",
+            "timezone": "America/New_York",
+        },
+    ]
+
+    data = None
+    for state in ["il", "nj", "mi", "pa", "co", "ny"]:
+        for params in params_variants:
+            url = f"https://sbapi.{state}.sportsbook.fanduel.com/api/content-managed-page"
+            data = await _make_request(client, url, headers=headers, params=params)
+            if data and data.get("attachments"):
+                break
+        if data and data.get("attachments"):
+            break
+
+    if not data:
+        logger.info("FanDuel: no data returned")
+        return events
+
+    try:
+        attachments = data.get("attachments", {})
+        fd_events = attachments.get("events", {})
+        markets = attachments.get("markets", {})
+
+        # Build event-to-teams map
+        event_info: Dict[str, Dict[str, Any]] = {}
+        for eid, ev in fd_events.items() if isinstance(fd_events, dict) else []:
+            runners_info = ev.get("runners", [])
+            name = ev.get("name", "")
+            open_date = ev.get("openDate", "")
+            home = ""
+            away = ""
+
+            # FanDuel names: "Team1 @ Team2" or "Team1 v Team2"
+            if " @ " in name:
+                parts = name.split(" @ ")
+                away = parts[0].strip()
+                home = parts[1].strip()
+            elif " v " in name:
+                parts = name.split(" v ")
+                home = parts[0].strip()
+                away = parts[1].strip()
+
+            event_info[eid] = {"home": home, "away": away, "start": open_date}
+
+        # Parse markets
+        game_odds: Dict[str, Dict[str, Any]] = {}
+
+        for mid, market in markets.items() if isinstance(markets, dict) else []:
+            eid = str(market.get("eventId", ""))
+            if not eid or eid not in event_info:
+                continue
+
+            if eid not in game_odds:
+                game_odds[eid] = {}
+
+            market_type = (market.get("marketType", "") or "").upper()
+            runners = market.get("runners", [])
+
+            # Moneyline
+            if market_type in ("MATCH_BETTING", "MONEY_LINE", "HEAD_TO_HEAD", "MATCH_ODDS"):
+                ev_info = event_info[eid]
+                for runner in runners if isinstance(runners, list) else []:
+                    runner_name = runner.get("runnerName", "")
+                    win_running = runner.get("winRunnerOdds", {})
+                    american_odds_str = (
+                        win_running.get("americanDisplayOdds", {}).get("americanOdds", "")
+                        or win_running.get("americanOdds", "")
+                    )
+                    decimal_odds = win_running.get("trueOdds", {}).get("decimalOdds", {}).get("decimalOdds", 0)
+
+                    try:
+                        if american_odds_str:
+                            odds_val = float(str(american_odds_str).replace("+", ""))
+                        elif decimal_odds:
+                            odds_val = decimal_to_american(float(decimal_odds))
+                        else:
+                            continue
+                    except (ValueError, TypeError):
+                        continue
+
+                    mapped = _map_team(runner_name)
+                    home_mapped = _map_team(ev_info["home"])
+                    if mapped and mapped == home_mapped:
+                        game_odds[eid]["home_ml"] = odds_val
+                    elif mapped:
+                        game_odds[eid]["away_ml"] = odds_val
+
+            # Spread / Puck Line
+            elif market_type in ("MATCH_HANDICAP", "SPREAD", "PUCK_LINE", "HANDICAP", "ASIAN_HANDICAP"):
+                ev_info = event_info[eid]
+                for runner in runners if isinstance(runners, list) else []:
+                    runner_name = runner.get("runnerName", "")
+                    handicap = runner.get("handicap", 0)
+                    win_running = runner.get("winRunnerOdds", {})
+                    american_odds_str = (
+                        win_running.get("americanDisplayOdds", {}).get("americanOdds", "")
+                        or win_running.get("americanOdds", "")
+                    )
+                    decimal_odds = win_running.get("trueOdds", {}).get("decimalOdds", {}).get("decimalOdds", 0)
+
+                    try:
+                        if american_odds_str:
+                            odds_val = float(str(american_odds_str).replace("+", ""))
+                        elif decimal_odds:
+                            odds_val = decimal_to_american(float(decimal_odds))
+                        else:
+                            continue
+                        line_val = float(handicap)
+                    except (ValueError, TypeError):
+                        continue
+
+                    mapped = _map_team(runner_name)
+                    home_mapped = _map_team(ev_info["home"])
+                    if mapped and mapped == home_mapped:
+                        game_odds[eid]["home_spread"] = line_val
+                        game_odds[eid]["home_spread_price"] = odds_val
+                    elif mapped:
+                        game_odds[eid]["away_spread"] = line_val
+                        game_odds[eid]["away_spread_price"] = odds_val
+
+            # Totals
+            elif market_type in ("TOTAL_GOALS", "MATCH_TOTAL", "TOTAL_POINTS", "OVER_UNDER", "TOTAL"):
+                for runner in runners if isinstance(runners, list) else []:
+                    runner_name = (runner.get("runnerName", "") or "").lower()
+                    handicap = runner.get("handicap", 0)
+                    win_running = runner.get("winRunnerOdds", {})
+                    american_odds_str = (
+                        win_running.get("americanDisplayOdds", {}).get("americanOdds", "")
+                        or win_running.get("americanOdds", "")
+                    )
+                    decimal_odds = win_running.get("trueOdds", {}).get("decimalOdds", {}).get("decimalOdds", 0)
+
+                    try:
+                        if american_odds_str:
+                            odds_val = float(str(american_odds_str).replace("+", ""))
+                        elif decimal_odds:
+                            odds_val = decimal_to_american(float(decimal_odds))
+                        else:
+                            continue
+                        line_val = float(handicap)
+                    except (ValueError, TypeError):
+                        continue
+
+                    if "over" in runner_name:
+                        game_odds[eid]["total_line"] = line_val
+                        game_odds[eid]["over_price"] = odds_val
+                    elif "under" in runner_name:
+                        game_odds[eid]["total_line"] = line_val
+                        game_odds[eid]["under_price"] = odds_val
+
+        # Build OddsEvent objects
+        for eid, odds in game_odds.items():
+            ev_info = event_info.get(eid, {})
+            home = ev_info.get("home", "")
+            away = ev_info.get("away", "")
+            if not home or not away:
+                continue
+
+            event = OddsEvent(
+                source="fanduel",
+                home_team=home,
+                away_team=away,
+                commence_time=ev_info.get("start", ""),
+                home_ml=odds.get("home_ml", 0),
+                away_ml=odds.get("away_ml", 0),
+                home_spread=odds.get("home_spread", 0),
+                away_spread=odds.get("away_spread", 0),
+                home_spread_price=odds.get("home_spread_price", -110),
+                away_spread_price=odds.get("away_spread_price", -110),
+                total_line=odds.get("total_line", 0),
+                over_price=odds.get("over_price", -110),
+                under_price=odds.get("under_price", -110),
+            )
+            if event.home_abbr and event.away_abbr:
+                events.append(event)
+
+    except Exception as exc:
+        logger.warning("FanDuel parse error: %s", exc)
+
+    logger.info("FanDuel: fetched odds for %d events", len(events))
+    return events
+
+
+# ---- Kambi CDN (powers BetRivers, Unibet, 888sport) ----
+
+async def _fetch_kambi(client: httpx.AsyncClient) -> List[OddsEvent]:
+    """
+    Fetch NHL odds from the Kambi offering API (CDN).
+
+    Kambi powers BetRivers, Unibet, 888sport, and other sportsbooks.
+    The offering API is publicly accessible and returns odds in decimal format.
+    """
+    events: List[OddsEvent] = []
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json",
+    }
+
+    # Kambi offering API - try multiple operator codes and CDN hosts
+    operators = [
+        ("rsiuspa", "BetRivers US PA"),
+        ("ub", "Unibet"),
+        ("888", "888sport"),
+    ]
+    cdn_hosts = [
+        "https://eu-offering-api.kambicdn.com",
+        "https://eu-offering.kambicdn.org",
+    ]
+    paths = [
+        "/offering/v2018/{op}/listView/ice_hockey/nhl/all/all/matches.json",
+        "/offering/v2018/{op}/listView/ice_hockey/nhl.json",
+    ]
+
+    data = None
+    for host in cdn_hosts:
+        for op_code, op_name in operators:
+            for path_tmpl in paths:
+                url = host + path_tmpl.format(op=op_code)
+                params = {
+                    "lang": "en_US",
+                    "market": "US",
+                    "client_id": "2",
+                    "channel_id": "1",
+                    "useCombined": "true",
+                    "includeParticipants": "true",
+                }
+                data = await _make_request(client, url, headers=headers, params=params)
+                if data and data.get("events"):
+                    logger.info("Kambi: got data via %s (%s)", op_name, host.split("//")[1])
+                    break
+            if data and data.get("events"):
+                break
+        if data and data.get("events"):
+            break
+
+    if not data:
+        logger.info("Kambi: no data returned from any operator")
+        return events
+
+    try:
+        kambi_events = data.get("events", [])
+
+        for ev in kambi_events if isinstance(kambi_events, list) else []:
+            ev_data = ev.get("event", {})
+            home_name = ev_data.get("homeName", "")
+            away_name = ev_data.get("awayName", "")
+            start = ev_data.get("start", "")
+
+            if not home_name or not away_name:
+                continue
+
+            bet_offers = ev.get("betOffers", [])
+            odds: Dict[str, Any] = {}
+
+            for offer in bet_offers if isinstance(bet_offers, list) else []:
+                criterion = offer.get("criterion", {})
+                criterion_label = (criterion.get("label") or "").lower()
+                offer_type = offer.get("betOfferType", {}).get("name", "").lower()
+                outcomes = offer.get("outcomes", [])
+
+                # Moneyline (Match Winner / 1X2 without draw for hockey)
+                if "winner" in criterion_label or "match" in criterion_label or offer_type == "match":
+                    for oc in outcomes if isinstance(outcomes, list) else []:
+                        oc_label = oc.get("label", "")
+                        oc_type = (oc.get("type", "") or "").upper()
+                        decimal_odds_val = oc.get("odds", 0)
+                        if not decimal_odds_val:
+                            continue
+                        # Kambi odds are in milliBet format (e.g., 1910 = 1.91)
+                        dec = decimal_odds_val / 1000.0 if decimal_odds_val > 100 else decimal_odds_val
+                        american = decimal_to_american(dec)
+
+                        if oc_type == "OT_ONE" or oc_label == home_name:
+                            odds["home_ml"] = american
+                        elif oc_type == "OT_TWO" or oc_label == away_name:
+                            odds["away_ml"] = american
+
+                # Spread / Handicap
+                elif "handicap" in criterion_label or "spread" in criterion_label or "puck" in criterion_label:
+                    for oc in outcomes if isinstance(outcomes, list) else []:
+                        oc_label = oc.get("label", "")
+                        line = oc.get("line", 0)
+                        decimal_odds_val = oc.get("odds", 0)
+                        if not decimal_odds_val:
+                            continue
+                        dec = decimal_odds_val / 1000.0 if decimal_odds_val > 100 else decimal_odds_val
+                        american = decimal_to_american(dec)
+                        try:
+                            line_val = float(line) / 1000.0 if abs(line) > 100 else float(line)
+                        except (ValueError, TypeError):
+                            continue
+
+                        if oc_label == home_name:
+                            odds["home_spread"] = line_val
+                            odds["home_spread_price"] = american
+                        elif oc_label == away_name:
+                            odds["away_spread"] = line_val
+                            odds["away_spread_price"] = american
+
+                # Totals (Over/Under)
+                elif "total" in criterion_label or "over" in criterion_label:
+                    for oc in outcomes if isinstance(outcomes, list) else []:
+                        oc_label = (oc.get("label", "") or "").lower()
+                        oc_type = (oc.get("type", "") or "").upper()
+                        line = oc.get("line", 0)
+                        decimal_odds_val = oc.get("odds", 0)
+                        if not decimal_odds_val:
+                            continue
+                        dec = decimal_odds_val / 1000.0 if decimal_odds_val > 100 else decimal_odds_val
+                        american = decimal_to_american(dec)
+                        try:
+                            line_val = float(line) / 1000.0 if abs(line) > 100 else float(line)
+                        except (ValueError, TypeError):
+                            continue
+
+                        if "over" in oc_label or oc_type == "OT_OVER":
+                            odds["total_line"] = line_val
+                            odds["over_price"] = american
+                        elif "under" in oc_label or oc_type == "OT_UNDER":
+                            odds["total_line"] = line_val
+                            odds["under_price"] = american
+
+            event = OddsEvent(
+                source="kambi",
+                home_team=home_name,
+                away_team=away_name,
+                commence_time=start,
+                home_ml=odds.get("home_ml", 0),
+                away_ml=odds.get("away_ml", 0),
+                home_spread=odds.get("home_spread", 0),
+                away_spread=odds.get("away_spread", 0),
+                home_spread_price=odds.get("home_spread_price", -110),
+                away_spread_price=odds.get("away_spread_price", -110),
+                total_line=odds.get("total_line", 0),
+                over_price=odds.get("over_price", -110),
+                under_price=odds.get("under_price", -110),
+            )
+            if event.home_abbr and event.away_abbr:
+                events.append(event)
+
+    except Exception as exc:
+        logger.warning("Kambi parse error: %s", exc)
+
+    logger.info("Kambi: fetched odds for %d events", len(events))
+    return events
+
+
+# ---- Bovada ----
+
+async def _fetch_bovada(client: httpx.AsyncClient) -> List[OddsEvent]:
+    """
+    Fetch NHL odds from Bovada's public coupon API.
+
+    Bovada returns all odds formats (American, decimal, fractional, etc.)
+    in a clean, well-structured response.  No API key required.
+    """
+    events: List[OddsEvent] = []
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json",
+    }
+
+    url = "https://www.bovada.lv/services/sports/event/coupon/events/A/description/hockey/nhl"
+    data = await _make_request(client, url, headers=headers)
+
+    if not data or not isinstance(data, list):
+        logger.info("Bovada: no data returned")
+        return events
+
+    try:
+        for section in data:
+            section_events = section.get("events", [])
+            if not isinstance(section_events, list):
+                continue
+
+            for ev in section_events:
+                # Get team info from competitors list
+                competitors = ev.get("competitors", [])
+                home_name = ""
+                away_name = ""
+                for comp in competitors if isinstance(competitors, list) else []:
+                    if comp.get("home"):
+                        home_name = comp.get("name", "")
+                    else:
+                        away_name = comp.get("name", "")
+
+                if not home_name or not away_name:
+                    # Try parsing from description: "Away @ Home"
+                    desc = ev.get("description", "")
+                    if " @ " in desc:
+                        parts = desc.split(" @ ")
+                        away_name = parts[0].strip()
+                        home_name = parts[1].strip()
+
+                if not home_name or not away_name:
+                    continue
+
+                # Parse start time (epoch milliseconds)
+                start_time = ev.get("startTime", 0)
+                commence = ""
+                if start_time:
+                    try:
+                        dt = datetime.fromtimestamp(start_time / 1000, tz=timezone.utc)
+                        commence = dt.isoformat()
+                    except (ValueError, TypeError, OverflowError):
+                        pass
+
+                odds: Dict[str, Any] = {}
+
+                # Parse display groups -> markets
+                for dg in ev.get("displayGroups", []):
+                    if not isinstance(dg, dict):
+                        continue
+                    for market in dg.get("markets", []):
+                        if not isinstance(market, dict):
+                            continue
+
+                        market_key = (market.get("key", "") or "").upper()
+                        market_desc = (market.get("description", "") or "").lower()
+                        outcomes = market.get("outcomes", [])
+                        if not isinstance(outcomes, list):
+                            continue
+
+                        # Only process main-game markets (not period-specific)
+                        period = market.get("period", {})
+                        if isinstance(period, dict) and not period.get("main", True):
+                            continue
+
+                        # Moneyline
+                        if market_key == "2W-ML" or "moneyline" in market_desc:
+                            for oc in outcomes:
+                                price = oc.get("price", {})
+                                if not isinstance(price, dict):
+                                    continue
+                                american_str = price.get("american", "")
+                                try:
+                                    odds_val = float(str(american_str).replace("+", ""))
+                                except (ValueError, TypeError):
+                                    continue
+                                oc_type = (oc.get("type", "") or "").upper()
+                                if oc_type == "H":
+                                    odds["home_ml"] = odds_val
+                                elif oc_type == "A":
+                                    odds["away_ml"] = odds_val
+
+                        # Spread / Puck Line
+                        elif market_key == "2W-SPRD" or "spread" in market_desc or "puck" in market_desc:
+                            for oc in outcomes:
+                                price = oc.get("price", {})
+                                if not isinstance(price, dict):
+                                    continue
+                                american_str = price.get("american", "")
+                                handicap_str = price.get("handicap", "0")
+                                try:
+                                    odds_val = float(str(american_str).replace("+", ""))
+                                    line_val = float(handicap_str)
+                                except (ValueError, TypeError):
+                                    continue
+                                oc_type = (oc.get("type", "") or "").upper()
+                                if oc_type == "H":
+                                    odds["home_spread"] = line_val
+                                    odds["home_spread_price"] = odds_val
+                                elif oc_type == "A":
+                                    odds["away_spread"] = line_val
+                                    odds["away_spread_price"] = odds_val
+
+                        # Totals
+                        elif market_key == "2W-OU" or "total" in market_desc:
+                            for oc in outcomes:
+                                price = oc.get("price", {})
+                                if not isinstance(price, dict):
+                                    continue
+                                american_str = price.get("american", "")
+                                handicap_str = price.get("handicap", "0")
+                                try:
+                                    odds_val = float(str(american_str).replace("+", ""))
+                                    line_val = float(handicap_str)
+                                except (ValueError, TypeError):
+                                    continue
+                                oc_type = (oc.get("type", "") or "").upper()
+                                if oc_type == "O":
+                                    odds["total_line"] = line_val
+                                    odds["over_price"] = odds_val
+                                elif oc_type == "U":
+                                    odds["total_line"] = line_val
+                                    odds["under_price"] = odds_val
+
+                event = OddsEvent(
+                    source="bovada",
+                    home_team=home_name,
+                    away_team=away_name,
+                    commence_time=commence,
+                    home_ml=odds.get("home_ml", 0),
+                    away_ml=odds.get("away_ml", 0),
+                    home_spread=odds.get("home_spread", 0),
+                    away_spread=odds.get("away_spread", 0),
+                    home_spread_price=odds.get("home_spread_price", -110),
+                    away_spread_price=odds.get("away_spread_price", -110),
+                    total_line=odds.get("total_line", 0),
+                    over_price=odds.get("over_price", -110),
+                    under_price=odds.get("under_price", -110),
+                )
+                if event.home_abbr and event.away_abbr:
+                    events.append(event)
+
+    except Exception as exc:
+        logger.warning("Bovada parse error: %s", exc)
+
+    logger.info("Bovada: fetched odds for %d events", len(events))
+    return events
+
+
+# ---- The Odds API (existing, requires API key) ----
+
+async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
+    """
+    Fetch NHL odds from The Odds API (v4).
+
+    Requires ODDS_API_KEY environment variable. Returns empty list if
+    no key is configured. This is a paid/rate-limited source — we use
+    it as a fallback/supplementary source.
+    """
+    events: List[OddsEvent] = []
+    api_key = settings.odds_api_key
+    if not api_key:
+        logger.info("The Odds API: no API key configured, skipping")
+        return events
+
+    url = "https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds"
+    params = {
+        "apiKey": api_key,
+        "regions": "us",
+        "markets": "h2h,spreads,totals",
+        "oddsFormat": "american",
+    }
+
+    data = await _make_request(client, url, params=params)
+    if not data or not isinstance(data, list):
+        logger.info("The Odds API: no data returned")
+        return events
+
+    for ev in data:
+        home_team = ev.get("home_team", "")
+        away_team = ev.get("away_team", "")
+        commence = ev.get("commence_time", "")
+
+        # Aggregate across all bookmakers for best odds
+        all_home_ml: List[float] = []
+        all_away_ml: List[float] = []
+        all_home_spread: List[Tuple[float, float]] = []  # (line, price)
+        all_away_spread: List[Tuple[float, float]] = []
+        all_total: List[Tuple[float, float, float]] = []  # (line, over_price, under_price)
+
+        for bm in ev.get("bookmakers", []):
+            for market in bm.get("markets", []):
+                mkey = market.get("key", "")
+                outcomes = market.get("outcomes", [])
+
+                if mkey == "h2h":
+                    for oc in outcomes:
+                        name = oc.get("name", "")
+                        price = oc.get("price", 0)
+                        if name == home_team:
+                            all_home_ml.append(float(price))
+                        elif name == away_team:
+                            all_away_ml.append(float(price))
+
+                elif mkey == "spreads":
+                    for oc in outcomes:
+                        name = oc.get("name", "")
+                        point = float(oc.get("point", 0))
+                        price = float(oc.get("price", 0))
+                        if name == home_team:
+                            all_home_spread.append((point, price))
+                        elif name == away_team:
+                            all_away_spread.append((point, price))
+
+                elif mkey == "totals":
+                    over_p = under_p = 0.0
+                    line = 0.0
+                    for oc in outcomes:
+                        point = float(oc.get("point", 0))
+                        price = float(oc.get("price", 0))
+                        if oc.get("name", "").lower() == "over":
+                            over_p = price
+                            line = point
+                        elif oc.get("name", "").lower() == "under":
+                            under_p = price
+                    if line > 0:
+                        all_total.append((line, over_p, under_p))
+
+        # Best odds across books
+        home_ml = max(all_home_ml) if all_home_ml else 0
+        away_ml = max(all_away_ml) if all_away_ml else 0
+
+        # Consensus spread
+        home_spread = home_spread_price = 0.0
+        away_spread = away_spread_price = 0.0
+        if all_home_spread:
+            # Most common absolute spread
+            spread_counts = Counter(abs(s[0]) for s in all_home_spread)
+            consensus = spread_counts.most_common(1)[0][0]
+            consensus_books = [s for s in all_home_spread if abs(s[0]) == consensus]
+            home_spread = sum(s[0] for s in consensus_books) / len(consensus_books)
+            home_spread_price = sum(s[1] for s in consensus_books) / len(consensus_books)
+        if all_away_spread:
+            spread_counts = Counter(abs(s[0]) for s in all_away_spread)
+            consensus = spread_counts.most_common(1)[0][0]
+            consensus_books = [s for s in all_away_spread if abs(s[0]) == consensus]
+            away_spread = sum(s[0] for s in consensus_books) / len(consensus_books)
+            away_spread_price = sum(s[1] for s in consensus_books) / len(consensus_books)
+
+        # Consensus total
+        total_line = over_price = under_price = 0.0
+        if all_total:
+            line_counts = Counter(t[0] for t in all_total)
+            consensus_line = line_counts.most_common(1)[0][0]
+            consensus_totals = [t for t in all_total if t[0] == consensus_line]
+            total_line = consensus_line
+            over_price = sum(t[1] for t in consensus_totals) / len(consensus_totals)
+            under_price = sum(t[2] for t in consensus_totals) / len(consensus_totals)
+
+        event = OddsEvent(
+            source="the_odds_api",
+            home_team=home_team,
+            away_team=away_team,
+            commence_time=commence,
+            home_ml=home_ml,
+            away_ml=away_ml,
+            home_spread=round(home_spread, 1),
+            away_spread=round(away_spread, 1),
+            home_spread_price=round(home_spread_price),
+            away_spread_price=round(away_spread_price),
+            total_line=total_line,
+            over_price=round(over_price),
+            under_price=round(under_price),
+        )
+        if event.home_abbr and event.away_abbr:
+            events.append(event)
+
+    logger.info("The Odds API: fetched odds for %d events", len(events))
+    return events
+
+
+# ---------------------------------------------------------------------------
+# Multi-source aggregation
+# ---------------------------------------------------------------------------
+
+def _merge_odds_events(
+    all_events: List[List[OddsEvent]],
+) -> List[Dict[str, Any]]:
+    """
+    Merge odds from multiple sources into a single best-odds-per-game dict.
+
+    Groups events by (home_abbr, away_abbr) matchup, then selects the
+    best available line for each market across all sources.
+
+    Returns a list of dicts, each representing one game with merged odds.
+    """
+    # Group by matchup key
+    matchup_odds: Dict[str, List[OddsEvent]] = {}
+    for source_events in all_events:
+        for ev in source_events:
+            key = f"{ev.home_abbr}_{ev.away_abbr}"
+            if key not in matchup_odds:
+                matchup_odds[key] = []
+            matchup_odds[key].append(ev)
+
+    merged: List[Dict[str, Any]] = []
+
+    for key, ev_list in matchup_odds.items():
+        # Best moneyline: highest value (best for bettor)
+        home_mls = [e.home_ml for e in ev_list if e.has_moneyline()]
+        away_mls = [e.away_ml for e in ev_list if e.has_moneyline()]
+
+        best_home_ml = max(home_mls) if home_mls else 0.0
+        best_away_ml = max(away_mls) if away_mls else 0.0
+
+        # Consensus spread: most common absolute value across sources
+        home_spreads = [(e.home_spread, e.home_spread_price, e.source) for e in ev_list if e.has_spread()]
+        away_spreads = [(e.away_spread, e.away_spread_price, e.source) for e in ev_list if e.has_spread()]
+
+        best_home_spread = best_home_spread_price = 0.0
+        best_away_spread = best_away_spread_price = 0.0
+        if home_spreads:
+            spread_vals = Counter(abs(s[0]) for s in home_spreads)
+            consensus = spread_vals.most_common(1)[0][0]
+            consensus_books = [s for s in home_spreads if abs(s[0]) == consensus]
+            best_home_spread = consensus_books[0][0]  # Keep sign from first book
+            best_home_spread_price = max(s[1] for s in consensus_books)
+        if away_spreads:
+            spread_vals = Counter(abs(s[0]) for s in away_spreads)
+            consensus = spread_vals.most_common(1)[0][0]
+            consensus_books = [s for s in away_spreads if abs(s[0]) == consensus]
+            best_away_spread = consensus_books[0][0]
+            best_away_spread_price = max(s[1] for s in consensus_books)
+
+        # Cross-check spread sign vs moneyline
+        if best_home_ml and best_away_ml and best_home_spread != 0:
+            home_is_fav = best_home_ml < best_away_ml
+            if home_is_fav and best_home_spread > 0:
+                best_home_spread = -abs(best_home_spread)
+                best_away_spread = abs(best_away_spread) if best_away_spread else abs(best_home_spread)
+                best_home_spread_price, best_away_spread_price = best_away_spread_price, best_home_spread_price
+            elif not home_is_fav and best_home_spread < 0:
+                best_home_spread = abs(best_home_spread)
+                best_away_spread = -abs(best_away_spread) if best_away_spread else -abs(best_home_spread)
+                best_home_spread_price, best_away_spread_price = best_away_spread_price, best_home_spread_price
+
+        # Consensus total
+        total_data = [(e.total_line, e.over_price, e.under_price) for e in ev_list if e.has_total()]
+        best_total = best_over = best_under = 0.0
+        if total_data:
+            line_counts = Counter(t[0] for t in total_data)
+            consensus_line = line_counts.most_common(1)[0][0]
+            consensus_totals = [t for t in total_data if t[0] == consensus_line]
+            best_total = consensus_line
+            best_over = max(t[1] for t in consensus_totals)
+            best_under = max(t[2] for t in consensus_totals)
+
+        # Use first event for metadata
+        first = ev_list[0]
+        sources_used = list(set(e.source for e in ev_list))
+
+        merged.append({
+            "home_team": first.home_team,
+            "away_team": first.away_team,
+            "home_abbrev": first.home_abbr,
+            "away_abbrev": first.away_abbr,
+            "commence_time": first.commence_time,
+            "sources": sources_used,
+            "best_odds": {
+                "home_moneyline": best_home_ml,
+                "away_moneyline": best_away_ml,
+                "home_spread": round(best_home_spread, 1),
+                "away_spread": round(best_away_spread, 1),
+                "home_spread_price": round(best_home_spread_price),
+                "away_spread_price": round(best_away_spread_price),
+                "over_under": best_total,
+                "over_price": round(best_over),
+                "under_price": round(best_under),
+            },
+            "all_sources": [e.to_dict() for e in ev_list],
+        })
+
+    return merged
+
+
+# ---------------------------------------------------------------------------
+# Public API: MultiSourceOddsScraper
+# ---------------------------------------------------------------------------
+
+class MultiSourceOddsScraper:
+    """
+    Orchestrates odds fetching from multiple sportsbook sources and
+    merges them to find the best available lines for each NHL game.
+
+    Usage:
+        scraper = MultiSourceOddsScraper()
+        odds = await scraper.fetch_best_odds()
+        await scraper.sync_odds(db_session)
+        await scraper.close()
+    """
+
+    def __init__(self):
+        self._client: Optional[httpx.AsyncClient] = None
+
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(20.0),
+                follow_redirects=True,
+                limits=httpx.Limits(
+                    max_keepalive_connections=10,
+                    max_connections=20,
+                ),
+            )
+        return self._client
+
+    async def close(self) -> None:
+        if self._client and not self._client.is_closed:
+            await self._client.aclose()
+            self._client = None
+
+    async def fetch_best_odds(self) -> List[Dict[str, Any]]:
+        """
+        Fetch odds from all sources concurrently and merge them.
+
+        Returns a list of dicts, each representing one game with the
+        best available odds across all sportsbooks.
+        """
+        client = self._get_client()
+
+        # Fetch from all sources concurrently
+        results = await asyncio.gather(
+            _fetch_draftkings(client),
+            _fetch_fanduel(client),
+            _fetch_kambi(client),
+            _fetch_bovada(client),
+            _fetch_odds_api(client),
+            return_exceptions=True,
+        )
+
+        all_events: List[List[OddsEvent]] = []
+        source_names = ["DraftKings", "FanDuel", "Kambi", "Bovada", "The Odds API"]
+
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.warning("%s fetch failed: %s", source_names[i], result)
+                all_events.append([])
+            else:
+                all_events.append(result)
+
+        total_events = sum(len(evts) for evts in all_events)
+        sources_with_data = sum(1 for evts in all_events if evts)
+        logger.info(
+            "Odds fetched: %d total events from %d/%d sources",
+            total_events, sources_with_data, len(source_names),
+        )
+
+        if total_events == 0:
+            logger.warning("No odds data from any source!")
+            return []
+
+        return _merge_odds_events(all_events)
+
+    async def sync_odds(self, db: AsyncSession) -> List[Dict[str, Any]]:
+        """
+        Fetch odds from all sources and sync them to Game records in the DB.
+
+        Matches odds to existing Game records by team abbreviations and date.
+        Updates Game model odds fields with the best available lines.
+
+        Returns the list of matched odds dicts.
+        """
+        odds_list = await self.fetch_best_odds()
+
+        if not odds_list:
+            logger.info("No odds to sync")
+            return []
+
+        matched: List[Dict[str, Any]] = []
+
+        for odds in odds_list:
+            home_abbrev = odds.get("home_abbrev", "")
+            away_abbrev = odds.get("away_abbrev", "")
+
+            if not home_abbrev or not away_abbrev:
+                continue
+
+            # Parse commence_time to date
+            commence = odds.get("commence_time", "")
+            game_date = None
+            if commence:
+                try:
+                    if isinstance(commence, str):
+                        ct = commence.replace("Z", "+00:00")
+                        dt = datetime.fromisoformat(ct)
+                    else:
+                        dt = commence
+                    game_date = dt.date()
+                except (ValueError, TypeError, AttributeError):
+                    # Try parsing as timestamp
+                    try:
+                        dt = datetime.fromtimestamp(float(commence) / 1000, tz=timezone.utc)
+                        game_date = dt.date()
+                    except (ValueError, TypeError, OverflowError):
+                        continue
+            else:
+                continue
+
+            # Find matching teams
+            home_result = await db.execute(
+                select(Team).where(Team.abbreviation == home_abbrev)
+            )
+            home_team = home_result.scalar_one_or_none()
+
+            away_result = await db.execute(
+                select(Team).where(Team.abbreviation == away_abbrev)
+            )
+            away_team = away_result.scalar_one_or_none()
+
+            if not home_team or not away_team:
+                logger.debug(
+                    "Teams not found for odds: %s vs %s",
+                    home_abbrev, away_abbrev,
+                )
+                continue
+
+            # Find the matching game
+            game_result = await db.execute(
+                select(Game).where(
+                    Game.home_team_id == home_team.id,
+                    Game.away_team_id == away_team.id,
+                    Game.date == game_date,
+                )
+            )
+            game = game_result.scalar_one_or_none()
+
+            if game is None:
+                logger.debug(
+                    "No game found for %s vs %s on %s",
+                    home_abbrev, away_abbrev, game_date,
+                )
+                continue
+
+            # Persist best odds to the Game record
+            best = odds.get("best_odds", {})
+            if best.get("home_moneyline"):
+                game.home_moneyline = best["home_moneyline"]
+            if best.get("away_moneyline"):
+                game.away_moneyline = best["away_moneyline"]
+            if best.get("over_under"):
+                game.over_under_line = best["over_under"]
+            if best.get("home_spread") is not None:
+                game.home_spread_line = best["home_spread"]
+            if best.get("away_spread") is not None:
+                game.away_spread_line = best["away_spread"]
+            if best.get("home_spread_price"):
+                game.home_spread_price = best["home_spread_price"]
+            if best.get("away_spread_price"):
+                game.away_spread_price = best["away_spread_price"]
+            if best.get("over_price"):
+                game.over_price = best["over_price"]
+            if best.get("under_price"):
+                game.under_price = best["under_price"]
+            game.odds_updated_at = datetime.now(timezone.utc)
+
+            matched.append({
+                "game_id": game.id,
+                "game_external_id": game.external_id,
+                "home_abbrev": home_abbrev,
+                "away_abbrev": away_abbrev,
+                "game_date": str(game_date),
+                "sources": odds.get("sources", []),
+                "best_odds": best,
+            })
+
+        logger.info(
+            "Multi-source odds sync complete: %d games matched from %d available",
+            len(matched), len(odds_list),
+        )
+        return matched

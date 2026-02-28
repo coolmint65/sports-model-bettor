@@ -123,18 +123,19 @@ async def _run_full_sync():
 
                 await session.flush()
 
-                # 3. Odds
-                _sync_state["step"] = "Syncing betting odds..."
+                # 3. Odds (multi-source: DraftKings, FanDuel, Kambi, The Odds API)
+                _sync_state["step"] = "Syncing betting odds (multi-source)..."
                 try:
-                    from app.scrapers.odds_api import OddsScraper
+                    from app.scrapers.odds_multi import MultiSourceOddsScraper
 
-                    odds_scraper = OddsScraper()
+                    odds_scraper = MultiSourceOddsScraper()
                     try:
-                        await odds_scraper.sync_odds(session)
+                        matched = await odds_scraper.sync_odds(session)
+                        logger.info("Multi-source odds sync matched %d games", len(matched))
                     finally:
                         await odds_scraper.close()
                 except Exception as exc:
-                    logger.warning("Odds sync failed (non-critical): %s", exc)
+                    logger.warning("Multi-source odds sync failed (non-critical): %s", exc)
 
                 await session.flush()
 
@@ -314,29 +315,38 @@ async def sync_results(
 @router.post(
     "/sync/odds",
     response_model=SyncResult,
-    summary="Sync betting odds",
+    summary="Sync betting odds (multi-source)",
 )
 async def sync_odds(
     session: AsyncSession = Depends(get_session),
 ):
-    """Fetch and update current betting odds from The Odds API."""
-    try:
-        from app.scrapers.odds_api import OddsScraper
+    """
+    Fetch and update current betting odds from multiple sportsbook sources.
 
-        odds_scraper = OddsScraper()
+    Sources: DraftKings, FanDuel, Kambi (BetRivers/Unibet), The Odds API.
+    Best available lines are computed across all books.
+    """
+    try:
+        from app.scrapers.odds_multi import MultiSourceOddsScraper
+
+        odds_scraper = MultiSourceOddsScraper()
         try:
             matched = await odds_scraper.sync_odds(session)
+            sources_seen = set()
+            for m in matched:
+                sources_seen.update(m.get("sources", []))
             return SyncResult(
                 success=True,
                 message=f"Odds synced for {len(matched)} games.",
-                details=f"Updated moneyline, spread, and totals odds.",
+                details=f"Sources: {', '.join(sorted(sources_seen)) or 'none'}. "
+                        f"Updated moneyline, spread, and totals odds.",
             )
         finally:
             await odds_scraper.close()
     except Exception as exc:
         raise HTTPException(
             status_code=502,
-            detail=f"Odds sync failed: {exc}",
+            detail=f"Multi-source odds sync failed: {exc}",
         )
 
 
@@ -459,3 +469,44 @@ async def get_data_status(
         games_today=games_today,
         games_final_today=games_final_today,
     )
+
+
+@router.get(
+    "/odds/test",
+    summary="Test all odds sources",
+)
+async def test_odds_sources():
+    """
+    Diagnostic endpoint: fetch odds from all sources and return raw results.
+
+    Does NOT write to the database. Returns which sources succeeded,
+    how many events each returned, and the merged best-odds output.
+    Use this to verify odds sources are working before running a full sync.
+    """
+    from app.scrapers.odds_multi import MultiSourceOddsScraper
+
+    scraper = MultiSourceOddsScraper()
+    try:
+        merged = await scraper.fetch_best_odds()
+        # Build a summary
+        source_counts: dict = {}
+        for game in merged:
+            for src in game.get("sources", []):
+                source_counts[src] = source_counts.get(src, 0) + 1
+
+        return {
+            "status": "ok" if merged else "no_data",
+            "total_games": len(merged),
+            "sources_active": source_counts,
+            "games": [
+                {
+                    "matchup": f"{g['home_abbrev']} vs {g['away_abbrev']}",
+                    "commence_time": g.get("commence_time"),
+                    "sources": g.get("sources", []),
+                    "best_odds": g.get("best_odds", {}),
+                }
+                for g in merged
+            ],
+        }
+    finally:
+        await scraper.close()
