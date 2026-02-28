@@ -682,6 +682,10 @@ class BettingModel:
         away_ml = odds_data.get("away_moneyline")
         ou_line = odds_data.get("over_under_line")
         spread_line = odds_data.get("home_spread_line")
+        over_price = odds_data.get("over_price")
+        under_price = odds_data.get("under_price")
+        home_spread_price = odds_data.get("home_spread_price")
+        away_spread_price = odds_data.get("away_spread_price")
 
         # ---- Moneyline ----
         try:
@@ -690,7 +694,7 @@ class BettingModel:
             away_wp = ml["away_win_prob"]
 
             if home_wp >= away_wp:
-                ml_pred = "home"
+                ml_pred = home_abbr
                 ml_prob = home_wp
                 odds_note = ""
                 if home_ml is not None:
@@ -701,7 +705,7 @@ class BettingModel:
                     f"(xG: {ml['home_xg']:.2f} vs {ml['away_xg']:.2f}).{odds_note}"
                 )
             else:
-                ml_pred = "away"
+                ml_pred = away_abbr
                 ml_prob = away_wp
                 odds_note = ""
                 if away_ml is not None:
@@ -715,10 +719,10 @@ class BettingModel:
             # Calculate implied probability and edge from real odds
             ml_implied = None
             ml_odds_display = None
-            if ml_pred == "home" and home_ml is not None:
+            if ml_pred == home_abbr and home_ml is not None:
                 ml_implied = american_odds_to_implied_prob(home_ml)
                 ml_odds_display = home_ml
-            elif ml_pred == "away" and away_ml is not None:
+            elif ml_pred == away_abbr and away_ml is not None:
                 ml_implied = american_odds_to_implied_prob(away_ml)
                 ml_odds_display = away_ml
 
@@ -761,13 +765,22 @@ class BettingModel:
                     book_line_prob = under_p
 
                 direction = "over" if "over" in book_line_pred else "under"
+                # Use actual sportsbook price if available
+                if direction == "over" and over_price is not None:
+                    total_odds_val = float(over_price)
+                elif direction == "under" and under_price is not None:
+                    total_odds_val = float(under_price)
+                else:
+                    total_odds_val = -110.0
+                total_implied_val = american_odds_to_implied_prob(total_odds_val)
+
                 predictions.append({
                     "bet_type": "total",
                     "prediction": book_line_pred,
                     "confidence": round(book_line_prob, 4),
                     "probability": round(book_line_prob, 4),
-                    "implied_probability": 0.524,   # standard -110 juice
-                    "odds": -110.0,
+                    "implied_probability": round(total_implied_val, 4),
+                    "odds": total_odds_val,
                     "reasoning": (
                         f"Model projects {total_xg:.1f} total goals. "
                         f"{direction.capitalize()} {ou_val} (sportsbook line) at "
@@ -840,20 +853,33 @@ class BettingModel:
                         pred_val = "home_-1.5"
                     prob_val = anti_prob
 
+                # Replace home/away with team abbreviations
+                if pred_val.startswith("home"):
+                    display_val = pred_val.replace("home", home_abbr, 1)
+                    sprd_price = home_spread_price
+                elif pred_val.startswith("away"):
+                    display_val = pred_val.replace("away", away_abbr, 1)
+                    sprd_price = away_spread_price
+                else:
+                    display_val = pred_val
+                    sprd_price = None
+
                 spread_reason = (
                     f"Predicted margin: {margin:+.2f} goals. "
-                    f"{pred_val.replace('_', ' ')} covers at {prob_val:.1%} probability."
+                    f"{display_val.replace('_', ' ')} covers at {prob_val:.1%} probability."
                 )
-                # Standard puck line pricing varies; use real spread if available
+                # Use actual spread price if available
                 spread_implied = None
                 spread_odds_display = None
-                if spread_line is not None:
-                    # Puck line is typically around -110 to -130 for each side
-                    spread_implied = 0.524
+                if sprd_price is not None and spread_line is not None:
+                    spread_odds_display = float(sprd_price)
+                    spread_implied = american_odds_to_implied_prob(spread_odds_display)
+                elif spread_line is not None:
                     spread_odds_display = -110.0
+                    spread_implied = 0.524
                 predictions.append({
                     "bet_type": "spread",
-                    "prediction": pred_val,
+                    "prediction": display_val,
                     "confidence": round(prob_val, 4),
                     "probability": round(prob_val, 4),
                     "implied_probability": round(spread_implied, 4) if spread_implied else None,

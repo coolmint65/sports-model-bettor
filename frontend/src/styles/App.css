@@ -505,6 +505,29 @@ a:hover {
   text-transform: uppercase;
 }
 
+.best-bet-live-badge {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--accent-red, #ff5252);
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  animation: pulse-live 2s ease-in-out infinite;
+}
+
+@keyframes pulse-live {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
 .best-bet-rank {
   flex-shrink: 0;
 }
@@ -1018,15 +1041,27 @@ a:hover {
 
 .odds-values {
   display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.odds-team-line {
+  display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
   gap: 8px;
+}
+
+.odds-team-name {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  font-weight: 500;
 }
 
 .odds-value {
   font-family: var(--font-mono);
   font-weight: 700;
-  font-size: 1.1rem;
+  font-size: 1rem;
   color: #4fc3f7;
 }
 

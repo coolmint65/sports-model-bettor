@@ -74,16 +74,21 @@ export function formatBetType(betType) {
 
 /**
  * Format a raw prediction_value string into a human-readable label.
- * e.g., "p1_under_1.5" → "P1 Under 1.5", "home" → "Home", "over_5.5" → "Over 5.5"
+ * e.g., "WPG_-1.5" → "WPG -1.5", "over_5.5" → "Over 5.5", "ANA" → "ANA"
+ *
+ * Team abbreviations (2-3 uppercase letters) are kept as-is.
+ * Spread signs (+/-) are preserved.
  */
 export function formatPredictionValue(value) {
   if (!value) return 'N/A';
   // Replace underscores with spaces
   let formatted = value.replace(/_/g, ' ');
-  // Title-case each word, keeping numbers and special chars as-is
+  // Title-case each word, keeping abbreviations and special chars as-is
   formatted = formatted
     .split(' ')
     .map((w) => {
+      // Keep team abbreviations uppercase (2-3 letter all-caps like WPG, ANA, TOR)
+      if (/^[A-Z]{2,3}$/.test(w)) return w;
       // Keep period prefixes uppercase (p1, p2, p3)
       if (/^p\d$/.test(w)) return w.toUpperCase();
       // Preserve +/- signs in spread values like "+1.5" or "-1.5"

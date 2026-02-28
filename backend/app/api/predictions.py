@@ -72,6 +72,8 @@ class BestBet(BaseModel):
     edge: Optional[float] = None
     odds_implied_prob: Optional[float] = None
     reasoning: Optional[str] = None
+    game_status: Optional[str] = None
+    odds_display: Optional[float] = None
 
 
 class BestBetsResponse(BaseModel):
@@ -303,6 +305,21 @@ async def get_best_bets(
     # inflated/fake edges.
     MARKET_BET_TYPES = ("ml", "total", "spread")
 
+    # Refresh odds from The Odds API to get live/current lines before
+    # generating predictions.  This ensures in-play games show live odds
+    # and pre-match games always have the latest lines.
+    try:
+        from app.scrapers.odds_api import OddsScraper
+
+        odds_scraper = OddsScraper()
+        try:
+            await odds_scraper.sync_odds(session)
+            await session.flush()
+        finally:
+            await odds_scraper.close()
+    except Exception:
+        pass  # Non-critical; proceed with existing odds
+
     # Always regenerate predictions fresh so they use current sportsbook
     # lines instead of returning stale cached predictions.
     try:
@@ -311,13 +328,17 @@ async def get_best_bets(
     except HTTPException:
         pass
 
-    # Get top predictions by edge for today
+    # Exclude games that are already final — those bets can't be placed.
+    FINAL_STATUSES = ("final", "completed", "off", "official")
+
+    # Get top predictions by edge for today (non-final games only)
     result = await session.execute(
         select(Prediction)
         .options(selectinload(Prediction.result))
         .join(Game, Game.id == Prediction.game_id)
         .where(
             Game.date == today,
+            ~func.lower(Game.status).in_(FINAL_STATUSES),
             Prediction.recommended == True,
             Prediction.bet_type.in_(MARKET_BET_TYPES),
         )
@@ -338,6 +359,7 @@ async def get_best_bets(
             .join(Game, Game.id == Prediction.game_id)
             .where(
                 Game.date == today,
+                ~func.lower(Game.status).in_(FINAL_STATUSES),
                 Prediction.bet_type.in_(MARKET_BET_TYPES),
             )
             .order_by(
@@ -350,6 +372,43 @@ async def get_best_bets(
     best_bets: List[BestBet] = []
     for pred in top_preds:
         detail = await _build_prediction_detail(pred, session)
+
+        # Fetch the game to get status and live odds
+        game_result = await session.execute(
+            select(Game).where(Game.id == pred.game_id)
+        )
+        game_obj = game_result.scalar_one_or_none()
+        game_status = game_obj.status if game_obj else None
+
+        # Resolve the actual sportsbook odds for this specific bet
+        live_odds = None
+        if game_obj:
+            if pred.bet_type == "ml":
+                # Figure out which side the prediction is for
+                home_team_result = await session.execute(
+                    select(Team).where(Team.id == game_obj.home_team_id)
+                )
+                home_team_obj = home_team_result.scalar_one_or_none()
+                if home_team_obj and pred.prediction_value == home_team_obj.abbreviation:
+                    live_odds = game_obj.home_moneyline
+                else:
+                    live_odds = game_obj.away_moneyline
+            elif pred.bet_type == "total":
+                if pred.prediction_value and "over" in pred.prediction_value:
+                    live_odds = game_obj.over_price or -110.0
+                else:
+                    live_odds = game_obj.under_price or -110.0
+            elif pred.bet_type == "spread":
+                # Check if it's home or away side spread
+                home_team_result = await session.execute(
+                    select(Team).where(Team.id == game_obj.home_team_id)
+                )
+                home_team_obj = home_team_result.scalar_one_or_none()
+                if home_team_obj and pred.prediction_value and home_team_obj.abbreviation in pred.prediction_value:
+                    live_odds = game_obj.home_spread_price or -110.0
+                else:
+                    live_odds = game_obj.away_spread_price or -110.0
+
         best_bets.append(
             BestBet(
                 prediction_id=detail.id,
@@ -363,6 +422,8 @@ async def get_best_bets(
                 edge=detail.edge,
                 odds_implied_prob=pred.odds_implied_prob,
                 reasoning=detail.reasoning,
+                game_status=game_status,
+                odds_display=live_odds,
             )
         )
 

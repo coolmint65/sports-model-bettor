@@ -302,7 +302,7 @@ class OddsScraper(BaseScraper):
 
         For moneyline: best = highest positive or least negative price.
         For spreads: best = most favourable spread for each side.
-        For totals: best = the consensus total line.
+        For totals: best = the consensus total line with prices.
         """
         best: Dict[str, Any] = {}
 
@@ -315,19 +315,31 @@ class OddsScraper(BaseScraper):
             if away_prices:
                 best["away_moneyline"] = max(away_prices)
 
-        # Best spread
+        # Best spread with prices
         if all_spreads:
             home_spreads = [
-                s.get("home_spread", 0) for s in all_spreads if s.get("home_spread")
+                s for s in all_spreads if s.get("home_spread")
             ]
             if home_spreads:
-                best["home_spread"] = max(home_spreads)
+                # Pick the consensus spread (most common)
+                best_spread = max(home_spreads, key=lambda s: s.get("home_spread", 0))
+                best["home_spread"] = best_spread["home_spread"]
+                best["away_spread"] = best_spread.get("away_spread", 0)
+                best["home_spread_price"] = best_spread.get("home_price", -110)
+                best["away_spread_price"] = best_spread.get("away_price", -110)
 
-        # Consensus total
+        # Consensus total with prices
         if all_totals:
             totals = [t.get("total", 0) for t in all_totals if t.get("total")]
             if totals:
                 best["over_under"] = round(sum(totals) / len(totals), 1)
+            # Average over/under prices
+            over_prices = [t.get("over_price", 0) for t in all_totals if t.get("over_price")]
+            under_prices = [t.get("under_price", 0) for t in all_totals if t.get("under_price")]
+            if over_prices:
+                best["over_price"] = round(sum(over_prices) / len(over_prices))
+            if under_prices:
+                best["under_price"] = round(sum(under_prices) / len(under_prices))
 
         return best
 
@@ -429,6 +441,17 @@ class OddsScraper(BaseScraper):
                 game.over_under_line = best_odds["over_under"]
             if best_odds.get("home_spread") is not None:
                 game.home_spread_line = best_odds["home_spread"]
+            if best_odds.get("away_spread") is not None:
+                game.away_spread_line = best_odds["away_spread"]
+            if best_odds.get("home_spread_price") is not None:
+                game.home_spread_price = best_odds["home_spread_price"]
+            if best_odds.get("away_spread_price") is not None:
+                game.away_spread_price = best_odds["away_spread_price"]
+            if best_odds.get("over_price") is not None:
+                game.over_price = best_odds["over_price"]
+            if best_odds.get("under_price") is not None:
+                game.under_price = best_odds["under_price"]
+            game.odds_updated_at = datetime.now(timezone.utc)
 
             matched.append({
                 "game_id": game.id,

@@ -140,6 +140,12 @@ class OddsInfo(BaseModel):
     away_moneyline: Optional[float] = None
     over_under_line: Optional[float] = None
     home_spread_line: Optional[float] = None
+    away_spread_line: Optional[float] = None
+    home_spread_price: Optional[float] = None
+    away_spread_price: Optional[float] = None
+    over_price: Optional[float] = None
+    under_price: Optional[float] = None
+    odds_updated_at: Optional[str] = None
 
 
 class GameDetailResponse(BaseModel):
@@ -602,11 +608,20 @@ async def get_game_details(
     # Build odds info from Game model fields (populated by OddsScraper)
     odds_info = None
     if any([game.home_moneyline, game.away_moneyline, game.over_under_line, game.home_spread_line]):
+        odds_updated = None
+        if hasattr(game, "odds_updated_at") and game.odds_updated_at:
+            odds_updated = str(game.odds_updated_at)
         odds_info = OddsInfo(
             home_moneyline=game.home_moneyline,
             away_moneyline=game.away_moneyline,
             over_under_line=game.over_under_line,
             home_spread_line=game.home_spread_line,
+            away_spread_line=getattr(game, "away_spread_line", None),
+            home_spread_price=getattr(game, "home_spread_price", None),
+            away_spread_price=getattr(game, "away_spread_price", None),
+            over_price=getattr(game, "over_price", None),
+            under_price=getattr(game, "under_price", None),
+            odds_updated_at=odds_updated,
         )
 
     return GameDetailResponse(

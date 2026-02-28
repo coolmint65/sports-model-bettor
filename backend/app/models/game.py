@@ -121,6 +121,16 @@ class Game(TimestampMixin, Base):
     over_under_line: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     home_spread_line: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
+    # Odds prices (American format juice)
+    away_spread_line: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    home_spread_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    away_spread_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    over_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    under_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    odds_updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     # Relationships
     home_team: Mapped["Team"] = relationship(
         "Team",

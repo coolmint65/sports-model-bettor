@@ -1,11 +1,24 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Trophy, TrendingUp, Target, Star, ChevronRight, DollarSign } from 'lucide-react';
+import { Trophy, TrendingUp, Target, Star, ChevronRight, DollarSign, Radio } from 'lucide-react';
 import { fetchBestBets } from '../utils/api';
 import { useApi } from '../hooks/useApi';
-import { teamName, confidencePct, formatBetType, formatPredictionValue } from '../utils/teams';
+import { teamName, teamAbbrev, confidencePct, formatBetType, formatPredictionValue } from '../utils/teams';
 
-function formatOdds(impliedProb) {
+/**
+ * Format American odds for display.
+ * Accepts a raw American odds number (e.g., -110, +150).
+ */
+function formatAmericanOdds(odds) {
+  if (odds == null) return null;
+  const v = Math.round(odds);
+  return v > 0 ? `+${v}` : `${v}`;
+}
+
+/**
+ * Fallback: derive American odds from implied probability.
+ */
+function formatOddsFromProb(impliedProb) {
   if (!impliedProb || impliedProb <= 0 || impliedProb >= 1) return null;
   if (impliedProb > 0.5) {
     const odds = Math.round(-(impliedProb / (1 - impliedProb)) * 100);
@@ -23,11 +36,10 @@ function getConfidenceColor(confidence) {
   return '#ff5252';
 }
 
-function getConfidenceLabel(confidence) {
-  if (confidence >= 75) return 'Very High';
-  if (confidence >= 60) return 'High';
-  if (confidence >= 45) return 'Medium';
-  return 'Low';
+function isLiveGame(status) {
+  if (!status) return false;
+  const s = status.toLowerCase();
+  return s === 'in_progress' || s === 'live' || s === 'in progress';
 }
 
 function BestBetCard({ bet, rank, isFeatured }) {
@@ -35,8 +47,12 @@ function BestBetCard({ bet, rank, isFeatured }) {
   const confidence = confidencePct(bet.confidence);
   const edge = confidencePct(bet.edge);
   const confColor = getConfidenceColor(confidence);
-  const impliedProb = bet.odds_implied_prob;
-  const oddsDisplay = formatOdds(impliedProb);
+  const live = isLiveGame(bet.game_status);
+
+  // Use live/actual American odds if available, fall back to implied prob conversion
+  const oddsDisplay = bet.odds_display != null
+    ? formatAmericanOdds(bet.odds_display)
+    : formatOddsFromProb(bet.odds_implied_prob);
 
   const awayName = teamName(bet.away_team, 'Away');
   const homeName = teamName(bet.home_team, 'Home');
@@ -58,6 +74,13 @@ function BestBetCard({ bet, rank, isFeatured }) {
         <div className="best-bet-badge">
           <Star size={14} />
           BEST BET
+        </div>
+      )}
+
+      {live && (
+        <div className="best-bet-live-badge">
+          <Radio size={12} />
+          LIVE
         </div>
       )}
 

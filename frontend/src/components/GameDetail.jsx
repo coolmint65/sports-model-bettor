@@ -121,16 +121,21 @@ function OverviewTab({ game }) {
         <div className="odds-section">
           <h3 className="subsection-title">
             <DollarSign size={16} />
-            Betting Odds
+            Sportsbook Odds
           </h3>
           <div className="odds-grid">
             {(odds.home_moneyline != null || odds.away_moneyline != null) && (
               <div className="odds-card">
                 <span className="odds-label">Moneyline</span>
                 <div className="odds-values">
-                  <span className="odds-value">{formatAmericanOdds(odds.away_moneyline)}</span>
-                  <span className="odds-vs">vs</span>
-                  <span className="odds-value">{formatAmericanOdds(odds.home_moneyline)}</span>
+                  <div className="odds-team-line">
+                    <span className="odds-team-name">{away.abbreviation || 'Away'}</span>
+                    <span className="odds-value">{formatAmericanOdds(odds.away_moneyline)}</span>
+                  </div>
+                  <div className="odds-team-line">
+                    <span className="odds-team-name">{home.abbreviation || 'Home'}</span>
+                    <span className="odds-value">{formatAmericanOdds(odds.home_moneyline)}</span>
+                  </div>
                 </div>
               </div>
             )}
@@ -138,7 +143,14 @@ function OverviewTab({ game }) {
               <div className="odds-card">
                 <span className="odds-label">Over/Under</span>
                 <div className="odds-values">
-                  <span className="odds-value">{odds.over_under_line}</span>
+                  <div className="odds-team-line">
+                    <span className="odds-team-name">O {odds.over_under_line}</span>
+                    <span className="odds-value">{formatAmericanOdds(odds.over_price)}</span>
+                  </div>
+                  <div className="odds-team-line">
+                    <span className="odds-team-name">U {odds.over_under_line}</span>
+                    <span className="odds-value">{formatAmericanOdds(odds.under_price)}</span>
+                  </div>
                 </div>
               </div>
             )}
@@ -146,9 +158,14 @@ function OverviewTab({ game }) {
               <div className="odds-card">
                 <span className="odds-label">Puck Line</span>
                 <div className="odds-values">
-                  <span className="odds-value">
-                    {odds.home_spread_line > 0 ? '+' : ''}{odds.home_spread_line}
-                  </span>
+                  <div className="odds-team-line">
+                    <span className="odds-team-name">{away.abbreviation} {odds.away_spread_line > 0 ? '+' : ''}{odds.away_spread_line || '+1.5'}</span>
+                    <span className="odds-value">{formatAmericanOdds(odds.away_spread_price)}</span>
+                  </div>
+                  <div className="odds-team-line">
+                    <span className="odds-team-name">{home.abbreviation} {odds.home_spread_line > 0 ? '+' : ''}{odds.home_spread_line}</span>
+                    <span className="odds-value">{formatAmericanOdds(odds.home_spread_price)}</span>
+                  </div>
                 </div>
               </div>
             )}
