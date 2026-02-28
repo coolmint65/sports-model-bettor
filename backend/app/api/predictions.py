@@ -18,6 +18,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.config import settings
 from app.database import get_session
 from app.models.game import Game
 from app.models.prediction import BetResult, Prediction
@@ -317,13 +318,13 @@ async def get_best_bets(
     # generating predictions.  This ensures in-play games show live odds
     # and pre-match games always have the latest lines.
     try:
-        from app.scrapers.odds_api import OddsScraper
+        from app.scrapers.odds_multi import MultiSourceOddsScraper
 
-        odds_scraper = OddsScraper()
+        odds_scraper = MultiSourceOddsScraper()
         try:
             matched = await odds_scraper.sync_odds(session)
             logger.info(
-                "Odds sync matched %d games before prediction generation",
+                "Multi-source odds sync matched %d games before prediction generation",
                 len(matched) if matched else 0,
             )
             await session.flush()
@@ -353,6 +354,12 @@ async def get_best_bets(
     # Only include predictions with real sportsbook odds so we can
     # calculate genuine edge.  Predictions without odds_implied_prob
     # had their edge set to None in _try_generate_predictions.
+    # Juice filter: exclude heavy chalk from best bets.
+    # odds_implied_prob reflects the market juice for ANY bet type
+    # (moneyline, spread/puck-line, totals).  A -278 puck line has
+    # implied prob ~0.735 which far exceeds our 0.63 ceiling.
+    max_implied = settings.best_bet_max_implied
+
     result = await session.execute(
         select(Prediction)
         .options(selectinload(Prediction.result))
@@ -363,6 +370,7 @@ async def get_best_bets(
             Prediction.recommended == True,
             Prediction.bet_type.in_(MARKET_BET_TYPES),
             Prediction.odds_implied_prob.isnot(None),
+            Prediction.odds_implied_prob < max_implied,
         )
         .order_by(
             Prediction.best_bet.desc(),
@@ -373,13 +381,14 @@ async def get_best_bets(
     )
     top_preds = result.scalars().all()
     logger.info(
-        "Best-bets primary query returned %d predictions with real odds",
+        "Best-bets primary query returned %d predictions with real odds (implied < %.2f)",
         len(top_preds),
+        max_implied,
     )
 
     # If no recommended preds with real odds, try without recommended filter
-    # but still require real odds — showing predictions without odds/edge
-    # is misleading and was the root cause of fake "Over 4.5" bets.
+    # but still require real odds and good juice — showing predictions
+    # without odds/edge is misleading and heavy chalk is poor value.
     if not top_preds:
         result = await session.execute(
             select(Prediction)
@@ -390,6 +399,7 @@ async def get_best_bets(
                 ~func.lower(Game.status).in_(FINAL_STATUSES),
                 Prediction.bet_type.in_(MARKET_BET_TYPES),
                 Prediction.odds_implied_prob.isnot(None),
+                Prediction.odds_implied_prob < max_implied,
             )
             .order_by(
                 Prediction.edge.desc().nulls_last(),
