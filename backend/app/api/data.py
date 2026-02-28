@@ -125,6 +125,22 @@ async def sync_all(
             status_code=502,
             detail=f"Full sync failed: {exc}",
         )
+
+    # Sync historical seasons for H2H data (last 2 seasons)
+    h2h_games = 0
+    try:
+        current = scraper.default_season
+        current_start = int(current[:4])
+    except (ValueError, IndexError):
+        current_start = 2025
+
+    try:
+        for i in range(1, 3):
+            start_year = current_start - i
+            season_str = f"{start_year}{start_year + 1}"
+            h2h_games += await scraper.sync_historical_season(session, season_str)
+    except Exception as exc:
+        logger.warning("Historical H2H sync failed (non-critical): %s", exc)
     finally:
         await scraper.close()
 
@@ -153,8 +169,12 @@ async def sync_all(
 
     return SyncResult(
         success=True,
-        message=f"Full data sync completed. Generated {pred_count} best bet predictions.",
-        details="Synced teams, rosters, schedule, and game results.",
+        message=(
+            f"Full data sync completed. "
+            f"Synced {h2h_games} historical games for H2H. "
+            f"Generated {pred_count} best bet predictions."
+        ),
+        details="Synced teams, rosters, schedule, game results, H2H history, and odds.",
     )
 
 
