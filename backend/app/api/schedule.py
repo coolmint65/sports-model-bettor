@@ -163,43 +163,6 @@ async def _games_for_date(
                     edge=pred.edge,
                 )
 
-        # Fallback: for games without edge-based picks, use highest confidence
-        missing_ids = [gid for gid in game_ids if gid not in top_picks]
-        if missing_ids:
-            max_conf_sub = (
-                select(
-                    Prediction.game_id,
-                    func.max(Prediction.confidence).label("max_conf"),
-                )
-                .where(
-                    Prediction.game_id.in_(missing_ids),
-                    Prediction.bet_type.in_(MARKET_BET_TYPES),
-                )
-                .group_by(Prediction.game_id)
-                .subquery()
-            )
-            fallback_result = await session.execute(
-                select(Prediction)
-                .join(
-                    max_conf_sub,
-                    and_(
-                        Prediction.game_id == max_conf_sub.c.game_id,
-                        Prediction.confidence == max_conf_sub.c.max_conf,
-                    ),
-                )
-                .where(
-                    Prediction.bet_type.in_(MARKET_BET_TYPES),
-                )
-            )
-            for pred in fallback_result.scalars().all():
-                if pred.game_id not in top_picks:
-                    top_picks[pred.game_id] = GameTopPick(
-                        bet_type=pred.bet_type,
-                        prediction_value=pred.prediction_value,
-                        confidence=pred.confidence,
-                        edge=pred.edge,
-                    )
-
     schedule_games: List[ScheduleGame] = []
     for game in games:
         home_brief = await _build_team_brief(game.home_team, session)
@@ -334,20 +297,37 @@ async def get_today_schedule(
         except HTTPException:
             pass
 
-    # If any scheduled games are missing a top pick, generate predictions
-    # so every game card shows its best bet.  This covers the case where
-    # the schedule loads before the best-bets endpoint has triggered
-    # prediction generation.
+    # If any non-final games are missing a top pick, sync odds and
+    # generate predictions so every game card shows a real best bet.
+    # This mirrors what the best-bets endpoint does: sync odds first so
+    # predictions are calculated against real sportsbook lines (giving
+    # them a real edge), rather than showing inflated fake confidence.
     missing_picks = [g for g in games if g.top_pick is None and g.status not in ("final", "completed", "off")]
     if missing_picks:
         try:
+            # Step 1: Sync fresh odds from sportsbook API
+            try:
+                from app.scrapers.odds_multi import MultiSourceOddsScraper
+
+                odds_scraper = MultiSourceOddsScraper()
+                try:
+                    matched = await odds_scraper.sync_odds(session)
+                    logger.info("Schedule odds sync matched %d games", len(matched) if matched else 0)
+                    await session.flush()
+                    session.expire_all()
+                finally:
+                    await odds_scraper.close()
+            except Exception as exc:
+                logger.warning("Schedule odds sync failed: %s", exc)
+
+            # Step 2: Generate predictions with real odds
             from app.api.predictions import _try_generate_predictions
 
             await _try_generate_predictions(session, target_date=today)
             await session.flush()
             games = await _games_for_date(today, session)
-            logger.info("Schedule triggered prediction generation; %d games now have picks",
-                        sum(1 for g in games if g.top_pick is not None))
+            logger.info("Schedule triggered prediction generation; %d/%d games now have picks",
+                        sum(1 for g in games if g.top_pick is not None), len(games))
         except HTTPException:
             pass
 
