@@ -152,11 +152,16 @@ class PredictionManager:
                 implied_prob = pred.get("implied_probability")
                 odds = pred.get("odds")
                 has_real_odds = implied_prob is not None
-                if implied_prob is None:
-                    implied_prob = 0.5
-                edge = confidence - implied_prob
-                # Cap edge at 25% — anything higher signals a model/data issue
-                edge = min(edge, 0.25)
+
+                # Only compute edge when we have real sportsbook odds.
+                # Without real odds there is no market to compare against,
+                # so edge is meaningless and should not be persisted.
+                if has_real_odds:
+                    edge = confidence - implied_prob
+                    # Cap edge at 25% — anything higher signals a model/data issue
+                    edge = min(edge, 0.25)
+                else:
+                    edge = None
 
                 flat = {
                     "game_id": game_data.get("game_id"),
@@ -165,8 +170,8 @@ class PredictionManager:
                     "prediction": pred["prediction"],
                     "confidence": confidence,
                     "probability": pred.get("probability", confidence),
-                    "edge": round(edge, 4),
-                    "implied_probability": round(implied_prob, 4),
+                    "edge": round(edge, 4) if edge is not None else None,
+                    "implied_probability": round(implied_prob, 4) if has_real_odds else None,
                     "odds": odds,
                     "reasoning": pred.get("reasoning", ""),
                     "is_best_bet": False,

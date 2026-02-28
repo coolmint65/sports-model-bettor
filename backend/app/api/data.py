@@ -138,11 +138,26 @@ async def _run_full_sync():
                     logger.warning("Multi-source odds sync failed (non-critical): %s", exc)
 
                 await session.flush()
+                session.expire_all()
 
-                # 4. Predictions
+                # 4. Predictions — delete stale predictions first so old
+                # fake-edge entries don't persist alongside real ones.
                 _sync_state["step"] = "Generating predictions..."
                 try:
+                    from datetime import date as date_type
+
+                    from sqlalchemy import delete as sa_delete
+
                     from app.analytics.predictions import PredictionManager
+
+                    today = date_type.today()
+                    today_game_ids = select(Game.id).where(Game.date == today)
+                    await session.execute(
+                        sa_delete(Prediction).where(
+                            Prediction.game_id.in_(today_game_ids)
+                        )
+                    )
+                    await session.flush()
 
                     manager = PredictionManager()
                     await manager.get_best_bets(session)
