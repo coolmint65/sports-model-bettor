@@ -309,7 +309,7 @@ async def _get_recent_games(
 async def _get_head_to_head(
     team1_id: int, team2_id: int, session: AsyncSession
 ) -> Optional[HeadToHeadRecord]:
-    """Compute H2H directly from completed Game records between the two teams.
+    """Compute H2H from the last 10 completed regular-season Game records.
 
     This is more accurate than the HeadToHead table because it includes
     ALL games in the database regardless of how they were synced.
@@ -326,8 +326,11 @@ async def _get_head_to_head(
             ),
             func.lower(Game.status).in_(FINISHED),
             Game.home_score.isnot(None),
+            Game.away_score.isnot(None),
+            Game.game_type == "regular",
         )
         .order_by(Game.date.desc())
+        .limit(10)
     )
     games = result.scalars().all()
 
@@ -379,7 +382,7 @@ async def _get_head_to_head(
     return HeadToHeadRecord(
         team1_id=lo,
         team2_id=hi,
-        season="All Time",
+        season="Last 10",
         games_played=total_gp,
         team1_wins=t1_wins,
         team2_wins=t2_wins,

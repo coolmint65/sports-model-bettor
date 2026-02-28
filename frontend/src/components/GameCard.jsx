@@ -44,7 +44,7 @@ function formatPeriod(game) {
   const periodType = game.period_type;
   const clock = game.clock;
 
-  if (!period) return null;
+  if (!period) return { label: null, clock: null };
 
   let periodLabel;
   if (periodType === 'OT') {
@@ -61,10 +61,7 @@ function formatPeriod(game) {
     periodLabel = `${period}th`;
   }
 
-  if (clock) {
-    return `${periodLabel} - ${clock}`;
-  }
-  return periodLabel;
+  return { label: periodLabel, clock: clock || null };
 }
 
 function Countdown({ startTime }) {
@@ -153,7 +150,7 @@ function GameCard({ game }) {
   const startTime = game.start_time || game.datetime;
 
   // Live game period info
-  const periodDisplay = statusInfo.isLive ? formatPeriod(game) : null;
+  const periodInfo = statusInfo.isLive ? formatPeriod(game) : { label: null, clock: null };
 
   const handleClick = () => {
     if (gameId) {
@@ -193,8 +190,10 @@ function GameCard({ game }) {
         <div className="game-divider">
           {statusInfo.isLive ? (
             <div className="live-divider">
-              <span className="vs-label live-label">{periodDisplay || 'LIVE'}</span>
-              <span className="live-start-time">{formatGameTime(game)}</span>
+              <span className="vs-label live-label">{periodInfo.label || 'LIVE'}</span>
+              {periodInfo.clock && (
+                <span className="live-clock">{periodInfo.clock}</span>
+              )}
             </div>
           ) : statusInfo.showScore ? (
             <span className="vs-label">{statusInfo.label}</span>

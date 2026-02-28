@@ -844,10 +844,12 @@ a:hover {
   font-size: 0.8rem;
 }
 
-.live-start-time {
-  font-size: 0.65rem;
-  color: var(--text-dim);
-  font-weight: 500;
+.live-clock {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--accent-red, #ff5252);
+  letter-spacing: 0.3px;
 }
 
 .game-countdown {

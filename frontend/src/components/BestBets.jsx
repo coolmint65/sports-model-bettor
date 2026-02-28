@@ -1,6 +1,6 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Trophy, TrendingUp, Target, Star, ChevronRight, DollarSign, Radio } from 'lucide-react';
+import { Trophy, TrendingUp, Target, Star, ChevronRight, Radio } from 'lucide-react';
 import { fetchBestBets } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import { teamName, teamAbbrev, confidencePct, formatBetType, formatPredictionValue } from '../utils/teams';
@@ -134,7 +134,6 @@ function BestBetCard({ bet, rank, isFeatured }) {
             <div className="metric">
               <span className="metric-label">Odds</span>
               <span className="metric-value odds-value">
-                <DollarSign size={14} />
                 {oddsDisplay}
               </span>
             </div>

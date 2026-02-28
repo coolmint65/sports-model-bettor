@@ -315,27 +315,40 @@ class OddsScraper(BaseScraper):
             if away_prices:
                 best["away_moneyline"] = max(away_prices)
 
-        # Best spread with prices
+        # Consensus spread with averaged prices
         if all_spreads:
             home_spreads = [
                 s for s in all_spreads if s.get("home_spread")
             ]
             if home_spreads:
-                # Pick the consensus spread (most common)
-                best_spread = max(home_spreads, key=lambda s: s.get("home_spread", 0))
-                best["home_spread"] = best_spread["home_spread"]
-                best["away_spread"] = best_spread.get("away_spread", 0)
-                best["home_spread_price"] = best_spread.get("home_price", -110)
-                best["away_spread_price"] = best_spread.get("away_price", -110)
+                # Find the most common spread value (mode)
+                from collections import Counter
+                spread_counts = Counter(s["home_spread"] for s in home_spreads)
+                consensus_val = spread_counts.most_common(1)[0][0]
+                # Average prices across books offering the consensus spread
+                consensus_books = [s for s in home_spreads if s["home_spread"] == consensus_val]
+                best["home_spread"] = consensus_val
+                best["away_spread"] = consensus_books[0].get("away_spread", -consensus_val)
+                hp = [s.get("home_price", -110) for s in consensus_books]
+                ap = [s.get("away_price", -110) for s in consensus_books]
+                best["home_spread_price"] = round(sum(hp) / len(hp))
+                best["away_spread_price"] = round(sum(ap) / len(ap))
 
-        # Consensus total with prices
+        # Consensus total with averaged prices
         if all_totals:
             totals = [t.get("total", 0) for t in all_totals if t.get("total")]
             if totals:
-                best["over_under"] = round(sum(totals) / len(totals), 1)
-            # Average over/under prices
-            over_prices = [t.get("over_price", 0) for t in all_totals if t.get("over_price")]
-            under_prices = [t.get("under_price", 0) for t in all_totals if t.get("under_price")]
+                # Find the most common total line
+                from collections import Counter
+                total_counts = Counter(totals)
+                consensus_total = total_counts.most_common(1)[0][0]
+                best["over_under"] = consensus_total
+            # Average over/under prices for books at the consensus line
+            consensus_totals = [t for t in all_totals if t.get("total") == best.get("over_under")]
+            if not consensus_totals:
+                consensus_totals = all_totals
+            over_prices = [t.get("over_price", 0) for t in consensus_totals if t.get("over_price")]
+            under_prices = [t.get("under_price", 0) for t in consensus_totals if t.get("under_price")]
             if over_prices:
                 best["over_price"] = round(sum(over_prices) / len(over_prices))
             if under_prices:
