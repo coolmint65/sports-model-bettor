@@ -119,6 +119,10 @@ async def _migrate_add_columns() -> None:
         ("game", "over_price", "FLOAT"),
         ("game", "under_price", "FLOAT"),
         ("game", "odds_updated_at", "DATETIME"),
+        ("game", "period", "INTEGER"),
+        ("game", "period_type", "VARCHAR(10)"),
+        ("game", "clock", "VARCHAR(10)"),
+        ("game", "clock_running", "BOOLEAN"),
     ]
 
     async with engine.begin() as conn:

@@ -50,6 +50,11 @@ class ScheduleGame(BaseModel):
     home_score: Optional[int] = None
     away_score: Optional[int] = None
     went_to_overtime: Optional[bool] = False
+    # Live game info
+    period: Optional[int] = None
+    period_type: Optional[str] = None  # REG, OT, SO
+    clock: Optional[str] = None  # e.g. "12:34"
+    clock_running: Optional[bool] = None
 
     model_config = {"from_attributes": True}
 
@@ -121,6 +126,10 @@ async def _games_for_date(
                 home_score=game.home_score,
                 away_score=game.away_score,
                 went_to_overtime=game.went_to_overtime or False,
+                period=getattr(game, "period", None),
+                period_type=getattr(game, "period_type", None),
+                clock=getattr(game, "clock", None),
+                clock_running=getattr(game, "clock_running", None),
             )
         )
     return schedule_games

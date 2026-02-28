@@ -82,6 +82,10 @@ class NHLScraper(BaseScraper):
             home = game_raw.get("homeTeam", {})
             away = game_raw.get("awayTeam", {})
 
+            # Extract live game clock info if available
+            period_desc = game_raw.get("periodDescriptor", {})
+            clock_info = game_raw.get("clock", {})
+
             return {
                 "id": game_raw.get("id"),
                 "season": str(game_raw.get("season", self.default_season)),
@@ -91,6 +95,10 @@ class NHLScraper(BaseScraper):
                 "venue": self.safe_get(game_raw, "venue", "default")
                 or self.safe_get(game_raw, "venue", "name"),
                 "status": game_raw.get("gameState", "FUT"),
+                "period": period_desc.get("number"),
+                "period_type": period_desc.get("periodType"),  # REG, OT, SO
+                "clock": clock_info.get("timeRemaining"),
+                "clock_running": clock_info.get("running", False),
                 "home_team": {
                     "abbrev": self.safe_get(home, "abbrev"),
                     "id": home.get("id"),
@@ -598,6 +606,16 @@ class NHLScraper(BaseScraper):
                     game.start_time = start_time
                 if game_data.get("venue"):
                     game.venue = game_data["venue"]
+
+            # Update live clock info (period, time remaining)
+            if game_data.get("period") is not None:
+                game.period = game_data["period"]
+            if game_data.get("period_type"):
+                game.period_type = game_data["period_type"]
+            if game_data.get("clock") is not None:
+                game.clock = game_data["clock"]
+            if game_data.get("clock_running") is not None:
+                game.clock_running = game_data["clock_running"]
 
             games.append(game)
 
@@ -1286,13 +1304,15 @@ class NHLScraper(BaseScraper):
             logger.warning("No teams found; run sync_teams first.")
             return 0
 
-        # Fetch schedules for ALL teams to get complete coverage.
-        # Each game appears on two teams' schedules, but we deduplicate
+        # Fetch schedules for half the league (16 teams) to get broad
+        # coverage (~75% of all games) while keeping sync fast.
+        # Each game appears on two teams' schedules, and we deduplicate
         # by game_id so no double-counting occurs.
+        sample_teams = teams[:16]
         seen_game_ids = set()
         games_created = 0
 
-        for team in teams:
+        for team in sample_teams:
             try:
                 season_games = await self.fetch_team_schedule(
                     team.abbreviation, season

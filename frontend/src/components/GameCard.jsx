@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Clock, MapPin, ChevronRight, TrendingUp } from 'lucide-react';
 import { format } from 'date-fns';
@@ -20,6 +20,7 @@ function getStatusDisplay(game) {
       label: 'Final',
       className: 'status-final',
       showScore: true,
+      isLive: false,
     };
   }
   if (statusLower === 'live' || statusLower === 'in_progress' || statusLower === 'active') {
@@ -27,13 +28,83 @@ function getStatusDisplay(game) {
       label: 'LIVE',
       className: 'status-live',
       showScore: true,
+      isLive: true,
     };
   }
   return {
     label: null,
     className: 'status-scheduled',
     showScore: false,
+    isLive: false,
   };
+}
+
+function formatPeriod(game) {
+  const period = game.period;
+  const periodType = game.period_type;
+  const clock = game.clock;
+
+  if (!period) return null;
+
+  let periodLabel;
+  if (periodType === 'OT') {
+    periodLabel = 'OT';
+  } else if (periodType === 'SO') {
+    periodLabel = 'SO';
+  } else if (period === 1) {
+    periodLabel = '1st';
+  } else if (period === 2) {
+    periodLabel = '2nd';
+  } else if (period === 3) {
+    periodLabel = '3rd';
+  } else {
+    periodLabel = `${period}th`;
+  }
+
+  if (clock) {
+    return `${periodLabel} - ${clock}`;
+  }
+  return periodLabel;
+}
+
+function Countdown({ startTime }) {
+  const [timeLeft, setTimeLeft] = useState('');
+
+  useEffect(() => {
+    function update() {
+      const now = new Date();
+      const start = parseAsUTC(startTime);
+      if (!start || isNaN(start.getTime())) {
+        setTimeLeft('TBD');
+        return;
+      }
+
+      const diff = start.getTime() - now.getTime();
+      if (diff <= 0) {
+        setTimeLeft('Starting');
+        return;
+      }
+
+      const hours = Math.floor(diff / (1000 * 60 * 60));
+      const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+
+      if (hours > 24) {
+        const days = Math.floor(hours / 24);
+        setTimeLeft(`${days}d ${hours % 24}h`);
+      } else if (hours > 0) {
+        setTimeLeft(`${hours}h ${mins}m`);
+      } else {
+        const secs = Math.floor((diff % (1000 * 60)) / 1000);
+        setTimeLeft(`${mins}m ${secs}s`);
+      }
+    }
+
+    update();
+    const interval = setInterval(update, 1000);
+    return () => clearInterval(interval);
+  }, [startTime]);
+
+  return <span className="game-countdown">{timeLeft}</span>;
 }
 
 function formatGameTime(game) {
@@ -79,6 +150,10 @@ function GameCard({ game }) {
   const rawConf = game.top_confidence || game.confidence || game.prediction_confidence || null;
   const confidence = rawConf != null ? confidencePct(rawConf) : null;
   const hasBadge = !!statusInfo.label;
+  const startTime = game.start_time || game.datetime;
+
+  // Live game period info
+  const periodDisplay = statusInfo.isLive ? formatPeriod(game) : null;
 
   const handleClick = () => {
     if (gameId) {
@@ -116,13 +191,22 @@ function GameCard({ game }) {
 
         {/* VS / Time Divider */}
         <div className="game-divider">
-          {statusInfo.showScore ? (
+          {statusInfo.isLive ? (
+            <div className="live-divider">
+              <span className="vs-label live-label">{periodDisplay || 'LIVE'}</span>
+            </div>
+          ) : statusInfo.showScore ? (
             <span className="vs-label">{statusInfo.label}</span>
           ) : (
-            <>
-              <Clock size={14} />
-              <span className="game-time">{formatGameTime(game)}</span>
-            </>
+            <div className="scheduled-divider">
+              <div className="game-time-row">
+                <Clock size={14} />
+                <span className="game-time">{formatGameTime(game)}</span>
+              </div>
+              {startTime && (
+                <Countdown startTime={startTime} />
+              )}
+            </div>
           )}
         </div>
 

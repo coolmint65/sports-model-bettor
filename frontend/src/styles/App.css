@@ -461,13 +461,13 @@ a:hover {
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-lg);
   padding: 20px;
+  padding-top: 28px;
   display: flex;
   align-items: flex-start;
   gap: 16px;
   cursor: pointer;
   transition: all var(--transition-base);
   position: relative;
-  overflow: hidden;
 }
 
 .best-bet-card:hover {
@@ -490,36 +490,38 @@ a:hover {
 
 .best-bet-badge {
   position: absolute;
-  top: 12px;
+  top: 6px;
   right: 12px;
   display: flex;
   align-items: center;
   gap: 4px;
   background: linear-gradient(135deg, var(--accent-gold), var(--accent-orange));
   color: #000;
-  font-size: 0.7rem;
+  font-size: 0.65rem;
   font-weight: 700;
-  padding: 3px 8px;
+  padding: 2px 8px;
   border-radius: 4px;
   letter-spacing: 0.5px;
   text-transform: uppercase;
+  z-index: 1;
 }
 
 .best-bet-live-badge {
   position: absolute;
-  top: 12px;
+  top: 6px;
   left: 12px;
   display: flex;
   align-items: center;
   gap: 4px;
   background: var(--accent-red, #ff5252);
   color: #fff;
-  font-size: 0.65rem;
+  font-size: 0.6rem;
   font-weight: 700;
-  padding: 3px 8px;
+  padding: 2px 8px;
   border-radius: 4px;
   letter-spacing: 0.5px;
   text-transform: uppercase;
+  z-index: 1;
   animation: pulse-live 2s ease-in-out infinite;
 }
 
@@ -797,7 +799,7 @@ a:hover {
   color: var(--text-dim);
   font-size: 0.75rem;
   flex-shrink: 0;
-  min-width: 60px;
+  min-width: 70px;
 }
 
 .vs-label {
@@ -808,10 +810,40 @@ a:hover {
   color: var(--text-muted);
 }
 
+.vs-label.live-label {
+  color: var(--accent-red, #ff5252);
+  font-size: 0.72rem;
+}
+
+.live-divider,
+.scheduled-divider {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.game-time-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .game-time {
   font-weight: 600;
   color: var(--text-secondary);
   font-size: 0.8rem;
+}
+
+.game-countdown {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--accent-green, #00ff88);
+  background: rgba(0, 255, 136, 0.08);
+  padding: 1px 6px;
+  border-radius: 3px;
+  letter-spacing: 0.3px;
 }
 
 .game-card-footer {

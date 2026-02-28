@@ -118,30 +118,33 @@ async def sync_all(
     game results. Delegates to NHLScraper.sync_all().
     """
     scraper = _get_scraper()
+    h2h_games = 0
     try:
         await scraper.sync_all(session)
+        await session.flush()
+
+        # Sync historical seasons for H2H data (current + last 2 seasons)
+        try:
+            current = scraper.default_season
+            current_start = int(current[:4])
+        except (ValueError, IndexError):
+            current_start = 2025
+
+        try:
+            # Include the current season (completed games) + 2 prior seasons
+            for i in range(0, 3):
+                start_year = current_start - i
+                season_str = f"{start_year}{start_year + 1}"
+                h2h_games += await scraper.sync_historical_season(session, season_str)
+        except Exception as exc:
+            logger.warning("Historical H2H sync failed (non-critical): %s", exc)
+
     except Exception as exc:
+        await scraper.close()
         raise HTTPException(
             status_code=502,
             detail=f"Full sync failed: {exc}",
         )
-
-    # Sync historical seasons for H2H data (current + last 2 seasons)
-    h2h_games = 0
-    try:
-        current = scraper.default_season
-        current_start = int(current[:4])
-    except (ValueError, IndexError):
-        current_start = 2025
-
-    try:
-        # Include the current season (completed games) + 2 prior seasons
-        for i in range(0, 3):
-            start_year = current_start - i
-            season_str = f"{start_year}{start_year + 1}"
-            h2h_games += await scraper.sync_historical_season(session, season_str)
-    except Exception as exc:
-        logger.warning("Historical H2H sync failed (non-critical): %s", exc)
     finally:
         await scraper.close()
 
