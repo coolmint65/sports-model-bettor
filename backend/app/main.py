@@ -5,6 +5,7 @@ Configures the app with CORS middleware, registers all API routers,
 and wires up startup/shutdown lifecycle events for database initialization.
 """
 
+import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +18,13 @@ from pydantic import BaseModel
 
 from app.config import settings
 from app.database import close_db, init_db
+
+# Configure root logger so all app.* module loggers output to console
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)-8s [%(name)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
 
 
 @asynccontextmanager
