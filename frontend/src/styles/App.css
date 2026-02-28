@@ -835,6 +835,12 @@ a:hover {
   font-size: 0.8rem;
 }
 
+.live-start-time {
+  font-size: 0.65rem;
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
 .game-countdown {
   font-family: var(--font-mono);
   font-size: 0.7rem;

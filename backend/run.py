@@ -21,6 +21,7 @@ def main() -> None:
         port=settings.port,
         reload=settings.debug,
         log_level="info",
+        timeout_keep_alive=300,
     )
 
 
