@@ -323,14 +323,16 @@ class BettingModel:
         produces prediction labels like "Under 7.0" that don't match what
         bettors actually see on the sportsbook.
 
-        Strategy: round down to the nearest .5 so that we err on the side
-        of the more probable "under" — e.g., a reported 7.0 becomes 6.5,
-        and a reported 6.0 becomes 5.5.
+        Strategy: snap to the nearest .5 value.  If rounding lands on a
+        whole number, nudge up to .5 — e.g., 6 → 6.5, 7 → 6.5.
         """
         if line % 1 == 0.5:
             return line  # already a .5 line
-        # Whole number or other non-.5 value → round down to nearest .5
-        return float(int(line) - 1) + 0.5
+        # Snap to nearest .5
+        normalized = round(line * 2) / 2
+        if normalized % 1 == 0:
+            normalized += 0.5
+        return normalized
 
     async def predict_total_goals(
         self,
@@ -358,14 +360,27 @@ class BettingModel:
         book_ou = odds_data.get("over_under_line")
         if book_ou is not None:
             normalized = self._normalize_total_line(float(book_ou))
-            eval_lines.add(normalized)
-            # Update the odds data so downstream code uses the corrected line
-            if normalized != float(book_ou):
-                logger.info(
-                    "Normalized sportsbook O/U line %.1f → %.1f",
-                    float(book_ou), normalized,
+            # Reject implausible lines — NHL O/U is always 4.5-8.5.
+            # A line outside this range is almost certainly a scraping error
+            # and would produce inflated confidence on a non-existent bet.
+            if normalized < 4.5 or normalized > 8.5:
+                logger.warning(
+                    "Discarding implausible sportsbook O/U line %.1f "
+                    "(normalized from %.1f) — outside 4.5-8.5 range",
+                    normalized, float(book_ou),
                 )
-                odds_data["over_under_line"] = normalized
+                odds_data.pop("over_under_line", None)
+                odds_data.pop("over_price", None)
+                odds_data.pop("under_price", None)
+            else:
+                eval_lines.add(normalized)
+                # Update the odds data so downstream code uses the corrected line
+                if normalized != float(book_ou):
+                    logger.info(
+                        "Normalized sportsbook O/U line %.1f → %.1f",
+                        float(book_ou), normalized,
+                    )
+                    odds_data["over_under_line"] = normalized
 
         lines = {}
         for line in sorted(eval_lines):

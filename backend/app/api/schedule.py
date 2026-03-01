@@ -159,12 +159,16 @@ async def _games_for_date(
     )
     games = result.scalars().all()
 
-    # Pre-fetch best prediction per game (highest edge, market types only)
+    # Pre-fetch best prediction per game (highest edge, market types only).
+    # Apply the same filters as best-bets: must be recommended, must have
+    # reasonable juice (implied prob < ceiling), and must meet edge/confidence
+    # thresholds so we don't surface heavy-juice or low-value picks.
     MARKET_BET_TYPES = ("ml", "total", "spread")
+    max_implied = settings.best_bet_max_implied
     game_ids = [g.id for g in games]
     top_picks: dict[int, GameTopPick] = {}
     if game_ids:
-        # Get the max edge per game
+        # Get the max edge per game (only from recommended predictions)
         max_edge_sub = (
             select(
                 Prediction.game_id,
@@ -174,6 +178,9 @@ async def _games_for_date(
                 Prediction.game_id.in_(game_ids),
                 Prediction.bet_type.in_(MARKET_BET_TYPES),
                 Prediction.edge.isnot(None),
+                Prediction.recommended == True,
+                Prediction.odds_implied_prob.isnot(None),
+                Prediction.odds_implied_prob < max_implied,
             )
             .group_by(Prediction.game_id)
             .subquery()
@@ -190,6 +197,9 @@ async def _games_for_date(
             .where(
                 Prediction.bet_type.in_(MARKET_BET_TYPES),
                 Prediction.edge.isnot(None),
+                Prediction.recommended == True,
+                Prediction.odds_implied_prob.isnot(None),
+                Prediction.odds_implied_prob < max_implied,
             )
         )
         for pred in pred_result.scalars().all():

@@ -1275,8 +1275,13 @@ def _merge_odds_events(
                 best_away_spread = -abs(best_away_spread) if best_away_spread else -abs(best_home_spread)
                 best_home_spread_price, best_away_spread_price = best_away_spread_price, best_home_spread_price
 
-        # Consensus total
-        total_data = [(e.total_line, e.over_price, e.under_price) for e in ev_list if e.has_total()]
+        # Consensus total — filter out implausible lines first.
+        # NHL O/U is virtually always between 4.5 and 8.5.
+        total_data = [
+            (e.total_line, e.over_price, e.under_price)
+            for e in ev_list
+            if e.has_total() and 4.0 <= e.total_line <= 9.0
+        ]
         best_total = best_over = best_under = 0.0
         if total_data:
             line_counts = Counter(t[0] for t in total_data)
@@ -1534,11 +1539,22 @@ class MultiSourceOddsScraper:
                 game.away_moneyline = best["away_moneyline"]
             if best.get("over_under"):
                 ou_raw = float(best["over_under"])
-                # Normalize whole-number lines to .5 (e.g., 7 → 6.5)
-                # NHL sportsbooks post .5 lines; some sources round to int.
+                # Normalize to nearest .5 line.
+                # NHL sportsbooks always post .5 lines; some sources
+                # round to int.  We snap to the nearest .5 value.
                 if ou_raw % 1 != 0.5:
-                    ou_raw = float(int(ou_raw) - 1) + 0.5
-                game.over_under_line = ou_raw
+                    ou_raw = round(ou_raw * 2) / 2
+                    # If rounding landed on a whole number, nudge up to .5
+                    if ou_raw % 1 == 0:
+                        ou_raw += 0.5
+                # Sanity check: NHL O/U lines are almost always 4.5-8.5
+                if 4.0 <= ou_raw <= 9.0:
+                    game.over_under_line = ou_raw
+                else:
+                    logger.warning(
+                        "Discarding out-of-range O/U line %.1f for %s@%s",
+                        ou_raw, away_abbrev, home_abbrev,
+                    )
             if best.get("home_spread") is not None:
                 game.home_spread_line = best["home_spread"]
             if best.get("away_spread") is not None:

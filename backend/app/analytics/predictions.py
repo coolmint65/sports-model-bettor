@@ -461,9 +461,11 @@ class PredictionManager:
             existing.odds_implied_prob = bet.get("implied_probability", existing.odds_implied_prob)
             existing.edge = bet.get("edge", existing.edge)
             existing.reasoning = reasoning or existing.reasoning
+            impl = existing.odds_implied_prob or 0
             existing.recommended = (
                 existing.confidence >= settings.min_confidence
                 and (existing.edge or 0) >= settings.min_edge
+                and impl < settings.best_bet_max_implied
             )
             existing.best_bet = (
                 bet.get("is_best_bet", False)
@@ -489,7 +491,11 @@ class PredictionManager:
             confidence=confidence,
             odds_implied_prob=implied_prob,
             edge=edge,
-            recommended=confidence >= settings.min_confidence and (edge or 0) >= settings.min_edge,
+            recommended=(
+                confidence >= settings.min_confidence
+                and (edge or 0) >= settings.min_edge
+                and (implied_prob or 0) < settings.best_bet_max_implied
+            ),
             best_bet=is_best and (edge or 0) >= settings.best_bet_edge,
             reasoning=reasoning,
             phase=phase,
