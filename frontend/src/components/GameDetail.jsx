@@ -228,6 +228,8 @@ function OverviewTab({ game }) {
   );
 }
 
+const MARKET_BET_TYPES = new Set(['ml', 'total', 'spread']);
+
 function PredictionsTab({ game }) {
   const predictions = game.predictions || game.bets || [];
 
@@ -242,27 +244,35 @@ function PredictionsTab({ game }) {
     );
   }
 
-  const recommended = predictions.filter((p) => p.recommended);
-  const fallback = predictions.filter((p) => p.is_fallback && !p.recommended);
-  const other = predictions.filter((p) => !p.recommended && !p.is_fallback);
+  // Split market bets from props
+  const market = predictions.filter((p) => MARKET_BET_TYPES.has(p.bet_type));
+  const props = predictions.filter((p) => !MARKET_BET_TYPES.has(p.bet_type));
+
+  // Within market bets: recommended > fallback > rest
+  const topPicks = market.filter((p) => p.recommended);
+  const heavyJuice = market.filter((p) => p.is_fallback && !p.recommended);
+  const otherMarket = market.filter((p) => !p.recommended && !p.is_fallback);
 
   return (
     <div className="tab-content predictions-tab">
-      {recommended.length > 0 && (
+      {/* --- Top Picks (recommended market bets) --- */}
+      {topPicks.length > 0 && (
         <div className="predictions-section">
           <h3 className="predictions-section-title">
             <Target size={16} />
             Top Picks
           </h3>
           <div className="predictions-list">
-            {recommended.map((pred, index) => (
+            {topPicks.map((pred, index) => (
               <PredictionCard key={pred.id || index} prediction={pred} />
             ))}
           </div>
         </div>
       )}
-      {fallback.length > 0 && (
-        <div className="predictions-section predictions-section-fallback">
+
+      {/* --- Heavy Juice (market bets with edge but steep lines) --- */}
+      {heavyJuice.length > 0 && (
+        <div className="predictions-section">
           <h3 className="predictions-section-title predictions-section-title-fallback">
             <AlertTriangle size={16} />
             Heavy Juice Picks
@@ -271,28 +281,40 @@ function PredictionsTab({ game }) {
             These picks have real edge but are on heavy favourite lines. Proceed with caution.
           </p>
           <div className="predictions-list">
-            {fallback.map((pred, index) => (
+            {heavyJuice.map((pred, index) => (
               <PredictionCard key={pred.id || index} prediction={pred} isFallback />
             ))}
           </div>
         </div>
       )}
-      {other.length > 0 && recommended.length === 0 && fallback.length === 0 && (
+
+      {/* --- Other market bets (no edge or below threshold) --- */}
+      {otherMarket.length > 0 && (
         <div className="predictions-section">
+          <h3 className="predictions-section-title predictions-section-title-other">
+            Market Analysis
+          </h3>
+          <p className="predictions-section-desc">
+            {topPicks.length === 0 && heavyJuice.length === 0
+              ? 'No actionable edge found for this game.'
+              : 'Other market predictions below threshold.'}
+          </p>
           <div className="predictions-list">
-            {other.map((pred, index) => (
+            {otherMarket.map((pred, index) => (
               <PredictionCard key={pred.id || index} prediction={pred} />
             ))}
           </div>
         </div>
       )}
-      {other.length > 0 && (recommended.length > 0 || fallback.length > 0) && (
-        <div className="predictions-section predictions-section-other">
+
+      {/* --- Props / Exotics --- */}
+      {props.length > 0 && (
+        <div className="predictions-section">
           <h3 className="predictions-section-title predictions-section-title-other">
-            Other Analysis
+            Props
           </h3>
           <div className="predictions-list">
-            {other.map((pred, index) => (
+            {props.map((pred, index) => (
               <PredictionCard key={pred.id || index} prediction={pred} compact />
             ))}
           </div>
