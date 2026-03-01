@@ -6,8 +6,8 @@ import GameCard from './GameCard';
 import { fetchTodaySchedule, fetchLiveGames } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 
-const LIVE_POLL_INTERVAL = 30_000; // 30 seconds when live
-const IDLE_POLL_INTERVAL = 120_000; // 2 minutes when no live games
+const LIVE_POLL_INTERVAL = 5_000; // 5 seconds when live
+const IDLE_POLL_INTERVAL = 60_000; // 1 minute when no live games
 
 function Dashboard() {
   const {
