@@ -210,13 +210,11 @@ async def _games_for_date(
     games = result.scalars().all()
 
     # Pre-fetch best prediction per game (highest edge, market types only).
-    # Two tiers: first prefer recommended picks with edge data, then fall
-    # back to the highest-confidence market-type prediction so every game
-    # shows *something* on the schedule card.
+    # Only show picks backed by real odds data — must have edge computed
+    # from sportsbook lines and meet the recommended threshold.
     game_ids = [g.id for g in games]
     top_picks: dict[int, GameTopPick] = {}
     if game_ids:
-        # Tier 1: best recommended prediction per game (highest edge)
         max_edge_sub = (
             select(
                 Prediction.game_id,
@@ -254,42 +252,6 @@ async def _games_for_date(
                     confidence=pred.confidence,
                     edge=pred.edge,
                 )
-
-        # Tier 2: for games still missing a pick, fall back to the
-        # highest-confidence market-type prediction (even without edge/odds).
-        missing_ids = [gid for gid in game_ids if gid not in top_picks]
-        if missing_ids:
-            max_conf_sub = (
-                select(
-                    Prediction.game_id,
-                    func.max(Prediction.confidence).label("max_conf"),
-                )
-                .where(
-                    Prediction.game_id.in_(missing_ids),
-                    Prediction.bet_type.in_(MARKET_BET_TYPES),
-                )
-                .group_by(Prediction.game_id)
-                .subquery()
-            )
-            fallback_result = await session.execute(
-                select(Prediction)
-                .join(
-                    max_conf_sub,
-                    and_(
-                        Prediction.game_id == max_conf_sub.c.game_id,
-                        Prediction.confidence == max_conf_sub.c.max_conf,
-                    ),
-                )
-                .where(Prediction.bet_type.in_(MARKET_BET_TYPES))
-            )
-            for pred in fallback_result.scalars().all():
-                if pred.game_id not in top_picks:
-                    top_picks[pred.game_id] = GameTopPick(
-                        bet_type=pred.bet_type,
-                        prediction_value=pred.prediction_value,
-                        confidence=pred.confidence,
-                        edge=pred.edge,
-                    )
 
     # Batch-load team stats to avoid N+1 queries
     all_team_ids = list({g.home_team_id for g in games} | {g.away_team_id for g in games})
