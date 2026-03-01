@@ -1148,6 +1148,17 @@ a:hover {
   letter-spacing: 0.2px;
 }
 
+.live-intermission {
+  font-size: 0.65rem;
+  font-weight: 500;
+  color: var(--text-muted, #888);
+  font-style: italic;
+}
+
+.intermission-label {
+  color: var(--accent-yellow, #ffd700);
+}
+
 .game-countdown {
   font-family: var(--font-mono);
   font-size: 0.7rem;

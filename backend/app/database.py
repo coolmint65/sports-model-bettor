@@ -123,6 +123,7 @@ async def _migrate_add_columns() -> None:
         ("game", "period_type", "VARCHAR(10)"),
         ("game", "clock", "VARCHAR(10)"),
         ("game", "clock_running", "BOOLEAN"),
+        ("game", "in_intermission", "BOOLEAN"),
         # Prediction phase (prematch vs live)
         ("prediction", "phase", "VARCHAR(20) DEFAULT 'prematch'"),
     ]

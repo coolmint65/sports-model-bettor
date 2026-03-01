@@ -120,6 +120,7 @@ class Game(TimestampMixin, Base):
     period_type: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
     clock: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
     clock_running: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    in_intermission: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
 
     # Betting odds (American format, from The Odds API)
     home_moneyline: Mapped[Optional[float]] = mapped_column(Float, nullable=True)

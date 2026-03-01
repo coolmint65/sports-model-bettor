@@ -80,6 +80,7 @@ class ScheduleGame(BaseModel):
     period_type: Optional[str] = None  # REG, OT, SO
     clock: Optional[str] = None  # e.g. "12:34"
     clock_running: Optional[bool] = None
+    in_intermission: Optional[bool] = None
     home_shots: Optional[int] = None
     away_shots: Optional[int] = None
     # Top prediction for this game
@@ -224,6 +225,7 @@ async def _games_for_date(
                 period_type=getattr(game, "period_type", None),
                 clock=getattr(game, "clock", None),
                 clock_running=getattr(game, "clock_running", None),
+                in_intermission=getattr(game, "in_intermission", None),
                 home_shots=getattr(game, "home_shots", None),
                 away_shots=getattr(game, "away_shots", None),
                 top_pick=top_picks.get(game.id),
@@ -326,6 +328,7 @@ async def get_live_games(
                 period_type=getattr(game, "period_type", None),
                 clock=getattr(game, "clock", None),
                 clock_running=getattr(game, "clock_running", None),
+                in_intermission=getattr(game, "in_intermission", None),
                 home_shots=getattr(game, "home_shots", None),
                 away_shots=getattr(game, "away_shots", None),
                 odds=_build_game_odds(game),

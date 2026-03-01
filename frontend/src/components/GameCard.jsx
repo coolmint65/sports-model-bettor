@@ -43,8 +43,9 @@ function formatPeriod(game) {
   const period = game.period;
   const periodType = game.period_type;
   const clock = game.clock;
+  const inIntermission = game.in_intermission;
 
-  if (!period) return { label: null, clock: null };
+  if (!period) return { label: null, clock: null, intermission: false };
 
   let periodLabel;
   if (periodType === 'OT') {
@@ -61,7 +62,13 @@ function formatPeriod(game) {
     periodLabel = `${period}th`;
   }
 
-  return { label: periodLabel, clock: clock || null };
+  // During intermission, show "End Xth" and hide the game clock
+  // (the API clock during intermission is the intermission countdown, not the game clock)
+  if (inIntermission) {
+    return { label: `End ${periodLabel}`, clock: null, intermission: true };
+  }
+
+  return { label: periodLabel, clock: clock || null, intermission: false };
 }
 
 function formatOdds(val) {
@@ -312,8 +319,14 @@ function GameCard({ game }) {
         <div className="game-divider">
           {statusInfo.isLive ? (
             <div className="live-divider">
-              <span className="vs-label live-label">{periodInfo.label || 'LIVE'}</span>
-              <span className="live-clock">{periodInfo.clock || '--:--'}</span>
+              <span className={`vs-label live-label ${periodInfo.intermission ? 'intermission-label' : ''}`}>
+                {periodInfo.label || 'LIVE'}
+              </span>
+              {periodInfo.intermission ? (
+                <span className="live-intermission">Intermission</span>
+              ) : (
+                <span className="live-clock">{periodInfo.clock || '--:--'}</span>
+              )}
               {(game.home_shots != null || game.away_shots != null) && (
                 <span className="live-shots">SOG: {game.away_shots ?? 0}-{game.home_shots ?? 0}</span>
               )}

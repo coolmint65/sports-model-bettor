@@ -115,6 +115,7 @@ class NHLScraper(BaseScraper):
                 "period_type": period_desc.get("periodType"),  # REG, OT, SO
                 "clock": clock_info.get("timeRemaining"),
                 "clock_running": clock_info.get("running", False),
+                "in_intermission": clock_info.get("inIntermission", False),
                 "home_team": {
                     "abbrev": self.safe_get(home, "abbrev"),
                     "id": home.get("id"),
@@ -632,6 +633,8 @@ class NHLScraper(BaseScraper):
                 game.clock = game_data["clock"]
             if game_data.get("clock_running") is not None:
                 game.clock_running = game_data["clock_running"]
+            if game_data.get("in_intermission") is not None:
+                game.in_intermission = game_data["in_intermission"]
 
             games.append(game)
 
