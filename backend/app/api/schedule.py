@@ -15,7 +15,6 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.config import settings
 from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES
 from app.database import get_session
 from app.models.game import Game
@@ -211,14 +210,13 @@ async def _games_for_date(
     games = result.scalars().all()
 
     # Pre-fetch best prediction per game (highest edge, market types only).
-    # Apply the same filters as best-bets: must be recommended, must have
-    # reasonable juice (implied prob < ceiling), and must meet edge/confidence
-    # thresholds so we don't surface heavy-juice or low-value picks.
-    max_implied = settings.best_bet_max_implied
+    # Two tiers: first prefer recommended picks with edge data, then fall
+    # back to the highest-confidence market-type prediction so every game
+    # shows *something* on the schedule card.
     game_ids = [g.id for g in games]
     top_picks: dict[int, GameTopPick] = {}
     if game_ids:
-        # Get the max edge per game (only from recommended predictions)
+        # Tier 1: best recommended prediction per game (highest edge)
         max_edge_sub = (
             select(
                 Prediction.game_id,
@@ -229,8 +227,6 @@ async def _games_for_date(
                 Prediction.bet_type.in_(MARKET_BET_TYPES),
                 Prediction.edge.isnot(None),
                 Prediction.recommended == True,
-                Prediction.odds_implied_prob.isnot(None),
-                Prediction.odds_implied_prob < max_implied,
             )
             .group_by(Prediction.game_id)
             .subquery()
@@ -248,8 +244,6 @@ async def _games_for_date(
                 Prediction.bet_type.in_(MARKET_BET_TYPES),
                 Prediction.edge.isnot(None),
                 Prediction.recommended == True,
-                Prediction.odds_implied_prob.isnot(None),
-                Prediction.odds_implied_prob < max_implied,
             )
         )
         for pred in pred_result.scalars().all():
@@ -260,6 +254,42 @@ async def _games_for_date(
                     confidence=pred.confidence,
                     edge=pred.edge,
                 )
+
+        # Tier 2: for games still missing a pick, fall back to the
+        # highest-confidence market-type prediction (even without edge/odds).
+        missing_ids = [gid for gid in game_ids if gid not in top_picks]
+        if missing_ids:
+            max_conf_sub = (
+                select(
+                    Prediction.game_id,
+                    func.max(Prediction.confidence).label("max_conf"),
+                )
+                .where(
+                    Prediction.game_id.in_(missing_ids),
+                    Prediction.bet_type.in_(MARKET_BET_TYPES),
+                )
+                .group_by(Prediction.game_id)
+                .subquery()
+            )
+            fallback_result = await session.execute(
+                select(Prediction)
+                .join(
+                    max_conf_sub,
+                    and_(
+                        Prediction.game_id == max_conf_sub.c.game_id,
+                        Prediction.confidence == max_conf_sub.c.max_conf,
+                    ),
+                )
+                .where(Prediction.bet_type.in_(MARKET_BET_TYPES))
+            )
+            for pred in fallback_result.scalars().all():
+                if pred.game_id not in top_picks:
+                    top_picks[pred.game_id] = GameTopPick(
+                        bet_type=pred.bet_type,
+                        prediction_value=pred.prediction_value,
+                        confidence=pred.confidence,
+                        edge=pred.edge,
+                    )
 
     # Batch-load team stats to avoid N+1 queries
     all_team_ids = list({g.home_team_id for g in games} | {g.away_team_id for g in games})
