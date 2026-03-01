@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Clock, MapPin, ChevronRight, TrendingUp, Target, Radio } from 'lucide-react';
 import { format, formatDistanceToNowStrict } from 'date-fns';
@@ -69,6 +69,47 @@ function formatPeriod(game) {
   }
 
   return { label: periodLabel, clock: clock || null, intermission: false };
+}
+
+/**
+ * Parse "mm:ss" to total seconds, count down locally every second,
+ * and snap to the server value whenever the prop changes.
+ */
+function LiveClock({ serverClock, running }) {
+  const [seconds, setSeconds] = useState(() => parseClock(serverClock));
+  const prevServer = useRef(serverClock);
+
+  // Snap to server value whenever it changes (new poll arrived)
+  useEffect(() => {
+    if (serverClock !== prevServer.current) {
+      prevServer.current = serverClock;
+      setSeconds(parseClock(serverClock));
+    }
+  }, [serverClock]);
+
+  // Tick down locally every second while clock is running
+  useEffect(() => {
+    if (!running || seconds <= 0) return;
+    const id = setInterval(() => {
+      setSeconds((s) => Math.max(0, s - 1));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [running, seconds > 0]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  const display = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+
+  return <span className="live-clock">{display}</span>;
+}
+
+function parseClock(str) {
+  if (!str) return 0;
+  const parts = str.split(':');
+  if (parts.length !== 2) return 0;
+  const m = parseInt(parts[0], 10) || 0;
+  const s = parseInt(parts[1], 10) || 0;
+  return m * 60 + s;
 }
 
 function formatOdds(val) {
@@ -325,7 +366,7 @@ function GameCard({ game }) {
               {periodInfo.intermission ? (
                 <span className="live-intermission">Intermission</span>
               ) : (
-                <span className="live-clock">{periodInfo.clock || '--:--'}</span>
+                <LiveClock serverClock={periodInfo.clock} running={game.clock_running !== false} />
               )}
               {(game.home_shots != null || game.away_shots != null) && (
                 <span className="live-shots">SOG: {game.away_shots ?? 0}-{game.home_shots ?? 0}</span>
