@@ -1341,6 +1341,25 @@ a:hover {
   font-size: 0.75rem;
 }
 
+.top-pick-fallback .top-pick-type {
+  color: #ff9800;
+}
+.top-pick-fallback .top-pick-value {
+  color: #ffb74d;
+}
+.top-pick-fallback-label {
+  font-size: 0.6rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: #ff9800;
+  opacity: 0.8;
+  border: 1px solid rgba(255, 152, 0, 0.3);
+  border-radius: 3px;
+  padding: 0 3px;
+  line-height: 1.4;
+}
+
 .game-confidence {
   display: flex;
   align-items: center;

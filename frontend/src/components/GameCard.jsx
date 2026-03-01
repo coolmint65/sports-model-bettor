@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Clock, MapPin, ChevronRight, TrendingUp, Target, Radio } from 'lucide-react';
+import { Clock, MapPin, ChevronRight, TrendingUp, Target, Radio, AlertTriangle } from 'lucide-react';
 import { format, formatDistanceToNowStrict } from 'date-fns';
 import { teamName, teamAbbrev, teamLogo, confidencePct, parseAsUTC, formatBetType, formatPredictionValue } from '../utils/teams';
 
@@ -406,10 +406,11 @@ function GameCard({ game }) {
       {/* Footer: Top Pick or Venue + Confidence */}
       <div className="game-card-footer">
         {topPick ? (
-          <div className="game-top-pick">
-            <Target size={12} />
+          <div className={`game-top-pick ${topPick.is_fallback ? 'top-pick-fallback' : ''}`}>
+            {topPick.is_fallback ? <AlertTriangle size={12} /> : <Target size={12} />}
             <span className="top-pick-type">{formatBetType(topPick.bet_type)}</span>
             <span className="top-pick-value">{formatPredictionValue(topPick.prediction_value)}</span>
+            {topPick.is_fallback && <span className="top-pick-fallback-label">Heavy Juice</span>}
           </div>
         ) : venue ? (
           <div className="game-venue">
@@ -422,7 +423,7 @@ function GameCard({ game }) {
             <TrendingUp size={12} />
             <span
               className="confidence-text"
-              style={{ color: getConfidenceColor(confidence) }}
+              style={{ color: topPick?.is_fallback ? '#ff9800' : getConfidenceColor(confidence) }}
             >
               {confidence.toFixed(0)}%
             </span>

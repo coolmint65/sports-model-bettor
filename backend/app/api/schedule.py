@@ -47,6 +47,7 @@ class GameTopPick(BaseModel):
     prediction_value: Optional[str] = None
     confidence: Optional[float] = None
     edge: Optional[float] = None
+    is_fallback: bool = False
 
 
 class GameOdds(BaseModel):
@@ -211,15 +212,19 @@ async def _games_for_date(
     games = result.scalars().all()
 
     # Pre-fetch best prediction per game (highest edge, market types only).
-    # Must have real odds-derived edge and meet confidence/edge thresholds,
-    # but unlike best-bets we do NOT apply the implied-prob ceiling here —
-    # the schedule should surface the model's top pick even on heavy
-    # favourites so every game with a data-driven edge shows a pick.
-    min_edge = settings.min_edge
-    min_conf = settings.min_confidence
+    #
+    # Tier 1 (strict): same criteria as best-bets — recommended, real edge,
+    #   and implied-prob below the juice ceiling.  These are our confident,
+    #   high-value picks.
+    # Tier 2 (fallback): for games with NO Tier-1 pick, relax the implied-
+    #   prob ceiling so we still surface the model's best data-driven pick
+    #   (e.g. on heavy favourites).  Marked is_fallback=True so the UI can
+    #   indicate reduced confidence.
+    max_implied = settings.best_bet_max_implied
     game_ids = [g.id for g in games]
     top_picks: dict[int, GameTopPick] = {}
     if game_ids:
+        # --- Tier 1: strict best-bet criteria ---
         max_edge_sub = (
             select(
                 Prediction.game_id,
@@ -229,8 +234,9 @@ async def _games_for_date(
                 Prediction.game_id.in_(game_ids),
                 Prediction.bet_type.in_(MARKET_BET_TYPES),
                 Prediction.edge.isnot(None),
-                Prediction.edge >= min_edge,
-                Prediction.confidence >= min_conf,
+                Prediction.recommended == True,
+                Prediction.odds_implied_prob.isnot(None),
+                Prediction.odds_implied_prob < max_implied,
             )
             .group_by(Prediction.game_id)
             .subquery()
@@ -247,8 +253,9 @@ async def _games_for_date(
             .where(
                 Prediction.bet_type.in_(MARKET_BET_TYPES),
                 Prediction.edge.isnot(None),
-                Prediction.edge >= min_edge,
-                Prediction.confidence >= min_conf,
+                Prediction.recommended == True,
+                Prediction.odds_implied_prob.isnot(None),
+                Prediction.odds_implied_prob < max_implied,
             )
         )
         for pred in pred_result.scalars().all():
@@ -258,7 +265,53 @@ async def _games_for_date(
                     prediction_value=pred.prediction_value,
                     confidence=pred.confidence,
                     edge=pred.edge,
+                    is_fallback=False,
                 )
+
+        # --- Tier 2: fallback for games still missing a pick ---
+        # Requires real edge but drops the implied-prob ceiling.
+        missing_ids = [gid for gid in game_ids if gid not in top_picks]
+        if missing_ids:
+            fb_edge_sub = (
+                select(
+                    Prediction.game_id,
+                    func.max(Prediction.edge).label("max_edge"),
+                )
+                .where(
+                    Prediction.game_id.in_(missing_ids),
+                    Prediction.bet_type.in_(MARKET_BET_TYPES),
+                    Prediction.edge.isnot(None),
+                    Prediction.edge >= settings.min_edge,
+                    Prediction.confidence >= settings.min_confidence,
+                )
+                .group_by(Prediction.game_id)
+                .subquery()
+            )
+            fb_result = await session.execute(
+                select(Prediction)
+                .join(
+                    fb_edge_sub,
+                    and_(
+                        Prediction.game_id == fb_edge_sub.c.game_id,
+                        Prediction.edge == fb_edge_sub.c.max_edge,
+                    ),
+                )
+                .where(
+                    Prediction.bet_type.in_(MARKET_BET_TYPES),
+                    Prediction.edge.isnot(None),
+                    Prediction.edge >= settings.min_edge,
+                    Prediction.confidence >= settings.min_confidence,
+                )
+            )
+            for pred in fb_result.scalars().all():
+                if pred.game_id not in top_picks:
+                    top_picks[pred.game_id] = GameTopPick(
+                        bet_type=pred.bet_type,
+                        prediction_value=pred.prediction_value,
+                        confidence=pred.confidence,
+                        edge=pred.edge,
+                        is_fallback=True,
+                    )
 
     # Batch-load team stats to avoid N+1 queries
     all_team_ids = list({g.home_team_id for g in games} | {g.away_team_id for g in games})
