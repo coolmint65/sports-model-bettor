@@ -47,6 +47,20 @@ class GameTopPick(BaseModel):
     edge: Optional[float] = None
 
 
+class GameOdds(BaseModel):
+    """Snapshot of sportsbook odds for a game."""
+    home_moneyline: Optional[float] = None
+    away_moneyline: Optional[float] = None
+    over_under_line: Optional[float] = None
+    over_price: Optional[float] = None
+    under_price: Optional[float] = None
+    home_spread_line: Optional[float] = None
+    away_spread_line: Optional[float] = None
+    home_spread_price: Optional[float] = None
+    away_spread_price: Optional[float] = None
+    odds_updated_at: Optional[str] = None
+
+
 class ScheduleGame(BaseModel):
     id: int
     external_id: str
@@ -70,6 +84,8 @@ class ScheduleGame(BaseModel):
     away_shots: Optional[int] = None
     # Top prediction for this game
     top_pick: Optional[GameTopPick] = None
+    # Sportsbook odds
+    odds: Optional[GameOdds] = None
 
     model_config = {"from_attributes": True}
 
@@ -108,6 +124,27 @@ async def _build_team_brief(team: Team, session: AsyncSession) -> TeamBrief:
         brief.points = stats.points
         brief.record = f"{stats.wins}-{stats.losses}-{stats.ot_losses}"
     return brief
+
+
+def _build_game_odds(game: Game) -> Optional[GameOdds]:
+    """Extract odds snapshot from a Game ORM object."""
+    hm = getattr(game, "home_moneyline", None)
+    am = getattr(game, "away_moneyline", None)
+    if hm is None and am is None:
+        return None
+    updated = getattr(game, "odds_updated_at", None)
+    return GameOdds(
+        home_moneyline=hm,
+        away_moneyline=am,
+        over_under_line=getattr(game, "over_under_line", None),
+        over_price=getattr(game, "over_price", None),
+        under_price=getattr(game, "under_price", None),
+        home_spread_line=getattr(game, "home_spread_line", None),
+        away_spread_line=getattr(game, "away_spread_line", None),
+        home_spread_price=getattr(game, "home_spread_price", None),
+        away_spread_price=getattr(game, "away_spread_price", None),
+        odds_updated_at=str(updated) if updated else None,
+    )
 
 
 async def _games_for_date(
@@ -190,6 +227,7 @@ async def _games_for_date(
                 home_shots=getattr(game, "home_shots", None),
                 away_shots=getattr(game, "away_shots", None),
                 top_pick=top_picks.get(game.id),
+                odds=_build_game_odds(game),
             )
         )
     return schedule_games
@@ -239,6 +277,22 @@ async def get_live_games(
                 await session.flush()
         except Exception:
             pass
+
+        # Also sync live odds so the frontend shows current lines
+        try:
+            async with session.begin_nested():
+                from app.scrapers.odds_multi import MultiSourceOddsScraper
+
+                odds_scraper = MultiSourceOddsScraper()
+                try:
+                    await odds_scraper.sync_odds(session)
+                    await session.flush()
+                    session.expire_all()
+                finally:
+                    await odds_scraper.close()
+        except Exception as exc:
+            logger.warning("Live odds sync failed: %s", exc)
+
         # Always re-query to get fresh ORM objects (savepoint rollback
         # expires identity-mapped objects, which breaks async lazy loading).
         result = await session.execute(
@@ -274,6 +328,7 @@ async def get_live_games(
                 clock_running=getattr(game, "clock_running", None),
                 home_shots=getattr(game, "home_shots", None),
                 away_shots=getattr(game, "away_shots", None),
+                odds=_build_game_odds(game),
             )
         )
 

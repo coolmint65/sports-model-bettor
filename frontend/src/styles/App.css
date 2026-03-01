@@ -1159,6 +1159,84 @@ a:hover {
   letter-spacing: 0.3px;
 }
 
+/* ─── Game Card Odds Row ──────────────────────────────────── */
+
+.game-odds-row {
+  display: flex;
+  gap: 2px;
+  padding: 8px 12px 0;
+  margin: 6px -4px 0;
+  border-top: 1px solid var(--border-primary, #1e1e3a);
+}
+
+.odds-market {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 4px 2px;
+}
+
+.odds-market-label {
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: var(--text-dim, #555);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.odds-market-values {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+}
+
+.odds-team-line {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 0.72rem;
+  font-family: var(--font-mono, monospace);
+  line-height: 1.3;
+}
+
+.odds-team-abbr {
+  color: var(--text-muted, #888);
+  font-weight: 600;
+  font-size: 0.65rem;
+  min-width: 22px;
+  text-align: right;
+}
+
+.odds-value {
+  color: var(--text-secondary, #ccc);
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.odds-price {
+  color: var(--text-dim, #666);
+  font-size: 0.65rem;
+}
+
+/* Highlight odds on live games */
+.status-live .game-odds-row {
+  border-top-color: rgba(255, 82, 82, 0.2);
+}
+
+.status-live .odds-value {
+  color: #ffd700;
+}
+
+.status-live .odds-market-label {
+  color: rgba(255, 215, 0, 0.6);
+}
+
 .game-card-footer {
   display: flex;
   align-items: center;

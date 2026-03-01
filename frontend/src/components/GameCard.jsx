@@ -64,6 +64,12 @@ function formatPeriod(game) {
   return { label: periodLabel, clock: clock || null };
 }
 
+function formatOdds(val) {
+  if (val == null) return null;
+  const v = Math.round(val);
+  return v > 0 ? `+${v}` : `${v}`;
+}
+
 function Countdown({ startTime }) {
   const [timeLeft, setTimeLeft] = useState('');
 
@@ -132,6 +138,86 @@ function TeamLogo({ team, size = 36 }) {
   );
 }
 
+function OddsRow({ odds, homeAbbr, awayAbbr }) {
+  if (!odds) return null;
+
+  const hasML = odds.home_moneyline != null || odds.away_moneyline != null;
+  const hasSpread = odds.home_spread_line != null;
+  const hasTotal = odds.over_under_line != null;
+
+  if (!hasML && !hasSpread && !hasTotal) return null;
+
+  return (
+    <div className="game-odds-row">
+      {hasML && (
+        <div className="odds-market">
+          <span className="odds-market-label">ML</span>
+          <div className="odds-market-values">
+            <span className="odds-team-line">
+              <span className="odds-team-abbr">{awayAbbr}</span>
+              <span className="odds-value">{formatOdds(odds.away_moneyline) || '—'}</span>
+            </span>
+            <span className="odds-team-line">
+              <span className="odds-team-abbr">{homeAbbr}</span>
+              <span className="odds-value">{formatOdds(odds.home_moneyline) || '—'}</span>
+            </span>
+          </div>
+        </div>
+      )}
+      {hasSpread && (
+        <div className="odds-market">
+          <span className="odds-market-label">PL</span>
+          <div className="odds-market-values">
+            <span className="odds-team-line">
+              <span className="odds-team-abbr">{awayAbbr}</span>
+              <span className="odds-value">
+                {odds.away_spread_line > 0 ? '+' : ''}{odds.away_spread_line}
+                {odds.away_spread_price != null && (
+                  <span className="odds-price">{formatOdds(odds.away_spread_price)}</span>
+                )}
+              </span>
+            </span>
+            <span className="odds-team-line">
+              <span className="odds-team-abbr">{homeAbbr}</span>
+              <span className="odds-value">
+                {odds.home_spread_line > 0 ? '+' : ''}{odds.home_spread_line}
+                {odds.home_spread_price != null && (
+                  <span className="odds-price">{formatOdds(odds.home_spread_price)}</span>
+                )}
+              </span>
+            </span>
+          </div>
+        </div>
+      )}
+      {hasTotal && (
+        <div className="odds-market">
+          <span className="odds-market-label">O/U</span>
+          <div className="odds-market-values">
+            <span className="odds-team-line">
+              <span className="odds-team-abbr">O</span>
+              <span className="odds-value">
+                {odds.over_under_line}
+                {odds.over_price != null && (
+                  <span className="odds-price">{formatOdds(odds.over_price)}</span>
+                )}
+              </span>
+            </span>
+            <span className="odds-team-line">
+              <span className="odds-team-abbr">U</span>
+              <span className="odds-value">
+                {odds.over_under_line}
+                {odds.under_price != null && (
+                  <span className="odds-price">{formatOdds(odds.under_price)}</span>
+                )}
+              </span>
+            </span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function GameCard({ game }) {
   const navigate = useNavigate();
   const gameId = game.game_id || game.id;
@@ -149,6 +235,7 @@ function GameCard({ game }) {
   const confidence = rawConf != null ? confidencePct(rawConf) : null;
   const hasBadge = !!statusInfo.label;
   const startTime = game.start_time || game.datetime;
+  const odds = game.odds || null;
 
   // Live game period info
   const periodInfo = statusInfo.isLive ? formatPeriod(game) : { label: null, clock: null };
@@ -224,6 +311,9 @@ function GameCard({ game }) {
           )}
         </div>
       </div>
+
+      {/* Odds Row */}
+      <OddsRow odds={odds} homeAbbr={homeAbbr} awayAbbr={awayAbbr} />
 
       {/* Footer: Top Pick or Venue + Confidence */}
       <div className="game-card-footer">
