@@ -683,6 +683,244 @@ class BettingModel:
         }
 
     # ------------------------------------------------------------------ #
+    #  Live-game adjustment                                                #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _calc_remaining_fraction(live_state: Dict[str, Any]) -> float:
+        """Return what fraction of the 60-minute regulation game remains.
+
+        Uses period number and clock (MM:SS counting down) from the live
+        game state to compute how much game time is left.
+        """
+        period = live_state.get("period") or 1
+        clock_str = live_state.get("clock")
+        period_type = (live_state.get("period_type") or "").upper()
+
+        PERIOD_SECS = 20 * 60   # 1200
+        GAME_SECS = 60 * 60     # 3600
+
+        # Overtime — treat as ~5 minutes of play
+        if "OT" in period_type or period > 3:
+            return 5 * 60 / GAME_SECS
+
+        # Parse "MM:SS" clock
+        period_remaining = 0
+        if clock_str:
+            try:
+                parts = clock_str.strip().split(":")
+                mins = int(parts[0])
+                secs = int(parts[1]) if len(parts) > 1 else 0
+                period_remaining = mins * 60 + secs
+            except (ValueError, IndexError):
+                pass
+
+        remaining_full_periods = max(0, 3 - period)
+        total_remaining = period_remaining + remaining_full_periods * PERIOD_SECS
+        return max(total_remaining / GAME_SECS, 0.01)
+
+    def adjust_for_live_state(
+        self,
+        predictions: List[Dict[str, Any]],
+        features: Dict[str, Any],
+        live_state: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """Adjust pre-game predictions for a game currently in progress.
+
+        Uses current score + remaining-time Poisson model to produce
+        live-accurate probabilities.  Without this, a team trailing 0-4
+        would keep its pre-game ~60 % confidence, creating a phantom edge
+        against live sportsbook odds that already price in the deficit.
+        """
+        home_score = live_state.get("home_score") or 0
+        away_score = live_state.get("away_score") or 0
+        period = live_state.get("period") or 1
+
+        # If we have no score data at all, don't adjust
+        if home_score == 0 and away_score == 0 and period <= 1:
+            return predictions
+
+        remaining = self._calc_remaining_fraction(live_state)
+
+        home_abbr = features.get("home_team_abbr", "HOM")
+        away_abbr = features.get("away_team_abbr", "AWY")
+        home_name = features.get("home_team_name", "Home")
+        away_name = features.get("away_team_name", "Away")
+        odds_data = features.get("odds", {})
+
+        # Full-game xG (same model as pre-game)
+        home_xg, away_xg = self._calc_expected_goals(features)
+
+        # Scale to remaining time
+        rem_home = max(home_xg * remaining, 0.05)
+        rem_away = max(away_xg * remaining, 0.05)
+
+        # Poisson matrix for *remaining* goals only
+        matrix = self._score_matrix(rem_home, rem_away)
+        max_g = POISSON_MAX_GOALS
+
+        # --- ML: live win probabilities considering current score ---
+        home_wp = 0.0
+        away_wp = 0.0
+        reg_tie = 0.0
+        for i in range(max_g + 1):
+            for j in range(max_g + 1):
+                fh = home_score + i
+                fa = away_score + j
+                p = matrix[i][j]
+                if fh > fa:
+                    home_wp += p
+                elif fa > fh:
+                    away_wp += p
+                else:
+                    reg_tie += p
+
+        # Redistribute regulation ties via OT (slight home edge)
+        ot_home = 0.52
+        home_wp += reg_tie * ot_home
+        away_wp += reg_tie * (1 - ot_home)
+        total_p = home_wp + away_wp
+        if total_p > 0:
+            home_wp /= total_p
+            away_wp /= total_p
+
+        # Score description for reasoning text
+        if home_score > away_score:
+            score_note = f"{home_name} leads {home_score}-{away_score}"
+        elif away_score > home_score:
+            score_note = f"{away_name} leads {away_score}-{home_score}"
+        else:
+            score_note = f"Tied {home_score}-{away_score}"
+        pct_left = f"{remaining:.0%}"
+
+        adjusted: List[Dict[str, Any]] = []
+        for pred in predictions:
+            pred = dict(pred)  # shallow copy
+            bt = pred["bet_type"]
+
+            if bt == "ml":
+                # Pick the team with higher live probability
+                if home_wp >= away_wp:
+                    pick, conf = home_abbr, home_wp
+                    pick_name = home_name
+                    pick_odds = odds_data.get("home_moneyline")
+                else:
+                    pick, conf = away_abbr, away_wp
+                    pick_name = away_name
+                    pick_odds = odds_data.get("away_moneyline")
+
+                imp = (
+                    round(american_odds_to_implied_prob(pick_odds), 4)
+                    if pick_odds is not None
+                    else None
+                )
+                pred["prediction"] = pick
+                pred["confidence"] = round(conf, 4)
+                pred["probability"] = round(conf, 4)
+                pred["implied_probability"] = imp
+                pred["odds"] = pick_odds
+                pred["reasoning"] = (
+                    f"LIVE \u2014 {score_note} (P{period}, {pct_left} remaining). "
+                    f"Live win probability for {pick_name} ({pick}): {conf:.1%} "
+                    f"(remaining xG: {rem_home:.2f} vs {rem_away:.2f})."
+                )
+                pred["details"] = {
+                    "home_xg": home_xg,
+                    "away_xg": away_xg,
+                    "remaining_home_xg": round(rem_home, 3),
+                    "remaining_away_xg": round(rem_away, 3),
+                    "home_win_prob": round(home_wp, 4),
+                    "away_win_prob": round(away_wp, 4),
+                    "regulation_tie_prob": round(reg_tie, 4),
+                    "remaining_fraction": round(remaining, 4),
+                    "live": True,
+                }
+
+            elif bt == "total":
+                try:
+                    parts = pred["prediction"].split("_")
+                    direction = parts[0]
+                    line_val = float(parts[1])
+                except (IndexError, ValueError):
+                    adjusted.append(pred)
+                    continue
+
+                current_total = home_score + away_score
+                threshold = int(line_val)
+                over_p = sum(
+                    matrix[i][j]
+                    for i in range(max_g + 1)
+                    for j in range(max_g + 1)
+                    if current_total + i + j > threshold
+                )
+                under_p = 1.0 - over_p
+
+                # Flip to the more likely side
+                if over_p >= under_p:
+                    direction, conf = "over", over_p
+                    side_odds = odds_data.get("over_price")
+                else:
+                    direction, conf = "under", under_p
+                    side_odds = odds_data.get("under_price")
+
+                imp = (
+                    round(american_odds_to_implied_prob(side_odds), 4)
+                    if side_odds is not None
+                    else None
+                )
+                rem_total = round(rem_home + rem_away, 2)
+                pred["prediction"] = f"{direction}_{line_val}"
+                pred["confidence"] = round(conf, 4)
+                pred["probability"] = round(conf, 4)
+                pred["implied_probability"] = imp
+                pred["odds"] = side_odds
+                pred["reasoning"] = (
+                    f"LIVE \u2014 Current total: {current_total} ({pct_left} remaining). "
+                    f"Projected remaining goals: {rem_total}. "
+                    f"Live {direction} {line_val} probability: {conf:.1%}."
+                )
+
+            elif bt == "spread":
+                try:
+                    pred_parts = pred["prediction"].split("_", 1)
+                    team_part = pred_parts[0]
+                    spread_val = float(pred_parts[1])
+                except (IndexError, ValueError):
+                    adjusted.append(pred)
+                    continue
+
+                cur_margin = home_score - away_score
+                is_home = team_part == home_abbr
+
+                cover_p = 0.0
+                for i in range(max_g + 1):
+                    for j in range(max_g + 1):
+                        fm = cur_margin + i - j
+                        if is_home:
+                            if fm > -spread_val:
+                                cover_p += matrix[i][j]
+                        else:
+                            if fm < spread_val:
+                                cover_p += matrix[i][j]
+
+                pred["confidence"] = round(cover_p, 4)
+                pred["probability"] = round(cover_p, 4)
+                pred["reasoning"] = (
+                    f"LIVE \u2014 {score_note} (P{period}, {pct_left} remaining). "
+                    f"Live {pred['prediction']} cover probability: {cover_p:.1%}."
+                )
+
+            elif bt in ("first_goal", "period_winner", "period_total"):
+                # These are resolved or irrelevant mid-game
+                continue
+            # else: keep other props (overtime, both_score, etc.) as-is
+
+            adjusted.append(pred)
+
+        adjusted.sort(key=lambda p: p.get("confidence", 0), reverse=True)
+        return adjusted
+
+    # ------------------------------------------------------------------ #
     #  Predict all: master method                                         #
     # ------------------------------------------------------------------ #
 

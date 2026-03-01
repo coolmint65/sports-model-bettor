@@ -354,6 +354,34 @@ class PredictionManager:
 
         predictions = await self.model.predict_all(features)
 
+        # For live games, adjust predictions based on current score and
+        # time remaining so confidence reflects the actual game state
+        # rather than stale pre-game projections.
+        if game.status == "in_progress" and (
+            game.home_score is not None or game.away_score is not None
+        ):
+            live_state = {
+                "home_score": game.home_score or 0,
+                "away_score": game.away_score or 0,
+                "period": getattr(game, "period", None) or 1,
+                "clock": getattr(game, "clock", None),
+                "period_type": getattr(game, "period_type", None),
+            }
+            predictions = self.model.adjust_for_live_state(
+                predictions, features, live_state
+            )
+            logger.info(
+                "Live-adjusted predictions for game %d (%s@%s): score %d-%d, "
+                "period %s, remaining %.0f%%",
+                game.id,
+                features.get("away_team_abbr", "?"),
+                features.get("home_team_abbr", "?"),
+                live_state["away_score"],
+                live_state["home_score"],
+                live_state["period"],
+                self.model._calc_remaining_fraction(live_state) * 100,
+            )
+
         # Build game info summary
         game_info = {
             "game_id": game.id,
