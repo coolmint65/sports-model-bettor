@@ -905,6 +905,37 @@ class BettingModel:
 
                 pred["confidence"] = round(cover_p, 4)
                 pred["probability"] = round(cover_p, 4)
+
+                # Update implied probability from the correct spread price.
+                # The model always uses the standard ±1.5 puck line, but
+                # live sportsbooks may move the spread (e.g., to ±3.5).
+                # Only use the book price if the line still matches ±1.5;
+                # otherwise null out implied_prob so this bet is excluded
+                # from best-bets (can't compare ±1.5 prob to ±3.5 price).
+                book_spread = odds_data.get("home_spread_line")
+                line_matches = (
+                    book_spread is not None
+                    and abs(abs(book_spread) - abs(spread_val)) < 0.2
+                )
+                if line_matches:
+                    sprd_price = (
+                        odds_data.get("home_spread_price")
+                        if is_home
+                        else odds_data.get("away_spread_price")
+                    )
+                    if sprd_price is not None:
+                        pred["implied_probability"] = round(
+                            american_odds_to_implied_prob(float(sprd_price)), 4
+                        )
+                        pred["odds"] = float(sprd_price)
+                    else:
+                        pred["implied_probability"] = None
+                        pred["odds"] = None
+                else:
+                    # Spread line moved — edge comparison is invalid
+                    pred["implied_probability"] = None
+                    pred["odds"] = None
+
                 pred["reasoning"] = (
                     f"LIVE \u2014 {score_note} (P{period}, {pct_left} remaining). "
                     f"Live {pred['prediction']} cover probability: {cover_p:.1%}."
