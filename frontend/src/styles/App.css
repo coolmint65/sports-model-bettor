@@ -1786,6 +1786,38 @@ a:hover {
 }
 
 /* ─── Predictions Tab ───────────────────────────────────────── */
+/* ─── Prediction Sections ──────────────────────────────────── */
+.predictions-section {
+  margin-bottom: 24px;
+}
+.predictions-section:last-child {
+  margin-bottom: 0;
+}
+.predictions-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--accent-blue);
+  margin: 0 0 12px 0;
+}
+.predictions-section-title-fallback {
+  color: #ff9800;
+}
+.predictions-section-title-other {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.predictions-section-desc {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin: -6px 0 12px 0;
+  opacity: 0.8;
+}
+
 .predictions-list {
   display: flex;
   flex-direction: column;
@@ -1815,6 +1847,14 @@ a:hover {
   padding: 12px 16px;
 }
 
+.prediction-fallback {
+  border-color: rgba(255, 152, 0, 0.25);
+  background: linear-gradient(135deg, rgba(255, 152, 0, 0.05), rgba(255, 87, 34, 0.02));
+}
+.prediction-fallback .prediction-type {
+  color: #ff9800;
+}
+
 .prediction-badge {
   display: inline-flex;
   align-items: center;
@@ -1828,6 +1868,9 @@ a:hover {
   letter-spacing: 0.5px;
   text-transform: uppercase;
   margin-bottom: 10px;
+}
+.prediction-badge-fallback {
+  background: linear-gradient(135deg, #ff9800, #ff5722);
 }
 
 .prediction-header {

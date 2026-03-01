@@ -15,7 +15,8 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.constants import GAME_FINAL_STATUSES
+from app.config import settings
+from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES
 from app.database import get_session
 from app.models.game import Game, HeadToHead
 from app.models.player import GoalieStats, Player
@@ -113,6 +114,7 @@ class GamePredictionBrief(BaseModel):
     edge: Optional[float] = None
     recommended: bool = False
     best_bet: bool = False
+    is_fallback: bool = False
     reasoning: Optional[str] = None
     created_at: Optional[str] = None
 
@@ -540,14 +542,34 @@ async def _compute_period_scoring(
 async def _get_game_predictions(
     game_id: int, session: AsyncSession
 ) -> List[GamePredictionBrief]:
-    """Return all predictions associated with a game."""
+    """Return predictions for a game, sorted: recommended first, then fallback.
+
+    A prediction is "fallback" when it has real edge (>= min_edge) and
+    confidence (>= min_confidence) but sits on a heavy-juice line
+    (implied_prob >= best_bet_max_implied).  Only market bet types
+    (ml, total, spread) are eligible for fallback status.
+    """
     result = await session.execute(
         select(Prediction).where(Prediction.game_id == game_id)
     )
     preds = result.scalars().all()
 
+    max_implied = settings.best_bet_max_implied
+    min_edge = settings.min_edge
+    min_conf = settings.min_confidence
+
     briefs: List[GamePredictionBrief] = []
     for p in preds:
+        # Fallback = has real edge but heavy juice (above implied ceiling)
+        is_fb = (
+            not p.recommended
+            and p.bet_type in MARKET_BET_TYPES
+            and p.edge is not None
+            and p.edge >= min_edge
+            and (p.confidence or 0) >= min_conf
+            and p.odds_implied_prob is not None
+            and p.odds_implied_prob >= max_implied
+        )
         briefs.append(
             GamePredictionBrief(
                 id=p.id,
@@ -557,10 +579,18 @@ async def _get_game_predictions(
                 edge=p.edge,
                 recommended=p.recommended,
                 best_bet=p.best_bet,
+                is_fallback=is_fb,
                 reasoning=p.reasoning,
                 created_at=str(p.created_at) if p.created_at else None,
             )
         )
+
+    # Sort: recommended first (by edge desc), then fallback, then rest
+    def sort_key(b: GamePredictionBrief):
+        tier = 0 if b.recommended else (1 if b.is_fallback else 2)
+        return (tier, -(b.edge or 0))
+
+    briefs.sort(key=sort_key)
     return briefs
 
 

@@ -12,6 +12,7 @@ import {
   Layers,
   DollarSign,
   Radio,
+  AlertTriangle,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { fetchGameDetails } from '../utils/api';
@@ -241,13 +242,62 @@ function PredictionsTab({ game }) {
     );
   }
 
+  const recommended = predictions.filter((p) => p.recommended);
+  const fallback = predictions.filter((p) => p.is_fallback && !p.recommended);
+  const other = predictions.filter((p) => !p.recommended && !p.is_fallback);
+
   return (
     <div className="tab-content predictions-tab">
-      <div className="predictions-list">
-        {predictions.map((pred, index) => (
-          <PredictionCard key={pred.id || index} prediction={pred} />
-        ))}
-      </div>
+      {recommended.length > 0 && (
+        <div className="predictions-section">
+          <h3 className="predictions-section-title">
+            <Target size={16} />
+            Top Picks
+          </h3>
+          <div className="predictions-list">
+            {recommended.map((pred, index) => (
+              <PredictionCard key={pred.id || index} prediction={pred} />
+            ))}
+          </div>
+        </div>
+      )}
+      {fallback.length > 0 && (
+        <div className="predictions-section predictions-section-fallback">
+          <h3 className="predictions-section-title predictions-section-title-fallback">
+            <AlertTriangle size={16} />
+            Heavy Juice Picks
+          </h3>
+          <p className="predictions-section-desc">
+            These picks have real edge but are on heavy favourite lines. Proceed with caution.
+          </p>
+          <div className="predictions-list">
+            {fallback.map((pred, index) => (
+              <PredictionCard key={pred.id || index} prediction={pred} isFallback />
+            ))}
+          </div>
+        </div>
+      )}
+      {other.length > 0 && recommended.length === 0 && fallback.length === 0 && (
+        <div className="predictions-section">
+          <div className="predictions-list">
+            {other.map((pred, index) => (
+              <PredictionCard key={pred.id || index} prediction={pred} />
+            ))}
+          </div>
+        </div>
+      )}
+      {other.length > 0 && (recommended.length > 0 || fallback.length > 0) && (
+        <div className="predictions-section predictions-section-other">
+          <h3 className="predictions-section-title predictions-section-title-other">
+            Other Analysis
+          </h3>
+          <div className="predictions-list">
+            {other.map((pred, index) => (
+              <PredictionCard key={pred.id || index} prediction={pred} compact />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

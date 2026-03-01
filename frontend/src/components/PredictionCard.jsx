@@ -1,4 +1,4 @@
-import { Target, TrendingUp, Star, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
+import { Target, TrendingUp, Star, CheckCircle, XCircle, AlertCircle, AlertTriangle } from 'lucide-react';
 import { confidencePct, formatBetType, formatPredictionValue } from '../utils/teams';
 
 function getConfidenceColor(confidence) {
@@ -27,29 +27,43 @@ function getOutcomeIcon(outcome) {
   return <AlertCircle size={16} className="outcome-push" />;
 }
 
-function PredictionCard({ prediction, showGame = false, compact = false }) {
+function PredictionCard({ prediction, showGame = false, compact = false, isFallback = false }) {
   const confidence = confidencePct(prediction.confidence);
   const edge = confidencePct(prediction.edge);
-  const confColor = getConfidenceColor(confidence);
-  const confLabel = getConfidenceLabel(confidence);
+  const confColor = isFallback ? '#ff9800' : getConfidenceColor(confidence);
+  const confLabel = isFallback ? 'Heavy Juice' : getConfidenceLabel(confidence);
   const isBestBet = prediction.is_best_bet || prediction.best_bet || false;
   const outcome = prediction.outcome || prediction.result || null;
   const betType = formatBetType(prediction.bet_type || prediction.type);
   const pick = formatPredictionValue(prediction.prediction_value || prediction.pick || prediction.selection);
   const reasoning = prediction.reasoning || prediction.reason || prediction.analysis || '';
 
+  const cardClasses = [
+    'prediction-card',
+    isBestBet ? 'prediction-best-bet' : '',
+    isFallback ? 'prediction-fallback' : '',
+    compact ? 'prediction-compact' : '',
+    outcome ? `prediction-${outcome.toLowerCase()}` : '',
+  ].filter(Boolean).join(' ');
+
   return (
-    <div className={`prediction-card ${isBestBet ? 'prediction-best-bet' : ''} ${compact ? 'prediction-compact' : ''} ${outcome ? `prediction-${outcome.toLowerCase()}` : ''}`}>
+    <div className={cardClasses}>
       {isBestBet && (
         <div className="prediction-badge">
           <Star size={12} />
           BEST BET
         </div>
       )}
+      {isFallback && !isBestBet && (
+        <div className="prediction-badge prediction-badge-fallback">
+          <AlertTriangle size={12} />
+          HEAVY JUICE
+        </div>
+      )}
 
       <div className="prediction-header">
         <div className="prediction-type">
-          <Target size={16} />
+          {isFallback ? <AlertTriangle size={16} /> : <Target size={16} />}
           <span>{betType}</span>
         </div>
         {outcome && (
