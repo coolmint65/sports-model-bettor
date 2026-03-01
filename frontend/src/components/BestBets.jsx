@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Trophy, TrendingUp, Target, Star, ChevronRight, Radio } from 'lucide-react';
-import { fetchBestBets } from '../utils/api';
+import { Trophy, TrendingUp, Target, Star, ChevronRight, Radio, Plus, Check, Layers } from 'lucide-react';
+import { fetchBestBets, trackBet } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import { teamName, teamAbbrev, confidencePct, formatBetType, formatPredictionValue } from '../utils/teams';
+
+const BEST_BETS_POLL_INTERVAL = 60_000; // 60 seconds
 
 function formatAmericanOdds(odds) {
   if (odds == null) return null;
@@ -35,12 +37,14 @@ function isLiveGame(status) {
   return s === 'in_progress' || s === 'live' || s === 'in progress';
 }
 
-function BestBetCard({ bet, rank, isFeatured }) {
+function BestBetCard({ bet, rank, isFeatured, onTrack, tracked }) {
   const navigate = useNavigate();
   const confidence = confidencePct(bet.confidence);
   const edge = confidencePct(bet.edge);
   const confColor = getConfidenceColor(confidence);
   const live = isLiveGame(bet.game_status);
+  const phase = bet.phase || 'prematch';
+  const units = bet.units || 1;
 
   const oddsDisplay = bet.odds_display != null
     ? formatAmericanOdds(bet.odds_display)
@@ -55,6 +59,13 @@ function BestBetCard({ bet, rank, isFeatured }) {
     }
   };
 
+  const handleTrack = (e) => {
+    e.stopPropagation();
+    if (!tracked && onTrack) {
+      onTrack(bet);
+    }
+  };
+
   return (
     <div
       className={`best-bet-card ${isFeatured ? 'best-bet-featured' : ''}`}
@@ -62,19 +73,26 @@ function BestBetCard({ bet, rank, isFeatured }) {
       role="button"
       tabIndex={0}
     >
-      {isFeatured && (
-        <div className="best-bet-badge">
-          <Star size={14} />
-          BEST BET
-        </div>
-      )}
+      <div className="best-bet-badges">
+        {isFeatured && (
+          <div className="best-bet-badge">
+            <Star size={14} />
+            BEST BET
+          </div>
+        )}
 
-      {live && (
-        <div className="best-bet-live-badge">
-          <Radio size={12} />
-          LIVE
+        {live && (
+          <div className="best-bet-live-badge">
+            <Radio size={12} />
+            LIVE
+          </div>
+        )}
+
+        <div className={`best-bet-phase-badge phase-${phase}`}>
+          <Layers size={11} />
+          {phase === 'live' ? 'LIVE PICK' : 'PREMATCH'}
         </div>
-      )}
+      </div>
 
       <div className="best-bet-rank">
         <span className="rank-number">#{rank}</span>
@@ -130,6 +148,13 @@ function BestBetCard({ bet, rank, isFeatured }) {
               </span>
             </div>
           )}
+
+          <div className="metric">
+            <span className="metric-label">Units</span>
+            <span className="metric-value units-value">
+              {units.toFixed(1)}u
+            </span>
+          </div>
         </div>
 
         {bet.reasoning && (
@@ -139,8 +164,19 @@ function BestBetCard({ bet, rank, isFeatured }) {
         )}
       </div>
 
-      <div className="best-bet-arrow">
-        <ChevronRight size={20} />
+      <div className="best-bet-actions">
+        <button
+          className={`btn-track ${tracked ? 'btn-tracked' : ''}`}
+          onClick={handleTrack}
+          disabled={tracked}
+          title={tracked ? 'Already tracked' : 'Track this bet'}
+        >
+          {tracked ? <Check size={14} /> : <Plus size={14} />}
+          {tracked ? 'Tracked' : 'Track'}
+        </button>
+        <div className="best-bet-arrow">
+          <ChevronRight size={20} />
+        </div>
       </div>
     </div>
   );
@@ -156,13 +192,37 @@ const TABS = [
 function BestBets() {
   const { data, loading, error, silentRefetch } = useApi(fetchBestBets);
   const [activeTab, setActiveTab] = useState('all');
+  const [trackedIds, setTrackedIds] = useState(new Set());
+  const [trackingId, setTrackingId] = useState(null);
 
-  // Refresh when a data sync completes
+  // Auto-poll best bets every 60 seconds for seamless updates
+  useEffect(() => {
+    const interval = setInterval(() => {
+      silentRefetch();
+    }, BEST_BETS_POLL_INTERVAL);
+    return () => clearInterval(interval);
+  }, [silentRefetch]);
+
+  // Also refresh on manual data sync
   useEffect(() => {
     const onSynced = () => silentRefetch();
     window.addEventListener('data-synced', onSynced);
     return () => window.removeEventListener('data-synced', onSynced);
   }, [silentRefetch]);
+
+  const handleTrack = useCallback(async (bet) => {
+    const predId = bet.prediction_id || bet.id;
+    if (!predId || trackedIds.has(predId)) return;
+    setTrackingId(predId);
+    try {
+      await trackBet(predId, bet.units);
+      setTrackedIds((prev) => new Set(prev).add(predId));
+    } catch (err) {
+      console.error('Failed to track bet:', err);
+    } finally {
+      setTrackingId(null);
+    }
+  }, [trackedIds]);
 
   const allBets = data?.best_bets || data?.bets || (Array.isArray(data) ? data : []);
   const mlBets = data?.ml_bets || [];
@@ -176,7 +236,6 @@ function BestBets() {
     total: totalBets,
   }[activeTab] || [];
 
-  // Count bets with content per tab for badge display
   const tabCounts = {
     all: allBets.length,
     ml: mlBets.length,
@@ -273,6 +332,8 @@ function BestBets() {
               bet={bet}
               rank={index + 1}
               isFeatured={index === 0}
+              onTrack={handleTrack}
+              tracked={trackedIds.has(bet.prediction_id || bet.id)}
             />
           ))}
         </div>

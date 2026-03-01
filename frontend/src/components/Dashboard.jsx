@@ -6,7 +6,8 @@ import GameCard from './GameCard';
 import { fetchTodaySchedule, fetchLiveGames } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 
-const LIVE_POLL_INTERVAL = 30_000; // 30 seconds
+const LIVE_POLL_INTERVAL = 30_000; // 30 seconds when live
+const IDLE_POLL_INTERVAL = 120_000; // 2 minutes when no live games
 
 function Dashboard() {
   const {
@@ -32,26 +33,24 @@ function Dashboard() {
   const today = format(new Date(), 'EEEE, MMMM d, yyyy');
   const games = scheduleData?.games || scheduleData || [];
 
-  // Check if there are live games in either source
   const todayHasLive = games.some((g) => {
     const s = (g.status || '').toLowerCase();
     return s === 'in_progress' || s === 'live' || s === 'active';
   });
   const hasAnyLive = liveGames.length > 0 || todayHasLive;
 
-  // Poll both today's schedule and live games when anything is live
-  // Uses silentRefetch to avoid flashing the loading spinner
+  // Always poll — faster when live, slower when idle.
+  // This replaces the manual sync-only model.
   const intervalRef = useRef(null);
   useEffect(() => {
-    // Always fetch live games on mount
     pollLive();
 
-    if (hasAnyLive) {
-      intervalRef.current = setInterval(() => {
-        silentRefetch();
-        pollLive();
-      }, LIVE_POLL_INTERVAL);
-    }
+    const interval = hasAnyLive ? LIVE_POLL_INTERVAL : IDLE_POLL_INTERVAL;
+    intervalRef.current = setInterval(() => {
+      silentRefetch();
+      pollLive();
+    }, interval);
+
     return () => {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
@@ -60,19 +59,18 @@ function Dashboard() {
     };
   }, [hasAnyLive, silentRefetch, pollLive]);
 
-  // Refresh immediately when a data sync completes
+  // Also refresh immediately on manual sync
   useEffect(() => {
     const onSynced = () => silentRefetch();
     window.addEventListener('data-synced', onSynced);
     return () => window.removeEventListener('data-synced', onSynced);
   }, [silentRefetch]);
 
-  // Deduplicate: remove live games that are already in today's schedule
+  // Deduplicate
   const todayGameIds = new Set(games.map((g) => g.id || g.game_id));
   const extraLiveGames = liveGames.filter(
     (g) => !todayGameIds.has(g.id) && !todayGameIds.has(g.game_id)
   );
-  // Combine: live games from today's list + any extras from other dates
   const allLive = [
     ...games.filter((g) => {
       const s = (g.status || '').toLowerCase();
@@ -101,7 +99,7 @@ function Dashboard() {
         <BestBets />
       </section>
 
-      {/* Live Games Section — always visible when games are in progress */}
+      {/* Live Games Section */}
       {allLive.length > 0 && (
         <section className="section live-section">
           <div className="section-header">

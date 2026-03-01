@@ -28,6 +28,14 @@ export const fetchBestBets = () => api.get('/predictions/best-bets');
 export const fetchPredictionHistory = () => api.get('/predictions/history');
 export const fetchPredictionStats = () => api.get('/predictions/stats');
 
+// Tracked bets endpoints
+export const trackBet = (predictionId, units) =>
+  api.post('/predictions/tracked', { prediction_id: predictionId, units });
+export const fetchTrackedBets = () => api.get('/predictions/tracked');
+export const deleteTrackedBet = (id) => api.delete(`/predictions/tracked/${id}`);
+export const settleTrackedBets = () => api.post('/predictions/tracked/settle');
+export const clearAllTrackedBets = () => api.delete('/predictions/tracked/all');
+
 // Stats endpoints
 export const fetchAllTeams = () => api.get('/stats/teams');
 

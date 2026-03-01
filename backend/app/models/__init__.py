@@ -9,7 +9,7 @@ from app.models.base import Base
 from app.models.team import Team, TeamStats
 from app.models.player import Player, PlayerStats, GoalieStats
 from app.models.game import Game, GamePlayerStats, GameGoalieStats, HeadToHead
-from app.models.prediction import Prediction, BetResult
+from app.models.prediction import Prediction, BetResult, TrackedBet
 
 __all__ = [
     "Base",
@@ -24,4 +24,5 @@ __all__ = [
     "HeadToHead",
     "Prediction",
     "BetResult",
+    "TrackedBet",
 ]

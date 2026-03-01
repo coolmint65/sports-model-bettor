@@ -699,6 +699,205 @@ a:hover {
   color: var(--text-secondary);
 }
 
+/* ─── Phase Badges & Track Button ─────────────────────────── */
+
+.best-bet-badges {
+  position: absolute;
+  top: 6px;
+  left: 12px;
+  right: 12px;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  z-index: 1;
+}
+
+.best-bet-badge,
+.best-bet-live-badge {
+  position: static;
+}
+
+.best-bet-phase-badge {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.55rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.best-bet-phase-badge.phase-prematch {
+  background: rgba(79, 195, 247, 0.15);
+  color: #4fc3f7;
+  border: 1px solid rgba(79, 195, 247, 0.3);
+}
+
+.best-bet-phase-badge.phase-live {
+  background: rgba(255, 82, 82, 0.15);
+  color: #ff5252;
+  border: 1px solid rgba(255, 82, 82, 0.3);
+}
+
+.best-bet-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.btn-track {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border: 1px solid var(--accent-green, #00ff88);
+  background: rgba(0, 255, 136, 0.08);
+  color: var(--accent-green, #00ff88);
+  border-radius: var(--radius-sm, 6px);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.btn-track:hover:not(:disabled) {
+  background: rgba(0, 255, 136, 0.18);
+  box-shadow: 0 0 10px rgba(0, 255, 136, 0.15);
+}
+
+.btn-track.btn-tracked {
+  border-color: var(--text-muted, #666);
+  background: transparent;
+  color: var(--text-muted, #666);
+  cursor: default;
+}
+
+.units-value {
+  color: var(--accent-green, #00ff88);
+  font-family: var(--font-mono);
+}
+
+/* ─── History actions ─────────────────────────────────────── */
+
+.history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.history-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.btn-settle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid var(--accent-green, #00ff88);
+  background: rgba(0, 255, 136, 0.08);
+  color: var(--accent-green, #00ff88);
+  border-radius: var(--radius-sm, 6px);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-settle:hover:not(:disabled) {
+  background: rgba(0, 255, 136, 0.18);
+}
+
+.btn-clear {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid var(--accent-red, #ff5252);
+  background: rgba(255, 82, 82, 0.08);
+  color: var(--accent-red, #ff5252);
+  border-radius: var(--radius-sm, 6px);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-clear:hover:not(:disabled) {
+  background: rgba(255, 82, 82, 0.18);
+}
+
+.btn-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  transition: all 0.15s ease;
+}
+
+.btn-delete {
+  color: var(--text-dim, #555);
+}
+
+.btn-delete:hover {
+  color: var(--accent-red, #ff5252);
+  background: rgba(255, 82, 82, 0.1);
+}
+
+/* ─── Phase tag in history table ──────────────────────────── */
+
+.phase-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.phase-tag.phase-prematch {
+  background: rgba(79, 195, 247, 0.12);
+  color: #4fc3f7;
+}
+
+.phase-tag.phase-live {
+  background: rgba(255, 82, 82, 0.12);
+  color: #ff5252;
+}
+
+.col-units {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--accent-green, #00ff88);
+  font-size: 0.85rem;
+}
+
+.col-phase {
+  min-width: 50px;
+}
+
+.col-action {
+  min-width: 30px;
+  text-align: center;
+}
+
 /* ─── Best Bets Tabs ───────────────────────────────────────── */
 .best-bets-tabs {
   display: flex;

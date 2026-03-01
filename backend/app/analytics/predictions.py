@@ -400,6 +400,7 @@ class PredictionManager:
 
         return {
             "game_id": game.id,
+            "status": game.status,
             "game_info": game_info,
             "predictions": predictions,
             "top_pick": top_pick,
@@ -479,6 +480,8 @@ class PredictionManager:
         implied_prob = bet.get("implied_probability")
         is_best = bet.get("is_best_bet", False)
 
+        phase = bet.get("phase", "prematch")
+
         prediction = Prediction(
             game_id=game_id,
             bet_type=bet_type,
@@ -489,6 +492,7 @@ class PredictionManager:
             recommended=confidence >= settings.min_confidence and (edge or 0) >= settings.min_edge,
             best_bet=is_best and (edge or 0) >= settings.best_bet_edge,
             reasoning=reasoning,
+            phase=phase,
         )
         db.add(prediction)
         logger.info(
