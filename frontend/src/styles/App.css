@@ -1163,10 +1163,16 @@ a:hover {
 
 .game-odds-row {
   display: flex;
+  flex-direction: column;
   gap: 2px;
   padding: 8px 12px 0;
   margin: 6px -4px 0;
   border-top: 1px solid var(--border-primary, #1e1e3a);
+}
+
+.odds-markets {
+  display: flex;
+  gap: 2px;
 }
 
 .odds-market {
@@ -1224,17 +1230,59 @@ a:hover {
   font-size: 0.65rem;
 }
 
-/* Highlight odds on live games */
-.status-live .game-odds-row {
-  border-top-color: rgba(255, 82, 82, 0.2);
+/* ─── Live Lines ──────────────────────────────────────────── */
+
+.game-odds-row.odds-live {
+  border-top-color: rgba(255, 215, 0, 0.25);
+  background: linear-gradient(180deg, rgba(255, 215, 0, 0.04) 0%, transparent 100%);
+  border-radius: 0 0 8px 8px;
+  padding-bottom: 4px;
 }
 
-.status-live .odds-value {
+.odds-live-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px 2px;
+}
+
+.odds-live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.58rem;
+  font-weight: 700;
+  color: #ffd700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+
+.odds-live-pulse {
+  animation: oddsPulse 1.8s ease-in-out infinite;
+  color: #ff5252;
+}
+
+@keyframes oddsPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.odds-updated-ago {
+  font-size: 0.55rem;
+  color: var(--text-dim, #555);
+  font-style: italic;
+}
+
+.game-odds-row.odds-live .odds-value {
   color: #ffd700;
 }
 
-.status-live .odds-market-label {
+.game-odds-row.odds-live .odds-market-label {
   color: rgba(255, 215, 0, 0.6);
+}
+
+.game-odds-row.odds-live .odds-price {
+  color: rgba(255, 215, 0, 0.45);
 }
 
 .game-card-footer {

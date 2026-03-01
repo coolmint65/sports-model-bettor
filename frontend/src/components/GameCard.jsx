@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Clock, MapPin, ChevronRight, TrendingUp, Target } from 'lucide-react';
-import { format } from 'date-fns';
+import { Clock, MapPin, ChevronRight, TrendingUp, Target, Radio } from 'lucide-react';
+import { format, formatDistanceToNowStrict } from 'date-fns';
 import { teamName, teamAbbrev, teamLogo, confidencePct, parseAsUTC, formatBetType, formatPredictionValue } from '../utils/teams';
 
 function getConfidenceColor(confidence) {
@@ -138,7 +138,30 @@ function TeamLogo({ team, size = 36 }) {
   );
 }
 
-function OddsRow({ odds, homeAbbr, awayAbbr }) {
+function OddsUpdatedAgo({ updatedAt }) {
+  const [ago, setAgo] = useState('');
+
+  useEffect(() => {
+    function update() {
+      if (!updatedAt) { setAgo(''); return; }
+      try {
+        const dt = new Date(updatedAt);
+        if (isNaN(dt.getTime())) { setAgo(''); return; }
+        setAgo(formatDistanceToNowStrict(dt, { addSuffix: false }));
+      } catch {
+        setAgo('');
+      }
+    }
+    update();
+    const interval = setInterval(update, 10_000);
+    return () => clearInterval(interval);
+  }, [updatedAt]);
+
+  if (!ago) return null;
+  return <span className="odds-updated-ago">{ago} ago</span>;
+}
+
+function OddsRow({ odds, homeAbbr, awayAbbr, isLive }) {
   if (!odds) return null;
 
   const hasML = odds.home_moneyline != null || odds.away_moneyline != null;
@@ -148,72 +171,83 @@ function OddsRow({ odds, homeAbbr, awayAbbr }) {
   if (!hasML && !hasSpread && !hasTotal) return null;
 
   return (
-    <div className="game-odds-row">
-      {hasML && (
-        <div className="odds-market">
-          <span className="odds-market-label">ML</span>
-          <div className="odds-market-values">
-            <span className="odds-team-line">
-              <span className="odds-team-abbr">{awayAbbr}</span>
-              <span className="odds-value">{formatOdds(odds.away_moneyline) || '—'}</span>
-            </span>
-            <span className="odds-team-line">
-              <span className="odds-team-abbr">{homeAbbr}</span>
-              <span className="odds-value">{formatOdds(odds.home_moneyline) || '—'}</span>
-            </span>
-          </div>
+    <div className={`game-odds-row ${isLive ? 'odds-live' : ''}`}>
+      {isLive && (
+        <div className="odds-live-header">
+          <span className="odds-live-badge">
+            <Radio size={10} className="odds-live-pulse" />
+            LIVE LINES
+          </span>
+          <OddsUpdatedAgo updatedAt={odds.odds_updated_at} />
         </div>
       )}
-      {hasSpread && (
-        <div className="odds-market">
-          <span className="odds-market-label">PL</span>
-          <div className="odds-market-values">
-            <span className="odds-team-line">
-              <span className="odds-team-abbr">{awayAbbr}</span>
-              <span className="odds-value">
-                {odds.away_spread_line > 0 ? '+' : ''}{odds.away_spread_line}
-                {odds.away_spread_price != null && (
-                  <span className="odds-price">{formatOdds(odds.away_spread_price)}</span>
-                )}
+      <div className="odds-markets">
+        {hasML && (
+          <div className="odds-market">
+            <span className="odds-market-label">ML</span>
+            <div className="odds-market-values">
+              <span className="odds-team-line">
+                <span className="odds-team-abbr">{awayAbbr}</span>
+                <span className="odds-value">{formatOdds(odds.away_moneyline) || '—'}</span>
               </span>
-            </span>
-            <span className="odds-team-line">
-              <span className="odds-team-abbr">{homeAbbr}</span>
-              <span className="odds-value">
-                {odds.home_spread_line > 0 ? '+' : ''}{odds.home_spread_line}
-                {odds.home_spread_price != null && (
-                  <span className="odds-price">{formatOdds(odds.home_spread_price)}</span>
-                )}
+              <span className="odds-team-line">
+                <span className="odds-team-abbr">{homeAbbr}</span>
+                <span className="odds-value">{formatOdds(odds.home_moneyline) || '—'}</span>
               </span>
-            </span>
+            </div>
           </div>
-        </div>
-      )}
-      {hasTotal && (
-        <div className="odds-market">
-          <span className="odds-market-label">O/U</span>
-          <div className="odds-market-values">
-            <span className="odds-team-line">
-              <span className="odds-team-abbr">O</span>
-              <span className="odds-value">
-                {odds.over_under_line}
-                {odds.over_price != null && (
-                  <span className="odds-price">{formatOdds(odds.over_price)}</span>
-                )}
+        )}
+        {hasSpread && (
+          <div className="odds-market">
+            <span className="odds-market-label">PL</span>
+            <div className="odds-market-values">
+              <span className="odds-team-line">
+                <span className="odds-team-abbr">{awayAbbr}</span>
+                <span className="odds-value">
+                  {odds.away_spread_line > 0 ? '+' : ''}{odds.away_spread_line}
+                  {odds.away_spread_price != null && (
+                    <span className="odds-price">{formatOdds(odds.away_spread_price)}</span>
+                  )}
+                </span>
               </span>
-            </span>
-            <span className="odds-team-line">
-              <span className="odds-team-abbr">U</span>
-              <span className="odds-value">
-                {odds.over_under_line}
-                {odds.under_price != null && (
-                  <span className="odds-price">{formatOdds(odds.under_price)}</span>
-                )}
+              <span className="odds-team-line">
+                <span className="odds-team-abbr">{homeAbbr}</span>
+                <span className="odds-value">
+                  {odds.home_spread_line > 0 ? '+' : ''}{odds.home_spread_line}
+                  {odds.home_spread_price != null && (
+                    <span className="odds-price">{formatOdds(odds.home_spread_price)}</span>
+                  )}
+                </span>
               </span>
-            </span>
+            </div>
           </div>
-        </div>
-      )}
+        )}
+        {hasTotal && (
+          <div className="odds-market">
+            <span className="odds-market-label">O/U</span>
+            <div className="odds-market-values">
+              <span className="odds-team-line">
+                <span className="odds-team-abbr">O</span>
+                <span className="odds-value">
+                  {odds.over_under_line}
+                  {odds.over_price != null && (
+                    <span className="odds-price">{formatOdds(odds.over_price)}</span>
+                  )}
+                </span>
+              </span>
+              <span className="odds-team-line">
+                <span className="odds-team-abbr">U</span>
+                <span className="odds-value">
+                  {odds.over_under_line}
+                  {odds.under_price != null && (
+                    <span className="odds-price">{formatOdds(odds.under_price)}</span>
+                  )}
+                </span>
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -313,7 +347,7 @@ function GameCard({ game }) {
       </div>
 
       {/* Odds Row */}
-      <OddsRow odds={odds} homeAbbr={homeAbbr} awayAbbr={awayAbbr} />
+      <OddsRow odds={odds} homeAbbr={homeAbbr} awayAbbr={awayAbbr} isLive={statusInfo.isLive} />
 
       {/* Footer: Top Pick or Venue + Confidence */}
       <div className="game-card-footer">
