@@ -6,7 +6,7 @@ team form, head-to-head records, goalie stats, predictions, and computed
 analytical features for a specific game.
 """
 
-from datetime import date
+from datetime import date, datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -628,6 +628,25 @@ async def get_game_details(
             game = await _get_game_or_404(game_id, session)
         except Exception:
             pass  # non-critical — serve stale data if sync fails
+
+        # Also sync live odds if stale (> 2 min since last update)
+        odds_stale = (
+            game.odds_updated_at is None
+            or (datetime.now(timezone.utc) - game.odds_updated_at)
+            > timedelta(minutes=2)
+        )
+        if odds_stale:
+            try:
+                async with session.begin_nested():
+                    from app.scrapers.odds_multi import MultiSourceOddsScraper
+
+                    async with MultiSourceOddsScraper() as odds_scraper:
+                        await odds_scraper.sync_odds(session)
+                        await session.flush()
+                        session.expire_all()
+                game = await _get_game_or_404(game_id, session)
+            except Exception:
+                pass  # non-critical — serve stale odds if sync fails
 
     # Gather all analytics data
     home_form = await _get_team_form(game.home_team, session)
