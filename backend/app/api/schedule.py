@@ -15,6 +15,7 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.config import settings
 from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES
 from app.database import get_session
 from app.models.game import Game
@@ -210,8 +211,12 @@ async def _games_for_date(
     games = result.scalars().all()
 
     # Pre-fetch best prediction per game (highest edge, market types only).
-    # Only show picks backed by real odds data — must have edge computed
-    # from sportsbook lines and meet the recommended threshold.
+    # Must have real odds-derived edge and meet confidence/edge thresholds,
+    # but unlike best-bets we do NOT apply the implied-prob ceiling here —
+    # the schedule should surface the model's top pick even on heavy
+    # favourites so every game with a data-driven edge shows a pick.
+    min_edge = settings.min_edge
+    min_conf = settings.min_confidence
     game_ids = [g.id for g in games]
     top_picks: dict[int, GameTopPick] = {}
     if game_ids:
@@ -224,7 +229,8 @@ async def _games_for_date(
                 Prediction.game_id.in_(game_ids),
                 Prediction.bet_type.in_(MARKET_BET_TYPES),
                 Prediction.edge.isnot(None),
-                Prediction.recommended == True,
+                Prediction.edge >= min_edge,
+                Prediction.confidence >= min_conf,
             )
             .group_by(Prediction.game_id)
             .subquery()
@@ -241,7 +247,8 @@ async def _games_for_date(
             .where(
                 Prediction.bet_type.in_(MARKET_BET_TYPES),
                 Prediction.edge.isnot(None),
-                Prediction.recommended == True,
+                Prediction.edge >= min_edge,
+                Prediction.confidence >= min_conf,
             )
         )
         for pred in pred_result.scalars().all():
