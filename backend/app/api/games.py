@@ -6,8 +6,11 @@ team form, head-to-head records, goalie stats, predictions, and computed
 analytical features for a specific game.
 """
 
+import logging
 from datetime import date, datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -630,10 +633,13 @@ async def get_game_details(
             pass  # non-critical — serve stale data if sync fails
 
         # Also sync live odds if stale (> 2 min since last update)
-        odds_stale = (
-            game.odds_updated_at is None
-            or (datetime.now(timezone.utc) - game.odds_updated_at)
-            > timedelta(minutes=2)
+        odds_age = None
+        if game.odds_updated_at:
+            odds_age = datetime.now(timezone.utc) - game.odds_updated_at
+        odds_stale = odds_age is None or odds_age > timedelta(minutes=2)
+        logger.info(
+            "Game %s live odds check: updated_at=%s, age=%s, stale=%s",
+            game_id, game.odds_updated_at, odds_age, odds_stale,
         )
         if odds_stale:
             try:
@@ -641,12 +647,21 @@ async def get_game_details(
                     from app.scrapers.odds_multi import MultiSourceOddsScraper
 
                     async with MultiSourceOddsScraper() as odds_scraper:
-                        await odds_scraper.sync_odds(session)
+                        matched = await odds_scraper.sync_odds(session)
+                        logger.info(
+                            "Game %s live odds sync returned %d matched games",
+                            game_id, len(matched),
+                        )
                         await session.flush()
                         session.expire_all()
                 game = await _get_game_or_404(game_id, session)
-            except Exception:
-                pass  # non-critical — serve stale odds if sync fails
+                logger.info(
+                    "Game %s odds after sync: ML=%s/%s, updated_at=%s",
+                    game_id, game.home_moneyline, game.away_moneyline,
+                    game.odds_updated_at,
+                )
+            except Exception as exc:
+                logger.warning("Game %s live odds sync failed: %s", game_id, exc)
 
     # Gather all analytics data
     home_form = await _get_team_form(game.home_team, session)

@@ -14,7 +14,7 @@ import {
   Radio,
   AlertTriangle,
 } from 'lucide-react';
-import { format } from 'date-fns';
+import { format, formatDistanceToNowStrict } from 'date-fns';
 import { fetchGameDetails } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import PredictionCard from './PredictionCard';
@@ -118,7 +118,28 @@ function OverviewTab({ game }) {
         <div className="odds-section">
           <h3 className="subsection-title">
             <DollarSign size={16} />
-            Sportsbook Odds
+            {(() => {
+              const live = isLiveStatus(game.status);
+              if (!live) return 'Sportsbook Odds';
+              if (!odds.odds_updated_at) return 'Pregame Lines';
+              try {
+                const dt = new Date(odds.odds_updated_at);
+                if (isNaN(dt.getTime())) return 'Pregame Lines';
+                const fresh = (Date.now() - dt.getTime()) < 5 * 60 * 1000;
+                return fresh ? 'Live Lines' : 'Pregame Lines';
+              } catch { return 'Pregame Lines'; }
+            })()}
+            {odds.odds_updated_at && (
+              <span className="odds-updated-ago-detail">
+                {(() => {
+                  try {
+                    const dt = new Date(odds.odds_updated_at);
+                    if (isNaN(dt.getTime())) return '';
+                    return formatDistanceToNowStrict(dt, { addSuffix: true });
+                  } catch { return ''; }
+                })()}
+              </span>
+            )}
           </h3>
           <div className="odds-grid">
             {(odds.home_moneyline != null || odds.away_moneyline != null) && (

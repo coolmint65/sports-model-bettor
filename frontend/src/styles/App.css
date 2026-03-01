@@ -1278,6 +1278,18 @@ a:hover {
   50% { opacity: 0.3; }
 }
 
+.odds-stale-badge {
+  color: #888;
+  font-style: italic;
+}
+
+.odds-updated-ago-detail {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: #888;
+  margin-left: 8px;
+}
+
 .odds-updated-ago {
   font-size: 0.55rem;
   color: var(--text-dim, #555);

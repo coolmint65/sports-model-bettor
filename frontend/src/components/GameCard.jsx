@@ -218,13 +218,34 @@ function OddsRow({ odds, homeAbbr, awayAbbr, isLive }) {
 
   if (!hasML && !hasSpread && !hasTotal) return null;
 
+  // Check if odds are fresh enough to be considered "live"
+  // (updated within the last 5 minutes)
+  const oddsAreFresh = (() => {
+    if (!odds.odds_updated_at) return false;
+    try {
+      const dt = new Date(odds.odds_updated_at);
+      if (isNaN(dt.getTime())) return false;
+      return (Date.now() - dt.getTime()) < 5 * 60 * 1000;
+    } catch {
+      return false;
+    }
+  })();
+
+  const showAsLive = isLive && oddsAreFresh;
+
   return (
     <div className={`game-odds-row ${isLive ? 'odds-live' : ''}`}>
       {isLive && (
         <div className="odds-live-header">
-          <span className="odds-live-badge">
-            <Radio size={10} className="odds-live-pulse" />
-            LIVE LINES
+          <span className={`odds-live-badge ${showAsLive ? '' : 'odds-stale-badge'}`}>
+            {showAsLive ? (
+              <>
+                <Radio size={10} className="odds-live-pulse" />
+                LIVE LINES
+              </>
+            ) : (
+              'PREGAME LINES'
+            )}
           </span>
           <OddsUpdatedAgo updatedAt={odds.odds_updated_at} />
         </div>
