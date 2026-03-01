@@ -6,19 +6,19 @@ team form, head-to-head records, goalie stats, predictions, and computed
 analytical features for a specific game.
 """
 
-import json
 from datetime import date
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.constants import GAME_FINAL_STATUSES
 from app.database import get_session
-from app.models.game import Game, GameGoalieStats, GamePlayerStats, HeadToHead
-from app.models.player import GoalieStats, Player, PlayerStats
+from app.models.game import Game, HeadToHead
+from app.models.player import GoalieStats, Player
 from app.models.prediction import Prediction
 from app.models.team import Team, TeamStats
 
@@ -272,13 +272,12 @@ async def _get_recent_games(
     team_id: int, session: AsyncSession, limit: int = 10
 ) -> List[RecentGameResult]:
     """Return the last N completed games for a team, most recent first."""
-    FINISHED_STATUSES = ("final", "completed", "off")
     result = await session.execute(
         select(Game)
         .options(selectinload(Game.home_team), selectinload(Game.away_team))
         .where(
             or_(Game.home_team_id == team_id, Game.away_team_id == team_id),
-            func.lower(Game.status).in_(FINISHED_STATUSES),
+            func.lower(Game.status).in_(GAME_FINAL_STATUSES),
             Game.home_score.isnot(None),
         )
         .order_by(Game.date.desc())
@@ -324,7 +323,6 @@ async def _get_head_to_head(
     ALL games in the database regardless of how they were synced.
     """
     lo, hi = sorted([team1_id, team2_id])
-    FINISHED = ("final", "completed", "off")
 
     result = await session.execute(
         select(Game)
@@ -333,7 +331,7 @@ async def _get_head_to_head(
                 and_(Game.home_team_id == lo, Game.away_team_id == hi),
                 and_(Game.home_team_id == hi, Game.away_team_id == lo),
             ),
-            func.lower(Game.status).in_(FINISHED),
+            func.lower(Game.status).in_(GAME_FINAL_STATUSES),
             Game.home_score.isnot(None),
             Game.away_score.isnot(None),
             Game.game_type == "regular",
@@ -457,13 +455,11 @@ async def _compute_period_scoring(
          breakdown using the typical NHL 32/33/35% distribution.
       3. TeamStats ``goals_for_per_game`` as a final fallback.
     """
-    FINISHED_STATUSES = ("final", "completed", "off")
-
     # ---- Approach 1: per-period scores from boxscore data ----
     result = await session.execute(
         select(Game).where(
             or_(Game.home_team_id == team_id, Game.away_team_id == team_id),
-            func.lower(Game.status).in_(FINISHED_STATUSES),
+            func.lower(Game.status).in_(GAME_FINAL_STATUSES),
             Game.home_score_p1.isnot(None),
         )
         .order_by(Game.date.desc())
@@ -495,7 +491,7 @@ async def _compute_period_scoring(
     result = await session.execute(
         select(Game).where(
             or_(Game.home_team_id == team_id, Game.away_team_id == team_id),
-            func.lower(Game.status).in_(FINISHED_STATUSES),
+            func.lower(Game.status).in_(GAME_FINAL_STATUSES),
             Game.home_score.isnot(None),
         )
         .order_by(Game.date.desc())
@@ -633,20 +629,17 @@ async def get_game_details(
     # Build odds info from Game model fields (populated by OddsScraper)
     odds_info = None
     if any([game.home_moneyline, game.away_moneyline, game.over_under_line, game.home_spread_line]):
-        odds_updated = None
-        if hasattr(game, "odds_updated_at") and game.odds_updated_at:
-            odds_updated = str(game.odds_updated_at)
         odds_info = OddsInfo(
             home_moneyline=game.home_moneyline,
             away_moneyline=game.away_moneyline,
             over_under_line=game.over_under_line,
             home_spread_line=game.home_spread_line,
-            away_spread_line=getattr(game, "away_spread_line", None),
-            home_spread_price=getattr(game, "home_spread_price", None),
-            away_spread_price=getattr(game, "away_spread_price", None),
-            over_price=getattr(game, "over_price", None),
-            under_price=getattr(game, "under_price", None),
-            odds_updated_at=odds_updated,
+            away_spread_line=game.away_spread_line,
+            home_spread_price=game.home_spread_price,
+            away_spread_price=game.away_spread_price,
+            over_price=game.over_price,
+            under_price=game.under_price,
+            odds_updated_at=str(game.odds_updated_at) if game.odds_updated_at else None,
         )
 
     return GameDetailResponse(
@@ -664,13 +657,13 @@ async def get_game_details(
         overtime=game.went_to_overtime or False,
         shootout=False,
         period_scores=parsed_period_scores,
-        period=getattr(game, "period", None),
-        period_type=getattr(game, "period_type", None),
-        clock=getattr(game, "clock", None),
-        clock_running=getattr(game, "clock_running", None),
-        in_intermission=getattr(game, "in_intermission", None),
-        home_shots=getattr(game, "home_shots", None),
-        away_shots=getattr(game, "away_shots", None),
+        period=game.period,
+        period_type=game.period_type,
+        clock=game.clock,
+        clock_running=game.clock_running,
+        in_intermission=game.in_intermission,
+        home_shots=game.home_shots,
+        away_shots=game.away_shots,
         odds=odds_info,
         home_team_form=home_form,
         away_team_form=away_form,

@@ -1622,29 +1622,24 @@ a:hover {
   gap: 6px;
 }
 
-.odds-team-line {
+.odds-section .odds-team-line {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
 
-.odds-team-name {
+.odds-section .odds-team-name {
   font-size: 0.85rem;
   color: var(--text-secondary);
   font-weight: 500;
 }
 
-.odds-value {
+.odds-section .odds-value {
   font-family: var(--font-mono);
   font-weight: 700;
   font-size: 1rem;
   color: #4fc3f7;
-}
-
-.odds-vs {
-  font-size: 0.75rem;
-  color: var(--text-muted);
 }
 
 /* ─── Overview Records Section ──────────────────────────────── */
@@ -1718,31 +1713,6 @@ a:hover {
 }
 
 /* ─── Stat Comparison Table (Overview Tab) ──────────────────── */
-.records-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 24px;
-  background: var(--bg-tertiary);
-  border-radius: var(--radius-md);
-  margin-bottom: 20px;
-}
-
-.record-label {
-  font-family: var(--font-mono);
-  font-weight: 600;
-  font-size: 0.9rem;
-  color: var(--text-secondary);
-}
-
-.record-vs {
-  font-size: 0.75rem;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  font-weight: 600;
-}
-
 .stat-comparison-table {
   display: flex;
   flex-direction: column;
@@ -2034,57 +2004,6 @@ a:hover {
   font-weight: 600;
   color: var(--text-secondary);
   margin-bottom: 12px;
-}
-
-.h2h-table {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.h2h-table-header {
-  display: grid;
-  grid-template-columns: 120px 1fr 100px;
-  padding: 8px 12px;
-  font-size: 0.72rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-  color: var(--text-dim);
-  border-bottom: 1px solid var(--border-primary);
-}
-
-.h2h-table-row {
-  display: grid;
-  grid-template-columns: 120px 1fr 100px;
-  padding: 10px 12px;
-  font-size: 0.85rem;
-  border-radius: var(--radius-sm);
-  transition: background var(--transition-fast);
-}
-
-.h2h-table-row:hover {
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.h2h-table-row:nth-child(even) {
-  background: rgba(255, 255, 255, 0.01);
-}
-
-.h2h-date {
-  color: var(--text-muted);
-  font-size: 0.8rem;
-}
-
-.h2h-matchup {
-  color: var(--text-secondary);
-}
-
-.h2h-score {
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-weight: 600;
-  text-align: right;
 }
 
 /* ─── Form Tab ──────────────────────────────────────────────── */

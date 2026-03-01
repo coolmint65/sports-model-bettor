@@ -19,6 +19,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.constants import GAME_FINAL_STATUSES
 from app.database import get_session, get_session_context
 from app.models.game import Game, GameGoalieStats, GamePlayerStats, HeadToHead
 from app.models.player import GoalieStats, Player, PlayerStats
@@ -129,12 +130,9 @@ async def _run_full_sync():
                 try:
                     from app.scrapers.odds_multi import MultiSourceOddsScraper
 
-                    odds_scraper = MultiSourceOddsScraper()
-                    try:
+                    async with MultiSourceOddsScraper() as odds_scraper:
                         matched = await odds_scraper.sync_odds(session)
                         logger.info("Multi-source odds sync matched %d games", len(matched))
-                    finally:
-                        await odds_scraper.close()
                 except Exception as exc:
                     logger.warning("Multi-source odds sync failed (non-critical): %s", exc)
 
@@ -154,7 +152,7 @@ async def _run_full_sync():
                     today = date_type.today()
                     non_final_game_ids = select(Game.id).where(
                         Game.date == today,
-                        Game.status.notin_(["final", "completed", "off"]),
+                        Game.status.notin_(GAME_FINAL_STATUSES),
                     )
                     await session.execute(
                         sa_delete(Prediction).where(
@@ -348,8 +346,7 @@ async def sync_odds(
     try:
         from app.scrapers.odds_multi import MultiSourceOddsScraper
 
-        odds_scraper = MultiSourceOddsScraper()
-        try:
+        async with MultiSourceOddsScraper() as odds_scraper:
             matched = await odds_scraper.sync_odds(session)
             sources_seen = set()
             for m in matched:
@@ -360,8 +357,6 @@ async def sync_odds(
                 details=f"Sources: {', '.join(sorted(sources_seen)) or 'none'}. "
                         f"Updated moneyline, spread, and totals odds.",
             )
-        finally:
-            await odds_scraper.close()
     except Exception as exc:
         raise HTTPException(
             status_code=502,
@@ -504,8 +499,7 @@ async def test_odds_sources():
     """
     from app.scrapers.odds_multi import MultiSourceOddsScraper
 
-    scraper = MultiSourceOddsScraper()
-    try:
+    async with MultiSourceOddsScraper() as scraper:
         merged = await scraper.fetch_best_odds()
         # Build a summary
         source_counts: dict = {}
@@ -527,8 +521,6 @@ async def test_odds_sources():
                 for g in merged
             ],
         }
-    finally:
-        await scraper.close()
 
 
 @router.get(
@@ -576,11 +568,8 @@ async def diagnose_odds_matching(
         })
 
     # 2. Fetch odds
-    scraper = MultiSourceOddsScraper()
-    try:
+    async with MultiSourceOddsScraper() as scraper:
         odds_list = await scraper.fetch_best_odds()
-    finally:
-        await scraper.close()
 
     # 3. Try matching each odds event
     match_results = []

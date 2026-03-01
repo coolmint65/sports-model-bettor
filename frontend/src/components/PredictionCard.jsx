@@ -1,4 +1,3 @@
-import React from 'react';
 import { Target, TrendingUp, Star, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
 import { confidencePct, formatBetType, formatPredictionValue } from '../utils/teams';
 

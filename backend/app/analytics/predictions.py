@@ -11,13 +11,14 @@ import logging
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import and_, desc, func, or_, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.analytics.features import FeatureEngine
 from app.analytics.models import BettingModel
 from app.config import settings
+from app.constants import MARKET_BET_TYPES
 from app.models.game import Game
 from app.models.prediction import BetResult, Prediction
 
@@ -139,7 +140,7 @@ class PredictionManager:
         # Only these are eligible for "best bets" since we can calculate
         # true edge. Props (BTTS, first_goal, overtime, odd_even) don't
         # have market odds and would show inflated fake edges.
-        ODDS_BET_TYPES = {"ml", "total", "spread"}
+        ODDS_BET_TYPES = set(MARKET_BET_TYPES)
 
         # Flatten all individual predictions across all games and persist ALL
         all_flat: List[Dict[str, Any]] = []

@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
+from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES
 from app.database import get_session
 from app.models.game import Game
 from app.models.prediction import Prediction
@@ -104,7 +105,33 @@ class SyncResult(BaseModel):
     games_synced: int = 0
 
 
-async def _build_team_brief(team: Team, session: AsyncSession) -> TeamBrief:
+async def _batch_load_team_stats(
+    team_ids: List[int], session: AsyncSession
+) -> dict[int, Optional[TeamStats]]:
+    """Batch-load the latest TeamStats for multiple teams in one query."""
+    if not team_ids:
+        return {}
+    # Subquery: max season per team
+    latest_season = (
+        select(TeamStats.team_id, func.max(TeamStats.season).label("max_season"))
+        .where(TeamStats.team_id.in_(team_ids))
+        .group_by(TeamStats.team_id)
+        .subquery()
+    )
+    result = await session.execute(
+        select(TeamStats).join(
+            latest_season,
+            and_(
+                TeamStats.team_id == latest_season.c.team_id,
+                TeamStats.season == latest_season.c.max_season,
+            ),
+        )
+    )
+    return {ts.team_id: ts for ts in result.scalars().all()}
+
+
+def _build_team_brief(team: Team, stats: Optional[TeamStats] = None) -> TeamBrief:
+    """Build a TeamBrief from a Team and optional pre-loaded TeamStats."""
     brief = TeamBrief(
         id=team.id,
         external_id=team.external_id,
@@ -112,13 +139,6 @@ async def _build_team_brief(team: Team, session: AsyncSession) -> TeamBrief:
         abbreviation=team.abbreviation,
         logo_url=team.logo_url,
     )
-    stats_result = await session.execute(
-        select(TeamStats)
-        .where(TeamStats.team_id == team.id)
-        .order_by(TeamStats.season.desc())
-        .limit(1)
-    )
-    stats: Optional[TeamStats] = stats_result.scalar_one_or_none()
     if stats:
         brief.wins = stats.wins
         brief.losses = stats.losses
@@ -130,22 +150,52 @@ async def _build_team_brief(team: Team, session: AsyncSession) -> TeamBrief:
 
 def _build_game_odds(game: Game) -> Optional[GameOdds]:
     """Extract odds snapshot from a Game ORM object."""
-    hm = getattr(game, "home_moneyline", None)
-    am = getattr(game, "away_moneyline", None)
-    if hm is None and am is None:
+    if game.home_moneyline is None and game.away_moneyline is None:
         return None
-    updated = getattr(game, "odds_updated_at", None)
     return GameOdds(
-        home_moneyline=hm,
-        away_moneyline=am,
-        over_under_line=getattr(game, "over_under_line", None),
-        over_price=getattr(game, "over_price", None),
-        under_price=getattr(game, "under_price", None),
-        home_spread_line=getattr(game, "home_spread_line", None),
-        away_spread_line=getattr(game, "away_spread_line", None),
-        home_spread_price=getattr(game, "home_spread_price", None),
-        away_spread_price=getattr(game, "away_spread_price", None),
-        odds_updated_at=str(updated) if updated else None,
+        home_moneyline=game.home_moneyline,
+        away_moneyline=game.away_moneyline,
+        over_under_line=game.over_under_line,
+        over_price=game.over_price,
+        under_price=game.under_price,
+        home_spread_line=game.home_spread_line,
+        away_spread_line=game.away_spread_line,
+        home_spread_price=game.home_spread_price,
+        away_spread_price=game.away_spread_price,
+        odds_updated_at=str(game.odds_updated_at) if game.odds_updated_at else None,
+    )
+
+
+def _build_schedule_game(
+    game: Game,
+    home_brief: TeamBrief,
+    away_brief: TeamBrief,
+    top_pick: Optional[GameTopPick] = None,
+) -> ScheduleGame:
+    """Build a ScheduleGame from a Game ORM object and pre-built team briefs."""
+    return ScheduleGame(
+        id=game.id,
+        external_id=game.external_id,
+        game_date=game.date,
+        start_time=game.start_time,
+        venue=game.venue,
+        status=game.status,
+        game_type=game.game_type,
+        season=game.season,
+        home_team=home_brief,
+        away_team=away_brief,
+        home_score=game.home_score,
+        away_score=game.away_score,
+        went_to_overtime=game.went_to_overtime or False,
+        period=game.period,
+        period_type=game.period_type,
+        clock=game.clock,
+        clock_running=game.clock_running,
+        in_intermission=game.in_intermission,
+        home_shots=game.home_shots,
+        away_shots=game.away_shots,
+        top_pick=top_pick,
+        odds=_build_game_odds(game),
     )
 
 
@@ -164,7 +214,6 @@ async def _games_for_date(
     # Apply the same filters as best-bets: must be recommended, must have
     # reasonable juice (implied prob < ceiling), and must meet edge/confidence
     # thresholds so we don't surface heavy-juice or low-value picks.
-    MARKET_BET_TYPES = ("ml", "total", "spread")
     max_implied = settings.best_bet_max_implied
     game_ids = [g.id for g in games]
     top_picks: dict[int, GameTopPick] = {}
@@ -212,36 +261,16 @@ async def _games_for_date(
                     edge=pred.edge,
                 )
 
+    # Batch-load team stats to avoid N+1 queries
+    all_team_ids = list({g.home_team_id for g in games} | {g.away_team_id for g in games})
+    stats_map = await _batch_load_team_stats(all_team_ids, session)
+
     schedule_games: List[ScheduleGame] = []
     for game in games:
-        home_brief = await _build_team_brief(game.home_team, session)
-        away_brief = await _build_team_brief(game.away_team, session)
-
+        home_brief = _build_team_brief(game.home_team, stats_map.get(game.home_team_id))
+        away_brief = _build_team_brief(game.away_team, stats_map.get(game.away_team_id))
         schedule_games.append(
-            ScheduleGame(
-                id=game.id,
-                external_id=game.external_id,
-                game_date=game.date,
-                start_time=game.start_time,
-                venue=game.venue,
-                status=game.status,
-                game_type=game.game_type,
-                season=game.season,
-                home_team=home_brief,
-                away_team=away_brief,
-                home_score=game.home_score,
-                away_score=game.away_score,
-                went_to_overtime=game.went_to_overtime or False,
-                period=getattr(game, "period", None),
-                period_type=getattr(game, "period_type", None),
-                clock=getattr(game, "clock", None),
-                clock_running=getattr(game, "clock_running", None),
-                in_intermission=getattr(game, "in_intermission", None),
-                home_shots=getattr(game, "home_shots", None),
-                away_shots=getattr(game, "away_shots", None),
-                top_pick=top_picks.get(game.id),
-                odds=_build_game_odds(game),
-            )
+            _build_schedule_game(game, home_brief, away_brief, top_picks.get(game.id))
         )
     return schedule_games
 
@@ -296,13 +325,10 @@ async def get_live_games(
             async with session.begin_nested():
                 from app.scrapers.odds_multi import MultiSourceOddsScraper
 
-                odds_scraper = MultiSourceOddsScraper()
-                try:
+                async with MultiSourceOddsScraper() as odds_scraper:
                     await odds_scraper.sync_odds(session)
                     await session.flush()
                     session.expire_all()
-                finally:
-                    await odds_scraper.close()
         except Exception as exc:
             logger.warning("Live odds sync failed: %s", exc)
 
@@ -316,35 +342,15 @@ async def get_live_games(
         )
         games = result.scalars().all()
 
+    # Batch-load team stats
+    all_team_ids = list({g.home_team_id for g in games} | {g.away_team_id for g in games})
+    stats_map = await _batch_load_team_stats(all_team_ids, session)
+
     schedule_games: List[ScheduleGame] = []
     for game in games:
-        home_brief = await _build_team_brief(game.home_team, session)
-        away_brief = await _build_team_brief(game.away_team, session)
-        schedule_games.append(
-            ScheduleGame(
-                id=game.id,
-                external_id=game.external_id,
-                game_date=game.date,
-                start_time=game.start_time,
-                venue=game.venue,
-                status=game.status,
-                game_type=game.game_type,
-                season=game.season,
-                home_team=home_brief,
-                away_team=away_brief,
-                home_score=game.home_score,
-                away_score=game.away_score,
-                went_to_overtime=game.went_to_overtime or False,
-                period=getattr(game, "period", None),
-                period_type=getattr(game, "period_type", None),
-                clock=getattr(game, "clock", None),
-                clock_running=getattr(game, "clock_running", None),
-                in_intermission=getattr(game, "in_intermission", None),
-                home_shots=getattr(game, "home_shots", None),
-                away_shots=getattr(game, "away_shots", None),
-                odds=_build_game_odds(game),
-            )
-        )
+        home_brief = _build_team_brief(game.home_team, stats_map.get(game.home_team_id))
+        away_brief = _build_team_brief(game.away_team, stats_map.get(game.away_team_id))
+        schedule_games.append(_build_schedule_game(game, home_brief, away_brief))
 
     today = date.today()
     return ScheduleResponse(date=today, game_count=len(schedule_games), games=schedule_games)
@@ -371,7 +377,7 @@ async def get_today_schedule(
 
     # If any non-final games are missing a top pick OR missing odds
     # data entirely, sync odds from sportsbooks and regenerate predictions.
-    missing_picks = [g for g in games if g.top_pick is None and g.status not in ("final", "completed", "off")]
+    missing_picks = [g for g in games if g.top_pick is None and g.status not in GAME_FINAL_STATUSES]
 
     # Also directly check if any DB games are missing odds — this catches
     # cases where predictions exist but lack edges because odds weren't
@@ -379,7 +385,7 @@ async def get_today_schedule(
     needs_odds_result = await session.execute(
         select(Game.id).where(
             Game.date == today,
-            Game.status.notin_(["final", "completed", "off"]),
+            Game.status.notin_(GAME_FINAL_STATUSES),
             Game.home_moneyline.is_(None),
         )
     )
@@ -398,8 +404,7 @@ async def get_today_schedule(
             async with session.begin_nested():
                 from app.scrapers.odds_multi import MultiSourceOddsScraper
 
-                odds_scraper = MultiSourceOddsScraper()
-                try:
+                async with MultiSourceOddsScraper() as odds_scraper:
                     matched = await odds_scraper.sync_odds(session)
                     matched_pairs = [f"{m.get('away_abbrev','')}@{m.get('home_abbrev','')}" for m in (matched or [])]
                     logger.info(
@@ -427,8 +432,6 @@ async def get_today_schedule(
                                 aa, ha,
                                 g.home_moneyline, g.over_under_line, g.home_spread_line,
                             )
-                finally:
-                    await odds_scraper.close()
         except Exception as exc:
             logger.warning("Schedule odds sync failed: %s", exc)
 
@@ -447,7 +450,7 @@ async def get_today_schedule(
 
         games = await _games_for_date(today, session)
         with_picks = [g for g in games if g.top_pick is not None]
-        without_picks = [g for g in games if g.top_pick is None and g.status not in ("final", "completed", "off")]
+        without_picks = [g for g in games if g.top_pick is None and g.status not in GAME_FINAL_STATUSES]
         logger.info(
             "Schedule prediction result: %d/%d games have picks. "
             "Still missing: %s",
@@ -502,45 +505,43 @@ async def force_sync_odds(
     """
     from app.scrapers.odds_multi import MultiSourceOddsScraper
 
-    scraper = MultiSourceOddsScraper()
     try:
-        matched = await scraper.sync_odds(session)
-        await session.flush()
-        session.expire_all()
-
-        matched_pairs = [
-            f"{m.get('away_abbrev', '')}@{m.get('home_abbrev', '')}"
-            for m in (matched or [])
-        ]
-
-        # Also regenerate predictions so edges are computed with real odds
-        from app.api.predictions import _try_generate_predictions
-
-        today = date.today()
-        pred_count = 0
-        pred_error = None
-        try:
-            pred_count = await _try_generate_predictions(session, target_date=today)
+        async with MultiSourceOddsScraper() as scraper:
+            matched = await scraper.sync_odds(session)
             await session.flush()
-        except HTTPException as exc:
-            pred_error = exc.detail
-            logger.warning("sync-odds: prediction generation failed: %s", exc.detail)
-        except Exception as exc:
-            pred_error = str(exc)
-            logger.warning("sync-odds: prediction generation error: %s", exc)
+            session.expire_all()
 
-        return {
-            "status": "ok",
-            "odds_matched": len(matched) if matched else 0,
-            "predictions_generated": pred_count,
-            "prediction_error": pred_error,
-            "matched_games": matched_pairs,
-        }
+            matched_pairs = [
+                f"{m.get('away_abbrev', '')}@{m.get('home_abbrev', '')}"
+                for m in (matched or [])
+            ]
+
+            # Also regenerate predictions so edges are computed with real odds
+            from app.api.predictions import _try_generate_predictions
+
+            today = date.today()
+            pred_count = 0
+            pred_error = None
+            try:
+                pred_count = await _try_generate_predictions(session, target_date=today)
+                await session.flush()
+            except HTTPException as exc:
+                pred_error = exc.detail
+                logger.warning("sync-odds: prediction generation failed: %s", exc.detail)
+            except Exception as exc:
+                pred_error = str(exc)
+                logger.warning("sync-odds: prediction generation error: %s", exc)
+
+            return {
+                "status": "ok",
+                "odds_matched": len(matched) if matched else 0,
+                "predictions_generated": pred_count,
+                "prediction_error": pred_error,
+                "matched_games": matched_pairs,
+            }
     except Exception as exc:
         logger.error("sync-odds endpoint failed: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Odds sync failed: {exc}",
         )
-    finally:
-        await scraper.close()

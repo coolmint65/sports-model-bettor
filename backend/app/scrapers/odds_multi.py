@@ -19,7 +19,6 @@ all books — exactly what a sharp bettor needs to find +EV lines.
 
 import asyncio
 import logging
-import math
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -98,14 +97,6 @@ _COMMON_TEAM_MAP: Dict[str, str] = {
 # Reverse lookup: 3-letter abbreviation → itself.  Handles cases where
 # sportsbooks return the abbreviation directly (e.g., "PIT", "NYR").
 _ABBREV_SET = set(_COMMON_TEAM_MAP.values())
-
-# Kambi uses English names, sometimes slightly different
-_KAMBI_TEAM_MAP: Dict[str, str] = {
-    **_COMMON_TEAM_MAP,
-    "Montréal Canadiens": "MTL",
-    "Montreal Canadiens": "MTL",
-    "LA Kings": "LAK",
-}
 
 # Track unmapped names to log them (avoid flooding with duplicates)
 _unmapped_logged: set = set()

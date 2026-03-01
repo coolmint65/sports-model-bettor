@@ -1,10 +1,11 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { Calendar, TrendingUp, Radio } from 'lucide-react';
 import { format } from 'date-fns';
 import BestBets from './BestBets';
 import GameCard from './GameCard';
 import { fetchTodaySchedule, fetchLiveGames } from '../utils/api';
 import { useApi } from '../hooks/useApi';
+import { isLiveStatus } from '../utils/teams';
 
 const LIVE_POLL_INTERVAL = 5_000; // 5 seconds when live
 const IDLE_POLL_INTERVAL = 60_000; // 1 minute when no live games
@@ -14,7 +15,6 @@ function Dashboard() {
     data: scheduleData,
     loading: scheduleLoading,
     error: scheduleError,
-    refetch,
     silentRefetch,
   } = useApi(fetchTodaySchedule);
 
@@ -33,10 +33,7 @@ function Dashboard() {
   const today = format(new Date(), 'EEEE, MMMM d, yyyy');
   const games = scheduleData?.games || scheduleData || [];
 
-  const todayHasLive = games.some((g) => {
-    const s = (g.status || '').toLowerCase();
-    return s === 'in_progress' || s === 'live' || s === 'active';
-  });
+  const todayHasLive = games.some((g) => isLiveStatus(g.status));
   const hasAnyLive = liveGames.length > 0 || todayHasLive;
 
   // Always poll — faster when live, slower when idle.
@@ -72,10 +69,7 @@ function Dashboard() {
     (g) => !todayGameIds.has(g.id) && !todayGameIds.has(g.game_id)
   );
   const allLive = [
-    ...games.filter((g) => {
-      const s = (g.status || '').toLowerCase();
-      return s === 'in_progress' || s === 'live' || s === 'active';
-    }),
+    ...games.filter((g) => isLiveStatus(g.status)),
     ...extraLiveGames,
   ];
 

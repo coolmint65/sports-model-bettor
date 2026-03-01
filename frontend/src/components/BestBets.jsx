@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Trophy, TrendingUp, Target, Star, ChevronRight, Radio, Plus, Check, Layers } from 'lucide-react';
 import { fetchBestBets, trackBet } from '../utils/api';

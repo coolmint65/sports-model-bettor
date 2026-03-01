@@ -5,7 +5,6 @@ Provides endpoints for retrieving team and player statistics, including
 season-level aggregates, goalie metrics, and roster-level data.
 """
 
-from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,7 +14,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_session
-from app.models.game import Game
 from app.models.player import GoalieStats, Player, PlayerStats
 from app.models.team import Team, TeamStats
 

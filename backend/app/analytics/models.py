@@ -41,9 +41,8 @@ H2H_FACTOR = 0.10
 # Goalie adjustment factor (how much goalie quality affects expected goals)
 GOALIE_FACTOR = 0.20
 
-# League average save percentage and GAA for baseline comparisons
+# League average save percentage for baseline comparisons
 LEAGUE_AVG_SAVE_PCT = 0.905
-LEAGUE_AVG_GAA = 3.05
 
 # Common betting lines
 TOTAL_LINES = [4.5, 5.5, 6.5]
@@ -276,11 +275,6 @@ class BettingModel:
     def _poisson_prob(lam: float, k: int) -> float:
         """Probability of exactly k goals given expected goals lam."""
         return float(poisson.pmf(k, lam))
-
-    @staticmethod
-    def _poisson_prob_over(lam: float, k: int) -> float:
-        """Probability of MORE than k goals (i.e., > k)."""
-        return float(1.0 - poisson.cdf(k, lam))
 
     @staticmethod
     def _poisson_prob_under(lam: float, k: int) -> float:

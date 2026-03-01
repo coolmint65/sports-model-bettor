@@ -37,13 +37,14 @@ export function confidencePct(value) {
 }
 
 /**
- * Parse a datetime string from the API as UTC.
- *
- * SQLite drops timezone info, so the backend may return datetimes
- * like "2026-02-28T00:00:00" without a timezone suffix.
- * The NHL API times are always UTC, so we append 'Z' if missing
- * to ensure correct local-time conversion in the browser.
+ * Check whether a game status string indicates a live/in-progress game.
  */
+export function isLiveStatus(status) {
+  if (!status) return false;
+  const s = status.toLowerCase();
+  return s === 'in_progress' || s === 'live' || s === 'active';
+}
+
 /**
  * Format a raw bet_type string into a human-readable label.
  * e.g., "period_total" → "Period Total", "ml" → "Moneyline"
@@ -99,6 +100,10 @@ export function formatPredictionValue(value) {
   return formatted;
 }
 
+/**
+ * Parse a datetime string from the API as UTC.
+ * Appends 'Z' if no timezone indicator is present.
+ */
 export function parseAsUTC(dateStr) {
   if (!dateStr) return null;
   let s = String(dateStr);

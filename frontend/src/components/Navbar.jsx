@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { BarChart3, Home, History, RefreshCw, Zap } from 'lucide-react';
 import { triggerDataSync } from '../utils/api';

@@ -16,7 +16,7 @@ from app.config import settings
 from app.models.game import Game, GameGoalieStats, GamePlayerStats, HeadToHead
 from app.models.player import Player, GoalieStats, PlayerStats
 from app.models.team import Team, TeamStats
-from app.scrapers.base import APIResponseError, BaseScraper, ScraperError
+from app.scrapers.base import APIResponseError, BaseScraper
 
 logger = logging.getLogger(__name__)
 

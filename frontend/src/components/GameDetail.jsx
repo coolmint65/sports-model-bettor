@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -17,7 +17,7 @@ import { format } from 'date-fns';
 import { fetchGameDetails } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import PredictionCard from './PredictionCard';
-import { teamName, teamAbbrev, teamLogo, parseAsUTC } from '../utils/teams';
+import { teamName, teamAbbrev, teamLogo, parseAsUTC, isLiveStatus } from '../utils/teams';
 
 const LIVE_POLL_INTERVAL = 30_000;
 
@@ -28,13 +28,6 @@ const TABS = [
   { id: 'form', label: 'Form', icon: TrendingUp },
   { id: 'periods', label: 'Periods', icon: Layers },
 ];
-
-function getConfidenceColor(confidence) {
-  if (confidence >= 75) return '#00ff88';
-  if (confidence >= 60) return '#4fc3f7';
-  if (confidence >= 45) return '#ffd700';
-  return '#ff5252';
-}
 
 function formatGameDateTime(game) {
   try {
@@ -552,7 +545,7 @@ function GameDetail() {
   const { data: game, loading, error, refetch } = useApi(fetchGameDetails, [id]);
 
   // Auto-poll for live games
-  const isLive = game && ['in_progress', 'live', 'active'].includes((game.status || '').toLowerCase());
+  const isLive = game && isLiveStatus(game.status);
   const intervalRef = useRef(null);
   useEffect(() => {
     if (isLive) {

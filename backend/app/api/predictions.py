@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
+from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES
 from app.database import get_session
 from app.models.game import Game
 from app.models.prediction import BetResult, Prediction, TrackedBet
@@ -445,15 +446,12 @@ async def get_best_bets(
 ):
     today = date.today()
 
-    MARKET_BET_TYPES = ("ml", "total", "spread")
-
     # Refresh odds
     try:
         async with session.begin_nested():
             from app.scrapers.odds_multi import MultiSourceOddsScraper
 
-            odds_scraper = MultiSourceOddsScraper()
-            try:
+            async with MultiSourceOddsScraper() as odds_scraper:
                 matched = await odds_scraper.sync_odds(session)
                 logger.info(
                     "Multi-source odds sync matched %d games before prediction generation",
@@ -461,8 +459,6 @@ async def get_best_bets(
                 )
                 await session.flush()
                 session.expire_all()
-            finally:
-                await odds_scraper.close()
     except Exception as exc:
         logger.warning("Odds sync failed before best-bets generation: %s", exc)
 
@@ -478,13 +474,11 @@ async def get_best_bets(
             getattr(exc, 'detail', str(exc)),
         )
 
-    FINAL_STATUSES = ("final", "completed", "off", "official")
-
     max_implied = settings.best_bet_max_implied
 
     base_conditions = [
         Game.date == today,
-        ~func.lower(Game.status).in_(FINAL_STATUSES),
+        ~func.lower(Game.status).in_(GAME_FINAL_STATUSES),
         Prediction.odds_implied_prob.isnot(None),
         Prediction.odds_implied_prob < max_implied,
     ]
@@ -791,7 +785,7 @@ async def settle_tracked_bets(
         .join(Game, Game.id == TrackedBet.game_id)
         .where(
             TrackedBet.result.is_(None),
-            func.lower(Game.status).in_(("final", "completed", "off", "official")),
+            func.lower(Game.status).in_(GAME_FINAL_STATUSES),
         )
     )
     unsettled = result.scalars().all()
