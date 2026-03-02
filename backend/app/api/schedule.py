@@ -90,6 +90,7 @@ class ScheduleGame(BaseModel):
     top_pick: Optional[GameTopPick] = None
     # Sportsbook odds
     odds: Optional[GameOdds] = None
+    pregame_odds: Optional[GameOdds] = None
 
     model_config = {"from_attributes": True}
 
@@ -167,6 +168,23 @@ def _build_game_odds(game: Game) -> Optional[GameOdds]:
     )
 
 
+def _build_pregame_odds(game: Game) -> Optional[GameOdds]:
+    """Extract the frozen pregame odds snapshot (populated once game goes live)."""
+    if game.pregame_home_moneyline is None and game.pregame_away_moneyline is None:
+        return None
+    return GameOdds(
+        home_moneyline=game.pregame_home_moneyline,
+        away_moneyline=game.pregame_away_moneyline,
+        over_under_line=game.pregame_over_under_line,
+        over_price=game.pregame_over_price,
+        under_price=game.pregame_under_price,
+        home_spread_line=game.pregame_home_spread_line,
+        away_spread_line=game.pregame_away_spread_line,
+        home_spread_price=game.pregame_home_spread_price,
+        away_spread_price=game.pregame_away_spread_price,
+    )
+
+
 def _build_schedule_game(
     game: Game,
     home_brief: TeamBrief,
@@ -197,6 +215,7 @@ def _build_schedule_game(
         away_shots=game.away_shots,
         top_pick=top_pick,
         odds=_build_game_odds(game),
+        pregame_odds=_build_pregame_odds(game),
     )
 
 

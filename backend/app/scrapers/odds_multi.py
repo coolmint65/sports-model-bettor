@@ -1522,6 +1522,28 @@ class MultiSourceOddsScraper:
                 )
                 continue
 
+            # Snapshot pregame odds before overwriting with live values.
+            # If the game is in-progress and we haven't snapshotted yet,
+            # copy current odds to the pregame_* fields.
+            if (
+                game.status in ("in_progress", "live")
+                and game.pregame_home_moneyline is None
+                and game.home_moneyline is not None
+            ):
+                game.pregame_home_moneyline = game.home_moneyline
+                game.pregame_away_moneyline = game.away_moneyline
+                game.pregame_over_under_line = game.over_under_line
+                game.pregame_home_spread_line = game.home_spread_line
+                game.pregame_away_spread_line = game.away_spread_line
+                game.pregame_home_spread_price = game.home_spread_price
+                game.pregame_away_spread_price = game.away_spread_price
+                game.pregame_over_price = game.over_price
+                game.pregame_under_price = game.under_price
+                logger.info(
+                    "Pregame odds snapshot saved for %s@%s (game %s)",
+                    away_abbrev, home_abbrev, game.id,
+                )
+
             # Persist best odds to the Game record
             best = odds.get("best_odds", {})
             if best.get("home_moneyline"):

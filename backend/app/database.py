@@ -126,6 +126,16 @@ async def _migrate_add_columns() -> None:
         ("game", "in_intermission", "BOOLEAN"),
         # Prediction phase (prematch vs live)
         ("prediction", "phase", "VARCHAR(20) DEFAULT 'prematch'"),
+        # Pregame odds snapshot (frozen when game goes live)
+        ("game", "pregame_home_moneyline", "FLOAT"),
+        ("game", "pregame_away_moneyline", "FLOAT"),
+        ("game", "pregame_over_under_line", "FLOAT"),
+        ("game", "pregame_home_spread_line", "FLOAT"),
+        ("game", "pregame_away_spread_line", "FLOAT"),
+        ("game", "pregame_home_spread_price", "FLOAT"),
+        ("game", "pregame_away_spread_price", "FLOAT"),
+        ("game", "pregame_over_price", "FLOAT"),
+        ("game", "pregame_under_price", "FLOAT"),
     ]
 
     async with engine.begin() as conn:

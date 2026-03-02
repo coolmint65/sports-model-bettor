@@ -182,6 +182,7 @@ class GameDetailResponse(BaseModel):
     away_shots: Optional[int] = None
 
     odds: Optional[OddsInfo] = None
+    pregame_odds: Optional[OddsInfo] = None
 
     home_team_form: TeamForm
     away_team_form: TeamForm
@@ -706,6 +707,22 @@ async def get_game_details(
             odds_updated_at=str(game.odds_updated_at) if game.odds_updated_at else None,
         )
 
+    # Build pregame odds snapshot (only populated once game goes live)
+    pregame_odds_info = None
+    if any([game.pregame_home_moneyline, game.pregame_away_moneyline,
+            game.pregame_over_under_line, game.pregame_home_spread_line]):
+        pregame_odds_info = OddsInfo(
+            home_moneyline=game.pregame_home_moneyline,
+            away_moneyline=game.pregame_away_moneyline,
+            over_under_line=game.pregame_over_under_line,
+            home_spread_line=game.pregame_home_spread_line,
+            away_spread_line=game.pregame_away_spread_line,
+            home_spread_price=game.pregame_home_spread_price,
+            away_spread_price=game.pregame_away_spread_price,
+            over_price=game.pregame_over_price,
+            under_price=game.pregame_under_price,
+        )
+
     return GameDetailResponse(
         id=game.id,
         external_id=game.external_id,
@@ -729,6 +746,7 @@ async def get_game_details(
         home_shots=game.home_shots,
         away_shots=game.away_shots,
         odds=odds_info,
+        pregame_odds=pregame_odds_info,
         home_team_form=home_form,
         away_team_form=away_form,
         home_recent_games=home_recent,

@@ -114,82 +114,119 @@ function OverviewTab({ game }) {
 
   return (
     <div className="tab-content overview-tab">
-      {odds && (
-        <div className="odds-section">
-          <h3 className="subsection-title">
-            <DollarSign size={16} />
-            {(() => {
-              const live = isLiveStatus(game.status);
-              if (!live) return 'Sportsbook Odds';
-              if (!odds.odds_updated_at) return 'Pregame Lines';
-              try {
-                const dt = new Date(odds.odds_updated_at);
-                if (isNaN(dt.getTime())) return 'Pregame Lines';
-                const fresh = (Date.now() - dt.getTime()) < 5 * 60 * 1000;
-                return fresh ? 'Live Lines' : 'Pregame Lines';
-              } catch { return 'Pregame Lines'; }
-            })()}
-            {odds.odds_updated_at && (
-              <span className="odds-updated-ago-detail">
-                {(() => {
-                  try {
-                    const dt = new Date(odds.odds_updated_at);
-                    if (isNaN(dt.getTime())) return '';
-                    return formatDistanceToNowStrict(dt, { addSuffix: true });
-                  } catch { return ''; }
-                })()}
-              </span>
-            )}
-          </h3>
+      {/* Odds — show pregame + live separately for live games */}
+      {(() => {
+        const pregame = game.pregame_odds;
+        const live = isLiveStatus(game.status);
+        const hasLiveOdds = live && pregame && odds;
+
+        const renderOddsGrid = (o) => (
           <div className="odds-grid">
-            {(odds.home_moneyline != null || odds.away_moneyline != null) && (
+            {(o.home_moneyline != null || o.away_moneyline != null) && (
               <div className="odds-card">
                 <span className="odds-label">Moneyline</span>
                 <div className="odds-values">
                   <div className="odds-team-line">
                     <span className="odds-team-name">{away.abbreviation || 'Away'}</span>
-                    <span className="odds-value">{formatAmericanOdds(odds.away_moneyline)}</span>
+                    <span className="odds-value">{formatAmericanOdds(o.away_moneyline)}</span>
                   </div>
                   <div className="odds-team-line">
                     <span className="odds-team-name">{home.abbreviation || 'Home'}</span>
-                    <span className="odds-value">{formatAmericanOdds(odds.home_moneyline)}</span>
+                    <span className="odds-value">{formatAmericanOdds(o.home_moneyline)}</span>
                   </div>
                 </div>
               </div>
             )}
-            {odds.over_under_line != null && (
+            {o.over_under_line != null && (
               <div className="odds-card">
                 <span className="odds-label">Over/Under</span>
                 <div className="odds-values">
                   <div className="odds-team-line">
-                    <span className="odds-team-name">O {odds.over_under_line}</span>
-                    <span className="odds-value">{formatAmericanOdds(odds.over_price)}</span>
+                    <span className="odds-team-name">O {o.over_under_line}</span>
+                    <span className="odds-value">{formatAmericanOdds(o.over_price)}</span>
                   </div>
                   <div className="odds-team-line">
-                    <span className="odds-team-name">U {odds.over_under_line}</span>
-                    <span className="odds-value">{formatAmericanOdds(odds.under_price)}</span>
+                    <span className="odds-team-name">U {o.over_under_line}</span>
+                    <span className="odds-value">{formatAmericanOdds(o.under_price)}</span>
                   </div>
                 </div>
               </div>
             )}
-            {odds.home_spread_line != null && (
+            {o.home_spread_line != null && (
               <div className="odds-card">
                 <span className="odds-label">Puck Line</span>
                 <div className="odds-values">
                   <div className="odds-team-line">
-                    <span className="odds-team-name">{away.abbreviation} {odds.away_spread_line != null ? (odds.away_spread_line > 0 ? '+' : '') + odds.away_spread_line : ''}</span>
-                    <span className="odds-value">{formatAmericanOdds(odds.away_spread_price)}</span>
+                    <span className="odds-team-name">{away.abbreviation} {o.away_spread_line != null ? (o.away_spread_line > 0 ? '+' : '') + o.away_spread_line : ''}</span>
+                    <span className="odds-value">{formatAmericanOdds(o.away_spread_price)}</span>
                   </div>
                   <div className="odds-team-line">
-                    <span className="odds-team-name">{home.abbreviation} {odds.home_spread_line > 0 ? '+' : ''}{odds.home_spread_line}</span>
-                    <span className="odds-value">{formatAmericanOdds(odds.home_spread_price)}</span>
+                    <span className="odds-team-name">{home.abbreviation} {o.home_spread_line > 0 ? '+' : ''}{o.home_spread_line}</span>
+                    <span className="odds-value">{formatAmericanOdds(o.home_spread_price)}</span>
                   </div>
                 </div>
               </div>
             )}
           </div>
-        </div>
-      )}
+        );
+
+        if (hasLiveOdds) {
+          // Show both sections for live games with pregame snapshot
+          return (
+            <>
+              <div className="odds-section">
+                <h3 className="subsection-title">
+                  <DollarSign size={16} />
+                  Pregame Lines
+                </h3>
+                {renderOddsGrid(pregame)}
+              </div>
+              <div className="odds-section odds-section-live">
+                <h3 className="subsection-title">
+                  <DollarSign size={16} />
+                  Live Lines
+                  {odds.odds_updated_at && (
+                    <span className="odds-updated-ago-detail">
+                      {(() => {
+                        try {
+                          const dt = new Date(odds.odds_updated_at);
+                          if (isNaN(dt.getTime())) return '';
+                          return formatDistanceToNowStrict(dt, { addSuffix: true });
+                        } catch { return ''; }
+                      })()}
+                    </span>
+                  )}
+                </h3>
+                {renderOddsGrid(odds)}
+              </div>
+            </>
+          );
+        }
+
+        if (!odds) return null;
+
+        // Single section for pregame or when no pregame snapshot
+        return (
+          <div className="odds-section">
+            <h3 className="subsection-title">
+              <DollarSign size={16} />
+              {live ? 'Pregame Lines' : 'Sportsbook Odds'}
+              {odds.odds_updated_at && (
+                <span className="odds-updated-ago-detail">
+                  {(() => {
+                    try {
+                      const dt = new Date(odds.odds_updated_at);
+                      if (isNaN(dt.getTime())) return '';
+                      return formatDistanceToNowStrict(dt, { addSuffix: true });
+                    } catch { return ''; }
+                  })()}
+                </span>
+              )}
+            </h3>
+            {renderOddsGrid(odds)}
+          </div>
+        );
+      })()}
 
       {/* Team Records Section */}
       <div className="overview-records-section">

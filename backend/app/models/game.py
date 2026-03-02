@@ -138,6 +138,18 @@ class Game(TimestampMixin, Base):
         DateTime(timezone=True), nullable=True
     )
 
+    # Pregame odds snapshot — frozen when the game goes live so live
+    # odds can overwrite the main fields without losing the opening lines.
+    pregame_home_moneyline: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    pregame_away_moneyline: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    pregame_over_under_line: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    pregame_home_spread_line: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    pregame_away_spread_line: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    pregame_home_spread_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    pregame_away_spread_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    pregame_over_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    pregame_under_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
     # Relationships
     home_team: Mapped["Team"] = relationship(
         "Team",

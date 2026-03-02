@@ -209,7 +209,7 @@ function OddsUpdatedAgo({ updatedAt }) {
   return <span className="odds-updated-ago">{ago} ago</span>;
 }
 
-function OddsRow({ odds, homeAbbr, awayAbbr, isLive }) {
+function OddsRow({ odds, homeAbbr, awayAbbr, isLive, label }) {
   if (!odds) return null;
 
   const hasML = odds.home_moneyline != null || odds.away_moneyline != null;
@@ -218,24 +218,25 @@ function OddsRow({ odds, homeAbbr, awayAbbr, isLive }) {
 
   if (!hasML && !hasSpread && !hasTotal) return null;
 
-  // Check if odds are fresh enough to be considered "live"
-  // (updated within the last 5 minutes)
-  const oddsAreFresh = (() => {
-    if (!odds.odds_updated_at) return false;
+  // Determine header label
+  const headerLabel = (() => {
+    if (label === 'PREGAME') return 'PREGAME LINES';
+    if (label === 'LIVE') return 'LIVE LINES';
+    if (!isLive) return null; // no header for scheduled games
+    // Fallback: check freshness
+    if (!odds.odds_updated_at) return 'PREGAME LINES';
     try {
       const dt = new Date(odds.odds_updated_at);
-      if (isNaN(dt.getTime())) return false;
-      return (Date.now() - dt.getTime()) < 5 * 60 * 1000;
-    } catch {
-      return false;
-    }
+      if (isNaN(dt.getTime())) return 'PREGAME LINES';
+      return (Date.now() - dt.getTime()) < 5 * 60 * 1000 ? 'LIVE LINES' : 'PREGAME LINES';
+    } catch { return 'PREGAME LINES'; }
   })();
 
-  const showAsLive = isLive && oddsAreFresh;
+  const showAsLive = headerLabel === 'LIVE LINES';
 
   return (
     <div className={`game-odds-row ${isLive ? 'odds-live' : ''}`}>
-      {isLive && (
+      {headerLabel && (
         <div className="odds-live-header">
           <span className={`odds-live-badge ${showAsLive ? '' : 'odds-stale-badge'}`}>
             {showAsLive ? (
@@ -244,10 +245,10 @@ function OddsRow({ odds, homeAbbr, awayAbbr, isLive }) {
                 LIVE LINES
               </>
             ) : (
-              'PREGAME LINES'
+              headerLabel
             )}
           </span>
-          <OddsUpdatedAgo updatedAt={odds.odds_updated_at} />
+          {odds.odds_updated_at && <OddsUpdatedAgo updatedAt={odds.odds_updated_at} />}
         </div>
       )}
       <div className="odds-markets">
@@ -421,8 +422,15 @@ function GameCard({ game }) {
         </div>
       </div>
 
-      {/* Odds Row */}
-      <OddsRow odds={odds} homeAbbr={homeAbbr} awayAbbr={awayAbbr} isLive={statusInfo.isLive} />
+      {/* Odds Row(s) — show pregame + live separately during live games */}
+      {statusInfo.isLive && game.pregame_odds ? (
+        <>
+          <OddsRow odds={game.pregame_odds} homeAbbr={homeAbbr} awayAbbr={awayAbbr} label="PREGAME" />
+          <OddsRow odds={odds} homeAbbr={homeAbbr} awayAbbr={awayAbbr} isLive label="LIVE" />
+        </>
+      ) : (
+        <OddsRow odds={odds} homeAbbr={homeAbbr} awayAbbr={awayAbbr} isLive={statusInfo.isLive} />
+      )}
 
       {/* Footer: Top Pick or Venue + Confidence */}
       <div className="game-card-footer">
