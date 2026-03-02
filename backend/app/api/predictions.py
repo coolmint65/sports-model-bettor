@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES
+from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES, composite_pick_score
 from app.database import get_session
 from app.models.game import Game
 from app.models.prediction import BetResult, Prediction, TrackedBet
@@ -484,70 +484,43 @@ async def get_best_bets(
         Prediction.odds_implied_prob < max_implied,
     ]
 
-    base_order = [
-        Prediction.best_bet.desc(),
-        Prediction.edge.desc().nulls_last(),
-        Prediction.confidence.desc().nulls_last(),
-    ]
+    def _score(p: Prediction) -> float:
+        """Composite score for ranking: confidence + edge + juice."""
+        return composite_pick_score(p.confidence, p.edge, p.odds_implied_prob)
 
-    # Query top bets per category (3 per type)
-    categorized: dict[str, list] = {"ml": [], "spread": [], "total": []}
-    for bet_type in MARKET_BET_TYPES:
-        result = await session.execute(
-            select(Prediction)
-            .options(selectinload(Prediction.result))
-            .join(Game, Game.id == Prediction.game_id)
-            .where(
-                *base_conditions,
-                Prediction.recommended == True,
-                Prediction.bet_type == bet_type,
-            )
-            .order_by(*base_order)
-            .limit(3)
-        )
-        preds = result.scalars().all()
-        if not preds:
-            result = await session.execute(
-                select(Prediction)
-                .options(selectinload(Prediction.result))
-                .join(Game, Game.id == Prediction.game_id)
-                .where(
-                    *base_conditions,
-                    Prediction.bet_type == bet_type,
-                )
-                .order_by(*base_order)
-                .limit(3)
-            )
-            preds = result.scalars().all()
-        categorized[bet_type] = preds
-
-    # Overall top 3
+    # Fetch all eligible predictions in one query, then rank in Python
+    # using the composite score (confidence + edge + juice).
     result = await session.execute(
         select(Prediction)
         .options(selectinload(Prediction.result))
         .join(Game, Game.id == Prediction.game_id)
         .where(
             *base_conditions,
-            Prediction.recommended == True,
             Prediction.bet_type.in_(MARKET_BET_TYPES),
         )
-        .order_by(*base_order)
-        .limit(3)
     )
-    top_preds = result.scalars().all()
+    all_eligible = result.scalars().all()
+
+    # Split into recommended and fallback pools
+    recommended = [p for p in all_eligible if p.recommended]
+    fallback = [p for p in all_eligible if not p.recommended]
+
+    # Sort each pool by composite score
+    recommended.sort(key=_score, reverse=True)
+    fallback.sort(key=_score, reverse=True)
+
+    # Pick top 3 per category (prefer recommended, fall back if empty)
+    categorized: dict[str, list] = {"ml": [], "spread": [], "total": []}
+    for bet_type in MARKET_BET_TYPES:
+        typed = [p for p in recommended if p.bet_type == bet_type][:3]
+        if not typed:
+            typed = [p for p in fallback if p.bet_type == bet_type][:3]
+        categorized[bet_type] = typed
+
+    # Overall top 3 (prefer recommended, fall back if empty)
+    top_preds = recommended[:3]
     if not top_preds:
-        result = await session.execute(
-            select(Prediction)
-            .options(selectinload(Prediction.result))
-            .join(Game, Game.id == Prediction.game_id)
-            .where(
-                *base_conditions,
-                Prediction.bet_type.in_(MARKET_BET_TYPES),
-            )
-            .order_by(*base_order)
-            .limit(3)
-        )
-        top_preds = result.scalars().all()
+        top_preds = fallback[:3]
 
     logger.info(
         "Best-bets: ml=%d, spread=%d, total=%d, overall=%d",

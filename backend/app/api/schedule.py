@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES
+from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES, composite_pick_score
 from app.database import get_session
 from app.models.game import Game
 from app.models.prediction import Prediction
@@ -234,58 +234,41 @@ async def _games_for_date(
     )
     games = result.scalars().all()
 
-    # Pre-fetch best prediction per game (highest edge, market types only).
+    # Pre-fetch best prediction per game using composite score
+    # (confidence + edge + juice quality) instead of pure edge.
     #
-    # Tier 1 (strict): same criteria as best-bets — recommended, real edge,
-    #   and implied-prob below the juice ceiling.  These are our confident,
-    #   high-value picks.
+    # Tier 1 (strict): recommended, real edge, implied-prob below juice ceiling.
     # Tier 2 (fallback): for games with NO Tier-1 pick, relax the implied-
-    #   prob ceiling so we still surface the model's best data-driven pick
-    #   (e.g. on heavy favourites).  Marked is_fallback=True so the UI can
-    #   indicate reduced confidence.
+    #   prob ceiling.  Marked is_fallback=True so the UI can indicate it.
     max_implied = settings.best_bet_max_implied
     game_ids = [g.id for g in games]
     top_picks: dict[int, GameTopPick] = {}
     if game_ids:
-        # --- Tier 1: strict best-bet criteria (prematch only) ---
-        # Schedule cards always show the prematch prediction.
-        # Live predictions belong in the Best Bets tab.
-        max_edge_sub = (
-            select(
-                Prediction.game_id,
-                func.max(Prediction.edge).label("max_edge"),
-            )
-            .where(
+        # Fetch all prematch market-type predictions with real edges
+        all_preds_result = await session.execute(
+            select(Prediction).where(
                 Prediction.game_id.in_(game_ids),
                 Prediction.bet_type.in_(MARKET_BET_TYPES),
                 Prediction.phase == "prematch",
                 Prediction.edge.isnot(None),
-                Prediction.recommended == True,
                 Prediction.odds_implied_prob.isnot(None),
-                Prediction.odds_implied_prob < max_implied,
-            )
-            .group_by(Prediction.game_id)
-            .subquery()
-        )
-        pred_result = await session.execute(
-            select(Prediction)
-            .join(
-                max_edge_sub,
-                and_(
-                    Prediction.game_id == max_edge_sub.c.game_id,
-                    Prediction.edge == max_edge_sub.c.max_edge,
-                ),
-            )
-            .where(
-                Prediction.bet_type.in_(MARKET_BET_TYPES),
-                Prediction.phase == "prematch",
-                Prediction.edge.isnot(None),
-                Prediction.recommended == True,
-                Prediction.odds_implied_prob.isnot(None),
-                Prediction.odds_implied_prob < max_implied,
             )
         )
-        for pred in pred_result.scalars().all():
+        all_preds = all_preds_result.scalars().all()
+
+        # --- Tier 1: strict best-bet criteria ---
+        tier1 = [
+            p for p in all_preds
+            if p.recommended
+            and p.odds_implied_prob is not None
+            and p.odds_implied_prob < max_implied
+        ]
+        # Pick best per game by composite score
+        for pred in sorted(
+            tier1,
+            key=lambda p: composite_pick_score(p.confidence, p.edge, p.odds_implied_prob),
+            reverse=True,
+        ):
             if pred.game_id not in top_picks:
                 top_picks[pred.game_id] = GameTopPick(
                     bet_type=pred.bet_type,
@@ -296,44 +279,19 @@ async def _games_for_date(
                 )
 
         # --- Tier 2: fallback for games still missing a pick ---
-        # Requires real edge but drops the implied-prob ceiling.
-        # Still prematch-only for schedule cards.
-        missing_ids = [gid for gid in game_ids if gid not in top_picks]
+        missing_ids = set(gid for gid in game_ids if gid not in top_picks)
         if missing_ids:
-            fb_edge_sub = (
-                select(
-                    Prediction.game_id,
-                    func.max(Prediction.edge).label("max_edge"),
-                )
-                .where(
-                    Prediction.game_id.in_(missing_ids),
-                    Prediction.bet_type.in_(MARKET_BET_TYPES),
-                    Prediction.phase == "prematch",
-                    Prediction.edge.isnot(None),
-                    Prediction.edge >= settings.min_edge,
-                    Prediction.confidence >= settings.min_confidence,
-                )
-                .group_by(Prediction.game_id)
-                .subquery()
-            )
-            fb_result = await session.execute(
-                select(Prediction)
-                .join(
-                    fb_edge_sub,
-                    and_(
-                        Prediction.game_id == fb_edge_sub.c.game_id,
-                        Prediction.edge == fb_edge_sub.c.max_edge,
-                    ),
-                )
-                .where(
-                    Prediction.bet_type.in_(MARKET_BET_TYPES),
-                    Prediction.phase == "prematch",
-                    Prediction.edge.isnot(None),
-                    Prediction.edge >= settings.min_edge,
-                    Prediction.confidence >= settings.min_confidence,
-                )
-            )
-            for pred in fb_result.scalars().all():
+            tier2 = [
+                p for p in all_preds
+                if p.game_id in missing_ids
+                and (p.edge or 0) >= settings.min_edge
+                and (p.confidence or 0) >= settings.min_confidence
+            ]
+            for pred in sorted(
+                tier2,
+                key=lambda p: composite_pick_score(p.confidence, p.edge, p.odds_implied_prob),
+                reverse=True,
+            ):
                 if pred.game_id not in top_picks:
                     top_picks[pred.game_id] = GameTopPick(
                         bet_type=pred.bet_type,

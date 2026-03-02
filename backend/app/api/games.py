@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES
+from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES, composite_pick_score
 from app.database import get_session
 from app.models.game import Game, HeadToHead
 from app.models.player import GoalieStats, Player
@@ -562,6 +562,8 @@ async def _get_game_predictions(
     min_conf = settings.min_confidence
 
     briefs: List[GamePredictionBrief] = []
+    # Map brief id → implied_prob for composite scoring
+    implied_map: dict[int, float | None] = {}
     for p in preds:
         # Fallback = has real edge but heavy juice (above implied ceiling)
         is_fb = (
@@ -587,11 +589,13 @@ async def _get_game_predictions(
                 created_at=str(p.created_at) if p.created_at else None,
             )
         )
+        implied_map[p.id] = p.odds_implied_prob
 
-    # Sort: recommended first (by edge desc), then fallback, then rest
+    # Sort: recommended first (by composite score), then fallback, then rest
     def sort_key(b: GamePredictionBrief):
         tier = 0 if b.recommended else (1 if b.is_fallback else 2)
-        return (tier, -(b.edge or 0))
+        score = composite_pick_score(b.confidence, b.edge, implied_map.get(b.id))
+        return (tier, -score)
 
     briefs.sort(key=sort_key)
     return briefs

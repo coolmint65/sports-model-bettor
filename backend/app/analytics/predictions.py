@@ -18,7 +18,7 @@ from sqlalchemy.orm import selectinload
 from app.analytics.features import FeatureEngine
 from app.analytics.models import BettingModel
 from app.config import settings
-from app.constants import MARKET_BET_TYPES
+from app.constants import MARKET_BET_TYPES, composite_pick_score
 from app.models.game import Game
 from app.models.prediction import BetResult, Prediction
 
@@ -204,9 +204,13 @@ class PredictionManager:
                 ):
                     candidates.append(flat)
 
-        # Sort by edge descending - this now reflects real value
-        # since edge = model_confidence - market_implied_probability
-        candidates.sort(key=lambda c: c["edge"], reverse=True)
+        # Sort by composite score (confidence + edge + juice quality)
+        candidates.sort(
+            key=lambda c: composite_pick_score(
+                c["confidence"], c["edge"], c["implied_probability"]
+            ),
+            reverse=True,
+        )
 
         # Take top 3
         best_bets = candidates[:3]
