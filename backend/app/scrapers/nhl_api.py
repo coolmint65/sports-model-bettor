@@ -613,6 +613,28 @@ class NHLScraper(BaseScraper):
                 await db.flush()
                 logger.debug("Created game: %s", game_ext_id)
             else:
+                # Snapshot pregame odds when game transitions to live
+                old_status = game.status
+                if (
+                    old_status in ("scheduled", "pregame")
+                    and status == "in_progress"
+                    and game.pregame_home_moneyline is None
+                    and game.home_moneyline is not None
+                ):
+                    game.pregame_home_moneyline = game.home_moneyline
+                    game.pregame_away_moneyline = game.away_moneyline
+                    game.pregame_over_under_line = game.over_under_line
+                    game.pregame_home_spread_line = game.home_spread_line
+                    game.pregame_away_spread_line = game.away_spread_line
+                    game.pregame_home_spread_price = game.home_spread_price
+                    game.pregame_away_spread_price = game.away_spread_price
+                    game.pregame_over_price = game.over_price
+                    game.pregame_under_price = game.under_price
+                    logger.info(
+                        "Pregame odds snapshot saved for game %s (status %s -> %s)",
+                        game_ext_id, old_status, status,
+                    )
+
                 # Update status and scores
                 game.status = status
                 if home_info.get("score") is not None:

@@ -1374,6 +1374,16 @@ class MultiSourceOddsScraper:
                 all_events.append([])
             else:
                 all_events.append(result)
+                if result:
+                    teams_list = [
+                        f"{e.away_team}@{e.home_team}" for e in result[:8]
+                    ]
+                    logger.info(
+                        "%s returned %d events: %s%s",
+                        source_names[i], len(result),
+                        ", ".join(teams_list),
+                        "..." if len(result) > 8 else "",
+                    )
 
         total_events = sum(len(evts) for evts in all_events)
         sources_with_data = sum(1 for evts in all_events if evts)

@@ -6,7 +6,7 @@ including the ability to sync schedule data from the NHL API.
 """
 
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timezone, timedelta
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -25,6 +25,10 @@ from app.models.team import Team, TeamStats
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/schedule", tags=["schedule"])
+
+# Throttle live odds syncs — sportsbook APIs rate-limit aggressively
+_LIVE_ODDS_MIN_INTERVAL = timedelta(minutes=2)
+_last_live_odds_sync: Optional[datetime] = None
 
 
 class TeamBrief(BaseModel):
@@ -391,17 +395,30 @@ async def get_live_games(
         except Exception:
             pass
 
-        # Also sync live odds so the frontend shows current lines
-        try:
-            async with session.begin_nested():
-                from app.scrapers.odds_multi import MultiSourceOddsScraper
+        # Also sync live odds — throttled to avoid sportsbook rate limits
+        global _last_live_odds_sync
+        now = datetime.now(timezone.utc)
+        odds_due = (
+            _last_live_odds_sync is None
+            or (now - _last_live_odds_sync) >= _LIVE_ODDS_MIN_INTERVAL
+        )
+        if odds_due:
+            try:
+                async with session.begin_nested():
+                    from app.scrapers.odds_multi import MultiSourceOddsScraper
 
-                async with MultiSourceOddsScraper() as odds_scraper:
-                    await odds_scraper.sync_odds(session)
-                    await session.flush()
-                    session.expire_all()
-        except Exception as exc:
-            logger.warning("Live odds sync failed: %s", exc)
+                    async with MultiSourceOddsScraper() as odds_scraper:
+                        matched = await odds_scraper.sync_odds(session)
+                        logger.info(
+                            "Live odds sync: matched %d games",
+                            len(matched) if matched else 0,
+                        )
+                        await session.flush()
+                        session.expire_all()
+                _last_live_odds_sync = now
+            except Exception as exc:
+                logger.warning("Live odds sync failed: %s", exc)
+                _last_live_odds_sync = now  # still throttle on failure
 
         # Always re-query to get fresh ORM objects (savepoint rollback
         # expires identity-mapped objects, which breaks async lazy loading).
