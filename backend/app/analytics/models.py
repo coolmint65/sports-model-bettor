@@ -1057,21 +1057,6 @@ class BettingModel:
             )
         lineup_note = " | ".join(lineup_notes) if lineup_notes else ""
 
-        # Validate spread sign against moneyline: favorite must have
-        # negative spread.  If they disagree, flip sign and prices.
-        if home_ml and away_ml and spread_line:
-            home_is_fav = home_ml < away_ml
-            if home_is_fav and spread_line > 0:
-                spread_line = -abs(spread_line)
-                odds_data["home_spread_line"] = spread_line
-                odds_data["away_spread_line"] = abs(spread_line)
-                home_spread_price, away_spread_price = away_spread_price, home_spread_price
-            elif not home_is_fav and spread_line < 0:
-                spread_line = abs(spread_line)
-                odds_data["home_spread_line"] = spread_line
-                odds_data["away_spread_line"] = -abs(spread_line)
-                home_spread_price, away_spread_price = away_spread_price, home_spread_price
-
         # ---- Moneyline ----
         try:
             ml = await self.predict_moneyline(features)
