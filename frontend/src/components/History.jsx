@@ -289,10 +289,28 @@ function History() {
                 <ResponsiveContainer width="100%" height={350}>
                   <AreaChart data={chartData} margin={{ top: 10, right: 30, left: 10, bottom: 10 }}>
                     <defs>
-                      <linearGradient id="profitGradient" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#00ff88" stopOpacity={0.3} />
-                        <stop offset="95%" stopColor="#00ff88" stopOpacity={0} />
-                      </linearGradient>
+                      {(() => {
+                        const profits = chartData.map(d => d.profit);
+                        const maxP = Math.max(...profits, 0);
+                        const minP = Math.min(...profits, 0);
+                        const range = maxP - minP || 1;
+                        // zeroOffset = fraction of the Y-axis where 0 sits (0=top, 1=bottom)
+                        const zeroOffset = maxP / range;
+                        return (
+                          <>
+                            <linearGradient id="profitGradientSplit" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor="#00ff88" stopOpacity={0.35} />
+                              <stop offset={`${(zeroOffset * 100).toFixed(1)}%`} stopColor="#00ff88" stopOpacity={0.05} />
+                              <stop offset={`${(zeroOffset * 100).toFixed(1)}%`} stopColor="#ff5252" stopOpacity={0.05} />
+                              <stop offset="100%" stopColor="#ff5252" stopOpacity={0.35} />
+                            </linearGradient>
+                            <linearGradient id="profitStrokeSplit" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset={`${(zeroOffset * 100).toFixed(1)}%`} stopColor="#00ff88" stopOpacity={1} />
+                              <stop offset={`${(zeroOffset * 100).toFixed(1)}%`} stopColor="#ff5252" stopOpacity={1} />
+                            </linearGradient>
+                          </>
+                        );
+                      })()}
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke="#2a2a4a" />
                     <XAxis
@@ -312,9 +330,9 @@ function History() {
                       type="monotone"
                       dataKey="profit"
                       name="Profit"
-                      stroke="#00ff88"
+                      stroke="url(#profitStrokeSplit)"
                       strokeWidth={2}
-                      fill="url(#profitGradient)"
+                      fill="url(#profitGradientSplit)"
                     />
                   </AreaChart>
                 </ResponsiveContainer>

@@ -41,6 +41,15 @@ H2H_FACTOR = 0.10
 # Goalie adjustment factor (how much goalie quality affects expected goals)
 GOALIE_FACTOR = 0.20
 
+# Player talent adjustment factor (how much skater quality affects xG)
+SKATER_TALENT_FACTOR = 0.10
+
+# Lineup depletion factor (how much missing players reduce xG)
+LINEUP_DEPLETION_FACTOR = 0.15
+
+# League average top-6 forward points per game (approx benchmark)
+LEAGUE_AVG_TOP6_PPG = 0.65
+
 # League average save percentage for baseline comparisons
 LEAGUE_AVG_SAVE_PCT = 0.905
 
@@ -194,6 +203,30 @@ class BettingModel:
         if away_splits.get("games_found", 0) >= 5:
             split_off = away_splits.get("avg_goals_for", away_xg)
             away_xg = away_xg * 0.85 + split_off * 0.15
+
+        # ---- Player talent adjustment ----
+        # Teams with elite top-6 forwards score more; adjust xG accordingly.
+        home_skaters = features.get("home_skaters", {})
+        away_skaters = features.get("away_skaters", {})
+        if home_skaters.get("games_found", 0) >= 5:
+            talent_diff = home_skaters.get("top6_fwd_ppg", LEAGUE_AVG_TOP6_PPG) - LEAGUE_AVG_TOP6_PPG
+            home_xg *= 1.0 + talent_diff * SKATER_TALENT_FACTOR
+        if away_skaters.get("games_found", 0) >= 5:
+            talent_diff = away_skaters.get("top6_fwd_ppg", LEAGUE_AVG_TOP6_PPG) - LEAGUE_AVG_TOP6_PPG
+            away_xg *= 1.0 + talent_diff * SKATER_TALENT_FACTOR
+
+        # ---- Lineup depletion adjustment ----
+        # Missing regular players reduce a team's expected output.
+        home_lineup = features.get("home_lineup", {})
+        away_lineup = features.get("away_lineup", {})
+        home_strength = home_lineup.get("lineup_strength", 1.0)
+        away_strength = away_lineup.get("lineup_strength", 1.0)
+        if home_strength < 1.0:
+            depletion = (1.0 - home_strength) * LINEUP_DEPLETION_FACTOR
+            home_xg *= (1.0 - depletion)
+        if away_strength < 1.0:
+            depletion = (1.0 - away_strength) * LINEUP_DEPLETION_FACTOR
+            away_xg *= (1.0 - depletion)
 
         # ---- Regression toward league average ----
         # Hot-streak form weights and weak-opponent defensive factors can
@@ -1008,6 +1041,22 @@ class BettingModel:
         home_spread_price = odds_data.get("home_spread_price")
         away_spread_price = odds_data.get("away_spread_price")
 
+        # Build lineup context notes for reasoning strings
+        lineup_notes = []
+        home_lineup = features.get("home_lineup", {})
+        away_lineup = features.get("away_lineup", {})
+        if home_lineup.get("missing_count", 0) > 0:
+            lineup_notes.append(
+                f"{home_abbr} missing {home_lineup['missing_count']} regular(s) "
+                f"({home_lineup['missing_points_per_game']:.1f} PPG absent)"
+            )
+        if away_lineup.get("missing_count", 0) > 0:
+            lineup_notes.append(
+                f"{away_abbr} missing {away_lineup['missing_count']} regular(s) "
+                f"({away_lineup['missing_points_per_game']:.1f} PPG absent)"
+            )
+        lineup_note = " | ".join(lineup_notes) if lineup_notes else ""
+
         # Validate spread sign against moneyline: favorite must have
         # negative spread.  If they disagree, flip sign and prices.
         if home_ml and away_ml and spread_line:
@@ -1040,6 +1089,8 @@ class BettingModel:
                     f"{home_name} ({home_abbr}) are favored with {home_wp:.1%} win probability "
                     f"(xG: {ml['home_xg']:.2f} vs {ml['away_xg']:.2f}).{odds_note}"
                 )
+                if lineup_note:
+                    ml_reason += f" Lineup: {lineup_note}."
             else:
                 ml_pred = away_abbr
                 ml_prob = away_wp
@@ -1051,6 +1102,8 @@ class BettingModel:
                     f"{away_name} ({away_abbr}) projected to win at {away_wp:.1%} "
                     f"(xG: {ml['away_xg']:.2f} vs {ml['home_xg']:.2f}).{odds_note}"
                 )
+                if lineup_note:
+                    ml_reason += f" Lineup: {lineup_note}."
 
             # Calculate implied probability and edge from real odds
             ml_implied = None

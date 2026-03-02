@@ -518,7 +518,7 @@ function FormTab({ game }) {
         </div>
 
         <div className="form-results-strip">
-          {last10.map((g, i) => {
+          {[...last10].reverse().map((g, i) => {
             const resultClass =
               g.result === 'W'
                 ? 'result-win'

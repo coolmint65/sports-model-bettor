@@ -13,8 +13,8 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import and_, case, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.game import Game, GameGoalieStats, HeadToHead
-from app.models.player import GoalieStats, Player
+from app.models.game import Game, GameGoalieStats, GamePlayerStats, HeadToHead
+from app.models.player import GoalieStats, Player, PlayerStats
 from app.models.team import Team, TeamStats
 
 logger = logging.getLogger(__name__)
@@ -583,6 +583,221 @@ class FeatureEngine:
         }
 
     # ------------------------------------------------------------------ #
+    #  Skater talent / offensive depth                                   #
+    # ------------------------------------------------------------------ #
+
+    async def get_skater_impact(
+        self,
+        db: AsyncSession,
+        team_id: int,
+        n_games: int = 10,
+    ) -> Dict[str, Any]:
+        """
+        Measure offensive talent depth for a team from recent game boxscores.
+
+        Queries per-game player stats (GamePlayerStats) to calculate:
+        - Top-6 forward production (points/game)
+        - Top-4 defenseman production (points/game)
+        - Star player contribution (top scorer points/game)
+        - Team total points/game from skaters
+
+        Returns:
+            dict with keys: top6_fwd_ppg, top4_def_ppg, star_ppg,
+            team_skater_ppg, games_found.
+        """
+        # Get recent completed games for this team
+        recent_games = await self._get_recent_games(db, team_id, n_games)
+        if not recent_games:
+            return self._empty_skater_impact()
+
+        game_ids = [g.id for g in recent_games]
+        n_actual = len(game_ids)
+
+        # Get all skater stats from these games for players on this team
+        stmt = (
+            select(
+                GamePlayerStats.player_id,
+                Player.position,
+                func.sum(GamePlayerStats.goals).label("total_goals"),
+                func.sum(GamePlayerStats.assists).label("total_assists"),
+                func.sum(GamePlayerStats.points).label("total_points"),
+                func.sum(GamePlayerStats.shots).label("total_shots"),
+                func.count().label("games"),
+            )
+            .join(Player, GamePlayerStats.player_id == Player.id)
+            .where(
+                and_(
+                    GamePlayerStats.game_id.in_(game_ids),
+                    Player.team_id == team_id,
+                    Player.position != "G",
+                )
+            )
+            .group_by(GamePlayerStats.player_id, Player.position)
+        )
+        result = await db.execute(stmt)
+        rows = result.all()
+
+        if not rows:
+            return self._empty_skater_impact()
+
+        forwards = []
+        defensemen = []
+
+        for row in rows:
+            ppg = row.total_points / row.games if row.games > 0 else 0
+            gpg = row.total_goals / row.games if row.games > 0 else 0
+            entry = {
+                "player_id": row.player_id,
+                "ppg": ppg,
+                "gpg": gpg,
+                "games": row.games,
+                "total_points": row.total_points,
+                "total_goals": row.total_goals,
+            }
+            if row.position in ("D",):
+                defensemen.append(entry)
+            else:
+                forwards.append(entry)
+
+        # Sort by points per game
+        forwards.sort(key=lambda x: x["ppg"], reverse=True)
+        defensemen.sort(key=lambda x: x["ppg"], reverse=True)
+
+        top6_fwd = forwards[:6]
+        top4_def = defensemen[:4]
+        all_skaters = forwards + defensemen
+
+        top6_fwd_ppg = (
+            sum(p["ppg"] for p in top6_fwd) / len(top6_fwd)
+            if top6_fwd else 0.0
+        )
+        top4_def_ppg = (
+            sum(p["ppg"] for p in top4_def) / len(top4_def)
+            if top4_def else 0.0
+        )
+        star_ppg = all_skaters[0]["ppg"] if all_skaters else 0.0
+        team_skater_ppg = (
+            sum(p["ppg"] for p in all_skaters) / len(all_skaters)
+            if all_skaters else 0.0
+        )
+
+        return {
+            "top6_fwd_ppg": round(top6_fwd_ppg, 3),
+            "top4_def_ppg": round(top4_def_ppg, 3),
+            "star_ppg": round(star_ppg, 3),
+            "team_skater_ppg": round(team_skater_ppg, 3),
+            "games_found": n_actual,
+        }
+
+    # ------------------------------------------------------------------ #
+    #  Lineup availability / missing player impact                       #
+    # ------------------------------------------------------------------ #
+
+    async def get_lineup_status(
+        self,
+        db: AsyncSession,
+        team_id: int,
+        window: int = 20,
+        recent: int = 3,
+    ) -> Dict[str, Any]:
+        """
+        Detect missing regular players by comparing recent games to
+        the broader window.
+
+        A "regular" is any skater who appeared in >= 70% of the last
+        *window* games. A player is considered "missing" if they did
+        not appear in any of the last *recent* games.
+
+        Returns:
+            dict with keys: regulars_count, missing_count,
+            missing_points_per_game, missing_goals_per_game,
+            lineup_strength (1.0 = full, lower = depleted).
+        """
+        all_games = await self._get_recent_games(db, team_id, window)
+        if len(all_games) < 5:
+            return self._empty_lineup_status()
+
+        all_game_ids = [g.id for g in all_games]
+        recent_game_ids = [g.id for g in all_games[:recent]]
+        n_total = len(all_game_ids)
+
+        # Count appearances per player across the full window
+        stmt = (
+            select(
+                GamePlayerStats.player_id,
+                func.count().label("appearances"),
+                func.sum(GamePlayerStats.points).label("total_points"),
+                func.sum(GamePlayerStats.goals).label("total_goals"),
+            )
+            .join(Player, GamePlayerStats.player_id == Player.id)
+            .where(
+                and_(
+                    GamePlayerStats.game_id.in_(all_game_ids),
+                    Player.team_id == team_id,
+                    Player.position != "G",
+                )
+            )
+            .group_by(GamePlayerStats.player_id)
+        )
+        result = await db.execute(stmt)
+        all_rows = {row.player_id: row for row in result.all()}
+
+        # Identify regulars (>= 70% appearance rate)
+        threshold = max(1, int(n_total * 0.70))
+        regulars = {
+            pid: row for pid, row in all_rows.items()
+            if row.appearances >= threshold
+        }
+
+        if not regulars:
+            return self._empty_lineup_status()
+
+        # Find who played in the recent games
+        recent_stmt = (
+            select(GamePlayerStats.player_id)
+            .where(
+                and_(
+                    GamePlayerStats.game_id.in_(recent_game_ids),
+                    GamePlayerStats.player_id.in_(list(regulars.keys())),
+                )
+            )
+            .distinct()
+        )
+        recent_result = await db.execute(recent_stmt)
+        recent_players = {row[0] for row in recent_result.all()}
+
+        # Missing regulars = regulars not in recent games
+        missing_pids = set(regulars.keys()) - recent_players
+
+        missing_ppg = 0.0
+        missing_gpg = 0.0
+        for pid in missing_pids:
+            row = regulars[pid]
+            games = row.appearances
+            if games > 0:
+                missing_ppg += row.total_points / games
+                missing_gpg += row.total_goals / games
+
+        total_regular_ppg = sum(
+            r.total_points / r.appearances
+            for r in regulars.values()
+            if r.appearances > 0
+        )
+
+        lineup_strength = 1.0
+        if total_regular_ppg > 0 and missing_ppg > 0:
+            lineup_strength = max(0.70, 1.0 - (missing_ppg / total_regular_ppg) * 0.5)
+
+        return {
+            "regulars_count": len(regulars),
+            "missing_count": len(missing_pids),
+            "missing_points_per_game": round(missing_ppg, 3),
+            "missing_goals_per_game": round(missing_gpg, 3),
+            "lineup_strength": round(lineup_strength, 4),
+            "total_regular_ppg": round(total_regular_ppg, 3),
+        }
+
+    # ------------------------------------------------------------------ #
     #  Season-level team stats (from TeamStats table)                     #
     # ------------------------------------------------------------------ #
 
@@ -690,6 +905,12 @@ class FeatureEngine:
         away_ot = await self.get_overtime_tendency(db, away_id)
         away_patterns = await self.get_scoring_patterns(db, away_id)
 
+        # Player talent and lineup status
+        home_skaters = await self.get_skater_impact(db, home_id)
+        away_skaters = await self.get_skater_impact(db, away_id)
+        home_lineup = await self.get_lineup_status(db, home_id)
+        away_lineup = await self.get_lineup_status(db, away_id)
+
         # Head-to-head
         h2h = await self.get_h2h_stats(db, home_id, away_id)
 
@@ -735,6 +956,11 @@ class FeatureEngine:
             "away_periods": away_periods,
             "away_ot": away_ot,
             "away_patterns": away_patterns,
+            # Player talent and lineup
+            "home_skaters": home_skaters,
+            "away_skaters": away_skaters,
+            "home_lineup": home_lineup,
+            "away_lineup": away_lineup,
             # Head-to-head
             "h2h": h2h,
         }
@@ -857,4 +1083,27 @@ class FeatureEngine:
             "last10_save_pct": 0.900,
             "last10_gaa": 3.00,
             "games_started_season": 0,
+        }
+
+    @staticmethod
+    def _empty_skater_impact() -> Dict[str, Any]:
+        """Return default skater impact features when no data is available."""
+        return {
+            "top6_fwd_ppg": 0.0,
+            "top4_def_ppg": 0.0,
+            "star_ppg": 0.0,
+            "team_skater_ppg": 0.0,
+            "games_found": 0,
+        }
+
+    @staticmethod
+    def _empty_lineup_status() -> Dict[str, Any]:
+        """Return default lineup status when no data is available."""
+        return {
+            "regulars_count": 0,
+            "missing_count": 0,
+            "missing_points_per_game": 0.0,
+            "missing_goals_per_game": 0.0,
+            "lineup_strength": 1.0,
+            "total_regular_ppg": 0.0,
         }
