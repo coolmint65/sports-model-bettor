@@ -156,6 +156,23 @@ def american_to_implied(american: float) -> float:
         return abs(american) / (abs(american) + 100.0)
 
 
+def _normalize_spread_line(val: float) -> float:
+    """Normalize a spread value to the nearest .5 increment.
+
+    NHL sportsbooks always use .5 lines (±1.5, ±2.5, etc.) but some
+    scraped sources return whole numbers (±1, ±2).  Snap to .5.
+    """
+    if val == 0:
+        return val
+    if val % 1 == 0.5 or val % 1 == -0.5:
+        return val
+    sign = -1 if val < 0 else 1
+    result = sign * (round(abs(val) * 2) / 2)
+    if result % 1 == 0:
+        result += sign * 0.5
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Standardised odds event structure
 # ---------------------------------------------------------------------------
@@ -1623,8 +1640,8 @@ def _merge_odds_events(
             "best_odds": {
                 "home_moneyline": best_home_ml,
                 "away_moneyline": best_away_ml,
-                "home_spread": round(best_home_spread, 1),
-                "away_spread": round(best_away_spread, 1),
+                "home_spread": _normalize_spread_line(round(best_home_spread, 1)),
+                "away_spread": _normalize_spread_line(round(best_away_spread, 1)),
                 "home_spread_price": round(best_home_spread_price),
                 "away_spread_price": round(best_away_spread_price),
                 "over_under": best_total,
@@ -1914,9 +1931,9 @@ class MultiSourceOddsScraper:
                         ou_raw, away_abbrev, home_abbrev,
                     )
             if best.get("home_spread") is not None:
-                game.home_spread_line = best["home_spread"]
+                game.home_spread_line = _normalize_spread_line(float(best["home_spread"]))
             if best.get("away_spread") is not None:
-                game.away_spread_line = best["away_spread"]
+                game.away_spread_line = _normalize_spread_line(float(best["away_spread"]))
             if best.get("home_spread_price"):
                 game.home_spread_price = best["home_spread_price"]
             if best.get("away_spread_price"):
