@@ -247,7 +247,9 @@ async def _games_for_date(
     game_ids = [g.id for g in games]
     top_picks: dict[int, GameTopPick] = {}
     if game_ids:
-        # --- Tier 1: strict best-bet criteria ---
+        # --- Tier 1: strict best-bet criteria (prematch only) ---
+        # Schedule cards always show the prematch prediction.
+        # Live predictions belong in the Best Bets tab.
         max_edge_sub = (
             select(
                 Prediction.game_id,
@@ -256,6 +258,7 @@ async def _games_for_date(
             .where(
                 Prediction.game_id.in_(game_ids),
                 Prediction.bet_type.in_(MARKET_BET_TYPES),
+                Prediction.phase == "prematch",
                 Prediction.edge.isnot(None),
                 Prediction.recommended == True,
                 Prediction.odds_implied_prob.isnot(None),
@@ -275,6 +278,7 @@ async def _games_for_date(
             )
             .where(
                 Prediction.bet_type.in_(MARKET_BET_TYPES),
+                Prediction.phase == "prematch",
                 Prediction.edge.isnot(None),
                 Prediction.recommended == True,
                 Prediction.odds_implied_prob.isnot(None),
@@ -293,6 +297,7 @@ async def _games_for_date(
 
         # --- Tier 2: fallback for games still missing a pick ---
         # Requires real edge but drops the implied-prob ceiling.
+        # Still prematch-only for schedule cards.
         missing_ids = [gid for gid in game_ids if gid not in top_picks]
         if missing_ids:
             fb_edge_sub = (
@@ -303,6 +308,7 @@ async def _games_for_date(
                 .where(
                     Prediction.game_id.in_(missing_ids),
                     Prediction.bet_type.in_(MARKET_BET_TYPES),
+                    Prediction.phase == "prematch",
                     Prediction.edge.isnot(None),
                     Prediction.edge >= settings.min_edge,
                     Prediction.confidence >= settings.min_confidence,
@@ -321,6 +327,7 @@ async def _games_for_date(
                 )
                 .where(
                     Prediction.bet_type.in_(MARKET_BET_TYPES),
+                    Prediction.phase == "prematch",
                     Prediction.edge.isnot(None),
                     Prediction.edge >= settings.min_edge,
                     Prediction.confidence >= settings.min_confidence,
