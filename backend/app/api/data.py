@@ -125,7 +125,7 @@ async def _run_full_sync():
 
                 await session.flush()
 
-                # 3. Odds (multi-source: DraftKings, FanDuel, Kambi, Bovada, The Odds API, Hard Rock)
+                # 3. Odds (Hard Rock Bet via The Odds API)
                 _sync_state["step"] = "Syncing betting odds (multi-source)..."
                 try:
                     from app.scrapers.odds_multi import MultiSourceOddsScraper

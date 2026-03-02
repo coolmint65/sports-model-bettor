@@ -1,21 +1,15 @@
 """
-Multi-source odds scraper for NHL games.
+Odds scraper for NHL games — Hard Rock Bet (sole source).
 
-Fetches odds directly from sportsbook public CDN/API endpoints without
-requiring any API keys. These are the same endpoints the sportsbooks'
-own websites use to render odds to visitors.
+Fetches odds from Hard Rock Bet via The Odds API us2 region.
+Hard Rock uses Kambi Odds Feed+ and is known for accurate,
+round-number pricing in clean increments of 5.
 
-Sources:
-  1. DraftKings Sportsbook API  (US, primary)
-  2. FanDuel Sportsbook API     (US, secondary)
-  3. Kambi CDN                  (powers BetRivers, Unibet, 888sport)
-  4. The Odds API               (aggregator, API key optional, us+us2 regions)
-  5. Hard Rock Bet              (extracted from Odds API us2 region, Kambi-powered)
+The ODDS_API_KEY environment variable is required.
 
-The scraper tries each source in priority order.  If the primary source
-fails or returns no data, it falls through to the next.  Results from
-multiple sources are merged to compute the *best available* odds across
-all books — exactly what a sharp bettor needs to find +EV lines.
+Other sportsbook scrapers (DraftKings, FanDuel, Kambi, Bovada,
+generic Odds API) are retained in the codebase but disabled.
+They can be re-enabled in ``fetch_best_odds()`` if needed.
 """
 
 import asyncio
@@ -1289,9 +1283,8 @@ async def _fetch_bovada(client: httpx.AsyncClient) -> List[OddsEvent]:
 # ---- The Odds API (existing, requires API key) ----
 
 # Shared cache for The Odds API response so we don't make duplicate calls.
-# Both _fetch_odds_api and _fetch_hardrock need the same data, but with
-# different regions.  We combine them into a single request (us,us2) and
-# cache the result so the second caller gets it for free.
+# Hard Rock is our sole odds source; we request the us2 region which
+# includes Hard Rock Bet bookmaker data.
 _odds_api_cache: Dict[str, Any] = {"data": None, "timestamp": 0.0}
 _ODDS_API_CACHE_TTL = 30.0  # seconds
 
@@ -1299,11 +1292,11 @@ _ODDS_API_CACHE_TTL = 30.0  # seconds
 async def _fetch_odds_api_raw(
     client: httpx.AsyncClient,
 ) -> Optional[List[Dict[str, Any]]]:
-    """Fetch raw data from The Odds API (us + us2 regions) with caching.
+    """Fetch raw data from The Odds API (us2 region) with caching.
 
     Returns the parsed JSON list or None. The result is cached for
-    ``_ODDS_API_CACHE_TTL`` seconds so that ``_fetch_odds_api`` and
-    ``_fetch_hardrock`` share a single API call per sync cycle.
+    ``_ODDS_API_CACHE_TTL`` seconds. Only the us2 region is needed
+    since Hard Rock Bet is our sole odds source.
     """
     import time as _time
 
@@ -1321,7 +1314,7 @@ async def _fetch_odds_api_raw(
     url = "https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds"
     params = {
         "apiKey": api_key,
-        "regions": "us,us2",
+        "regions": "us2",
         "markets": "h2h,spreads,totals",
         "oddsFormat": "american",
     }
@@ -1876,26 +1869,21 @@ class MultiSourceOddsScraper:
 
     async def fetch_best_odds(self) -> List[Dict[str, Any]]:
         """
-        Fetch odds from all sources concurrently and merge them.
+        Fetch odds from Hard Rock Bet (sole source) and merge them.
 
-        Returns a list of dicts, each representing one game with the
-        best available odds across all sportsbooks.
+        Returns a list of dicts, each representing one game with
+        Hard Rock's odds via The Odds API us2 region.
         """
         client = self._get_client()
 
-        # Fetch from all sources concurrently
+        # Hard Rock is our sole odds source
         results = await asyncio.gather(
-            _fetch_draftkings(client),
-            _fetch_fanduel(client),
-            _fetch_kambi(client),
-            _fetch_bovada(client),
-            _fetch_odds_api(client),
             _fetch_hardrock(client),
             return_exceptions=True,
         )
 
         all_events: List[List[OddsEvent]] = []
-        source_names = ["DraftKings", "FanDuel", "Kambi", "Bovada", "The Odds API", "Hard Rock"]
+        source_names = ["Hard Rock"]
 
         for i, result in enumerate(results):
             if isinstance(result, Exception):
