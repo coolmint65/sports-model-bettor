@@ -168,6 +168,7 @@ class OddsEvent:
         "commence_time", "home_ml", "away_ml",
         "home_spread", "away_spread", "home_spread_price", "away_spread_price",
         "total_line", "over_price", "under_price",
+        "alt_totals", "alt_spreads",
     )
 
     def __init__(
@@ -185,6 +186,8 @@ class OddsEvent:
         total_line: float = 0.0,
         over_price: float = -110.0,
         under_price: float = -110.0,
+        alt_totals: Optional[List] = None,
+        alt_spreads: Optional[List] = None,
     ):
         self.source = source
         self.home_team = home_team
@@ -201,6 +204,10 @@ class OddsEvent:
         self.total_line = total_line
         self.over_price = over_price
         self.under_price = under_price
+        # alt_totals: list of {"line": float, "over_price": float, "under_price": float}
+        self.alt_totals = alt_totals or []
+        # alt_spreads: list of {"line": float, "home_price": float, "away_price": float}
+        self.alt_spreads = alt_spreads or []
 
     def has_moneyline(self) -> bool:
         return self.home_ml != 0 and self.away_ml != 0
@@ -228,6 +235,8 @@ class OddsEvent:
             "total_line": self.total_line,
             "over_price": self.over_price,
             "under_price": self.under_price,
+            "alt_totals": self.alt_totals,
+            "alt_spreads": self.alt_spreads,
         }
 
 
@@ -405,8 +414,9 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
                                     else:
                                         game_odds[eid]["away_ml"] = odds_val
 
-                        # Spread / Puck Line
+                        # Spread / Puck Line — collect ALL available lines
                         elif "spread" in label or "puck" in label or "handicap" in label:
+                            spread_lines: Dict[float, Dict[str, float]] = {}
                             for oc in outcomes:
                                 line = oc.get("line", 0)
                                 odds_am = oc.get("oddsAmerican", "")
@@ -419,15 +429,36 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
                                 mapped = _map_team(oc_label)
                                 ev_info = event_map.get(eid, {})
                                 home_mapped = _map_team(ev_info.get("home", ""))
+                                abs_line = abs(line_val)
+                                if abs_line not in spread_lines:
+                                    spread_lines[abs_line] = {}
                                 if mapped and mapped == home_mapped:
                                     game_odds[eid]["home_spread"] = line_val
                                     game_odds[eid]["home_spread_price"] = odds_val
+                                    spread_lines[abs_line]["home_spread"] = line_val
+                                    spread_lines[abs_line]["home_price"] = odds_val
                                 elif mapped:
                                     game_odds[eid]["away_spread"] = line_val
                                     game_odds[eid]["away_spread_price"] = odds_val
+                                    spread_lines[abs_line]["away_spread"] = line_val
+                                    spread_lines[abs_line]["away_price"] = odds_val
 
-                        # Totals
+                            for abs_lv, prices in spread_lines.items():
+                                if "home_price" in prices and "away_price" in prices:
+                                    if "dk_alt_spreads" not in game_odds[eid]:
+                                        game_odds[eid]["dk_alt_spreads"] = []
+                                    game_odds[eid]["dk_alt_spreads"].append({
+                                        "line": abs_lv,
+                                        "home_spread": prices.get("home_spread", -abs_lv),
+                                        "away_spread": prices.get("away_spread", abs_lv),
+                                        "home_price": prices["home_price"],
+                                        "away_price": prices["away_price"],
+                                    })
+
+                        # Totals — collect ALL available lines
                         elif "total" in label or "over" in label:
+                            # Collect over/under prices per line value
+                            offer_lines: Dict[float, Dict[str, float]] = {}
                             for oc in outcomes:
                                 line = oc.get("line", 0)
                                 odds_am = oc.get("oddsAmerican", "")
@@ -436,13 +467,45 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
                                     line_val = float(line)
                                 except (ValueError, TypeError):
                                     continue
+                                if line_val not in offer_lines:
+                                    offer_lines[line_val] = {}
                                 oc_label = (oc.get("label") or "").lower()
                                 if "over" in oc_label:
-                                    game_odds[eid]["total_line"] = line_val
-                                    game_odds[eid]["over_price"] = odds_val
+                                    offer_lines[line_val]["over_price"] = odds_val
                                 elif "under" in oc_label:
-                                    game_odds[eid]["total_line"] = line_val
-                                    game_odds[eid]["under_price"] = odds_val
+                                    offer_lines[line_val]["under_price"] = odds_val
+
+                            # Store all lines as alt_totals
+                            for lv, prices in offer_lines.items():
+                                if "over_price" in prices and "under_price" in prices:
+                                    if "dk_alt_totals" not in game_odds[eid]:
+                                        game_odds[eid]["dk_alt_totals"] = []
+                                    game_odds[eid]["dk_alt_totals"].append({
+                                        "line": lv,
+                                        "over_price": prices["over_price"],
+                                        "under_price": prices["under_price"],
+                                    })
+
+                            # Keep backward compat: primary total_line
+                            # is the one closest to the "main" market line
+                            if offer_lines:
+                                # Pick the line with the tightest juice
+                                # (closest to -110/-110) as the primary
+                                best_line = None
+                                best_juice = float("inf")
+                                for lv, prices in offer_lines.items():
+                                    op = prices.get("over_price", -110)
+                                    up = prices.get("under_price", -110)
+                                    # Tightest juice = both sides closest
+                                    # to -110
+                                    juice = abs(op - (-110)) + abs(up - (-110))
+                                    if juice < best_juice:
+                                        best_juice = juice
+                                        best_line = lv
+                                if best_line is not None and best_line in offer_lines:
+                                    game_odds[eid]["total_line"] = best_line
+                                    game_odds[eid]["over_price"] = offer_lines[best_line].get("over_price", -110)
+                                    game_odds[eid]["under_price"] = offer_lines[best_line].get("under_price", -110)
 
         # Build OddsEvent objects
         for eid, odds in game_odds.items():
@@ -470,6 +533,8 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
                 total_line=odds.get("total_line", 0),
                 over_price=odds.get("over_price", -110),
                 under_price=odds.get("under_price", -110),
+                alt_totals=odds.get("dk_alt_totals", []),
+                alt_spreads=odds.get("dk_alt_spreads", []),
             )
             if event.home_abbr and event.away_abbr:
                 events.append(event)
@@ -608,9 +673,10 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
                     elif mapped:
                         game_odds[eid]["away_ml"] = odds_val
 
-            # Spread / Puck Line
+            # Spread / Puck Line — collect ALL available lines
             elif market_type in ("MATCH_HANDICAP", "SPREAD", "PUCK_LINE", "HANDICAP", "ASIAN_HANDICAP"):
                 ev_info = event_info[eid]
+                fd_spread_lines: Dict[float, Dict[str, float]] = {}
                 for runner in runners if isinstance(runners, list) else []:
                     runner_name = runner.get("runnerName", "")
                     handicap = runner.get("handicap", 0)
@@ -634,15 +700,35 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
 
                     mapped = _map_team(runner_name)
                     home_mapped = _map_team(ev_info["home"])
+                    abs_line = abs(line_val)
+                    if abs_line not in fd_spread_lines:
+                        fd_spread_lines[abs_line] = {}
                     if mapped and mapped == home_mapped:
                         game_odds[eid]["home_spread"] = line_val
                         game_odds[eid]["home_spread_price"] = odds_val
+                        fd_spread_lines[abs_line]["home_spread"] = line_val
+                        fd_spread_lines[abs_line]["home_price"] = odds_val
                     elif mapped:
                         game_odds[eid]["away_spread"] = line_val
                         game_odds[eid]["away_spread_price"] = odds_val
+                        fd_spread_lines[abs_line]["away_spread"] = line_val
+                        fd_spread_lines[abs_line]["away_price"] = odds_val
 
-            # Totals
+                for abs_lv, prices in fd_spread_lines.items():
+                    if "home_price" in prices and "away_price" in prices:
+                        if "fd_alt_spreads" not in game_odds[eid]:
+                            game_odds[eid]["fd_alt_spreads"] = []
+                        game_odds[eid]["fd_alt_spreads"].append({
+                            "line": abs_lv,
+                            "home_spread": prices.get("home_spread", -abs_lv),
+                            "away_spread": prices.get("away_spread", abs_lv),
+                            "home_price": prices["home_price"],
+                            "away_price": prices["away_price"],
+                        })
+
+            # Totals — collect ALL available lines
             elif market_type in ("TOTAL_GOALS", "MATCH_TOTAL", "TOTAL_POINTS", "OVER_UNDER", "TOTAL"):
+                fd_lines: Dict[float, Dict[str, float]] = {}
                 for runner in runners if isinstance(runners, list) else []:
                     runner_name = (runner.get("runnerName", "") or "").lower()
                     handicap = runner.get("handicap", 0)
@@ -664,12 +750,39 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
                     except (ValueError, TypeError):
                         continue
 
+                    if line_val not in fd_lines:
+                        fd_lines[line_val] = {}
                     if "over" in runner_name:
-                        game_odds[eid]["total_line"] = line_val
-                        game_odds[eid]["over_price"] = odds_val
+                        fd_lines[line_val]["over_price"] = odds_val
                     elif "under" in runner_name:
-                        game_odds[eid]["total_line"] = line_val
-                        game_odds[eid]["under_price"] = odds_val
+                        fd_lines[line_val]["under_price"] = odds_val
+
+                # Store all lines as alt_totals
+                for lv, prices in fd_lines.items():
+                    if "over_price" in prices and "under_price" in prices:
+                        if "fd_alt_totals" not in game_odds[eid]:
+                            game_odds[eid]["fd_alt_totals"] = []
+                        game_odds[eid]["fd_alt_totals"].append({
+                            "line": lv,
+                            "over_price": prices["over_price"],
+                            "under_price": prices["under_price"],
+                        })
+
+                # Keep backward compat: primary line = tightest juice
+                if fd_lines:
+                    best_line = None
+                    best_juice = float("inf")
+                    for lv, prices in fd_lines.items():
+                        op = prices.get("over_price", -110)
+                        up = prices.get("under_price", -110)
+                        juice = abs(op - (-110)) + abs(up - (-110))
+                        if juice < best_juice:
+                            best_juice = juice
+                            best_line = lv
+                    if best_line is not None and best_line in fd_lines:
+                        game_odds[eid]["total_line"] = best_line
+                        game_odds[eid]["over_price"] = fd_lines[best_line].get("over_price", -110)
+                        game_odds[eid]["under_price"] = fd_lines[best_line].get("under_price", -110)
 
         # Build OddsEvent objects
         for eid, odds in game_odds.items():
@@ -696,6 +809,8 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
                 total_line=odds.get("total_line", 0),
                 over_price=odds.get("over_price", -110),
                 under_price=odds.get("under_price", -110),
+                alt_totals=odds.get("fd_alt_totals", []),
+                alt_spreads=odds.get("fd_alt_spreads", []),
             )
             if event.home_abbr and event.away_abbr:
                 events.append(event)
@@ -810,8 +925,9 @@ async def _fetch_kambi(client: httpx.AsyncClient) -> List[OddsEvent]:
                         elif oc_type == "OT_TWO" or oc_label == away_name:
                             odds["away_ml"] = american
 
-                # Spread / Handicap
+                # Spread / Handicap — collect ALL available lines
                 elif "handicap" in criterion_label or "spread" in criterion_label or "puck" in criterion_label:
+                    kambi_spread_lines: Dict[float, Dict[str, float]] = {}
                     for oc in outcomes if isinstance(outcomes, list) else []:
                         oc_label = oc.get("label", "")
                         line = oc.get("line", 0)
@@ -825,15 +941,35 @@ async def _fetch_kambi(client: httpx.AsyncClient) -> List[OddsEvent]:
                         except (ValueError, TypeError):
                             continue
 
+                        abs_line = abs(line_val)
+                        if abs_line not in kambi_spread_lines:
+                            kambi_spread_lines[abs_line] = {}
                         if oc_label == home_name:
                             odds["home_spread"] = line_val
                             odds["home_spread_price"] = american
+                            kambi_spread_lines[abs_line]["home_spread"] = line_val
+                            kambi_spread_lines[abs_line]["home_price"] = american
                         elif oc_label == away_name:
                             odds["away_spread"] = line_val
                             odds["away_spread_price"] = american
+                            kambi_spread_lines[abs_line]["away_spread"] = line_val
+                            kambi_spread_lines[abs_line]["away_price"] = american
 
-                # Totals (Over/Under)
+                    for abs_lv, prices in kambi_spread_lines.items():
+                        if "home_price" in prices and "away_price" in prices:
+                            if "kambi_alt_spreads" not in odds:
+                                odds["kambi_alt_spreads"] = []
+                            odds["kambi_alt_spreads"].append({
+                                "line": abs_lv,
+                                "home_spread": prices.get("home_spread", -abs_lv),
+                                "away_spread": prices.get("away_spread", abs_lv),
+                                "home_price": prices["home_price"],
+                                "away_price": prices["away_price"],
+                            })
+
+                # Totals (Over/Under) — collect ALL available lines
                 elif "total" in criterion_label or "over" in criterion_label:
+                    kambi_lines: Dict[float, Dict[str, float]] = {}
                     for oc in outcomes if isinstance(outcomes, list) else []:
                         oc_label = (oc.get("label", "") or "").lower()
                         oc_type = (oc.get("type", "") or "").upper()
@@ -848,12 +984,37 @@ async def _fetch_kambi(client: httpx.AsyncClient) -> List[OddsEvent]:
                         except (ValueError, TypeError):
                             continue
 
+                        if line_val not in kambi_lines:
+                            kambi_lines[line_val] = {}
                         if "over" in oc_label or oc_type == "OT_OVER":
-                            odds["total_line"] = line_val
-                            odds["over_price"] = american
+                            kambi_lines[line_val]["over_price"] = american
                         elif "under" in oc_label or oc_type == "OT_UNDER":
-                            odds["total_line"] = line_val
-                            odds["under_price"] = american
+                            kambi_lines[line_val]["under_price"] = american
+
+                    for lv, prices in kambi_lines.items():
+                        if "over_price" in prices and "under_price" in prices:
+                            if "kambi_alt_totals" not in odds:
+                                odds["kambi_alt_totals"] = []
+                            odds["kambi_alt_totals"].append({
+                                "line": lv,
+                                "over_price": prices["over_price"],
+                                "under_price": prices["under_price"],
+                            })
+
+                    if kambi_lines:
+                        best_line = None
+                        best_juice = float("inf")
+                        for lv, prices in kambi_lines.items():
+                            op = prices.get("over_price", -110)
+                            up = prices.get("under_price", -110)
+                            juice = abs(op - (-110)) + abs(up - (-110))
+                            if juice < best_juice:
+                                best_juice = juice
+                                best_line = lv
+                        if best_line is not None and best_line in kambi_lines:
+                            odds["total_line"] = best_line
+                            odds["over_price"] = kambi_lines[best_line].get("over_price", -110)
+                            odds["under_price"] = kambi_lines[best_line].get("under_price", -110)
 
             event = OddsEvent(
                 source="kambi",
@@ -869,6 +1030,8 @@ async def _fetch_kambi(client: httpx.AsyncClient) -> List[OddsEvent]:
                 total_line=odds.get("total_line", 0),
                 over_price=odds.get("over_price", -110),
                 under_price=odds.get("under_price", -110),
+                alt_totals=odds.get("kambi_alt_totals", []),
+                alt_spreads=odds.get("kambi_alt_spreads", []),
             )
             if event.home_abbr and event.away_abbr:
                 events.append(event)
@@ -984,8 +1147,9 @@ async def _fetch_bovada(client: httpx.AsyncClient) -> List[OddsEvent]:
                                 elif oc_type == "A":
                                     odds["away_ml"] = odds_val
 
-                        # Spread / Puck Line
+                        # Spread / Puck Line — collect ALL available lines
                         elif market_key == "2W-SPRD" or "spread" in market_desc or "puck" in market_desc:
+                            bov_spread_lines: Dict[float, Dict[str, float]] = {}
                             for oc in outcomes:
                                 price = oc.get("price", {})
                                 if not isinstance(price, dict):
@@ -997,16 +1161,36 @@ async def _fetch_bovada(client: httpx.AsyncClient) -> List[OddsEvent]:
                                     line_val = float(handicap_str)
                                 except (ValueError, TypeError):
                                     continue
+                                abs_line = abs(line_val)
+                                if abs_line not in bov_spread_lines:
+                                    bov_spread_lines[abs_line] = {}
                                 oc_type = (oc.get("type", "") or "").upper()
                                 if oc_type == "H":
                                     odds["home_spread"] = line_val
                                     odds["home_spread_price"] = odds_val
+                                    bov_spread_lines[abs_line]["home_spread"] = line_val
+                                    bov_spread_lines[abs_line]["home_price"] = odds_val
                                 elif oc_type == "A":
                                     odds["away_spread"] = line_val
                                     odds["away_spread_price"] = odds_val
+                                    bov_spread_lines[abs_line]["away_spread"] = line_val
+                                    bov_spread_lines[abs_line]["away_price"] = odds_val
 
-                        # Totals
+                            for abs_lv, prices in bov_spread_lines.items():
+                                if "home_price" in prices and "away_price" in prices:
+                                    if "bov_alt_spreads" not in odds:
+                                        odds["bov_alt_spreads"] = []
+                                    odds["bov_alt_spreads"].append({
+                                        "line": abs_lv,
+                                        "home_spread": prices.get("home_spread", -abs_lv),
+                                        "away_spread": prices.get("away_spread", abs_lv),
+                                        "home_price": prices["home_price"],
+                                        "away_price": prices["away_price"],
+                                    })
+
+                        # Totals — collect ALL available lines
                         elif market_key == "2W-OU" or "total" in market_desc:
+                            bov_lines: Dict[float, Dict[str, float]] = {}
                             for oc in outcomes:
                                 price = oc.get("price", {})
                                 if not isinstance(price, dict):
@@ -1018,13 +1202,38 @@ async def _fetch_bovada(client: httpx.AsyncClient) -> List[OddsEvent]:
                                     line_val = float(handicap_str)
                                 except (ValueError, TypeError):
                                     continue
+                                if line_val not in bov_lines:
+                                    bov_lines[line_val] = {}
                                 oc_type = (oc.get("type", "") or "").upper()
                                 if oc_type == "O":
-                                    odds["total_line"] = line_val
-                                    odds["over_price"] = odds_val
+                                    bov_lines[line_val]["over_price"] = odds_val
                                 elif oc_type == "U":
-                                    odds["total_line"] = line_val
-                                    odds["under_price"] = odds_val
+                                    bov_lines[line_val]["under_price"] = odds_val
+
+                            for lv, prices in bov_lines.items():
+                                if "over_price" in prices and "under_price" in prices:
+                                    if "bov_alt_totals" not in odds:
+                                        odds["bov_alt_totals"] = []
+                                    odds["bov_alt_totals"].append({
+                                        "line": lv,
+                                        "over_price": prices["over_price"],
+                                        "under_price": prices["under_price"],
+                                    })
+
+                            if bov_lines:
+                                best_line = None
+                                best_juice = float("inf")
+                                for lv, prices in bov_lines.items():
+                                    op = prices.get("over_price", -110)
+                                    up = prices.get("under_price", -110)
+                                    juice = abs(op - (-110)) + abs(up - (-110))
+                                    if juice < best_juice:
+                                        best_juice = juice
+                                        best_line = lv
+                                if best_line is not None and best_line in bov_lines:
+                                    odds["total_line"] = best_line
+                                    odds["over_price"] = bov_lines[best_line].get("over_price", -110)
+                                    odds["under_price"] = bov_lines[best_line].get("under_price", -110)
 
                 event = OddsEvent(
                     source="bovada",
@@ -1040,6 +1249,8 @@ async def _fetch_bovada(client: httpx.AsyncClient) -> List[OddsEvent]:
                     total_line=odds.get("total_line", 0),
                     over_price=odds.get("over_price", -110),
                     under_price=odds.get("under_price", -110),
+                    alt_totals=odds.get("bov_alt_totals", []),
+                    alt_spreads=odds.get("bov_alt_spreads", []),
                 )
                 if event.home_abbr and event.away_abbr:
                     events.append(event)
@@ -1157,9 +1368,31 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
             away_spread = sum(s[0] for s in consensus_books) / len(consensus_books)
             away_spread_price = sum(s[1] for s in consensus_books) / len(consensus_books)
 
-        # Consensus total
+        # Aggregate all totals by line value — keep best price per line
         total_line = over_price = under_price = 0.0
+        oa_alt_totals: List[Dict[str, float]] = []
         if all_total:
+            by_line: Dict[float, Dict[str, List[float]]] = {}
+            for t_line, t_over, t_under in all_total:
+                if t_line not in by_line:
+                    by_line[t_line] = {"over": [], "under": []}
+                if t_over:
+                    by_line[t_line]["over"].append(t_over)
+                if t_under:
+                    by_line[t_line]["under"].append(t_under)
+
+            for lv in sorted(by_line):
+                overs = by_line[lv]["over"]
+                unders = by_line[lv]["under"]
+                if overs and unders:
+                    # Best (highest) price across books for each side
+                    oa_alt_totals.append({
+                        "line": lv,
+                        "over_price": round(max(overs)),
+                        "under_price": round(max(unders)),
+                    })
+
+            # Consensus for primary line
             line_counts = Counter(t[0] for t in all_total)
             consensus_line = line_counts.most_common(1)[0][0]
             consensus_totals = [t for t in all_total if t[0] == consensus_line]
@@ -1181,6 +1414,7 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
             total_line=total_line,
             over_price=round(over_price),
             under_price=round(under_price),
+            alt_totals=oa_alt_totals,
         )
         if event.home_abbr and event.away_abbr:
             events.append(event)
@@ -1282,6 +1516,99 @@ def _merge_odds_events(
             best_over = max(t[1] for t in consensus_totals)
             best_under = max(t[2] for t in consensus_totals)
 
+        # Aggregate ALL available total lines across all sources
+        # For each line value, keep the best (highest) over/under price
+        all_lines_map: Dict[float, Dict[str, float]] = {}
+        for e in ev_list:
+            # Include primary line
+            if e.has_total() and 4.0 <= e.total_line <= 9.0:
+                lv = e.total_line
+                if lv not in all_lines_map:
+                    all_lines_map[lv] = {"over_price": -999, "under_price": -999}
+                all_lines_map[lv]["over_price"] = max(
+                    all_lines_map[lv]["over_price"], e.over_price
+                )
+                all_lines_map[lv]["under_price"] = max(
+                    all_lines_map[lv]["under_price"], e.under_price
+                )
+            # Include all alternate lines
+            for alt in e.alt_totals:
+                lv = alt["line"]
+                if lv < 4.0 or lv > 9.0:
+                    continue
+                op = alt.get("over_price", -110)
+                up = alt.get("under_price", -110)
+                if lv not in all_lines_map:
+                    all_lines_map[lv] = {"over_price": -999, "under_price": -999}
+                all_lines_map[lv]["over_price"] = max(
+                    all_lines_map[lv]["over_price"], op
+                )
+                all_lines_map[lv]["under_price"] = max(
+                    all_lines_map[lv]["under_price"], up
+                )
+
+        # Build sorted list of all available lines with best prices
+        all_total_lines = sorted([
+            {
+                "line": lv,
+                "over_price": round(prices["over_price"]),
+                "under_price": round(prices["under_price"]),
+            }
+            for lv, prices in all_lines_map.items()
+            if prices["over_price"] > -999 and prices["under_price"] > -999
+        ], key=lambda x: x["line"])
+
+        # Aggregate ALL available spread lines across all sources
+        all_spreads_map: Dict[float, Dict[str, float]] = {}
+        for e in ev_list:
+            # Include primary spread
+            if e.has_spread():
+                abs_line = abs(e.home_spread) if e.home_spread else abs(e.away_spread)
+                if abs_line not in all_spreads_map:
+                    all_spreads_map[abs_line] = {
+                        "home_price": -999, "away_price": -999,
+                        "home_spread": 0, "away_spread": 0,
+                    }
+                all_spreads_map[abs_line]["home_price"] = max(
+                    all_spreads_map[abs_line]["home_price"], e.home_spread_price
+                )
+                all_spreads_map[abs_line]["away_price"] = max(
+                    all_spreads_map[abs_line]["away_price"], e.away_spread_price
+                )
+                if e.home_spread:
+                    all_spreads_map[abs_line]["home_spread"] = e.home_spread
+                if e.away_spread:
+                    all_spreads_map[abs_line]["away_spread"] = e.away_spread
+            # Include alt spreads
+            for alt in e.alt_spreads:
+                abs_line = alt["line"]
+                if abs_line not in all_spreads_map:
+                    all_spreads_map[abs_line] = {
+                        "home_price": -999, "away_price": -999,
+                        "home_spread": alt.get("home_spread", -abs_line),
+                        "away_spread": alt.get("away_spread", abs_line),
+                    }
+                all_spreads_map[abs_line]["home_price"] = max(
+                    all_spreads_map[abs_line]["home_price"],
+                    alt.get("home_price", -110)
+                )
+                all_spreads_map[abs_line]["away_price"] = max(
+                    all_spreads_map[abs_line]["away_price"],
+                    alt.get("away_price", -110)
+                )
+
+        all_spread_lines = sorted([
+            {
+                "line": abs_lv,
+                "home_spread": round(prices["home_spread"], 1),
+                "away_spread": round(prices["away_spread"], 1),
+                "home_price": round(prices["home_price"]),
+                "away_price": round(prices["away_price"]),
+            }
+            for abs_lv, prices in all_spreads_map.items()
+            if prices["home_price"] > -999 and prices["away_price"] > -999
+        ], key=lambda x: x["line"])
+
         # Use first event for metadata
         first = ev_list[0]
         sources_used = list(set(e.source for e in ev_list))
@@ -1304,6 +1631,8 @@ def _merge_odds_events(
                 "over_price": round(best_over),
                 "under_price": round(best_under),
             },
+            "all_total_lines": all_total_lines,
+            "all_spread_lines": all_spread_lines,
             "all_sources": [e.to_dict() for e in ev_list],
         })
 
@@ -1596,6 +1925,14 @@ class MultiSourceOddsScraper:
                 game.over_price = best["over_price"]
             if best.get("under_price"):
                 game.under_price = best["under_price"]
+            # Persist all available total/spread lines
+            atl = odds.get("all_total_lines")
+            if atl:
+                game.all_total_lines = atl
+            asl = odds.get("all_spread_lines")
+            if asl:
+                game.all_spread_lines = asl
+
             game.odds_updated_at = datetime.now(timezone.utc)
 
             matched.append({

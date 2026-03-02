@@ -136,6 +136,9 @@ async def _migrate_add_columns() -> None:
         ("game", "pregame_away_spread_price", "FLOAT"),
         ("game", "pregame_over_price", "FLOAT"),
         ("game", "pregame_under_price", "FLOAT"),
+        # All available total/spread lines (JSON)
+        ("game", "all_total_lines", "JSON"),
+        ("game", "all_spread_lines", "JSON"),
     ]
 
     async with engine.begin() as conn:

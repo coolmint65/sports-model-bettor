@@ -714,6 +714,8 @@ class FeatureEngine:
                 "away_spread_price": getattr(game, "away_spread_price", None),
                 "over_price": getattr(game, "over_price", None),
                 "under_price": getattr(game, "under_price", None),
+                "all_total_lines": getattr(game, "all_total_lines", None) or [],
+                "all_spread_lines": getattr(game, "all_spread_lines", None) or [],
             },
             # Home team features
             "home_form_5": home_form_5,

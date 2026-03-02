@@ -348,15 +348,15 @@ class BettingModel:
         matrix = self._score_matrix(home_xg, away_xg)
         max_g = POISSON_MAX_GOALS
 
-        # Build the set of lines to evaluate, including the actual book line
+        # Build the set of lines to evaluate:
+        # 1) Standard lines (4.5, 5.5, 6.5)
+        # 2) The primary sportsbook line
+        # 3) ALL available alternate lines from sportsbooks
         eval_lines = set(TOTAL_LINES)
         odds_data = features.get("odds", {})
         book_ou = odds_data.get("over_under_line")
         if book_ou is not None:
             normalized = self._normalize_total_line(float(book_ou))
-            # Reject implausible lines — NHL O/U is always 4.5-8.5.
-            # A line outside this range is almost certainly a scraping error
-            # and would produce inflated confidence on a non-existent bet.
             if normalized < 4.5 or normalized > 8.5:
                 logger.warning(
                     "Discarding implausible sportsbook O/U line %.1f "
@@ -368,13 +368,19 @@ class BettingModel:
                 odds_data.pop("under_price", None)
             else:
                 eval_lines.add(normalized)
-                # Update the odds data so downstream code uses the corrected line
                 if normalized != float(book_ou):
                     logger.info(
                         "Normalized sportsbook O/U line %.1f → %.1f",
                         float(book_ou), normalized,
                     )
                     odds_data["over_under_line"] = normalized
+
+        # Add all available alternate total lines
+        all_total_lines = odds_data.get("all_total_lines") or []
+        for alt in all_total_lines:
+            alt_line = alt.get("line", 0)
+            if 4.0 <= alt_line <= 9.0:
+                eval_lines.add(self._normalize_total_line(alt_line))
 
         lines = {}
         for line in sorted(eval_lines):
@@ -481,14 +487,11 @@ class BettingModel:
         """
         Predict spread (puck line) probabilities.
 
-        Computes four cover probabilities for the standard 1.5 puck line:
-          - home_-1.5: P(home wins by 2+)
-          - home_+1.5: P(home doesn't lose by 2+)
-          - away_-1.5: P(away wins by 2+)
-          - away_+1.5: P(away doesn't lose by 2+)
+        Computes cover probabilities for the standard 1.5 puck line plus
+        any additional spread lines available from sportsbooks.
 
         The actual bettable puck line pairs are:
-          - Favorite -1.5 vs Underdog +1.5 (complements)
+          - Favorite -X.5 vs Underdog +X.5 (complements)
 
         Returns:
             dict with predicted_margin, spread probabilities for each side.
@@ -499,24 +502,30 @@ class BettingModel:
 
         predicted_margin = round(home_xg - away_xg, 3)
 
-        # Calculate all four spread probabilities for the 1.5 puck line.
-        # margin = home_score - away_score (positive = home winning)
-        home_minus_15 = 0.0  # P(home wins by 2+): margin > 1.5
-        away_minus_15 = 0.0  # P(away wins by 2+): margin < -1.5
-        for i in range(max_g + 1):
-            for j in range(max_g + 1):
-                margin = i - j
-                if margin > 1.5:
-                    home_minus_15 += matrix[i][j]
-                if margin < -1.5:
-                    away_minus_15 += matrix[i][j]
+        # Build set of spread lines to evaluate
+        eval_spread_lines = {1.5}  # Always include standard puck line
+        odds_data = features.get("odds", {})
+        all_spread_lines = odds_data.get("all_spread_lines") or []
+        for alt in all_spread_lines:
+            eval_spread_lines.add(alt.get("line", 1.5))
 
-        spreads = {
-            "home_-1.5": round(home_minus_15, 4),
-            "home_+1.5": round(1.0 - away_minus_15, 4),
-            "away_-1.5": round(away_minus_15, 4),
-            "away_+1.5": round(1.0 - home_minus_15, 4),
-        }
+        # Calculate spread probabilities for each line
+        spreads = {}
+        for spread_val in sorted(eval_spread_lines):
+            home_minus = 0.0  # P(home wins by spread_val+): margin > spread_val
+            away_minus = 0.0  # P(away wins by spread_val+): margin < -spread_val
+            for i in range(max_g + 1):
+                for j in range(max_g + 1):
+                    m = i - j
+                    if m > spread_val:
+                        home_minus += matrix[i][j]
+                    if m < -spread_val:
+                        away_minus += matrix[i][j]
+
+            spreads[f"home_-{spread_val}"] = round(home_minus, 4)
+            spreads[f"home_+{spread_val}"] = round(1.0 - away_minus, 4)
+            spreads[f"away_-{spread_val}"] = round(away_minus, 4)
+            spreads[f"away_+{spread_val}"] = round(1.0 - home_minus, 4)
 
         return {
             "predicted_margin": predicted_margin,
@@ -1066,22 +1075,91 @@ class BettingModel:
         except Exception as e:
             logger.error("Moneyline prediction failed: %s", e)
 
-        # ---- Total goals ----
+        # ---- Total goals (evaluate ALL available lines) ----
         try:
             totals = await self.predict_total_goals(features)
             lines = totals.get("lines", {})
             total_xg = totals["total_xg"]
 
-            # Re-read ou_line after predict_total_goals may have normalized
-            # a whole-number line (e.g., 7.0 → 6.5) in odds_data.
+            # Build a price map: line_val → {over_price, under_price}
+            # from all available sportsbook lines
+            all_total_lines = odds_data.get("all_total_lines") or []
+            price_map: Dict[float, Dict[str, float]] = {}
+            for alt in all_total_lines:
+                lv = alt.get("line", 0)
+                price_map[lv] = {
+                    "over_price": alt.get("over_price", -110),
+                    "under_price": alt.get("under_price", -110),
+                }
+            # Also include the primary line in the price map
             ou_line = odds_data.get("over_under_line")
-
-            # When we have a sportsbook O/U line, prioritise the book line
-            # so best-bet recommendations match what the user can actually bet.
-            book_line_pred = None
-            book_line_prob = 0.0
-
             if ou_line is not None:
+                ou_val = float(ou_line)
+                if ou_val not in price_map:
+                    price_map[ou_val] = {
+                        "over_price": float(over_price) if over_price else -110,
+                        "under_price": float(under_price) if under_price else -110,
+                    }
+
+            # Evaluate ALL lines and find the one with the best edge
+            # Edge = model_prob - implied_prob
+            best_edge = -999
+            best_pred = None
+            best_pred_prob = 0.0
+            best_pred_odds = -110.0
+            best_pred_implied = 0.5
+            best_pred_line = 0.0
+
+            for line_key, prob in lines.items():
+                # line_key is like "over_5.5" or "under_6.5"
+                parts = line_key.split("_", 1)
+                if len(parts) != 2:
+                    continue
+                direction = parts[0]  # "over" or "under"
+                try:
+                    line_val = float(parts[1])
+                except ValueError:
+                    continue
+
+                # Look up actual sportsbook price for this line+direction
+                if line_val in price_map:
+                    price_key = f"{direction}_price"
+                    odds_val = price_map[line_val].get(price_key, -110)
+                    implied = american_odds_to_implied_prob(odds_val)
+                    edge = prob - implied
+
+                    if edge > best_edge:
+                        best_edge = edge
+                        best_pred = line_key
+                        best_pred_prob = prob
+                        best_pred_odds = odds_val
+                        best_pred_implied = implied
+                        best_pred_line = line_val
+
+            if best_pred and best_edge > -999:
+                direction = "over" if "over" in best_pred else "under"
+                predictions.append({
+                    "bet_type": "total",
+                    "prediction": best_pred,
+                    "confidence": round(best_pred_prob, 4),
+                    "probability": round(best_pred_prob, 4),
+                    "implied_probability": round(best_pred_implied, 4),
+                    "odds": best_pred_odds,
+                    "edge": round(best_edge, 4),
+                    "reasoning": (
+                        f"Model projects {total_xg:.1f} total goals. "
+                        f"{direction.capitalize()} {best_pred_line} at "
+                        f"{best_pred_prob:.1%} model prob vs "
+                        f"{best_pred_implied:.1%} implied "
+                        f"(edge {best_edge:+.1%}). "
+                        f"Best line across {len(price_map)} available lines. "
+                        f"Based on {home_abbr} xG {totals['home_xg']:.2f} + "
+                        f"{away_abbr} xG {totals['away_xg']:.2f}."
+                    ),
+                    "details": totals,
+                })
+            elif ou_line is not None:
+                # Fallback: use primary sportsbook line if no price_map
                 ou_val = float(ou_line)
                 over_key = f"over_{ou_val}"
                 under_key = f"under_{ou_val}"
@@ -1089,14 +1167,13 @@ class BettingModel:
                 under_p = lines.get(under_key, 0.5)
 
                 if over_p >= under_p:
-                    book_line_pred = over_key
-                    book_line_prob = over_p
+                    book_pred = over_key
+                    book_prob = over_p
                 else:
-                    book_line_pred = under_key
-                    book_line_prob = under_p
+                    book_pred = under_key
+                    book_prob = under_p
 
-                direction = "over" if "over" in book_line_pred else "under"
-                # Use actual sportsbook price if available
+                direction = "over" if "over" in book_pred else "under"
                 if direction == "over" and over_price is not None:
                     total_odds_val = float(over_price)
                 elif direction == "under" and under_price is not None:
@@ -1107,27 +1184,22 @@ class BettingModel:
 
                 predictions.append({
                     "bet_type": "total",
-                    "prediction": book_line_pred,
-                    "confidence": round(book_line_prob, 4),
-                    "probability": round(book_line_prob, 4),
+                    "prediction": book_pred,
+                    "confidence": round(book_prob, 4),
+                    "probability": round(book_prob, 4),
                     "implied_probability": round(total_implied_val, 4),
                     "odds": total_odds_val,
                     "reasoning": (
                         f"Model projects {total_xg:.1f} total goals. "
                         f"{direction.capitalize()} {ou_val} (sportsbook line) at "
-                        f"{book_line_prob:.1%} probability. "
+                        f"{book_prob:.1%} probability. "
                         f"Based on {home_abbr} xG {totals['home_xg']:.2f} + "
                         f"{away_abbr} xG {totals['away_xg']:.2f}."
                     ),
                     "details": totals,
                 })
-
-            # Only generate a model-line prediction if there is NO sportsbook
-            # O/U line.  When a book line exists the prediction above already
-            # targets the actual bettable line; adding a softer standard line
-            # (e.g., Over 4.5 when the book is 6.5) would dominate best-bets
-            # with inflated confidence on a non-existent bet.
-            if book_line_pred is None:
+            else:
+                # No sportsbook lines at all — use best model probability
                 best_total_pred = None
                 best_total_prob = 0.0
                 for line_val in TOTAL_LINES:
@@ -1164,82 +1236,154 @@ class BettingModel:
         except Exception as e:
             logger.error("Total goals prediction failed: %s", e)
 
-        # ---- Spread / Puck Line ----
+        # ---- Spread / Puck Line (evaluate ALL available lines) ----
         try:
             spread = await self.predict_spread(features)
             spreads = spread.get("spreads", {})
             margin = spread["predicted_margin"]
 
-            # Determine which team is the favorite to assign the correct
-            # puck line.  In real sportsbooks:
-            #   - Favorite gets -1.5 (must win by 2+)
-            #   - Underdog gets +1.5 (can lose by 1 and still cover)
-            #
-            # We use the moneyline to determine favorite.  If moneyline
-            # data is missing, fall back to the predicted margin.
+            # Determine which team is the favorite
             if home_ml is not None and away_ml is not None:
                 home_is_fav = home_ml < away_ml
             else:
-                home_is_fav = margin > 0  # positive margin = home favored
+                home_is_fav = margin > 0
 
             if home_is_fav:
-                # Home is favorite: bettable lines are HOME -1.5 / AWAY +1.5
                 fav_abbr = home_abbr
-                fav_name = home_name
                 dog_abbr = away_abbr
-                dog_name = away_name
-                fav_cover_prob = spreads.get("home_-1.5", 0.0)
-                dog_cover_prob = spreads.get("away_+1.5", 0.0)
-                fav_price = home_spread_price
-                dog_price = away_spread_price
             else:
-                # Away is favorite: bettable lines are AWAY -1.5 / HOME +1.5
                 fav_abbr = away_abbr
-                fav_name = away_name
                 dog_abbr = home_abbr
-                dog_name = home_name
-                fav_cover_prob = spreads.get("away_-1.5", 0.0)
-                dog_cover_prob = spreads.get("home_+1.5", 0.0)
-                fav_price = away_spread_price
-                dog_price = home_spread_price
 
-            # Pick the side with higher cover probability
-            if fav_cover_prob >= dog_cover_prob:
-                best_abbr = fav_abbr
-                best_spread_sign = "-1.5"
-                best_spread_prob = fav_cover_prob
-                sprd_price = fav_price
+            # Build spread price map from all available lines
+            all_spread_lines_data = odds_data.get("all_spread_lines") or []
+            spread_price_map: Dict[float, Dict[str, float]] = {}
+            for alt in all_spread_lines_data:
+                lv = alt.get("line", 1.5)
+                spread_price_map[lv] = {
+                    "home_price": alt.get("home_price", -110),
+                    "away_price": alt.get("away_price", -110),
+                }
+            # Include primary spread in price map
+            if spread_line is not None:
+                abs_spread = abs(float(spread_line))
+                if abs_spread not in spread_price_map:
+                    spread_price_map[abs_spread] = {
+                        "home_price": float(home_spread_price) if home_spread_price else -110,
+                        "away_price": float(away_spread_price) if away_spread_price else -110,
+                    }
+
+            # Evaluate all spread lines for best edge
+            best_spread_edge = -999
+            best_spread_pred = None
+            best_spread_prob = 0.0
+            best_spread_odds = -110.0
+            best_spread_implied = 0.524
+            best_spread_sign = "-1.5"
+            best_spread_abbr = fav_abbr
+
+            for lv, prices in spread_price_map.items():
+                # Favorite side: fav -X.5
+                if home_is_fav:
+                    fav_prob = spreads.get(f"home_-{lv}", 0.0)
+                    dog_prob = spreads.get(f"away_+{lv}", 0.0)
+                    fav_odds = prices["home_price"]
+                    dog_odds = prices["away_price"]
+                else:
+                    fav_prob = spreads.get(f"away_-{lv}", 0.0)
+                    dog_prob = spreads.get(f"home_+{lv}", 0.0)
+                    fav_odds = prices["away_price"]
+                    dog_odds = prices["home_price"]
+
+                # Check favorite side edge
+                fav_implied = american_odds_to_implied_prob(fav_odds)
+                fav_edge = fav_prob - fav_implied
+                if fav_edge > best_spread_edge:
+                    best_spread_edge = fav_edge
+                    best_spread_pred = f"{fav_abbr}_-{lv}"
+                    best_spread_prob = fav_prob
+                    best_spread_odds = fav_odds
+                    best_spread_implied = fav_implied
+                    best_spread_sign = f"-{lv}"
+                    best_spread_abbr = fav_abbr
+
+                # Check underdog side edge
+                dog_implied = american_odds_to_implied_prob(dog_odds)
+                dog_edge = dog_prob - dog_implied
+                if dog_edge > best_spread_edge:
+                    best_spread_edge = dog_edge
+                    best_spread_pred = f"{dog_abbr}_+{lv}"
+                    best_spread_prob = dog_prob
+                    best_spread_odds = dog_odds
+                    best_spread_implied = dog_implied
+                    best_spread_sign = f"+{lv}"
+                    best_spread_abbr = dog_abbr
+
+            if best_spread_pred and best_spread_edge > -999:
+                predictions.append({
+                    "bet_type": "spread",
+                    "prediction": best_spread_pred,
+                    "confidence": round(best_spread_prob, 4),
+                    "probability": round(best_spread_prob, 4),
+                    "implied_probability": round(best_spread_implied, 4),
+                    "odds": best_spread_odds,
+                    "edge": round(best_spread_edge, 4),
+                    "reasoning": (
+                        f"Predicted margin: {margin:+.2f} goals. "
+                        f"{best_spread_abbr} {best_spread_sign} covers at "
+                        f"{best_spread_prob:.1%} model prob vs "
+                        f"{best_spread_implied:.1%} implied "
+                        f"(edge {best_spread_edge:+.1%}). "
+                        f"Best across {len(spread_price_map)} spread lines."
+                    ),
+                    "details": spread,
+                })
             else:
-                best_abbr = dog_abbr
-                best_spread_sign = "+1.5"
-                best_spread_prob = dog_cover_prob
-                sprd_price = dog_price
+                # Fallback: no price data, use standard 1.5 puck line
+                if home_is_fav:
+                    fav_cover_prob = spreads.get("home_-1.5", 0.0)
+                    dog_cover_prob = spreads.get("away_+1.5", 0.0)
+                    fav_price = home_spread_price
+                    dog_price = away_spread_price
+                else:
+                    fav_cover_prob = spreads.get("away_-1.5", 0.0)
+                    dog_cover_prob = spreads.get("home_+1.5", 0.0)
+                    fav_price = away_spread_price
+                    dog_price = home_spread_price
 
-            display_val = f"{best_abbr}_{best_spread_sign}"
+                if fav_cover_prob >= dog_cover_prob:
+                    sb_abbr = fav_abbr
+                    sb_sign = "-1.5"
+                    sb_prob = fav_cover_prob
+                    sb_price = fav_price
+                else:
+                    sb_abbr = dog_abbr
+                    sb_sign = "+1.5"
+                    sb_prob = dog_cover_prob
+                    sb_price = dog_price
 
-            spread_reason = (
-                f"Predicted margin: {margin:+.2f} goals. "
-                f"{best_abbr} {best_spread_sign} covers at {best_spread_prob:.1%} probability."
-            )
-            # Use actual spread price if available
-            spread_implied = None
-            spread_odds_display = None
-            if sprd_price is not None and spread_line is not None:
-                spread_odds_display = float(sprd_price)
-                spread_implied = american_odds_to_implied_prob(spread_odds_display)
-            elif spread_line is not None:
-                spread_odds_display = -110.0
-                spread_implied = 0.524
-            predictions.append({
-                "bet_type": "spread",
-                "prediction": display_val,
-                "confidence": round(best_spread_prob, 4),
-                "probability": round(best_spread_prob, 4),
-                "implied_probability": round(spread_implied, 4) if spread_implied else None,
-                "odds": spread_odds_display,
-                "reasoning": spread_reason,
-                "details": spread,
-            })
+                spread_odds_display = None
+                spread_implied = None
+                if sb_price is not None and spread_line is not None:
+                    spread_odds_display = float(sb_price)
+                    spread_implied = american_odds_to_implied_prob(spread_odds_display)
+                elif spread_line is not None:
+                    spread_odds_display = -110.0
+                    spread_implied = 0.524
+
+                predictions.append({
+                    "bet_type": "spread",
+                    "prediction": f"{sb_abbr}_{sb_sign}",
+                    "confidence": round(sb_prob, 4),
+                    "probability": round(sb_prob, 4),
+                    "implied_probability": round(spread_implied, 4) if spread_implied else None,
+                    "odds": spread_odds_display,
+                    "reasoning": (
+                        f"Predicted margin: {margin:+.2f} goals. "
+                        f"{sb_abbr} {sb_sign} covers at {sb_prob:.1%} probability."
+                    ),
+                    "details": spread,
+                })
         except Exception as e:
             logger.error("Spread prediction failed: %s", e)
 
