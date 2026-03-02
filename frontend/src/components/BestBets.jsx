@@ -193,9 +193,11 @@ function BestBets() {
   const { data, loading, error, silentRefetch } = useApi(fetchBestBets);
   const [activeTab, setActiveTab] = useState('all');
   const [trackedIds, setTrackedIds] = useState(new Set());
+  // Track by game_id+bet_type as fallback (handles prediction ID changes)
+  const [trackedKeys, setTrackedKeys] = useState(new Set());
   const [trackingId, setTrackingId] = useState(null);
 
-  // Load already-tracked prediction IDs so the Track button is disabled
+  // Load already-tracked bets so the Track button is disabled
   useEffect(() => {
     (async () => {
       try {
@@ -204,7 +206,11 @@ function BestBets() {
         const ids = new Set(
           bets.map((b) => b.prediction_id).filter(Boolean)
         );
-        if (ids.size) setTrackedIds(ids);
+        const keys = new Set(
+          bets.map((b) => `${b.game_id}:${b.bet_type}:${b.prediction_value}`)
+        );
+        setTrackedIds(ids);
+        setTrackedKeys(keys);
       } catch {
         // non-critical
       }
@@ -226,14 +232,27 @@ function BestBets() {
     return () => window.removeEventListener('data-synced', onSynced);
   }, [silentRefetch]);
 
+  const isBetTracked = useCallback((bet) => {
+    const predId = bet.prediction_id || bet.id;
+    if (predId && trackedIds.has(predId)) return true;
+    const key = `${bet.game_id}:${bet.bet_type}:${bet.prediction_value}`;
+    return trackedKeys.has(key);
+  }, [trackedIds, trackedKeys]);
+
   const handleTrack = useCallback(async (bet) => {
     const predId = bet.prediction_id || bet.id;
-    if (!predId || trackedIds.has(predId)) return;
+    if (!predId || isBetTracked(bet)) return;
     setTrackingId(predId);
     try {
       await trackBet(predId, bet.units);
       setTrackedIds((prev) => new Set(prev).add(predId));
+      const key = `${bet.game_id}:${bet.bet_type}:${bet.prediction_value}`;
+      setTrackedKeys((prev) => new Set(prev).add(key));
     } catch (err) {
+      if (err?.response?.status === 409) {
+        // Already tracked server-side — mark as tracked locally
+        setTrackedIds((prev) => new Set(prev).add(predId));
+      }
       console.error('Failed to track bet:', err);
     } finally {
       setTrackingId(null);
@@ -349,7 +368,7 @@ function BestBets() {
               rank={index + 1}
               isFeatured={index === 0}
               onTrack={handleTrack}
-              tracked={trackedIds.has(bet.prediction_id || bet.id)}
+              tracked={isBetTracked(bet)}
             />
           ))}
         </div>
