@@ -138,6 +138,7 @@ class TrackedBetRequest(BaseModel):
 
 class TrackedBetResponse(BaseModel):
     id: int
+    prediction_id: Optional[int] = None
     game_id: int
     bet_type: str
     prediction_value: str
@@ -841,6 +842,7 @@ async def clear_all_tracked_bets(
 def _tracked_bet_to_response(tb: TrackedBet) -> TrackedBetResponse:
     return TrackedBetResponse(
         id=tb.id,
+        prediction_id=tb.prediction_id,
         game_id=tb.game_id,
         bet_type=tb.bet_type,
         prediction_value=tb.prediction_value,

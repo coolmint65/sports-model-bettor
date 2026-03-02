@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Trophy, TrendingUp, Target, Star, ChevronRight, Radio, Plus, Check, Layers } from 'lucide-react';
-import { fetchBestBets, trackBet } from '../utils/api';
+import { fetchBestBets, trackBet, fetchTrackedBets } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import { teamName, teamAbbrev, confidencePct, formatBetType, formatPredictionValue } from '../utils/teams';
 
@@ -194,6 +194,22 @@ function BestBets() {
   const [activeTab, setActiveTab] = useState('all');
   const [trackedIds, setTrackedIds] = useState(new Set());
   const [trackingId, setTrackingId] = useState(null);
+
+  // Load already-tracked prediction IDs so the Track button is disabled
+  useEffect(() => {
+    (async () => {
+      try {
+        const resp = await fetchTrackedBets();
+        const bets = resp.data?.bets || resp.data || [];
+        const ids = new Set(
+          bets.map((b) => b.prediction_id).filter(Boolean)
+        );
+        if (ids.size) setTrackedIds(ids);
+      } catch {
+        // non-critical
+      }
+    })();
+  }, []);
 
   // Auto-poll best bets every 60 seconds for seamless updates
   useEffect(() => {
