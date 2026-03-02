@@ -9,8 +9,8 @@ Sources:
   1. DraftKings Sportsbook API  (US, primary)
   2. FanDuel Sportsbook API     (US, secondary)
   3. Kambi CDN                  (powers BetRivers, Unibet, 888sport)
-  4. The Odds API               (aggregator, API key optional, tertiary)
-  5. Hard Rock Bet              (via The Odds API us2 region, Kambi-powered)
+  4. The Odds API               (aggregator, API key optional, us+us2 regions)
+  5. Hard Rock Bet              (extracted from Odds API us2 region, Kambi-powered)
 
 The scraper tries each source in priority order.  If the primary source
 fails or returns no data, it falls through to the next.  Results from
@@ -1288,6 +1288,52 @@ async def _fetch_bovada(client: httpx.AsyncClient) -> List[OddsEvent]:
 
 # ---- The Odds API (existing, requires API key) ----
 
+# Shared cache for The Odds API response so we don't make duplicate calls.
+# Both _fetch_odds_api and _fetch_hardrock need the same data, but with
+# different regions.  We combine them into a single request (us,us2) and
+# cache the result so the second caller gets it for free.
+_odds_api_cache: Dict[str, Any] = {"data": None, "timestamp": 0.0}
+_ODDS_API_CACHE_TTL = 30.0  # seconds
+
+
+async def _fetch_odds_api_raw(
+    client: httpx.AsyncClient,
+) -> Optional[List[Dict[str, Any]]]:
+    """Fetch raw data from The Odds API (us + us2 regions) with caching.
+
+    Returns the parsed JSON list or None. The result is cached for
+    ``_ODDS_API_CACHE_TTL`` seconds so that ``_fetch_odds_api`` and
+    ``_fetch_hardrock`` share a single API call per sync cycle.
+    """
+    import time as _time
+
+    now = _time.monotonic()
+    if (
+        _odds_api_cache["data"] is not None
+        and now - _odds_api_cache["timestamp"] < _ODDS_API_CACHE_TTL
+    ):
+        return _odds_api_cache["data"]
+
+    api_key = settings.odds_api_key
+    if not api_key:
+        return None
+
+    url = "https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds"
+    params = {
+        "apiKey": api_key,
+        "regions": "us,us2",
+        "markets": "h2h,spreads,totals",
+        "oddsFormat": "american",
+    }
+
+    data = await _make_request(client, url, params=params)
+    if data and isinstance(data, list):
+        _odds_api_cache["data"] = data
+        _odds_api_cache["timestamp"] = now
+        return data
+    return None
+
+
 async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
     """
     Fetch NHL odds from The Odds API (v4).
@@ -1295,6 +1341,9 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
     Requires ODDS_API_KEY environment variable. Returns empty list if
     no key is configured. This is a paid/rate-limited source — we use
     it as a fallback/supplementary source.
+
+    Uses a combined us+us2 region request shared with ``_fetch_hardrock``
+    to avoid doubling API quota usage.
     """
     events: List[OddsEvent] = []
     api_key = settings.odds_api_key
@@ -1302,16 +1351,8 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
         logger.info("The Odds API: no API key configured, skipping")
         return events
 
-    url = "https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds"
-    params = {
-        "apiKey": api_key,
-        "regions": "us",
-        "markets": "h2h,spreads,totals",
-        "oddsFormat": "american",
-    }
-
-    data = await _make_request(client, url, params=params)
-    if not data or not isinstance(data, list):
+    data = await _fetch_odds_api_raw(client)
+    if not data:
         logger.info("The Odds API: no data returned")
         return events
 
@@ -1320,7 +1361,10 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
         away_team = ev.get("away_team", "")
         commence = ev.get("commence_time", "")
 
-        # Aggregate across all bookmakers for best odds
+        # Aggregate across all bookmakers for best odds.
+        # Exclude Hard Rock bookmakers — they are handled by
+        # _fetch_hardrock() as a dedicated source to avoid
+        # double-counting in the merge.
         all_home_ml: List[float] = []
         all_away_ml: List[float] = []
         all_home_spread: List[Tuple[float, float]] = []  # (line, price)
@@ -1328,6 +1372,10 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
         all_total: List[Tuple[float, float, float]] = []  # (line, over_price, under_price)
 
         for bm in ev.get("bookmakers", []):
+            bm_key = bm.get("key", "").lower().replace("-", "_")
+            bm_title = bm.get("title", "").lower()
+            if bm_key in _HARDROCK_KEYS or "hard rock" in bm_title:
+                continue  # handled separately by _fetch_hardrock
             for market in bm.get("markets", []):
                 mkey = market.get("key", "")
                 outcomes = market.get("outcomes", [])
@@ -1460,9 +1508,13 @@ async def _fetch_hardrock(client: httpx.AsyncClient) -> List[OddsEvent]:
 
     Hard Rock Bet uses Kambi Odds Feed+ on a proprietary platform with no
     public API.  The Odds API aggregator includes Hard Rock in its ``us2``
-    region.  We make a dedicated call for that region and extract only the
-    Hard Rock bookmaker data so that its odds enter the multi-source merge
-    as a first-class source with accurate, round-number pricing.
+    region.  We extract only the Hard Rock bookmaker data so that its odds
+    enter the multi-source merge as a first-class source with accurate,
+    round-number pricing.
+
+    Shares the same API call as ``_fetch_odds_api`` via
+    ``_fetch_odds_api_raw`` (combined us+us2 regions) to avoid doubling
+    API quota usage.
 
     Requires ODDS_API_KEY.  Returns empty list if no key is configured or
     Hard Rock data is not present in the response.
@@ -1473,17 +1525,9 @@ async def _fetch_hardrock(client: httpx.AsyncClient) -> List[OddsEvent]:
         logger.info("Hard Rock: no Odds API key configured, skipping")
         return events
 
-    url = "https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds"
-    params = {
-        "apiKey": api_key,
-        "regions": "us2",
-        "markets": "h2h,spreads,totals",
-        "oddsFormat": "american",
-    }
-
-    data = await _make_request(client, url, params=params)
-    if not data or not isinstance(data, list):
-        logger.info("Hard Rock: no data returned from us2 region")
+    data = await _fetch_odds_api_raw(client)
+    if not data:
+        logger.info("Hard Rock: no data returned from Odds API")
         return events
 
     for ev in data:

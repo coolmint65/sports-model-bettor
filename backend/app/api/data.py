@@ -125,7 +125,7 @@ async def _run_full_sync():
 
                 await session.flush()
 
-                # 3. Odds (multi-source: DraftKings, FanDuel, Kambi, The Odds API)
+                # 3. Odds (multi-source: DraftKings, FanDuel, Kambi, Bovada, The Odds API, Hard Rock)
                 _sync_state["step"] = "Syncing betting odds (multi-source)..."
                 try:
                     from app.scrapers.odds_multi import MultiSourceOddsScraper
@@ -340,7 +340,8 @@ async def sync_odds(
     """
     Fetch and update current betting odds from multiple sportsbook sources.
 
-    Sources: DraftKings, FanDuel, Kambi (BetRivers/Unibet), The Odds API.
+    Sources: DraftKings, FanDuel, Kambi (BetRivers/Unibet), Bovada,
+    The Odds API, and Hard Rock Bet.
     Best available lines are computed across all books.
     """
     try:
