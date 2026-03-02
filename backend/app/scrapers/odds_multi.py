@@ -10,6 +10,7 @@ Sources:
   2. FanDuel Sportsbook API     (US, secondary)
   3. Kambi CDN                  (powers BetRivers, Unibet, 888sport)
   4. The Odds API               (aggregator, API key optional, tertiary)
+  5. Hard Rock Bet              (via The Odds API us2 region, Kambi-powered)
 
 The scraper tries each source in priority order.  If the primary source
 fails or returns no data, it falls through to the next.  Results from
@@ -1446,6 +1447,149 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
     return events
 
 
+# ---- Hard Rock Bet (via The Odds API, us2 region) ----
+
+# Known candidate bookmaker keys for Hard Rock Bet on The Odds API.
+# The exact key isn't publicly documented — we try common variants.
+_HARDROCK_KEYS = {"hard_rock_bet", "hardrockbet", "hardrock", "hard_rock"}
+
+
+async def _fetch_hardrock(client: httpx.AsyncClient) -> List[OddsEvent]:
+    """
+    Fetch NHL odds specifically from Hard Rock Bet via The Odds API (us2 region).
+
+    Hard Rock Bet uses Kambi Odds Feed+ on a proprietary platform with no
+    public API.  The Odds API aggregator includes Hard Rock in its ``us2``
+    region.  We make a dedicated call for that region and extract only the
+    Hard Rock bookmaker data so that its odds enter the multi-source merge
+    as a first-class source with accurate, round-number pricing.
+
+    Requires ODDS_API_KEY.  Returns empty list if no key is configured or
+    Hard Rock data is not present in the response.
+    """
+    events: List[OddsEvent] = []
+    api_key = settings.odds_api_key
+    if not api_key:
+        logger.info("Hard Rock: no Odds API key configured, skipping")
+        return events
+
+    url = "https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds"
+    params = {
+        "apiKey": api_key,
+        "regions": "us2",
+        "markets": "h2h,spreads,totals",
+        "oddsFormat": "american",
+    }
+
+    data = await _make_request(client, url, params=params)
+    if not data or not isinstance(data, list):
+        logger.info("Hard Rock: no data returned from us2 region")
+        return events
+
+    for ev in data:
+        home_team = ev.get("home_team", "")
+        away_team = ev.get("away_team", "")
+        commence = ev.get("commence_time", "")
+
+        # Find the Hard Rock bookmaker entry
+        hr_bm = None
+        for bm in ev.get("bookmakers", []):
+            bm_key = bm.get("key", "").lower().replace("-", "_")
+            bm_title = bm.get("title", "").lower()
+            if bm_key in _HARDROCK_KEYS or "hard rock" in bm_title:
+                hr_bm = bm
+                break
+
+        if hr_bm is None:
+            continue
+
+        # Parse markets from the Hard Rock bookmaker
+        home_ml = away_ml = 0.0
+        home_spread = away_spread = 0.0
+        home_spread_price = away_spread_price = 0.0
+        total_line = over_price = under_price = 0.0
+
+        for market in hr_bm.get("markets", []):
+            mkey = market.get("key", "")
+            outcomes = market.get("outcomes", [])
+
+            if mkey == "h2h":
+                for oc in outcomes:
+                    name = oc.get("name", "")
+                    price = float(oc.get("price", 0))
+                    if name == home_team:
+                        home_ml = price
+                    elif name == away_team:
+                        away_ml = price
+
+            elif mkey == "spreads":
+                for oc in outcomes:
+                    name = oc.get("name", "")
+                    point = float(oc.get("point", 0))
+                    price = float(oc.get("price", 0))
+                    if name == home_team:
+                        home_spread = point
+                        home_spread_price = price
+                    elif name == away_team:
+                        away_spread = point
+                        away_spread_price = price
+
+            elif mkey == "totals":
+                for oc in outcomes:
+                    point = float(oc.get("point", 0))
+                    price = float(oc.get("price", 0))
+                    if oc.get("name", "").lower() == "over":
+                        over_price = price
+                        total_line = point
+                    elif oc.get("name", "").lower() == "under":
+                        under_price = price
+
+        # Only add if we got at least moneyline data
+        if home_ml == 0 and away_ml == 0:
+            continue
+
+        event = OddsEvent(
+            source="hardrock",
+            home_team=home_team,
+            away_team=away_team,
+            commence_time=commence,
+            home_ml=round(home_ml),
+            away_ml=round(away_ml),
+            home_spread=round(home_spread, 1),
+            away_spread=round(away_spread, 1),
+            home_spread_price=round(home_spread_price),
+            away_spread_price=round(away_spread_price),
+            total_line=total_line,
+            over_price=round(over_price),
+            under_price=round(under_price),
+        )
+
+        if event.home_abbr and event.away_abbr:
+            events.append(event)
+        else:
+            logger.warning(
+                "Hard Rock: dropping event — unmapped teams "
+                "(home=%r→%r, away=%r→%r)",
+                home_team, event.home_abbr, away_team, event.away_abbr,
+            )
+
+    logger.info("Hard Rock: fetched odds for %d events", len(events))
+
+    # Log the discovered bookmaker key on first successful fetch for debugging
+    if events and data:
+        for bm in data[0].get("bookmakers", []):
+            bm_key = bm.get("key", "").lower().replace("-", "_")
+            bm_title = bm.get("title", "").lower()
+            if bm_key in _HARDROCK_KEYS or "hard rock" in bm_title:
+                logger.info(
+                    "Hard Rock: discovered bookmaker key=%r title=%r",
+                    bm.get("key"), bm.get("title"),
+                )
+                break
+
+    return events
+
+
 # ---------------------------------------------------------------------------
 # Multi-source aggregation
 # ---------------------------------------------------------------------------
@@ -1702,11 +1846,12 @@ class MultiSourceOddsScraper:
             _fetch_kambi(client),
             _fetch_bovada(client),
             _fetch_odds_api(client),
+            _fetch_hardrock(client),
             return_exceptions=True,
         )
 
         all_events: List[List[OddsEvent]] = []
-        source_names = ["DraftKings", "FanDuel", "Kambi", "Bovada", "The Odds API"]
+        source_names = ["DraftKings", "FanDuel", "Kambi", "Bovada", "The Odds API", "Hard Rock"]
 
         for i, result in enumerate(results):
             if isinstance(result, Exception):
