@@ -1308,14 +1308,18 @@ class BettingModel:
                 fav_abbr = away_abbr
                 dog_abbr = home_abbr
 
-            # Build spread price map from all available lines
+            # Build spread price map from all available lines.
+            # Each entry uses the signed home_spread value from the
+            # data to correctly map home_price/away_price to the
+            # right probability keys.
             all_spread_lines_data = odds_data.get("all_spread_lines") or []
-            spread_price_map: Dict[float, Dict[str, float]] = {}
+            spread_price_map: Dict[float, Dict[str, Any]] = {}
             for alt in all_spread_lines_data:
                 lv = alt.get("line", 1.5)
                 spread_price_map[lv] = {
                     "home_price": alt.get("home_price", -110),
                     "away_price": alt.get("away_price", -110),
+                    "home_spread": alt.get("home_spread", 0),
                 }
             # Include primary spread in price map
             if spread_line is not None:
@@ -1324,9 +1328,12 @@ class BettingModel:
                     spread_price_map[abs_spread] = {
                         "home_price": float(home_spread_price) if home_spread_price else -110,
                         "away_price": float(away_spread_price) if away_spread_price else -110,
+                        "home_spread": float(spread_line),
                     }
 
-            # Evaluate all spread lines for best edge
+            # Evaluate all spread lines for best edge.
+            # Use home_spread sign to correctly pair prices with
+            # probability keys (NOT home_is_fav which can disagree).
             best_spread_edge = -999
             best_spread_pred = None
             best_spread_prob = 0.0
@@ -1336,41 +1343,50 @@ class BettingModel:
             best_spread_abbr = fav_abbr
 
             for lv, prices in spread_price_map.items():
-                # Favorite side: fav -X.5
-                if home_is_fav:
-                    fav_prob = spreads.get(f"home_-{lv}", 0.0)
-                    dog_prob = spreads.get(f"away_+{lv}", 0.0)
-                    fav_odds = prices["home_price"]
-                    dog_odds = prices["away_price"]
+                h_spread = prices.get("home_spread", 0)
+                h_price = prices["home_price"]
+                a_price = prices["away_price"]
+
+                # Determine which prob key pairs with which price
+                # based on the actual spread direction from the data.
+                if h_spread < 0:
+                    # Home is favorite for this line: home -lv, away +lv
+                    side_checks = [
+                        (spreads.get(f"home_-{lv}", 0.0), h_price, home_abbr, f"-{lv}"),
+                        (spreads.get(f"away_+{lv}", 0.0), a_price, away_abbr, f"+{lv}"),
+                    ]
+                elif h_spread > 0:
+                    # Home is underdog for this line: home +lv, away -lv
+                    side_checks = [
+                        (spreads.get(f"home_+{lv}", 0.0), h_price, home_abbr, f"+{lv}"),
+                        (spreads.get(f"away_-{lv}", 0.0), a_price, away_abbr, f"-{lv}"),
+                    ]
                 else:
-                    fav_prob = spreads.get(f"away_-{lv}", 0.0)
-                    dog_prob = spreads.get(f"home_+{lv}", 0.0)
-                    fav_odds = prices["away_price"]
-                    dog_odds = prices["home_price"]
+                    # No spread direction info; fall back to home_is_fav
+                    if home_is_fav:
+                        side_checks = [
+                            (spreads.get(f"home_-{lv}", 0.0), h_price, home_abbr, f"-{lv}"),
+                            (spreads.get(f"away_+{lv}", 0.0), a_price, away_abbr, f"+{lv}"),
+                        ]
+                    else:
+                        side_checks = [
+                            (spreads.get(f"away_-{lv}", 0.0), a_price, away_abbr, f"-{lv}"),
+                            (spreads.get(f"home_+{lv}", 0.0), h_price, home_abbr, f"+{lv}"),
+                        ]
 
-                # Check favorite side edge
-                fav_implied = american_odds_to_implied_prob(fav_odds)
-                fav_edge = fav_prob - fav_implied
-                if fav_edge > best_spread_edge:
-                    best_spread_edge = fav_edge
-                    best_spread_pred = f"{fav_abbr}_-{lv}"
-                    best_spread_prob = fav_prob
-                    best_spread_odds = fav_odds
-                    best_spread_implied = fav_implied
-                    best_spread_sign = f"-{lv}"
-                    best_spread_abbr = fav_abbr
-
-                # Check underdog side edge
-                dog_implied = american_odds_to_implied_prob(dog_odds)
-                dog_edge = dog_prob - dog_implied
-                if dog_edge > best_spread_edge:
-                    best_spread_edge = dog_edge
-                    best_spread_pred = f"{dog_abbr}_+{lv}"
-                    best_spread_prob = dog_prob
-                    best_spread_odds = dog_odds
-                    best_spread_implied = dog_implied
-                    best_spread_sign = f"+{lv}"
-                    best_spread_abbr = dog_abbr
+                for s_prob, s_odds, s_abbr, s_sign in side_checks:
+                    if s_prob <= 0 or s_odds == 0:
+                        continue
+                    s_implied = american_odds_to_implied_prob(s_odds)
+                    s_edge = s_prob - s_implied
+                    if s_edge > best_spread_edge:
+                        best_spread_edge = s_edge
+                        best_spread_pred = f"{s_abbr}_{s_sign}"
+                        best_spread_prob = s_prob
+                        best_spread_odds = s_odds
+                        best_spread_implied = s_implied
+                        best_spread_sign = s_sign
+                        best_spread_abbr = s_abbr
 
             if best_spread_pred and best_spread_edge > -999:
                 predictions.append({
