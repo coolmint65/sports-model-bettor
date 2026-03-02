@@ -264,19 +264,23 @@ function BestBets() {
   const handleRegenerate = useCallback(async () => {
     if (regenerating) return;
     setRegenerating(true);
-    setRegenMessage('Regenerating...');
+    setRegenMessage('Syncing schedule & odds...');
     try {
       const resp = await regeneratePredictions();
-      const msg = resp.data?.message || 'Predictions regenerated';
+      const count = resp.data?.predictions_generated ?? 0;
+      const msg = count > 0
+        ? `Regenerated ${count} predictions`
+        : 'No predictions generated (check data sync)';
       setRegenMessage(msg);
       // Refresh the best bets data
       await silentRefetch();
       window.dispatchEvent(new Event('data-synced'));
-      setTimeout(() => setRegenMessage(''), 4000);
+      setTimeout(() => setRegenMessage(''), 6000);
     } catch (err) {
-      setRegenMessage('Regeneration failed');
+      const detail = err?.response?.data?.detail || err?.message || '';
+      setRegenMessage(`Regeneration failed${detail ? `: ${detail}` : ''}`);
       console.error('Failed to regenerate predictions:', err);
-      setTimeout(() => setRegenMessage(''), 4000);
+      setTimeout(() => setRegenMessage(''), 6000);
     } finally {
       setRegenerating(false);
     }
@@ -366,10 +370,10 @@ function BestBets() {
             className="btn btn-regen"
             onClick={handleRegenerate}
             disabled={regenerating}
-            title="Delete and regenerate all predictions with latest odds"
+            title="Sync schedule, fetch latest odds, and regenerate all predictions"
           >
             <RefreshCw size={14} className={regenerating ? 'spin' : ''} />
-            {regenerating ? 'Regenerating...' : 'Regenerate'}
+            {regenerating ? (regenMessage || 'Regenerating...') : 'Regenerate'}
           </button>
           {regenMessage && !regenerating && (
             <span className="regen-message">{regenMessage}</span>

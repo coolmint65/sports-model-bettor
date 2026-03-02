@@ -291,7 +291,12 @@ async def _try_generate_predictions(
         td = target_date or date.today()
 
         manager = PredictionManager()
-        results = await manager.generate_predictions(session, target_date)
+        results = await manager.generate_predictions(session, td)
+
+        if not results:
+            logger.warning(
+                "_try_generate: model returned 0 game results for %s", td
+            )
 
         count = 0
         for game_data in results or []:
@@ -447,33 +452,48 @@ async def get_best_bets(
 ):
     today = date.today()
 
-    # Refresh odds
-    try:
-        async with session.begin_nested():
-            from app.scrapers.odds_multi import MultiSourceOddsScraper
-
-            async with MultiSourceOddsScraper() as odds_scraper:
-                matched = await odds_scraper.sync_odds(session)
-                logger.info(
-                    "Multi-source odds sync matched %d games before prediction generation",
-                    len(matched) if matched else 0,
-                )
-                await session.flush()
-                session.expire_all()
-    except Exception as exc:
-        logger.warning("Odds sync failed before best-bets generation: %s", exc)
-
-    # Generate / update predictions (respects prematch locks)
-    try:
-        async with session.begin_nested():
-            pred_count = await _try_generate_predictions(session, target_date=today)
-            await session.flush()
-            logger.info("Generated/updated %d predictions for best-bets", pred_count)
-    except Exception as exc:
-        logger.warning(
-            "Prediction generation failed: %s",
-            getattr(exc, 'detail', str(exc)),
+    # Check if predictions already exist (e.g., from a recent regeneration).
+    # If they do, skip the expensive odds sync + regeneration to avoid
+    # timeouts and redundant API calls.
+    existing_pred_count = await session.execute(
+        select(func.count(Prediction.id))
+        .join(Game, Game.id == Prediction.game_id)
+        .where(
+            Game.date == today,
+            ~func.lower(Game.status).in_(GAME_FINAL_STATUSES),
+            Prediction.phase == "prematch",
         )
+    )
+    has_predictions = (existing_pred_count.scalar() or 0) > 0
+
+    if not has_predictions:
+        # No predictions yet — sync odds and generate
+        try:
+            async with session.begin_nested():
+                from app.scrapers.odds_multi import MultiSourceOddsScraper
+
+                async with MultiSourceOddsScraper() as odds_scraper:
+                    matched = await odds_scraper.sync_odds(session)
+                    logger.info(
+                        "Multi-source odds sync matched %d games before prediction generation",
+                        len(matched) if matched else 0,
+                    )
+                    await session.flush()
+                    session.expire_all()
+        except Exception as exc:
+            logger.warning("Odds sync failed before best-bets generation: %s", exc)
+
+        # Generate / update predictions (respects prematch locks)
+        try:
+            async with session.begin_nested():
+                pred_count = await _try_generate_predictions(session, target_date=today)
+                await session.flush()
+                logger.info("Generated/updated %d predictions for best-bets", pred_count)
+        except Exception as exc:
+            logger.warning(
+                "Prediction generation failed: %s",
+                getattr(exc, 'detail', str(exc)),
+            )
 
     max_implied = settings.best_bet_max_implied
 
@@ -914,14 +934,37 @@ async def regenerate_predictions(
 ):
     """Delete ALL of today's predictions and regenerate from scratch.
 
-    Use this when predictions were generated with stale or incorrect data
-    (e.g. wrong odds mappings) and need to be rebuilt with the latest model
-    and odds.  Clears every prediction for today so both Best Bets and
-    Schedule cards are refreshed.
+    Full pipeline:
+      1. Sync today's schedule from NHL API (pick up status changes)
+      2. Delete ALL existing predictions for today
+      3. Sync fresh odds from sportsbooks
+      4. Regenerate predictions with latest data
     """
     today = date.today()
+    steps: list[str] = []
 
-    # Step 1: Delete ALL predictions for today's games (not just prematch,
+    # Step 1: Sync today's schedule from NHL API so game statuses,
+    # scores, and any newly-added games are up to date.
+    schedule_synced = 0
+    try:
+        async with session.begin_nested():
+            from app.scrapers.nhl_api import NHLScraper
+
+            scraper = NHLScraper()
+            try:
+                synced_games = await scraper.sync_schedule(session, str(today))
+                schedule_synced = len(synced_games) if synced_games else 0
+                await session.flush()
+                session.expire_all()
+                logger.info("Regenerate: schedule sync updated %s games", schedule_synced)
+            finally:
+                await scraper.close()
+        steps.append(f"schedule synced ({schedule_synced} games)")
+    except Exception as exc:
+        logger.warning("Regenerate: schedule sync failed: %s", exc)
+        steps.append(f"schedule sync failed: {exc}")
+
+    # Step 2: Delete ALL predictions for today's games (not just prematch,
     # not just market types — nuke everything so the prematch lock is
     # fully cleared).  BetResults cascade-delete via the ORM relationship,
     # but bulk delete bypasses that, so delete BetResults first.
@@ -948,8 +991,9 @@ async def regenerate_predictions(
     logger.info(
         "Regenerate: deleted %d predictions for %s", deleted, today,
     )
+    steps.append(f"cleared {deleted} predictions")
 
-    # Step 2: Sync fresh odds from sportsbooks
+    # Step 3: Sync fresh odds from sportsbooks
     odds_matched = 0
     try:
         async with session.begin_nested():
@@ -961,18 +1005,39 @@ async def regenerate_predictions(
                 logger.info("Regenerate: odds sync matched %d games", odds_matched)
                 await session.flush()
                 session.expire_all()
+        steps.append(f"odds synced ({odds_matched} games)")
     except Exception as exc:
         logger.warning("Regenerate: odds sync failed: %s", exc)
+        steps.append(f"odds sync failed: {exc}")
 
-    # Step 3: Generate fresh predictions (prematch lock is fully cleared)
-    count = await _try_generate_predictions(session, target_date=today)
+    # Step 4: Generate fresh predictions (prematch lock is fully cleared)
+    try:
+        count = await _try_generate_predictions(session, target_date=today)
+    except HTTPException:
+        # _try_generate_predictions raises HTTPException on failure.
+        # If we deleted predictions but failed to regenerate, the
+        # transaction rollback from the exception will restore the
+        # old predictions — which is what we want.
+        logger.error("Regenerate: prediction generation failed, rolling back deletes")
+        raise
+
+    steps.append(f"generated {count} predictions")
+
+    # Safety: if we deleted predictions but generated 0, log a warning.
+    # The best-bets endpoint will try to generate on the next fetch.
+    if deleted > 0 and count == 0:
+        logger.warning(
+            "Regenerate: deleted %d predictions but generated 0. "
+            "Games may have changed status or feature extraction failed.",
+            deleted,
+        )
+
+    msg = " → ".join(steps)
+    logger.info("Regenerate complete: %s", msg)
 
     return GenerateResult(
         success=True,
-        message=(
-            f"Cleared {deleted} predictions, synced odds for {odds_matched} games, "
-            f"regenerated {count} for {today}."
-        ),
+        message=msg,
         predictions_generated=count,
     )
 
