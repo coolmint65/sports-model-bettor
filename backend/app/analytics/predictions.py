@@ -176,6 +176,7 @@ class PredictionManager:
                     "odds": odds,
                     "reasoning": pred.get("reasoning", ""),
                     "is_best_bet": False,
+                    "phase": "live" if game_data.get("status") == "in_progress" else "prematch",
                 }
                 all_flat.append(flat)
 
@@ -462,6 +463,9 @@ class PredictionManager:
             existing.odds_implied_prob = bet.get("implied_probability", existing.odds_implied_prob)
             existing.edge = bet.get("edge", existing.edge)
             existing.reasoning = reasoning or existing.reasoning
+            # Upgrade phase from prematch to live (never downgrade)
+            if bet.get("phase") == "live":
+                existing.phase = "live"
             impl = existing.odds_implied_prob or 0
             existing.recommended = (
                 existing.confidence >= settings.min_confidence

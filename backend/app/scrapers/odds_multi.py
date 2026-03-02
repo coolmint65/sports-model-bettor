@@ -1344,7 +1344,13 @@ class MultiSourceOddsScraper:
     async def close(self) -> None:
         if self._client and not self._client.is_closed:
             await self._client.aclose()
-            self._client = None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
+        return False
 
     async def fetch_best_odds(self) -> List[Dict[str, Any]]:
         """

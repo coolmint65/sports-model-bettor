@@ -597,7 +597,9 @@ async def get_best_bets(
                     live_odds = game_obj.away_spread_price
 
         units = calculate_units(pred.edge, pred.confidence)
-        phase = getattr(pred, "phase", "prematch")
+        # Use the actual game status to determine phase — a prediction
+        # created prematch is effectively "live" once the game starts.
+        phase = "live" if game_status == "in_progress" else getattr(pred, "phase", "prematch")
 
         return BestBet(
             prediction_id=detail.id,
