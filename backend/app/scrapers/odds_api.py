@@ -371,21 +371,6 @@ class OddsScraper(BaseScraper):
                 best["home_spread_price"] = round(sum(hp) / len(hp))
                 best["away_spread_price"] = round(sum(ap) / len(ap))
 
-                # Cross-check: if moneyline says home is favorite (more negative)
-                # then home_spread should be negative. If sign is wrong, flip.
-                home_ml = best.get("home_moneyline")
-                away_ml = best.get("away_moneyline")
-                if home_ml and away_ml and best["home_spread"] != 0:
-                    home_is_fav = (home_ml < away_ml)
-                    if home_is_fav and best["home_spread"] > 0:
-                        # Home is favorite but spread is positive — flip
-                        best["home_spread"], best["away_spread"] = -abs(best["home_spread"]), abs(best["away_spread"])
-                        best["home_spread_price"], best["away_spread_price"] = best["away_spread_price"], best["home_spread_price"]
-                    elif not home_is_fav and best["home_spread"] < 0:
-                        # Home is underdog but spread is negative — flip
-                        best["home_spread"], best["away_spread"] = abs(best["home_spread"]), -abs(best["away_spread"])
-                        best["home_spread_price"], best["away_spread_price"] = best["away_spread_price"], best["home_spread_price"]
-
         # Consensus total with averaged prices
         if all_totals:
             totals = [t.get("total", 0) for t in all_totals if t.get("total")]

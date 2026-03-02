@@ -1505,18 +1505,6 @@ def _merge_odds_events(
             best_away_spread = consensus_books[0][0]
             best_away_spread_price = max(s[1] for s in consensus_books)
 
-        # Cross-check spread sign vs moneyline
-        if best_home_ml and best_away_ml and best_home_spread != 0:
-            home_is_fav = best_home_ml < best_away_ml
-            if home_is_fav and best_home_spread > 0:
-                best_home_spread = -abs(best_home_spread)
-                best_away_spread = abs(best_away_spread) if best_away_spread else abs(best_home_spread)
-                best_home_spread_price, best_away_spread_price = best_away_spread_price, best_home_spread_price
-            elif not home_is_fav and best_home_spread < 0:
-                best_home_spread = abs(best_home_spread)
-                best_away_spread = -abs(best_away_spread) if best_away_spread else -abs(best_home_spread)
-                best_home_spread_price, best_away_spread_price = best_away_spread_price, best_home_spread_price
-
         # Consensus total — filter out implausible lines first.
         # NHL O/U is virtually always between 4.5 and 8.5.
         total_data = [
