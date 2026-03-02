@@ -269,6 +269,29 @@ a:hover {
   background: var(--accent-gold-bg);
 }
 
+.btn-regen {
+  border-color: var(--accent-gold-dim);
+  color: var(--accent-gold);
+  background: var(--accent-gold-bg);
+  font-size: 12px;
+  padding: 5px 12px;
+}
+
+.btn-regen:hover:not(:disabled) {
+  background: rgba(255, 215, 0, 0.15);
+}
+
+.section-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.regen-message {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
 .btn-back {
   background: transparent;
   border: none;

@@ -27,6 +27,7 @@ export const fetchTodayPredictions = () => api.get('/predictions/today');
 export const fetchBestBets = () => api.get('/predictions/best-bets');
 export const fetchPredictionHistory = () => api.get('/predictions/history');
 export const fetchPredictionStats = () => api.get('/predictions/stats');
+export const regeneratePredictions = () => api.post('/predictions/regenerate');
 
 // Tracked bets endpoints
 export const trackBet = (predictionId, units) =>

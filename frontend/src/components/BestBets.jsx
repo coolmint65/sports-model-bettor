@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Trophy, TrendingUp, Target, Star, ChevronRight, Radio, Plus, Check, Layers } from 'lucide-react';
-import { fetchBestBets, trackBet, fetchTrackedBets } from '../utils/api';
+import { Trophy, TrendingUp, Target, Star, ChevronRight, Radio, Plus, Check, Layers, RefreshCw } from 'lucide-react';
+import { fetchBestBets, trackBet, fetchTrackedBets, regeneratePredictions } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import { teamName, teamAbbrev, confidencePct, formatBetType, formatPredictionValue } from '../utils/teams';
 
@@ -196,6 +196,8 @@ function BestBets() {
   // Track by game_id+bet_type as fallback (handles prediction ID changes)
   const [trackedKeys, setTrackedKeys] = useState(new Set());
   const [trackingId, setTrackingId] = useState(null);
+  const [regenerating, setRegenerating] = useState(false);
+  const [regenMessage, setRegenMessage] = useState('');
 
   // Load already-tracked bets so the Track button is disabled
   useEffect(() => {
@@ -258,6 +260,27 @@ function BestBets() {
       setTrackingId(null);
     }
   }, [trackedIds]);
+
+  const handleRegenerate = useCallback(async () => {
+    if (regenerating) return;
+    setRegenerating(true);
+    setRegenMessage('Regenerating...');
+    try {
+      const resp = await regeneratePredictions();
+      const msg = resp.data?.message || 'Predictions regenerated';
+      setRegenMessage(msg);
+      // Refresh the best bets data
+      await silentRefetch();
+      window.dispatchEvent(new Event('data-synced'));
+      setTimeout(() => setRegenMessage(''), 4000);
+    } catch (err) {
+      setRegenMessage('Regeneration failed');
+      console.error('Failed to regenerate predictions:', err);
+      setTimeout(() => setRegenMessage(''), 4000);
+    } finally {
+      setRegenerating(false);
+    }
+  }, [regenerating, silentRefetch]);
 
   const allBets = data?.best_bets || data?.bets || (Array.isArray(data) ? data : []);
   const mlBets = data?.ml_bets || [];
@@ -337,7 +360,21 @@ function BestBets() {
           <Trophy size={22} className="gold-icon" />
           Best Bets
         </h2>
-        <span className="bet-count">{currentBets.length} Pick{currentBets.length !== 1 ? 's' : ''}</span>
+        <div className="section-header-actions">
+          <span className="bet-count">{currentBets.length} Pick{currentBets.length !== 1 ? 's' : ''}</span>
+          <button
+            className="btn btn-regen"
+            onClick={handleRegenerate}
+            disabled={regenerating}
+            title="Delete and regenerate all predictions with latest odds"
+          >
+            <RefreshCw size={14} className={regenerating ? 'spin' : ''} />
+            {regenerating ? 'Regenerating...' : 'Regenerate'}
+          </button>
+          {regenMessage && !regenerating && (
+            <span className="regen-message">{regenMessage}</span>
+          )}
+        </div>
       </div>
 
       <div className="best-bets-tabs">

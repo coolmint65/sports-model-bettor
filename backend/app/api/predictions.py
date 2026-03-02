@@ -908,6 +908,72 @@ async def generate_predictions(
     )
 
 
+@router.post("/regenerate", response_model=GenerateResult)
+async def regenerate_predictions(
+    session: AsyncSession = Depends(get_session),
+):
+    """Delete today's prematch predictions and regenerate from scratch.
+
+    Use this when predictions were generated with stale or incorrect data
+    (e.g. wrong odds mappings) and need to be rebuilt with the latest model
+    and odds.  Only deletes prematch predictions that have NOT been graded.
+    """
+    today = date.today()
+
+    # Find prematch prediction IDs for today's non-final games that have
+    # no graded BetResult yet (safe to delete without losing history).
+    ungraded_ids_result = await session.execute(
+        select(Prediction.id)
+        .join(Game, Game.id == Prediction.game_id)
+        .outerjoin(BetResult, BetResult.prediction_id == Prediction.id)
+        .where(
+            Game.date == today,
+            ~func.lower(Game.status).in_(GAME_FINAL_STATUSES),
+            Prediction.phase == "prematch",
+            BetResult.id.is_(None),
+        )
+    )
+    ids_to_delete = [row[0] for row in ungraded_ids_result.all()]
+
+    deleted = 0
+    if ids_to_delete:
+        await session.execute(
+            delete(Prediction).where(Prediction.id.in_(ids_to_delete))
+        )
+        deleted = len(ids_to_delete)
+        await session.flush()
+
+    logger.info(
+        "Regenerate: deleted %d stale prematch predictions for %s",
+        deleted, today,
+    )
+
+    # Sync fresh odds first
+    try:
+        async with session.begin_nested():
+            from app.scrapers.odds_multi import MultiSourceOddsScraper
+
+            async with MultiSourceOddsScraper() as odds_scraper:
+                matched = await odds_scraper.sync_odds(session)
+                logger.info(
+                    "Regenerate: odds sync matched %d games",
+                    len(matched) if matched else 0,
+                )
+                await session.flush()
+                session.expire_all()
+    except Exception as exc:
+        logger.warning("Regenerate: odds sync failed: %s", exc)
+
+    # Now regenerate predictions (prematch lock is cleared, so they'll be rebuilt)
+    count = await _try_generate_predictions(session, target_date=today)
+
+    return GenerateResult(
+        success=True,
+        message=f"Cleared {deleted} stale predictions, regenerated {count} for {today}.",
+        predictions_generated=count,
+    )
+
+
 @router.get("/stats", response_model=ModelPerformanceStats)
 async def get_model_stats(
     session: AsyncSession = Depends(get_session),
