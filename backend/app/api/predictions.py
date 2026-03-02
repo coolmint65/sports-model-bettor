@@ -555,7 +555,8 @@ async def get_best_bets(
     spread_bets: List[BestBet] = []
     total_bets: List[BestBet] = []
 
-    async def _build_best_bet(pred: Prediction) -> BestBet:
+    async def _build_best_bet(pred: Prediction) -> Optional[BestBet]:
+        """Build a BestBet response, or return None if display odds exceed juice threshold."""
         detail = await _build_prediction_detail(pred, session)
 
         game_result = await session.execute(
@@ -590,6 +591,19 @@ async def get_best_bets(
                 else:
                     live_odds = game_obj.away_spread_price
 
+        # Filter out bets whose displayed odds exceed the juice threshold.
+        # The model may have evaluated using a better price from another
+        # sportsbook, but if the primary line is heavy juice, don't show it.
+        if live_odds is not None:
+            from app.analytics.models import american_odds_to_implied_prob
+            display_implied = american_odds_to_implied_prob(live_odds)
+            if display_implied >= max_implied:
+                logger.debug(
+                    "Filtering heavy-juice best bet: %s %s (display odds %s, implied %.3f)",
+                    pred.bet_type, pred.prediction_value, live_odds, display_implied,
+                )
+                return None
+
         units = calculate_units(pred.edge, pred.confidence)
         # Use the actual game status to determine phase — a prediction
         # created prematch is effectively "live" once the game starts.
@@ -614,11 +628,15 @@ async def get_best_bets(
         )
 
     for pred in top_preds:
-        best_bets.append(await _build_best_bet(pred))
+        bet = await _build_best_bet(pred)
+        if bet is not None:
+            best_bets.append(bet)
     for bet_type, preds in categorized.items():
         target = {"ml": ml_bets, "spread": spread_bets, "total": total_bets}[bet_type]
         for pred in preds:
-            target.append(await _build_best_bet(pred))
+            bet = await _build_best_bet(pred)
+            if bet is not None:
+                target.append(bet)
 
     return BestBetsResponse(
         date=today,
