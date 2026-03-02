@@ -912,64 +912,67 @@ async def generate_predictions(
 async def regenerate_predictions(
     session: AsyncSession = Depends(get_session),
 ):
-    """Delete today's prematch predictions and regenerate from scratch.
+    """Delete ALL of today's predictions and regenerate from scratch.
 
     Use this when predictions were generated with stale or incorrect data
     (e.g. wrong odds mappings) and need to be rebuilt with the latest model
-    and odds.  Only deletes prematch predictions that have NOT been graded.
+    and odds.  Clears every prediction for today so both Best Bets and
+    Schedule cards are refreshed.
     """
     today = date.today()
 
-    # Find prematch prediction IDs for today's non-final games that have
-    # no graded BetResult yet (safe to delete without losing history).
-    ungraded_ids_result = await session.execute(
+    # Step 1: Delete ALL predictions for today's games (not just prematch,
+    # not just market types — nuke everything so the prematch lock is
+    # fully cleared).  BetResults cascade-delete via the ORM relationship,
+    # but bulk delete bypasses that, so delete BetResults first.
+    today_pred_ids = await session.execute(
         select(Prediction.id)
         .join(Game, Game.id == Prediction.game_id)
-        .outerjoin(BetResult, BetResult.prediction_id == Prediction.id)
-        .where(
-            Game.date == today,
-            ~func.lower(Game.status).in_(GAME_FINAL_STATUSES),
-            Prediction.phase == "prematch",
-            BetResult.id.is_(None),
-        )
+        .where(Game.date == today)
     )
-    ids_to_delete = [row[0] for row in ungraded_ids_result.all()]
+    pred_ids = [row[0] for row in today_pred_ids.all()]
 
     deleted = 0
-    if ids_to_delete:
+    if pred_ids:
+        # Delete child BetResults first (FK constraint)
         await session.execute(
-            delete(Prediction).where(Prediction.id.in_(ids_to_delete))
+            delete(BetResult).where(BetResult.prediction_id.in_(pred_ids))
         )
-        deleted = len(ids_to_delete)
+        # Then delete the predictions themselves
+        await session.execute(
+            delete(Prediction).where(Prediction.id.in_(pred_ids))
+        )
+        deleted = len(pred_ids)
         await session.flush()
 
     logger.info(
-        "Regenerate: deleted %d stale prematch predictions for %s",
-        deleted, today,
+        "Regenerate: deleted %d predictions for %s", deleted, today,
     )
 
-    # Sync fresh odds first
+    # Step 2: Sync fresh odds from sportsbooks
+    odds_matched = 0
     try:
         async with session.begin_nested():
             from app.scrapers.odds_multi import MultiSourceOddsScraper
 
             async with MultiSourceOddsScraper() as odds_scraper:
                 matched = await odds_scraper.sync_odds(session)
-                logger.info(
-                    "Regenerate: odds sync matched %d games",
-                    len(matched) if matched else 0,
-                )
+                odds_matched = len(matched) if matched else 0
+                logger.info("Regenerate: odds sync matched %d games", odds_matched)
                 await session.flush()
                 session.expire_all()
     except Exception as exc:
         logger.warning("Regenerate: odds sync failed: %s", exc)
 
-    # Now regenerate predictions (prematch lock is cleared, so they'll be rebuilt)
+    # Step 3: Generate fresh predictions (prematch lock is fully cleared)
     count = await _try_generate_predictions(session, target_date=today)
 
     return GenerateResult(
         success=True,
-        message=f"Cleared {deleted} stale predictions, regenerated {count} for {today}.",
+        message=(
+            f"Cleared {deleted} predictions, synced odds for {odds_matched} games, "
+            f"regenerated {count} for {today}."
+        ),
         predictions_generated=count,
     )
 
