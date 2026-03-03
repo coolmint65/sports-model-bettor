@@ -1873,6 +1873,16 @@ def _merge_odds_events(
         home_spreads = [(e.home_spread, e.home_spread_price, e.source) for e in ev_list if e.has_spread()]
         away_spreads = [(e.away_spread, e.away_spread_price, e.source) for e in ev_list if e.has_spread()]
 
+        # Log per-source spread data to identify bad sources
+        if home_spreads:
+            for hs, hp, src in home_spreads:
+                for _as, ap, _ in [(a, b, c) for a, b, c in away_spreads if c == src]:
+                    logger.info(
+                        "  spread %s@%s [%s]: home %+.1f @ %+.0f  away %+.1f @ %+.0f",
+                        ev_list[0].away_abbr, ev_list[0].home_abbr, src,
+                        hs, hp, _as, ap,
+                    )
+
         # Determine which team is the favorite from moneyline data.
         # Lower moneyline = favorite.  This is the source of truth
         # for which team gets the negative spread.
@@ -1931,19 +1941,43 @@ def _merge_odds_events(
                 if home_is_fav:
                     # Home at -2.5+: price should be positive (hard to cover)
                     valid = [s for s in consensus_home_books if s[1] > 0]
+                    rejected = [s for s in consensus_home_books if s[1] <= 0]
+                    for r in rejected:
+                        logger.warning(
+                            "REJECTED %s@%s [%s]: home spread price %+.0f wrong sign for fav -%.1f line",
+                            ev_list[0].away_abbr, ev_list[0].home_abbr, r[2], r[1], consensus,
+                        )
                     if valid:
                         consensus_home_books = valid
                     # Away at +2.5+: price should be negative (easy to cover)
                     valid = [s for s in consensus_away_books if s[1] < 0]
+                    rejected = [s for s in consensus_away_books if s[1] >= 0]
+                    for r in rejected:
+                        logger.warning(
+                            "REJECTED %s@%s [%s]: away spread price %+.0f wrong sign for dog +%.1f line",
+                            ev_list[0].away_abbr, ev_list[0].home_abbr, r[2], r[1], consensus,
+                        )
                     if valid:
                         consensus_away_books = valid
                 else:
                     # Home at +2.5+: price should be negative
                     valid = [s for s in consensus_home_books if s[1] < 0]
+                    rejected = [s for s in consensus_home_books if s[1] >= 0]
+                    for r in rejected:
+                        logger.warning(
+                            "REJECTED %s@%s [%s]: home spread price %+.0f wrong sign for dog +%.1f line",
+                            ev_list[0].away_abbr, ev_list[0].home_abbr, r[2], r[1], consensus,
+                        )
                     if valid:
                         consensus_home_books = valid
                     # Away at -2.5+: price should be positive
                     valid = [s for s in consensus_away_books if s[1] > 0]
+                    rejected = [s for s in consensus_away_books if s[1] <= 0]
+                    for r in rejected:
+                        logger.warning(
+                            "REJECTED %s@%s [%s]: away spread price %+.0f wrong sign for fav -%.1f line",
+                            ev_list[0].away_abbr, ev_list[0].home_abbr, r[2], r[1], consensus,
+                        )
                     if valid:
                         consensus_away_books = valid
 
@@ -2215,40 +2249,40 @@ class MultiSourceOddsScraper:
 
     async def fetch_best_odds(self) -> List[Dict[str, Any]]:
         """
-        Fetch odds from proven sources and merge to find best lines.
+        Fetch odds from ALL available sources and merge to find best lines.
 
-        Active sources:
+        Sources (all enabled):
         - Hard Rock Bet (via The Odds API us2 region, clean pricing)
         - The Odds API generic (all US bookmakers: FanDuel, BetMGM, Caesars,
           DraftKings, PointsBet, etc.)
         - DraftKings (public sportsbook API, alt lines)
-
-        Disabled sources (one returns swapped spread prices):
-        - FanDuel, Kambi, Bovada — disabled pending individual testing.
+        - FanDuel (public sportsbook API, alt lines)
+        - Kambi (powers BetRivers, Unibet, 888sport)
+        - Bovada (public coupon API)
 
         The Odds API sources (Hard Rock + generic) share a single cached
         request so they don't double-count against the API quota.
+
+        The merge validates spread prices against moneyline data to reject
+        any source that returns swapped home/away spread prices.
         """
         client = self._get_client()
 
-        # Fetch from proven sources concurrently.
-        # FanDuel, Kambi, and Bovada are DISABLED — one of them returns
-        # swapped spread prices (e.g. PIT +2.5 at +385 instead of -500),
-        # which poisons the merge via max() and creates fake edges.
-        # They can be re-enabled one-at-a-time for testing.
+        # Fetch from ALL sources concurrently for maximum coverage
         results = await asyncio.gather(
             _fetch_hardrock(client),
             _fetch_odds_api(client),
             _fetch_draftkings(client),
-            # _fetch_fanduel(client),   # DISABLED: suspect bad spread prices
-            # _fetch_kambi(client),     # DISABLED: suspect bad spread prices
-            # _fetch_bovada(client),    # DISABLED: suspect bad spread prices
+            _fetch_fanduel(client),
+            _fetch_kambi(client),
+            _fetch_bovada(client),
             return_exceptions=True,
         )
 
         all_events: List[List[OddsEvent]] = []
         source_names = [
             "Hard Rock", "Odds API", "DraftKings",
+            "FanDuel", "Kambi", "Bovada",
         ]
 
         for i, result in enumerate(results):
