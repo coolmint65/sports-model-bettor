@@ -606,6 +606,48 @@ async def get_best_bets(
     session: AsyncSession = Depends(get_session),
 ):
     today = date.today()
+    logger.info("=== BEST-BETS START for %s ===", today)
+
+    # Step 0: Ensure games exist for today.  If the schedule hasn't been
+    # synced yet (e.g. user navigated directly to Best Bets before the
+    # dashboard loaded), there are 0 games and nothing downstream works.
+    game_count_result = await session.execute(
+        select(func.count(Game.id)).where(
+            Game.date == today,
+            ~func.lower(Game.status).in_(GAME_FINAL_STATUSES),
+        )
+    )
+    games_today = game_count_result.scalar() or 0
+    logger.info("Best-bets step 0: %d non-final games for today", games_today)
+
+    if games_today == 0:
+        try:
+            async with session.begin_nested():
+                from app.scrapers.nhl_api import NHLScraper
+
+                scraper = NHLScraper()
+                try:
+                    synced = await scraper.sync_schedule(session, str(today))
+                    synced_count = len(synced) if synced else 0
+                    logger.info(
+                        "Best-bets step 0: schedule sync added %d games", synced_count
+                    )
+                    await session.flush()
+                    session.expire_all()
+                finally:
+                    await scraper.close()
+        except Exception as exc:
+            logger.warning("Best-bets step 0: schedule sync failed: %s", exc)
+
+        # Re-check
+        game_count_result = await session.execute(
+            select(func.count(Game.id)).where(
+                Game.date == today,
+                ~func.lower(Game.status).in_(GAME_FINAL_STATUSES),
+            )
+        )
+        games_today = game_count_result.scalar() or 0
+        logger.info("Best-bets step 0: after sync, %d non-final games", games_today)
 
     # Step 1: Always refresh odds when stale, even if predictions exist.
     # Without this, odds go stale after initial generation and the
@@ -621,6 +663,7 @@ async def get_best_bets(
         )
     )
     needs_odds_refresh = (stale_result.scalar() or 0) > 0
+    logger.info("Best-bets step 1: needs_odds_refresh=%s", needs_odds_refresh)
 
     if needs_odds_refresh:
         try:
@@ -630,14 +673,32 @@ async def get_best_bets(
                 async with MultiSourceOddsScraper() as odds_scraper:
                     matched = await odds_scraper.sync_odds(session)
                     logger.info(
-                        "Odds refresh (stale >%d min): matched %d games",
-                        settings.odds_refresh_interval_minutes,
+                        "Best-bets step 1: odds refresh matched %d games",
                         len(matched) if matched else 0,
                     )
                     await session.flush()
                     session.expire_all()
         except Exception as exc:
-            logger.warning("Odds refresh failed: %s", exc)
+            logger.warning("Best-bets step 1: odds refresh failed: %s", exc)
+
+    # Log odds state after refresh
+    odds_check = await session.execute(
+        select(
+            Game.id,
+            Game.home_moneyline,
+            Game.over_under_line,
+            Game.home_spread_line,
+            Game.odds_updated_at,
+        ).where(
+            Game.date == today,
+            ~func.lower(Game.status).in_(GAME_FINAL_STATUSES),
+        )
+    )
+    for row in odds_check.all():
+        logger.info(
+            "Best-bets odds state: game=%d ml=%s ou=%s spread=%s updated=%s",
+            row[0], row[1], row[2], row[3], row[4],
+        )
 
     # Step 2: Generate predictions if none exist yet.
     # Check for ANY prediction phase (prematch or live) — not just
@@ -651,7 +712,9 @@ async def get_best_bets(
             ~func.lower(Game.status).in_(GAME_FINAL_STATUSES),
         )
     )
-    has_predictions = (existing_pred_count.scalar() or 0) > 0
+    pred_count_val = existing_pred_count.scalar() or 0
+    has_predictions = pred_count_val > 0
+    logger.info("Best-bets step 2: existing predictions=%d", pred_count_val)
 
     if not has_predictions:
         # Generate / update predictions (respects prematch locks)
@@ -659,10 +722,10 @@ async def get_best_bets(
             async with session.begin_nested():
                 pred_count = await _try_generate_predictions(session, target_date=today)
                 await session.flush()
-                logger.info("Generated/updated %d predictions for best-bets", pred_count)
+                logger.info("Best-bets step 2: generated %d predictions", pred_count)
         except Exception as exc:
             logger.warning(
-                "Prediction generation failed: %s",
+                "Best-bets step 2: prediction generation failed: %s",
                 getattr(exc, 'detail', str(exc)),
             )
 
@@ -677,9 +740,43 @@ async def get_best_bets(
         async with session.begin_nested():
             backfilled = await _backfill_prediction_odds(session, today)
             if backfilled:
-                logger.info("Best-bets: backfilled odds on %d predictions", backfilled)
+                logger.info("Best-bets step 3: backfilled odds on %d predictions", backfilled)
     except Exception as exc:
-        logger.warning("Prediction odds backfill failed: %s", exc)
+        logger.warning("Best-bets step 3: odds backfill failed: %s", exc)
+
+    # Log prediction state before filtering
+    all_pred_result = await session.execute(
+        select(
+            Prediction.id,
+            Prediction.bet_type,
+            Prediction.prediction_value,
+            Prediction.confidence,
+            Prediction.odds_implied_prob,
+            Prediction.edge,
+            Prediction.recommended,
+            Prediction.phase,
+            Game.status,
+        )
+        .join(Game, Game.id == Prediction.game_id)
+        .where(
+            Game.date == today,
+            ~func.lower(Game.status).in_(GAME_FINAL_STATUSES),
+        )
+    )
+    all_pred_rows = all_pred_result.all()
+    logger.info("Best-bets step 4: %d total predictions before filtering", len(all_pred_rows))
+    null_odds = sum(1 for r in all_pred_rows if r[4] is None)
+    has_odds = sum(1 for r in all_pred_rows if r[4] is not None)
+    market_type = sum(1 for r in all_pred_rows if r[1] in MARKET_BET_TYPES)
+    logger.info(
+        "Best-bets step 4: null_odds=%d, has_odds=%d, market_types=%d",
+        null_odds, has_odds, market_type,
+    )
+    for r in all_pred_rows[:20]:
+        logger.info(
+            "  pred id=%s type=%s val=%s conf=%.3f impl=%s edge=%s rec=%s phase=%s gstatus=%s",
+            r[0], r[1], r[2], r[3] or 0, r[4], r[5], r[6], r[7], r[8],
+        )
 
     max_implied = settings.best_bet_max_implied
 
@@ -706,10 +803,12 @@ async def get_best_bets(
         )
     )
     all_eligible = result.scalars().all()
+    logger.info("Best-bets step 4: %d eligible after filtering (implied<%.2f, not null, market type)", len(all_eligible), max_implied)
 
     # Split into recommended and fallback pools
     recommended = [p for p in all_eligible if p.recommended]
     fallback = [p for p in all_eligible if not p.recommended]
+    logger.info("Best-bets step 4: recommended=%d, fallback=%d", len(recommended), len(fallback))
 
     # Sort each pool by composite score
     recommended.sort(key=_score, reverse=True)
@@ -1333,6 +1432,118 @@ async def generate_predictions(
         message=f"Generated {count} predictions for {today}.",
         predictions_generated=count,
     )
+
+
+@router.get("/debug")
+async def debug_pipeline(
+    session: AsyncSession = Depends(get_session),
+):
+    """Diagnostic endpoint: show the full state of the prediction pipeline.
+
+    Returns raw counts, statuses, and filter results at each stage so you
+    can see exactly where best bets generation breaks down.
+    """
+    today = date.today()
+    info: dict = {"date": str(today), "steps": []}
+
+    # 1. Games for today
+    game_result = await session.execute(
+        select(
+            Game.id, Game.status, Game.home_moneyline, Game.away_moneyline,
+            Game.over_under_line, Game.home_spread_line, Game.odds_updated_at,
+        ).where(Game.date == today)
+    )
+    games_raw = game_result.all()
+    game_rows = []
+    for g in games_raw:
+        game_rows.append({
+            "id": g[0], "status": g[1],
+            "home_ml": g[2], "away_ml": g[3],
+            "ou": g[4], "spread": g[5],
+            "odds_updated": str(g[6]) if g[6] else None,
+        })
+    non_final = [g for g in game_rows if g["status"] and g["status"].lower() not in GAME_FINAL_STATUSES]
+    info["games_total"] = len(game_rows)
+    info["games_non_final"] = len(non_final)
+    info["games"] = game_rows
+    info["steps"].append(f"Found {len(game_rows)} games ({len(non_final)} non-final)")
+
+    # 2. Games with odds
+    with_ml = sum(1 for g in non_final if g["home_ml"] is not None)
+    with_ou = sum(1 for g in non_final if g["ou"] is not None)
+    with_spread = sum(1 for g in non_final if g["spread"] is not None)
+    info["games_with_moneyline"] = with_ml
+    info["games_with_ou"] = with_ou
+    info["games_with_spread"] = with_spread
+    info["steps"].append(f"Odds: {with_ml} have ML, {with_ou} have O/U, {with_spread} have spread")
+
+    # 3. Predictions
+    pred_result = await session.execute(
+        select(
+            Prediction.id, Prediction.game_id, Prediction.bet_type,
+            Prediction.prediction_value, Prediction.confidence,
+            Prediction.odds_implied_prob, Prediction.edge,
+            Prediction.recommended, Prediction.phase,
+        )
+        .join(Game, Game.id == Prediction.game_id)
+        .where(Game.date == today)
+    )
+    preds_raw = pred_result.all()
+    pred_rows = []
+    for p in preds_raw:
+        pred_rows.append({
+            "id": p[0], "game_id": p[1], "bet_type": p[2],
+            "prediction_value": p[3],
+            "confidence": round(p[4], 4) if p[4] else None,
+            "odds_implied_prob": round(p[5], 4) if p[5] else None,
+            "edge": round(p[6], 4) if p[6] else None,
+            "recommended": p[7], "phase": p[8],
+        })
+    info["predictions_total"] = len(pred_rows)
+    info["steps"].append(f"Found {len(pred_rows)} predictions total")
+
+    # 4. Filter breakdown
+    non_final_preds = [p for p in pred_rows if any(
+        g["id"] == p["game_id"] for g in non_final
+    )]
+    with_odds = [p for p in non_final_preds if p["odds_implied_prob"] is not None]
+    null_odds = [p for p in non_final_preds if p["odds_implied_prob"] is None]
+    market_type = [p for p in with_odds if p["bet_type"] in MARKET_BET_TYPES]
+    under_juice = [p for p in market_type if p["odds_implied_prob"] < settings.best_bet_max_implied]
+    recommended_preds = [p for p in under_juice if p["recommended"]]
+
+    info["filter_breakdown"] = {
+        "non_final_preds": len(non_final_preds),
+        "with_odds_implied": len(with_odds),
+        "null_odds_implied": len(null_odds),
+        "market_bet_types": len(market_type),
+        "under_juice_ceiling": len(under_juice),
+        "recommended": len(recommended_preds),
+    }
+    info["steps"].append(
+        f"Filters: {len(non_final_preds)} non-final → "
+        f"{len(with_odds)} have odds → "
+        f"{len(market_type)} market types → "
+        f"{len(under_juice)} under juice → "
+        f"{len(recommended_preds)} recommended"
+    )
+
+    # 5. Show null-odds predictions (the most common failure mode)
+    info["null_odds_predictions"] = null_odds[:10]
+
+    # 6. Settings
+    info["settings"] = {
+        "min_confidence": settings.min_confidence,
+        "min_edge": settings.min_edge,
+        "best_bet_max_implied": settings.best_bet_max_implied,
+        "best_bet_max_favorite": settings.best_bet_max_favorite,
+        "odds_api_key_set": bool(settings.odds_api_key),
+    }
+
+    # 7. All predictions (capped at 30)
+    info["predictions"] = pred_rows[:30]
+
+    return info
 
 
 @router.post("/regenerate", response_model=GenerateResult)
