@@ -2291,7 +2291,7 @@ class MultiSourceOddsScraper:
             # If the game is in-progress and we haven't snapshotted yet,
             # copy current odds to the pregame_* fields.
             if (
-                game.status in ("in_progress", "live")
+                game.status and game.status.lower() in ("in_progress", "live")
                 and game.pregame_home_moneyline is None
                 and game.home_moneyline is not None
             ):

@@ -9,6 +9,17 @@ Centralizes values that were previously duplicated in multiple modules
 # Used for filtering, grading predictions, and settling bets.
 GAME_FINAL_STATUSES = ("final", "completed", "off", "official")
 
+# Statuses that represent games we can generate predictions for.
+# This is the complement of GAME_FINAL_STATUSES — every non-final
+# status should be here so games are never deleted-but-not-regenerated.
+GAME_PREDICTABLE_STATUSES = (
+    "scheduled",
+    "pregame",
+    "preview",
+    "in_progress",
+    "live",
+)
+
 # The three core sportsbook market types the model generates predictions for.
 MARKET_BET_TYPES = ("ml", "total", "spread")
 

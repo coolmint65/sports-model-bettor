@@ -355,7 +355,7 @@ async def get_live_games(
     result = await session.execute(
         select(Game)
         .options(selectinload(Game.home_team), selectinload(Game.away_team))
-        .where(Game.status.in_(["in_progress", "live"]))
+        .where(func.lower(Game.status).in_(("in_progress", "live")))
         .order_by(Game.start_time.asc().nulls_last(), Game.id.asc())
     )
     games = result.scalars().all()
@@ -400,7 +400,7 @@ async def get_live_games(
         result = await session.execute(
             select(Game)
             .options(selectinload(Game.home_team), selectinload(Game.away_team))
-            .where(Game.status.in_(["in_progress", "live"]))
+            .where(func.lower(Game.status).in_(("in_progress", "live")))
             .order_by(Game.start_time.asc().nulls_last(), Game.id.asc())
         )
         games = result.scalars().all()
@@ -428,7 +428,7 @@ async def get_today_schedule(
 
     # Check if any games are live (in_progress) or if we have no games yet.
     # In either case, re-sync from the NHL API so we get the latest scores.
-    has_live = any(g.status == "in_progress" for g in games)
+    has_live = any(g.status and g.status.lower() in ("in_progress", "live") for g in games)
     if not games or has_live:
         try:
             async with session.begin_nested():
@@ -440,7 +440,7 @@ async def get_today_schedule(
 
     # If any non-final games are missing a top pick OR missing odds
     # data entirely, sync odds from sportsbooks and regenerate predictions.
-    missing_picks = [g for g in games if g.top_pick is None and g.status not in GAME_FINAL_STATUSES]
+    missing_picks = [g for g in games if g.top_pick is None and (not g.status or g.status.lower() not in GAME_FINAL_STATUSES)]
 
     # Also directly check if any DB games are missing odds — this catches
     # cases where predictions exist but lack edges because odds weren't
@@ -448,7 +448,7 @@ async def get_today_schedule(
     needs_odds_result = await session.execute(
         select(Game.id).where(
             Game.date == today,
-            Game.status.notin_(GAME_FINAL_STATUSES),
+            ~func.lower(Game.status).in_(GAME_FINAL_STATUSES),
             Game.home_moneyline.is_(None),
         )
     )
@@ -513,7 +513,7 @@ async def get_today_schedule(
 
         games = await _games_for_date(today, session)
         with_picks = [g for g in games if g.top_pick is not None]
-        without_picks = [g for g in games if g.top_pick is None and g.status not in GAME_FINAL_STATUSES]
+        without_picks = [g for g in games if g.top_pick is None and (not g.status or g.status.lower() not in GAME_FINAL_STATUSES)]
         logger.info(
             "Schedule prediction result: %d/%d games have picks. "
             "Still missing: %s",

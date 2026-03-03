@@ -18,7 +18,7 @@ from sqlalchemy.orm import selectinload
 from app.analytics.features import FeatureEngine
 from app.analytics.models import BettingModel
 from app.config import settings
-from app.constants import MARKET_BET_TYPES, composite_pick_score
+from app.constants import GAME_PREDICTABLE_STATUSES, MARKET_BET_TYPES, composite_pick_score
 from app.models.game import Game
 from app.models.prediction import BetResult, Prediction
 
@@ -64,13 +64,16 @@ class PredictionManager:
         game_date = self._parse_date(target_date)
         logger.info("Generating predictions for %s", game_date)
 
-        # Fetch scheduled or in-progress games for the target date
+        # Fetch all non-final games for the target date.
+        # Uses the shared GAME_PREDICTABLE_STATUSES constant so that
+        # every status that can be deleted is also regenerated — no
+        # game falls through the cracks.
         stmt = (
             select(Game)
             .where(
                 and_(
                     Game.date == game_date,
-                    Game.status.in_(["scheduled", "in_progress", "preview"]),
+                    func.lower(Game.status).in_(GAME_PREDICTABLE_STATUSES),
                 )
             )
             .order_by(Game.start_time)
@@ -79,7 +82,7 @@ class PredictionManager:
         games = result.scalars().all()
 
         if not games:
-            logger.info("No scheduled games found for %s", game_date)
+            logger.info("No predictable games found for %s", game_date)
             return []
 
         logger.info("Found %d games for %s", len(games), game_date)
@@ -176,7 +179,7 @@ class PredictionManager:
                     "odds": odds,
                     "reasoning": pred.get("reasoning", ""),
                     "is_best_bet": False,
-                    "phase": "live" if game_data.get("status") == "in_progress" else "prematch",
+                    "phase": "live" if (game_data.get("status") or "").lower() in ("in_progress", "live") else "prematch",
                 }
                 all_flat.append(flat)
 
@@ -363,7 +366,7 @@ class PredictionManager:
         # For live games, adjust predictions based on current score and
         # time remaining so confidence reflects the actual game state
         # rather than stale pre-game projections.
-        if game.status == "in_progress" and (
+        if game.status and game.status.lower() in ("in_progress", "live") and (
             game.home_score is not None or game.away_score is not None
         ):
             live_state = {

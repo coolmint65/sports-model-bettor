@@ -616,8 +616,8 @@ class NHLScraper(BaseScraper):
                 # Snapshot pregame odds when game transitions to live
                 old_status = game.status
                 if (
-                    old_status in ("scheduled", "pregame")
-                    and status == "in_progress"
+                    old_status and old_status.lower() in ("scheduled", "pregame", "preview")
+                    and status in ("in_progress", "live")
                     and game.pregame_home_moneyline is None
                     and game.home_moneyline is not None
                 ):
@@ -666,17 +666,23 @@ class NHLScraper(BaseScraper):
 
     @staticmethod
     def _map_game_status(api_status: str) -> str:
-        """Map NHL API gameState codes to our internal status strings."""
+        """Map NHL API gameState codes to our internal status strings.
+
+        Case-insensitive: the NHL API typically returns uppercase codes
+        (FUT, LIVE, …) but we normalise to uppercase before lookup so
+        mixed-case or lowercase values don't slip through unmapped.
+        """
         mapping = {
             "FUT": "scheduled",
             "PRE": "scheduled",
+            "PREGAME": "scheduled",
             "LIVE": "in_progress",
             "CRIT": "in_progress",
             "OFF": "final",
             "FINAL": "final",
             "OVER": "final",
         }
-        return mapping.get(api_status, api_status.lower())
+        return mapping.get(api_status.upper(), api_status.lower())
 
     # ------------------------------------------------------------------
     # K) Sync game results (boxscore)

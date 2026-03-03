@@ -624,7 +624,7 @@ async def get_game_details(
     game = await _get_game_or_404(game_id, session)
 
     # Auto-sync from NHL API if game is live to get latest scores/clock
-    if game.status in ("in_progress", "live"):
+    if game.status and game.status.lower() in ("in_progress", "live"):
         try:
             from app.scrapers.nhl_api import NHLScraper
 

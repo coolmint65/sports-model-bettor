@@ -154,10 +154,18 @@ async def _run_full_sync():
                     today = date_type.today()
 
                     async with session.begin_nested():
+                        # Count how many predictions we're about to delete
                         non_final_game_ids = select(Game.id).where(
                             Game.date == today,
-                            Game.status.notin_(GAME_FINAL_STATUSES),
+                            ~func.lower(Game.status).in_(GAME_FINAL_STATUSES),
                         )
+                        del_count_result = await session.execute(
+                            select(func.count(Prediction.id)).where(
+                                Prediction.game_id.in_(non_final_game_ids)
+                            )
+                        )
+                        deleted_count = del_count_result.scalar() or 0
+
                         await session.execute(
                             sa_delete(Prediction).where(
                                 Prediction.game_id.in_(non_final_game_ids)
@@ -166,7 +174,28 @@ async def _run_full_sync():
                         await session.flush()
 
                         manager = PredictionManager()
-                        await manager.get_best_bets(session)
+                        new_bets = await manager.get_best_bets(session)
+
+                        # Count newly created predictions
+                        new_count_result = await session.execute(
+                            select(func.count(Prediction.id)).where(
+                                Prediction.game_id.in_(non_final_game_ids)
+                            )
+                        )
+                        new_count = new_count_result.scalar() or 0
+
+                        if deleted_count > 0 and new_count == 0:
+                            logger.warning(
+                                "Sync: deleted %d predictions but regenerated 0. "
+                                "Best bets returned %d. Games may have unexpected statuses.",
+                                deleted_count, len(new_bets),
+                            )
+                        else:
+                            logger.info(
+                                "Sync predictions: deleted %d old, created %d new, "
+                                "best bets=%d",
+                                deleted_count, new_count, len(new_bets),
+                            )
                 except Exception as exc:
                     logger.warning("Prediction generation failed (non-critical): %s", exc)
 

@@ -457,7 +457,7 @@ async def _try_generate_predictions(
         for game_data in results or []:
             game_id = game_data.get("game_id")
             game_status = game_data.get("status", "scheduled")
-            is_live = game_status == "in_progress"
+            is_live = game_status.lower() in ("in_progress", "live") if game_status else False
             phase = "live" if is_live else "prematch"
 
             if not is_live:
@@ -639,14 +639,16 @@ async def get_best_bets(
         except Exception as exc:
             logger.warning("Odds refresh failed: %s", exc)
 
-    # Step 2: Generate predictions if none exist yet
+    # Step 2: Generate predictions if none exist yet.
+    # Check for ANY prediction phase (prematch or live) — not just
+    # prematch — so that live-only games don't trigger unnecessary
+    # regeneration that silently produces duplicates or empties.
     existing_pred_count = await session.execute(
         select(func.count(Prediction.id))
         .join(Game, Game.id == Prediction.game_id)
         .where(
             Game.date == today,
             ~func.lower(Game.status).in_(GAME_FINAL_STATUSES),
-            Prediction.phase == "prematch",
         )
     )
     has_predictions = (existing_pred_count.scalar() or 0) > 0
@@ -851,7 +853,7 @@ async def get_best_bets(
         units = calculate_units(fresh_edge, pred.confidence)
         # Use the actual game status to determine phase — a prediction
         # created prematch is effectively "live" once the game starts.
-        phase = "live" if game_status == "in_progress" else getattr(pred, "phase", "prematch")
+        phase = "live" if game_status and game_status.lower() in ("in_progress", "live") else getattr(pred, "phase", "prematch")
 
         return BestBet(
             prediction_id=detail.id,
