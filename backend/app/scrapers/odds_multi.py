@@ -1,15 +1,19 @@
 """
-Odds scraper for NHL games — Hard Rock Bet (sole source).
+Odds scraper for NHL games — Hard Rock Bet + DraftKings.
 
-Fetches odds from Hard Rock Bet via The Odds API us2 region.
-Hard Rock uses Kambi Odds Feed+ and is known for accurate,
-round-number pricing in clean increments of 5.
+Hard Rock Bet (primary) provides moneyline, spread, and totals odds
+via The Odds API us2 region. Known for accurate, round-number pricing
+in clean increments of 5. Alternate spreads and totals are fetched
+per-event from the Odds API event endpoint.
 
-The ODDS_API_KEY environment variable is required.
+DraftKings (secondary) supplements with additional alternate spread
+and total lines from its public sportsbook API.
 
-Other sportsbook scrapers (DraftKings, FanDuel, Kambi, Bovada,
-generic Odds API) are retained in the codebase but disabled.
-They can be re-enabled in ``fetch_best_odds()`` if needed.
+The ODDS_API_KEY environment variable is required for Hard Rock.
+
+Other sportsbook scrapers (FanDuel, Kambi, Bovada, generic Odds API)
+are retained in the codebase but disabled. They can be re-enabled
+in ``fetch_best_odds()`` if needed.
 """
 
 import asyncio
@@ -1495,6 +1499,103 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
 _HARDROCK_KEYS = {"hard_rock_bet", "hardrockbet", "hardrock", "hard_rock"}
 
 
+async def _fetch_hardrock_alt_lines(
+    client: httpx.AsyncClient,
+    event_id: str,
+    home_team: str,
+    away_team: str,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Fetch alternate spreads and totals for a single event from Hard Rock.
+
+    Uses the per-event endpoint ``/events/{eventId}/odds`` which supports
+    additional markets like ``alternate_spreads`` and ``alternate_totals``.
+
+    Returns (alt_totals, alt_spreads) lists ready for ``OddsEvent``.
+    """
+    alt_totals: List[Dict[str, Any]] = []
+    alt_spreads: List[Dict[str, Any]] = []
+
+    api_key = settings.odds_api_key
+    if not api_key:
+        return alt_totals, alt_spreads
+
+    url = f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/events/{event_id}/odds"
+    params = {
+        "apiKey": api_key,
+        "regions": "us2",
+        "markets": "alternate_spreads,alternate_totals",
+        "oddsFormat": "american",
+    }
+
+    data = await _make_request(client, url, params=params)
+    if not data or not isinstance(data, dict):
+        return alt_totals, alt_spreads
+
+    for bm in data.get("bookmakers", []):
+        bm_key = bm.get("key", "").lower().replace("-", "_")
+        bm_title = bm.get("title", "").lower()
+        if bm_key not in _HARDROCK_KEYS and "hard rock" not in bm_title:
+            continue
+
+        for market in bm.get("markets", []):
+            mkey = market.get("key", "")
+            outcomes = market.get("outcomes", [])
+
+            if mkey == "alternate_totals":
+                # Group outcomes by point value into over/under pairs
+                by_line: Dict[float, Dict[str, float]] = {}
+                for oc in outcomes:
+                    point = float(oc.get("point", 0))
+                    price = float(oc.get("price", 0))
+                    side = oc.get("name", "").lower()
+                    if point <= 0:
+                        continue
+                    if point not in by_line:
+                        by_line[point] = {}
+                    if "over" in side:
+                        by_line[point]["over_price"] = round(price)
+                    elif "under" in side:
+                        by_line[point]["under_price"] = round(price)
+                for lv in sorted(by_line):
+                    prices = by_line[lv]
+                    if "over_price" in prices and "under_price" in prices:
+                        alt_totals.append({
+                            "line": lv,
+                            "over_price": prices["over_price"],
+                            "under_price": prices["under_price"],
+                        })
+
+            elif mkey == "alternate_spreads":
+                # Group outcomes by absolute point value into home/away pairs
+                by_abs: Dict[float, Dict[str, float]] = {}
+                for oc in outcomes:
+                    name = oc.get("name", "")
+                    point = float(oc.get("point", 0))
+                    price = float(oc.get("price", 0))
+                    abs_line = abs(point)
+                    if abs_line not in by_abs:
+                        by_abs[abs_line] = {}
+                    if name == home_team:
+                        by_abs[abs_line]["home_spread"] = point
+                        by_abs[abs_line]["home_price"] = round(price)
+                    elif name == away_team:
+                        by_abs[abs_line]["away_spread"] = point
+                        by_abs[abs_line]["away_price"] = round(price)
+                for abs_lv in sorted(by_abs):
+                    prices = by_abs[abs_lv]
+                    if "home_price" in prices and "away_price" in prices:
+                        alt_spreads.append({
+                            "line": abs_lv,
+                            "home_spread": prices.get("home_spread", -abs_lv),
+                            "away_spread": prices.get("away_spread", abs_lv),
+                            "home_price": prices["home_price"],
+                            "away_price": prices["away_price"],
+                        })
+        break  # only need the Hard Rock bookmaker
+
+    return alt_totals, alt_spreads
+
+
 async def _fetch_hardrock(client: httpx.AsyncClient) -> List[OddsEvent]:
     """
     Fetch NHL odds specifically from Hard Rock Bet via The Odds API (us2 region).
@@ -1502,12 +1603,12 @@ async def _fetch_hardrock(client: httpx.AsyncClient) -> List[OddsEvent]:
     Hard Rock Bet uses Kambi Odds Feed+ on a proprietary platform with no
     public API.  The Odds API aggregator includes Hard Rock in its ``us2``
     region.  We extract only the Hard Rock bookmaker data so that its odds
-    enter the multi-source merge as a first-class source with accurate,
-    round-number pricing.
+    enter the merge as a first-class source with accurate, round-number pricing.
 
-    Shares the same API call as ``_fetch_odds_api`` via
-    ``_fetch_odds_api_raw`` (combined us+us2 regions) to avoid doubling
-    API quota usage.
+    Primary lines come from the bulk ``/odds`` endpoint (shared via
+    ``_fetch_odds_api_raw``).  Alternate spreads and totals are fetched
+    per-event from ``/events/{eventId}/odds`` with the
+    ``alternate_spreads,alternate_totals`` markets.
 
     Requires ODDS_API_KEY.  Returns empty list if no key is configured or
     Hard Rock data is not present in the response.
@@ -1523,10 +1624,13 @@ async def _fetch_hardrock(client: httpx.AsyncClient) -> List[OddsEvent]:
         logger.info("Hard Rock: no data returned from Odds API")
         return events
 
+    # First pass: extract primary lines and collect event IDs for alt-line fetch
+    primary_data: List[Dict[str, Any]] = []
     for ev in data:
         home_team = ev.get("home_team", "")
         away_team = ev.get("away_team", "")
         commence = ev.get("commence_time", "")
+        event_id = ev.get("id", "")
 
         # Find the Hard Rock bookmaker entry
         hr_bm = None
@@ -1585,20 +1689,66 @@ async def _fetch_hardrock(client: httpx.AsyncClient) -> List[OddsEvent]:
         if home_ml == 0 and away_ml == 0:
             continue
 
+        primary_data.append({
+            "event_id": event_id,
+            "home_team": home_team,
+            "away_team": away_team,
+            "commence": commence,
+            "home_ml": round(home_ml),
+            "away_ml": round(away_ml),
+            "home_spread": round(home_spread, 1),
+            "away_spread": round(away_spread, 1),
+            "home_spread_price": round(home_spread_price),
+            "away_spread_price": round(away_spread_price),
+            "total_line": total_line,
+            "over_price": round(over_price),
+            "under_price": round(under_price),
+        })
+
+    # Second pass: fetch alt lines concurrently for all events
+    alt_results = await asyncio.gather(
+        *(
+            _fetch_hardrock_alt_lines(
+                client, pd["event_id"], pd["home_team"], pd["away_team"]
+            )
+            for pd in primary_data
+            if pd["event_id"]
+        ),
+        return_exceptions=True,
+    )
+
+    # Map event_id → alt data
+    alt_map: Dict[str, Tuple[List, List]] = {}
+    alt_idx = 0
+    for pd in primary_data:
+        if pd["event_id"]:
+            result = alt_results[alt_idx]
+            alt_idx += 1
+            if isinstance(result, tuple):
+                alt_map[pd["event_id"]] = result
+            else:
+                logger.warning("Hard Rock alt-line fetch failed for %s: %s", pd["event_id"], result)
+
+    # Build OddsEvent objects with alt lines
+    for pd in primary_data:
+        alt_totals, alt_spreads = alt_map.get(pd["event_id"], ([], []))
+
         event = OddsEvent(
             source="hardrock",
-            home_team=home_team,
-            away_team=away_team,
-            commence_time=commence,
-            home_ml=round(home_ml),
-            away_ml=round(away_ml),
-            home_spread=round(home_spread, 1),
-            away_spread=round(away_spread, 1),
-            home_spread_price=round(home_spread_price),
-            away_spread_price=round(away_spread_price),
-            total_line=total_line,
-            over_price=round(over_price),
-            under_price=round(under_price),
+            home_team=pd["home_team"],
+            away_team=pd["away_team"],
+            commence_time=pd["commence"],
+            home_ml=pd["home_ml"],
+            away_ml=pd["away_ml"],
+            home_spread=pd["home_spread"],
+            away_spread=pd["away_spread"],
+            home_spread_price=pd["home_spread_price"],
+            away_spread_price=pd["away_spread_price"],
+            total_line=pd["total_line"],
+            over_price=pd["over_price"],
+            under_price=pd["under_price"],
+            alt_totals=alt_totals,
+            alt_spreads=alt_spreads,
         )
 
         if event.home_abbr and event.away_abbr:
@@ -1607,10 +1757,17 @@ async def _fetch_hardrock(client: httpx.AsyncClient) -> List[OddsEvent]:
             logger.warning(
                 "Hard Rock: dropping event — unmapped teams "
                 "(home=%r→%r, away=%r→%r)",
-                home_team, event.home_abbr, away_team, event.away_abbr,
+                pd["home_team"], event.home_abbr,
+                pd["away_team"], event.away_abbr,
             )
 
-    logger.info("Hard Rock: fetched odds for %d events", len(events))
+    total_alts = sum(
+        len(e.alt_totals) + len(e.alt_spreads) for e in events
+    )
+    logger.info(
+        "Hard Rock: fetched odds for %d events (%d alt lines)",
+        len(events), total_alts,
+    )
 
     # Log the discovered bookmaker key on first successful fetch for debugging
     if events and data:
@@ -1869,21 +2026,23 @@ class MultiSourceOddsScraper:
 
     async def fetch_best_odds(self) -> List[Dict[str, Any]]:
         """
-        Fetch odds from Hard Rock Bet (sole source) and merge them.
+        Fetch odds from Hard Rock Bet (primary) and DraftKings (alt lines).
 
-        Returns a list of dicts, each representing one game with
-        Hard Rock's odds via The Odds API us2 region.
+        Hard Rock provides the primary moneyline, spread, and totals odds
+        plus its own alternate lines.  DraftKings supplements with
+        additional alternate spread and total lines from its public API.
         """
         client = self._get_client()
 
-        # Hard Rock is our sole odds source
+        # Hard Rock (primary) + DraftKings (alt lines supplement)
         results = await asyncio.gather(
             _fetch_hardrock(client),
+            _fetch_draftkings(client),
             return_exceptions=True,
         )
 
         all_events: List[List[OddsEvent]] = []
-        source_names = ["Hard Rock"]
+        source_names = ["Hard Rock", "DraftKings"]
 
         for i, result in enumerate(results):
             if isinstance(result, Exception):
