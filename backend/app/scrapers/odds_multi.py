@@ -1264,6 +1264,48 @@ async def _fetch_bovada(client: httpx.AsyncClient) -> List[OddsEvent]:
                                     odds["over_price"] = bov_lines[best_line].get("over_price", -110)
                                     odds["under_price"] = bov_lines[best_line].get("under_price", -110)
 
+                # ---- Fix Bovada spread home/away inversion ----
+                # Bovada's "H"/"A" type on spread outcomes sometimes
+                # assigns the handicap to the wrong side.  The moneyline
+                # type mapping IS reliable, so use ML to detect and
+                # correct the inversion before the data reaches merging.
+                _hml = odds.get("home_ml", 0)
+                _aml = odds.get("away_ml", 0)
+                _hs = odds.get("home_spread", 0)
+                if _hml and _aml and _hs and _hml != _aml:
+                    _home_fav = _hml < _aml
+                    # If home is favorite, home_spread should be negative
+                    # (giving points).  If positive, the sides are swapped.
+                    _signs_wrong = (
+                        (_home_fav and _hs > 0)
+                        or (not _home_fav and _hs < 0)
+                    )
+                    if _signs_wrong:
+                        logger.info(
+                            "Bovada %s @ %s: fixing spread H/A swap "
+                            "(home %+.1f @ %+.0f ↔ away %+.1f @ %+.0f)",
+                            away_name, home_name,
+                            odds.get("home_spread", 0),
+                            odds.get("home_spread_price", 0),
+                            odds.get("away_spread", 0),
+                            odds.get("away_spread_price", 0),
+                        )
+                        odds["home_spread"], odds["away_spread"] = (
+                            odds.get("away_spread", 0),
+                            odds.get("home_spread", 0),
+                        )
+                        odds["home_spread_price"], odds["away_spread_price"] = (
+                            odds.get("away_spread_price", -110),
+                            odds.get("home_spread_price", -110),
+                        )
+                        for alt in odds.get("bov_alt_spreads", []):
+                            alt["home_spread"], alt["away_spread"] = (
+                                alt["away_spread"], alt["home_spread"],
+                            )
+                            alt["home_price"], alt["away_price"] = (
+                                alt["away_price"], alt["home_price"],
+                            )
+
                 event = OddsEvent(
                     source="bovada",
                     home_team=home_name,
