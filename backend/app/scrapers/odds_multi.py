@@ -1918,11 +1918,37 @@ def _merge_odds_events(
 
             # Best price: the prices are always tied to their team's
             # side of the spread (home_spread_price = price for whatever
-            # spread the home team has), so max() is correct here.
+            # spread the home team has), so max() is correct here —
+            # BUT we first filter out prices with the wrong sign for
+            # large spreads (≥2.0).  In NHL, the team giving up goals
+            # (negative spread) always has positive odds, and the team
+            # getting goals (positive spread) always has negative odds.
+            # A wrong-sign price means the source swapped home/away.
             consensus_home_books = [s for s in home_spreads if abs(s[0]) == consensus]
+            consensus_away_books = [s for s in away_spreads if abs(s[0]) == consensus]
+
+            if consensus >= 2.0 and home_is_fav is not None:
+                if home_is_fav:
+                    # Home at -2.5+: price should be positive (hard to cover)
+                    valid = [s for s in consensus_home_books if s[1] > 0]
+                    if valid:
+                        consensus_home_books = valid
+                    # Away at +2.5+: price should be negative (easy to cover)
+                    valid = [s for s in consensus_away_books if s[1] < 0]
+                    if valid:
+                        consensus_away_books = valid
+                else:
+                    # Home at +2.5+: price should be negative
+                    valid = [s for s in consensus_home_books if s[1] < 0]
+                    if valid:
+                        consensus_home_books = valid
+                    # Away at -2.5+: price should be positive
+                    valid = [s for s in consensus_away_books if s[1] > 0]
+                    if valid:
+                        consensus_away_books = valid
+
             if consensus_home_books:
                 best_home_spread_price = max(s[1] for s in consensus_home_books)
-            consensus_away_books = [s for s in away_spreads if abs(s[0]) == consensus]
             if consensus_away_books:
                 best_away_spread_price = max(s[1] for s in consensus_away_books)
 
@@ -2007,18 +2033,56 @@ def _merge_odds_events(
                     "home_spread": 0, "away_spread": 0,
                 }
 
+        def _valid_spread_price(
+            price: float, abs_line: float, is_home: bool,
+        ) -> bool:
+            """Check if a spread price has a plausible sign.
+
+            For lines ≥ 2.0 we can validate against moneyline data:
+            the team giving up goals (negative spread / favorite)
+            should have positive odds, and the team getting goals
+            (positive spread / underdog) should have negative odds.
+            A violation means the source likely swapped home/away.
+            """
+            if abs_line < 2.0 or home_is_fav is None:
+                return True  # can't validate small lines or without ML
+            if is_home:
+                if home_is_fav:
+                    return price > 0   # home -2.5+ → positive price
+                else:
+                    return price < 0   # home +2.5+ → negative price
+            else:
+                if home_is_fav:
+                    return price < 0   # away +2.5+ → negative price
+                else:
+                    return price > 0   # away -2.5+ → positive price
+
         for e in ev_list:
             # Include primary spread
             if e.has_spread():
                 abs_line = abs(e.home_spread) if e.home_spread else abs(e.away_spread)
                 if abs_line not in all_spreads_map:
                     all_spreads_map[abs_line] = _init_spread_entry(abs_line)
-                all_spreads_map[abs_line]["home_price"] = max(
-                    all_spreads_map[abs_line]["home_price"], e.home_spread_price
-                )
-                all_spreads_map[abs_line]["away_price"] = max(
-                    all_spreads_map[abs_line]["away_price"], e.away_spread_price
-                )
+                if _valid_spread_price(e.home_spread_price, abs_line, True):
+                    all_spreads_map[abs_line]["home_price"] = max(
+                        all_spreads_map[abs_line]["home_price"], e.home_spread_price
+                    )
+                else:
+                    logger.warning(
+                        "Merge %s@%s: rejecting %s home spread price %s for %.1f line (wrong sign)",
+                        ev_list[0].away_abbr, ev_list[0].home_abbr,
+                        e.source, e.home_spread_price, abs_line,
+                    )
+                if _valid_spread_price(e.away_spread_price, abs_line, False):
+                    all_spreads_map[abs_line]["away_price"] = max(
+                        all_spreads_map[abs_line]["away_price"], e.away_spread_price
+                    )
+                else:
+                    logger.warning(
+                        "Merge %s@%s: rejecting %s away spread price %s for %.1f line (wrong sign)",
+                        ev_list[0].away_abbr, ev_list[0].home_abbr,
+                        e.source, e.away_spread_price, abs_line,
+                    )
                 # Only accept spread signs that agree with moneyline.
                 # If no ML data, accept the first non-zero value.
                 if e.home_spread:
@@ -2040,14 +2104,16 @@ def _merge_odds_events(
                 abs_line = alt["line"]
                 if abs_line not in all_spreads_map:
                     all_spreads_map[abs_line] = _init_spread_entry(abs_line)
-                all_spreads_map[abs_line]["home_price"] = max(
-                    all_spreads_map[abs_line]["home_price"],
-                    alt.get("home_price", -110)
-                )
-                all_spreads_map[abs_line]["away_price"] = max(
-                    all_spreads_map[abs_line]["away_price"],
-                    alt.get("away_price", -110)
-                )
+                hp = alt.get("home_price", -110)
+                ap = alt.get("away_price", -110)
+                if _valid_spread_price(hp, abs_line, True):
+                    all_spreads_map[abs_line]["home_price"] = max(
+                        all_spreads_map[abs_line]["home_price"], hp
+                    )
+                if _valid_spread_price(ap, abs_line, False):
+                    all_spreads_map[abs_line]["away_price"] = max(
+                        all_spreads_map[abs_line]["away_price"], ap
+                    )
 
         all_spread_lines = sorted([
             {
@@ -2149,37 +2215,40 @@ class MultiSourceOddsScraper:
 
     async def fetch_best_odds(self) -> List[Dict[str, Any]]:
         """
-        Fetch odds from ALL available sources and merge to find best lines.
+        Fetch odds from proven sources and merge to find best lines.
 
-        Sources (all enabled):
+        Active sources:
         - Hard Rock Bet (via The Odds API us2 region, clean pricing)
         - The Odds API generic (all US bookmakers: FanDuel, BetMGM, Caesars,
           DraftKings, PointsBet, etc.)
         - DraftKings (public sportsbook API, alt lines)
-        - FanDuel (public sportsbook API, alt lines)
-        - Kambi (powers BetRivers, Unibet, 888sport)
-        - Bovada (public coupon API)
+
+        Disabled sources (one returns swapped spread prices):
+        - FanDuel, Kambi, Bovada — disabled pending individual testing.
 
         The Odds API sources (Hard Rock + generic) share a single cached
         request so they don't double-count against the API quota.
         """
         client = self._get_client()
 
-        # Fetch from ALL sources concurrently for maximum coverage
+        # Fetch from proven sources concurrently.
+        # FanDuel, Kambi, and Bovada are DISABLED — one of them returns
+        # swapped spread prices (e.g. PIT +2.5 at +385 instead of -500),
+        # which poisons the merge via max() and creates fake edges.
+        # They can be re-enabled one-at-a-time for testing.
         results = await asyncio.gather(
             _fetch_hardrock(client),
             _fetch_odds_api(client),
             _fetch_draftkings(client),
-            _fetch_fanduel(client),
-            _fetch_kambi(client),
-            _fetch_bovada(client),
+            # _fetch_fanduel(client),   # DISABLED: suspect bad spread prices
+            # _fetch_kambi(client),     # DISABLED: suspect bad spread prices
+            # _fetch_bovada(client),    # DISABLED: suspect bad spread prices
             return_exceptions=True,
         )
 
         all_events: List[List[OddsEvent]] = []
         source_names = [
             "Hard Rock", "Odds API", "DraftKings",
-            "FanDuel", "Kambi", "Bovada",
         ]
 
         for i, result in enumerate(results):
