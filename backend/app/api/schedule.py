@@ -223,6 +223,53 @@ def _build_schedule_game(
     )
 
 
+def _current_implied_for_pred(
+    pred: Prediction, game: Game
+) -> Optional[float]:
+    """Compute fresh implied probability from the Game's current odds.
+
+    The Prediction record's ``odds_implied_prob`` may be stale (set during
+    the last backfill).  This helper reads the Game's live sportsbook odds
+    and converts them so the schedule tier logic always reflects the current
+    market line.  Falls back to the stored value when Game odds are missing.
+    """
+    live_odds: Optional[float] = None
+
+    if pred.bet_type == "ml":
+        home_abbr = game.home_team.abbreviation if game.home_team else ""
+        if pred.prediction_value == home_abbr:
+            live_odds = game.home_moneyline
+        else:
+            live_odds = game.away_moneyline
+
+    elif pred.bet_type == "total":
+        if pred.prediction_value and "over" in pred.prediction_value:
+            live_odds = game.over_price
+        else:
+            live_odds = game.under_price
+
+    elif pred.bet_type == "spread":
+        home_abbr = game.home_team.abbreviation if game.home_team else ""
+        pred_is_home = (
+            pred.prediction_value
+            and pred.prediction_value.startswith(home_abbr)
+        )
+        if pred_is_home:
+            live_odds = game.home_spread_price
+        else:
+            live_odds = game.away_spread_price
+
+    if live_odds is None:
+        return pred.odds_implied_prob  # fall back to stored value
+
+    # Same conversion used elsewhere in the codebase
+    if live_odds == 0:
+        return pred.odds_implied_prob
+    if live_odds > 0:
+        return round(100.0 / (live_odds + 100.0), 4)
+    return round(abs(live_odds) / (abs(live_odds) + 100.0), 4)
+
+
 async def _games_for_date(
     target_date: date, session: AsyncSession
 ) -> List[ScheduleGame]:
@@ -237,11 +284,14 @@ async def _games_for_date(
     # Pre-fetch best prediction per game using composite score
     # (confidence + edge + juice quality) instead of pure edge.
     #
-    # Tier 1 (strict): recommended, real edge, implied-prob below juice ceiling.
+    # Tier 1 (strict): real edge, confidence, and implied-prob below juice
+    #   ceiling — checked against the Game's CURRENT odds to avoid stale
+    #   Prediction data causing false Heavy Juice labels.
     # Tier 2 (fallback): for games with NO Tier-1 pick, relax the implied-
     #   prob ceiling.  Marked is_fallback=True so the UI can indicate it.
     max_implied = settings.best_bet_max_implied
     game_ids = [g.id for g in games]
+    game_by_id = {g.id: g for g in games}
     top_picks: dict[int, GameTopPick] = {}
     if game_ids:
         # Fetch all prematch market-type predictions with real edges
@@ -256,17 +306,32 @@ async def _games_for_date(
         )
         all_preds = all_preds_result.scalars().all()
 
+        # Pre-compute fresh implied prob for every prediction using
+        # the Game's current odds (avoids stale Prediction data).
+        fresh_implied: dict[int, Optional[float]] = {}
+        for p in all_preds:
+            game_obj = game_by_id.get(p.game_id)
+            if game_obj:
+                fresh_implied[p.id] = _current_implied_for_pred(p, game_obj)
+            else:
+                fresh_implied[p.id] = p.odds_implied_prob
+
         # --- Tier 1: strict best-bet criteria ---
+        # Use fresh implied prob from current Game odds so that picks
+        # whose lines have moved within thresholds are not misclassified.
         tier1 = [
             p for p in all_preds
-            if p.recommended
-            and p.odds_implied_prob is not None
-            and p.odds_implied_prob < max_implied
+            if (p.edge or 0) >= settings.min_edge
+            and (p.confidence or 0) >= settings.min_confidence
+            and fresh_implied.get(p.id) is not None
+            and fresh_implied[p.id] < max_implied
         ]
         # Pick best per game by composite score
         for pred in sorted(
             tier1,
-            key=lambda p: composite_pick_score(p.confidence, p.edge, p.odds_implied_prob),
+            key=lambda p: composite_pick_score(
+                p.confidence, p.edge, fresh_implied.get(p.id)
+            ),
             reverse=True,
         ):
             if pred.game_id not in top_picks:
@@ -279,6 +344,8 @@ async def _games_for_date(
                 )
 
         # --- Tier 2: fallback for games still missing a pick ---
+        # Only picks whose current implied prob is genuinely above the
+        # juice ceiling belong here (true heavy-juice picks).
         missing_ids = set(gid for gid in game_ids if gid not in top_picks)
         if missing_ids:
             tier2 = [
@@ -289,7 +356,9 @@ async def _games_for_date(
             ]
 
             def _tier2_sort_key(p):
-                score = composite_pick_score(p.confidence, p.edge, p.odds_implied_prob)
+                score = composite_pick_score(
+                    p.confidence, p.edge, fresh_implied.get(p.id)
+                )
                 # Deprioritize underdog puck line picks (+1.5, +2.5, etc.)
                 # They have high raw confidence but poor value and make
                 # every game card show the same pick.
@@ -303,12 +372,18 @@ async def _games_for_date(
 
             for pred in sorted(tier2, key=_tier2_sort_key, reverse=True):
                 if pred.game_id not in top_picks:
+                    # Check current Game odds to determine if this is truly
+                    # heavy juice or just had a stale recommended flag.
+                    cur_impl = fresh_implied.get(pred.id)
+                    actually_heavy = (
+                        cur_impl is not None and cur_impl >= max_implied
+                    )
                     top_picks[pred.game_id] = GameTopPick(
                         bet_type=pred.bet_type,
                         prediction_value=pred.prediction_value,
                         confidence=pred.confidence,
                         edge=pred.edge,
-                        is_fallback=True,
+                        is_fallback=actually_heavy,
                     )
 
         # --- Tier 3: confidence-only fallback when odds data is missing ---

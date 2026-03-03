@@ -542,15 +542,61 @@ async def _compute_period_scoring(
     return PeriodScoring()
 
 
+def _fresh_implied_for_pred(
+    pred: Prediction, game: Optional[Game]
+) -> Optional[float]:
+    """Compute current implied probability from the Game's live odds.
+
+    Falls back to the stored ``odds_implied_prob`` when the Game object
+    is unavailable or the relevant odds field is NULL.
+    """
+    if game is None:
+        return pred.odds_implied_prob
+
+    live_odds: Optional[float] = None
+
+    if pred.bet_type == "ml":
+        home_abbr = game.home_team.abbreviation if game.home_team else ""
+        if pred.prediction_value == home_abbr:
+            live_odds = game.home_moneyline
+        else:
+            live_odds = game.away_moneyline
+
+    elif pred.bet_type == "total":
+        if pred.prediction_value and "over" in pred.prediction_value:
+            live_odds = game.over_price
+        else:
+            live_odds = game.under_price
+
+    elif pred.bet_type == "spread":
+        home_abbr = game.home_team.abbreviation if game.home_team else ""
+        pred_is_home = (
+            pred.prediction_value
+            and pred.prediction_value.startswith(home_abbr)
+        )
+        if pred_is_home:
+            live_odds = game.home_spread_price
+        else:
+            live_odds = game.away_spread_price
+
+    if live_odds is None or live_odds == 0:
+        return pred.odds_implied_prob
+
+    if live_odds > 0:
+        return round(100.0 / (live_odds + 100.0), 4)
+    return round(abs(live_odds) / (abs(live_odds) + 100.0), 4)
+
+
 async def _get_game_predictions(
-    game_id: int, session: AsyncSession
+    game_id: int, session: AsyncSession, game: Optional[Game] = None
 ) -> List[GamePredictionBrief]:
     """Return predictions for a game, sorted: recommended first, then fallback.
 
     A prediction is "fallback" when it has real edge (>= min_edge) and
     confidence (>= min_confidence) but sits on a heavy-juice line
-    (implied_prob >= best_bet_max_implied).  Only market bet types
-    (ml, total, spread) are eligible for fallback status.
+    (implied_prob >= best_bet_max_implied).  The juice check uses the
+    Game's current odds (not the potentially stale Prediction record)
+    to avoid false Heavy Juice labels after line movement.
     """
     result = await session.execute(
         select(Prediction).where(Prediction.game_id == game_id)
@@ -562,18 +608,32 @@ async def _get_game_predictions(
     min_conf = settings.min_confidence
 
     briefs: List[GamePredictionBrief] = []
-    # Map brief id → implied_prob for composite scoring
+    # Map brief id → fresh implied_prob for composite scoring
     implied_map: dict[int, float | None] = {}
     for p in preds:
+        cur_impl = _fresh_implied_for_pred(p, game)
+        implied_map[p.id] = cur_impl
+
         # Fallback = has real edge but heavy juice (above implied ceiling)
+        # Uses fresh implied from current Game odds to avoid stale labels.
         is_fb = (
-            not p.recommended
-            and p.bet_type in MARKET_BET_TYPES
+            p.bet_type in MARKET_BET_TYPES
             and p.edge is not None
             and p.edge >= min_edge
             and (p.confidence or 0) >= min_conf
-            and p.odds_implied_prob is not None
-            and p.odds_implied_prob >= max_implied
+            and cur_impl is not None
+            and cur_impl >= max_implied
+        )
+        # A pick that meets edge/confidence thresholds AND has acceptable
+        # juice should be treated as recommended regardless of stale flag.
+        effectively_recommended = (
+            p.recommended
+            or (
+                (p.confidence or 0) >= min_conf
+                and (p.edge or 0) >= min_edge
+                and cur_impl is not None
+                and cur_impl < max_implied
+            )
         )
         briefs.append(
             GamePredictionBrief(
@@ -582,14 +642,13 @@ async def _get_game_predictions(
                 prediction_value=p.prediction_value,
                 confidence=p.confidence,
                 edge=p.edge,
-                recommended=p.recommended,
+                recommended=effectively_recommended,
                 best_bet=p.best_bet,
                 is_fallback=is_fb,
                 reasoning=p.reasoning,
                 created_at=str(p.created_at) if p.created_at else None,
             )
         )
-        implied_map[p.id] = p.odds_implied_prob
 
     # Sort: recommended first (by composite score), then fallback, then rest
     def sort_key(b: GamePredictionBrief):
@@ -675,7 +734,7 @@ async def get_game_details(
     away_period = await _compute_period_scoring(game.away_team_id, session)
     home_goalies = await _get_team_goalies(game.home_team_id, session)
     away_goalies = await _get_team_goalies(game.away_team_id, session)
-    predictions = await _get_game_predictions(game.id, session)
+    predictions = await _get_game_predictions(game.id, session, game=game)
     home_recent = await _get_recent_games(game.home_team_id, session, limit=20)
     away_recent = await _get_recent_games(game.away_team_id, session, limit=20)
 
