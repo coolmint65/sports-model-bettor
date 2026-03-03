@@ -547,11 +547,13 @@ def _fresh_implied_for_pred(
 ) -> Optional[float]:
     """Compute current implied probability from the Game's live odds.
 
-    Falls back to the stored ``odds_implied_prob`` when the Game object
-    is unavailable or the relevant odds field is NULL.
+    Returns ``None`` when the Game object is unavailable or the relevant
+    odds field is NULL.  Callers that need a value for scoring should
+    fall back to ``pred.odds_implied_prob`` explicitly; the juice
+    classification must only rely on fresh data to avoid false labels.
     """
     if game is None:
-        return pred.odds_implied_prob
+        return None
 
     live_odds: Optional[float] = None
 
@@ -580,7 +582,7 @@ def _fresh_implied_for_pred(
             live_odds = game.away_spread_price
 
     if live_odds is None or live_odds == 0:
-        return pred.odds_implied_prob
+        return None
 
     if live_odds > 0:
         return round(100.0 / (live_odds + 100.0), 4)
@@ -608,16 +610,21 @@ async def _get_game_predictions(
     min_conf = settings.min_confidence
 
     briefs: List[GamePredictionBrief] = []
-    # Map brief id → fresh implied_prob for composite scoring
+    # Map brief id → implied_prob for composite scoring.
+    # Use fresh Game odds when available, fall back to stored value.
     implied_map: dict[int, float | None] = {}
     for p in preds:
         cur_impl = _fresh_implied_for_pred(p, game)
-        implied_map[p.id] = cur_impl
+        implied_map[p.id] = cur_impl if cur_impl is not None else p.odds_implied_prob
 
-        # Fallback = has real edge but heavy juice (above implied ceiling)
-        # Uses fresh implied from current Game odds to avoid stale labels.
+        # Fallback = has real edge but heavy juice (above implied ceiling).
+        # Only applied to moneyline and total bets — spread/puck-line prices
+        # are inherently steep (e.g. +1.5 at -258) and don't represent
+        # excessive bookmaker juice in the same way.
+        # Requires FRESH implied from current Game odds; when odds are
+        # unavailable we give the pick benefit of the doubt (not heavy).
         is_fb = (
-            p.bet_type in MARKET_BET_TYPES
+            p.bet_type in ("ml", "total")
             and p.edge is not None
             and p.edge >= min_edge
             and (p.confidence or 0) >= min_conf
@@ -626,13 +633,18 @@ async def _get_game_predictions(
         )
         # A pick that meets edge/confidence thresholds AND has acceptable
         # juice should be treated as recommended regardless of stale flag.
+        # Spread bets skip the juice ceiling (steep prices are inherent).
+        # When fresh odds are unavailable, give the pick benefit of the doubt.
         effectively_recommended = (
             p.recommended
             or (
                 (p.confidence or 0) >= min_conf
                 and (p.edge or 0) >= min_edge
-                and cur_impl is not None
-                and cur_impl < max_implied
+                and (
+                    p.bet_type == "spread"
+                    or cur_impl is None
+                    or cur_impl < max_implied
+                )
             )
         )
         briefs.append(

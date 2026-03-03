@@ -228,10 +228,10 @@ def _current_implied_for_pred(
 ) -> Optional[float]:
     """Compute fresh implied probability from the Game's current odds.
 
-    The Prediction record's ``odds_implied_prob`` may be stale (set during
-    the last backfill).  This helper reads the Game's live sportsbook odds
-    and converts them so the schedule tier logic always reflects the current
-    market line.  Falls back to the stored value when Game odds are missing.
+    Returns ``None`` when the relevant Game odds field is NULL or zero.
+    Callers that need a value for composite scoring should fall back to
+    ``pred.odds_implied_prob`` explicitly; the juice/tier classification
+    must only rely on fresh data to avoid false Heavy Juice labels.
     """
     live_odds: Optional[float] = None
 
@@ -259,12 +259,9 @@ def _current_implied_for_pred(
         else:
             live_odds = game.away_spread_price
 
-    if live_odds is None:
-        return pred.odds_implied_prob  # fall back to stored value
+    if live_odds is None or live_odds == 0:
+        return None
 
-    # Same conversion used elsewhere in the codebase
-    if live_odds == 0:
-        return pred.odds_implied_prob
     if live_odds > 0:
         return round(100.0 / (live_odds + 100.0), 4)
     return round(abs(live_odds) / (abs(live_odds) + 100.0), 4)
@@ -307,30 +304,43 @@ async def _games_for_date(
         all_preds = all_preds_result.scalars().all()
 
         # Pre-compute fresh implied prob for every prediction using
-        # the Game's current odds (avoids stale Prediction data).
+        # the Game's current odds.  Returns None when Game odds are
+        # unavailable — callers fall back to stored value for scoring only.
         fresh_implied: dict[int, Optional[float]] = {}
+        # Scoring map: use fresh when available, else stored value.
+        scoring_implied: dict[int, Optional[float]] = {}
         for p in all_preds:
             game_obj = game_by_id.get(p.game_id)
             if game_obj:
                 fresh_implied[p.id] = _current_implied_for_pred(p, game_obj)
             else:
-                fresh_implied[p.id] = p.odds_implied_prob
+                fresh_implied[p.id] = None
+            scoring_implied[p.id] = (
+                fresh_implied[p.id]
+                if fresh_implied[p.id] is not None
+                else p.odds_implied_prob
+            )
 
         # --- Tier 1: strict best-bet criteria ---
         # Use fresh implied prob from current Game odds so that picks
         # whose lines have moved within thresholds are not misclassified.
+        # Spread/puck-line bets skip the implied-prob ceiling — their
+        # steep prices reflect the spread itself, not excessive juice.
         tier1 = [
             p for p in all_preds
             if (p.edge or 0) >= settings.min_edge
             and (p.confidence or 0) >= settings.min_confidence
-            and fresh_implied.get(p.id) is not None
-            and fresh_implied[p.id] < max_implied
+            and (
+                p.bet_type == "spread"  # spreads exempt from juice ceiling
+                or fresh_implied.get(p.id) is None  # no fresh data → benefit of the doubt
+                or fresh_implied[p.id] < max_implied
+            )
         ]
         # Pick best per game by composite score
         for pred in sorted(
             tier1,
             key=lambda p: composite_pick_score(
-                p.confidence, p.edge, fresh_implied.get(p.id)
+                p.confidence, p.edge, scoring_implied.get(p.id)
             ),
             reverse=True,
         ):
@@ -344,8 +354,9 @@ async def _games_for_date(
                 )
 
         # --- Tier 2: fallback for games still missing a pick ---
-        # Only picks whose current implied prob is genuinely above the
-        # juice ceiling belong here (true heavy-juice picks).
+        # Only ML/total picks whose current implied prob is genuinely
+        # above the juice ceiling are marked heavy juice.  Spread bets
+        # are never heavy juice (steep prices are inherent to the spread).
         missing_ids = set(gid for gid in game_ids if gid not in top_picks)
         if missing_ids:
             tier2 = [
@@ -357,7 +368,7 @@ async def _games_for_date(
 
             def _tier2_sort_key(p):
                 score = composite_pick_score(
-                    p.confidence, p.edge, fresh_implied.get(p.id)
+                    p.confidence, p.edge, scoring_implied.get(p.id)
                 )
                 # Deprioritize underdog puck line picks (+1.5, +2.5, etc.)
                 # They have high raw confidence but poor value and make
@@ -373,10 +384,12 @@ async def _games_for_date(
             for pred in sorted(tier2, key=_tier2_sort_key, reverse=True):
                 if pred.game_id not in top_picks:
                     # Check current Game odds to determine if this is truly
-                    # heavy juice or just had a stale recommended flag.
+                    # heavy juice.  Spread bets are never heavy juice.
                     cur_impl = fresh_implied.get(pred.id)
                     actually_heavy = (
-                        cur_impl is not None and cur_impl >= max_implied
+                        pred.bet_type in ("ml", "total")
+                        and cur_impl is not None
+                        and cur_impl >= max_implied
                     )
                     top_picks[pred.game_id] = GameTopPick(
                         bet_type=pred.bet_type,
