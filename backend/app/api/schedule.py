@@ -409,6 +409,7 @@ async def _games_for_date(
                 select(Prediction).where(
                     Prediction.game_id.in_(list(still_missing)),
                     Prediction.bet_type.in_(MARKET_BET_TYPES),
+                    Prediction.phase == "prematch",
                 )
             )
             no_odds_preds = no_odds_result.scalars().all()
