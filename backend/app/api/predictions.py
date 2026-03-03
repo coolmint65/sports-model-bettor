@@ -635,11 +635,66 @@ async def get_best_bets(
                         fresh_edge = round(pred.confidence - fresh_implied, 4)
 
             elif pred.bet_type == "spread":
-                # For spread bets, derive display odds from the prediction's
-                # own implied probability. The model may have picked an
-                # alternate spread line (e.g., ±2.5) whose price differs
-                # from the Game model's primary ±1.5 puck line prices.
-                live_odds = implied_prob_to_american(pred.odds_implied_prob)
+                # Read actual current sportsbook spread prices so odds,
+                # edge, and the juice filter stay accurate as lines move.
+                #
+                # pred.prediction_value has the form "ABBR_+1.5" or
+                # "ABBR_-1.5".  First determine which side (home/away)
+                # the prediction is on.
+                home_team_result = await session.execute(
+                    select(Team).where(Team.id == game_obj.home_team_id)
+                )
+                home_team_obj = home_team_result.scalar_one_or_none()
+
+                pred_is_home = (
+                    home_team_obj
+                    and pred.prediction_value
+                    and pred.prediction_value.startswith(home_team_obj.abbreviation)
+                )
+
+                # Try to find the exact line in all_spread_lines (covers
+                # both primary and alternate spread lines).
+                spread_found = False
+                if game_obj.all_spread_lines and pred.prediction_value:
+                    try:
+                        # Parse the spread value from prediction_value
+                        # e.g. "LAK_-1.5" → spread_val = 1.5
+                        parts = pred.prediction_value.rsplit("_", 1)
+                        if len(parts) == 2:
+                            spread_val = abs(float(parts[1]))
+                            all_sl = game_obj.all_spread_lines
+                            if isinstance(all_sl, str):
+                                import json
+                                all_sl = json.loads(all_sl)
+                            for sl in (all_sl or []):
+                                if abs(sl.get("line", 0) - spread_val) < 0.01:
+                                    if pred_is_home:
+                                        live_odds = sl.get("home_price")
+                                    else:
+                                        live_odds = sl.get("away_price")
+                                    if live_odds is not None:
+                                        spread_found = True
+                                    break
+                    except (ValueError, TypeError, KeyError):
+                        pass
+
+                # Fall back to the primary spread prices on the Game.
+                if not spread_found:
+                    if pred_is_home and game_obj.home_spread_price:
+                        live_odds = game_obj.home_spread_price
+                    elif not pred_is_home and game_obj.away_spread_price:
+                        live_odds = game_obj.away_spread_price
+
+                # Last resort: derive from stored implied probability.
+                if live_odds is None:
+                    live_odds = implied_prob_to_american(pred.odds_implied_prob)
+
+                # Recompute edge from current sportsbook spread odds,
+                # just like we already do for ML and totals.
+                if live_odds is not None:
+                    fresh_implied = american_to_implied(live_odds)
+                    if fresh_implied is not None and pred.confidence is not None:
+                        fresh_edge = round(pred.confidence - fresh_implied, 4)
 
         # Juice filter: exclude bets whose display odds are steeper than
         # the configured threshold (default -170). This catches cases

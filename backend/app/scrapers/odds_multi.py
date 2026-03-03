@@ -430,7 +430,10 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
                                     else:
                                         game_odds[eid]["away_ml"] = odds_val
 
-                        # Spread / Puck Line — collect ALL available lines
+                        # Spread / Puck Line — collect ALL available lines.
+                        # Only use the standard 1.5 puck line for the
+                        # primary spread fields; alternate lines go into
+                        # dk_alt_spreads only.
                         elif "spread" in label or "puck" in label or "handicap" in label:
                             spread_lines: Dict[float, Dict[str, float]] = {}
                             for oc in outcomes:
@@ -449,13 +452,19 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
                                 if abs_line not in spread_lines:
                                     spread_lines[abs_line] = {}
                                 if mapped and mapped == home_mapped:
-                                    game_odds[eid]["home_spread"] = line_val
-                                    game_odds[eid]["home_spread_price"] = odds_val
+                                    # Only set primary spread from the
+                                    # standard 1.5 puck line (or the first
+                                    # line if no 1.5 seen yet) to prevent
+                                    # alternate lines from overwriting.
+                                    if abs_line == 1.5 or "home_spread" not in game_odds[eid]:
+                                        game_odds[eid]["home_spread"] = line_val
+                                        game_odds[eid]["home_spread_price"] = odds_val
                                     spread_lines[abs_line]["home_spread"] = line_val
                                     spread_lines[abs_line]["home_price"] = odds_val
                                 elif mapped:
-                                    game_odds[eid]["away_spread"] = line_val
-                                    game_odds[eid]["away_spread_price"] = odds_val
+                                    if abs_line == 1.5 or "away_spread" not in game_odds[eid]:
+                                        game_odds[eid]["away_spread"] = line_val
+                                        game_odds[eid]["away_spread_price"] = odds_val
                                     spread_lines[abs_line]["away_spread"] = line_val
                                     spread_lines[abs_line]["away_price"] = odds_val
 
@@ -689,7 +698,9 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
                     elif mapped:
                         game_odds[eid]["away_ml"] = odds_val
 
-            # Spread / Puck Line — collect ALL available lines
+            # Spread / Puck Line — collect ALL available lines.
+            # Only use the standard 1.5 puck line for the primary
+            # spread fields; alternate lines go into fd_alt_spreads.
             elif market_type in ("MATCH_HANDICAP", "SPREAD", "PUCK_LINE", "HANDICAP", "ASIAN_HANDICAP"):
                 ev_info = event_info[eid]
                 fd_spread_lines: Dict[float, Dict[str, float]] = {}
@@ -720,13 +731,15 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
                     if abs_line not in fd_spread_lines:
                         fd_spread_lines[abs_line] = {}
                     if mapped and mapped == home_mapped:
-                        game_odds[eid]["home_spread"] = line_val
-                        game_odds[eid]["home_spread_price"] = odds_val
+                        if abs_line == 1.5 or "home_spread" not in game_odds[eid]:
+                            game_odds[eid]["home_spread"] = line_val
+                            game_odds[eid]["home_spread_price"] = odds_val
                         fd_spread_lines[abs_line]["home_spread"] = line_val
                         fd_spread_lines[abs_line]["home_price"] = odds_val
                     elif mapped:
-                        game_odds[eid]["away_spread"] = line_val
-                        game_odds[eid]["away_spread_price"] = odds_val
+                        if abs_line == 1.5 or "away_spread" not in game_odds[eid]:
+                            game_odds[eid]["away_spread"] = line_val
+                            game_odds[eid]["away_spread_price"] = odds_val
                         fd_spread_lines[abs_line]["away_spread"] = line_val
                         fd_spread_lines[abs_line]["away_price"] = odds_val
 
@@ -1824,24 +1837,64 @@ def _merge_odds_events(
         best_home_ml = max(home_mls) if home_mls else 0.0
         best_away_ml = max(away_mls) if away_mls else 0.0
 
-        # Consensus spread: most common absolute value across sources
+        # Consensus spread: most common absolute value across sources.
+        # Use moneyline data to determine the correct sign so that
+        # conflicting source signs never flip the puck line.
         home_spreads = [(e.home_spread, e.home_spread_price, e.source) for e in ev_list if e.has_spread()]
         away_spreads = [(e.away_spread, e.away_spread_price, e.source) for e in ev_list if e.has_spread()]
+
+        # Determine which team is the favorite from moneyline data.
+        # Lower moneyline = favorite.  This is the source of truth
+        # for which team gets the negative spread.
+        home_is_fav = None
+        if best_home_ml and best_away_ml:
+            home_is_fav = best_home_ml < best_away_ml
+        elif home_spreads:
+            # Fall back to majority vote of signed home_spread values
+            neg_count = sum(1 for s in home_spreads if s[0] < 0)
+            pos_count = sum(1 for s in home_spreads if s[0] > 0)
+            if neg_count > pos_count:
+                home_is_fav = True
+            elif pos_count > neg_count:
+                home_is_fav = False
 
         best_home_spread = best_home_spread_price = 0.0
         best_away_spread = best_away_spread_price = 0.0
         if home_spreads:
-            spread_vals = Counter(abs(s[0]) for s in home_spreads)
-            consensus = spread_vals.most_common(1)[0][0]
-            consensus_books = [s for s in home_spreads if abs(s[0]) == consensus]
-            best_home_spread = consensus_books[0][0]  # Keep sign from first book
-            best_home_spread_price = max(s[1] for s in consensus_books)
-        if away_spreads:
-            spread_vals = Counter(abs(s[0]) for s in away_spreads)
-            consensus = spread_vals.most_common(1)[0][0]
-            consensus_books = [s for s in away_spreads if abs(s[0]) == consensus]
-            best_away_spread = consensus_books[0][0]
-            best_away_spread_price = max(s[1] for s in consensus_books)
+            spread_vals = Counter(abs(s[0]) for s in home_spreads if s[0] != 0)
+            if spread_vals:
+                consensus = spread_vals.most_common(1)[0][0]
+            else:
+                consensus = 1.5  # NHL standard puck line
+
+            # Enforce correct sign based on moneyline-derived favorite.
+            # This prevents conflicting source signs from flipping the
+            # puck line direction.
+            if home_is_fav is True:
+                best_home_spread = -consensus
+                best_away_spread = consensus
+            elif home_is_fav is False:
+                best_home_spread = consensus
+                best_away_spread = -consensus
+            else:
+                # No moneyline data; use first non-zero signed value
+                signed = [s[0] for s in home_spreads if s[0] != 0]
+                if signed:
+                    best_home_spread = -consensus if signed[0] < 0 else consensus
+                    best_away_spread = -best_home_spread
+                else:
+                    best_home_spread = -consensus
+                    best_away_spread = consensus
+
+            # Best price: the prices are always tied to their team's
+            # side of the spread (home_spread_price = price for whatever
+            # spread the home team has), so max() is correct here.
+            consensus_home_books = [s for s in home_spreads if abs(s[0]) == consensus]
+            if consensus_home_books:
+                best_home_spread_price = max(s[1] for s in consensus_home_books)
+            consensus_away_books = [s for s in away_spreads if abs(s[0]) == consensus]
+            if consensus_away_books:
+                best_away_spread_price = max(s[1] for s in consensus_away_books)
 
         # Consensus total — filter out implausible lines first.
         # NHL O/U is virtually always between 4.5 and 8.5.
@@ -1901,36 +1954,62 @@ def _merge_odds_events(
             if prices["over_price"] > -999 and prices["under_price"] > -999
         ], key=lambda x: x["line"])
 
-        # Aggregate ALL available spread lines across all sources
+        # Aggregate ALL available spread lines across all sources.
+        # Use moneyline-derived ``home_is_fav`` to enforce correct
+        # spread direction so prices always pair with the right side.
         all_spreads_map: Dict[float, Dict[str, float]] = {}
+
+        def _init_spread_entry(abs_line: float) -> Dict[str, float]:
+            """Create a new spread entry with correct signs from ML data."""
+            if home_is_fav is True:
+                return {
+                    "home_price": -999, "away_price": -999,
+                    "home_spread": -abs_line, "away_spread": abs_line,
+                }
+            elif home_is_fav is False:
+                return {
+                    "home_price": -999, "away_price": -999,
+                    "home_spread": abs_line, "away_spread": -abs_line,
+                }
+            else:
+                return {
+                    "home_price": -999, "away_price": -999,
+                    "home_spread": 0, "away_spread": 0,
+                }
+
         for e in ev_list:
             # Include primary spread
             if e.has_spread():
                 abs_line = abs(e.home_spread) if e.home_spread else abs(e.away_spread)
                 if abs_line not in all_spreads_map:
-                    all_spreads_map[abs_line] = {
-                        "home_price": -999, "away_price": -999,
-                        "home_spread": 0, "away_spread": 0,
-                    }
+                    all_spreads_map[abs_line] = _init_spread_entry(abs_line)
                 all_spreads_map[abs_line]["home_price"] = max(
                     all_spreads_map[abs_line]["home_price"], e.home_spread_price
                 )
                 all_spreads_map[abs_line]["away_price"] = max(
                     all_spreads_map[abs_line]["away_price"], e.away_spread_price
                 )
+                # Only accept spread signs that agree with moneyline.
+                # If no ML data, accept the first non-zero value.
                 if e.home_spread:
-                    all_spreads_map[abs_line]["home_spread"] = e.home_spread
+                    if home_is_fav is None:
+                        # No ML data; accept as-is
+                        if not all_spreads_map[abs_line]["home_spread"]:
+                            all_spreads_map[abs_line]["home_spread"] = e.home_spread
+                    elif (home_is_fav and e.home_spread < 0) or (not home_is_fav and e.home_spread > 0):
+                        # Sign agrees with ML-derived favorite
+                        all_spreads_map[abs_line]["home_spread"] = e.home_spread
                 if e.away_spread:
-                    all_spreads_map[abs_line]["away_spread"] = e.away_spread
+                    if home_is_fav is None:
+                        if not all_spreads_map[abs_line]["away_spread"]:
+                            all_spreads_map[abs_line]["away_spread"] = e.away_spread
+                    elif (home_is_fav and e.away_spread > 0) or (not home_is_fav and e.away_spread < 0):
+                        all_spreads_map[abs_line]["away_spread"] = e.away_spread
             # Include alt spreads
             for alt in e.alt_spreads:
                 abs_line = alt["line"]
                 if abs_line not in all_spreads_map:
-                    all_spreads_map[abs_line] = {
-                        "home_price": -999, "away_price": -999,
-                        "home_spread": alt.get("home_spread", -abs_line),
-                        "away_spread": alt.get("away_spread", abs_line),
-                    }
+                    all_spreads_map[abs_line] = _init_spread_entry(abs_line)
                 all_spreads_map[abs_line]["home_price"] = max(
                     all_spreads_map[abs_line]["home_price"],
                     alt.get("home_price", -110)

@@ -191,7 +191,7 @@ class PredictionManager:
                 bet_type = pred["bet_type"]
                 odds_val = odds or 0
                 has_good_juice = (
-                    odds_val >= settings.best_bet_max_favorite  # e.g. >= -200
+                    odds_val >= settings.best_bet_max_favorite  # e.g. >= -170 (less steep)
                     or odds_val > 0  # all plus-money is fine
                 )
                 if (
