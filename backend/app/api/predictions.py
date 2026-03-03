@@ -14,7 +14,7 @@ Predictions are split into two phases:
 """
 
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
 
 logger = logging.getLogger(__name__)
@@ -65,6 +65,30 @@ def calculate_units(edge: Optional[float], confidence: Optional[float]) -> float
     if e < 12:
         return 2.0
     return 3.0
+
+
+# ---------------------------------------------------------------------------
+# Odds conversion helpers
+# ---------------------------------------------------------------------------
+
+def implied_prob_to_american(prob: Optional[float]) -> Optional[float]:
+    """Convert implied probability (0-1) back to American odds."""
+    if prob is None or prob <= 0 or prob >= 1:
+        return None
+    if prob > 0.5:
+        return round(-(prob / (1 - prob)) * 100)
+    else:
+        return round(((1 - prob) / prob) * 100)
+
+
+def american_to_implied(odds: Optional[float]) -> Optional[float]:
+    """Convert American odds to implied probability."""
+    if odds is None or odds == 0:
+        return None
+    if odds > 0:
+        return round(100.0 / (odds + 100.0), 4)
+    else:
+        return round(abs(odds) / (abs(odds) + 100.0), 4)
 
 
 # ---------------------------------------------------------------------------
@@ -452,9 +476,39 @@ async def get_best_bets(
 ):
     today = date.today()
 
-    # Check if predictions already exist (e.g., from a recent regeneration).
-    # If they do, skip the expensive odds sync + regeneration to avoid
-    # timeouts and redundant API calls.
+    # Step 1: Always refresh odds when stale, even if predictions exist.
+    # Without this, odds go stale after initial generation and the
+    # displayed edge/confidence become unreliable ("fake edge").
+    stale_cutoff = datetime.now(timezone.utc) - timedelta(
+        minutes=settings.odds_refresh_interval_minutes
+    )
+    stale_result = await session.execute(
+        select(func.count(Game.id)).where(
+            Game.date == today,
+            ~func.lower(Game.status).in_(GAME_FINAL_STATUSES),
+            (Game.odds_updated_at.is_(None)) | (Game.odds_updated_at < stale_cutoff),
+        )
+    )
+    needs_odds_refresh = (stale_result.scalar() or 0) > 0
+
+    if needs_odds_refresh:
+        try:
+            async with session.begin_nested():
+                from app.scrapers.odds_multi import MultiSourceOddsScraper
+
+                async with MultiSourceOddsScraper() as odds_scraper:
+                    matched = await odds_scraper.sync_odds(session)
+                    logger.info(
+                        "Odds refresh (stale >%d min): matched %d games",
+                        settings.odds_refresh_interval_minutes,
+                        len(matched) if matched else 0,
+                    )
+                    await session.flush()
+                    session.expire_all()
+        except Exception as exc:
+            logger.warning("Odds refresh failed: %s", exc)
+
+    # Step 2: Generate predictions if none exist yet
     existing_pred_count = await session.execute(
         select(func.count(Prediction.id))
         .join(Game, Game.id == Prediction.game_id)
@@ -467,22 +521,6 @@ async def get_best_bets(
     has_predictions = (existing_pred_count.scalar() or 0) > 0
 
     if not has_predictions:
-        # No predictions yet — sync odds and generate
-        try:
-            async with session.begin_nested():
-                from app.scrapers.odds_multi import MultiSourceOddsScraper
-
-                async with MultiSourceOddsScraper() as odds_scraper:
-                    matched = await odds_scraper.sync_odds(session)
-                    logger.info(
-                        "Multi-source odds sync matched %d games before prediction generation",
-                        len(matched) if matched else 0,
-                    )
-                    await session.flush()
-                    session.expire_all()
-        except Exception as exc:
-            logger.warning("Odds sync failed before best-bets generation: %s", exc)
-
         # Generate / update predictions (respects prematch locks)
         try:
             async with session.begin_nested():
@@ -566,6 +604,9 @@ async def get_best_bets(
         game_status = game_obj.status if game_obj else None
 
         live_odds = None
+        fresh_implied = pred.odds_implied_prob
+        fresh_edge = pred.edge
+
         if game_obj:
             if pred.bet_type == "ml":
                 home_team_result = await session.execute(
@@ -576,22 +617,37 @@ async def get_best_bets(
                     live_odds = game_obj.home_moneyline
                 else:
                     live_odds = game_obj.away_moneyline
+                # Recompute edge from current sportsbook odds
+                if live_odds is not None:
+                    fresh_implied = american_to_implied(live_odds)
+                    if fresh_implied is not None and pred.confidence is not None:
+                        fresh_edge = round(pred.confidence - fresh_implied, 4)
+
             elif pred.bet_type == "total":
                 if pred.prediction_value and "over" in pred.prediction_value:
                     live_odds = game_obj.over_price
                 else:
                     live_odds = game_obj.under_price
-            elif pred.bet_type == "spread":
-                home_team_result = await session.execute(
-                    select(Team).where(Team.id == game_obj.home_team_id)
-                )
-                home_team_obj = home_team_result.scalar_one_or_none()
-                if home_team_obj and pred.prediction_value and home_team_obj.abbreviation in pred.prediction_value:
-                    live_odds = game_obj.home_spread_price
-                else:
-                    live_odds = game_obj.away_spread_price
+                # Recompute edge from current sportsbook odds
+                if live_odds is not None:
+                    fresh_implied = american_to_implied(live_odds)
+                    if fresh_implied is not None and pred.confidence is not None:
+                        fresh_edge = round(pred.confidence - fresh_implied, 4)
 
-        units = calculate_units(pred.edge, pred.confidence)
+            elif pred.bet_type == "spread":
+                # For spread bets, derive display odds from the prediction's
+                # own implied probability. The model may have picked an
+                # alternate spread line (e.g., ±2.5) whose price differs
+                # from the Game model's primary ±1.5 puck line prices.
+                live_odds = implied_prob_to_american(pred.odds_implied_prob)
+
+        # Juice filter: exclude bets whose display odds are steeper than
+        # the configured threshold (default -170). This catches cases
+        # where the DB implied-prob filter passes but actual odds are bad.
+        if live_odds is not None and live_odds < 0 and live_odds < settings.best_bet_max_favorite:
+            return None
+
+        units = calculate_units(fresh_edge, pred.confidence)
         # Use the actual game status to determine phase — a prediction
         # created prematch is effectively "live" once the game starts.
         phase = "live" if game_status == "in_progress" else getattr(pred, "phase", "prematch")
@@ -605,8 +661,8 @@ async def get_best_bets(
             bet_type=detail.bet_type,
             prediction_value=detail.prediction_value,
             confidence=detail.confidence,
-            edge=detail.edge,
-            odds_implied_prob=pred.odds_implied_prob,
+            edge=fresh_edge,
+            odds_implied_prob=fresh_implied,
             reasoning=detail.reasoning,
             game_status=game_status,
             odds_display=live_odds,
