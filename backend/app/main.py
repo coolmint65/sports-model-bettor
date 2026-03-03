@@ -6,6 +6,7 @@ and wires up startup/shutdown lifecycle events for database initialization.
 """
 
 import logging
+import logging.handlers
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,15 +17,29 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from app.config import settings
+from app.config import DATA_DIR, settings
 from app.database import close_db, init_db
 
-# Configure root logger so all app.* module loggers output to console
+# Configure root logger so all app.* module loggers output to console and file
+_log_fmt = logging.Formatter(
+    "%(asctime)s %(levelname)-8s [%(name)s] %(message)s", datefmt="%H:%M:%S"
+)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)-8s [%(name)s] %(message)s",
     datefmt="%H:%M:%S",
 )
+
+# Rotating file handler: 5 MB per file, keep last 3 rotations
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+_file_handler = logging.handlers.RotatingFileHandler(
+    DATA_DIR / "app.log", maxBytes=5 * 1024 * 1024, backupCount=3
+)
+_file_handler.setFormatter(_log_fmt)
+_file_handler.setLevel(logging.INFO)
+logging.getLogger().addHandler(_file_handler)
+
 # Suppress noisy SQLAlchemy engine logs (SQL statements) so app-level
 # diagnostic messages (odds sync, predictions, etc.) are visible.
 logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
