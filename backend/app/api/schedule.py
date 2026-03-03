@@ -403,6 +403,8 @@ async def _games_for_date(
         # When odds scraping fails or lines aren't posted yet, predictions
         # have NULL edge/odds_implied_prob and tiers 1+2 are empty.  Show
         # the highest-confidence pick per game so cards aren't blank.
+        # is_fallback is False here: missing odds ≠ heavy juice — there is
+        # no implied-probability data to measure juice against.
         still_missing = set(gid for gid in game_ids if gid not in top_picks)
         if still_missing:
             no_odds_result = await session.execute(
@@ -424,7 +426,7 @@ async def _games_for_date(
                         prediction_value=pred.prediction_value,
                         confidence=pred.confidence,
                         edge=pred.edge,
-                        is_fallback=True,
+                        is_fallback=False,
                     )
 
     # Batch-load team stats to avoid N+1 queries
