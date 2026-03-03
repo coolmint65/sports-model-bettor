@@ -661,6 +661,7 @@ async def diagnose_odds_matching(
                 if matched_game:
                     break
 
+        best = odds.get("best_odds", {})
         match_results.append({
             "matchup": f"{away_abbrev}@{home_abbrev}",
             "commence_time": commence,
@@ -674,6 +675,18 @@ async def diagnose_odds_matching(
             "game_found": matched_game is not None,
             "game_id": matched_game.id if matched_game else None,
             "game_status": matched_game.status if matched_game else None,
+            "sources": odds.get("sources", []),
+            "best_odds": {
+                "home_ml": best.get("home_moneyline"),
+                "away_ml": best.get("away_moneyline"),
+                "over_under": best.get("over_under"),
+                "over_price": best.get("over_price"),
+                "under_price": best.get("under_price"),
+                "home_spread": best.get("home_spread"),
+                "away_spread": best.get("away_spread"),
+                "home_spread_price": best.get("home_spread_price"),
+                "away_spread_price": best.get("away_spread_price"),
+            },
         })
 
     matched_count = sum(1 for m in match_results if m["game_found"])

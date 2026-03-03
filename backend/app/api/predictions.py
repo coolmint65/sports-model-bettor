@@ -270,6 +270,7 @@ class BestBet(BaseModel):
     reasoning: Optional[str] = None
     game_status: Optional[str] = None
     odds_display: Optional[float] = None
+    line_display: Optional[str] = None
     phase: Optional[str] = None
     units: Optional[float] = None
 
@@ -976,6 +977,29 @@ async def get_best_bets(
         # created prematch is effectively "live" once the game starts.
         phase = "live" if game_status and game_status.lower() in ("in_progress", "live") else getattr(pred, "phase", "prematch")
 
+        # Build a human-readable line display for the bet card
+        # e.g., "O 5.5 (-110)", "BOS -1.5 (-130)", "BOS +145"
+        line_display = None
+        if game_obj and live_odds is not None:
+            odds_str = f"+{round(live_odds)}" if live_odds > 0 else str(round(live_odds))
+            if pred.bet_type == "total":
+                ou_line = game_obj.over_under_line
+                if ou_line is not None:
+                    side = "O" if pred.prediction_value and "over" in pred.prediction_value else "U"
+                    line_display = f"{side} {ou_line} ({odds_str})"
+            elif pred.bet_type == "spread":
+                if pred.prediction_value:
+                    parts = pred.prediction_value.rsplit("_", 1)
+                    if len(parts) == 2:
+                        team_abbr = parts[0]
+                        spread_val = parts[1]
+                        if not spread_val.startswith("+") and not spread_val.startswith("-"):
+                            spread_val = f"+{spread_val}"
+                        line_display = f"{team_abbr} {spread_val} ({odds_str})"
+            elif pred.bet_type == "ml":
+                team_abbr = pred.prediction_value or ""
+                line_display = f"{team_abbr} ML ({odds_str})"
+
         return BestBet(
             prediction_id=detail.id,
             game_id=detail.game_id,
@@ -990,6 +1014,7 @@ async def get_best_bets(
             reasoning=detail.reasoning,
             game_status=game_status,
             odds_display=live_odds,
+            line_display=line_display,
             phase=phase,
             units=units,
         )

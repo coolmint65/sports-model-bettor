@@ -111,7 +111,7 @@ function BestBetCard({ bet, rank, isFeatured, onTrack, tracked }) {
         </div>
 
         <div className="best-bet-selection">
-          {formatPredictionValue(bet.prediction_value || bet.pick || bet.selection)}
+          {bet.line_display || formatPredictionValue(bet.prediction_value || bet.pick || bet.selection)}
         </div>
 
         <div className="best-bet-metrics">
@@ -142,14 +142,12 @@ function BestBetCard({ bet, rank, isFeatured, onTrack, tracked }) {
           </div>
           )}
 
-          {oddsDisplay && (
-            <div className="metric">
-              <span className="metric-label">Odds</span>
-              <span className="metric-value odds-value">
-                {oddsDisplay}
-              </span>
-            </div>
-          )}
+          <div className="metric">
+            <span className="metric-label">Odds</span>
+            <span className="metric-value odds-value">
+              {oddsDisplay || '—'}
+            </span>
+          </div>
 
           <div className="metric">
             <span className="metric-label">Units</span>

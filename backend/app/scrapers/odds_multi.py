@@ -1313,10 +1313,11 @@ async def _fetch_odds_api_raw(
 ) -> Optional[List[Dict[str, Any]]]:
     """Fetch raw data from The Odds API with caching.
 
-    Tries the ``us`` region first (major US sportsbooks).  If that
-    returns no data, falls back to ``us2`` (secondary books including
-    Hard Rock Bet).  The result is cached for ``_ODDS_API_CACHE_TTL``
-    seconds.
+    Requests the combined ``us,us2`` regions in a single API call to get
+    ALL US sportsbooks (FanDuel, DraftKings, BetMGM, Caesars, Hard Rock,
+    etc.) in one response.  Falls back to individual regions if the
+    combined request fails.  The result is cached for
+    ``_ODDS_API_CACHE_TTL`` seconds.
     """
     import time as _time
 
@@ -1333,8 +1334,11 @@ async def _fetch_odds_api_raw(
 
     url = "https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds"
 
-    # Try us region first (major US sportsbooks), fall back to us2
-    for region in ("us", "us2"):
+    # Request combined us+us2 regions to get ALL US sportsbooks in one
+    # API call.  This includes FanDuel, DraftKings, BetMGM, Caesars,
+    # PointsBet, Hard Rock, Bet365, etc.  Fall back to individual
+    # regions if the combined request doesn't work.
+    for region in ("us,us2", "us", "us2"):
         params = {
             "apiKey": api_key,
             "regions": region,
@@ -1349,8 +1353,14 @@ async def _fetch_odds_api_raw(
                 len(ev.get("bookmakers", [])) > 0 for ev in data
             )
             if has_bookmakers:
+                total_books = set()
+                for ev in data:
+                    for bm in ev.get("bookmakers", []):
+                        total_books.add(bm.get("key", "unknown"))
                 logger.info(
-                    "Odds API: got %d events from '%s' region", len(data), region
+                    "Odds API: got %d events from '%s' region(s) with %d bookmakers: %s",
+                    len(data), region, len(total_books),
+                    ", ".join(sorted(total_books)),
                 )
                 _odds_api_cache["data"] = data
                 _odds_api_cache["timestamp"] = now
@@ -2055,6 +2065,20 @@ def _merge_odds_events(
         first = ev_list[0]
         sources_used = list(set(e.source for e in ev_list))
 
+        logger.info(
+            "Merge %s@%s: sources=%s, ML=%s/%s, O/U=%.1f (%s/%s), spread=%.1f (%s/%s)",
+            first.away_abbr, first.home_abbr,
+            "+".join(sorted(sources_used)),
+            round(best_home_ml) if best_home_ml else "?",
+            round(best_away_ml) if best_away_ml else "?",
+            best_total,
+            round(best_over) if best_over else "?",
+            round(best_under) if best_under else "?",
+            best_home_spread,
+            round(best_home_spread_price) if best_home_spread_price else "?",
+            round(best_away_spread_price) if best_away_spread_price else "?",
+        )
+
         merged.append({
             "home_team": first.home_team,
             "away_team": first.away_team,
@@ -2125,28 +2149,38 @@ class MultiSourceOddsScraper:
 
     async def fetch_best_odds(self) -> List[Dict[str, Any]]:
         """
-        Fetch odds from multiple sources and merge to find best lines.
+        Fetch odds from ALL available sources and merge to find best lines.
 
-        Sources:
-        - Hard Rock Bet (via The Odds API, preferred for clean pricing)
-        - The Odds API generic (all other US bookmakers as fallback)
-        - DraftKings (public API, alt lines supplement)
+        Sources (all enabled):
+        - Hard Rock Bet (via The Odds API us2 region, clean pricing)
+        - The Odds API generic (all US bookmakers: FanDuel, BetMGM, Caesars,
+          DraftKings, PointsBet, etc.)
+        - DraftKings (public sportsbook API, alt lines)
+        - FanDuel (public sportsbook API, alt lines)
+        - Kambi (powers BetRivers, Unibet, 888sport)
+        - Bovada (public coupon API)
 
-        The Odds API sources share a single cached request so they
-        don't double-count against the API quota.
+        The Odds API sources (Hard Rock + generic) share a single cached
+        request so they don't double-count against the API quota.
         """
         client = self._get_client()
 
-        # Hard Rock (primary) + Odds API generic (fallback) + DraftKings (alt lines)
+        # Fetch from ALL sources concurrently for maximum coverage
         results = await asyncio.gather(
             _fetch_hardrock(client),
             _fetch_odds_api(client),
             _fetch_draftkings(client),
+            _fetch_fanduel(client),
+            _fetch_kambi(client),
+            _fetch_bovada(client),
             return_exceptions=True,
         )
 
         all_events: List[List[OddsEvent]] = []
-        source_names = ["Hard Rock", "Odds API", "DraftKings"]
+        source_names = [
+            "Hard Rock", "Odds API", "DraftKings",
+            "FanDuel", "Kambi", "Bovada",
+        ]
 
         for i, result in enumerate(results):
             if isinstance(result, Exception):
