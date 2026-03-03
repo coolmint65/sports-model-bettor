@@ -591,19 +591,6 @@ async def get_best_bets(
                 else:
                     live_odds = game_obj.away_spread_price
 
-        # Filter out bets whose displayed odds exceed the juice threshold.
-        # The model may have evaluated using a better price from another
-        # sportsbook, but if the primary line is heavy juice, don't show it.
-        if live_odds is not None:
-            from app.analytics.models import american_odds_to_implied_prob
-            display_implied = american_odds_to_implied_prob(live_odds)
-            if display_implied >= max_implied:
-                logger.debug(
-                    "Filtering heavy-juice best bet: %s %s (display odds %s, implied %.3f)",
-                    pred.bet_type, pred.prediction_value, live_odds, display_implied,
-                )
-                return None
-
         units = calculate_units(pred.edge, pred.confidence)
         # Use the actual game status to determine phase — a prediction
         # created prematch is effectively "live" once the game starts.

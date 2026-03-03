@@ -1393,7 +1393,13 @@ class BettingModel:
                     "details": spread,
                 })
             else:
-                # Fallback: no price data, use standard 1.5 puck line
+                # Fallback: no price data, use standard 1.5 puck line.
+                # Compare by estimated edge (not raw probability) to avoid
+                # always picking the underdog +1.5, which mathematically
+                # covers ~75% of the time but offers poor value.
+                DEFAULT_FAV_MINUS_IMPLIED = 0.35  # -1.5 typical implied (~+170)
+                DEFAULT_DOG_PLUS_IMPLIED = 0.65   # +1.5 typical implied (~-185)
+
                 if home_is_fav:
                     fav_cover_prob = spreads.get("home_-1.5", 0.0)
                     dog_cover_prob = spreads.get("away_+1.5", 0.0)
@@ -1405,7 +1411,19 @@ class BettingModel:
                     fav_price = away_spread_price
                     dog_price = home_spread_price
 
-                if fav_cover_prob >= dog_cover_prob:
+                # Use actual odds if available, otherwise NHL puck line defaults
+                fav_implied = (
+                    american_odds_to_implied_prob(float(fav_price))
+                    if fav_price is not None else DEFAULT_FAV_MINUS_IMPLIED
+                )
+                dog_implied = (
+                    american_odds_to_implied_prob(float(dog_price))
+                    if dog_price is not None else DEFAULT_DOG_PLUS_IMPLIED
+                )
+                fav_edge = fav_cover_prob - fav_implied
+                dog_edge = dog_cover_prob - dog_implied
+
+                if fav_edge >= dog_edge:
                     sb_abbr = fav_abbr
                     sb_sign = "-1.5"
                     sb_prob = fav_cover_prob

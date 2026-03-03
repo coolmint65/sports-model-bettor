@@ -287,11 +287,21 @@ async def _games_for_date(
                 and (p.edge or 0) >= settings.min_edge
                 and (p.confidence or 0) >= settings.min_confidence
             ]
-            for pred in sorted(
-                tier2,
-                key=lambda p: composite_pick_score(p.confidence, p.edge, p.odds_implied_prob),
-                reverse=True,
-            ):
+
+            def _tier2_sort_key(p):
+                score = composite_pick_score(p.confidence, p.edge, p.odds_implied_prob)
+                # Deprioritize underdog puck line picks (+1.5, +2.5, etc.)
+                # They have high raw confidence but poor value and make
+                # every game card show the same pick.
+                if (
+                    p.bet_type == "spread"
+                    and p.prediction_value
+                    and "+" in p.prediction_value
+                ):
+                    score -= 0.10
+                return score
+
+            for pred in sorted(tier2, key=_tier2_sort_key, reverse=True):
                 if pred.game_id not in top_picks:
                     top_picks[pred.game_id] = GameTopPick(
                         bet_type=pred.bet_type,

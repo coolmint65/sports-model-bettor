@@ -286,10 +286,19 @@ function BestBets() {
     }
   }, [regenerating, silentRefetch]);
 
-  const allBets = data?.best_bets || data?.bets || (Array.isArray(data) ? data : []);
+  let allBets = data?.best_bets || data?.bets || (Array.isArray(data) ? data : []);
   const mlBets = data?.ml_bets || [];
   const spreadBets = data?.spread_bets || [];
   const totalBets = data?.total_bets || [];
+
+  // If the overall best_bets is empty but categorized tabs have data,
+  // synthesize a top picks view from the categorized bets so the
+  // "Top Picks" tab is never empty when picks exist.
+  if (allBets.length === 0 && (mlBets.length > 0 || spreadBets.length > 0 || totalBets.length > 0)) {
+    allBets = [...mlBets, ...spreadBets, ...totalBets]
+      .sort((a, b) => (b.confidence || 0) - (a.confidence || 0))
+      .slice(0, 3);
+  }
 
   const currentBets = {
     all: allBets,
