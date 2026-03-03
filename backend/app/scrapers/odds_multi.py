@@ -1300,8 +1300,10 @@ async def _fetch_bovada(client: httpx.AsyncClient) -> List[OddsEvent]:
 # ---- The Odds API (existing, requires API key) ----
 
 # Shared cache for The Odds API response so we don't make duplicate calls.
-# Hard Rock is our sole odds source; we request the us2 region which
-# includes Hard Rock Bet bookmaker data.
+# We use the ``us`` region which includes all major US sportsbooks
+# (FanDuel, BetMGM, DraftKings, Caesars, etc.) for broad coverage.
+# Hard Rock may also appear via the ``us2`` region — we try both if
+# the primary request returns no usable bookmaker data.
 _odds_api_cache: Dict[str, Any] = {"data": None, "timestamp": 0.0}
 _ODDS_API_CACHE_TTL = 30.0  # seconds
 
@@ -1309,11 +1311,12 @@ _ODDS_API_CACHE_TTL = 30.0  # seconds
 async def _fetch_odds_api_raw(
     client: httpx.AsyncClient,
 ) -> Optional[List[Dict[str, Any]]]:
-    """Fetch raw data from The Odds API (us2 region) with caching.
+    """Fetch raw data from The Odds API with caching.
 
-    Returns the parsed JSON list or None. The result is cached for
-    ``_ODDS_API_CACHE_TTL`` seconds. Only the us2 region is needed
-    since Hard Rock Bet is our sole odds source.
+    Tries the ``us`` region first (major US sportsbooks).  If that
+    returns no data, falls back to ``us2`` (secondary books including
+    Hard Rock Bet).  The result is cached for ``_ODDS_API_CACHE_TTL``
+    seconds.
     """
     import time as _time
 
@@ -1329,18 +1332,35 @@ async def _fetch_odds_api_raw(
         return None
 
     url = "https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds"
-    params = {
-        "apiKey": api_key,
-        "regions": "us2",
-        "markets": "h2h,spreads,totals",
-        "oddsFormat": "american",
-    }
 
-    data = await _make_request(client, url, params=params)
-    if data and isinstance(data, list):
-        _odds_api_cache["data"] = data
-        _odds_api_cache["timestamp"] = now
-        return data
+    # Try us region first (major US sportsbooks), fall back to us2
+    for region in ("us", "us2"):
+        params = {
+            "apiKey": api_key,
+            "regions": region,
+            "markets": "h2h,spreads,totals",
+            "oddsFormat": "american",
+        }
+
+        data = await _make_request(client, url, params=params)
+        if data and isinstance(data, list) and len(data) > 0:
+            # Check that at least one event has bookmaker data
+            has_bookmakers = any(
+                len(ev.get("bookmakers", [])) > 0 for ev in data
+            )
+            if has_bookmakers:
+                logger.info(
+                    "Odds API: got %d events from '%s' region", len(data), region
+                )
+                _odds_api_cache["data"] = data
+                _odds_api_cache["timestamp"] = now
+                return data
+            else:
+                logger.info(
+                    "Odds API: '%s' region returned %d events but no bookmakers, trying next",
+                    region, len(data),
+                )
+
     return None
 
 
@@ -2105,23 +2125,28 @@ class MultiSourceOddsScraper:
 
     async def fetch_best_odds(self) -> List[Dict[str, Any]]:
         """
-        Fetch odds from Hard Rock Bet (primary) and DraftKings (alt lines).
+        Fetch odds from multiple sources and merge to find best lines.
 
-        Hard Rock provides the primary moneyline, spread, and totals odds
-        plus its own alternate lines.  DraftKings supplements with
-        additional alternate spread and total lines from its public API.
+        Sources:
+        - Hard Rock Bet (via The Odds API, preferred for clean pricing)
+        - The Odds API generic (all other US bookmakers as fallback)
+        - DraftKings (public API, alt lines supplement)
+
+        The Odds API sources share a single cached request so they
+        don't double-count against the API quota.
         """
         client = self._get_client()
 
-        # Hard Rock (primary) + DraftKings (alt lines supplement)
+        # Hard Rock (primary) + Odds API generic (fallback) + DraftKings (alt lines)
         results = await asyncio.gather(
             _fetch_hardrock(client),
+            _fetch_odds_api(client),
             _fetch_draftkings(client),
             return_exceptions=True,
         )
 
         all_events: List[List[OddsEvent]] = []
-        source_names = ["Hard Rock", "DraftKings"]
+        source_names = ["Hard Rock", "Odds API", "DraftKings"]
 
         for i, result in enumerate(results):
             if isinstance(result, Exception):
@@ -2309,13 +2334,15 @@ class MultiSourceOddsScraper:
                     away_abbrev, home_abbrev, game.id,
                 )
 
-            # Persist best odds to the Game record
+            # Persist best odds to the Game record.
+            # Use ``is not None`` checks (not truthiness) so that valid
+            # zero values are not silently skipped.
             best = odds.get("best_odds", {})
-            if best.get("home_moneyline"):
+            if best.get("home_moneyline") is not None:
                 game.home_moneyline = best["home_moneyline"]
-            if best.get("away_moneyline"):
+            if best.get("away_moneyline") is not None:
                 game.away_moneyline = best["away_moneyline"]
-            if best.get("over_under"):
+            if best.get("over_under") is not None:
                 ou_raw = float(best["over_under"])
                 # Normalize to nearest .5 line.
                 # NHL sportsbooks always post .5 lines; some sources
@@ -2337,13 +2364,13 @@ class MultiSourceOddsScraper:
                 game.home_spread_line = _normalize_spread_line(float(best["home_spread"]))
             if best.get("away_spread") is not None:
                 game.away_spread_line = _normalize_spread_line(float(best["away_spread"]))
-            if best.get("home_spread_price"):
+            if best.get("home_spread_price") is not None:
                 game.home_spread_price = best["home_spread_price"]
-            if best.get("away_spread_price"):
+            if best.get("away_spread_price") is not None:
                 game.away_spread_price = best["away_spread_price"]
-            if best.get("over_price"):
+            if best.get("over_price") is not None:
                 game.over_price = best["over_price"]
-            if best.get("under_price"):
+            if best.get("under_price") is not None:
                 game.under_price = best["under_price"]
             # Persist all available total/spread lines
             atl = odds.get("all_total_lines")
