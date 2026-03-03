@@ -131,6 +131,7 @@ function BestBetCard({ bet, rank, isFeatured, onTrack, tracked }) {
             </span>
           </div>
 
+          {bet.edge != null && (
           <div className="metric">
             <span className="metric-label">Edge</span>
             <span className="metric-value edge-value">
@@ -139,6 +140,7 @@ function BestBetCard({ bet, rank, isFeatured, onTrack, tracked }) {
               {edge.toFixed(1)}%
             </span>
           </div>
+          )}
 
           {oddsDisplay && (
             <div className="metric">

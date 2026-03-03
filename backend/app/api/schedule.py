@@ -311,6 +311,33 @@ async def _games_for_date(
                         is_fallback=True,
                     )
 
+        # --- Tier 3: confidence-only fallback when odds data is missing ---
+        # When odds scraping fails or lines aren't posted yet, predictions
+        # have NULL edge/odds_implied_prob and tiers 1+2 are empty.  Show
+        # the highest-confidence pick per game so cards aren't blank.
+        still_missing = set(gid for gid in game_ids if gid not in top_picks)
+        if still_missing:
+            no_odds_result = await session.execute(
+                select(Prediction).where(
+                    Prediction.game_id.in_(list(still_missing)),
+                    Prediction.bet_type.in_(MARKET_BET_TYPES),
+                )
+            )
+            no_odds_preds = no_odds_result.scalars().all()
+            for pred in sorted(
+                no_odds_preds,
+                key=lambda p: p.confidence or 0,
+                reverse=True,
+            ):
+                if pred.game_id not in top_picks:
+                    top_picks[pred.game_id] = GameTopPick(
+                        bet_type=pred.bet_type,
+                        prediction_value=pred.prediction_value,
+                        confidence=pred.confidence,
+                        edge=pred.edge,
+                        is_fallback=True,
+                    )
+
     # Batch-load team stats to avoid N+1 queries
     all_team_ids = list({g.home_team_id for g in games} | {g.away_team_id for g in games})
     stats_map = await _batch_load_team_stats(all_team_ids, session)

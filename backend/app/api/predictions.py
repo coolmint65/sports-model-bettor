@@ -805,6 +805,28 @@ async def get_best_bets(
     all_eligible = result.scalars().all()
     logger.info("Best-bets step 4: %d eligible after filtering (implied<%.2f, not null, market type)", len(all_eligible), max_implied)
 
+    # Fallback: when odds data is unavailable (scraper failed, lines not
+    # posted yet, etc.), all predictions have NULL odds_implied_prob and
+    # the strict filter above returns nothing.  Re-query without the odds
+    # requirement so the dashboard still shows the top picks ranked by
+    # confidence alone rather than an empty "No best bets" message.
+    if not all_eligible:
+        fallback_result = await session.execute(
+            select(Prediction)
+            .options(selectinload(Prediction.result))
+            .join(Game, Game.id == Prediction.game_id)
+            .where(
+                Game.date == today,
+                ~func.lower(Game.status).in_(GAME_FINAL_STATUSES),
+                Prediction.bet_type.in_(MARKET_BET_TYPES),
+            )
+        )
+        all_eligible = fallback_result.scalars().all()
+        logger.info(
+            "Best-bets step 4 fallback: %d predictions without odds filter",
+            len(all_eligible),
+        )
+
     # Split into recommended and fallback pools
     recommended = [p for p in all_eligible if p.recommended]
     fallback = [p for p in all_eligible if not p.recommended]
