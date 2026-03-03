@@ -92,6 +92,134 @@ def american_to_implied(odds: Optional[float]) -> Optional[float]:
 
 
 # ---------------------------------------------------------------------------
+# Backfill prediction odds from fresh Game records
+# ---------------------------------------------------------------------------
+
+async def _backfill_prediction_odds(
+    session: AsyncSession, target_date: date
+) -> int:
+    """Update all predictions for the given date with fresh odds from Game records.
+
+    After odds are synced to Game records, the corresponding Prediction rows
+    may still carry stale (or NULL) ``odds_implied_prob`` and ``edge`` values.
+    This function reads the current Game odds and writes them back onto the
+    Prediction records so the DB-level filters in best-bets work correctly.
+
+    Handles ML, totals, and spreads — keeping ALL bet types in sync.
+
+    Returns the number of predictions updated.
+    """
+    # Fetch all non-final games for the date with their teams
+    game_result = await session.execute(
+        select(Game)
+        .options(selectinload(Game.home_team), selectinload(Game.away_team))
+        .where(
+            Game.date == target_date,
+            ~func.lower(Game.status).in_(GAME_FINAL_STATUSES),
+        )
+    )
+    games = {g.id: g for g in game_result.scalars().all()}
+    if not games:
+        return 0
+
+    # Fetch all predictions for these games
+    pred_result = await session.execute(
+        select(Prediction).where(
+            Prediction.game_id.in_(list(games.keys())),
+            Prediction.bet_type.in_(MARKET_BET_TYPES),
+        )
+    )
+    predictions = pred_result.scalars().all()
+
+    import json as _json
+
+    updated = 0
+    for pred in predictions:
+        game = games.get(pred.game_id)
+        if not game:
+            continue
+
+        live_odds = None
+
+        if pred.bet_type == "ml":
+            home_abbr = game.home_team.abbreviation if game.home_team else ""
+            if pred.prediction_value == home_abbr:
+                live_odds = game.home_moneyline
+            else:
+                live_odds = game.away_moneyline
+
+        elif pred.bet_type == "total":
+            if pred.prediction_value and "over" in pred.prediction_value:
+                live_odds = game.over_price
+            else:
+                live_odds = game.under_price
+
+        elif pred.bet_type == "spread":
+            home_abbr = game.home_team.abbreviation if game.home_team else ""
+            pred_is_home = (
+                pred.prediction_value
+                and pred.prediction_value.startswith(home_abbr)
+            )
+
+            # Try all_spread_lines first for exact line match
+            spread_found = False
+            if game.all_spread_lines and pred.prediction_value:
+                try:
+                    parts = pred.prediction_value.rsplit("_", 1)
+                    if len(parts) == 2:
+                        spread_val = abs(float(parts[1]))
+                        all_sl = game.all_spread_lines
+                        if isinstance(all_sl, str):
+                            all_sl = _json.loads(all_sl)
+                        for sl in (all_sl or []):
+                            if abs(sl.get("line", 0) - spread_val) < 0.01:
+                                if pred_is_home:
+                                    live_odds = sl.get("home_price")
+                                else:
+                                    live_odds = sl.get("away_price")
+                                if live_odds is not None:
+                                    spread_found = True
+                                break
+                except (ValueError, TypeError, KeyError):
+                    pass
+
+            # Fall back to primary spread prices
+            if not spread_found:
+                if pred_is_home and game.home_spread_price:
+                    live_odds = game.home_spread_price
+                elif not pred_is_home and game.away_spread_price:
+                    live_odds = game.away_spread_price
+
+        if live_odds is None:
+            continue
+
+        fresh_implied = american_to_implied(live_odds)
+        if fresh_implied is None:
+            continue
+
+        fresh_edge = round(pred.confidence - fresh_implied, 4) if pred.confidence else None
+
+        # Update the prediction record
+        pred.odds_implied_prob = fresh_implied
+        pred.edge = fresh_edge
+        pred.recommended = (
+            (pred.confidence or 0) >= settings.min_confidence
+            and (fresh_edge or 0) >= settings.min_edge
+            and fresh_implied < settings.best_bet_max_implied
+        )
+        updated += 1
+
+    if updated > 0:
+        await session.flush()
+        logger.info(
+            "Backfilled odds for %d/%d predictions on %s",
+            updated, len(predictions), target_date,
+        )
+
+    return updated
+
+
+# ---------------------------------------------------------------------------
 # Pydantic response schemas
 # ---------------------------------------------------------------------------
 
@@ -532,6 +660,21 @@ async def get_best_bets(
                 "Prediction generation failed: %s",
                 getattr(exc, 'detail', str(exc)),
             )
+
+    # Step 3: Backfill prediction odds from fresh Game records.
+    # Predictions may have been generated before odds were synced
+    # (e.g., from /predictions/today or a failed odds fetch), leaving
+    # odds_implied_prob as NULL.  This step reads the current odds on
+    # the Game records and writes them back to every Prediction so the
+    # DB-level filter below can find them.  Handles ML, totals, AND
+    # spreads — keeping all bet types in sync.
+    try:
+        async with session.begin_nested():
+            backfilled = await _backfill_prediction_odds(session, today)
+            if backfilled:
+                logger.info("Best-bets: backfilled odds on %d predictions", backfilled)
+    except Exception as exc:
+        logger.warning("Prediction odds backfill failed: %s", exc)
 
     max_implied = settings.best_bet_max_implied
 
@@ -1138,6 +1281,19 @@ async def regenerate_predictions(
         raise
 
     steps.append(f"generated {count} predictions")
+
+    # Step 5: Backfill odds onto freshly generated predictions.
+    # Even though odds were synced in step 3, the prediction generator
+    # may have failed to pick up odds for some bet types, or odds may
+    # have been missing for certain games.  This ensures every
+    # prediction record has the latest odds data.
+    try:
+        async with session.begin_nested():
+            backfilled = await _backfill_prediction_odds(session, today)
+            if backfilled:
+                steps.append(f"backfilled odds on {backfilled} predictions")
+    except Exception as exc:
+        logger.warning("Regenerate: odds backfill failed: %s", exc)
 
     # Safety: if we deleted predictions but generated 0, log a warning.
     # The best-bets endpoint will try to generate on the next fetch.
