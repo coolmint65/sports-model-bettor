@@ -2139,25 +2139,39 @@ def _merge_odds_events(
                 abs_line = abs(e.home_spread) if e.home_spread else abs(e.away_spread)
                 if abs_line not in all_spreads_map:
                     all_spreads_map[abs_line] = _init_spread_entry(abs_line)
-                if _valid_spread_price(e.home_spread_price, abs_line, True):
+
+                # Determine if this source's spread direction is inverted
+                # relative to the ML-derived favorite.  If so, swap prices
+                # so they pair with the correct side.
+                e_hp = e.home_spread_price
+                e_ap = e.away_spread_price
+                if home_is_fav is not None and e.home_spread:
+                    source_inverted = (
+                        (home_is_fav and e.home_spread > 0)
+                        or (not home_is_fav and e.home_spread < 0)
+                    )
+                    if source_inverted:
+                        e_hp, e_ap = e_ap, e_hp
+
+                if _valid_spread_price(e_hp, abs_line, True):
                     all_spreads_map[abs_line]["home_price"] = max(
-                        all_spreads_map[abs_line]["home_price"], e.home_spread_price
+                        all_spreads_map[abs_line]["home_price"], e_hp
                     )
                 else:
                     logger.warning(
                         "Merge %s@%s: rejecting %s home spread price %s for %.1f line (wrong sign)",
                         ev_list[0].away_abbr, ev_list[0].home_abbr,
-                        e.source, e.home_spread_price, abs_line,
+                        e.source, e_hp, abs_line,
                     )
-                if _valid_spread_price(e.away_spread_price, abs_line, False):
+                if _valid_spread_price(e_ap, abs_line, False):
                     all_spreads_map[abs_line]["away_price"] = max(
-                        all_spreads_map[abs_line]["away_price"], e.away_spread_price
+                        all_spreads_map[abs_line]["away_price"], e_ap
                     )
                 else:
                     logger.warning(
                         "Merge %s@%s: rejecting %s away spread price %s for %.1f line (wrong sign)",
                         ev_list[0].away_abbr, ev_list[0].home_abbr,
-                        e.source, e.away_spread_price, abs_line,
+                        e.source, e_ap, abs_line,
                     )
                 # Only accept spread signs that agree with moneyline.
                 # If no ML data, accept the first non-zero value.
@@ -2182,6 +2196,12 @@ def _merge_odds_events(
                     all_spreads_map[abs_line] = _init_spread_entry(abs_line)
                 hp = alt.get("home_price", -110)
                 ap = alt.get("away_price", -110)
+                # If the alt_spread's direction disagrees with the
+                # ML-derived direction, swap prices to the correct side.
+                alt_hs = alt.get("home_spread", 0)
+                init_hs = all_spreads_map[abs_line]["home_spread"]
+                if alt_hs and init_hs and (alt_hs > 0) != (init_hs > 0):
+                    hp, ap = ap, hp
                 if _valid_spread_price(hp, abs_line, True):
                     all_spreads_map[abs_line]["home_price"] = max(
                         all_spreads_map[abs_line]["home_price"], hp
