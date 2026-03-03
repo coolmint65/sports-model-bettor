@@ -139,6 +139,8 @@ async def _migrate_add_columns() -> None:
         # All available total/spread lines (JSON)
         ("game", "all_total_lines", "JSON"),
         ("game", "all_spread_lines", "JSON"),
+        # TrackedBet lock lifecycle
+        ("tracked_bet", "locked_at", "DATETIME"),
     ]
 
     async with engine.begin() as conn:

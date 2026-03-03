@@ -141,6 +141,8 @@ async def _run_full_sync():
 
                 # 4. Predictions — delete stale predictions only for
                 # non-final games so final game predictions are preserved.
+                # Wrapped in a savepoint so that if regeneration fails, the
+                # old predictions are restored instead of leaving the DB empty.
                 _sync_state["step"] = "Generating predictions..."
                 try:
                     from datetime import date as date_type
@@ -150,19 +152,21 @@ async def _run_full_sync():
                     from app.analytics.predictions import PredictionManager
 
                     today = date_type.today()
-                    non_final_game_ids = select(Game.id).where(
-                        Game.date == today,
-                        Game.status.notin_(GAME_FINAL_STATUSES),
-                    )
-                    await session.execute(
-                        sa_delete(Prediction).where(
-                            Prediction.game_id.in_(non_final_game_ids)
-                        )
-                    )
-                    await session.flush()
 
-                    manager = PredictionManager()
-                    await manager.get_best_bets(session)
+                    async with session.begin_nested():
+                        non_final_game_ids = select(Game.id).where(
+                            Game.date == today,
+                            Game.status.notin_(GAME_FINAL_STATUSES),
+                        )
+                        await session.execute(
+                            sa_delete(Prediction).where(
+                                Prediction.game_id.in_(non_final_game_ids)
+                            )
+                        )
+                        await session.flush()
+
+                        manager = PredictionManager()
+                        await manager.get_best_bets(session)
                 except Exception as exc:
                     logger.warning("Prediction generation failed (non-critical): %s", exc)
 

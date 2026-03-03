@@ -13,6 +13,8 @@ import {
   Trash2,
   RefreshCw,
   Layers,
+  Lock,
+  Unlock,
 } from 'lucide-react';
 import {
   XAxis,
@@ -25,7 +27,7 @@ import {
   ReferenceLine,
 } from 'recharts';
 import { format, parseISO } from 'date-fns';
-import { fetchTrackedBets, deleteTrackedBet, settleTrackedBets, clearAllTrackedBets } from '../utils/api';
+import { fetchTrackedBets, deleteTrackedBet, settleTrackedBets, clearAllTrackedBets, updateTrackedBet } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import { confidencePct, formatBetType, formatPredictionValue } from '../utils/teams';
 
@@ -380,6 +382,7 @@ function History() {
                   <span className="col-confidence">Conf.</span>
                   <span className="col-units">Units</span>
                   <span className="col-phase">Phase</span>
+                  <span className="col-status">Status</span>
                   <span className="col-result">Result</span>
                   <span className="col-profit">Profit</span>
                   <span className="col-action"></span>
@@ -391,6 +394,7 @@ function History() {
                     const isPending = !bet.result;
                     const profit = bet.profit_loss || 0;
                     const confidence = confidencePct(bet.confidence);
+                    const isLocked = bet.locked;
                     const dateStr = bet.game_date || '';
                     let displayDate = dateStr;
                     try {
@@ -431,6 +435,10 @@ function History() {
                           <Layers size={10} />
                           {phase === 'live' ? 'Live' : 'Pre'}
                         </span>
+                        <span className={`col-status ${isLocked ? 'status-locked' : 'status-open'}`} title={isLocked ? 'Locked — game started' : 'Open — updates with latest predictions'}>
+                          {isLocked ? <Lock size={13} /> : <Unlock size={13} />}
+                          {isLocked ? 'Locked' : 'Open'}
+                        </span>
                         <span className={`col-result ${isWin ? 'result-win' : isLoss ? 'result-loss' : 'result-pending'}`}>
                           {isWin && <CheckCircle size={14} />}
                           {isLoss && <XCircle size={14} />}
@@ -444,7 +452,8 @@ function History() {
                           <button
                             className="btn-icon btn-delete"
                             onClick={() => handleDelete(bet.id)}
-                            title="Remove bet"
+                            title={isLocked && bet.result ? 'Cannot remove settled bet' : 'Remove bet'}
+                            disabled={isLocked && bet.result != null}
                           >
                             <Trash2 size={14} />
                           </button>

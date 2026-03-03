@@ -200,24 +200,26 @@ function BestBets() {
   const [regenMessage, setRegenMessage] = useState('');
 
   // Load already-tracked bets so the Track button is disabled
-  useEffect(() => {
-    (async () => {
-      try {
-        const resp = await fetchTrackedBets();
-        const bets = resp.data?.bets || resp.data || [];
-        const ids = new Set(
-          bets.map((b) => b.prediction_id).filter(Boolean)
-        );
-        const keys = new Set(
-          bets.map((b) => `${b.game_id}:${b.bet_type}:${b.prediction_value}`)
-        );
-        setTrackedIds(ids);
-        setTrackedKeys(keys);
-      } catch {
-        // non-critical
-      }
-    })();
+  const refreshTrackedState = useCallback(async () => {
+    try {
+      const resp = await fetchTrackedBets();
+      const bets = resp.data?.bets || resp.data || [];
+      const ids = new Set(
+        bets.map((b) => b.prediction_id).filter(Boolean)
+      );
+      const keys = new Set(
+        bets.map((b) => `${b.game_id}:${b.bet_type}:${b.prediction_value}`)
+      );
+      setTrackedIds(ids);
+      setTrackedKeys(keys);
+    } catch {
+      // non-critical
+    }
   }, []);
+
+  useEffect(() => {
+    refreshTrackedState();
+  }, [refreshTrackedState]);
 
   // Auto-poll best bets every 60 seconds for seamless updates
   useEffect(() => {
@@ -227,12 +229,15 @@ function BestBets() {
     return () => clearInterval(interval);
   }, [silentRefetch]);
 
-  // Also refresh on manual data sync
+  // Also refresh on manual data sync — refresh both bets and tracked state
   useEffect(() => {
-    const onSynced = () => silentRefetch();
+    const onSynced = () => {
+      silentRefetch();
+      refreshTrackedState();
+    };
     window.addEventListener('data-synced', onSynced);
     return () => window.removeEventListener('data-synced', onSynced);
-  }, [silentRefetch]);
+  }, [silentRefetch, refreshTrackedState]);
 
   const isBetTracked = useCallback((bet) => {
     const predId = bet.prediction_id || bet.id;

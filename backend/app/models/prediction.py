@@ -169,6 +169,11 @@ class TrackedBet(TimestampMixin, Base):
     away_team_abbr: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
     game_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
 
+    # Lock lifecycle — bet is editable until the game starts, then frozen.
+    locked_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     # Result lifecycle
     result: Mapped[Optional[str]] = mapped_column(
         String(20), nullable=True

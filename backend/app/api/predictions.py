@@ -306,10 +306,13 @@ class TrackedBetResponse(BaseModel):
     home_team_abbr: Optional[str] = None
     away_team_abbr: Optional[str] = None
     game_date: Optional[date] = None
+    locked: bool = False
+    locked_at: Optional[str] = None
     result: Optional[str] = None
     profit_loss: Optional[float] = None
     settled_at: Optional[str] = None
     created_at: Optional[str] = None
+    game_start_time: Optional[str] = None
     model_config = {"from_attributes": True}
 
 
@@ -890,6 +893,34 @@ async def get_best_bets(
 
 
 # ---------------------------------------------------------------------------
+# Tracked bets helpers
+# ---------------------------------------------------------------------------
+
+def _resolve_odds(
+    bet_type: str, prediction_value: str, game: Game
+) -> Optional[float]:
+    """Resolve current sportsbook odds for a bet from the Game record."""
+    if bet_type == "ml":
+        if game.home_team and prediction_value == game.home_team.abbreviation:
+            return game.home_moneyline
+        return game.away_moneyline
+    elif bet_type == "total":
+        if prediction_value and "over" in prediction_value:
+            return game.over_price
+        return game.under_price
+    elif bet_type == "spread":
+        is_home = (
+            game.home_team
+            and prediction_value
+            and prediction_value.startswith(game.home_team.abbreviation)
+        )
+        if is_home:
+            return game.home_spread_price
+        return game.away_spread_price
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Tracked bets endpoints
 # ---------------------------------------------------------------------------
 
@@ -926,23 +957,7 @@ async def track_bet(
     units = body.units or calculate_units(pred.edge, pred.confidence)
 
     # Resolve sportsbook odds for snapshot
-    odds_val = None
-    if game:
-        if pred.bet_type == "ml":
-            if game.home_team and pred.prediction_value == game.home_team.abbreviation:
-                odds_val = game.home_moneyline
-            else:
-                odds_val = game.away_moneyline
-        elif pred.bet_type == "total":
-            if pred.prediction_value and "over" in pred.prediction_value:
-                odds_val = game.over_price
-            else:
-                odds_val = game.under_price
-        elif pred.bet_type == "spread":
-            if game.home_team and pred.prediction_value and game.home_team.abbreviation in pred.prediction_value:
-                odds_val = game.home_spread_price
-            else:
-                odds_val = game.away_spread_price
+    odds_val = _resolve_odds(pred.bet_type, pred.prediction_value, game) if game else None
 
     tracked = TrackedBet(
         prediction_id=pred.id,
@@ -962,17 +977,28 @@ async def track_bet(
         away_team_abbr=game.away_team.abbreviation if game and game.away_team else None,
         game_date=game.date if game else None,
     )
+    # Auto-lock if game has already started
+    if game and game.status and game.status.lower() in (
+        *GAME_FINAL_STATUSES, "in_progress", "live"
+    ):
+        tracked.locked_at = datetime.now(timezone.utc)
+
     session.add(tracked)
     await session.flush()
 
-    return _tracked_bet_to_response(tracked)
+    return _tracked_bet_to_response(tracked, game)
 
 
 @router.get("/tracked", response_model=TrackedBetsListResponse)
 async def list_tracked_bets(
     session: AsyncSession = Depends(get_session),
 ):
-    """Return all tracked bets with aggregate stats."""
+    """Return all tracked bets with aggregate stats.
+
+    For unlocked (pre-game) bets, automatically syncs the latest
+    prediction data so the user always sees current model output.
+    Once a game starts (or is final), the bet is locked permanently.
+    """
     result = await session.execute(
         select(TrackedBet).order_by(TrackedBet.created_at.desc())
     )
@@ -982,9 +1008,52 @@ async def list_tracked_bets(
     wins = losses = pushes = pending = 0
     total_profit = 0.0
     total_units = 0.0
+    dirty = False
 
     for tb in bets:
-        items.append(_tracked_bet_to_response(tb))
+        # Load the game for start_time and status
+        game_result = await session.execute(
+            select(Game)
+            .options(selectinload(Game.home_team), selectinload(Game.away_team))
+            .where(Game.id == tb.game_id)
+        )
+        game = game_result.scalar_one_or_none()
+
+        # Auto-lock: once the game starts or is final, freeze the bet
+        if tb.locked_at is None and game:
+            game_started = (
+                game.status
+                and game.status.lower() in (*GAME_FINAL_STATUSES, "in_progress", "live")
+            )
+            if game_started:
+                tb.locked_at = datetime.now(timezone.utc)
+                dirty = True
+
+        # Auto-refresh: for unlocked, unsettled bets, sync from
+        # the latest Prediction data so the user sees current values
+        if tb.locked_at is None and tb.result is None and tb.prediction_id is not None:
+            pred_result = await session.execute(
+                select(Prediction).where(Prediction.id == tb.prediction_id)
+            )
+            pred = pred_result.scalar_one_or_none()
+            if pred:
+                # Sync snapshot from the prediction
+                tb.bet_type = pred.bet_type
+                tb.prediction_value = pred.prediction_value
+                tb.confidence = pred.confidence
+                tb.implied_probability = pred.odds_implied_prob
+                tb.edge = pred.edge
+                tb.phase = getattr(pred, "phase", "prematch")
+                tb.reasoning = pred.reasoning
+                # Refresh odds from game
+                if game:
+                    odds_val = _resolve_odds(pred.bet_type, pred.prediction_value, game)
+                    if odds_val is not None:
+                        tb.odds = odds_val
+                tb.units = calculate_units(tb.edge, tb.confidence)
+                dirty = True
+
+        items.append(_tracked_bet_to_response(tb, game))
         total_units += tb.units or 1.0
         if tb.result == "win":
             wins += 1
@@ -996,6 +1065,9 @@ async def list_tracked_bets(
             pushes += 1
         else:
             pending += 1
+
+    if dirty:
+        await session.flush()
 
     graded = wins + losses
     win_rate = round(wins / graded, 4) if graded > 0 else None
@@ -1011,6 +1083,69 @@ async def list_tracked_bets(
         total_profit=round(total_profit, 2),
         total_units_wagered=round(total_units, 2),
     )
+
+
+class TrackedBetUpdateRequest(BaseModel):
+    units: Optional[float] = None
+    prediction_id: Optional[int] = None  # swap to a different prediction
+
+
+@router.put("/tracked/{tracked_id}", response_model=TrackedBetResponse)
+async def update_tracked_bet(
+    tracked_id: int,
+    body: TrackedBetUpdateRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Update a tracked bet (only allowed before the game starts)."""
+    result = await session.execute(
+        select(TrackedBet).where(TrackedBet.id == tracked_id)
+    )
+    tb = result.scalar_one_or_none()
+    if not tb:
+        raise HTTPException(status_code=404, detail="Tracked bet not found")
+    if tb.locked_at is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="Bet is locked — game has started or is final",
+        )
+
+    game_result = await session.execute(
+        select(Game)
+        .options(selectinload(Game.home_team), selectinload(Game.away_team))
+        .where(Game.id == tb.game_id)
+    )
+    game = game_result.scalar_one_or_none()
+
+    # If swapping to a new prediction, refresh all snapshot data
+    if body.prediction_id is not None:
+        pred_result = await session.execute(
+            select(Prediction).where(Prediction.id == body.prediction_id)
+        )
+        pred = pred_result.scalar_one_or_none()
+        if not pred:
+            raise HTTPException(status_code=404, detail="Prediction not found")
+        tb.prediction_id = pred.id
+        tb.game_id = pred.game_id
+        tb.bet_type = pred.bet_type
+        tb.prediction_value = pred.prediction_value
+        tb.confidence = pred.confidence
+        tb.implied_probability = pred.odds_implied_prob
+        tb.edge = pred.edge
+        tb.phase = getattr(pred, "phase", "prematch")
+        tb.reasoning = pred.reasoning
+        if game:
+            odds_val = _resolve_odds(pred.bet_type, pred.prediction_value, game)
+            if odds_val is not None:
+                tb.odds = odds_val
+
+    if body.units is not None:
+        tb.units = body.units
+    elif body.prediction_id is not None:
+        # Recalculate units from new prediction data
+        tb.units = calculate_units(tb.edge, tb.confidence)
+
+    await session.flush()
+    return _tracked_bet_to_response(tb, game)
 
 
 @router.delete("/tracked/{tracked_id}")
@@ -1072,7 +1207,9 @@ async def settle_tracked_bets(
                 tb.profit_loss = round(1.0 * tb.units, 2)
         else:
             tb.profit_loss = round(-1.0 * tb.units, 2)
-        tb.settled_at = datetime.utcnow()
+        tb.settled_at = datetime.now(timezone.utc)
+        if tb.locked_at is None:
+            tb.locked_at = tb.settled_at
         settled_count += 1
 
     if settled_count > 0:
@@ -1091,7 +1228,13 @@ async def clear_all_tracked_bets(
     return {"ok": True}
 
 
-def _tracked_bet_to_response(tb: TrackedBet) -> TrackedBetResponse:
+def _tracked_bet_to_response(
+    tb: TrackedBet, game: Optional[Game] = None
+) -> TrackedBetResponse:
+    locked = tb.locked_at is not None
+    game_start_time = None
+    if game and game.start_time:
+        game_start_time = game.start_time.isoformat()
     return TrackedBetResponse(
         id=tb.id,
         prediction_id=tb.prediction_id,
@@ -1110,10 +1253,13 @@ def _tracked_bet_to_response(tb: TrackedBet) -> TrackedBetResponse:
         home_team_abbr=tb.home_team_abbr,
         away_team_abbr=tb.away_team_abbr,
         game_date=tb.game_date,
+        locked=locked,
+        locked_at=str(tb.locked_at) if tb.locked_at else None,
         result=tb.result,
         profit_loss=tb.profit_loss,
         settled_at=str(tb.settled_at) if tb.settled_at else None,
         created_at=str(tb.created_at) if tb.created_at else None,
+        game_start_time=game_start_time,
     )
 
 

@@ -916,9 +916,31 @@ a:hover {
   min-width: 50px;
 }
 
+.col-status {
+  min-width: 65px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.col-status.status-locked {
+  color: #888;
+}
+
+.col-status.status-open {
+  color: #4fc3f7;
+}
+
 .col-action {
   min-width: 30px;
   text-align: center;
+}
+
+.col-action .btn-icon:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
 }
 
 /* ─── Best Bets Tabs ───────────────────────────────────────── */

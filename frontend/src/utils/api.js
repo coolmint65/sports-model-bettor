@@ -34,6 +34,8 @@ export const regeneratePredictions = () =>
 export const trackBet = (predictionId, units) =>
   api.post('/predictions/tracked', { prediction_id: predictionId, units });
 export const fetchTrackedBets = () => api.get('/predictions/tracked');
+export const updateTrackedBet = (id, data) =>
+  api.put(`/predictions/tracked/${id}`, data);
 export const deleteTrackedBet = (id) => api.delete(`/predictions/tracked/${id}`);
 export const settleTrackedBets = () => api.post('/predictions/tracked/settle');
 export const clearAllTrackedBets = () => api.delete('/predictions/tracked/all');
