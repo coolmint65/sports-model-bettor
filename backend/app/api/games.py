@@ -25,6 +25,7 @@ from app.models.game import Game, HeadToHead
 from app.models.player import GoalieStats, Player
 from app.models.prediction import Prediction
 from app.models.team import Team, TeamStats
+from app.utils import serialize_utc_datetime
 
 router = APIRouter(prefix="/api/games", tags=["games"])
 
@@ -703,7 +704,7 @@ async def get_game_details(
             away_spread_price=game.away_spread_price,
             over_price=game.over_price,
             under_price=game.under_price,
-            odds_updated_at=game.odds_updated_at.isoformat() if game.odds_updated_at else None,
+            odds_updated_at=serialize_utc_datetime(game.odds_updated_at),
         )
 
     # Build pregame odds snapshot (only populated once game goes live)

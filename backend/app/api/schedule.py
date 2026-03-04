@@ -23,6 +23,7 @@ from app.models.game import Game
 from app.models.prediction import Prediction
 from app.models.team import Team, TeamStats
 from app.services.odds import fresh_implied_prob
+from app.utils import serialize_utc_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +168,7 @@ def _build_game_odds(game: Game) -> Optional[GameOdds]:
         away_spread_line=game.away_spread_line,
         home_spread_price=game.home_spread_price,
         away_spread_price=game.away_spread_price,
-        odds_updated_at=game.odds_updated_at.isoformat() if game.odds_updated_at else None,
+        odds_updated_at=serialize_utc_datetime(game.odds_updated_at),
     )
 
 

@@ -14,6 +14,8 @@ from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Set
 
 from fastapi import WebSocket, WebSocketDisconnect
+
+from app.utils import serialize_utc_datetime
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
@@ -165,7 +167,7 @@ async def _sync_odds_and_broadcast():
                             "status": game.status,
                             "odds": {
                                 **current,
-                                "odds_updated_at": game.odds_updated_at.isoformat() if game.odds_updated_at else None,
+                                "odds_updated_at": serialize_utc_datetime(game.odds_updated_at),
                             },
                         })
 
@@ -308,7 +310,7 @@ async def websocket_handler(ws: WebSocket):
                             "clock": g.clock,
                             "odds": {
                                 **snap,
-                                "odds_updated_at": g.odds_updated_at.isoformat() if g.odds_updated_at else None,
+                                "odds_updated_at": serialize_utc_datetime(g.odds_updated_at),
                             },
                         })
 
