@@ -83,6 +83,7 @@ _COMMON_TEAM_MAP: Dict[str, str] = {
     "St Louis Blues": "STL",
     "Saint Louis Blues": "STL",
     "Utah HC": "UTA",
+    "Utah Mammoth": "UTA",
     "Utah": "UTA",
     "Vegas": "VGK",
     "Golden Knights": "VGK",
@@ -254,6 +255,51 @@ class OddsEvent:
             "alt_totals": self.alt_totals,
             "alt_spreads": self.alt_spreads,
         }
+
+
+def _validate_event(event: OddsEvent) -> OddsEvent:
+    """Apply source-level validation to an OddsEvent before merge.
+
+    Validates moneyline, total, and spread data using the
+    ``odds_validation`` module.  Invalid entries are zeroed out
+    or removed from alt lines so that only clean data enters the
+    merge pipeline.
+    """
+    from app.scrapers.odds_validation import (
+        is_valid_american_odds,
+        validate_odds_event_totals,
+        validate_odds_event_spreads,
+    )
+
+    matchup = f"{event.away_abbr}@{event.home_abbr}"
+
+    # Validate moneyline — just check individual odds are valid American
+    if event.has_moneyline():
+        if not is_valid_american_odds(event.home_ml) or not is_valid_american_odds(event.away_ml):
+            logger.warning(
+                "[%s] %s: invalid ML odds H=%s A=%s — zeroing out",
+                event.source, matchup, event.home_ml, event.away_ml,
+            )
+            event.home_ml = 0
+            event.away_ml = 0
+
+    # Validate totals (primary + alt)
+    cleaned_alts, pline, pover, punder = validate_odds_event_totals(
+        event.alt_totals,
+        event.total_line, event.over_price, event.under_price,
+        event.source, matchup,
+    )
+    event.alt_totals = cleaned_alts
+    event.total_line = pline
+    event.over_price = pover
+    event.under_price = punder
+
+    # Validate alt spreads
+    event.alt_spreads = validate_odds_event_spreads(
+        event.alt_spreads, event.source, matchup,
+    )
+
+    return event
 
 
 # ---------------------------------------------------------------------------
@@ -562,7 +608,7 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
                 alt_spreads=odds.get("dk_alt_spreads", []),
             )
             if event.home_abbr and event.away_abbr:
-                events.append(event)
+                events.append(_validate_event(event))
             else:
                 logger.warning(
                     "DraftKings: dropping event — unmapped teams "
@@ -842,7 +888,7 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
                 alt_spreads=odds.get("fd_alt_spreads", []),
             )
             if event.home_abbr and event.away_abbr:
-                events.append(event)
+                events.append(_validate_event(event))
             else:
                 logger.warning(
                     "FanDuel: dropping event — unmapped teams "
@@ -1063,7 +1109,7 @@ async def _fetch_kambi(client: httpx.AsyncClient) -> List[OddsEvent]:
                 alt_spreads=odds.get("kambi_alt_spreads", []),
             )
             if event.home_abbr and event.away_abbr:
-                events.append(event)
+                events.append(_validate_event(event))
             else:
                 logger.warning(
                     "Kambi: dropping event — unmapped teams "
@@ -1324,7 +1370,7 @@ async def _fetch_bovada(client: httpx.AsyncClient) -> List[OddsEvent]:
                     alt_spreads=odds.get("bov_alt_spreads", []),
                 )
                 if event.home_abbr and event.away_abbr:
-                    events.append(event)
+                    events.append(_validate_event(event))
                 else:
                     logger.warning(
                         "Bovada: dropping event — unmapped teams "
@@ -1565,7 +1611,7 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
             alt_totals=oa_alt_totals,
         )
         if event.home_abbr and event.away_abbr:
-            events.append(event)
+            events.append(_validate_event(event))
         else:
             logger.warning(
                 "The Odds API: dropping event — unmapped teams "
@@ -1837,7 +1883,7 @@ async def _fetch_hardrock(client: httpx.AsyncClient) -> List[OddsEvent]:
         )
 
         if event.home_abbr and event.away_abbr:
-            events.append(event)
+            events.append(_validate_event(event))
         else:
             logger.warning(
                 "Hard Rock: dropping event — unmapped teams "
@@ -1906,8 +1952,8 @@ def _merge_odds_events(
         home_mls = [e.home_ml for e in ev_list if e.has_moneyline()]
         away_mls = [e.away_ml for e in ev_list if e.has_moneyline()]
 
-        best_home_ml = max(home_mls) if home_mls else 0.0
-        best_away_ml = max(away_mls) if away_mls else 0.0
+        best_home_ml = max(home_mls) if home_mls else None
+        best_away_ml = max(away_mls) if away_mls else None
 
         # Consensus spread: most common absolute value across sources.
         # Use moneyline data to determine the correct sign so that
@@ -1940,8 +1986,8 @@ def _merge_odds_events(
             elif pos_count > neg_count:
                 home_is_fav = False
 
-        best_home_spread = best_home_spread_price = 0.0
-        best_away_spread = best_away_spread_price = 0.0
+        best_home_spread = best_home_spread_price = None
+        best_away_spread = best_away_spread_price = None
         if home_spreads:
             spread_vals = Counter(abs(s[0]) for s in home_spreads if s[0] != 0)
             if spread_vals:
@@ -2044,58 +2090,94 @@ def _merge_odds_events(
             best_over = max(t[1] for t in consensus_totals)
             best_under = max(t[2] for t in consensus_totals)
 
-        # Aggregate ALL available total lines across all sources
-        # For each line value, keep the best (highest) over/under price
-        all_lines_map: Dict[float, Dict[str, float]] = {}
+        # Aggregate ALL available total lines across all sources.
+        # Pair-based selection: over/under prices for each line must come
+        # from the same source and pass vig validation.  Among valid pairs
+        # per line, pick the one with lowest total vig (best for bettor).
+        from app.scrapers.odds_validation import (
+            validate_total_line_pair,
+            validate_alt_totals_monotonicity,
+            validate_alt_spreads_monotonicity,
+            validate_moneyline,
+            validate_spread_pair,
+        )
+
+        matchup_label = f"{ev_list[0].away_abbr}@{ev_list[0].home_abbr}"
+
+        # Collect all (over, under) pairs per line, keyed by source
+        all_line_pairs: Dict[float, List[Tuple[float, float, str]]] = {}
         for e in ev_list:
-            # Include primary line
+            # Primary line from this source
             if e.has_total() and 4.0 <= e.total_line <= 9.0:
                 lv = e.total_line
-                if lv not in all_lines_map:
-                    all_lines_map[lv] = {"over_price": -999, "under_price": -999}
-                all_lines_map[lv]["over_price"] = max(
-                    all_lines_map[lv]["over_price"], e.over_price
-                )
-                all_lines_map[lv]["under_price"] = max(
-                    all_lines_map[lv]["under_price"], e.under_price
-                )
-            # Include all alternate lines
+                if lv not in all_line_pairs:
+                    all_line_pairs[lv] = []
+                all_line_pairs[lv].append((e.over_price, e.under_price, e.source))
+            # Alt lines from this source
             for alt in e.alt_totals:
                 lv = alt["line"]
                 if lv < 4.0 or lv > 9.0:
                     continue
-                op = alt.get("over_price", -110)
-                up = alt.get("under_price", -110)
-                if lv not in all_lines_map:
-                    all_lines_map[lv] = {"over_price": -999, "under_price": -999}
-                all_lines_map[lv]["over_price"] = max(
-                    all_lines_map[lv]["over_price"], op
-                )
-                all_lines_map[lv]["under_price"] = max(
-                    all_lines_map[lv]["under_price"], up
-                )
+                op = alt.get("over_price", 0)
+                up = alt.get("under_price", 0)
+                if op == 0 or up == 0:
+                    continue
+                if lv not in all_line_pairs:
+                    all_line_pairs[lv] = []
+                all_line_pairs[lv].append((op, up, e.source))
 
-        # When no primary total line was found, derive the consensus
-        # from alt lines so the main O/U still gets populated.
+        # For each line, pick the best valid pair
+        all_lines_map: Dict[float, Dict[str, float]] = {}
+        for lv, pairs in all_line_pairs.items():
+            best_pair = None
+            best_vig = float("inf")
+            for op, up, src in pairs:
+                if not validate_total_line_pair(lv, op, up):
+                    logger.debug(
+                        "Merge %s: total %.1f from %s rejected (bad vig: O=%s U=%s)",
+                        matchup_label, lv, src, op, up,
+                    )
+                    continue
+                # Vig = sum of implied probs - 1.0; lower is better for bettor
+                imp_o = abs(op) / (abs(op) + 100) if op < 0 else 100 / (op + 100)
+                imp_u = abs(up) / (abs(up) + 100) if up < 0 else 100 / (up + 100)
+                vig = imp_o + imp_u - 1.0
+                if vig < best_vig:
+                    best_vig = vig
+                    best_pair = (op, up, src)
+            if best_pair:
+                all_lines_map[lv] = {
+                    "over_price": best_pair[0],
+                    "under_price": best_pair[1],
+                }
+
+        # When no primary total was found, derive from best alt lines
         if best_total is None and all_lines_map:
-            alt_counts = Counter(lv for lv in all_lines_map)
-            consensus_line = alt_counts.most_common(1)[0][0]
-            prices = all_lines_map[consensus_line]
-            if prices["over_price"] > -999 and prices["under_price"] > -999:
+            # Pick the line with the most source contributions
+            line_counts = Counter(
+                lv for lv, pairs in all_line_pairs.items()
+                if lv in all_lines_map
+            )
+            if line_counts:
+                consensus_line = line_counts.most_common(1)[0][0]
+                prices = all_lines_map[consensus_line]
                 best_total = consensus_line
                 best_over = prices["over_price"]
                 best_under = prices["under_price"]
 
-        # Build sorted list of all available lines with best prices
-        all_total_lines = sorted([
+        # Build sorted list and enforce monotonicity
+        all_total_lines_raw = sorted([
             {
                 "line": lv,
                 "over_price": round(prices["over_price"]),
                 "under_price": round(prices["under_price"]),
             }
             for lv, prices in all_lines_map.items()
-            if prices["over_price"] > -999 and prices["under_price"] > -999
         ], key=lambda x: x["line"])
+
+        all_total_lines = validate_alt_totals_monotonicity(
+            all_total_lines_raw, label=matchup_label,
+        )
 
         # Aggregate ALL available spread lines across all sources.
         # Use moneyline-derived ``home_is_fav`` to enforce correct
@@ -2222,7 +2304,7 @@ def _merge_odds_events(
                         all_spreads_map[abs_line]["away_price"], ap
                     )
 
-        all_spread_lines = sorted([
+        all_spread_lines_raw = sorted([
             {
                 "line": abs_lv,
                 "home_spread": round(prices["home_spread"], 1),
@@ -2234,22 +2316,26 @@ def _merge_odds_events(
             if prices["home_price"] > -999 and prices["away_price"] > -999
         ], key=lambda x: x["line"])
 
+        all_spread_lines = validate_alt_spreads_monotonicity(
+            all_spread_lines_raw, label=matchup_label,
+        )
+
         # Use first event for metadata
         first = ev_list[0]
         sources_used = list(set(e.source for e in ev_list))
 
         logger.info(
-            "Merge %s@%s: sources=%s, ML=%s/%s, O/U=%s (%s/%s), spread=%.1f (%s/%s)",
+            "Merge %s@%s: sources=%s, ML=%s/%s, O/U=%s (%s/%s), spread=%s (%s/%s)",
             first.away_abbr, first.home_abbr,
             "+".join(sorted(sources_used)),
-            round(best_home_ml) if best_home_ml else "?",
-            round(best_away_ml) if best_away_ml else "?",
+            round(best_home_ml) if best_home_ml is not None else "?",
+            round(best_away_ml) if best_away_ml is not None else "?",
             f"{best_total:.1f}" if best_total is not None else "?",
-            round(best_over) if best_over else "?",
-            round(best_under) if best_under else "?",
-            best_home_spread,
-            round(best_home_spread_price) if best_home_spread_price else "?",
-            round(best_away_spread_price) if best_away_spread_price else "?",
+            round(best_over) if best_over is not None else "?",
+            round(best_under) if best_under is not None else "?",
+            f"{best_home_spread:+.1f}" if best_home_spread is not None else "?",
+            round(best_home_spread_price) if best_home_spread_price is not None else "?",
+            round(best_away_spread_price) if best_away_spread_price is not None else "?",
         )
 
         merged.append({
@@ -2260,12 +2346,12 @@ def _merge_odds_events(
             "commence_time": first.commence_time,
             "sources": sources_used,
             "best_odds": {
-                "home_moneyline": best_home_ml,
-                "away_moneyline": best_away_ml,
-                "home_spread": _normalize_spread_line(round(best_home_spread, 1)),
-                "away_spread": _normalize_spread_line(round(best_away_spread, 1)),
-                "home_spread_price": round(best_home_spread_price),
-                "away_spread_price": round(best_away_spread_price),
+                "home_moneyline": round(best_home_ml) if best_home_ml is not None else None,
+                "away_moneyline": round(best_away_ml) if best_away_ml is not None else None,
+                "home_spread": _normalize_spread_line(round(best_home_spread, 1)) if best_home_spread is not None else None,
+                "away_spread": _normalize_spread_line(round(best_away_spread, 1)) if best_away_spread is not None else None,
+                "home_spread_price": round(best_home_spread_price) if best_home_spread_price is not None else None,
+                "away_spread_price": round(best_away_spread_price) if best_away_spread_price is not None else None,
                 "over_under": best_total,
                 "over_price": round(best_over) if best_over is not None else None,
                 "under_price": round(best_under) if best_under is not None else None,
@@ -2365,15 +2451,22 @@ class MultiSourceOddsScraper:
             else:
                 all_events.append(result)
                 if result:
-                    teams_list = [
-                        f"{e.away_team}@{e.home_team}" for e in result[:8]
-                    ]
-                    logger.info(
-                        "%s returned %d events: %s%s",
-                        source_names[i], len(result),
-                        ", ".join(teams_list),
-                        "..." if len(result) > 8 else "",
-                    )
+                    for ev in result:
+                        ml_str = (
+                            f"ML {round(ev.home_ml)}/{round(ev.away_ml)}"
+                            if ev.has_moneyline() else "ML --"
+                        )
+                        ou_str = (
+                            f"O/U {ev.total_line:.1f} ({round(ev.over_price)}/{round(ev.under_price)})"
+                            if ev.has_total() else "O/U --"
+                        )
+                        n_alts = len(ev.alt_totals)
+                        n_aspr = len(ev.alt_spreads)
+                        logger.info(
+                            "[%s] %s@%s: %s, %s, %d alt totals, %d alt spreads",
+                            source_names[i], ev.away_abbr, ev.home_abbr,
+                            ml_str, ou_str, n_alts, n_aspr,
+                        )
 
         total_events = sum(len(evts) for evts in all_events)
         sources_with_data = sum(1 for evts in all_events if evts)
@@ -2545,43 +2638,95 @@ class MultiSourceOddsScraper:
                 )
 
             # Persist best odds to the Game record.
-            # Use ``is not None`` checks (not truthiness) so that valid
-            # zero values are not silently skipped.
+            # Validate each market pair before writing — skip invalid
+            # fields and preserve existing DB data.
+            from app.scrapers.odds_validation import (
+                is_valid_american_odds,
+                validate_moneyline,
+                validate_total_line_pair,
+                validate_spread_pair,
+            )
+
             best = odds.get("best_odds", {})
-            if best.get("home_moneyline") is not None:
-                game.home_moneyline = best["home_moneyline"]
-            if best.get("away_moneyline") is not None:
-                game.away_moneyline = best["away_moneyline"]
-            if best.get("over_under") is not None:
-                ou_raw = float(best["over_under"])
+            sync_label = f"{away_abbrev}@{home_abbrev}"
+
+            # Moneyline: validate both sides are valid American odds
+            h_ml = best.get("home_moneyline")
+            a_ml = best.get("away_moneyline")
+            if h_ml is not None and a_ml is not None:
+                if is_valid_american_odds(h_ml) and is_valid_american_odds(a_ml):
+                    game.home_moneyline = h_ml
+                    game.away_moneyline = a_ml
+                else:
+                    logger.warning(
+                        "DB sync %s: skipping invalid ML H=%s A=%s",
+                        sync_label, h_ml, a_ml,
+                    )
+            elif h_ml is not None and is_valid_american_odds(h_ml):
+                game.home_moneyline = h_ml
+            elif a_ml is not None and is_valid_american_odds(a_ml):
+                game.away_moneyline = a_ml
+
+            # Over/Under: validate line + prices as a valid market
+            ou_line = best.get("over_under")
+            op = best.get("over_price")
+            up = best.get("under_price")
+            if ou_line is not None:
+                ou_raw = float(ou_line)
                 # Normalize to nearest .5 line.
-                # NHL sportsbooks always post .5 lines; some sources
-                # round to int.  We snap to the nearest .5 value.
                 if ou_raw % 1 != 0.5:
                     ou_raw = round(ou_raw * 2) / 2
-                    # If rounding landed on a whole number, nudge up to .5
                     if ou_raw % 1 == 0:
                         ou_raw += 0.5
                 # Sanity check: NHL O/U lines are almost always 4.5-8.5
                 if 4.0 <= ou_raw <= 9.0:
-                    game.over_under_line = ou_raw
+                    if op is not None and up is not None:
+                        if validate_total_line_pair(ou_raw, op, up):
+                            game.over_under_line = ou_raw
+                            game.over_price = op
+                            game.under_price = up
+                        else:
+                            logger.warning(
+                                "DB sync %s: O/U %.1f failed vig check (O=%s U=%s) — keeping existing",
+                                sync_label, ou_raw, op, up,
+                            )
+                    else:
+                        # Line present but missing prices — write line only
+                        game.over_under_line = ou_raw
+                        if op is not None:
+                            game.over_price = op
+                        if up is not None:
+                            game.under_price = up
                 else:
                     logger.warning(
-                        "Discarding out-of-range O/U line %.1f for %s@%s",
-                        ou_raw, away_abbrev, home_abbrev,
+                        "DB sync %s: discarding out-of-range O/U line %.1f",
+                        sync_label, ou_raw,
                     )
-            if best.get("home_spread") is not None:
-                game.home_spread_line = _normalize_spread_line(float(best["home_spread"]))
-            if best.get("away_spread") is not None:
-                game.away_spread_line = _normalize_spread_line(float(best["away_spread"]))
-            if best.get("home_spread_price") is not None:
-                game.home_spread_price = best["home_spread_price"]
-            if best.get("away_spread_price") is not None:
-                game.away_spread_price = best["away_spread_price"]
-            if best.get("over_price") is not None:
-                game.over_price = best["over_price"]
-            if best.get("under_price") is not None:
-                game.under_price = best["under_price"]
+
+            # Spread: validate price pair
+            hs = best.get("home_spread")
+            aws = best.get("away_spread")
+            hsp = best.get("home_spread_price")
+            asp = best.get("away_spread_price")
+            if hs is not None:
+                game.home_spread_line = _normalize_spread_line(float(hs))
+            if aws is not None:
+                game.away_spread_line = _normalize_spread_line(float(aws))
+            if hsp is not None and asp is not None:
+                if validate_spread_pair(hsp, asp):
+                    game.home_spread_price = hsp
+                    game.away_spread_price = asp
+                else:
+                    logger.warning(
+                        "DB sync %s: spread prices failed vig check (H=%s A=%s) — keeping existing",
+                        sync_label, hsp, asp,
+                    )
+            else:
+                if hsp is not None:
+                    game.home_spread_price = hsp
+                if asp is not None:
+                    game.away_spread_price = asp
+
             # Persist all available total/spread lines
             atl = odds.get("all_total_lines")
             if atl:
