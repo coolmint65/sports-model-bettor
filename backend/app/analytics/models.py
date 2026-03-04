@@ -1123,21 +1123,63 @@ class BettingModel:
             # from all available sportsbook lines
             all_total_lines = odds_data.get("all_total_lines") or []
             price_map: Dict[float, Dict[str, float]] = {}
+
+            # First, establish the primary line as the reference point
+            ou_line = odds_data.get("over_under_line")
+            primary_ou_val = float(ou_line) if ou_line is not None else None
+            primary_over_implied = None
+            if primary_ou_val is not None:
+                primary_op = float(over_price) if over_price else -110
+                primary_over_implied = american_odds_to_implied_prob(primary_op)
+                price_map[primary_ou_val] = {
+                    "over_price": primary_op,
+                    "under_price": float(under_price) if under_price else -110,
+                }
+
             for alt in all_total_lines:
                 lv = alt.get("line", 0)
+                alt_op = alt.get("over_price", -110)
+                alt_up = alt.get("under_price", -110)
+
+                # Cross-validate alt line odds against the primary line.
+                # For lines below the primary, over implied should be HIGHER
+                # (easier to go over a lower number).  For lines above, it
+                # should be LOWER.  A line like O 4.5 at +110 when the main
+                # line is 7.5 at -110 is clearly bad data (period total, etc).
+                if primary_ou_val is not None and primary_over_implied is not None:
+                    alt_over_implied = american_odds_to_implied_prob(alt_op)
+                    if alt_over_implied is not None:
+                        if lv < primary_ou_val and alt_over_implied <= primary_over_implied:
+                            # Alt line is BELOW primary but over implied is
+                            # not higher — odds are inconsistent (likely
+                            # period total or bad data).
+                            logger.warning(
+                                "Rejecting alt total %.1f: over implied %.3f "
+                                "not > primary %.1f over implied %.3f",
+                                lv, alt_over_implied,
+                                primary_ou_val, primary_over_implied,
+                            )
+                            continue
+                        if lv > primary_ou_val and alt_over_implied >= primary_over_implied:
+                            # Alt line is ABOVE primary but over implied is
+                            # not lower — odds are inconsistent.
+                            logger.warning(
+                                "Rejecting alt total %.1f: over implied %.3f "
+                                "not < primary %.1f over implied %.3f",
+                                lv, alt_over_implied,
+                                primary_ou_val, primary_over_implied,
+                            )
+                            continue
+
                 price_map[lv] = {
-                    "over_price": alt.get("over_price", -110),
-                    "under_price": alt.get("under_price", -110),
+                    "over_price": alt_op,
+                    "under_price": alt_up,
                 }
-            # Also include the primary line in the price map
-            ou_line = odds_data.get("over_under_line")
-            if ou_line is not None:
-                ou_val = float(ou_line)
-                if ou_val not in price_map:
-                    price_map[ou_val] = {
-                        "over_price": float(over_price) if over_price else -110,
-                        "under_price": float(under_price) if under_price else -110,
-                    }
+
+            # Maximum believable edge.  Real sports-betting edges rarely
+            # exceed ~15-20%.  Anything above this threshold is almost
+            # certainly bad data (wrong line / wrong odds pairing).
+            MAX_EDGE = 0.20
 
             # Evaluate ALL lines and find the one with the best edge
             # Edge = model_prob - implied_prob
@@ -1165,6 +1207,16 @@ class BettingModel:
                     odds_val = price_map[line_val].get(price_key, -110)
                     implied = american_odds_to_implied_prob(odds_val)
                     edge = prob - implied
+
+                    # Skip edges that are too large — almost certainly
+                    # bad data rather than a real opportunity.
+                    if edge > MAX_EDGE:
+                        logger.warning(
+                            "Capping suspicious edge on %s: %.1f%% "
+                            "(prob=%.3f, implied=%.3f, odds=%s)",
+                            line_key, edge * 100, prob, implied, odds_val,
+                        )
+                        continue
 
                     if edge > best_edge:
                         best_edge = edge

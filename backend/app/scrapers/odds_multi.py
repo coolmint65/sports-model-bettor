@@ -437,6 +437,12 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
                 if not isinstance(offer_list, list):
                     continue
 
+                # Skip period-specific subcategories — we only want
+                # full-game markets.
+                _PERIOD_TOKENS = ("1st", "2nd", "3rd", "period", "half", "quarter", "inning")
+                if any(tok in sub_name for tok in _PERIOD_TOKENS):
+                    continue
+
                 for offer_row in offer_list:
                     if not isinstance(offer_row, list):
                         offer_row = [offer_row]
@@ -452,6 +458,10 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
                             continue
 
                         label = (offer.get("label") or "").lower()
+
+                        # Skip period-specific offer labels
+                        if any(tok in label for tok in _PERIOD_TOKENS):
+                            continue
 
                         # Moneyline
                         if "moneyline" in label or "money line" in label or "game" in sub_name and "line" not in label and "total" not in label:
@@ -713,7 +723,16 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
                 game_odds[eid] = {}
 
             market_type = (market.get("marketType", "") or "").upper()
+            market_name = (market.get("marketName", "") or market.get("name", "") or "").lower()
             runners = market.get("runners", [])
+
+            # Skip period-specific markets
+            _FD_PERIOD_TOKENS = ("1st", "2nd", "3rd", "period", "half", "quarter", "inning")
+            if any(tok in market_name for tok in _FD_PERIOD_TOKENS):
+                continue
+            # Also skip market types that are explicitly period-scoped
+            if any(tok in market_type for tok in ("PERIOD", "HALF", "QUARTER", "INNING")):
+                continue
 
             # Moneyline
             if market_type in ("MATCH_BETTING", "MONEY_LINE", "HEAD_TO_HEAD", "MATCH_ODDS"):
@@ -1043,7 +1062,10 @@ async def _fetch_kambi(client: httpx.AsyncClient) -> List[OddsEvent]:
                             })
 
                 # Totals (Over/Under) — collect ALL available lines
-                elif "total" in criterion_label or "over" in criterion_label:
+                # Skip period-specific totals (e.g. "1st period total")
+                elif ("total" in criterion_label or "over" in criterion_label) and not any(
+                    tok in criterion_label for tok in ("1st", "2nd", "3rd", "period", "half", "quarter", "inning")
+                ):
                     kambi_lines: Dict[float, Dict[str, float]] = {}
                     for oc in outcomes if isinstance(outcomes, list) else []:
                         oc_label = (oc.get("label", "") or "").lower()

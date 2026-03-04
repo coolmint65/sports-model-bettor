@@ -118,12 +118,15 @@ def validate_alt_totals_monotonicity(
     """Filter alt totals to enforce price monotonicity.
 
     For total lines sorted ascending by line value:
-    - Over prices must be non-increasing (O4.5 <= O5.5 <= O6.5 in magnitude,
-      meaning more negative for lower lines)
-    - Under prices must be non-decreasing (same logic, inverted)
+    - Over implied prob must DECREASE as line increases
+      (easier to go over a lower line)
+    - Lines that violate monotonicity are discarded with a warning.
 
-    Lines that violate monotonicity are discarded with a warning.
-    Also discards lines that fail vig validation.
+    Uses a majority-consensus approach: instead of blindly anchoring to
+    the first (lowest) line, compute the expected monotonic direction
+    between adjacent pairs and reject outliers that disagree with the
+    majority.  This prevents a single bad low line (e.g. period total
+    data) from poisoning the entire set.
     """
     if not lines:
         return []
@@ -148,29 +151,64 @@ def validate_alt_totals_monotonicity(
     # Sort by line ascending
     valid.sort(key=lambda x: x["line"])
 
-    # Second pass: enforce monotonicity
-    # Over implied prob should INCREASE as line increases (easier to go over a lower line)
-    # So over_price should become less negative (increase) as line increases.
-    result = [valid[0]]
-    for i in range(1, len(valid)):
-        prev = result[-1]
-        curr = valid[i]
-        prev_over_imp = american_to_implied(prev["over_price"]) or 0
-        curr_over_imp = american_to_implied(curr["over_price"]) or 0
+    if len(valid) <= 1:
+        return valid
 
-        # Over implied should decrease as line increases
-        # (harder to go over a higher line)
-        if curr_over_imp > prev_over_imp + 0.02:
-            # Current line has HIGHER over implied than a lower line — wrong
-            logger.warning(
-                "Alt total %s line %.1f rejected (monotonicity): "
-                "O implied %.3f > prev line %.1f O implied %.3f",
-                label, curr["line"], curr_over_imp,
-                prev["line"], prev_over_imp,
-            )
-            continue
+    # Compute over-implied for each line
+    imps = []
+    for entry in valid:
+        imp = american_to_implied(entry["over_price"])
+        imps.append(imp if imp is not None else 0)
 
-        result.append(curr)
+    # Second pass: detect outliers via majority voting.
+    # For correctly priced lines, over implied should DECREASE as line
+    # increases.  Count how many adjacent pairs follow this rule.
+    decreasing_pairs = 0
+    total_pairs = 0
+    for i in range(len(imps) - 1):
+        total_pairs += 1
+        if imps[i + 1] <= imps[i] + 0.02:
+            decreasing_pairs += 1
+
+    # If the majority of pairs are decreasing, the sequence is mostly
+    # correct and we do the standard forward sweep (reject violators).
+    # If NOT, the first line is likely the outlier — try starting from
+    # the end and working backwards to find the consistent subset.
+    if total_pairs > 0 and decreasing_pairs >= total_pairs / 2:
+        # Standard forward sweep
+        result = [valid[0]]
+        for i in range(1, len(valid)):
+            prev_imp = american_to_implied(result[-1]["over_price"]) or 0
+            curr_imp = imps[i]
+            if curr_imp > prev_imp + 0.02:
+                logger.warning(
+                    "Alt total %s line %.1f rejected (monotonicity): "
+                    "O implied %.3f > prev line %.1f O implied %.3f",
+                    label, valid[i]["line"], curr_imp,
+                    result[-1]["line"], prev_imp,
+                )
+                continue
+            result.append(valid[i])
+    else:
+        # Majority of adjacent pairs are NOT decreasing — the low end
+        # is likely corrupted.  Build the result from the high end.
+        result = [valid[-1]]
+        for i in range(len(valid) - 2, -1, -1):
+            next_imp = american_to_implied(result[-1]["over_price"]) or 0
+            curr_imp = imps[i]
+            # Going backwards: curr line is LOWER, so its over implied
+            # should be HIGHER (or equal within tolerance).
+            if curr_imp < next_imp - 0.02:
+                logger.warning(
+                    "Alt total %s line %.1f rejected (reverse monotonicity): "
+                    "O implied %.3f < next line %.1f O implied %.3f",
+                    label, valid[i]["line"], curr_imp,
+                    result[-1]["line"], next_imp,
+                )
+                continue
+            result.append(valid[i])
+        # Reverse to restore ascending order by line
+        result.reverse()
 
     return result
 
