@@ -33,6 +33,14 @@ from app.models.team import Team
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# O/U line plausibility range.
+# Pregame NHL totals are 4.5-8.5, but live totals climb as goals are scored.
+# Upper bound of 15.0 covers any realistic in-progress scenario.
+# ---------------------------------------------------------------------------
+_OU_LINE_MIN = 4.0
+_OU_LINE_MAX = 15.0
+
+# ---------------------------------------------------------------------------
 # Team-name normalisation maps (sportsbook name -> 3-letter NHL abbreviation)
 # ---------------------------------------------------------------------------
 
@@ -2134,11 +2142,11 @@ def _merge_odds_events(
                 best_away_spread_price = max(s[1] for s in consensus_away_books)
 
         # Consensus total — filter out implausible lines first.
-        # NHL O/U is virtually always between 4.5 and 8.5.
+        # Filter implausible O/U lines (pregame ~4.5-8.5, live can go higher).
         total_data = [
             (e.total_line, e.over_price, e.under_price)
             for e in ev_list
-            if e.has_total() and 4.0 <= e.total_line <= 9.0
+            if e.has_total() and _OU_LINE_MIN <= e.total_line <= _OU_LINE_MAX
         ]
         best_total = best_over = best_under = None
         if total_data:
@@ -2167,7 +2175,7 @@ def _merge_odds_events(
         all_line_pairs: Dict[float, List[Tuple[float, float, str]]] = {}
         for e in ev_list:
             # Primary line from this source
-            if e.has_total() and 4.0 <= e.total_line <= 9.0:
+            if e.has_total() and _OU_LINE_MIN <= e.total_line <= _OU_LINE_MAX:
                 lv = e.total_line
                 if lv not in all_line_pairs:
                     all_line_pairs[lv] = []
@@ -2175,7 +2183,7 @@ def _merge_odds_events(
             # Alt lines from this source
             for alt in e.alt_totals:
                 lv = alt["line"]
-                if lv < 4.0 or lv > 9.0:
+                if lv < _OU_LINE_MIN or lv > _OU_LINE_MAX:
                     continue
                 op = alt.get("over_price", 0)
                 up = alt.get("under_price", 0)
@@ -2756,8 +2764,8 @@ class MultiSourceOddsScraper:
                     ou_raw = round(ou_raw * 2) / 2
                     if ou_raw % 1 == 0:
                         ou_raw += 0.5
-                # Sanity check: NHL O/U lines are almost always 4.5-8.5
-                if 4.0 <= ou_raw <= 9.0:
+                # Sanity check: must be within plausible range (includes live totals)
+                if _OU_LINE_MIN <= ou_raw <= _OU_LINE_MAX:
                     if op is not None and up is not None:
                         if validate_total_line_pair(ou_raw, op, up):
                             game.over_under_line = ou_raw

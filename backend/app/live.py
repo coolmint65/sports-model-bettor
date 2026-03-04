@@ -210,7 +210,8 @@ async def _scheduler_loop():
 
                     live_result = await session.execute(
                         select(func.count(Game.id)).where(
-                            func.lower(Game.status).in_(("in_progress", "live"))
+                            Game.date == today,
+                            func.lower(Game.status).in_(("in_progress", "live")),
                         )
                     )
                     live_count = live_result.scalar() or 0

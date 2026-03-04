@@ -703,7 +703,7 @@ async def get_game_details(
             away_spread_price=game.away_spread_price,
             over_price=game.over_price,
             under_price=game.under_price,
-            odds_updated_at=str(game.odds_updated_at) if game.odds_updated_at else None,
+            odds_updated_at=game.odds_updated_at.isoformat() if game.odds_updated_at else None,
         )
 
     # Build pregame odds snapshot (only populated once game goes live)

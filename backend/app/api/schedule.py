@@ -167,7 +167,7 @@ def _build_game_odds(game: Game) -> Optional[GameOdds]:
         away_spread_line=game.away_spread_line,
         home_spread_price=game.home_spread_price,
         away_spread_price=game.away_spread_price,
-        odds_updated_at=str(game.odds_updated_at) if game.odds_updated_at else None,
+        odds_updated_at=game.odds_updated_at.isoformat() if game.odds_updated_at else None,
     )
 
 
@@ -531,3 +531,17 @@ async def force_sync_odds(
         "predictions_generated": pred_count,
         "matched_games": matched_pairs,
     }
+
+
+@router.get("/odds-usage")
+async def odds_api_usage():
+    """Check remaining Odds API quota."""
+    from app.scrapers.odds_api import OddsAPIScraper
+
+    async with OddsAPIScraper() as scraper:
+        usage = await scraper.get_usage()
+
+    if usage is None:
+        raise HTTPException(status_code=503, detail="Could not fetch API usage (key missing or API unreachable)")
+
+    return usage
