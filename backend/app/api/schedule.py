@@ -267,8 +267,7 @@ async def _games_for_date(
             if (p.edge or 0) >= settings.min_edge
             and (p.confidence or 0) >= settings.min_confidence
             and (
-                p.bet_type == "spread"
-                or fresh_map.get(p.id) is None
+                fresh_map.get(p.id) is None
                 or fresh_map[p.id] < max_implied
             )
         ]
@@ -314,8 +313,7 @@ async def _games_for_date(
                 if pred.game_id not in top_picks:
                     cur_impl = fresh_map.get(pred.id)
                     actually_heavy = (
-                        pred.bet_type in ("ml", "total")
-                        and cur_impl is not None
+                        cur_impl is not None
                         and cur_impl >= max_implied
                     )
                     top_picks[pred.game_id] = GameTopPick(

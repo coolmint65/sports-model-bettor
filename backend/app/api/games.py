@@ -575,14 +575,10 @@ async def _get_game_predictions(
         implied_map[p.id] = cur_impl if cur_impl is not None else p.odds_implied_prob
 
         # Fallback = has real edge but heavy juice (above implied ceiling).
-        # Only applied to moneyline and total bets — spread/puck-line prices
-        # are inherently steep (e.g. +1.5 at -258) and don't represent
-        # excessive bookmaker juice in the same way.
         # Requires FRESH implied from current Game odds; when odds are
         # unavailable we give the pick benefit of the doubt (not heavy).
         is_fb = (
-            p.bet_type in ("ml", "total")
-            and p.edge is not None
+            p.edge is not None
             and p.edge >= min_edge
             and (p.confidence or 0) >= min_conf
             and cur_impl is not None
@@ -590,7 +586,6 @@ async def _get_game_predictions(
         )
         # A pick that meets edge/confidence thresholds AND has acceptable
         # juice should be treated as recommended regardless of stale flag.
-        # Spread bets skip the juice ceiling (steep prices are inherent).
         # When fresh odds are unavailable, give the pick benefit of the doubt.
         effectively_recommended = (
             p.recommended
@@ -598,8 +593,7 @@ async def _get_game_predictions(
                 (p.confidence or 0) >= min_conf
                 and (p.edge or 0) >= min_edge
                 and (
-                    p.bet_type == "spread"
-                    or cur_impl is None
+                    cur_impl is None
                     or cur_impl < max_implied
                 )
             )
