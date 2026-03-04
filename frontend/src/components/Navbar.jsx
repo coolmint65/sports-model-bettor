@@ -19,8 +19,9 @@ function Navbar() {
       setSyncMessage('Sync complete!');
       setTimeout(() => setSyncMessage(''), 3000);
     } catch (err) {
-      setSyncMessage('Sync failed');
-      setTimeout(() => setSyncMessage(''), 3000);
+      const detail = err?.message || 'Unknown error';
+      setSyncMessage(`Sync failed: ${detail}`);
+      setTimeout(() => setSyncMessage(''), 5000);
     } finally {
       setSyncing(false);
     }

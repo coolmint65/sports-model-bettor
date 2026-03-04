@@ -100,8 +100,12 @@ async def _run_full_sync():
             async with get_session_context() as session:
                 # 1. Core sync: teams, rosters, schedule, game results
                 _sync_state["step"] = "Syncing teams, rosters, schedule..."
-                await scraper.sync_all(session)
-                await session.flush()
+                try:
+                    await scraper.sync_all(session)
+                    await session.flush()
+                except Exception as exc:
+                    logger.warning("Core NHL sync failed (non-critical): %s", exc)
+                    # Continue with odds/predictions using whatever data is in the DB
 
                 # 2. Historical H2H
                 _sync_state["step"] = "Syncing historical H2H data..."

@@ -500,8 +500,11 @@ async def sync_stats(
     try:
         from app.scrapers.nhl_api import NHLScraper
 
-        scraper = NHLScraper(session)
-        await scraper.sync_rosters()
+        scraper = NHLScraper()
+        try:
+            await scraper.sync_rosters(session)
+        finally:
+            await scraper.close()
         return SyncResult(
             success=True,
             message="Successfully synced rosters and stats from the NHL API.",
