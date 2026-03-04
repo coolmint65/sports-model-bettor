@@ -894,10 +894,35 @@ async def get_best_bets(
                         fresh_edge = round(pred.confidence - fresh_implied, 4)
 
             elif pred.bet_type == "total":
-                if pred.prediction_value and "over" in pred.prediction_value:
-                    live_odds = game_obj.over_price
-                else:
-                    live_odds = game_obj.under_price
+                # Parse the line from prediction_value (e.g., "over_4.5" → 4.5)
+                is_over = pred.prediction_value and "over" in pred.prediction_value
+                total_found = False
+                if game_obj.all_total_lines and pred.prediction_value:
+                    try:
+                        parts = pred.prediction_value.split("_", 1)
+                        if len(parts) == 2:
+                            pred_line = float(parts[1])
+                            all_tl = game_obj.all_total_lines
+                            if isinstance(all_tl, str):
+                                import json
+                                all_tl = json.loads(all_tl)
+                            for tl in (all_tl or []):
+                                if abs(tl.get("line", 0) - pred_line) < 0.01:
+                                    price_key = "over_price" if is_over else "under_price"
+                                    live_odds = tl.get(price_key)
+                                    if live_odds is not None:
+                                        total_found = True
+                                    break
+                    except (ValueError, TypeError, KeyError):
+                        pass
+
+                # Fall back to the primary O/U prices on the Game.
+                if not total_found:
+                    if is_over:
+                        live_odds = game_obj.over_price
+                    else:
+                        live_odds = game_obj.under_price
+
                 # Recompute edge from current sportsbook odds
                 if live_odds is not None:
                     fresh_implied = american_to_implied(live_odds)
@@ -983,10 +1008,14 @@ async def get_best_bets(
         if game_obj and live_odds is not None:
             odds_str = f"+{round(live_odds)}" if live_odds > 0 else str(round(live_odds))
             if pred.bet_type == "total":
-                ou_line = game_obj.over_under_line
-                if ou_line is not None:
-                    side = "O" if pred.prediction_value and "over" in pred.prediction_value else "U"
-                    line_display = f"{side} {ou_line} ({odds_str})"
+                # Extract the actual line from prediction_value (e.g., "over_4.5" → 4.5)
+                if pred.prediction_value:
+                    side = "O" if "over" in pred.prediction_value else "U"
+                    try:
+                        pred_line = pred.prediction_value.split("_", 1)[1]
+                        line_display = f"{side} {pred_line} ({odds_str})"
+                    except (IndexError, ValueError):
+                        pass
             elif pred.bet_type == "spread":
                 if pred.prediction_value:
                     parts = pred.prediction_value.rsplit("_", 1)

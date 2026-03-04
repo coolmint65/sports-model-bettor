@@ -243,10 +243,30 @@ def _current_implied_for_pred(
             live_odds = game.away_moneyline
 
     elif pred.bet_type == "total":
-        if pred.prediction_value and "over" in pred.prediction_value:
-            live_odds = game.over_price
-        else:
-            live_odds = game.under_price
+        is_over = pred.prediction_value and "over" in pred.prediction_value
+        # Look up the specific line in all_total_lines first.
+        if game.all_total_lines and pred.prediction_value:
+            try:
+                parts = pred.prediction_value.split("_", 1)
+                if len(parts) == 2:
+                    pred_line = float(parts[1])
+                    all_tl = game.all_total_lines
+                    if isinstance(all_tl, str):
+                        import json
+                        all_tl = json.loads(all_tl)
+                    for tl in (all_tl or []):
+                        if abs(tl.get("line", 0) - pred_line) < 0.01:
+                            price_key = "over_price" if is_over else "under_price"
+                            live_odds = tl.get(price_key)
+                            break
+            except (ValueError, TypeError, KeyError):
+                pass
+        # Fall back to the primary O/U prices.
+        if live_odds is None:
+            if is_over:
+                live_odds = game.over_price
+            else:
+                live_odds = game.under_price
 
     elif pred.bet_type == "spread":
         home_abbr = game.home_team.abbreviation if game.home_team else ""

@@ -2035,7 +2035,7 @@ def _merge_odds_events(
             for e in ev_list
             if e.has_total() and 4.0 <= e.total_line <= 9.0
         ]
-        best_total = best_over = best_under = 0.0
+        best_total = best_over = best_under = None
         if total_data:
             line_counts = Counter(t[0] for t in total_data)
             consensus_line = line_counts.most_common(1)[0][0]
@@ -2074,6 +2074,17 @@ def _merge_odds_events(
                 all_lines_map[lv]["under_price"] = max(
                     all_lines_map[lv]["under_price"], up
                 )
+
+        # When no primary total line was found, derive the consensus
+        # from alt lines so the main O/U still gets populated.
+        if best_total is None and all_lines_map:
+            alt_counts = Counter(lv for lv in all_lines_map)
+            consensus_line = alt_counts.most_common(1)[0][0]
+            prices = all_lines_map[consensus_line]
+            if prices["over_price"] > -999 and prices["under_price"] > -999:
+                best_total = consensus_line
+                best_over = prices["over_price"]
+                best_under = prices["under_price"]
 
         # Build sorted list of all available lines with best prices
         all_total_lines = sorted([
@@ -2228,12 +2239,12 @@ def _merge_odds_events(
         sources_used = list(set(e.source for e in ev_list))
 
         logger.info(
-            "Merge %s@%s: sources=%s, ML=%s/%s, O/U=%.1f (%s/%s), spread=%.1f (%s/%s)",
+            "Merge %s@%s: sources=%s, ML=%s/%s, O/U=%s (%s/%s), spread=%.1f (%s/%s)",
             first.away_abbr, first.home_abbr,
             "+".join(sorted(sources_used)),
             round(best_home_ml) if best_home_ml else "?",
             round(best_away_ml) if best_away_ml else "?",
-            best_total,
+            f"{best_total:.1f}" if best_total is not None else "?",
             round(best_over) if best_over else "?",
             round(best_under) if best_under else "?",
             best_home_spread,
@@ -2256,8 +2267,8 @@ def _merge_odds_events(
                 "home_spread_price": round(best_home_spread_price),
                 "away_spread_price": round(best_away_spread_price),
                 "over_under": best_total,
-                "over_price": round(best_over),
-                "under_price": round(best_under),
+                "over_price": round(best_over) if best_over is not None else None,
+                "under_price": round(best_under) if best_under is not None else None,
             },
             "all_total_lines": all_total_lines,
             "all_spread_lines": all_spread_lines,
