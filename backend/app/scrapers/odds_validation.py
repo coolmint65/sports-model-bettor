@@ -216,9 +216,18 @@ def validate_alt_totals_monotonicity(
 def validate_alt_spreads_monotonicity(
     lines: List[Dict], label: str = ""
 ) -> List[Dict]:
-    """Filter alt spreads to enforce price consistency.
+    """Filter alt spreads to enforce price consistency and monotonicity.
 
     Discards lines that fail vig validation (home_price + away_price).
+
+    For spreads sorted ascending by absolute line value:
+    - The favorite (negative spread) side becomes HARDER to cover as
+      the line increases, so favorite implied prob should DECREASE.
+    - The underdog (positive spread) side becomes EASIER to cover,
+      so underdog implied prob should INCREASE.
+
+    Uses the same majority-consensus approach as totals to handle
+    outlier anchors.
     """
     if not lines:
         return []
@@ -235,7 +244,80 @@ def validate_alt_spreads_monotonicity(
                 label, entry.get("line", 0), hp, ap,
             )
 
-    return sorted(valid, key=lambda x: x.get("line", 0))
+    if len(valid) <= 1:
+        return sorted(valid, key=lambda x: x.get("line", 0))
+
+    valid.sort(key=lambda x: x.get("line", 0))
+
+    # Use home_spread sign to determine which side is the favorite.
+    # The favorite price (negative spread side) implied should DECREASE
+    # as line increases.  We check this via home_price since the
+    # merge normalizes home_spread direction.
+    # Determine if home is favorite from the first entry with a sign.
+    home_is_fav = None
+    for entry in valid:
+        hs = entry.get("home_spread", 0)
+        if hs < 0:
+            home_is_fav = True
+            break
+        elif hs > 0:
+            home_is_fav = False
+            break
+
+    if home_is_fav is None:
+        # Can't determine direction; just return vig-valid lines
+        return valid
+
+    # The favorite price is home_price when home_is_fav, else away_price.
+    # Favorite implied should DECREASE as line increases (harder to cover
+    # a bigger spread).
+    fav_key = "home_price" if home_is_fav else "away_price"
+    fav_imps = []
+    for entry in valid:
+        imp = american_to_implied(entry[fav_key])
+        fav_imps.append(imp if imp is not None else 0)
+
+    # Majority voting on adjacent pairs
+    decreasing_pairs = 0
+    total_pairs = 0
+    for i in range(len(fav_imps) - 1):
+        total_pairs += 1
+        if fav_imps[i + 1] <= fav_imps[i] + 0.02:
+            decreasing_pairs += 1
+
+    if total_pairs > 0 and decreasing_pairs >= total_pairs / 2:
+        # Forward sweep
+        result = [valid[0]]
+        for i in range(1, len(valid)):
+            prev_imp = american_to_implied(result[-1][fav_key]) or 0
+            curr_imp = fav_imps[i]
+            if curr_imp > prev_imp + 0.02:
+                logger.warning(
+                    "Alt spread %s line %.1f rejected (monotonicity): "
+                    "fav implied %.3f > prev line %.1f fav implied %.3f",
+                    label, valid[i]["line"], curr_imp,
+                    result[-1]["line"], prev_imp,
+                )
+                continue
+            result.append(valid[i])
+    else:
+        # Reverse sweep — low end is corrupted
+        result = [valid[-1]]
+        for i in range(len(valid) - 2, -1, -1):
+            next_imp = american_to_implied(result[-1][fav_key]) or 0
+            curr_imp = fav_imps[i]
+            if curr_imp < next_imp - 0.02:
+                logger.warning(
+                    "Alt spread %s line %.1f rejected (reverse monotonicity): "
+                    "fav implied %.3f < next line %.1f fav implied %.3f",
+                    label, valid[i]["line"], curr_imp,
+                    result[-1]["line"], next_imp,
+                )
+                continue
+            result.append(valid[i])
+        result.reverse()
+
+    return result
 
 
 # ---------------------------------------------------------------------------

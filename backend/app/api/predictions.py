@@ -653,9 +653,20 @@ async def get_best_bets(
     # Step 1: Always refresh odds when stale, even if predictions exist.
     # Without this, odds go stale after initial generation and the
     # displayed edge/confidence become unreliable ("fake edge").
-    stale_cutoff = datetime.now(timezone.utc) - timedelta(
-        minutes=settings.odds_refresh_interval_minutes
+    #
+    # Use a shorter refresh interval when live games are in progress —
+    # live odds move fast and 15-minute-old odds produce phantom edges.
+    _LIVE_STATUSES = ("in_progress", "live")
+    live_count_result = await session.execute(
+        select(func.count(Game.id)).where(
+            Game.date == today,
+            func.lower(Game.status).in_(_LIVE_STATUSES),
+        )
     )
+    has_live_games = (live_count_result.scalar() or 0) > 0
+    refresh_minutes = 2 if has_live_games else settings.odds_refresh_interval_minutes
+
+    stale_cutoff = datetime.now(timezone.utc) - timedelta(minutes=refresh_minutes)
     stale_result = await session.execute(
         select(func.count(Game.id)).where(
             Game.date == today,
@@ -664,7 +675,10 @@ async def get_best_bets(
         )
     )
     needs_odds_refresh = (stale_result.scalar() or 0) > 0
-    logger.info("Best-bets step 1: needs_odds_refresh=%s", needs_odds_refresh)
+    logger.info(
+        "Best-bets step 1: needs_odds_refresh=%s (interval=%dmin, live=%s)",
+        needs_odds_refresh, refresh_minutes, has_live_games,
+    )
 
     if needs_odds_refresh:
         try:

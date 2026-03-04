@@ -2248,18 +2248,25 @@ def _merge_odds_events(
                 else:
                     return price > 0   # away -2.5+ → positive price
 
+        # Pair-based spread selection: collect all (home_price,
+        # away_price, source) tuples per line, then pick the best valid
+        # pair per line.  This prevents mixing prices from different
+        # sources (which can produce invalid combinations like +480/-165
+        # from different sportsbooks).
+        all_spread_pairs: Dict[float, List[Tuple[float, float, str, float, float]]] = {}
+        # Each tuple: (home_price, away_price, source, home_spread, away_spread)
+
         for e in ev_list:
             # Include primary spread
             if e.has_spread():
                 abs_line = abs(e.home_spread) if e.home_spread else abs(e.away_spread)
-                if abs_line not in all_spreads_map:
-                    all_spreads_map[abs_line] = _init_spread_entry(abs_line)
 
                 # Determine if this source's spread direction is inverted
-                # relative to the ML-derived favorite.  If so, swap prices
-                # so they pair with the correct side.
+                # relative to the ML-derived favorite.  If so, swap prices.
                 e_hp = e.home_spread_price
                 e_ap = e.away_spread_price
+                e_hs = e.home_spread
+                e_as = e.away_spread
                 if home_is_fav is not None and e.home_spread:
                     source_inverted = (
                         (home_is_fav and e.home_spread > 0)
@@ -2267,64 +2274,76 @@ def _merge_odds_events(
                     )
                     if source_inverted:
                         e_hp, e_ap = e_ap, e_hp
+                        e_hs, e_as = e_as, e_hs
 
-                if _valid_spread_price(e_hp, abs_line, True):
-                    all_spreads_map[abs_line]["home_price"] = max(
-                        all_spreads_map[abs_line]["home_price"], e_hp
-                    )
-                else:
-                    logger.warning(
-                        "Merge %s@%s: rejecting %s home spread price %s for %.1f line (wrong sign)",
-                        ev_list[0].away_abbr, ev_list[0].home_abbr,
-                        e.source, e_hp, abs_line,
-                    )
-                if _valid_spread_price(e_ap, abs_line, False):
-                    all_spreads_map[abs_line]["away_price"] = max(
-                        all_spreads_map[abs_line]["away_price"], e_ap
-                    )
-                else:
-                    logger.warning(
-                        "Merge %s@%s: rejecting %s away spread price %s for %.1f line (wrong sign)",
-                        ev_list[0].away_abbr, ev_list[0].home_abbr,
-                        e.source, e_ap, abs_line,
-                    )
-                # Only accept spread signs that agree with moneyline.
-                # If no ML data, accept the first non-zero value.
-                if e.home_spread:
-                    if home_is_fav is None:
-                        # No ML data; accept as-is
-                        if not all_spreads_map[abs_line]["home_spread"]:
-                            all_spreads_map[abs_line]["home_spread"] = e.home_spread
-                    elif (home_is_fav and e.home_spread < 0) or (not home_is_fav and e.home_spread > 0):
-                        # Sign agrees with ML-derived favorite
-                        all_spreads_map[abs_line]["home_spread"] = e.home_spread
-                if e.away_spread:
-                    if home_is_fav is None:
-                        if not all_spreads_map[abs_line]["away_spread"]:
-                            all_spreads_map[abs_line]["away_spread"] = e.away_spread
-                    elif (home_is_fav and e.away_spread > 0) or (not home_is_fav and e.away_spread < 0):
-                        all_spreads_map[abs_line]["away_spread"] = e.away_spread
+                if abs_line not in all_spread_pairs:
+                    all_spread_pairs[abs_line] = []
+                all_spread_pairs[abs_line].append((e_hp, e_ap, e.source, e_hs, e_as))
+
             # Include alt spreads
             for alt in e.alt_spreads:
                 abs_line = alt["line"]
-                if abs_line not in all_spreads_map:
-                    all_spreads_map[abs_line] = _init_spread_entry(abs_line)
                 hp = alt.get("home_price", -110)
                 ap = alt.get("away_price", -110)
-                # If the alt_spread's direction disagrees with the
-                # ML-derived direction, swap prices to the correct side.
                 alt_hs = alt.get("home_spread", 0)
-                init_hs = all_spreads_map[abs_line]["home_spread"]
-                if alt_hs and init_hs and (alt_hs > 0) != (init_hs > 0):
+                alt_as = alt.get("away_spread", 0)
+                # Determine expected home_spread sign from ML data
+                expected_hs_sign = None
+                if home_is_fav is True:
+                    expected_hs_sign = -1  # home is fav → negative spread
+                elif home_is_fav is False:
+                    expected_hs_sign = 1   # home is dog → positive spread
+                # If direction disagrees, swap prices
+                if (expected_hs_sign is not None and alt_hs
+                        and (alt_hs > 0) != (expected_hs_sign > 0)):
                     hp, ap = ap, hp
-                if _valid_spread_price(hp, abs_line, True):
-                    all_spreads_map[abs_line]["home_price"] = max(
-                        all_spreads_map[abs_line]["home_price"], hp
+                    alt_hs, alt_as = alt_as, alt_hs
+
+                if abs_line not in all_spread_pairs:
+                    all_spread_pairs[abs_line] = []
+                all_spread_pairs[abs_line].append((hp, ap, e.source, alt_hs, alt_as))
+
+        # For each line, pick the best valid pair (lowest vig)
+        for abs_line, pairs in all_spread_pairs.items():
+            best_pair = None
+            best_vig = float("inf")
+            for hp, ap, src, hs, a_s in pairs:
+                if not _valid_spread_price(hp, abs_line, True):
+                    logger.debug(
+                        "Merge %s: spread %.1f from %s home price %s rejected (wrong sign)",
+                        matchup_label, abs_line, src, hp,
                     )
-                if _valid_spread_price(ap, abs_line, False):
-                    all_spreads_map[abs_line]["away_price"] = max(
-                        all_spreads_map[abs_line]["away_price"], ap
+                    continue
+                if not _valid_spread_price(ap, abs_line, False):
+                    logger.debug(
+                        "Merge %s: spread %.1f from %s away price %s rejected (wrong sign)",
+                        matchup_label, abs_line, src, ap,
                     )
+                    continue
+                if not validate_spread_pair(hp, ap):
+                    logger.debug(
+                        "Merge %s: spread %.1f from %s rejected (bad vig: H=%s A=%s)",
+                        matchup_label, abs_line, src, hp, ap,
+                    )
+                    continue
+                # Compute vig
+                imp_h = abs(hp) / (abs(hp) + 100) if hp < 0 else 100 / (hp + 100)
+                imp_a = abs(ap) / (abs(ap) + 100) if ap < 0 else 100 / (ap + 100)
+                vig = imp_h + imp_a - 1.0
+                if vig < best_vig:
+                    best_vig = vig
+                    best_pair = (hp, ap, src, hs, a_s)
+
+            if best_pair:
+                hp, ap, src, hs, a_s = best_pair
+                entry = _init_spread_entry(abs_line)
+                entry["home_price"] = hp
+                entry["away_price"] = ap
+                if hs:
+                    entry["home_spread"] = hs
+                if a_s:
+                    entry["away_spread"] = a_s
+                all_spreads_map[abs_line] = entry
 
         all_spread_lines_raw = sorted([
             {

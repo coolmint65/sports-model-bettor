@@ -1176,11 +1176,6 @@ class BettingModel:
                     "under_price": alt_up,
                 }
 
-            # Maximum believable edge.  Real sports-betting edges rarely
-            # exceed ~15-20%.  Anything above this threshold is almost
-            # certainly bad data (wrong line / wrong odds pairing).
-            MAX_EDGE = 0.20
-
             # Evaluate ALL lines and find the one with the best edge
             # Edge = model_prob - implied_prob
             best_edge = -999
@@ -1207,16 +1202,6 @@ class BettingModel:
                     odds_val = price_map[line_val].get(price_key, -110)
                     implied = american_odds_to_implied_prob(odds_val)
                     edge = prob - implied
-
-                    # Skip edges that are too large — almost certainly
-                    # bad data rather than a real opportunity.
-                    if edge > MAX_EDGE:
-                        logger.warning(
-                            "Capping suspicious edge on %s: %.1f%% "
-                            "(prob=%.3f, implied=%.3f, odds=%s)",
-                            line_key, edge * 100, prob, implied, odds_val,
-                        )
-                        continue
 
                     if edge > best_edge:
                         best_edge = edge
@@ -1349,23 +1334,71 @@ class BettingModel:
             # Each entry uses the signed home_spread value from the
             # data to correctly map home_price/away_price to the
             # right probability keys.
+            #
+            # First, establish the primary spread as reference for
+            # cross-validation (same approach as totals).
             all_spread_lines_data = odds_data.get("all_spread_lines") or []
             spread_price_map: Dict[float, Dict[str, Any]] = {}
+
+            primary_spread_line = None
+            primary_home_spread_imp = None
+            primary_away_spread_imp = None
+            if spread_line is not None:
+                primary_spread_line = abs(float(spread_line))
+                _php = float(home_spread_price) if home_spread_price else -110
+                _pap = float(away_spread_price) if away_spread_price else -110
+                primary_home_spread_imp = american_odds_to_implied_prob(_php)
+                primary_away_spread_imp = american_odds_to_implied_prob(_pap)
+                spread_price_map[primary_spread_line] = {
+                    "home_price": _php,
+                    "away_price": _pap,
+                    "home_spread": float(spread_line),
+                }
+
             for alt in all_spread_lines_data:
                 lv = alt.get("line", 1.5)
-                spread_price_map[lv] = {
-                    "home_price": alt.get("home_price", -110),
-                    "away_price": alt.get("away_price", -110),
-                    "home_spread": alt.get("home_spread", 0),
-                }
-            # Include primary spread in price map
-            if spread_line is not None:
-                abs_spread = abs(float(spread_line))
-                if abs_spread not in spread_price_map:
-                    spread_price_map[abs_spread] = {
-                        "home_price": float(home_spread_price) if home_spread_price else -110,
-                        "away_price": float(away_spread_price) if away_spread_price else -110,
-                        "home_spread": float(spread_line),
+                alt_hp = alt.get("home_price", -110)
+                alt_ap = alt.get("away_price", -110)
+
+                # Cross-validate alt spread odds against the primary.
+                # For spreads, the relationship depends on spread direction:
+                # As the spread gets LARGER, the underdog + side becomes
+                # easier to cover (more cushion) → lower odds (more negative).
+                # The favorite - side becomes harder → higher odds (more positive).
+                #
+                # For the SAME line (e.g., both 1.5), the odds should be
+                # similar to the primary.  A huge discrepancy (e.g., +480 vs
+                # -165 for the same 1.5 line) means bad data.
+                if primary_spread_line is not None and lv == primary_spread_line:
+                    # Same line as primary — odds should be in the same
+                    # ballpark.  Reject if the implied prob differs by
+                    # more than 25 percentage points from the primary.
+                    alt_home_imp = american_odds_to_implied_prob(alt_hp)
+                    alt_away_imp = american_odds_to_implied_prob(alt_ap)
+                    if (primary_home_spread_imp is not None
+                            and alt_home_imp is not None
+                            and abs(alt_home_imp - primary_home_spread_imp) > 0.25):
+                        logger.warning(
+                            "Rejecting alt spread %.1f: home implied %.3f "
+                            "vs primary %.3f (diff > 25pp)",
+                            lv, alt_home_imp, primary_home_spread_imp,
+                        )
+                        continue
+                    if (primary_away_spread_imp is not None
+                            and alt_away_imp is not None
+                            and abs(alt_away_imp - primary_away_spread_imp) > 0.25):
+                        logger.warning(
+                            "Rejecting alt spread %.1f: away implied %.3f "
+                            "vs primary %.3f (diff > 25pp)",
+                            lv, alt_away_imp, primary_away_spread_imp,
+                        )
+                        continue
+
+                if lv not in spread_price_map:
+                    spread_price_map[lv] = {
+                        "home_price": alt_hp,
+                        "away_price": alt_ap,
+                        "home_spread": alt.get("home_spread", 0),
                     }
 
             # Evaluate all spread lines for best edge.
@@ -1416,6 +1449,7 @@ class BettingModel:
                         continue
                     s_implied = american_odds_to_implied_prob(s_odds)
                     s_edge = s_prob - s_implied
+
                     if s_edge > best_spread_edge:
                         best_spread_edge = s_edge
                         best_spread_pred = f"{s_abbr}_{s_sign}"
