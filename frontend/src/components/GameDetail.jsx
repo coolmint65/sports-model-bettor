@@ -320,7 +320,7 @@ function PredictionsTab({ game }) {
           </h3>
           <div className="predictions-list">
             {topPicks.map((pred, index) => (
-              <PredictionCard key={pred.id || index} prediction={pred} isFallback={pred.is_fallback} />
+              <PredictionCard key={pred.id || index} prediction={pred} />
             ))}
           </div>
         </div>
