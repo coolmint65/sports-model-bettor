@@ -576,6 +576,34 @@ async def get_today_schedule(
         except Exception:
             pass
 
+    # Sync live odds for in-progress games — throttled to the same
+    # interval as /schedule/live to avoid sportsbook rate limits.
+    if has_live:
+        global _last_live_odds_sync
+        now = datetime.now(timezone.utc)
+        odds_due = (
+            _last_live_odds_sync is None
+            or (now - _last_live_odds_sync) >= _LIVE_ODDS_MIN_INTERVAL
+        )
+        if odds_due:
+            try:
+                async with session.begin_nested():
+                    from app.scrapers.odds_multi import MultiSourceOddsScraper
+
+                    async with MultiSourceOddsScraper() as odds_scraper:
+                        matched = await odds_scraper.sync_odds(session)
+                        logger.info(
+                            "Today live odds sync: matched %d games",
+                            len(matched) if matched else 0,
+                        )
+                        await session.flush()
+                        session.expire_all()
+                _last_live_odds_sync = now
+            except Exception as exc:
+                logger.warning("Today live odds sync failed: %s", exc)
+                _last_live_odds_sync = now  # still throttle on failure
+            games = await _games_for_date(today, session)
+
     # If any non-final games are missing a top pick OR missing odds
     # data entirely, sync odds from sportsbooks and regenerate predictions.
     missing_picks = [g for g in games if g.top_pick is None and (not g.status or g.status.lower() not in GAME_FINAL_STATUSES)]

@@ -63,13 +63,26 @@ function Dashboard() {
     return () => window.removeEventListener('data-synced', onSynced);
   }, [silentRefetch]);
 
-  // Deduplicate
+  // Build a lookup of live game data (from /schedule/live which has
+  // the freshest odds via live odds sync).  Prefer this data over
+  // /schedule/today for live games so odds timestamps stay current.
+  const liveGameMap = new Map();
+  for (const g of liveGames) {
+    const gid = g.id || g.game_id;
+    if (gid) liveGameMap.set(gid, g);
+  }
+
   const todayGameIds = new Set(games.map((g) => g.id || g.game_id));
   const extraLiveGames = liveGames.filter(
     (g) => !todayGameIds.has(g.id) && !todayGameIds.has(g.game_id)
   );
+
+  // For live games in today's schedule, prefer the /schedule/live data
+  // which carries freshly-synced odds.
   const allLive = [
-    ...games.filter((g) => isLiveStatus(g.status)),
+    ...games
+      .filter((g) => isLiveStatus(g.status))
+      .map((g) => liveGameMap.get(g.id || g.game_id) || g),
     ...extraLiveGames,
   ];
 
