@@ -10,7 +10,7 @@ Provides:
 import asyncio
 import json
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Set
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -33,14 +33,17 @@ class ConnectionManager:
 
     def __init__(self):
         self._connections: Set[WebSocket] = set()
+        self._lock = asyncio.Lock()
 
     async def connect(self, ws: WebSocket):
         await ws.accept()
-        self._connections.add(ws)
+        async with self._lock:
+            self._connections.add(ws)
         logger.info("WebSocket client connected (%d total)", len(self._connections))
 
-    def disconnect(self, ws: WebSocket):
-        self._connections.discard(ws)
+    async def disconnect(self, ws: WebSocket):
+        async with self._lock:
+            self._connections.discard(ws)
         logger.info("WebSocket client disconnected (%d remaining)", len(self._connections))
 
     @property
@@ -53,13 +56,14 @@ class ConnectionManager:
             return
         payload = json.dumps(message)
         stale: List[WebSocket] = []
-        for ws in self._connections:
-            try:
-                await ws.send_text(payload)
-            except Exception:
-                stale.append(ws)
-        for ws in stale:
-            self._connections.discard(ws)
+        async with self._lock:
+            for ws in self._connections:
+                try:
+                    await ws.send_text(payload)
+                except Exception:
+                    stale.append(ws)
+            for ws in stale:
+                self._connections.discard(ws)
 
 
 manager = ConnectionManager()
@@ -69,6 +73,7 @@ manager = ConnectionManager()
 # Odds snapshot for change detection
 # ---------------------------------------------------------------------------
 
+_snapshot_lock = asyncio.Lock()
 _last_odds_snapshot: Dict[int, Dict[str, Any]] = {}
 
 
@@ -104,14 +109,14 @@ _scheduler_running = False
 
 
 async def _sync_odds_and_broadcast():
-    """Fetch latest odds, detect changes, broadcast to clients."""
+    """Fetch latest odds via service layer, detect changes, broadcast."""
     global _last_odds_snapshot
 
     try:
         async with get_session_context() as session:
             today = date.today()
 
-            # Check for games that need odds updates (today's non-final games)
+            # Snapshot pre-sync state
             games_result = await session.execute(
                 select(Game)
                 .options(selectinload(Game.home_team), selectinload(Game.away_team))
@@ -125,22 +130,17 @@ async def _sync_odds_and_broadcast():
             if not games:
                 return
 
-            # Snapshot pre-sync odds
-            pre_sync: Dict[int, Dict[str, Any]] = {}
             for g in games:
-                pre_sync[g.id] = _snapshot_game_odds(g)
+                _snapshot_game_odds(g)  # populate pre-sync snapshots
 
-            # Sync odds from sportsbooks
-            from app.scrapers.odds_multi import MultiSourceOddsScraper
-            async with MultiSourceOddsScraper() as scraper:
-                matched = await scraper.sync_odds(session)
-                await session.flush()
-                session.expire_all()
+            # Use service layer for sync + prediction regen
+            from app.services.odds import sync_odds_and_regenerate
+            matched, pred_count = await sync_odds_and_regenerate(session)
 
             if not matched:
                 return
 
-            # Re-query games to get updated values
+            # Re-query to get updated values
             games_result = await session.execute(
                 select(Game)
                 .options(selectinload(Game.home_team), selectinload(Game.away_team))
@@ -153,49 +153,24 @@ async def _sync_odds_and_broadcast():
 
             # Detect changes and build update payload
             changed_games: List[Dict[str, Any]] = []
-            any_changed = False
-            for game in games:
-                current = _snapshot_game_odds(game)
-                if _odds_changed(game.id, current):
-                    any_changed = True
-                    _last_odds_snapshot[game.id] = current
-                    changed_games.append({
-                        "game_id": game.id,
-                        "home_abbrev": game.home_team.abbreviation if game.home_team else "",
-                        "away_abbrev": game.away_team.abbreviation if game.away_team else "",
-                        "status": game.status,
-                        "odds": {
-                            **current,
-                            "odds_updated_at": game.odds_updated_at.isoformat() if game.odds_updated_at else None,
-                        },
-                    })
+            async with _snapshot_lock:
+                for game in games:
+                    current = _snapshot_game_odds(game)
+                    if _odds_changed(game.id, current):
+                        _last_odds_snapshot[game.id] = current
+                        changed_games.append({
+                            "game_id": game.id,
+                            "home_abbrev": game.home_team.abbreviation if game.home_team else "",
+                            "away_abbrev": game.away_team.abbreviation if game.away_team else "",
+                            "status": game.status,
+                            "odds": {
+                                **current,
+                                "odds_updated_at": game.odds_updated_at.isoformat() if game.odds_updated_at else None,
+                            },
+                        })
 
-            if not any_changed:
+            if not changed_games:
                 return
-
-            # If odds changed, regenerate predictions too
-            predictions_updated = False
-            try:
-                from app.analytics.predictions import PredictionManager
-                from app.models.prediction import Prediction
-                from sqlalchemy import delete as sa_delete
-
-                async with session.begin_nested():
-                    non_final_ids = select(Game.id).where(
-                        Game.date == today,
-                        ~func.lower(Game.status).in_(GAME_FINAL_STATUSES),
-                    )
-                    await session.execute(
-                        sa_delete(Prediction).where(
-                            Prediction.game_id.in_(non_final_ids)
-                        )
-                    )
-                    await session.flush()
-                    pm = PredictionManager()
-                    await pm.get_best_bets(session)
-                    predictions_updated = True
-            except Exception as exc:
-                logger.warning("Auto-prediction regen failed: %s", exc)
 
             # Broadcast to all WebSocket clients
             if manager.client_count > 0:
@@ -203,11 +178,11 @@ async def _sync_odds_and_broadcast():
                     "type": "odds_update",
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "changed_games": changed_games,
-                    "predictions_updated": predictions_updated,
+                    "predictions_updated": pred_count > 0,
                 })
                 logger.info(
-                    "Broadcast odds update: %d games changed, predictions=%s, clients=%d",
-                    len(changed_games), predictions_updated, manager.client_count,
+                    "Broadcast odds update: %d games changed, predictions=%d, clients=%d",
+                    len(changed_games), pred_count, manager.client_count,
                 )
 
     except Exception as exc:
@@ -233,7 +208,6 @@ async def _scheduler_loop():
                 async with get_session_context() as session:
                     today = date.today()
 
-                    # Check for live games
                     live_result = await session.execute(
                         select(func.count(Game.id)).where(
                             func.lower(Game.status).in_(("in_progress", "live"))
@@ -244,7 +218,6 @@ async def _scheduler_loop():
                     if live_count > 0:
                         interval = LIVE_INTERVAL
                     else:
-                        # Check for upcoming games today
                         upcoming_result = await session.execute(
                             select(func.count(Game.id)).where(
                                 Game.date == today,
@@ -254,8 +227,8 @@ async def _scheduler_loop():
                         upcoming = upcoming_result.scalar() or 0
                         if upcoming > 0:
                             interval = PREGAME_INTERVAL
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Scheduler interval check failed: %s", exc)
 
             # Only sync if there are clients connected or games are live
             has_clients = manager.client_count > 0
@@ -269,7 +242,7 @@ async def _scheduler_loop():
         except asyncio.CancelledError:
             break
         except Exception as exc:
-            logger.error("Scheduler loop error: %s", exc)
+            logger.error("Scheduler loop error: %s", exc, exc_info=True)
             await asyncio.sleep(60)
 
     logger.info("Live odds scheduler stopped")
@@ -319,23 +292,24 @@ async def websocket_handler(ws: WebSocket):
                 games = games_result.scalars().all()
 
                 initial_games = []
-                for g in games:
-                    snap = _snapshot_game_odds(g)
-                    _last_odds_snapshot[g.id] = snap
-                    initial_games.append({
-                        "game_id": g.id,
-                        "home_abbrev": g.home_team.abbreviation if g.home_team else "",
-                        "away_abbrev": g.away_team.abbreviation if g.away_team else "",
-                        "status": g.status,
-                        "home_score": g.home_score,
-                        "away_score": g.away_score,
-                        "period": g.period,
-                        "clock": g.clock,
-                        "odds": {
-                            **snap,
-                            "odds_updated_at": g.odds_updated_at.isoformat() if g.odds_updated_at else None,
-                        },
-                    })
+                async with _snapshot_lock:
+                    for g in games:
+                        snap = _snapshot_game_odds(g)
+                        _last_odds_snapshot[g.id] = snap
+                        initial_games.append({
+                            "game_id": g.id,
+                            "home_abbrev": g.home_team.abbreviation if g.home_team else "",
+                            "away_abbrev": g.away_team.abbreviation if g.away_team else "",
+                            "status": g.status,
+                            "home_score": g.home_score,
+                            "away_score": g.away_score,
+                            "period": g.period,
+                            "clock": g.clock,
+                            "odds": {
+                                **snap,
+                                "odds_updated_at": g.odds_updated_at.isoformat() if g.odds_updated_at else None,
+                            },
+                        })
 
                 await ws.send_text(json.dumps({
                     "type": "initial_state",
@@ -354,4 +328,4 @@ async def websocket_handler(ws: WebSocket):
             except WebSocketDisconnect:
                 break
     finally:
-        manager.disconnect(ws)
+        await manager.disconnect(ws)

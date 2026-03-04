@@ -129,19 +129,15 @@ async def _run_full_sync():
 
                 await session.flush()
 
-                # 3. Odds (Hard Rock Bet via The Odds API)
+                # 3. Odds via service layer
                 _sync_state["step"] = "Syncing betting odds (multi-source)..."
                 try:
-                    from app.scrapers.odds_multi import MultiSourceOddsScraper
+                    from app.services.odds import sync_odds as svc_sync_odds
 
-                    async with MultiSourceOddsScraper() as odds_scraper:
-                        matched = await odds_scraper.sync_odds(session)
-                        logger.info("Multi-source odds sync matched %d games", len(matched))
+                    matched = await svc_sync_odds(session, force=True)
+                    logger.info("Multi-source odds sync matched %d games", len(matched))
                 except Exception as exc:
-                    logger.warning("Multi-source odds sync failed (non-critical): %s", exc)
-
-                await session.flush()
-                session.expire_all()
+                    logger.warning("Multi-source odds sync failed: %s", exc, exc_info=True)
 
                 # 4. Predictions — delete stale predictions only for
                 # non-final games so final game predictions are preserved.
@@ -211,16 +207,16 @@ async def _run_full_sync():
 
         # Broadcast to WebSocket clients so frontend updates instantly
         try:
-            from app.live import manager
-            await manager.broadcast({
+            from app.live import manager as ws_manager
+            await ws_manager.broadcast({
                 "type": "odds_update",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "changed_games": [],
                 "predictions_updated": True,
                 "source": "full_sync",
             })
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("WebSocket broadcast after sync failed: %s", exc)
 
     except Exception as exc:
         logger.error("Background sync failed: %s", exc)
@@ -395,19 +391,18 @@ async def sync_odds(
     Best available lines are computed across all books.
     """
     try:
-        from app.scrapers.odds_multi import MultiSourceOddsScraper
+        from app.services.odds import sync_odds as svc_sync_odds
 
-        async with MultiSourceOddsScraper() as odds_scraper:
-            matched = await odds_scraper.sync_odds(session)
-            sources_seen = set()
-            for m in matched:
-                sources_seen.update(m.get("sources", []))
-            return SyncResult(
-                success=True,
-                message=f"Odds synced for {len(matched)} games.",
-                details=f"Sources: {', '.join(sorted(sources_seen)) or 'none'}. "
-                        f"Updated moneyline, spread, and totals odds.",
-            )
+        matched = await svc_sync_odds(session, force=True)
+        sources_seen = set()
+        for m in matched:
+            sources_seen.update(m.get("sources", []))
+        return SyncResult(
+            success=True,
+            message=f"Odds synced for {len(matched)} games.",
+            details=f"Sources: {', '.join(sorted(sources_seen)) or 'none'}. "
+                    f"Updated moneyline, spread, and totals odds.",
+        )
     except Exception as exc:
         raise HTTPException(
             status_code=502,

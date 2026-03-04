@@ -20,6 +20,7 @@ import { useApi } from '../hooks/useApi';
 import { useWebSocketEvent } from '../hooks/useWebSocket';
 import PredictionCard from './PredictionCard';
 import { teamName, teamAbbrev, teamLogo, parseAsUTC, isLiveStatus } from '../utils/teams';
+import { formatAmericanOddsOrDash } from '../utils/formatting';
 
 const LIVE_POLL_INTERVAL = 30_000;
 
@@ -64,11 +65,7 @@ function StatComparison({ label, awayValue, homeValue, higherIsBetter = true, fo
   );
 }
 
-function formatAmericanOdds(odds) {
-  if (odds == null) return '-';
-  const rounded = Math.round(odds);
-  return rounded > 0 ? `+${rounded}` : `${rounded}`;
-}
+const formatAmericanOdds = formatAmericanOddsOrDash;
 
 function RecordPill({ label, value }) {
   if (!value) return null;

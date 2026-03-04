@@ -3,13 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Clock, MapPin, ChevronRight, TrendingUp, Target, Radio, AlertTriangle } from 'lucide-react';
 import { format, formatDistanceToNowStrict } from 'date-fns';
 import { teamName, teamAbbrev, teamLogo, confidencePct, parseAsUTC, formatBetType, formatPredictionValue } from '../utils/teams';
-
-function getConfidenceColor(confidence) {
-  if (confidence >= 75) return '#00ff88';
-  if (confidence >= 60) return '#4fc3f7';
-  if (confidence >= 45) return '#ffd700';
-  return '#ff5252';
-}
+import { getConfidenceColor } from '../utils/formatting';
 
 function getStatusDisplay(game) {
   const status = game.status || game.game_state || '';
