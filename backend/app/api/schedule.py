@@ -312,7 +312,7 @@ async def _games_for_date(
                     prediction_value=pred.prediction_value,
                     confidence=pred.confidence,
                     edge=pred.edge,
-                    is_fallback=is_heavy,
+                    is_fallback=False,
                     heavy_juice=is_heavy,
                 )
 
@@ -344,7 +344,7 @@ async def _games_for_date(
                         prediction_value=pred.prediction_value,
                         confidence=pred.confidence,
                         edge=pred.edge,
-                        is_fallback=is_heavy,
+                        is_fallback=False,
                         heavy_juice=is_heavy,
                     )
 
