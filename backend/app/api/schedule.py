@@ -249,12 +249,15 @@ async def _games_for_date(
         )
         all_preds = all_preds_result.scalars().all()
 
-        # Compute fresh implied prob using the service layer
+        # Compute fresh implied prob using the service layer.
+        # When fresh odds aren't available, fall back to the stored
+        # implied prob so we never give "benefit of the doubt" on juice.
         fresh_map: dict[int, Optional[float]] = {}
         scoring_map: dict[int, Optional[float]] = {}
         for p in all_preds:
             game_obj = game_by_id.get(p.game_id)
-            fresh_map[p.id] = fresh_implied_prob(p, game_obj)
+            fresh = fresh_implied_prob(p, game_obj)
+            fresh_map[p.id] = fresh if fresh is not None else p.odds_implied_prob
             scoring_map[p.id] = (
                 fresh_map[p.id]
                 if fresh_map[p.id] is not None

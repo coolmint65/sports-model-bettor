@@ -571,12 +571,12 @@ async def _get_game_predictions(
     # Use fresh Game odds when available, fall back to stored value.
     implied_map: dict[int, float | None] = {}
     for p in preds:
-        cur_impl = _fresh_implied_for_pred(p, game)
-        implied_map[p.id] = cur_impl if cur_impl is not None else p.odds_implied_prob
+        fresh = _fresh_implied_for_pred(p, game)
+        cur_impl = fresh if fresh is not None else p.odds_implied_prob
+        implied_map[p.id] = cur_impl
 
         # Fallback = has real edge but heavy juice (above implied ceiling).
-        # Requires FRESH implied from current Game odds; when odds are
-        # unavailable we give the pick benefit of the doubt (not heavy).
+        # Uses fresh odds when available, otherwise stored implied prob.
         is_fb = (
             p.edge is not None
             and p.edge >= min_edge
@@ -586,7 +586,6 @@ async def _get_game_predictions(
         )
         # A pick that meets edge/confidence thresholds AND has acceptable
         # juice should be treated as recommended regardless of stale flag.
-        # When fresh odds are unavailable, give the pick benefit of the doubt.
         effectively_recommended = (
             p.recommended
             or (
