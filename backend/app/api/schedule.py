@@ -291,6 +291,22 @@ async def _games_for_date(
                     cur_impl is not None
                     and cur_impl >= max_implied
                 )
+                if pred.bet_type == "spread":
+                    game_obj = game_by_id.get(pred.game_id)
+                    logger.info(
+                        "Spread top pick: game=%d val=%s cur_impl=%.4f "
+                        "max_implied=%.4f is_heavy=%s "
+                        "home_spread_price=%s away_spread_price=%s "
+                        "stored_impl=%s",
+                        pred.game_id,
+                        pred.prediction_value,
+                        cur_impl if cur_impl is not None else -1,
+                        max_implied,
+                        is_heavy,
+                        getattr(game_obj, "home_spread_price", "N/A") if game_obj else "no_game",
+                        getattr(game_obj, "away_spread_price", "N/A") if game_obj else "no_game",
+                        pred.odds_implied_prob,
+                    )
                 top_picks[pred.game_id] = GameTopPick(
                     bet_type=pred.bet_type,
                     prediction_value=pred.prediction_value,
@@ -317,12 +333,19 @@ async def _games_for_date(
                 reverse=True,
             ):
                 if pred.game_id not in top_picks:
+                    # Check stored implied prob for heavy juice
+                    stored_impl = pred.odds_implied_prob
+                    is_heavy = (
+                        stored_impl is not None
+                        and stored_impl >= max_implied
+                    )
                     top_picks[pred.game_id] = GameTopPick(
                         bet_type=pred.bet_type,
                         prediction_value=pred.prediction_value,
                         confidence=pred.confidence,
                         edge=pred.edge,
-                        is_fallback=False,
+                        is_fallback=is_heavy,
+                        heavy_juice=is_heavy,
                     )
 
     # Batch-load team stats

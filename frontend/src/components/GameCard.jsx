@@ -429,8 +429,8 @@ function GameCard({ game }) {
       {/* Footer: Top Pick or Venue + Confidence */}
       <div className="game-card-footer">
         {topPick ? (
-          <div className={`game-top-pick ${topPick.is_fallback ? 'top-pick-fallback' : ''}`}>
-            {topPick.is_fallback ? <AlertTriangle size={12} /> : <Target size={12} />}
+          <div className={`game-top-pick ${(topPick.is_fallback || topPick.heavy_juice) ? 'top-pick-fallback' : ''}`}>
+            {(topPick.is_fallback || topPick.heavy_juice) ? <AlertTriangle size={12} /> : <Target size={12} />}
             <span className="top-pick-type">{formatBetType(topPick.bet_type)}</span>
             <span className="top-pick-value">{formatPredictionValue(topPick.prediction_value)}</span>
             {(topPick.heavy_juice || topPick.is_fallback) && <span className="top-pick-fallback-label">Heavy Juice</span>}
