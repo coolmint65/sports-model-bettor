@@ -23,6 +23,7 @@ from app.models.game import Game
 from app.models.prediction import Prediction
 from app.models.team import Team, TeamStats
 from app.services.odds import fresh_implied_prob
+from app.utils import serialize_utc_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,7 @@ class GameTopPick(BaseModel):
     confidence: Optional[float] = None
     edge: Optional[float] = None
     is_fallback: bool = False
+    heavy_juice: bool = False
 
 
 class GameOdds(BaseModel):
@@ -167,7 +169,7 @@ def _build_game_odds(game: Game) -> Optional[GameOdds]:
         away_spread_line=game.away_spread_line,
         home_spread_price=game.home_spread_price,
         away_spread_price=game.away_spread_price,
-        odds_updated_at=str(game.odds_updated_at) if game.odds_updated_at else None,
+        odds_updated_at=serialize_utc_datetime(game.odds_updated_at),
     )
 
 
@@ -248,82 +250,71 @@ async def _games_for_date(
         )
         all_preds = all_preds_result.scalars().all()
 
-        # Compute fresh implied prob using the service layer
+        # Compute fresh implied prob using the service layer.
+        # When fresh odds aren't available, fall back to the stored
+        # implied prob so we never give "benefit of the doubt" on juice.
         fresh_map: dict[int, Optional[float]] = {}
         scoring_map: dict[int, Optional[float]] = {}
         for p in all_preds:
             game_obj = game_by_id.get(p.game_id)
-            fresh_map[p.id] = fresh_implied_prob(p, game_obj)
+            fresh = fresh_implied_prob(p, game_obj)
+            fresh_map[p.id] = fresh if fresh is not None else p.odds_implied_prob
             scoring_map[p.id] = (
                 fresh_map[p.id]
                 if fresh_map[p.id] is not None
                 else p.odds_implied_prob
             )
 
-        # --- Tier 1: strict best-bet criteria ---
+        # --- Tier 1: best-bet criteria (edge + confidence) ---
         tier1 = [
             p for p in all_preds
             if (p.edge or 0) >= settings.min_edge
             and (p.confidence or 0) >= settings.min_confidence
-            and (
-                p.bet_type == "spread"
-                or fresh_map.get(p.id) is None
-                or fresh_map[p.id] < max_implied
-            )
         ]
-        for pred in sorted(
-            tier1,
-            key=lambda p: composite_pick_score(
+
+        def _tier1_sort_key(p):
+            score = composite_pick_score(
                 p.confidence, p.edge, scoring_map.get(p.id)
-            ),
-            reverse=True,
-        ):
+            )
+            if (
+                p.bet_type == "spread"
+                and p.prediction_value
+                and "+" in p.prediction_value
+            ):
+                score -= 0.10
+            return score
+
+        for pred in sorted(tier1, key=_tier1_sort_key, reverse=True):
             if pred.game_id not in top_picks:
+                cur_impl = fresh_map.get(pred.id)
+                is_heavy = (
+                    cur_impl is not None
+                    and cur_impl >= max_implied
+                )
+                if pred.bet_type == "spread":
+                    game_obj = game_by_id.get(pred.game_id)
+                    logger.info(
+                        "Spread top pick: game=%d val=%s cur_impl=%.4f "
+                        "max_implied=%.4f is_heavy=%s "
+                        "home_spread_price=%s away_spread_price=%s "
+                        "stored_impl=%s",
+                        pred.game_id,
+                        pred.prediction_value,
+                        cur_impl if cur_impl is not None else -1,
+                        max_implied,
+                        is_heavy,
+                        getattr(game_obj, "home_spread_price", "N/A") if game_obj else "no_game",
+                        getattr(game_obj, "away_spread_price", "N/A") if game_obj else "no_game",
+                        pred.odds_implied_prob,
+                    )
                 top_picks[pred.game_id] = GameTopPick(
                     bet_type=pred.bet_type,
                     prediction_value=pred.prediction_value,
                     confidence=pred.confidence,
                     edge=pred.edge,
-                    is_fallback=False,
+                    is_fallback=is_heavy,
+                    heavy_juice=is_heavy,
                 )
-
-        # --- Tier 2: fallback for games still missing a pick ---
-        missing_ids = set(gid for gid in game_ids if gid not in top_picks)
-        if missing_ids:
-            tier2 = [
-                p for p in all_preds
-                if p.game_id in missing_ids
-                and (p.edge or 0) >= settings.min_edge
-                and (p.confidence or 0) >= settings.min_confidence
-            ]
-
-            def _tier2_sort_key(p):
-                score = composite_pick_score(
-                    p.confidence, p.edge, scoring_map.get(p.id)
-                )
-                if (
-                    p.bet_type == "spread"
-                    and p.prediction_value
-                    and "+" in p.prediction_value
-                ):
-                    score -= 0.10
-                return score
-
-            for pred in sorted(tier2, key=_tier2_sort_key, reverse=True):
-                if pred.game_id not in top_picks:
-                    cur_impl = fresh_map.get(pred.id)
-                    actually_heavy = (
-                        pred.bet_type in ("ml", "total")
-                        and cur_impl is not None
-                        and cur_impl >= max_implied
-                    )
-                    top_picks[pred.game_id] = GameTopPick(
-                        bet_type=pred.bet_type,
-                        prediction_value=pred.prediction_value,
-                        confidence=pred.confidence,
-                        edge=pred.edge,
-                        is_fallback=actually_heavy,
-                    )
 
         # --- Tier 3: confidence-only fallback when odds data is missing ---
         still_missing = set(gid for gid in game_ids if gid not in top_picks)
@@ -342,12 +333,19 @@ async def _games_for_date(
                 reverse=True,
             ):
                 if pred.game_id not in top_picks:
+                    # Check stored implied prob for heavy juice
+                    stored_impl = pred.odds_implied_prob
+                    is_heavy = (
+                        stored_impl is not None
+                        and stored_impl >= max_implied
+                    )
                     top_picks[pred.game_id] = GameTopPick(
                         bet_type=pred.bet_type,
                         prediction_value=pred.prediction_value,
                         confidence=pred.confidence,
                         edge=pred.edge,
-                        is_fallback=False,
+                        is_fallback=is_heavy,
+                        heavy_juice=is_heavy,
                     )
 
     # Batch-load team stats
@@ -531,3 +529,17 @@ async def force_sync_odds(
         "predictions_generated": pred_count,
         "matched_games": matched_pairs,
     }
+
+
+@router.get("/odds-usage")
+async def odds_api_usage():
+    """Check remaining Odds API quota."""
+    from app.scrapers.odds_api import OddsAPIScraper
+
+    async with OddsAPIScraper() as scraper:
+        usage = await scraper.get_usage()
+
+    if usage is None:
+        raise HTTPException(status_code=503, detail="Could not fetch API usage (key missing or API unreachable)")
+
+    return usage

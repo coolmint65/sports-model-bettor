@@ -898,6 +898,12 @@ class BettingModel:
 
                 current_total = home_score + away_score
                 threshold = int(line_val)
+
+                # Skip already-decided totals — e.g. over 4.5 in a 4-3 game
+                # is already won and shouldn't be recommended.
+                if current_total > threshold:
+                    continue
+
                 over_p = sum(
                     matrix[i][j]
                     for i in range(max_g + 1)
