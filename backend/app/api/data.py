@@ -209,6 +209,19 @@ async def _run_full_sync():
         _sync_state = {"running": False, "step": "Complete", "error": None}
         logger.info("Full background sync completed successfully.")
 
+        # Broadcast to WebSocket clients so frontend updates instantly
+        try:
+            from app.live import manager
+            await manager.broadcast({
+                "type": "odds_update",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "changed_games": [],
+                "predictions_updated": True,
+                "source": "full_sync",
+            })
+        except Exception:
+            pass
+
     except Exception as exc:
         logger.error("Background sync failed: %s", exc)
         _sync_state = {"running": False, "step": "Failed", "error": str(exc)}

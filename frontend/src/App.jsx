@@ -5,12 +5,16 @@ import Dashboard from './components/Dashboard';
 import GameDetail from './components/GameDetail';
 import History from './components/History';
 import ErrorBoundary from './components/ErrorBoundary';
+import { useWebSocket } from './hooks/useWebSocket';
 
 function App() {
+  // Single WebSocket connection for the entire app
+  const { connected } = useWebSocket();
+
   return (
     <div className="app">
       <ErrorBoundary>
-        <Navbar />
+        <Navbar wsConnected={connected} />
         <main className="main-content">
           <Routes>
             <Route path="/" element={<Dashboard />} />

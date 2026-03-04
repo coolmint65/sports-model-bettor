@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Trophy, TrendingUp, Target, Star, ChevronRight, Radio, Plus, Check, Layers, RefreshCw } from 'lucide-react';
 import { fetchBestBets, trackBet, fetchTrackedBets, regeneratePredictions } from '../utils/api';
 import { useApi } from '../hooks/useApi';
+import { useWebSocketEvent } from '../hooks/useWebSocket';
 import { teamName, teamAbbrev, confidencePct, formatBetType, formatPredictionValue } from '../utils/teams';
 
 const BEST_BETS_POLL_INTERVAL = 60_000; // 60 seconds
@@ -221,7 +222,15 @@ function BestBets() {
     refreshTrackedState();
   }, [refreshTrackedState]);
 
-  // Auto-poll best bets every 60 seconds for seamless updates
+  // Instantly refetch when WebSocket pushes odds/predictions updates
+  useWebSocketEvent('odds_update', useCallback((data) => {
+    if (data?.predictions_updated) {
+      silentRefetch();
+      refreshTrackedState();
+    }
+  }, [silentRefetch, refreshTrackedState]));
+
+  // Fallback: poll best bets every 60 seconds
   useEffect(() => {
     const interval = setInterval(() => {
       silentRefetch();

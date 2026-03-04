@@ -761,6 +761,19 @@ async def force_sync_odds(
                 pred_error = str(exc)
                 logger.warning("sync-odds: prediction generation error: %s", exc)
 
+            # Broadcast to WebSocket clients
+            try:
+                from app.live import manager as ws_manager
+                await ws_manager.broadcast({
+                    "type": "odds_update",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "changed_games": [],
+                    "predictions_updated": pred_count > 0,
+                    "source": "force_sync_odds",
+                })
+            except Exception:
+                pass
+
             return {
                 "status": "ok",
                 "odds_matched": len(matched) if matched else 0,

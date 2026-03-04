@@ -28,6 +28,7 @@ import {
 } from 'recharts';
 import { format, parseISO } from 'date-fns';
 import { fetchTrackedBets, deleteTrackedBet, settleTrackedBets, clearAllTrackedBets, updateTrackedBet } from '../utils/api';
+import { useWebSocketEvent } from '../hooks/useWebSocket';
 import { useApi } from '../hooks/useApi';
 import { confidencePct, formatBetType, formatPredictionValue } from '../utils/teams';
 
@@ -82,6 +83,11 @@ function History() {
     window.addEventListener('data-synced', onSynced);
     return () => window.removeEventListener('data-synced', onSynced);
   }, [silentRefetch]);
+
+  // Refetch when WebSocket pushes updates (bets may have settled)
+  useWebSocketEvent('odds_update', useCallback(() => {
+    silentRefetch();
+  }, [silentRefetch]));
 
   const bets = data?.bets || [];
   const totalBets = data?.total_bets || 0;
