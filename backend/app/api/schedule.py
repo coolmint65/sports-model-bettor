@@ -51,6 +51,7 @@ class GameTopPick(BaseModel):
     confidence: Optional[float] = None
     edge: Optional[float] = None
     is_fallback: bool = False
+    heavy_juice: bool = False
 
 
 class GameOdds(BaseModel):
@@ -264,68 +265,40 @@ async def _games_for_date(
                 else p.odds_implied_prob
             )
 
-        # --- Tier 1: strict best-bet criteria ---
+        # --- Tier 1: best-bet criteria (edge + confidence) ---
         tier1 = [
             p for p in all_preds
             if (p.edge or 0) >= settings.min_edge
             and (p.confidence or 0) >= settings.min_confidence
-            and (
-                fresh_map.get(p.id) is None
-                or fresh_map[p.id] < max_implied
-            )
         ]
-        for pred in sorted(
-            tier1,
-            key=lambda p: composite_pick_score(
+
+        def _tier1_sort_key(p):
+            score = composite_pick_score(
                 p.confidence, p.edge, scoring_map.get(p.id)
-            ),
-            reverse=True,
-        ):
+            )
+            if (
+                p.bet_type == "spread"
+                and p.prediction_value
+                and "+" in p.prediction_value
+            ):
+                score -= 0.10
+            return score
+
+        for pred in sorted(tier1, key=_tier1_sort_key, reverse=True):
             if pred.game_id not in top_picks:
+                cur_impl = fresh_map.get(pred.id)
+                is_heavy = (
+                    cur_impl is not None
+                    and cur_impl >= max_implied
+                )
                 top_picks[pred.game_id] = GameTopPick(
                     bet_type=pred.bet_type,
                     prediction_value=pred.prediction_value,
                     confidence=pred.confidence,
                     edge=pred.edge,
-                    is_fallback=False,
+                    is_fallback=is_heavy,
+                    heavy_juice=is_heavy,
                 )
-
-        # --- Tier 2: fallback for games still missing a pick ---
-        missing_ids = set(gid for gid in game_ids if gid not in top_picks)
-        if missing_ids:
-            tier2 = [
-                p for p in all_preds
-                if p.game_id in missing_ids
-                and (p.edge or 0) >= settings.min_edge
-                and (p.confidence or 0) >= settings.min_confidence
-            ]
-
-            def _tier2_sort_key(p):
-                score = composite_pick_score(
-                    p.confidence, p.edge, scoring_map.get(p.id)
-                )
-                if (
-                    p.bet_type == "spread"
-                    and p.prediction_value
-                    and "+" in p.prediction_value
-                ):
-                    score -= 0.10
-                return score
-
-            for pred in sorted(tier2, key=_tier2_sort_key, reverse=True):
-                if pred.game_id not in top_picks:
-                    cur_impl = fresh_map.get(pred.id)
-                    actually_heavy = (
-                        cur_impl is not None
-                        and cur_impl >= max_implied
-                    )
-                    top_picks[pred.game_id] = GameTopPick(
-                        bet_type=pred.bet_type,
-                        prediction_value=pred.prediction_value,
-                        confidence=pred.confidence,
-                        edge=pred.edge,
-                        is_fallback=actually_heavy,
-                    )
 
         # --- Tier 3: confidence-only fallback when odds data is missing ---
         still_missing = set(gid for gid in game_ids if gid not in top_picks)
