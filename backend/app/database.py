@@ -20,12 +20,14 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Create the async engine
+# Create the async engine.
+# timeout=30 raises the SQLite busy-wait from 5 s to 30 s so the
+# background sync and API requests don't clash with "database is locked".
 engine = create_async_engine(
     settings.database_url,
     echo=settings.debug,
     future=True,
-    connect_args={"check_same_thread": False},
+    connect_args={"check_same_thread": False, "timeout": 30},
 )
 
 # Create the async session factory
@@ -100,6 +102,8 @@ async def init_db() -> None:
     import app.models.prediction  # noqa: F401
 
     async with engine.begin() as conn:
+        # Enable WAL mode so readers don't block on the background sync writer.
+        await conn.execute(text("PRAGMA journal_mode=WAL"))
         await conn.run_sync(Base.metadata.create_all)
 
     # Add new columns to existing tables if they don't exist yet (SQLite)

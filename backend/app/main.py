@@ -31,9 +31,20 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
-# Rotating file handler: 5 MB per file, keep last 3 rotations
+# Rotating file handler: 5 MB per file, keep last 3 rotations.
+# On Windows the backup file may be locked by another process, so we
+# subclass to swallow PermissionError during rollover instead of crashing.
+class _SafeRotatingFileHandler(logging.handlers.RotatingFileHandler):
+    def doRollover(self):
+        try:
+            super().doRollover()
+        except PermissionError:
+            # Another process holds the log file open (common on Windows).
+            # Continue writing to the current file rather than crashing.
+            pass
+
 DATA_DIR.mkdir(parents=True, exist_ok=True)
-_file_handler = logging.handlers.RotatingFileHandler(
+_file_handler = _SafeRotatingFileHandler(
     DATA_DIR / "app.log", maxBytes=5 * 1024 * 1024, backupCount=3
 )
 _file_handler.setFormatter(_log_fmt)
