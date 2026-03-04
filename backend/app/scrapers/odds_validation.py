@@ -108,6 +108,23 @@ def validate_spread_pair(home_price: float, away_price: float) -> bool:
     return validate_odds_pair(home_price, away_price)
 
 
+# Maximum absolute American odds for any spread/puck-line price.
+# Legitimate NHL puck lines rarely exceed ±400 for the standard 1.5 line
+# and ±600 for alt lines.  Values beyond this threshold (e.g. -5000)
+# indicate a data source is returning moneyline prices in the spread
+# field.  800 provides a comfortable margin for unusual alt lines.
+MAX_SPREAD_PRICE_ABS = 800
+
+
+def is_reasonable_spread_price(price: float) -> bool:
+    """Check that a spread price is within a plausible range.
+
+    Catches data-source errors where moneyline values (e.g. -5000, +700)
+    are returned as spread prices.
+    """
+    return abs(price) <= MAX_SPREAD_PRICE_ABS
+
+
 # ---------------------------------------------------------------------------
 # Alt-line validation
 # ---------------------------------------------------------------------------
@@ -366,6 +383,55 @@ def validate_odds_event_totals(
     return cleaned, primary_line, primary_over, primary_under
 
 
+def validate_odds_event_primary_spread(
+    home_spread: float,
+    away_spread: float,
+    home_price: float,
+    away_price: float,
+    source: str,
+    matchup: str,
+) -> Tuple[float, float, float, float]:
+    """Validate primary spread line and prices for an OddsEvent.
+
+    Checks that prices are valid American odds, within a reasonable range
+    (not moneyline-magnitude values), and form a valid vig pair.
+    Returns (home_spread, away_spread, home_price, away_price) — zeroed
+    out if validation fails.
+    """
+    if home_spread == 0 and away_spread == 0:
+        return home_spread, away_spread, home_price, away_price
+
+    # Check both prices are valid American odds
+    if not is_valid_american_odds(home_price) or not is_valid_american_odds(away_price):
+        logger.warning(
+            "[%s] %s: primary spread prices invalid American odds "
+            "(H=%.1f @ %+.0f, A=%.1f @ %+.0f) — zeroing",
+            source, matchup, home_spread, home_price, away_spread, away_price,
+        )
+        return 0, 0, 0, 0
+
+    # Reject extreme prices that indicate moneyline contamination
+    if not is_reasonable_spread_price(home_price) or not is_reasonable_spread_price(away_price):
+        logger.warning(
+            "[%s] %s: primary spread prices out of range "
+            "(H=%.1f @ %+.0f, A=%.1f @ %+.0f, max ±%d) — zeroing",
+            source, matchup, home_spread, home_price,
+            away_spread, away_price, MAX_SPREAD_PRICE_ABS,
+        )
+        return 0, 0, 0, 0
+
+    # Check vig is reasonable
+    if not validate_spread_pair(home_price, away_price):
+        logger.warning(
+            "[%s] %s: primary spread prices bad vig "
+            "(H=%.1f @ %+.0f, A=%.1f @ %+.0f) — zeroing",
+            source, matchup, home_spread, home_price, away_spread, away_price,
+        )
+        return 0, 0, 0, 0
+
+    return home_spread, away_spread, home_price, away_price
+
+
 def validate_odds_event_spreads(
     alt_spreads: List[Dict],
     source: str,
@@ -377,7 +443,12 @@ def validate_odds_event_spreads(
         hp = alt.get("home_price", 0)
         ap = alt.get("away_price", 0)
         if hp != 0 and ap != 0:
-            if validate_spread_pair(hp, ap):
+            if not is_reasonable_spread_price(hp) or not is_reasonable_spread_price(ap):
+                logger.warning(
+                    "[%s] %s: alt spread %.1f rejected (price out of range: H=%s A=%s)",
+                    source, matchup, alt.get("line", 0), hp, ap,
+                )
+            elif validate_spread_pair(hp, ap):
                 cleaned.append(alt)
             else:
                 logger.debug(

@@ -269,6 +269,7 @@ def _validate_event(event: OddsEvent) -> OddsEvent:
         is_valid_american_odds,
         validate_odds_event_totals,
         validate_odds_event_spreads,
+        validate_odds_event_primary_spread,
     )
 
     matchup = f"{event.away_abbr}@{event.home_abbr}"
@@ -293,6 +294,17 @@ def _validate_event(event: OddsEvent) -> OddsEvent:
     event.total_line = pline
     event.over_price = pover
     event.under_price = punder
+
+    # Validate primary spread prices (catches moneyline contamination)
+    hs, as_, hp, ap = validate_odds_event_primary_spread(
+        event.home_spread, event.away_spread,
+        event.home_spread_price, event.away_spread_price,
+        event.source, matchup,
+    )
+    event.home_spread = hs
+    event.away_spread = as_
+    event.home_spread_price = hp
+    event.away_spread_price = ap
 
     # Validate alt spreads
     event.alt_spreads = validate_odds_event_spreads(
@@ -2090,6 +2102,31 @@ def _merge_odds_events(
                         )
                     if valid:
                         consensus_away_books = valid
+
+            # Defense-in-depth: filter out any remaining extreme spread
+            # prices that slipped through source validation (e.g. moneyline
+            # values in spread fields).
+            from app.scrapers.odds_validation import is_reasonable_spread_price, MAX_SPREAD_PRICE_ABS
+            reasonable_home = [s for s in consensus_home_books if is_reasonable_spread_price(s[1])]
+            reasonable_away = [s for s in consensus_away_books if is_reasonable_spread_price(s[1])]
+            for s in consensus_home_books:
+                if not is_reasonable_spread_price(s[1]):
+                    logger.warning(
+                        "REJECTED %s@%s [%s]: home spread price %+.0f exceeds max ±%d",
+                        ev_list[0].away_abbr, ev_list[0].home_abbr, s[2], s[1],
+                        MAX_SPREAD_PRICE_ABS,
+                    )
+            for s in consensus_away_books:
+                if not is_reasonable_spread_price(s[1]):
+                    logger.warning(
+                        "REJECTED %s@%s [%s]: away spread price %+.0f exceeds max ±%d",
+                        ev_list[0].away_abbr, ev_list[0].home_abbr, s[2], s[1],
+                        MAX_SPREAD_PRICE_ABS,
+                    )
+            if reasonable_home:
+                consensus_home_books = reasonable_home
+            if reasonable_away:
+                consensus_away_books = reasonable_away
 
             if consensus_home_books:
                 best_home_spread_price = max(s[1] for s in consensus_home_books)
