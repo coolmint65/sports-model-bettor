@@ -542,71 +542,7 @@ async def _compute_period_scoring(
     return PeriodScoring()
 
 
-def _fresh_implied_for_pred(
-    pred: Prediction, game: Optional[Game]
-) -> Optional[float]:
-    """Compute current implied probability from the Game's live odds.
-
-    Returns ``None`` when the Game object is unavailable or the relevant
-    odds field is NULL.  Callers that need a value for scoring should
-    fall back to ``pred.odds_implied_prob`` explicitly; the juice
-    classification must only rely on fresh data to avoid false labels.
-    """
-    if game is None:
-        return None
-
-    live_odds: Optional[float] = None
-
-    if pred.bet_type == "ml":
-        home_abbr = game.home_team.abbreviation if game.home_team else ""
-        if pred.prediction_value == home_abbr:
-            live_odds = game.home_moneyline
-        else:
-            live_odds = game.away_moneyline
-
-    elif pred.bet_type == "total":
-        is_over = pred.prediction_value and "over" in pred.prediction_value
-        # Look up the specific line in all_total_lines first.
-        if game.all_total_lines and pred.prediction_value:
-            try:
-                parts = pred.prediction_value.split("_", 1)
-                if len(parts) == 2:
-                    pred_line = float(parts[1])
-                    all_tl = game.all_total_lines
-                    if isinstance(all_tl, str):
-                        import json
-                        all_tl = json.loads(all_tl)
-                    for tl in (all_tl or []):
-                        if abs(tl.get("line", 0) - pred_line) < 0.01:
-                            price_key = "over_price" if is_over else "under_price"
-                            live_odds = tl.get(price_key)
-                            break
-            except (ValueError, TypeError, KeyError):
-                pass
-        # Fall back to the primary O/U prices.
-        if live_odds is None:
-            if is_over:
-                live_odds = game.over_price
-            else:
-                live_odds = game.under_price
-
-    elif pred.bet_type == "spread":
-        home_abbr = game.home_team.abbreviation if game.home_team else ""
-        pred_is_home = (
-            pred.prediction_value
-            and pred.prediction_value.startswith(home_abbr)
-        )
-        if pred_is_home:
-            live_odds = game.home_spread_price
-        else:
-            live_odds = game.away_spread_price
-
-    if live_odds is None or live_odds == 0:
-        return None
-
-    if live_odds > 0:
-        return round(100.0 / (live_odds + 100.0), 4)
-    return round(abs(live_odds) / (abs(live_odds) + 100.0), 4)
+from app.services.odds import fresh_implied_prob as _fresh_implied_for_pred  # noqa: E402
 
 
 async def _get_game_predictions(
@@ -714,7 +650,8 @@ async def get_game_details(
     """
     game = await _get_game_or_404(game_id, session)
 
-    # Auto-sync from NHL API if game is live to get latest scores/clock
+    # Sync scores/clock from NHL API for live games
+    # Odds syncing is handled by the background scheduler (app.live)
     if game.status and game.status.lower() in ("in_progress", "live"):
         try:
             from app.scrapers.nhl_api import NHLScraper
@@ -722,41 +659,9 @@ async def get_game_details(
             scraper = NHLScraper()
             await scraper.sync_schedule(session, str(game.date))
             await session.flush()
-            # Re-load game with fresh data
             game = await _get_game_or_404(game_id, session)
-        except Exception:
-            pass  # non-critical — serve stale data if sync fails
-
-        # Also sync live odds if stale (> 2 min since last update)
-        odds_age = None
-        if game.odds_updated_at:
-            odds_age = datetime.now(timezone.utc) - game.odds_updated_at
-        odds_stale = odds_age is None or odds_age > timedelta(minutes=2)
-        logger.info(
-            "Game %s live odds check: updated_at=%s, age=%s, stale=%s",
-            game_id, game.odds_updated_at, odds_age, odds_stale,
-        )
-        if odds_stale:
-            try:
-                async with session.begin_nested():
-                    from app.scrapers.odds_multi import MultiSourceOddsScraper
-
-                    async with MultiSourceOddsScraper() as odds_scraper:
-                        matched = await odds_scraper.sync_odds(session)
-                        logger.info(
-                            "Game %s live odds sync returned %d matched games",
-                            game_id, len(matched),
-                        )
-                        await session.flush()
-                        session.expire_all()
-                game = await _get_game_or_404(game_id, session)
-                logger.info(
-                    "Game %s odds after sync: ML=%s/%s, updated_at=%s",
-                    game_id, game.home_moneyline, game.away_moneyline,
-                    game.odds_updated_at,
-                )
-            except Exception as exc:
-                logger.warning("Game %s live odds sync failed: %s", game_id, exc)
+        except Exception as exc:
+            logger.warning("Game %s live schedule sync failed: %s", game_id, exc)
 
     # Gather all analytics data
     home_form = await _get_team_form(game.home_team, session)

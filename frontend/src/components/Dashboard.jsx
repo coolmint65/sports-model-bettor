@@ -5,6 +5,7 @@ import BestBets from './BestBets';
 import GameCard from './GameCard';
 import { fetchTodaySchedule, fetchLiveGames } from '../utils/api';
 import { useApi } from '../hooks/useApi';
+import { useWebSocketEvent } from '../hooks/useWebSocket';
 import { isLiveStatus } from '../utils/teams';
 
 const LIVE_POLL_INTERVAL = 5_000; // 5 seconds when live
@@ -29,6 +30,12 @@ function Dashboard() {
       // Silently fail — live section just won't show
     }
   }, []);
+
+  // Instantly refetch when WebSocket pushes odds/predictions updates
+  useWebSocketEvent('odds_update', useCallback(() => {
+    silentRefetch();
+    pollLive();
+  }, [silentRefetch, pollLive]));
 
   const today = format(new Date(), 'EEEE, MMMM d, yyyy');
   const games = scheduleData?.games || scheduleData || [];

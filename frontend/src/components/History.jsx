@@ -28,8 +28,10 @@ import {
 } from 'recharts';
 import { format, parseISO } from 'date-fns';
 import { fetchTrackedBets, deleteTrackedBet, settleTrackedBets, clearAllTrackedBets, updateTrackedBet } from '../utils/api';
+import { useWebSocketEvent } from '../hooks/useWebSocket';
 import { useApi } from '../hooks/useApi';
 import { confidencePct, formatBetType, formatPredictionValue } from '../utils/teams';
+import { formatAmericanOdds } from '../utils/formatting';
 
 function StatCard({ icon: Icon, label, value, subValue, color, className }) {
   return (
@@ -64,11 +66,7 @@ function CustomTooltip({ active, payload, label }) {
   return null;
 }
 
-function formatAmericanOdds(odds) {
-  if (odds == null) return null;
-  const v = Math.round(odds);
-  return v > 0 ? `+${v}` : `${v}`;
-}
+
 
 function History() {
   const { data, loading, error, refetch, silentRefetch } = useApi(fetchTrackedBets);
@@ -82,6 +80,11 @@ function History() {
     window.addEventListener('data-synced', onSynced);
     return () => window.removeEventListener('data-synced', onSynced);
   }, [silentRefetch]);
+
+  // Refetch when WebSocket pushes updates (bets may have settled)
+  useWebSocketEvent('odds_update', useCallback(() => {
+    silentRefetch();
+  }, [silentRefetch]));
 
   const bets = data?.bets || [];
   const totalBets = data?.total_bets || 0;

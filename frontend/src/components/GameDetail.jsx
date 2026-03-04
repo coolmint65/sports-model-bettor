@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -17,8 +17,10 @@ import {
 import { format, formatDistanceToNowStrict } from 'date-fns';
 import { fetchGameDetails } from '../utils/api';
 import { useApi } from '../hooks/useApi';
+import { useWebSocketEvent } from '../hooks/useWebSocket';
 import PredictionCard from './PredictionCard';
 import { teamName, teamAbbrev, teamLogo, parseAsUTC, isLiveStatus } from '../utils/teams';
+import { formatAmericanOddsOrDash } from '../utils/formatting';
 
 const LIVE_POLL_INTERVAL = 30_000;
 
@@ -63,11 +65,7 @@ function StatComparison({ label, awayValue, homeValue, higherIsBetter = true, fo
   );
 }
 
-function formatAmericanOdds(odds) {
-  if (odds == null) return '-';
-  const rounded = Math.round(odds);
-  return rounded > 0 ? `+${rounded}` : `${rounded}`;
-}
+const formatAmericanOdds = formatAmericanOddsOrDash;
 
 function RecordPill({ label, value }) {
   if (!value) return null;
@@ -674,7 +672,7 @@ function GameDetail() {
 
   const { data: game, loading, error, refetch } = useApi(fetchGameDetails, [id]);
 
-  // Auto-poll for live games
+  // Auto-poll for live games (fallback)
   const isLive = game && isLiveStatus(game.status);
   const intervalRef = useRef(null);
   useEffect(() => {
@@ -690,6 +688,14 @@ function GameDetail() {
       }
     };
   }, [isLive, refetch]);
+
+  // Instantly refetch when WebSocket pushes odds update for this game
+  useWebSocketEvent('odds_update', useCallback((data) => {
+    const changedIds = (data?.changed_games || []).map((g) => g.game_id);
+    if (changedIds.includes(Number(id))) {
+      refetch();
+    }
+  }, [id, refetch]));
 
   if (loading) {
     return (

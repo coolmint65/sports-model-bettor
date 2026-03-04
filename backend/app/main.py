@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from app.config import DATA_DIR, settings
 from app.database import close_db, init_db
+from app.live import manager, start_scheduler, stop_scheduler, websocket_handler
 
 # Configure root logger so all app.* module loggers output to console and file
 _log_fmt = logging.Formatter(
@@ -60,7 +61,9 @@ logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     settings.db_dir.mkdir(parents=True, exist_ok=True)
     await init_db()
+    await start_scheduler()
     yield
+    await stop_scheduler()
     await close_db()
 
 
@@ -117,6 +120,13 @@ def create_app() -> FastAPI:
     application.include_router(games_router)
     application.include_router(players_router)
     application.include_router(predictions_router)
+
+    # WebSocket endpoint for live updates
+    from fastapi import WebSocket as WS
+
+    @application.websocket("/ws/live")
+    async def ws_live(ws: WS):
+        await websocket_handler(ws)
 
     # Static files
     static_dir = Path(__file__).resolve().parent.parent / "static"

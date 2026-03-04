@@ -1,12 +1,6 @@
 import { Target, TrendingUp, Star, CheckCircle, XCircle, AlertCircle, AlertTriangle } from 'lucide-react';
 import { confidencePct, formatBetType, formatPredictionValue } from '../utils/teams';
-
-function getConfidenceColor(confidence) {
-  if (confidence >= 75) return '#00ff88';
-  if (confidence >= 60) return '#4fc3f7';
-  if (confidence >= 45) return '#ffd700';
-  return '#ff5252';
-}
+import { getConfidenceColor } from '../utils/formatting';
 
 function getConfidenceLabel(confidence) {
   if (confidence >= 75) return 'Very High';

@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { BarChart3, Home, History, RefreshCw, Zap } from 'lucide-react';
+import { Home, History, RefreshCw, Zap, Wifi, WifiOff } from 'lucide-react';
 import { triggerDataSync } from '../utils/api';
 
-function Navbar() {
+function Navbar({ wsConnected }) {
   const location = useLocation();
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState('');
@@ -55,6 +55,15 @@ function Navbar() {
         </div>
 
         <div className="navbar-actions">
+          <div
+            className={`ws-status ${wsConnected ? 'ws-connected' : 'ws-disconnected'}`}
+            title={wsConnected ? 'Live updates active' : 'Reconnecting...'}
+          >
+            {wsConnected ? <Wifi size={14} /> : <WifiOff size={14} />}
+            <span className="ws-status-text">
+              {wsConnected ? 'Live' : 'Offline'}
+            </span>
+          </div>
           {syncMessage && (
             <span
               className={`sync-message ${

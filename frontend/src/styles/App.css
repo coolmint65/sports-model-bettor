@@ -198,6 +198,34 @@ a:hover {
   gap: 12px;
 }
 
+.ws-status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.ws-connected {
+  color: var(--accent-green);
+  background: rgba(0, 255, 136, 0.1);
+  border: 1px solid rgba(0, 255, 136, 0.2);
+}
+
+.ws-disconnected {
+  color: var(--accent-red);
+  background: rgba(255, 82, 82, 0.1);
+  border: 1px solid rgba(255, 82, 82, 0.2);
+}
+
+.ws-status-text {
+  line-height: 1;
+}
+
 .sync-message {
   font-size: 0.82rem;
   font-weight: 500;
