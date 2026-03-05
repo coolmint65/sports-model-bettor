@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 # background sync and API requests don't clash with "database is locked".
 engine = create_async_engine(
     settings.database_url,
-    echo=settings.debug,
+    echo=False,
     future=True,
     connect_args={"check_same_thread": False, "timeout": 30},
 )
