@@ -201,6 +201,14 @@ class OddsEvent:
         "total_odd", "total_even",
         "p1_total_line", "p1_over_price", "p1_under_price",
         "p1_home_ml", "p1_away_ml", "p1_draw_price",
+        # New prop odds (batch 2)
+        "p1_btts_yes", "p1_btts_no",
+        "p1_spread_line", "p1_home_spread_price", "p1_away_spread_price",
+        "reg_home_ml", "reg_away_ml", "reg_draw_price",
+        "home_team_total_line", "home_team_over", "home_team_under",
+        "away_team_total_line", "away_team_over", "away_team_under",
+        "highest_period_p1", "highest_period_p2", "highest_period_p3",
+        "highest_period_tie",
     )
 
     def __init__(
@@ -255,6 +263,25 @@ class OddsEvent:
         self.p1_home_ml: float = 0.0
         self.p1_away_ml: float = 0.0
         self.p1_draw_price: float = 0.0
+        # New props (batch 2)
+        self.p1_btts_yes: float = 0.0
+        self.p1_btts_no: float = 0.0
+        self.p1_spread_line: float = 0.0
+        self.p1_home_spread_price: float = 0.0
+        self.p1_away_spread_price: float = 0.0
+        self.reg_home_ml: float = 0.0
+        self.reg_away_ml: float = 0.0
+        self.reg_draw_price: float = 0.0
+        self.home_team_total_line: float = 0.0
+        self.home_team_over: float = 0.0
+        self.home_team_under: float = 0.0
+        self.away_team_total_line: float = 0.0
+        self.away_team_over: float = 0.0
+        self.away_team_under: float = 0.0
+        self.highest_period_p1: float = 0.0
+        self.highest_period_p2: float = 0.0
+        self.highest_period_p3: float = 0.0
+        self.highest_period_tie: float = 0.0
 
     def has_moneyline(self) -> bool:
         return self.home_ml != 0 and self.away_ml != 0
@@ -298,6 +325,24 @@ class OddsEvent:
             "p1_home_ml": self.p1_home_ml,
             "p1_away_ml": self.p1_away_ml,
             "p1_draw_price": self.p1_draw_price,
+            "p1_btts_yes": self.p1_btts_yes,
+            "p1_btts_no": self.p1_btts_no,
+            "p1_spread_line": self.p1_spread_line,
+            "p1_home_spread_price": self.p1_home_spread_price,
+            "p1_away_spread_price": self.p1_away_spread_price,
+            "reg_home_ml": self.reg_home_ml,
+            "reg_away_ml": self.reg_away_ml,
+            "reg_draw_price": self.reg_draw_price,
+            "home_team_total_line": self.home_team_total_line,
+            "home_team_over": self.home_team_over,
+            "home_team_under": self.home_team_under,
+            "away_team_total_line": self.away_team_total_line,
+            "away_team_over": self.away_team_over,
+            "away_team_under": self.away_team_under,
+            "highest_period_p1": self.highest_period_p1,
+            "highest_period_p2": self.highest_period_p2,
+            "highest_period_p3": self.highest_period_p3,
+            "highest_period_tie": self.highest_period_tie,
         }
 
 
@@ -520,7 +565,7 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
                             ev_info = event_map.get(eid, {})
                             home_mapped = _map_team(ev_info.get("home", ""))
 
-                            if "moneyline" in label or "winner" in label or "money line" in label:
+                            if "moneyline" in label or "winner" in label or "money line" in label or "result" in label:
                                 for oc in outcomes:
                                     odds_am = oc.get("oddsAmerican", "")
                                     try:
@@ -537,7 +582,7 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
                                         game_odds[eid].setdefault("p1_away_mls", []).append(odds_val)
                                 continue
 
-                            if "total" in label or "over" in label:
+                            if ("total" in label or "over" in label) and "both" not in label and "team" not in label:
                                 for oc in outcomes:
                                     line = oc.get("line", 0)
                                     odds_am = oc.get("oddsAmerican", "")
@@ -551,6 +596,39 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
                                         game_odds[eid].setdefault("p1_overs", []).append((line_val, odds_val))
                                     elif "under" in oc_label:
                                         game_odds[eid].setdefault("p1_unders", []).append((line_val, odds_val))
+                                continue
+
+                            # 1st Period Both Teams to Score
+                            if "both teams" in label or "btts" in label:
+                                for oc in outcomes:
+                                    odds_am = oc.get("oddsAmerican", "")
+                                    try:
+                                        odds_val = float(str(odds_am).replace("+", ""))
+                                    except (ValueError, TypeError):
+                                        continue
+                                    oc_label = (oc.get("label") or "").lower()
+                                    if "yes" in oc_label:
+                                        game_odds[eid].setdefault("p1_btts_yes_prices", []).append(odds_val)
+                                    elif "no" in oc_label:
+                                        game_odds[eid].setdefault("p1_btts_no_prices", []).append(odds_val)
+                                continue
+
+                            # 1st Period Spread
+                            if "spread" in label or "puck" in label or "handicap" in label:
+                                for oc in outcomes:
+                                    line = oc.get("line", 0)
+                                    odds_am = oc.get("oddsAmerican", "")
+                                    try:
+                                        odds_val = float(str(odds_am).replace("+", ""))
+                                        line_val = float(line)
+                                    except (ValueError, TypeError):
+                                        continue
+                                    oc_label = (oc.get("label") or "").strip()
+                                    mapped = _map_team(oc_label)
+                                    if mapped and mapped == home_mapped:
+                                        game_odds[eid].setdefault("p1_home_spread_prices", []).append((line_val, odds_val))
+                                    elif mapped:
+                                        game_odds[eid].setdefault("p1_away_spread_prices", []).append((line_val, odds_val))
                                 continue
 
                         # Skip remaining period markets (2nd, 3rd, etc.)
@@ -615,6 +693,76 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
                                     game_odds[eid].setdefault("fg_home_prices", []).append(odds_val)
                                 elif mapped:
                                     game_odds[eid].setdefault("fg_away_prices", []).append(odds_val)
+                            continue
+
+                        # Regulation Winner / Game Winner (excludes OT) — 3-way
+                        if ("game winner" in label or "regulation" in label) and "exclu" in label:
+                            ev_info = event_map.get(eid, {})
+                            home_mapped = _map_team(ev_info.get("home", ""))
+                            for oc in outcomes:
+                                odds_am = oc.get("oddsAmerican", "")
+                                try:
+                                    odds_val = float(str(odds_am).replace("+", ""))
+                                except (ValueError, TypeError):
+                                    continue
+                                oc_label = (oc.get("label") or "").strip()
+                                mapped = _map_team(oc_label)
+                                if oc_label.lower() in ("draw", "tie"):
+                                    game_odds[eid].setdefault("reg_draw_prices", []).append(odds_val)
+                                elif mapped and mapped == home_mapped:
+                                    game_odds[eid].setdefault("reg_home_prices", []).append(odds_val)
+                                elif mapped:
+                                    game_odds[eid].setdefault("reg_away_prices", []).append(odds_val)
+                            continue
+
+                        # Highest Scoring Period
+                        if "highest scoring" in label or "most goals" in label:
+                            for oc in outcomes:
+                                odds_am = oc.get("oddsAmerican", "")
+                                try:
+                                    odds_val = float(str(odds_am).replace("+", ""))
+                                except (ValueError, TypeError):
+                                    continue
+                                oc_label = (oc.get("label") or "").lower()
+                                if "1st" in oc_label:
+                                    game_odds[eid].setdefault("hp_p1_prices", []).append(odds_val)
+                                elif "2nd" in oc_label:
+                                    game_odds[eid].setdefault("hp_p2_prices", []).append(odds_val)
+                                elif "3rd" in oc_label:
+                                    game_odds[eid].setdefault("hp_p3_prices", []).append(odds_val)
+                                elif "tie" in oc_label or "equal" in oc_label or "draw" in oc_label:
+                                    game_odds[eid].setdefault("hp_tie_prices", []).append(odds_val)
+                            continue
+
+                        # Team Total Goals (individual team O/U)
+                        if "total" in label and ("team" in label or "goals" in label):
+                            ev_info = event_map.get(eid, {})
+                            home_mapped = _map_team(ev_info.get("home", ""))
+                            # Determine which team this is for
+                            is_home_total = any(
+                                _map_team(word) == home_mapped
+                                for word in label.split()
+                                if _map_team(word)
+                            )
+                            for oc in outcomes:
+                                line = oc.get("line", 0)
+                                odds_am = oc.get("oddsAmerican", "")
+                                try:
+                                    odds_val = float(str(odds_am).replace("+", ""))
+                                    line_val = float(line)
+                                except (ValueError, TypeError):
+                                    continue
+                                oc_label = (oc.get("label") or "").lower()
+                                if is_home_total:
+                                    if "over" in oc_label:
+                                        game_odds[eid].setdefault("home_tt_overs", []).append((line_val, odds_val))
+                                    elif "under" in oc_label:
+                                        game_odds[eid].setdefault("home_tt_unders", []).append((line_val, odds_val))
+                                else:
+                                    if "over" in oc_label:
+                                        game_odds[eid].setdefault("away_tt_overs", []).append((line_val, odds_val))
+                                    elif "under" in oc_label:
+                                        game_odds[eid].setdefault("away_tt_unders", []).append((line_val, odds_val))
                             continue
 
                         # Moneyline
@@ -807,6 +955,57 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
                     event.p1_total_line = p1_best_line
                     event.p1_over_price = round(max(p1_o))
                     event.p1_under_price = round(max(p1_u))
+
+            # 1st Period BTTS
+            if odds.get("p1_btts_yes_prices"):
+                event.p1_btts_yes = round(max(odds["p1_btts_yes_prices"]))
+            if odds.get("p1_btts_no_prices"):
+                event.p1_btts_no = round(max(odds["p1_btts_no_prices"]))
+            # 1st Period Spread — use the most common line
+            p1_hs = odds.get("p1_home_spread_prices", [])
+            p1_as = odds.get("p1_away_spread_prices", [])
+            if p1_hs and p1_as:
+                p1_sp_lines = Counter(abs(t[0]) for t in p1_hs)
+                p1_sp_best = p1_sp_lines.most_common(1)[0][0]
+                hs_match = [t for t in p1_hs if abs(t[0]) == p1_sp_best]
+                as_match = [t for t in p1_as if abs(t[0]) == p1_sp_best]
+                if hs_match and as_match:
+                    event.p1_spread_line = hs_match[0][0]
+                    event.p1_home_spread_price = round(max(t[1] for t in hs_match))
+                    event.p1_away_spread_price = round(max(t[1] for t in as_match))
+            # Regulation Winner (excludes OT)
+            if odds.get("reg_home_prices"):
+                event.reg_home_ml = round(max(odds["reg_home_prices"]))
+            if odds.get("reg_away_prices"):
+                event.reg_away_ml = round(max(odds["reg_away_prices"]))
+            if odds.get("reg_draw_prices"):
+                event.reg_draw_price = round(max(odds["reg_draw_prices"]))
+            # Highest Scoring Period
+            if odds.get("hp_p1_prices"):
+                event.highest_period_p1 = round(max(odds["hp_p1_prices"]))
+            if odds.get("hp_p2_prices"):
+                event.highest_period_p2 = round(max(odds["hp_p2_prices"]))
+            if odds.get("hp_p3_prices"):
+                event.highest_period_p3 = round(max(odds["hp_p3_prices"]))
+            if odds.get("hp_tie_prices"):
+                event.highest_period_tie = round(max(odds["hp_tie_prices"]))
+            # Team Total Goals
+            home_tt_o = odds.get("home_tt_overs", [])
+            home_tt_u = odds.get("home_tt_unders", [])
+            if home_tt_o and home_tt_u:
+                htt_lines = Counter(t[0] for t in home_tt_o)
+                htt_best = htt_lines.most_common(1)[0][0]
+                event.home_team_total_line = htt_best
+                event.home_team_over = round(max(t[1] for t in home_tt_o if t[0] == htt_best))
+                event.home_team_under = round(max(t[1] for t in home_tt_u if t[0] == htt_best))
+            away_tt_o = odds.get("away_tt_overs", [])
+            away_tt_u = odds.get("away_tt_unders", [])
+            if away_tt_o and away_tt_u:
+                att_lines = Counter(t[0] for t in away_tt_o)
+                att_best = att_lines.most_common(1)[0][0]
+                event.away_team_total_line = att_best
+                event.away_team_over = round(max(t[1] for t in away_tt_o if t[0] == att_best))
+                event.away_team_under = round(max(t[1] for t in away_tt_u if t[0] == att_best))
 
             if event.home_abbr and event.away_abbr:
                 events.append(_validate_event(event))
@@ -1643,7 +1842,7 @@ async def _fetch_odds_api_raw(
         params = {
             "apiKey": api_key,
             "regions": region,
-            "markets": "h2h,spreads,totals,btts,h2h_h1,totals_h1",
+            "markets": "h2h,spreads,totals,btts,h2h_h1,totals_h1,spreads_h1",
             "oddsFormat": "american",
         }
 
@@ -1718,6 +1917,8 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
         all_p1_away_ml: List[float] = []
         all_p1_draw: List[float] = []
         all_p1_total: List[Tuple[float, float, float]] = []
+        all_p1_home_spread: List[Tuple[float, float]] = []  # (line, price)
+        all_p1_away_spread: List[Tuple[float, float]] = []
 
         for bm in ev.get("bookmakers", []):
             bm_key = bm.get("key", "").lower().replace("-", "_")
@@ -1797,6 +1998,17 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
                             under_p = price
                     if line > 0:
                         all_p1_total.append((line, over_p, under_p))
+
+                elif mkey == "spreads_h1":
+                    # 1st period spread
+                    for oc in outcomes:
+                        name = oc.get("name", "")
+                        point = float(oc.get("point", 0))
+                        price = float(oc.get("price", 0))
+                        if name == home_team:
+                            all_p1_home_spread.append((point, price))
+                        elif name == away_team:
+                            all_p1_away_spread.append((point, price))
 
         # Best odds across books
         home_ml = max(all_home_ml) if all_home_ml else 0
@@ -1887,6 +2099,16 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
             event.p1_total_line = p1_consensus
             event.p1_over_price = round(sum(t[1] for t in p1_consensus_totals) / len(p1_consensus_totals))
             event.p1_under_price = round(sum(t[2] for t in p1_consensus_totals) / len(p1_consensus_totals))
+        if all_p1_home_spread and all_p1_away_spread:
+            # Consensus P1 spread line
+            p1s_counts = Counter(abs(s[0]) for s in all_p1_home_spread)
+            p1s_consensus = p1s_counts.most_common(1)[0][0]
+            p1s_home = [s for s in all_p1_home_spread if abs(s[0]) == p1s_consensus]
+            p1s_away = [s for s in all_p1_away_spread if abs(s[0]) == p1s_consensus]
+            if p1s_home and p1s_away:
+                event.p1_spread_line = p1s_home[0][0]
+                event.p1_home_spread_price = round(max(s[1] for s in p1s_home))
+                event.p1_away_spread_price = round(max(s[1] for s in p1s_away))
 
         if event.home_abbr and event.away_abbr:
             events.append(_validate_event(event))
@@ -2685,6 +2907,26 @@ def _merge_odds_events(
         prop_p1_away = [e.p1_away_ml for e in ev_list]
         prop_p1_draw = [e.p1_draw_price for e in ev_list]
 
+        # New props (batch 2)
+        prop_p1_btts_yes = [e.p1_btts_yes for e in ev_list]
+        prop_p1_btts_no = [e.p1_btts_no for e in ev_list]
+        prop_p1_sp_line = [e.p1_spread_line for e in ev_list if e.p1_spread_line and e.p1_spread_line != 0.0]
+        prop_p1_sp_home = [e.p1_home_spread_price for e in ev_list]
+        prop_p1_sp_away = [e.p1_away_spread_price for e in ev_list]
+        prop_reg_home = [e.reg_home_ml for e in ev_list]
+        prop_reg_away = [e.reg_away_ml for e in ev_list]
+        prop_reg_draw = [e.reg_draw_price for e in ev_list]
+        prop_htt_line = [e.home_team_total_line for e in ev_list if e.home_team_total_line and e.home_team_total_line != 0.0]
+        prop_htt_over = [e.home_team_over for e in ev_list]
+        prop_htt_under = [e.home_team_under for e in ev_list]
+        prop_att_line = [e.away_team_total_line for e in ev_list if e.away_team_total_line and e.away_team_total_line != 0.0]
+        prop_att_over = [e.away_team_over for e in ev_list]
+        prop_att_under = [e.away_team_under for e in ev_list]
+        prop_hp_p1 = [e.highest_period_p1 for e in ev_list]
+        prop_hp_p2 = [e.highest_period_p2 for e in ev_list]
+        prop_hp_p3 = [e.highest_period_p3 for e in ev_list]
+        prop_hp_tie = [e.highest_period_tie for e in ev_list]
+
         best_prop_odds = {
             "btts_yes_price": _best_price(prop_btts_yes),
             "btts_no_price": _best_price(prop_btts_no),
@@ -2700,12 +2942,44 @@ def _merge_odds_events(
             "period1_home_ml": _best_price(prop_p1_home),
             "period1_away_ml": _best_price(prop_p1_away),
             "period1_draw_price": _best_price(prop_p1_draw),
+            # Batch 2
+            "period1_btts_yes_price": _best_price(prop_p1_btts_yes),
+            "period1_btts_no_price": _best_price(prop_p1_btts_no),
+            "period1_spread_line": prop_p1_sp_line[0] if prop_p1_sp_line else None,
+            "period1_home_spread_price": _best_price(prop_p1_sp_home),
+            "period1_away_spread_price": _best_price(prop_p1_sp_away),
+            "regulation_home_price": _best_price(prop_reg_home),
+            "regulation_away_price": _best_price(prop_reg_away),
+            "regulation_draw_price": _best_price(prop_reg_draw),
+            "home_team_total_line": prop_htt_line[0] if prop_htt_line else None,
+            "home_team_over_price": _best_price(prop_htt_over),
+            "home_team_under_price": _best_price(prop_htt_under),
+            "away_team_total_line": prop_att_line[0] if prop_att_line else None,
+            "away_team_over_price": _best_price(prop_att_over),
+            "away_team_under_price": _best_price(prop_att_under),
+            "highest_period_p1_price": _best_price(prop_hp_p1),
+            "highest_period_p2_price": _best_price(prop_hp_p2),
+            "highest_period_p3_price": _best_price(prop_hp_p3),
+            "highest_period_tie_price": _best_price(prop_hp_tie),
         }
         # Use the most common p1 total line across sources
         if prop_p1_line:
             from collections import Counter
             best_prop_odds["period1_total_line"] = Counter(
                 round(v * 2) / 2 for v in prop_p1_line
+            ).most_common(1)[0][0]
+        # Most common team total lines
+        if prop_htt_line:
+            best_prop_odds["home_team_total_line"] = Counter(
+                round(v * 2) / 2 for v in prop_htt_line
+            ).most_common(1)[0][0]
+        if prop_att_line:
+            best_prop_odds["away_team_total_line"] = Counter(
+                round(v * 2) / 2 for v in prop_att_line
+            ).most_common(1)[0][0]
+        if prop_p1_sp_line:
+            best_prop_odds["period1_spread_line"] = Counter(
+                round(v * 2) / 2 for v in prop_p1_sp_line
             ).most_common(1)[0][0]
 
         # Count how many prop fields were found
@@ -3124,6 +3398,18 @@ class MultiSourceOddsScraper:
                     "total_odd_price", "total_even_price",
                     "period1_total_line", "period1_over_price", "period1_under_price",
                     "period1_home_ml", "period1_away_ml", "period1_draw_price",
+                    # Batch 2
+                    "period1_btts_yes_price", "period1_btts_no_price",
+                    "period1_spread_line", "period1_home_spread_price",
+                    "period1_away_spread_price",
+                    "regulation_home_price", "regulation_away_price",
+                    "regulation_draw_price",
+                    "home_team_total_line", "home_team_over_price",
+                    "home_team_under_price",
+                    "away_team_total_line", "away_team_over_price",
+                    "away_team_under_price",
+                    "highest_period_p1_price", "highest_period_p2_price",
+                    "highest_period_p3_price", "highest_period_tie_price",
                 ):
                     val = props.get(field)
                     if val is not None:
