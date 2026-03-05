@@ -1833,6 +1833,10 @@ async def _fetch_odds_api_raw(
 
     api_key = settings.odds_api_key
     if not api_key:
+        logger.warning(
+            "ODDS_API_KEY is not set — The Odds API will not be called. "
+            "Create backend/.env with your key (see .env.example)."
+        )
         return None
 
     url = "https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds"
