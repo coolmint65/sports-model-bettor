@@ -7,6 +7,7 @@ sport-specific settings, and application-wide constants.
 
 import os
 import sys
+from datetime import date
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -36,6 +37,17 @@ else:
 
 # Data directory for SQLite database and any local data files
 DATA_DIR = BASE_DIR / "data"
+
+
+def _current_nhl_season() -> str:
+    """Compute the current NHL season string (e.g. '20252026').
+
+    The NHL season starts in October — if we're in Jan-Aug, we're in the
+    second half of the previous year's season.
+    """
+    today = date.today()
+    start_year = today.year if today.month >= 9 else today.year - 1
+    return f"{start_year}{start_year + 1}"
 
 
 class SportConfig(BaseModel):
@@ -91,7 +103,7 @@ class Settings(BaseModel):
         "nhl": SportConfig(
             name="NHL",
             api_base_url="https://api-web.nhle.com/v1",
-            default_season="20252026",
+            default_season=_current_nhl_season(),
             game_types={
                 "preseason": "1",
                 "regular": "2",
