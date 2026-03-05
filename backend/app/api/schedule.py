@@ -288,8 +288,9 @@ def _grade_top_pick(pick: GameTopPick, game: Game) -> Optional[str]:
             return "win" if val == actual else "loss"
 
     elif pick.bet_type == "overtime":
-        went_ot = game.went_to_overtime or False
-        return "win" if (val == "yes") == went_ot else "loss"
+        if game.went_to_overtime is None:
+            return None  # OT status not yet synced
+        return "win" if (val == "yes") == game.went_to_overtime else "loss"
 
     elif pick.bet_type == "odd_even":
         total = hs + aws
@@ -297,14 +298,13 @@ def _grade_top_pick(pick: GameTopPick, game: Game) -> Optional[str]:
         return "win" if val == actual else "loss"
 
     elif pick.bet_type == "regulation_winner":
-        reg_home = hs - (game.home_score_ot or 0)
-        reg_away = aws - (game.away_score_ot or 0)
-        if reg_home > reg_away:
-            actual = "home"
-        elif reg_away > reg_home:
-            actual = "away"
-        else:
+        if game.went_to_overtime is None:
+            return None  # OT data not yet synced
+        if game.went_to_overtime:
+            # Game went to OT — regulation ended in a draw
             actual = "draw"
+        else:
+            actual = "home" if hs > aws else "away"
         return "win" if val == actual else "loss"
 
     elif pick.bet_type == "team_total":
@@ -323,6 +323,8 @@ def _grade_top_pick(pick: GameTopPick, game: Game) -> Optional[str]:
             return None
 
     elif pick.bet_type == "highest_scoring_period":
+        if game.home_score_p1 is None or game.away_score_p1 is None:
+            return None  # period scores not yet synced
         hp1 = game.home_score_p1 or 0
         ap1 = game.away_score_p1 or 0
         hp2 = game.home_score_p2 or 0
