@@ -111,7 +111,11 @@ _scheduler_running = False
 
 
 async def _sync_odds_and_broadcast():
-    """Fetch latest odds via service layer, detect changes, broadcast."""
+    """Fetch latest odds, detect changes, broadcast.
+
+    This is the fast path: odds-only, no prediction regeneration.
+    Predictions are regenerated separately on a slower cadence.
+    """
     global _last_odds_snapshot
 
     try:
@@ -135,9 +139,11 @@ async def _sync_odds_and_broadcast():
             for g in games:
                 _snapshot_game_odds(g)  # populate pre-sync snapshots
 
-            # Use service layer for sync + prediction regen
-            from app.services.odds import sync_odds_and_regenerate
-            matched, pred_count = await sync_odds_and_regenerate(session)
+            # Odds-only sync (no prediction regen) — force=True to
+            # bypass the service-layer throttle since the scheduler
+            # already controls pacing.
+            from app.services.odds import sync_odds
+            matched = await sync_odds(session, force=True)
 
             if not matched:
                 return
@@ -180,15 +186,59 @@ async def _sync_odds_and_broadcast():
                     "type": "odds_update",
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "changed_games": changed_games,
-                    "predictions_updated": pred_count > 0,
                 })
                 logger.info(
-                    "Broadcast odds update: %d games changed, predictions=%d, clients=%d",
-                    len(changed_games), pred_count, manager.client_count,
+                    "Broadcast odds update: %d games changed, clients=%d",
+                    len(changed_games), manager.client_count,
                 )
 
     except Exception as exc:
         logger.error("Background odds sync failed: %s", exc, exc_info=True)
+
+
+async def _regenerate_predictions():
+    """Regenerate predictions for today's non-final games.
+
+    Runs on a slower cadence than odds sync since predictions don't
+    need to update every 30 seconds.
+    """
+    try:
+        async with get_session_context() as session:
+            from datetime import date as date_type
+
+            from sqlalchemy import delete as sa_delete
+
+            from app.analytics.predictions import PredictionManager
+            from app.models.prediction import Prediction
+
+            today = date_type.today()
+
+            async with session.begin_nested():
+                non_final_ids = select(Game.id).where(
+                    Game.date == today,
+                    ~func.lower(Game.status).in_(GAME_FINAL_STATUSES),
+                )
+                await session.execute(
+                    sa_delete(Prediction).where(
+                        Prediction.game_id.in_(non_final_ids)
+                    )
+                )
+                await session.flush()
+                pm = PredictionManager()
+                bets = await pm.get_best_bets(session)
+                pred_count = len(bets) if bets else 0
+
+            logger.info("Predictions regenerated: %d bets", pred_count)
+
+            # Notify clients that predictions were updated
+            if pred_count > 0 and manager.client_count > 0:
+                await manager.broadcast({
+                    "type": "predictions_update",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
+
+    except Exception as exc:
+        logger.error("Prediction regeneration failed: %s", exc, exc_info=True)
 
 
 async def _run_full_data_sync():
@@ -209,16 +259,21 @@ async def _run_full_data_sync():
 
 
 async def _scheduler_loop():
-    """Adaptive scheduler: fast when live, moderate for pregame, idle otherwise.
+    """Adaptive scheduler: fast odds when live, slower predictions & full sync.
 
-    Also runs a full data sync (schedule + teams + rosters) on startup and
-    every 30 minutes to keep data fresh without requiring a manual sync button.
+    Timing strategy:
+    - Live games: odds every 30s, predictions every 5min
+    - Pregame: odds every 90s, predictions every 5min
+    - Idle: odds every 5min, predictions every 10min
+    - Full data sync: every 30min, runs in a separate task so it never
+      blocks the odds loop
     """
     global _scheduler_running
 
     LIVE_INTERVAL = 30       # 30 seconds when games are live
-    PREGAME_INTERVAL = 120   # 2 minutes for pregame odds
+    PREGAME_INTERVAL = 90    # 90 seconds for pregame odds
     IDLE_INTERVAL = 300      # 5 minutes when nothing happening
+    PRED_REGEN_INTERVAL = 300  # 5 minutes between prediction regenerations
     FULL_SYNC_INTERVAL = 1800  # 30 minutes for full data refresh
 
     _scheduler_running = True
@@ -226,10 +281,15 @@ async def _scheduler_loop():
 
     # Run a full data sync on startup
     await _run_full_data_sync()
-    last_full_sync = asyncio.get_event_loop().time()
+    loop = asyncio.get_event_loop()
+    last_full_sync = loop.time()
+    last_pred_regen = loop.time()
+    _full_sync_task: Optional[asyncio.Task] = None
 
     while _scheduler_running:
         try:
+            cycle_start = loop.time()
+
             # Determine current interval based on game state
             interval = IDLE_INTERVAL
             try:
@@ -266,13 +326,27 @@ async def _scheduler_loop():
             if has_upcoming or has_clients:
                 await _sync_odds_and_broadcast()
 
-            # Periodic full data sync every 30 minutes
-            now = asyncio.get_event_loop().time()
+            # Regenerate predictions on a slower cadence
+            now = loop.time()
+            if now - last_pred_regen >= PRED_REGEN_INTERVAL:
+                if has_upcoming or has_clients:
+                    await _regenerate_predictions()
+                last_pred_regen = now
+
+            # Periodic full data sync — run as background task so it
+            # never blocks the fast odds loop
+            now = loop.time()
             if now - last_full_sync >= FULL_SYNC_INTERVAL:
-                await _run_full_data_sync()
+                if _full_sync_task is None or _full_sync_task.done():
+                    _full_sync_task = asyncio.create_task(_run_full_data_sync())
                 last_full_sync = now
 
-            await asyncio.sleep(interval)
+            # Sleep only the remaining time in the interval, accounting
+            # for how long the sync took
+            elapsed = loop.time() - cycle_start
+            sleep_time = max(0, interval - elapsed)
+            if sleep_time > 0:
+                await asyncio.sleep(sleep_time)
 
         except asyncio.CancelledError:
             break

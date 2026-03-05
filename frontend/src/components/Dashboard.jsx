@@ -31,11 +31,15 @@ function Dashboard() {
     }
   }, []);
 
-  // Instantly refetch when WebSocket pushes odds/predictions updates
+  // Instantly refetch when WebSocket pushes odds or predictions updates
   useWebSocketEvent('odds_update', useCallback(() => {
     silentRefetch();
     pollLive();
   }, [silentRefetch, pollLive]));
+
+  useWebSocketEvent('predictions_update', useCallback(() => {
+    silentRefetch();
+  }, [silentRefetch]));
 
   const today = format(new Date(), 'EEEE, MMMM d, yyyy');
   const games = scheduleData?.games || scheduleData || [];
