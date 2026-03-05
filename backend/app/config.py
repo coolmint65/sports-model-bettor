@@ -6,6 +6,7 @@ sport-specific settings, and application-wide constants.
 """
 
 import os
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -17,7 +18,21 @@ from pydantic import BaseModel
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Load .env from the backend/ directory
-load_dotenv(BASE_DIR / ".env")
+_env_path = BASE_DIR / ".env"
+_env_loaded = load_dotenv(_env_path)
+
+# Startup diagnostics — print to stderr so they appear even before logging
+# is configured.  This helps debug ".env not found" issues.
+if _env_loaded:
+    _key_val = os.environ.get("ODDS_API_KEY", "")
+    _masked = f"{_key_val[:6]}...{_key_val[-4:]}" if len(_key_val) > 10 else "(empty)"
+    print(f"[config] Loaded .env from {_env_path}  ODDS_API_KEY={_masked}", file=sys.stderr)
+else:
+    print(
+        f"[config] WARNING: .env not found at {_env_path} — "
+        f"ODDS_API_KEY will be empty. Copy .env.example to .env and add your key.",
+        file=sys.stderr,
+    )
 
 # Data directory for SQLite database and any local data files
 DATA_DIR = BASE_DIR / "data"

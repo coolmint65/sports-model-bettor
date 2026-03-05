@@ -513,7 +513,7 @@ class PredictionManager:
             phase=phase,
         )
         db.add(prediction)
-        logger.info(
+        logger.debug(
             "Persisted prediction: game=%d, type=%s, value=%s, conf=%.3f, edge=%s",
             game_id, bet_type, prediction_value, confidence, edge,
         )

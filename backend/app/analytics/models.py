@@ -1331,7 +1331,7 @@ class BettingModel:
                             # Alt line is BELOW primary but over implied is
                             # not higher — odds are inconsistent (likely
                             # period total or bad data).
-                            logger.warning(
+                            logger.debug(
                                 "Rejecting alt total %.1f: over implied %.3f "
                                 "not > primary %.1f over implied %.3f",
                                 lv, alt_over_implied,
@@ -1341,7 +1341,7 @@ class BettingModel:
                         if lv > primary_ou_val and alt_over_implied >= primary_over_implied:
                             # Alt line is ABOVE primary but over implied is
                             # not lower — odds are inconsistent.
-                            logger.warning(
+                            logger.debug(
                                 "Rejecting alt total %.1f: over implied %.3f "
                                 "not < primary %.1f over implied %.3f",
                                 lv, alt_over_implied,
@@ -1560,7 +1560,7 @@ class BettingModel:
                     if (primary_home_spread_imp is not None
                             and alt_home_imp is not None
                             and abs(alt_home_imp - primary_home_spread_imp) > 0.25):
-                        logger.warning(
+                        logger.debug(
                             "Rejecting alt spread %.1f: home implied %.3f "
                             "vs primary %.3f (diff > 25pp)",
                             lv, alt_home_imp, primary_home_spread_imp,
@@ -1569,7 +1569,7 @@ class BettingModel:
                     if (primary_away_spread_imp is not None
                             and alt_away_imp is not None
                             and abs(alt_away_imp - primary_away_spread_imp) > 0.25):
-                        logger.warning(
+                        logger.debug(
                             "Rejecting alt spread %.1f: away implied %.3f "
                             "vs primary %.3f (diff > 25pp)",
                             lv, alt_away_imp, primary_away_spread_imp,
