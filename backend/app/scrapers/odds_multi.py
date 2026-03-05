@@ -453,15 +453,18 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
         "https://sportsbook.draftkings.com/sites/US-SB/api/v5/eventgroups/42133?format=json",
         "https://sportsbook-us-nj.draftkings.com/sites/US-NJ-SB/api/v5/eventgroups/42133?format=json",
         "https://sportsbook-us-il.draftkings.com/sites/US-IL-SB/api/v5/eventgroups/42133?format=json",
+        "https://sportsbook-us-pa.draftkings.com/sites/US-PA-SB/api/v5/eventgroups/42133?format=json",
+        "https://sportsbook-us-co.draftkings.com/sites/US-CO-SB/api/v5/eventgroups/42133?format=json",
     ]
     data = None
     for url in urls:
         data = await _make_request(client, url, headers=headers)
         if data:
+            logger.info("DraftKings: connected via %s", url.split("/sites/")[1].split("/")[0] if "/sites/" in url else url)
             break
 
     if not data:
-        logger.info("DraftKings: no data returned")
+        logger.warning("DraftKings: all %d endpoints failed — no data", len(urls))
         return events
 
     try:

@@ -19,7 +19,14 @@ from pydantic import BaseModel
 
 from app.config import DATA_DIR, settings
 from app.database import close_db, init_db
-from app.live import manager, start_scheduler, stop_scheduler, websocket_handler
+from app.live import (
+    ensure_scheduler_alive,
+    manager,
+    scheduler_status,
+    start_scheduler,
+    stop_scheduler,
+    websocket_handler,
+)
 
 # Configure root logger so all app.* module loggers output to console and file
 _log_fmt = logging.Formatter(
@@ -73,6 +80,9 @@ class HealthResponse(BaseModel):
     version: str
     sport: str
     timestamp: str
+    scheduler_running: bool = False
+    scheduler_task_alive: bool = False
+    websocket_clients: int = 0
 
 
 def create_app() -> FastAPI:
@@ -94,12 +104,18 @@ def create_app() -> FastAPI:
     # Health check
     @application.get("/health", response_model=HealthResponse, tags=["health"])
     async def health_check():
+        # Auto-restart scheduler if it died
+        await ensure_scheduler_alive()
+        sched = scheduler_status()
         return HealthResponse(
             status="healthy",
             app_name=settings.app_name,
             version=settings.app_version,
             sport=settings.default_sport,
             timestamp=datetime.now(timezone.utc).isoformat(),
+            scheduler_running=sched["scheduler_running"],
+            scheduler_task_alive=sched["scheduler_task_alive"],
+            websocket_clients=sched["websocket_clients"],
         )
 
     # Register all API routers from individual modules

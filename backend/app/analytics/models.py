@@ -53,8 +53,8 @@ LEAGUE_AVG_TOP6_PPG = 0.65
 # League average save percentage for baseline comparisons
 LEAGUE_AVG_SAVE_PCT = 0.905
 
-# Common betting lines
-TOTAL_LINES = [4.5, 5.5, 6.5]
+# Common NHL sportsbook total lines (4.5 is not offered by sportsbooks)
+TOTAL_LINES = [5.5, 6.5, 7.5]
 # Standard NHL puck line (favorite -1.5, underdog +1.5)
 PUCK_LINE = 1.5
 
@@ -1450,40 +1450,44 @@ class BettingModel:
                     "details": totals,
                 })
             else:
-                # No sportsbook lines at all — use best model probability
-                best_total_pred = None
-                best_total_prob = 0.0
-                for line_val in TOTAL_LINES:
-                    over_key = f"over_{line_val}"
-                    under_key = f"under_{line_val}"
-                    over_p = lines.get(over_key, 0.5)
-                    under_p = lines.get(under_key, 0.5)
+                # No sportsbook lines at all — pick the standard line
+                # closest to the model's projected total, then recommend
+                # over or under on that line.  This avoids always picking
+                # the lowest line (e.g., over_5.5) just because it has the
+                # highest raw probability.
+                best_line = min(
+                    TOTAL_LINES,
+                    key=lambda l: abs(l - total_xg),
+                )
+                over_key = f"over_{best_line}"
+                under_key = f"under_{best_line}"
+                over_p = lines.get(over_key, 0.5)
+                under_p = lines.get(under_key, 0.5)
 
-                    if over_p > best_total_prob:
-                        best_total_prob = over_p
-                        best_total_pred = over_key
-                    if under_p > best_total_prob:
-                        best_total_prob = under_p
-                        best_total_pred = under_key
+                if over_p >= under_p:
+                    best_total_pred = over_key
+                    best_total_prob = over_p
+                else:
+                    best_total_pred = under_key
+                    best_total_prob = under_p
 
-                if best_total_pred:
-                    direction = "over" if "over" in best_total_pred else "under"
-                    line_num = best_total_pred.split("_", 1)[1]
-                    predictions.append({
-                        "bet_type": "total",
-                        "prediction": best_total_pred,
-                        "confidence": round(best_total_prob, 4),
-                        "probability": round(best_total_prob, 4),
-                        "implied_probability": None,
-                        "odds": None,
-                        "reasoning": (
-                            f"Model projects {total_xg:.1f} total goals. "
-                            f"{direction.capitalize()} {line_num} at {best_total_prob:.1%} probability. "
-                            f"Based on {home_abbr} xG {totals['home_xg']:.2f} + "
-                            f"{away_abbr} xG {totals['away_xg']:.2f}."
-                        ),
-                        "details": totals,
-                    })
+                direction = "over" if "over" in best_total_pred else "under"
+                predictions.append({
+                    "bet_type": "total",
+                    "prediction": best_total_pred,
+                    "confidence": round(best_total_prob, 4),
+                    "probability": round(best_total_prob, 4),
+                    "implied_probability": None,
+                    "odds": None,
+                    "reasoning": (
+                        f"Model projects {total_xg:.1f} total goals. "
+                        f"{direction.capitalize()} {best_line} at {best_total_prob:.1%} probability "
+                        f"(no sportsbook line available, using nearest standard line). "
+                        f"Based on {home_abbr} xG {totals['home_xg']:.2f} + "
+                        f"{away_abbr} xG {totals['away_xg']:.2f}."
+                    ),
+                    "details": totals,
+                })
         except Exception as e:
             logger.error("Total goals prediction failed: %s", e)
 
@@ -2132,6 +2136,15 @@ class BettingModel:
             })
         except Exception as e:
             logger.error("Period 1 spread prediction failed: %s", e)
+
+        # Compute edge for all predictions that have implied probability
+        # but no edge yet (props don't compute it inline).
+        for pred in predictions:
+            if pred.get("edge") is None and pred.get("implied_probability") is not None:
+                pred["edge"] = round(
+                    (pred.get("confidence", 0) or 0) - pred["implied_probability"],
+                    4,
+                )
 
         # Sort by confidence descending
         predictions.sort(key=lambda p: p["confidence"], reverse=True)

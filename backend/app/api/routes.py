@@ -208,8 +208,88 @@ async def health_check() -> HealthResponse:
 @health_router.get("/health/scheduler")
 async def scheduler_health():
     """Return scheduler status for debugging live odds freshness."""
-    from app.live import scheduler_status
+    from app.live import ensure_scheduler_alive, scheduler_status
+    await ensure_scheduler_alive()
     return scheduler_status()
+
+
+@health_router.get("/health/odds-sources")
+async def odds_sources_health():
+    """Test which odds sources are reachable and returning data."""
+    import httpx
+    from app.config import settings
+
+    results = {}
+
+    # Check API key
+    results["odds_api_key_configured"] = bool(settings.odds_api_key)
+
+    async with httpx.AsyncClient() as client:
+        # Test DraftKings
+        dk_urls = [
+            "https://sportsbook.draftkings.com/sites/US-SB/api/v5/eventgroups/42133?format=json",
+            "https://sportsbook-us-nj.draftkings.com/sites/US-NJ-SB/api/v5/eventgroups/42133?format=json",
+        ]
+        dk_ok = False
+        for url in dk_urls:
+            try:
+                resp = await client.get(
+                    url,
+                    headers={"User-Agent": "Mozilla/5.0"},
+                    timeout=10.0,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    events = data.get("eventGroup", {}).get("events", [])
+                    results["draftkings"] = {"status": "ok", "events": len(events)}
+                    dk_ok = True
+                    break
+                else:
+                    results["draftkings"] = {"status": f"http_{resp.status_code}"}
+            except Exception as e:
+                results["draftkings"] = {"status": "error", "detail": str(e)[:100]}
+
+        # Test Odds API
+        if settings.odds_api_key:
+            try:
+                resp = await client.get(
+                    "https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds",
+                    params={
+                        "apiKey": settings.odds_api_key,
+                        "regions": "us",
+                        "markets": "h2h",
+                    },
+                    timeout=10.0,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    results["odds_api"] = {"status": "ok", "events": len(data)}
+                    remaining = resp.headers.get("x-requests-remaining", "?")
+                    results["odds_api"]["requests_remaining"] = remaining
+                else:
+                    results["odds_api"] = {"status": f"http_{resp.status_code}"}
+            except Exception as e:
+                results["odds_api"] = {"status": "error", "detail": str(e)[:100]}
+        else:
+            results["odds_api"] = {"status": "no_api_key"}
+
+        # Test Bovada
+        try:
+            resp = await client.get(
+                "https://www.bovada.lv/services/sports/event/coupon/events/A/description/hockey/nhl",
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=10.0,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                events = len(data) if isinstance(data, list) else 0
+                results["bovada"] = {"status": "ok", "events": events}
+            else:
+                results["bovada"] = {"status": f"http_{resp.status_code}"}
+        except Exception as e:
+            results["bovada"] = {"status": "error", "detail": str(e)[:100]}
+
+    return results
 
 
 # ---------------------------------------------------------------------------
