@@ -592,6 +592,14 @@ class BettingModel:
         home_periods = features.get("home_periods", {})
         away_periods = features.get("away_periods", {})
 
+        # If a team has no period data (games_found == 0), all values will
+        # be 0.0 which produces unrealistically low xG.  Fall back to
+        # league-average defaults (~0.8 goals per period per team) so the
+        # Poisson model produces realistic probabilities.
+        _DEFAULT_PERIOD_XG = 0.8
+        home_has_data = home_periods.get("games_found", 0) > 0
+        away_has_data = away_periods.get("games_found", 0) > 0
+
         period_labels = ["p1", "p2", "p3"]
         period_fields_for = ["avg_p1_for", "avg_p2_for", "avg_p3_for"]
         period_fields_against = ["avg_p1_against", "avg_p2_against", "avg_p3_against"]
@@ -599,14 +607,22 @@ class BettingModel:
         results = {}
         for idx, label in enumerate(period_labels):
             # Home team expected goals in this period
-            home_p_for = home_periods.get(period_fields_for[idx], 0.8)
-            away_p_against = away_periods.get(period_fields_against[idx], 0.8)
+            home_p_for = home_periods.get(period_fields_for[idx], _DEFAULT_PERIOD_XG)
+            if not home_has_data:
+                home_p_for = _DEFAULT_PERIOD_XG
+            away_p_against = away_periods.get(period_fields_against[idx], _DEFAULT_PERIOD_XG)
+            if not away_has_data:
+                away_p_against = _DEFAULT_PERIOD_XG
             # Blend team's scoring with opponent's allowing
             home_p_xg = (home_p_for + away_p_against) / 2.0
 
             # Away team expected goals in this period
-            away_p_for = away_periods.get(period_fields_for[idx], 0.8)
-            home_p_against = home_periods.get(period_fields_against[idx], 0.8)
+            away_p_for = away_periods.get(period_fields_for[idx], _DEFAULT_PERIOD_XG)
+            if not away_has_data:
+                away_p_for = _DEFAULT_PERIOD_XG
+            home_p_against = home_periods.get(period_fields_against[idx], _DEFAULT_PERIOD_XG)
+            if not home_has_data:
+                home_p_against = _DEFAULT_PERIOD_XG
             away_p_xg = (away_p_for + home_p_against) / 2.0
 
             # Add small home advantage for first period
