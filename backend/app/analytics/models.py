@@ -53,8 +53,10 @@ LEAGUE_AVG_TOP6_PPG = 0.65
 # League average save percentage for baseline comparisons
 LEAGUE_AVG_SAVE_PCT = 0.905
 
-# Common NHL sportsbook total lines (4.5 is not offered by sportsbooks)
-TOTAL_LINES = [5.5, 6.5, 7.5]
+# Standard NHL sportsbook total lines.
+# The primary line is usually 5.5 or 6.5, but 4.5 appears in low-scoring
+# matchups and lines shift during live play, so we cover the full range.
+TOTAL_LINES = [3.5, 4.5, 5.5, 6.5, 7.5, 8.5]
 # Standard NHL puck line (favorite -1.5, underdog +1.5)
 PUCK_LINE = 1.5
 
@@ -382,7 +384,7 @@ class BettingModel:
         max_g = POISSON_MAX_GOALS
 
         # Build the set of lines to evaluate:
-        # 1) Standard lines (4.5, 5.5, 6.5)
+        # 1) Standard lines (3.5 through 8.5)
         # 2) The primary sportsbook line
         # 3) ALL available alternate lines from sportsbooks
         eval_lines = set(TOTAL_LINES)
