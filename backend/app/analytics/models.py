@@ -405,7 +405,7 @@ class BettingModel:
                 eval_lines.add(normalized)
                 if normalized != float(book_ou):
                     logger.info(
-                        "Normalized sportsbook O/U line %.1f → %.1f",
+                        "Normalized sportsbook O/U line %.1f -> %.1f",
                         float(book_ou), normalized,
                     )
                     odds_data["over_under_line"] = normalized

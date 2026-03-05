@@ -710,7 +710,7 @@ async def get_best_bets(
         )
     )
     for row in odds_check.all():
-        logger.info(
+        logger.debug(
             "Best-bets odds state: game=%d ml=%s ou=%s spread=%s updated=%s",
             row[0], row[1], row[2], row[3], row[4],
         )
@@ -788,7 +788,7 @@ async def get_best_bets(
         null_odds, has_odds, market_type,
     )
     for r in all_pred_rows[:20]:
-        logger.info(
+        logger.debug(
             "  pred id=%s type=%s val=%s conf=%.3f impl=%s edge=%s rec=%s phase=%s gstatus=%s",
             r[0], r[1], r[2], r[3] or 0, r[4], r[5], r[6], r[7], r[8],
         )
@@ -1611,10 +1611,10 @@ async def debug_pipeline(
         "recommended": len(recommended_preds),
     }
     info["steps"].append(
-        f"Filters: {len(non_final_preds)} non-final → "
-        f"{len(with_odds)} have odds → "
-        f"{len(market_type)} market types → "
-        f"{len(under_juice)} under juice → "
+        f"Filters: {len(non_final_preds)} non-final -> "
+        f"{len(with_odds)} have odds -> "
+        f"{len(market_type)} market types -> "
+        f"{len(under_juice)} under juice -> "
         f"{len(recommended_preds)} recommended"
     )
 
@@ -1753,7 +1753,7 @@ async def regenerate_predictions(
             deleted,
         )
 
-    msg = " → ".join(steps)
+    msg = " -> ".join(steps)
     logger.info("Regenerate complete: %s", msg)
 
     return GenerateResult(

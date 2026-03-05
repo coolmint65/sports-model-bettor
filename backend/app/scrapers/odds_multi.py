@@ -1024,8 +1024,8 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
                 events.append(_validate_event(event))
             else:
                 logger.warning(
-                    "DraftKings: dropping event — unmapped teams "
-                    "(home=%r→%r, away=%r→%r)",
+                    "DraftKings: dropping event -- unmapped teams "
+                    "(home=%r->%r, away=%r->%r)",
                     home, event.home_abbr, away, event.away_abbr,
                 )
 
@@ -1313,8 +1313,8 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
                 events.append(_validate_event(event))
             else:
                 logger.warning(
-                    "FanDuel: dropping event — unmapped teams "
-                    "(home=%r→%r, away=%r→%r)",
+                    "FanDuel: dropping event -- unmapped teams "
+                    "(home=%r->%r, away=%r->%r)",
                     home, event.home_abbr, away, event.away_abbr,
                 )
 
@@ -1629,8 +1629,8 @@ async def _fetch_kambi(client: httpx.AsyncClient) -> List[OddsEvent]:
                 events.append(_validate_event(event))
             else:
                 logger.warning(
-                    "Kambi: dropping event — unmapped teams "
-                    "(home=%r→%r, away=%r→%r)",
+                    "Kambi: dropping event -- unmapped teams "
+                    "(home=%r->%r, away=%r->%r)",
                     home_name, event.home_abbr, away_name, event.away_abbr,
                 )
 
@@ -1992,8 +1992,8 @@ async def _fetch_bovada(client: httpx.AsyncClient) -> List[OddsEvent]:
                     events.append(_validate_event(event))
                 else:
                     logger.warning(
-                        "Bovada: dropping event — unmapped teams "
-                        "(home=%r→%r, away=%r→%r)",
+                        "Bovada: dropping event -- unmapped teams "
+                        "(home=%r->%r, away=%r->%r)",
                         home_name, event.home_abbr, away_name, event.away_abbr,
                     )
 
@@ -2053,7 +2053,7 @@ async def _fetch_odds_api_raw(
         params = {
             "apiKey": api_key,
             "regions": region,
-            "markets": "h2h,spreads,totals,btts,h2h_h1,totals_h1,spreads_h1",
+            "markets": "h2h,spreads,totals",
             "oddsFormat": "american",
         }
 
@@ -2337,8 +2337,8 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
             events.append(_validate_event(event))
         else:
             logger.warning(
-                "The Odds API: dropping event — unmapped teams "
-                "(home=%r→%r, away=%r→%r)",
+                "The Odds API: dropping event -- unmapped teams "
+                "(home=%r->%r, away=%r->%r)",
                 home_team, event.home_abbr, away_team, event.away_abbr,
             )
 
@@ -2609,8 +2609,8 @@ async def _fetch_hardrock(client: httpx.AsyncClient) -> List[OddsEvent]:
             events.append(_validate_event(event))
         else:
             logger.warning(
-                "Hard Rock: dropping event — unmapped teams "
-                "(home=%r→%r, away=%r→%r)",
+                "Hard Rock: dropping event -- unmapped teams "
+                "(home=%r->%r, away=%r->%r)",
                 pd["home_team"], event.home_abbr,
                 pd["away_team"], event.away_abbr,
             )
@@ -3441,7 +3441,7 @@ class MultiSourceOddsScraper:
                 continue
 
             logger.info(
-                "Odds sync: %s@%s commence=%s → game_date=%s",
+                "Odds sync: %s@%s commence=%s -> game_date=%s",
                 away_abbrev, home_abbrev,
                 odds.get("commence_time", ""), game_date,
             )
