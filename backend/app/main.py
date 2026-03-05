@@ -63,6 +63,10 @@ logging.getLogger().addHandler(_file_handler)
 # diagnostic messages (odds sync, predictions, etc.) are visible.
 logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 
+# Suppress per-request httpx logs (HTTP Request: GET ... 200 OK) that
+# flood the console during odds/roster sync.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:

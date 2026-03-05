@@ -28,6 +28,7 @@ from sqlalchemy.orm import selectinload
 from app.config import settings
 from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES, composite_pick_score
 from app.database import get_session
+from app.services.odds import american_to_implied, implied_to_american as implied_prob_to_american
 from app.models.game import Game
 from app.models.prediction import BetResult, Prediction, TrackedBet
 from app.models.team import Team
@@ -65,30 +66,6 @@ def calculate_units(edge: Optional[float], confidence: Optional[float]) -> float
     if e < 12:
         return 2.0
     return 3.0
-
-
-# ---------------------------------------------------------------------------
-# Odds conversion helpers
-# ---------------------------------------------------------------------------
-
-def implied_prob_to_american(prob: Optional[float]) -> Optional[float]:
-    """Convert implied probability (0-1) back to American odds."""
-    if prob is None or prob <= 0 or prob >= 1:
-        return None
-    if prob > 0.5:
-        return round(-(prob / (1 - prob)) * 100)
-    else:
-        return round(((1 - prob) / prob) * 100)
-
-
-def american_to_implied(odds: Optional[float]) -> Optional[float]:
-    """Convert American odds to implied probability."""
-    if odds is None or odds == 0:
-        return None
-    if odds > 0:
-        return round(100.0 / (odds + 100.0), 4)
-    else:
-        return round(abs(odds) / (abs(odds) + 100.0), 4)
 
 
 # ---------------------------------------------------------------------------
@@ -592,8 +569,8 @@ async def get_today_predictions(
                 await _try_generate_predictions(session, target_date=today)
                 await session.flush()
             predictions = await _get_predictions_for_date(today, session)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Today predictions: auto-generation failed: %s", exc)
 
     return TodayPredictionsResponse(
         date=today,
@@ -710,7 +687,7 @@ async def get_best_bets(
         )
     )
     for row in odds_check.all():
-        logger.info(
+        logger.debug(
             "Best-bets odds state: game=%d ml=%s ou=%s spread=%s updated=%s",
             row[0], row[1], row[2], row[3], row[4],
         )
@@ -788,7 +765,7 @@ async def get_best_bets(
         null_odds, has_odds, market_type,
     )
     for r in all_pred_rows[:20]:
-        logger.info(
+        logger.debug(
             "  pred id=%s type=%s val=%s conf=%.3f impl=%s edge=%s rec=%s phase=%s gstatus=%s",
             r[0], r[1], r[2], r[3] or 0, r[4], r[5], r[6], r[7], r[8],
         )
@@ -1611,10 +1588,10 @@ async def debug_pipeline(
         "recommended": len(recommended_preds),
     }
     info["steps"].append(
-        f"Filters: {len(non_final_preds)} non-final → "
-        f"{len(with_odds)} have odds → "
-        f"{len(market_type)} market types → "
-        f"{len(under_juice)} under juice → "
+        f"Filters: {len(non_final_preds)} non-final -> "
+        f"{len(with_odds)} have odds -> "
+        f"{len(market_type)} market types -> "
+        f"{len(under_juice)} under juice -> "
         f"{len(recommended_preds)} recommended"
     )
 
@@ -1753,7 +1730,7 @@ async def regenerate_predictions(
             deleted,
         )
 
-    msg = " → ".join(steps)
+    msg = " -> ".join(steps)
     logger.info("Regenerate complete: %s", msg)
 
     return GenerateResult(

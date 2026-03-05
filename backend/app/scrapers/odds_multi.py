@@ -21,6 +21,7 @@ import logging
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 import httpx
 from sqlalchemy import select
@@ -154,14 +155,6 @@ def decimal_to_american(decimal_odds: float) -> float:
         return round(-100 / (decimal_odds - 1), 0)
 
 
-def american_to_implied(american: float) -> float:
-    """Convert American odds to implied probability (0-1)."""
-    if american == 0:
-        return 0.5
-    if american > 0:
-        return 100.0 / (american + 100.0)
-    else:
-        return abs(american) / (abs(american) + 100.0)
 
 
 def _normalize_spread_line(val: float) -> float:
@@ -1024,8 +1017,8 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
                 events.append(_validate_event(event))
             else:
                 logger.warning(
-                    "DraftKings: dropping event — unmapped teams "
-                    "(home=%r→%r, away=%r→%r)",
+                    "DraftKings: dropping event -- unmapped teams "
+                    "(home=%r->%r, away=%r->%r)",
                     home, event.home_abbr, away, event.away_abbr,
                 )
 
@@ -1313,8 +1306,8 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
                 events.append(_validate_event(event))
             else:
                 logger.warning(
-                    "FanDuel: dropping event — unmapped teams "
-                    "(home=%r→%r, away=%r→%r)",
+                    "FanDuel: dropping event -- unmapped teams "
+                    "(home=%r->%r, away=%r->%r)",
                     home, event.home_abbr, away, event.away_abbr,
                 )
 
@@ -1629,8 +1622,8 @@ async def _fetch_kambi(client: httpx.AsyncClient) -> List[OddsEvent]:
                 events.append(_validate_event(event))
             else:
                 logger.warning(
-                    "Kambi: dropping event — unmapped teams "
-                    "(home=%r→%r, away=%r→%r)",
+                    "Kambi: dropping event -- unmapped teams "
+                    "(home=%r->%r, away=%r->%r)",
                     home_name, event.home_abbr, away_name, event.away_abbr,
                 )
 
@@ -1992,8 +1985,8 @@ async def _fetch_bovada(client: httpx.AsyncClient) -> List[OddsEvent]:
                     events.append(_validate_event(event))
                 else:
                     logger.warning(
-                        "Bovada: dropping event — unmapped teams "
-                        "(home=%r→%r, away=%r→%r)",
+                        "Bovada: dropping event -- unmapped teams "
+                        "(home=%r->%r, away=%r->%r)",
                         home_name, event.home_abbr, away_name, event.away_abbr,
                     )
 
@@ -2053,7 +2046,7 @@ async def _fetch_odds_api_raw(
         params = {
             "apiKey": api_key,
             "regions": region,
-            "markets": "h2h,spreads,totals,btts,h2h_h1,totals_h1,spreads_h1",
+            "markets": "h2h,spreads,totals",
             "oddsFormat": "american",
         }
 
@@ -2133,15 +2126,6 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
         all_home_spread: List[Tuple[float, float]] = []  # (line, price)
         all_away_spread: List[Tuple[float, float]] = []
         all_total: List[Tuple[float, float, float]] = []  # (line, over_price, under_price)
-        # Prop aggregation lists
-        all_btts_yes: List[float] = []
-        all_btts_no: List[float] = []
-        all_p1_home_ml: List[float] = []
-        all_p1_away_ml: List[float] = []
-        all_p1_draw: List[float] = []
-        all_p1_total: List[Tuple[float, float, float]] = []
-        all_p1_home_spread: List[Tuple[float, float]] = []  # (line, price)
-        all_p1_away_spread: List[Tuple[float, float]] = []
 
         for bm in ev.get("bookmakers", []):
             bm_key = bm.get("key", "").lower().replace("-", "_")
@@ -2185,53 +2169,6 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
                     if line > 0:
                         all_total.append((line, over_p, under_p))
 
-                # --- Prop markets ---
-                elif mkey == "btts":
-                    for oc in outcomes:
-                        name = oc.get("name", "").lower()
-                        price = float(oc.get("price", 0))
-                        if name == "yes":
-                            all_btts_yes.append(price)
-                        elif name == "no":
-                            all_btts_no.append(price)
-
-                elif mkey == "h2h_h1":
-                    # 1st period winner (3-way: home/away/draw)
-                    for oc in outcomes:
-                        name = oc.get("name", "")
-                        price = float(oc.get("price", 0))
-                        if name == home_team:
-                            all_p1_home_ml.append(price)
-                        elif name == away_team:
-                            all_p1_away_ml.append(price)
-                        elif name.lower() == "draw":
-                            all_p1_draw.append(price)
-
-                elif mkey == "totals_h1":
-                    # 1st period total
-                    over_p = under_p = 0.0
-                    line = 0.0
-                    for oc in outcomes:
-                        point = float(oc.get("point", 0))
-                        price = float(oc.get("price", 0))
-                        if oc.get("name", "").lower() == "over":
-                            over_p = price
-                            line = point
-                        elif oc.get("name", "").lower() == "under":
-                            under_p = price
-                    if line > 0:
-                        all_p1_total.append((line, over_p, under_p))
-
-                elif mkey == "spreads_h1":
-                    # 1st period spread
-                    for oc in outcomes:
-                        name = oc.get("name", "")
-                        point = float(oc.get("point", 0))
-                        price = float(oc.get("price", 0))
-                        if name == home_team:
-                            all_p1_home_spread.append((point, price))
-                        elif name == away_team:
-                            all_p1_away_spread.append((point, price))
 
         # Best odds across books
         home_ml = max(all_home_ml) if all_home_ml else 0
@@ -2303,42 +2240,12 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
             alt_totals=oa_alt_totals,
         )
 
-        # Attach prop odds — best price across books
-        if all_btts_yes:
-            event.btts_yes = round(max(all_btts_yes))
-        if all_btts_no:
-            event.btts_no = round(max(all_btts_no))
-        if all_p1_home_ml:
-            event.p1_home_ml = round(max(all_p1_home_ml))
-        if all_p1_away_ml:
-            event.p1_away_ml = round(max(all_p1_away_ml))
-        if all_p1_draw:
-            event.p1_draw_price = round(max(all_p1_draw))
-        if all_p1_total:
-            # Consensus line
-            p1_line_counts = Counter(t[0] for t in all_p1_total)
-            p1_consensus = p1_line_counts.most_common(1)[0][0]
-            p1_consensus_totals = [t for t in all_p1_total if t[0] == p1_consensus]
-            event.p1_total_line = p1_consensus
-            event.p1_over_price = round(sum(t[1] for t in p1_consensus_totals) / len(p1_consensus_totals))
-            event.p1_under_price = round(sum(t[2] for t in p1_consensus_totals) / len(p1_consensus_totals))
-        if all_p1_home_spread and all_p1_away_spread:
-            # Consensus P1 spread line
-            p1s_counts = Counter(abs(s[0]) for s in all_p1_home_spread)
-            p1s_consensus = p1s_counts.most_common(1)[0][0]
-            p1s_home = [s for s in all_p1_home_spread if abs(s[0]) == p1s_consensus]
-            p1s_away = [s for s in all_p1_away_spread if abs(s[0]) == p1s_consensus]
-            if p1s_home and p1s_away:
-                event.p1_spread_line = p1s_home[0][0]
-                event.p1_home_spread_price = round(max(s[1] for s in p1s_home))
-                event.p1_away_spread_price = round(max(s[1] for s in p1s_away))
-
         if event.home_abbr and event.away_abbr:
             events.append(_validate_event(event))
         else:
             logger.warning(
-                "The Odds API: dropping event — unmapped teams "
-                "(home=%r→%r, away=%r→%r)",
+                "The Odds API: dropping event -- unmapped teams "
+                "(home=%r->%r, away=%r->%r)",
                 home_team, event.home_abbr, away_team, event.away_abbr,
             )
 
@@ -2609,8 +2516,8 @@ async def _fetch_hardrock(client: httpx.AsyncClient) -> List[OddsEvent]:
             events.append(_validate_event(event))
         else:
             logger.warning(
-                "Hard Rock: dropping event — unmapped teams "
-                "(home=%r→%r, away=%r→%r)",
+                "Hard Rock: dropping event -- unmapped teams "
+                "(home=%r->%r, away=%r->%r)",
                 pd["home_team"], event.home_abbr,
                 pd["away_team"], event.away_abbr,
             )
@@ -3413,24 +3320,14 @@ class MultiSourceOddsScraper:
                         dt = commence
                     # Convert to US/Eastern so the date matches
                     # the local game date stored in the DB.
-                    try:
-                        from zoneinfo import ZoneInfo
-                        dt_et = dt.astimezone(ZoneInfo("America/New_York"))
-                        game_date = dt_et.date()
-                    except Exception:
-                        # Fallback: subtract 5 hours (EST approximation)
-                        dt_est = dt.astimezone(timezone.utc) - timedelta(hours=5)
-                        game_date = dt_est.date()
+                    dt_et = dt.astimezone(ZoneInfo("America/New_York"))
+                    game_date = dt_et.date()
                 except (ValueError, TypeError, AttributeError):
                     # Try parsing as timestamp
                     try:
                         dt = datetime.fromtimestamp(float(commence) / 1000, tz=timezone.utc)
-                        try:
-                            from zoneinfo import ZoneInfo
-                            dt_et = dt.astimezone(ZoneInfo("America/New_York"))
-                            game_date = dt_et.date()
-                        except Exception:
-                            game_date = (dt - timedelta(hours=5)).date()
+                        dt_et = dt.astimezone(ZoneInfo("America/New_York"))
+                        game_date = dt_et.date()
                     except (ValueError, TypeError, OverflowError):
                         continue
             else:
@@ -3441,7 +3338,7 @@ class MultiSourceOddsScraper:
                 continue
 
             logger.info(
-                "Odds sync: %s@%s commence=%s → game_date=%s",
+                "Odds sync: %s@%s commence=%s -> game_date=%s",
                 away_abbrev, home_abbrev,
                 odds.get("commence_time", ""), game_date,
             )

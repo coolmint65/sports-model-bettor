@@ -192,7 +192,7 @@ class OddsScraper(BaseScraper):
 
             if not home_abbrev or not away_abbrev:
                 logger.warning(
-                    "Odds API: UNMAPPED team — home=%r→%r, away=%r→%r",
+                    "Odds API: UNMAPPED team -- home=%r->%r, away=%r->%r",
                     home_team, home_abbrev, away_team, away_abbrev,
                 )
 

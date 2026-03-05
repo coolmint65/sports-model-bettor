@@ -188,8 +188,7 @@ async def _migrate_add_columns() -> None:
                     text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
                 )
                 logger.info("Added column %s.%s", table, column)
-            except Exception:
-                # Column already exists
+            except Exception:  # noqa: BLE001 — OperationalError when column exists
                 pass
 
 

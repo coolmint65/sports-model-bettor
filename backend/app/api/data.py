@@ -9,6 +9,7 @@ of synced data in the database.
 import asyncio
 import logging
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -637,15 +638,9 @@ async def diagnose_odds_matching(
                     dt_val = dt_cls.fromisoformat(ct)
                 else:
                     dt_val = commence
-                try:
-                    from zoneinfo import ZoneInfo
-                    dt_et = dt_val.astimezone(ZoneInfo("America/New_York"))
-                    game_date = dt_et.date()
-                    date_debug = f"UTC={dt_val.isoformat()} → ET={dt_et.isoformat()} → date={game_date}"
-                except Exception:
-                    dt_est = dt_val.astimezone(tz.utc) - timedelta(hours=5)
-                    game_date = dt_est.date()
-                    date_debug = f"UTC={dt_val.isoformat()} → EST_approx → date={game_date}"
+                dt_et = dt_val.astimezone(ZoneInfo("America/New_York"))
+                game_date = dt_et.date()
+                date_debug = f"UTC={dt_val.isoformat()} -> ET={dt_et.isoformat()} -> date={game_date}"
             except Exception as e:
                 date_debug = f"parse_error: {e}"
 

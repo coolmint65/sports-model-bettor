@@ -475,6 +475,8 @@ async def websocket_handler(ws: WebSocket):
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "games": initial_games,
                 }))
+        except WebSocketDisconnect:
+            return
         except Exception as exc:
             logger.warning("Failed to send initial state: %s", exc)
 
@@ -484,7 +486,7 @@ async def websocket_handler(ws: WebSocket):
                 msg = await ws.receive_text()
                 if msg == "ping":
                     await ws.send_text(json.dumps({"type": "pong"}))
-            except WebSocketDisconnect:
+            except (WebSocketDisconnect, RuntimeError):
                 break
     finally:
         await manager.disconnect(ws)

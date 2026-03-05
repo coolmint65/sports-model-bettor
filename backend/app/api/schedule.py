@@ -475,7 +475,7 @@ async def _compute_top_picks(
             )
             if pred.bet_type == "spread":
                 game_obj = game_by_id.get(pred.game_id)
-                logger.info(
+                logger.debug(
                     "Spread top pick: game=%d val=%s cur_impl=%.4f "
                     "max_implied=%.4f is_heavy=%s "
                     "home_spread_price=%s away_spread_price=%s "

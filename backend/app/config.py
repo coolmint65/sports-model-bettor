@@ -7,6 +7,7 @@ sport-specific settings, and application-wide constants.
 
 import os
 import sys
+from datetime import date
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -38,6 +39,17 @@ else:
 DATA_DIR = BASE_DIR / "data"
 
 
+def _current_nhl_season() -> str:
+    """Compute the current NHL season string (e.g. '20252026').
+
+    The NHL season starts in October — if we're in Jan-Aug, we're in the
+    second half of the previous year's season.
+    """
+    today = date.today()
+    start_year = today.year if today.month >= 9 else today.year - 1
+    return f"{start_year}{start_year + 1}"
+
+
 class SportConfig(BaseModel):
     """Configuration for a specific sport."""
 
@@ -62,7 +74,7 @@ class Settings(BaseModel):
     # Application
     app_name: str = "Sports Model Bettor"
     app_version: str = "1.0.0"
-    debug: bool = True
+    debug: bool = os.environ.get("DEBUG", "false").lower() in ("true", "1", "yes")
 
     # Database
     db_dir: Path = DATA_DIR
@@ -91,7 +103,7 @@ class Settings(BaseModel):
         "nhl": SportConfig(
             name="NHL",
             api_base_url="https://api-web.nhle.com/v1",
-            default_season="20252026",
+            default_season=_current_nhl_season(),
             game_types={
                 "preseason": "1",
                 "regular": "2",
@@ -110,7 +122,12 @@ class Settings(BaseModel):
     port: int = 8000
 
     # CORS
-    cors_origins: List[str] = ["*"]
+    cors_origins: List[str] = [
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:5173",
+    ]
 
     # Prediction thresholds
     min_confidence: float = 0.55
