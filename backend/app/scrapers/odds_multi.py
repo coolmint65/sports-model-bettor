@@ -2971,7 +2971,6 @@ def _merge_odds_events(
         }
         # Use the most common p1 total line across sources
         if prop_p1_line:
-            from collections import Counter
             best_prop_odds["period1_total_line"] = Counter(
                 round(v * 2) / 2 for v in prop_p1_line
             ).most_common(1)[0][0]
