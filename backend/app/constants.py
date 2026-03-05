@@ -23,7 +23,7 @@ GAME_PREDICTABLE_STATUSES = (
 # The three core sportsbook market types the model generates predictions for.
 MARKET_BET_TYPES = ("ml", "total", "spread")
 
-# Non-market prop bet types (no real sportsbook odds, confidence-only).
+# Non-market prop bet types (with real sportsbook odds when available).
 PROP_BET_TYPES = (
     "period_total",
     "period_winner",
@@ -31,6 +31,11 @@ PROP_BET_TYPES = (
     "both_score",
     "overtime",
     "odd_even",
+    "period1_btts",
+    "period1_spread",
+    "highest_scoring_period",
+    "regulation_winner",
+    "team_total",
 )
 
 

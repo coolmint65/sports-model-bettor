@@ -278,6 +278,119 @@ def _grade_top_pick(pick: GameTopPick, game: Game) -> Optional[str]:
             return "push"
         return "win" if adjusted > 0 else "loss"
 
+    elif pick.bet_type == "both_score":
+        both = hs > 0 and aws > 0
+        return "win" if (val == "yes") == both else "loss"
+
+    elif pick.bet_type == "first_goal":
+        if hs > 0 or aws > 0:
+            actual = "home" if hs > 0 else "away"
+            return "win" if val == actual else "loss"
+
+    elif pick.bet_type == "overtime":
+        went_ot = game.went_to_overtime or False
+        return "win" if (val == "yes") == went_ot else "loss"
+
+    elif pick.bet_type == "odd_even":
+        total = hs + aws
+        actual = "odd" if total % 2 == 1 else "even"
+        return "win" if val == actual else "loss"
+
+    elif pick.bet_type == "regulation_winner":
+        reg_home = hs - (game.home_score_ot or 0)
+        reg_away = aws - (game.away_score_ot or 0)
+        if reg_home > reg_away:
+            actual = "home"
+        elif reg_away > reg_home:
+            actual = "away"
+        else:
+            actual = "draw"
+        return "win" if val == actual else "loss"
+
+    elif pick.bet_type == "team_total":
+        try:
+            line = float(val.split("_")[-1])
+            team_goals = hs if val.startswith("home") else aws
+            if "over" in val:
+                if team_goals == line:
+                    return "push"
+                return "win" if team_goals > line else "loss"
+            else:
+                if team_goals == line:
+                    return "push"
+                return "win" if team_goals < line else "loss"
+        except (ValueError, IndexError):
+            return None
+
+    elif pick.bet_type == "highest_scoring_period":
+        hp1 = game.home_score_p1 or 0
+        ap1 = game.away_score_p1 or 0
+        hp2 = game.home_score_p2 or 0
+        ap2 = game.away_score_p2 or 0
+        hp3 = game.home_score_p3 or 0
+        ap3 = game.away_score_p3 or 0
+        periods = [hp1 + ap1, hp2 + ap2, hp3 + ap3]
+        max_p = max(periods)
+        if periods.count(max_p) > 1:
+            actual = "tie"
+        else:
+            actual = ["p1", "p2", "p3"][periods.index(max_p)]
+        return "win" if val == actual else "loss"
+
+    elif pick.bet_type == "period1_btts":
+        hp1 = game.home_score_p1
+        ap1 = game.away_score_p1
+        if hp1 is not None and ap1 is not None:
+            both = hp1 > 0 and ap1 > 0
+            return "win" if (val == "yes") == both else "loss"
+
+    elif pick.bet_type == "period1_spread":
+        hp1 = game.home_score_p1
+        ap1 = game.away_score_p1
+        if hp1 is not None and ap1 is not None:
+            try:
+                spread_val = float(val.split("_")[-1])
+                margin = hp1 - ap1
+                if val.startswith("home"):
+                    adjusted = margin + spread_val
+                else:
+                    adjusted = -margin + spread_val
+                if adjusted == 0:
+                    return "push"
+                return "win" if adjusted > 0 else "loss"
+            except (ValueError, IndexError):
+                return None
+
+    elif pick.bet_type == "period_winner":
+        hp1 = game.home_score_p1
+        ap1 = game.away_score_p1
+        if hp1 is not None and ap1 is not None and val and val.startswith("p1_"):
+            if hp1 > ap1:
+                actual = "p1_home"
+            elif ap1 > hp1:
+                actual = "p1_away"
+            else:
+                actual = "p1_draw"
+            return "win" if val == actual else "loss"
+
+    elif pick.bet_type == "period_total":
+        hp1 = game.home_score_p1
+        ap1 = game.away_score_p1
+        if hp1 is not None and ap1 is not None and val and val.startswith("p1_"):
+            p1_total = hp1 + ap1
+            try:
+                line = float(val.split("_")[-1])
+                if "over" in val:
+                    if p1_total == line:
+                        return "push"
+                    return "win" if p1_total > line else "loss"
+                elif "under" in val:
+                    if p1_total == line:
+                        return "push"
+                    return "win" if p1_total < line else "loss"
+            except (ValueError, IndexError):
+                return None
+
     return None
 
 

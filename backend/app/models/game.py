@@ -171,6 +171,29 @@ class Game(TimestampMixin, Base):
     period1_home_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     period1_away_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     period1_draw_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # 1st Period Both Teams to Score
+    period1_btts_yes_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    period1_btts_no_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # 1st Period Spread
+    period1_spread_line: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    period1_home_spread_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    period1_away_spread_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # Regulation Winner (excludes OT — 3-way)
+    regulation_home_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    regulation_away_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    regulation_draw_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # Team Total Goals (home/away individual O/U)
+    home_team_total_line: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    home_team_over_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    home_team_under_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    away_team_total_line: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    away_team_over_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    away_team_under_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # Highest Scoring Period
+    highest_period_p1_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    highest_period_p2_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    highest_period_p3_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    highest_period_tie_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
     # Pregame odds snapshot — frozen when the game goes live so live
     # odds can overwrite the main fields without losing the opening lines.

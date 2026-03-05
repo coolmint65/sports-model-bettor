@@ -161,6 +161,49 @@ def fresh_implied_prob(pred: Prediction, game: Optional[Game]) -> Optional[float
             elif "under" in pv:
                 live_odds = game.period1_under_price
 
+    elif pred.bet_type == "period1_btts":
+        if pred.prediction_value == "yes":
+            live_odds = getattr(game, "period1_btts_yes_price", None)
+        else:
+            live_odds = getattr(game, "period1_btts_no_price", None)
+
+    elif pred.bet_type == "period1_spread":
+        pv = pred.prediction_value or ""
+        if "home" in pv:
+            live_odds = getattr(game, "period1_home_spread_price", None)
+        else:
+            live_odds = getattr(game, "period1_away_spread_price", None)
+
+    elif pred.bet_type == "regulation_winner":
+        if pred.prediction_value == "home":
+            live_odds = getattr(game, "regulation_home_price", None)
+        elif pred.prediction_value == "away":
+            live_odds = getattr(game, "regulation_away_price", None)
+        elif pred.prediction_value == "draw":
+            live_odds = getattr(game, "regulation_draw_price", None)
+
+    elif pred.bet_type == "team_total":
+        pv = pred.prediction_value or ""
+        if pv.startswith("home_over"):
+            live_odds = getattr(game, "home_team_over_price", None)
+        elif pv.startswith("home_under"):
+            live_odds = getattr(game, "home_team_under_price", None)
+        elif pv.startswith("away_over"):
+            live_odds = getattr(game, "away_team_over_price", None)
+        elif pv.startswith("away_under"):
+            live_odds = getattr(game, "away_team_under_price", None)
+
+    elif pred.bet_type == "highest_scoring_period":
+        hp_map = {
+            "p1": "highest_period_p1_price",
+            "p2": "highest_period_p2_price",
+            "p3": "highest_period_p3_price",
+            "tie": "highest_period_tie_price",
+        }
+        field = hp_map.get(pred.prediction_value or "")
+        if field:
+            live_odds = getattr(game, field, None)
+
     return american_to_implied(live_odds)
 
 

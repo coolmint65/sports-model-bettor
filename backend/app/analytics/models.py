@@ -1009,6 +1009,176 @@ class BettingModel:
         return adjusted
 
     # ------------------------------------------------------------------ #
+    #  Extended props: regulation winner, team totals, etc.                #
+    # ------------------------------------------------------------------ #
+
+    async def predict_regulation_winner(
+        self,
+        features: Dict[str, Any],
+    ) -> Dict[str, float]:
+        """Predict 3-way regulation winner (home/away/draw excluding OT)."""
+        home_xg, away_xg = self._calc_expected_goals(features)
+        matrix = self._score_matrix(home_xg, away_xg)
+        max_g = POISSON_MAX_GOALS
+
+        home_win = away_win = draw = 0.0
+        for i in range(max_g + 1):
+            for j in range(max_g + 1):
+                if i > j:
+                    home_win += matrix[i][j]
+                elif j > i:
+                    away_win += matrix[i][j]
+                else:
+                    draw += matrix[i][j]
+
+        return {
+            "home_win_prob": round(home_win, 4),
+            "away_win_prob": round(away_win, 4),
+            "draw_prob": round(draw, 4),
+        }
+
+    async def predict_team_totals(
+        self,
+        features: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Predict individual team total goals (O/U lines)."""
+        home_xg, away_xg = self._calc_expected_goals(features)
+
+        # Standard team total lines in NHL
+        team_lines = [1.5, 2.5, 3.5, 4.5]
+        home_lines = {}
+        away_lines = {}
+
+        for line in team_lines:
+            # P(team scores > line) using Poisson CDF
+            home_over = 1.0 - sum(self._poisson_prob(home_xg, k) for k in range(int(line) + 1))
+            home_under = 1.0 - home_over
+            away_over = 1.0 - sum(self._poisson_prob(away_xg, k) for k in range(int(line) + 1))
+            away_under = 1.0 - away_over
+            home_lines[line] = {"over": round(home_over, 4), "under": round(home_under, 4)}
+            away_lines[line] = {"over": round(away_over, 4), "under": round(away_under, 4)}
+
+        return {
+            "home_xg": home_xg,
+            "away_xg": away_xg,
+            "home_lines": home_lines,
+            "away_lines": away_lines,
+        }
+
+    async def predict_highest_scoring_period(
+        self,
+        features: Dict[str, Any],
+    ) -> Dict[str, float]:
+        """Predict which period will have the most goals."""
+        home_periods = features.get("home_periods", {})
+        away_periods = features.get("away_periods", {})
+
+        period_xgs = []
+        for idx, (for_key, ag_key) in enumerate([
+            ("avg_p1_for", "avg_p1_against"),
+            ("avg_p2_for", "avg_p2_against"),
+            ("avg_p3_for", "avg_p3_against"),
+        ]):
+            home_f = home_periods.get(for_key, 0.8)
+            away_ag = away_periods.get(ag_key, 0.8)
+            away_f = away_periods.get(for_key, 0.8)
+            home_ag = home_periods.get(ag_key, 0.8)
+            total_xg = (home_f + away_ag) / 2.0 + (away_f + home_ag) / 2.0
+            if idx == 0:
+                total_xg += 0.05  # home ice advantage in P1
+            period_xgs.append(max(0.6, total_xg))
+
+        # Use Monte Carlo-ish Poisson approach to estimate which period
+        # scores most. Simplification: compare expected values.
+        # P(period i is highest) approximated by relative xG share with
+        # tie probability from similarity of xGs.
+        total = sum(period_xgs)
+        raw_probs = [xg / total for xg in period_xgs]
+
+        # Adjust for tie probability — periods with similar xG are more
+        # likely to tie each other
+        max_diff = max(period_xgs) - min(period_xgs)
+        tie_prob = max(0.15, 0.30 - max_diff * 0.3)  # 15-30% tie
+
+        # Distribute remaining probability proportionally
+        remaining = 1.0 - tie_prob
+        probs = {
+            "p1": round(raw_probs[0] * remaining, 4),
+            "p2": round(raw_probs[1] * remaining, 4),
+            "p3": round(raw_probs[2] * remaining, 4),
+            "tie": round(tie_prob, 4),
+        }
+
+        return probs
+
+    async def predict_period1_btts(
+        self,
+        features: Dict[str, Any],
+    ) -> Dict[str, float]:
+        """Predict whether both teams score in the 1st period."""
+        home_periods = features.get("home_periods", {})
+        away_periods = features.get("away_periods", {})
+
+        # Home team xG in P1
+        home_p1_for = home_periods.get("avg_p1_for", 0.8)
+        away_p1_against = away_periods.get("avg_p1_against", 0.8)
+        home_p1_xg = max(0.3, (home_p1_for + away_p1_against) / 2.0 + 0.05)
+
+        # Away team xG in P1
+        away_p1_for = away_periods.get("avg_p1_for", 0.8)
+        home_p1_against = home_periods.get("avg_p1_against", 0.8)
+        away_p1_xg = max(0.3, (away_p1_for + home_p1_against) / 2.0)
+
+        p_home_scores = 1.0 - self._poisson_prob(home_p1_xg, 0)
+        p_away_scores = 1.0 - self._poisson_prob(away_p1_xg, 0)
+        btts = p_home_scores * p_away_scores
+
+        return {
+            "btts_yes": round(btts, 4),
+            "btts_no": round(1.0 - btts, 4),
+        }
+
+    async def predict_period1_spread(
+        self,
+        features: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Predict 1st period spread outcomes."""
+        home_periods = features.get("home_periods", {})
+        away_periods = features.get("away_periods", {})
+
+        home_p1_for = home_periods.get("avg_p1_for", 0.8)
+        away_p1_against = away_periods.get("avg_p1_against", 0.8)
+        home_p1_xg = max(0.3, (home_p1_for + away_p1_against) / 2.0 + 0.05)
+
+        away_p1_for = away_periods.get("avg_p1_for", 0.8)
+        home_p1_against = home_periods.get("avg_p1_against", 0.8)
+        away_p1_xg = max(0.3, (away_p1_for + home_p1_against) / 2.0)
+
+        matrix = self._score_matrix(home_p1_xg, away_p1_xg, max_goals=6)
+
+        # Standard P1 spread is 0.5
+        lines = [0.5, 1.5]
+        spreads = {}
+        for line in lines:
+            home_cover = away_cover = 0.0
+            for i in range(7):
+                for j in range(7):
+                    if i - j > line:
+                        home_cover += matrix[i][j]
+                    elif j - i > line:
+                        away_cover += matrix[i][j]
+            spreads[f"home_-{line}"] = round(home_cover, 4)
+            spreads[f"away_+{line}"] = round(1.0 - home_cover, 4) if line == 0.5 else round(away_cover, 4)
+            spreads[f"home_+{line}"] = round(1.0 - away_cover, 4) if line == 0.5 else None
+            spreads[f"away_-{line}"] = round(away_cover, 4) if line == 0.5 else None
+
+        return {
+            "home_xg": home_p1_xg,
+            "away_xg": away_p1_xg,
+            "spreads": spreads,
+        }
+
+    # ------------------------------------------------------------------ #
     #  Predict all: master method                                         #
     # ------------------------------------------------------------------ #
 
@@ -1746,6 +1916,222 @@ class BettingModel:
             })
         except Exception as e:
             logger.error("Props prediction failed: %s", e)
+
+        # ---- Regulation Winner (excludes OT — 3-way) ----
+        try:
+            reg = await self.predict_regulation_winner(features)
+            rh = reg["home_win_prob"]
+            ra = reg["away_win_prob"]
+            rd = reg["draw_prob"]
+            best_reg = max(
+                [("home", rh), ("away", ra), ("draw", rd)],
+                key=lambda x: x[1],
+            )
+            reg_pred = best_reg[0]
+            reg_prob = best_reg[1]
+            if reg_pred == "home":
+                reg_team = home_name
+                reg_odds = odds_data.get("regulation_home_price")
+            elif reg_pred == "away":
+                reg_team = away_name
+                reg_odds = odds_data.get("regulation_away_price")
+            else:
+                reg_team = "Draw"
+                reg_odds = odds_data.get("regulation_draw_price")
+            reg_implied = american_odds_to_implied_prob(reg_odds) if reg_odds else None
+
+            predictions.append({
+                "bet_type": "regulation_winner",
+                "prediction": reg_pred,
+                "confidence": round(reg_prob, 4),
+                "probability": round(reg_prob, 4),
+                "implied_probability": round(reg_implied, 4) if reg_implied else None,
+                "odds": reg_odds,
+                "reasoning": (
+                    f"{reg_team} projected as regulation winner ({reg_prob:.1%} confidence). "
+                    f"Home {rh:.1%} / Away {ra:.1%} / Draw {rd:.1%}."
+                ),
+                "details": reg,
+            })
+        except Exception as e:
+            logger.error("Regulation winner prediction failed: %s", e)
+
+        # ---- Team Total Goals ----
+        try:
+            tt = await self.predict_team_totals(features)
+            # Home team total
+            home_tt_line = odds_data.get("home_team_total_line")
+            if home_tt_line is not None:
+                hline = float(home_tt_line)
+                h_over_p = tt["home_lines"].get(hline, {}).get("over", 0.5)
+                h_under_p = tt["home_lines"].get(hline, {}).get("under", 0.5)
+            else:
+                hline = 2.5  # default NHL team total line
+                h_over_p = tt["home_lines"].get(2.5, {}).get("over", 0.5)
+                h_under_p = tt["home_lines"].get(2.5, {}).get("under", 0.5)
+            if h_over_p >= h_under_p:
+                htt_pred = f"home_over_{hline}"
+                htt_prob = h_over_p
+                htt_odds_key = "home_team_over_price"
+            else:
+                htt_pred = f"home_under_{hline}"
+                htt_prob = h_under_p
+                htt_odds_key = "home_team_under_price"
+            htt_odds = odds_data.get(htt_odds_key)
+            htt_implied = american_odds_to_implied_prob(htt_odds) if htt_odds else None
+
+            predictions.append({
+                "bet_type": "team_total",
+                "prediction": htt_pred,
+                "confidence": round(htt_prob, 4),
+                "probability": round(htt_prob, 4),
+                "implied_probability": round(htt_implied, 4) if htt_implied else None,
+                "odds": htt_odds,
+                "reasoning": (
+                    f"{home_name} projected {tt['home_xg']:.2f} goals. "
+                    f"{'Over' if 'over' in htt_pred else 'Under'} {hline} at {htt_prob:.1%}."
+                ),
+                "details": tt,
+            })
+
+            # Away team total
+            away_tt_line = odds_data.get("away_team_total_line")
+            if away_tt_line is not None:
+                aline = float(away_tt_line)
+                a_over_p = tt["away_lines"].get(aline, {}).get("over", 0.5)
+                a_under_p = tt["away_lines"].get(aline, {}).get("under", 0.5)
+            else:
+                aline = 2.5
+                a_over_p = tt["away_lines"].get(2.5, {}).get("over", 0.5)
+                a_under_p = tt["away_lines"].get(2.5, {}).get("under", 0.5)
+            if a_over_p >= a_under_p:
+                att_pred = f"away_over_{aline}"
+                att_prob = a_over_p
+                att_odds_key = "away_team_over_price"
+            else:
+                att_pred = f"away_under_{aline}"
+                att_prob = a_under_p
+                att_odds_key = "away_team_under_price"
+            att_odds = odds_data.get(att_odds_key)
+            att_implied = american_odds_to_implied_prob(att_odds) if att_odds else None
+
+            predictions.append({
+                "bet_type": "team_total",
+                "prediction": att_pred,
+                "confidence": round(att_prob, 4),
+                "probability": round(att_prob, 4),
+                "implied_probability": round(att_implied, 4) if att_implied else None,
+                "odds": att_odds,
+                "reasoning": (
+                    f"{away_name} projected {tt['away_xg']:.2f} goals. "
+                    f"{'Over' if 'over' in att_pred else 'Under'} {aline} at {att_prob:.1%}."
+                ),
+                "details": tt,
+            })
+        except Exception as e:
+            logger.error("Team totals prediction failed: %s", e)
+
+        # ---- Highest Scoring Period ----
+        try:
+            hsp = await self.predict_highest_scoring_period(features)
+            best_hsp = max(hsp.items(), key=lambda x: x[1])
+            hsp_pred = best_hsp[0]  # "p1", "p2", "p3", or "tie"
+            hsp_prob = best_hsp[1]
+            hsp_labels = {"p1": "1st Period", "p2": "2nd Period", "p3": "3rd Period", "tie": "Tie"}
+            hsp_odds_map = {
+                "p1": "highest_period_p1_price",
+                "p2": "highest_period_p2_price",
+                "p3": "highest_period_p3_price",
+                "tie": "highest_period_tie_price",
+            }
+            hsp_odds = odds_data.get(hsp_odds_map.get(hsp_pred, ""))
+            hsp_implied = american_odds_to_implied_prob(hsp_odds) if hsp_odds else None
+
+            predictions.append({
+                "bet_type": "highest_scoring_period",
+                "prediction": hsp_pred,
+                "confidence": round(hsp_prob, 4),
+                "probability": round(hsp_prob, 4),
+                "implied_probability": round(hsp_implied, 4) if hsp_implied else None,
+                "odds": hsp_odds,
+                "reasoning": (
+                    f"{hsp_labels[hsp_pred]} projected as highest scoring ({hsp_prob:.1%} confidence)."
+                ),
+                "details": hsp,
+            })
+        except Exception as e:
+            logger.error("Highest scoring period prediction failed: %s", e)
+
+        # ---- 1st Period Both Teams to Score ----
+        try:
+            p1b = await self.predict_period1_btts(features)
+            p1b_yes = p1b["btts_yes"]
+            p1b_pred = "yes" if p1b_yes > 0.5 else "no"
+            p1b_conf = p1b_yes if p1b_yes > 0.5 else p1b["btts_no"]
+            if p1b_pred == "yes":
+                p1b_odds = odds_data.get("period1_btts_yes_price")
+            else:
+                p1b_odds = odds_data.get("period1_btts_no_price")
+            p1b_implied = american_odds_to_implied_prob(p1b_odds) if p1b_odds else None
+
+            predictions.append({
+                "bet_type": "period1_btts",
+                "prediction": p1b_pred,
+                "confidence": round(p1b_conf, 4),
+                "probability": round(p1b_conf, 4),
+                "implied_probability": round(p1b_implied, 4) if p1b_implied else None,
+                "odds": p1b_odds,
+                "reasoning": (
+                    f"1st period BTTS {'likely' if p1b_pred == 'yes' else 'unlikely'} "
+                    f"({p1b_conf:.1%} confidence)."
+                ),
+                "details": p1b,
+            })
+        except Exception as e:
+            logger.error("Period 1 BTTS prediction failed: %s", e)
+
+        # ---- 1st Period Spread ----
+        try:
+            p1s = await self.predict_period1_spread(features)
+            p1_spreads = p1s["spreads"]
+            # Use sportsbook line if available, else default 0.5
+            p1_sp_line = odds_data.get("period1_spread_line")
+            if p1_sp_line is not None:
+                abs_line = abs(float(p1_sp_line))
+            else:
+                abs_line = 0.5
+
+            home_cover = p1_spreads.get(f"home_-{abs_line}", 0.3)
+            away_cover = p1_spreads.get(f"away_+{abs_line}", 0.7)
+            if home_cover is None:
+                home_cover = 0.3
+            if away_cover is None:
+                away_cover = 0.7
+
+            if home_cover >= away_cover:
+                p1s_pred = f"home_-{abs_line}"
+                p1s_prob = home_cover
+                p1s_odds = odds_data.get("period1_home_spread_price")
+            else:
+                p1s_pred = f"away_+{abs_line}"
+                p1s_prob = away_cover
+                p1s_odds = odds_data.get("period1_away_spread_price")
+            p1s_implied = american_odds_to_implied_prob(p1s_odds) if p1s_odds else None
+
+            predictions.append({
+                "bet_type": "period1_spread",
+                "prediction": p1s_pred,
+                "confidence": round(p1s_prob, 4),
+                "probability": round(p1s_prob, 4),
+                "implied_probability": round(p1s_implied, 4) if p1s_implied else None,
+                "odds": p1s_odds,
+                "reasoning": (
+                    f"1st period spread: {p1s_pred.replace('_', ' ')} at {p1s_prob:.1%} confidence."
+                ),
+                "details": p1s,
+            })
+        except Exception as e:
+            logger.error("Period 1 spread prediction failed: %s", e)
 
         # Sort by confidence descending
         predictions.sort(key=lambda p: p["confidence"], reverse=True)
