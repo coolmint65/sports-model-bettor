@@ -295,12 +295,23 @@ async def _compute_top_picks(
         select(Prediction).where(
             Prediction.game_id.in_(game_ids),
             Prediction.bet_type.in_(MARKET_BET_TYPES),
-            Prediction.phase == "prematch",
+            Prediction.phase.in_(("prematch", "live")),
             Prediction.edge.isnot(None),
             Prediction.odds_implied_prob.isnot(None),
         )
     )
     all_preds = all_preds_result.scalars().all()
+
+    # Prefer prematch predictions over live ones (prematch = original
+    # recommendation before game started). If only live exist, use those.
+    # Group by (game_id, bet_type, prediction_value) and keep prematch.
+    _seen: dict[tuple, Prediction] = {}
+    for p in all_preds:
+        key = (p.game_id, p.bet_type, p.prediction_value)
+        existing = _seen.get(key)
+        if existing is None or (existing.phase == "live" and p.phase == "prematch"):
+            _seen[key] = p
+    all_preds = list(_seen.values())
 
     # Compute fresh implied prob using the service layer.
     # When fresh odds aren't available, fall back to the stored
@@ -375,10 +386,18 @@ async def _compute_top_picks(
             select(Prediction).where(
                 Prediction.game_id.in_(list(still_missing)),
                 Prediction.bet_type.in_(MARKET_BET_TYPES),
-                Prediction.phase == "prematch",
+                Prediction.phase.in_(("prematch", "live")),
             )
         )
-        no_odds_preds = no_odds_result.scalars().all()
+        no_odds_preds_raw = no_odds_result.scalars().all()
+        # Deduplicate: prefer prematch over live
+        _seen_t3: dict[tuple, Prediction] = {}
+        for p in no_odds_preds_raw:
+            key = (p.game_id, p.bet_type, p.prediction_value)
+            existing = _seen_t3.get(key)
+            if existing is None or (existing.phase == "live" and p.phase == "prematch"):
+                _seen_t3[key] = p
+        no_odds_preds = list(_seen_t3.values())
         for pred in sorted(
             no_odds_preds,
             key=lambda p: p.confidence or 0,
