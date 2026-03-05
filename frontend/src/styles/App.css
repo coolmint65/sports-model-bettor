@@ -1043,6 +1043,7 @@ a:hover {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 14px;
+  align-items: start;
 }
 
 /* ─── Game Card ─────────────────────────────────────────────── */
@@ -1457,6 +1458,49 @@ a:hover {
 
 .confidence-text {
   font-weight: 700;
+}
+
+.game-footer-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* Win/loss outcome indicators on game card */
+.pick-outcome {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.pick-outcome-win {
+  color: var(--accent-green, #00ff88);
+}
+
+.pick-outcome-loss {
+  color: var(--accent-red, #ff5252);
+}
+
+.pick-outcome-push {
+  color: var(--text-dim, #888);
+}
+
+/* Outcome styling on the top pick text */
+.game-top-pick.pick-win .top-pick-type,
+.game-top-pick.pick-win .top-pick-value {
+  color: var(--accent-green, #00ff88);
+}
+
+.game-top-pick.pick-loss .top-pick-type,
+.game-top-pick.pick-loss .top-pick-value {
+  color: var(--accent-red, #ff5252);
+  opacity: 0.8;
+}
+
+.game-top-pick.pick-push .top-pick-type,
+.game-top-pick.pick-push .top-pick-value {
+  color: var(--text-dim, #888);
 }
 
 .game-card-arrow {
