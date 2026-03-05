@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Clock, MapPin, ChevronRight, TrendingUp, Target, Radio, AlertTriangle, CheckCircle, XCircle, MinusCircle, Sparkles } from 'lucide-react';
 import { format, formatDistanceToNowStrict } from 'date-fns';
 import { teamName, teamAbbrev, teamLogo, confidencePct, parseAsUTC, formatBetType, formatPredictionValue } from '../utils/teams';
-import { getConfidenceColor } from '../utils/formatting';
+import { getConfidenceColor, formatAmericanOdds } from '../utils/formatting';
 
 function getStatusDisplay(game) {
   const status = game.status || game.game_state || '';
@@ -106,11 +106,7 @@ function parseClock(str) {
   return m * 60 + s;
 }
 
-function formatOdds(val) {
-  if (val == null) return null;
-  const v = Math.round(val);
-  return v > 0 ? `+${v}` : `${v}`;
-}
+const formatOdds = formatAmericanOdds;
 
 function Countdown({ startTime }) {
   const [timeLeft, setTimeLeft] = useState('');
@@ -467,17 +463,18 @@ function GameCard({ game }) {
 
       {/* Top Prop Row */}
       {topProp && (
-        <div className={`game-card-footer game-card-prop-footer ${topProp.outcome ? `pick-${topProp.outcome}` : ''}`}>
+        <div className={`game-card-footer game-card-prop-footer ${topProp.is_fallback ? 'top-pick-fallback' : ''} ${topProp.outcome ? `pick-${topProp.outcome}` : ''}`}>
           <div className="game-top-prop">
-            <Sparkles size={12} />
+            {topProp.is_fallback ? <AlertTriangle size={12} /> : <Sparkles size={12} />}
             <span className="top-prop-type">{formatBetType(topProp.bet_type)}</span>
             <span className="top-prop-value">{formatPredictionValue(topProp.prediction_value)}</span>
+            {topProp.is_fallback && <span className="top-pick-fallback-label">No Odds</span>}
           </div>
           <div className="game-footer-right">
             {propConf != null && (
               <div className="game-confidence" title={`Top prop confidence: ${propConf.toFixed(0)}%`}>
                 <TrendingUp size={12} />
-                <span className="confidence-text" style={{ color: getConfidenceColor(propConf) }}>
+                <span className="confidence-text" style={{ color: topProp.is_fallback ? '#ff9800' : getConfidenceColor(propConf) }}>
                   {propConf.toFixed(0)}%
                 </span>
               </div>
