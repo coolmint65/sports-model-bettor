@@ -621,6 +621,8 @@ class PredictionManager:
             return "yes" if home_score > 0 and away_score > 0 else "no"
 
         elif bet_type == "overtime":
+            if game.went_to_overtime is None:
+                return None  # OT status not yet synced
             return "yes" if game.went_to_overtime else "no"
 
         elif bet_type == "odd_even":
@@ -648,14 +650,11 @@ class PredictionManager:
 
         elif bet_type == "regulation_winner":
             # Winner in regulation only (excl OT)
-            reg_home = (game.home_score or 0) - (game.home_score_ot or 0)
-            reg_away = (game.away_score or 0) - (game.away_score_ot or 0)
-            if reg_home > reg_away:
-                return "home"
-            elif reg_away > reg_home:
-                return "away"
-            else:
-                return "draw"
+            if game.went_to_overtime is None:
+                return None  # OT data not yet synced
+            if game.went_to_overtime:
+                return "draw"  # regulation ended tied
+            return "home" if home_score > away_score else "away"
 
         elif bet_type == "team_total":
             return f"home_{home_score}_away_{away_score}"

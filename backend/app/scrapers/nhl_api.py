@@ -658,6 +658,28 @@ class NHLScraper(BaseScraper):
             if game_data.get("in_intermission") is not None:
                 game.in_intermission = game_data["in_intermission"]
 
+            # Infer went_to_overtime from schedule data when boxscore
+            # hasn't been fetched yet. The schedule API provides period
+            # number and periodType (REG, OT, SO) which is enough to
+            # determine OT status without waiting for the full boxscore.
+            if (
+                status == "final"
+                and game.went_to_overtime is None
+            ):
+                period_num = game_data.get("period")
+                period_type = (game_data.get("period_type") or "").upper()
+                if period_type in ("OT", "SO") or (
+                    period_num is not None and period_num > 3
+                ):
+                    game.went_to_overtime = True
+                    logger.info(
+                        "Inferred OT=True for game %s from schedule "
+                        "(period=%s, type=%s)",
+                        game_ext_id, period_num, period_type,
+                    )
+                elif period_num is not None and period_num <= 3:
+                    game.went_to_overtime = False
+
             games.append(game)
 
         await db.flush()
@@ -1288,13 +1310,18 @@ class NHLScraper(BaseScraper):
             db: Async SQLAlchemy session.
             days_back: Number of past days to scan.
         """
+        from sqlalchemy import or_
+
         cutoff = date.today() - timedelta(days=days_back)
         result = await db.execute(
             select(Game).where(
                 Game.sport == "nhl",
                 Game.date >= cutoff,
                 Game.status == "final",
-                Game.home_score_p1.is_(None),
+                or_(
+                    Game.home_score_p1.is_(None),
+                    Game.went_to_overtime.is_(None),
+                ),
             )
         )
         games = result.scalars().all()
