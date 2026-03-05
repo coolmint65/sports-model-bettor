@@ -552,8 +552,12 @@ async def _compute_top_props(
 ) -> dict[int, GameTopPick]:
     """Select the best prop prediction for each game (non-market bet types).
 
-    Uses composite scoring (confidence + edge + juice) when real sportsbook
-    odds are available, falling back to confidence-only when not.
+    Uses a tiered approach matching _compute_top_picks():
+      Tier 1: Props with real sportsbook odds AND positive edge (composite score).
+      Tier 2: Props with real odds, any edge (composite score).
+      Tier 3: No-odds fallback — only if nothing else exists for a game.
+              Skips trivially high-confidence bets (e.g., BTTS No at 93%)
+              that provide no useful betting signal.
     """
     game_ids = [g.id for g in games]
     game_by_id = {g.id: g for g in games}
@@ -587,14 +591,20 @@ async def _compute_top_props(
             pred.odds_implied_prob = fresh_ip
             pred.edge = (pred.confidence or 0) - fresh_ip
 
-    # Score and pick best prop per game using composite scoring
-    def _prop_score(p: Prediction) -> float:
-        conf = p.confidence or 0
-        if p.edge is not None and p.odds_implied_prob is not None:
-            return composite_pick_score(conf, p.edge, p.odds_implied_prob)
-        return conf  # fallback: confidence-only
-
-    for pred in sorted(deduped, key=_prop_score, reverse=True):
+    # --- Tier 1: props with real odds AND positive edge ---
+    tier1 = [
+        p for p in deduped
+        if p.odds_implied_prob is not None
+        and p.edge is not None
+        and p.edge > 0
+    ]
+    for pred in sorted(
+        tier1,
+        key=lambda p: composite_pick_score(
+            p.confidence, p.edge, p.odds_implied_prob
+        ),
+        reverse=True,
+    ):
         if pred.game_id not in top_props:
             top_props[pred.game_id] = GameTopPick(
                 bet_type=pred.bet_type,
@@ -604,6 +614,57 @@ async def _compute_top_props(
                 is_fallback=False,
                 heavy_juice=False,
             )
+
+    # --- Tier 2: props with real odds, any edge ---
+    still_missing = set(gid for gid in game_ids if gid not in top_props)
+    if still_missing:
+        tier2 = [
+            p for p in deduped
+            if p.game_id in still_missing
+            and p.odds_implied_prob is not None
+        ]
+        for pred in sorted(
+            tier2,
+            key=lambda p: composite_pick_score(
+                p.confidence, p.edge or 0, p.odds_implied_prob
+            ),
+            reverse=True,
+        ):
+            if pred.game_id not in top_props:
+                top_props[pred.game_id] = GameTopPick(
+                    bet_type=pred.bet_type,
+                    prediction_value=pred.prediction_value,
+                    confidence=pred.confidence,
+                    edge=pred.edge,
+                    is_fallback=False,
+                    heavy_juice=False,
+                )
+
+    # --- Tier 3: no-odds fallback (confidence-only) ---
+    # Only for games that have NO odds-backed props at all.
+    # Skip trivially-confident bets that aren't useful betting signals
+    # (e.g., BTTS No at 90%+ — always true, not insightful).
+    still_missing = set(gid for gid in game_ids if gid not in top_props)
+    if still_missing:
+        tier3 = [
+            p for p in deduped
+            if p.game_id in still_missing
+            and (p.confidence or 0) < 0.88  # skip trivially obvious bets
+        ]
+        for pred in sorted(
+            tier3,
+            key=lambda p: p.confidence or 0,
+            reverse=True,
+        ):
+            if pred.game_id not in top_props:
+                top_props[pred.game_id] = GameTopPick(
+                    bet_type=pred.bet_type,
+                    prediction_value=pred.prediction_value,
+                    confidence=pred.confidence,
+                    edge=pred.edge,
+                    is_fallback=True,
+                    heavy_juice=False,
+                )
 
     # Grade outcomes for final games
     for game_id, prop in top_props.items():

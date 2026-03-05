@@ -88,7 +88,15 @@ _sync_state = {
 
 
 async def _run_full_sync():
-    """Execute the full sync pipeline in the background."""
+    """Execute the full sync pipeline in the background.
+
+    Each step uses its OWN database session so that writes are committed
+    between steps.  This is critical for SQLite: a single long-lived
+    session holds the write lock for its entire duration, blocking the
+    scheduler's odds sync (which runs in a separate session).  By
+    committing after each step we release the lock so the scheduler can
+    interleave its fast odds updates.
+    """
     global _sync_state
     _sync_state = {"running": True, "step": "Starting sync...", "error": None}
 
@@ -97,64 +105,60 @@ async def _run_full_sync():
 
         scraper = NHLScraper()
         try:
-            async with get_session_context() as session:
-                # 1. Core sync: teams, rosters, schedule, game results
-                _sync_state["step"] = "Syncing teams, rosters, schedule..."
-                try:
+            # 1. Core sync: teams, rosters, schedule, game results
+            _sync_state["step"] = "Syncing teams, rosters, schedule..."
+            try:
+                async with get_session_context() as session:
                     await scraper.sync_all(session)
                     await session.flush()
-                except Exception as exc:
-                    logger.warning("Core NHL sync failed (non-critical): %s", exc)
-                    # Continue with odds/predictions using whatever data is in the DB
+            except Exception as exc:
+                logger.warning("Core NHL sync failed (non-critical): %s", exc)
 
-                # 2. Historical H2H
-                _sync_state["step"] = "Syncing historical H2H data..."
-                try:
-                    current = scraper.default_season
-                    current_start = int(current[:4])
-                except (ValueError, IndexError):
-                    current_start = 2025
+            # 2. Historical H2H — each season in its own session
+            _sync_state["step"] = "Syncing historical H2H data..."
+            try:
+                current = scraper.default_season
+                current_start = int(current[:4])
+            except (ValueError, IndexError):
+                current_start = 2025
 
-                h2h_games = 0
-                try:
-                    for i in range(0, 3):
-                        start_year = current_start - i
-                        season_str = f"{start_year}{start_year + 1}"
-                        _sync_state["step"] = f"Syncing H2H season {season_str}..."
+            h2h_games = 0
+            try:
+                for i in range(0, 3):
+                    start_year = current_start - i
+                    season_str = f"{start_year}{start_year + 1}"
+                    _sync_state["step"] = f"Syncing H2H season {season_str}..."
+                    async with get_session_context() as session:
                         h2h_games += await scraper.sync_historical_season(
                             session, season_str
                         )
-                except Exception as exc:
-                    logger.warning("Historical H2H sync failed (non-critical): %s", exc)
+            except Exception as exc:
+                logger.warning("Historical H2H sync failed (non-critical): %s", exc)
 
-                await session.flush()
+            # 3. Odds via service layer (own session)
+            _sync_state["step"] = "Syncing betting odds (multi-source)..."
+            try:
+                from app.services.odds import sync_odds as svc_sync_odds
 
-                # 3. Odds via service layer
-                _sync_state["step"] = "Syncing betting odds (multi-source)..."
-                try:
-                    from app.services.odds import sync_odds as svc_sync_odds
-
+                async with get_session_context() as session:
                     matched = await svc_sync_odds(session, force=True)
                     logger.info("Multi-source odds sync matched %d games", len(matched))
-                except Exception as exc:
-                    logger.warning("Multi-source odds sync failed: %s", exc, exc_info=True)
+            except Exception as exc:
+                logger.warning("Multi-source odds sync failed: %s", exc, exc_info=True)
 
-                # 4. Predictions — delete stale predictions only for
-                # non-final games so final game predictions are preserved.
-                # Wrapped in a savepoint so that if regeneration fails, the
-                # old predictions are restored instead of leaving the DB empty.
-                _sync_state["step"] = "Generating predictions..."
-                try:
-                    from datetime import date as date_type
+            # 4. Predictions (own session with savepoint)
+            _sync_state["step"] = "Generating predictions..."
+            try:
+                from datetime import date as date_type
 
-                    from sqlalchemy import delete as sa_delete
+                from sqlalchemy import delete as sa_delete
 
-                    from app.analytics.predictions import PredictionManager
+                from app.analytics.predictions import PredictionManager
 
-                    today = date_type.today()
+                today = date_type.today()
 
+                async with get_session_context() as session:
                     async with session.begin_nested():
-                        # Count how many predictions we're about to delete
                         non_final_game_ids = select(Game.id).where(
                             Game.date == today,
                             ~func.lower(Game.status).in_(GAME_FINAL_STATUSES),
@@ -176,7 +180,6 @@ async def _run_full_sync():
                         manager = PredictionManager()
                         new_bets = await manager.get_best_bets(session)
 
-                        # Count newly created predictions
                         new_count_result = await session.execute(
                             select(func.count(Prediction.id)).where(
                                 Prediction.game_id.in_(non_final_game_ids)
@@ -196,8 +199,8 @@ async def _run_full_sync():
                                 "best bets=%d",
                                 deleted_count, new_count, len(new_bets),
                             )
-                except Exception as exc:
-                    logger.warning("Prediction generation failed (non-critical): %s", exc)
+            except Exception as exc:
+                logger.warning("Prediction generation failed (non-critical): %s", exc)
 
         finally:
             await scraper.close()

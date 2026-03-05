@@ -420,6 +420,14 @@ def scheduler_status() -> Dict[str, Any]:
     }
 
 
+async def ensure_scheduler_alive():
+    """Restart the scheduler if it died.  Called from the health endpoint."""
+    global _scheduler_task
+    if _scheduler_running and (_scheduler_task is None or _scheduler_task.done()):
+        logger.warning("Scheduler task died — restarting automatically")
+        _scheduler_task = asyncio.create_task(_scheduler_loop())
+
+
 # ---------------------------------------------------------------------------
 # WebSocket endpoint handler
 # ---------------------------------------------------------------------------
