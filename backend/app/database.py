@@ -145,6 +145,21 @@ async def _migrate_add_columns() -> None:
         ("game", "all_spread_lines", "JSON"),
         # TrackedBet lock lifecycle
         ("tracked_bet", "locked_at", "DATETIME"),
+        # Prop odds
+        ("game", "btts_yes_price", "FLOAT"),
+        ("game", "btts_no_price", "FLOAT"),
+        ("game", "first_goal_home_price", "FLOAT"),
+        ("game", "first_goal_away_price", "FLOAT"),
+        ("game", "overtime_yes_price", "FLOAT"),
+        ("game", "overtime_no_price", "FLOAT"),
+        ("game", "total_odd_price", "FLOAT"),
+        ("game", "total_even_price", "FLOAT"),
+        ("game", "period1_total_line", "FLOAT"),
+        ("game", "period1_over_price", "FLOAT"),
+        ("game", "period1_under_price", "FLOAT"),
+        ("game", "period1_home_ml", "FLOAT"),
+        ("game", "period1_away_ml", "FLOAT"),
+        ("game", "period1_draw_price", "FLOAT"),
     ]
 
     async with engine.begin() as conn:

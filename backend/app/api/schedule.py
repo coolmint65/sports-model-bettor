@@ -437,7 +437,8 @@ async def _compute_top_props(
 ) -> dict[int, GameTopPick]:
     """Select the best prop prediction for each game (non-market bet types).
 
-    Props have no real sportsbook odds, so ranking is purely by confidence.
+    Uses composite scoring (confidence + edge + juice) when real sportsbook
+    odds are available, falling back to confidence-only when not.
     """
     game_ids = [g.id for g in games]
     game_by_id = {g.id: g for g in games}
@@ -463,8 +464,22 @@ async def _compute_top_props(
             _seen[key] = p
     deduped = list(_seen.values())
 
-    # Pick highest confidence prop per game
-    for pred in sorted(deduped, key=lambda p: p.confidence or 0, reverse=True):
+    # Refresh implied prob from current game odds when available
+    for pred in deduped:
+        game_obj = game_by_id.get(pred.game_id)
+        fresh_ip = fresh_implied_prob(pred, game_obj)
+        if fresh_ip is not None:
+            pred.odds_implied_prob = fresh_ip
+            pred.edge = (pred.confidence or 0) - fresh_ip
+
+    # Score and pick best prop per game using composite scoring
+    def _prop_score(p: Prediction) -> float:
+        conf = p.confidence or 0
+        if p.edge is not None and p.odds_implied_prob is not None:
+            return composite_pick_score(conf, p.edge, p.odds_implied_prob)
+        return conf  # fallback: confidence-only
+
+    for pred in sorted(deduped, key=_prop_score, reverse=True):
         if pred.game_id not in top_props:
             top_props[pred.game_id] = GameTopPick(
                 bet_type=pred.bet_type,
