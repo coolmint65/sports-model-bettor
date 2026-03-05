@@ -191,16 +191,42 @@ async def _sync_odds_and_broadcast():
         logger.error("Background odds sync failed: %s", exc, exc_info=True)
 
 
+async def _run_full_data_sync():
+    """Run a full data sync (schedule, teams, rosters, odds, predictions).
+
+    Delegates to the same pipeline as the manual sync button, but runs
+    automatically in the background.
+    """
+    try:
+        from app.api.data import _run_full_sync, _sync_state
+        if _sync_state.get("running"):
+            logger.debug("Full sync already running, skipping")
+            return
+        await _run_full_sync()
+        logger.info("Periodic full data sync completed")
+    except Exception as exc:
+        logger.error("Periodic full data sync failed: %s", exc, exc_info=True)
+
+
 async def _scheduler_loop():
-    """Adaptive scheduler: fast when live, moderate for pregame, idle otherwise."""
+    """Adaptive scheduler: fast when live, moderate for pregame, idle otherwise.
+
+    Also runs a full data sync (schedule + teams + rosters) on startup and
+    every 30 minutes to keep data fresh without requiring a manual sync button.
+    """
     global _scheduler_running
 
     LIVE_INTERVAL = 30       # 30 seconds when games are live
     PREGAME_INTERVAL = 120   # 2 minutes for pregame odds
     IDLE_INTERVAL = 300      # 5 minutes when nothing happening
+    FULL_SYNC_INTERVAL = 1800  # 30 minutes for full data refresh
 
     _scheduler_running = True
     logger.info("Live odds scheduler started")
+
+    # Run a full data sync on startup
+    await _run_full_data_sync()
+    last_full_sync = asyncio.get_event_loop().time()
 
     while _scheduler_running:
         try:
@@ -233,12 +259,18 @@ async def _scheduler_loop():
             except Exception as exc:
                 logger.warning("Scheduler interval check failed: %s", exc)
 
-            # Only sync if there are clients connected or games are live
+            # Always sync odds when there are upcoming/live games
+            has_upcoming = interval != IDLE_INTERVAL
             has_clients = manager.client_count > 0
-            has_live = interval == LIVE_INTERVAL
 
-            if has_clients or has_live:
+            if has_upcoming or has_clients:
                 await _sync_odds_and_broadcast()
+
+            # Periodic full data sync every 30 minutes
+            now = asyncio.get_event_loop().time()
+            if now - last_full_sync >= FULL_SYNC_INTERVAL:
+                await _run_full_data_sync()
+                last_full_sync = now
 
             await asyncio.sleep(interval)
 

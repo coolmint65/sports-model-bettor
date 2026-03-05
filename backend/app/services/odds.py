@@ -115,6 +115,52 @@ def fresh_implied_prob(pred: Prediction, game: Optional[Game]) -> Optional[float
         else:
             live_odds = game.away_spread_price
 
+    # --- Prop bet types ---
+    elif pred.bet_type == "first_goal":
+        if pred.prediction_value == "home":
+            live_odds = game.first_goal_home_price
+        else:
+            live_odds = game.first_goal_away_price
+
+    elif pred.bet_type == "both_score":
+        if pred.prediction_value == "yes":
+            live_odds = game.btts_yes_price
+        else:
+            live_odds = game.btts_no_price
+
+    elif pred.bet_type == "overtime":
+        if pred.prediction_value == "yes":
+            live_odds = game.overtime_yes_price
+        else:
+            live_odds = game.overtime_no_price
+
+    elif pred.bet_type == "odd_even":
+        if pred.prediction_value == "odd":
+            live_odds = game.total_odd_price
+        else:
+            live_odds = game.total_even_price
+
+    elif pred.bet_type == "period_winner":
+        # prediction_value like "p1_home", "p1_away", "p1_draw"
+        pv = pred.prediction_value or ""
+        if pv.startswith("p1_"):
+            side = pv[3:]  # "home", "away", or "draw"
+            if side == "home":
+                live_odds = game.period1_home_ml
+            elif side == "away":
+                live_odds = game.period1_away_ml
+            elif side == "draw":
+                live_odds = game.period1_draw_price
+
+    elif pred.bet_type == "period_total":
+        # prediction_value like "p1_over_1.5", "p1_under_1.5"
+        pv = pred.prediction_value or ""
+        if pv.startswith("p1_"):
+            if "over" in pv:
+                live_odds = game.period1_over_price
+            elif "under" in pv:
+                live_odds = game.period1_under_price
+
     return american_to_implied(live_odds)
 
 

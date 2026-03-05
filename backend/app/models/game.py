@@ -150,6 +150,28 @@ class Game(TimestampMixin, Base):
         JSON, nullable=True, default=None
     )
 
+    # Prop odds (American format)
+    # Both Teams to Score
+    btts_yes_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    btts_no_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # First Goal (which team scores first)
+    first_goal_home_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    first_goal_away_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # Overtime
+    overtime_yes_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    overtime_no_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # Odd/Even Total
+    total_odd_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    total_even_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # 1st Period Total (most commonly offered period prop)
+    period1_total_line: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    period1_over_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    period1_under_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # 1st Period Winner (3-way: home/away/draw)
+    period1_home_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    period1_away_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    period1_draw_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
     # Pregame odds snapshot — frozen when the game goes live so live
     # odds can overwrite the main fields without losing the opening lines.
     pregame_home_moneyline: Mapped[Optional[float]] = mapped_column(Float, nullable=True)

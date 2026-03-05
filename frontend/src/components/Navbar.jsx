@@ -1,31 +1,8 @@
-import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Home, History, RefreshCw, Zap, Wifi, WifiOff } from 'lucide-react';
-import { triggerDataSync } from '../utils/api';
+import { Home, History, Zap, Wifi, WifiOff } from 'lucide-react';
 
 function Navbar({ wsConnected }) {
   const location = useLocation();
-  const [syncing, setSyncing] = useState(false);
-  const [syncMessage, setSyncMessage] = useState('');
-
-  const handleSync = async () => {
-    if (syncing) return;
-    setSyncing(true);
-    setSyncMessage('');
-    try {
-      await triggerDataSync((step) => {
-        setSyncMessage(step || 'Syncing...');
-      });
-      setSyncMessage('Sync complete!');
-      setTimeout(() => setSyncMessage(''), 3000);
-    } catch (err) {
-      const detail = err?.message || 'Unknown error';
-      setSyncMessage(`Sync failed: ${detail}`);
-      setTimeout(() => setSyncMessage(''), 5000);
-    } finally {
-      setSyncing(false);
-    }
-  };
 
   const isActive = (path) => location.pathname === path;
 
@@ -64,27 +41,6 @@ function Navbar({ wsConnected }) {
               {wsConnected ? 'Live' : 'Offline'}
             </span>
           </div>
-          {syncMessage && (
-            <span
-              className={`sync-message ${
-                syncMessage.includes('failed') || syncMessage.includes('Failed')
-                  ? 'sync-error'
-                  : syncMessage.includes('complete')
-                    ? 'sync-success'
-                    : 'sync-progress'
-              }`}
-            >
-              {syncMessage}
-            </span>
-          )}
-          <button
-            className={`btn btn-sync ${syncing ? 'syncing' : ''}`}
-            onClick={handleSync}
-            disabled={syncing}
-          >
-            <RefreshCw size={16} className={syncing ? 'spin' : ''} />
-            <span>{syncing ? 'Syncing...' : 'Sync Data'}</span>
-          </button>
         </div>
       </div>
     </nav>

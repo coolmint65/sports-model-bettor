@@ -1390,6 +1390,54 @@ a:hover {
   padding-top: 10px;
 }
 
+.game-card-prop-footer {
+  border-top: 1px dashed var(--border-primary);
+  padding-top: 8px;
+  margin-top: -2px;
+}
+
+.game-top-prop {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.70rem;
+  color: var(--text-dim);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.top-prop-type {
+  text-transform: uppercase;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  color: var(--accent-purple, #b388ff);
+  font-size: 0.66rem;
+}
+
+.top-prop-value {
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-size: 0.73rem;
+}
+
+.game-top-prop svg {
+  color: var(--accent-purple, #b388ff);
+  flex-shrink: 0;
+}
+
+/* Prop outcome styling */
+.game-card-prop-footer.pick-win .top-prop-type,
+.game-card-prop-footer.pick-win .top-prop-value {
+  color: var(--accent-green, #00ff88);
+}
+
+.game-card-prop-footer.pick-loss .top-prop-type,
+.game-card-prop-footer.pick-loss .top-prop-value {
+  color: var(--accent-red, #ff5252);
+  opacity: 0.8;
+}
+
 .game-venue {
   display: flex;
   align-items: center;
