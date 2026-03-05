@@ -52,6 +52,7 @@ class GameTopPick(BaseModel):
     edge: Optional[float] = None
     is_fallback: bool = False
     heavy_juice: bool = False
+    outcome: Optional[str] = None  # "win", "loss", or None (pending/in-progress)
 
 
 class GameOdds(BaseModel):
@@ -222,6 +223,192 @@ def _build_schedule_game(
     )
 
 
+def _grade_top_pick(pick: GameTopPick, game: Game) -> Optional[str]:
+    """Grade a top pick against final scores. Returns 'win', 'loss', or None."""
+    if game.home_score is None or game.away_score is None:
+        return None
+    hs = game.home_score
+    aws = game.away_score
+    val = pick.prediction_value
+
+    if pick.bet_type == "ml":
+        home_abbr = game.home_team.abbreviation if game.home_team else ""
+        if val == home_abbr:
+            return "win" if hs > aws else "loss"
+        else:
+            return "win" if aws > hs else "loss"
+
+    elif pick.bet_type == "total":
+        total = hs + aws
+        if "over" in val:
+            try:
+                line = float(val.split("_")[1])
+            except (IndexError, ValueError):
+                return None
+            if total == line:
+                return "push"
+            return "win" if total > line else "loss"
+        elif "under" in val:
+            try:
+                line = float(val.split("_")[1])
+            except (IndexError, ValueError):
+                return None
+            if total == line:
+                return "push"
+            return "win" if total < line else "loss"
+
+    elif pick.bet_type == "spread":
+        try:
+            parts = val.split("_")
+            team_abbr = parts[0]
+            spread_val = float(parts[1])
+        except (IndexError, ValueError):
+            return None
+        margin = hs - aws
+        home_abbr = game.home_team.abbreviation if game.home_team else ""
+        if team_abbr == home_abbr:
+            adjusted = margin + spread_val
+        else:
+            adjusted = -margin + spread_val
+        if adjusted == 0:
+            return "push"
+        return "win" if adjusted > 0 else "loss"
+
+    return None
+
+
+async def _compute_top_picks(
+    games: List[Game], session: AsyncSession
+) -> dict[int, GameTopPick]:
+    """Compute the best top_pick prediction for each game.
+
+    Shared by /today, /live, and date-specific schedule endpoints.
+    """
+    max_implied = settings.best_bet_max_implied
+    game_ids = [g.id for g in games]
+    game_by_id = {g.id: g for g in games}
+    top_picks: dict[int, GameTopPick] = {}
+    if not game_ids:
+        return top_picks
+
+    all_preds_result = await session.execute(
+        select(Prediction).where(
+            Prediction.game_id.in_(game_ids),
+            Prediction.bet_type.in_(MARKET_BET_TYPES),
+            Prediction.phase == "prematch",
+            Prediction.edge.isnot(None),
+            Prediction.odds_implied_prob.isnot(None),
+        )
+    )
+    all_preds = all_preds_result.scalars().all()
+
+    # Compute fresh implied prob using the service layer.
+    # When fresh odds aren't available, fall back to the stored
+    # implied prob so we never give "benefit of the doubt" on juice.
+    fresh_map: dict[int, Optional[float]] = {}
+    scoring_map: dict[int, Optional[float]] = {}
+    for p in all_preds:
+        game_obj = game_by_id.get(p.game_id)
+        fresh = fresh_implied_prob(p, game_obj)
+        fresh_map[p.id] = fresh if fresh is not None else p.odds_implied_prob
+        scoring_map[p.id] = (
+            fresh_map[p.id]
+            if fresh_map[p.id] is not None
+            else p.odds_implied_prob
+        )
+
+    # --- Tier 1: best-bet criteria (edge + confidence) ---
+    tier1 = [
+        p for p in all_preds
+        if (p.edge or 0) >= settings.min_edge
+        and (p.confidence or 0) >= settings.min_confidence
+    ]
+
+    def _tier1_sort_key(p):
+        score = composite_pick_score(
+            p.confidence, p.edge, scoring_map.get(p.id)
+        )
+        if (
+            p.bet_type == "spread"
+            and p.prediction_value
+            and "+" in p.prediction_value
+        ):
+            score -= 0.10
+        return score
+
+    for pred in sorted(tier1, key=_tier1_sort_key, reverse=True):
+        if pred.game_id not in top_picks:
+            cur_impl = fresh_map.get(pred.id)
+            is_heavy = (
+                cur_impl is not None
+                and cur_impl >= max_implied
+            )
+            if pred.bet_type == "spread":
+                game_obj = game_by_id.get(pred.game_id)
+                logger.info(
+                    "Spread top pick: game=%d val=%s cur_impl=%.4f "
+                    "max_implied=%.4f is_heavy=%s "
+                    "home_spread_price=%s away_spread_price=%s "
+                    "stored_impl=%s",
+                    pred.game_id,
+                    pred.prediction_value,
+                    cur_impl if cur_impl is not None else -1,
+                    max_implied,
+                    is_heavy,
+                    getattr(game_obj, "home_spread_price", "N/A") if game_obj else "no_game",
+                    getattr(game_obj, "away_spread_price", "N/A") if game_obj else "no_game",
+                    pred.odds_implied_prob,
+                )
+            top_picks[pred.game_id] = GameTopPick(
+                bet_type=pred.bet_type,
+                prediction_value=pred.prediction_value,
+                confidence=pred.confidence,
+                edge=pred.edge,
+                is_fallback=False,
+                heavy_juice=is_heavy,
+            )
+
+    # --- Tier 3: confidence-only fallback when odds data is missing ---
+    still_missing = set(gid for gid in game_ids if gid not in top_picks)
+    if still_missing:
+        no_odds_result = await session.execute(
+            select(Prediction).where(
+                Prediction.game_id.in_(list(still_missing)),
+                Prediction.bet_type.in_(MARKET_BET_TYPES),
+                Prediction.phase == "prematch",
+            )
+        )
+        no_odds_preds = no_odds_result.scalars().all()
+        for pred in sorted(
+            no_odds_preds,
+            key=lambda p: p.confidence or 0,
+            reverse=True,
+        ):
+            if pred.game_id not in top_picks:
+                # Check stored implied prob for heavy juice
+                stored_impl = pred.odds_implied_prob
+                is_heavy = (
+                    stored_impl is not None
+                    and stored_impl >= max_implied
+                )
+                top_picks[pred.game_id] = GameTopPick(
+                    bet_type=pred.bet_type,
+                    prediction_value=pred.prediction_value,
+                    confidence=pred.confidence,
+                    edge=pred.edge,
+                    is_fallback=False,
+                    heavy_juice=is_heavy,
+                )
+
+    # Grade outcomes for final games
+    for game_id, pick in top_picks.items():
+        game_obj = game_by_id.get(game_id)
+        if game_obj and game_obj.status and game_obj.status.lower() in GAME_FINAL_STATUSES:
+            pick.outcome = _grade_top_pick(pick, game_obj)
+
+    return top_picks
+
+
 async def _games_for_date(
     target_date: date, session: AsyncSession
 ) -> List[ScheduleGame]:
@@ -234,119 +421,7 @@ async def _games_for_date(
     games = result.scalars().all()
 
     # Pre-fetch best prediction per game using composite score
-    max_implied = settings.best_bet_max_implied
-    game_ids = [g.id for g in games]
-    game_by_id = {g.id: g for g in games}
-    top_picks: dict[int, GameTopPick] = {}
-    if game_ids:
-        all_preds_result = await session.execute(
-            select(Prediction).where(
-                Prediction.game_id.in_(game_ids),
-                Prediction.bet_type.in_(MARKET_BET_TYPES),
-                Prediction.phase == "prematch",
-                Prediction.edge.isnot(None),
-                Prediction.odds_implied_prob.isnot(None),
-            )
-        )
-        all_preds = all_preds_result.scalars().all()
-
-        # Compute fresh implied prob using the service layer.
-        # When fresh odds aren't available, fall back to the stored
-        # implied prob so we never give "benefit of the doubt" on juice.
-        fresh_map: dict[int, Optional[float]] = {}
-        scoring_map: dict[int, Optional[float]] = {}
-        for p in all_preds:
-            game_obj = game_by_id.get(p.game_id)
-            fresh = fresh_implied_prob(p, game_obj)
-            fresh_map[p.id] = fresh if fresh is not None else p.odds_implied_prob
-            scoring_map[p.id] = (
-                fresh_map[p.id]
-                if fresh_map[p.id] is not None
-                else p.odds_implied_prob
-            )
-
-        # --- Tier 1: best-bet criteria (edge + confidence) ---
-        tier1 = [
-            p for p in all_preds
-            if (p.edge or 0) >= settings.min_edge
-            and (p.confidence or 0) >= settings.min_confidence
-        ]
-
-        def _tier1_sort_key(p):
-            score = composite_pick_score(
-                p.confidence, p.edge, scoring_map.get(p.id)
-            )
-            if (
-                p.bet_type == "spread"
-                and p.prediction_value
-                and "+" in p.prediction_value
-            ):
-                score -= 0.10
-            return score
-
-        for pred in sorted(tier1, key=_tier1_sort_key, reverse=True):
-            if pred.game_id not in top_picks:
-                cur_impl = fresh_map.get(pred.id)
-                is_heavy = (
-                    cur_impl is not None
-                    and cur_impl >= max_implied
-                )
-                if pred.bet_type == "spread":
-                    game_obj = game_by_id.get(pred.game_id)
-                    logger.info(
-                        "Spread top pick: game=%d val=%s cur_impl=%.4f "
-                        "max_implied=%.4f is_heavy=%s "
-                        "home_spread_price=%s away_spread_price=%s "
-                        "stored_impl=%s",
-                        pred.game_id,
-                        pred.prediction_value,
-                        cur_impl if cur_impl is not None else -1,
-                        max_implied,
-                        is_heavy,
-                        getattr(game_obj, "home_spread_price", "N/A") if game_obj else "no_game",
-                        getattr(game_obj, "away_spread_price", "N/A") if game_obj else "no_game",
-                        pred.odds_implied_prob,
-                    )
-                top_picks[pred.game_id] = GameTopPick(
-                    bet_type=pred.bet_type,
-                    prediction_value=pred.prediction_value,
-                    confidence=pred.confidence,
-                    edge=pred.edge,
-                    is_fallback=False,
-                    heavy_juice=is_heavy,
-                )
-
-        # --- Tier 3: confidence-only fallback when odds data is missing ---
-        still_missing = set(gid for gid in game_ids if gid not in top_picks)
-        if still_missing:
-            no_odds_result = await session.execute(
-                select(Prediction).where(
-                    Prediction.game_id.in_(list(still_missing)),
-                    Prediction.bet_type.in_(MARKET_BET_TYPES),
-                    Prediction.phase == "prematch",
-                )
-            )
-            no_odds_preds = no_odds_result.scalars().all()
-            for pred in sorted(
-                no_odds_preds,
-                key=lambda p: p.confidence or 0,
-                reverse=True,
-            ):
-                if pred.game_id not in top_picks:
-                    # Check stored implied prob for heavy juice
-                    stored_impl = pred.odds_implied_prob
-                    is_heavy = (
-                        stored_impl is not None
-                        and stored_impl >= max_implied
-                    )
-                    top_picks[pred.game_id] = GameTopPick(
-                        bet_type=pred.bet_type,
-                        prediction_value=pred.prediction_value,
-                        confidence=pred.confidence,
-                        edge=pred.edge,
-                        is_fallback=False,
-                        heavy_juice=is_heavy,
-                    )
+    top_picks = await _compute_top_picks(games, session)
 
     # Batch-load team stats
     all_team_ids = list({g.home_team_id for g in games} | {g.away_team_id for g in games})
@@ -425,6 +500,9 @@ async def get_live_games(
         )
         games = result.scalars().all()
 
+    # Compute top picks for live games (same logic as /today)
+    top_picks = await _compute_top_picks(games, session)
+
     # Batch-load team stats
     all_team_ids = list({g.home_team_id for g in games} | {g.away_team_id for g in games})
     stats_map = await _batch_load_team_stats(all_team_ids, session)
@@ -433,7 +511,7 @@ async def get_live_games(
     for game in games:
         home_brief = _build_team_brief(game.home_team, stats_map.get(game.home_team_id))
         away_brief = _build_team_brief(game.away_team, stats_map.get(game.away_team_id))
-        schedule_games.append(_build_schedule_game(game, home_brief, away_brief))
+        schedule_games.append(_build_schedule_game(game, home_brief, away_brief, top_picks.get(game.id)))
 
     today = date.today()
     return ScheduleResponse(date=today, game_count=len(schedule_games), games=schedule_games)

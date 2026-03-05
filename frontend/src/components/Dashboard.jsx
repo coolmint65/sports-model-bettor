@@ -73,10 +73,22 @@ function Dashboard() {
   // Build a lookup of live game data (from /schedule/live which has
   // the freshest odds via live odds sync).  Prefer this data over
   // /schedule/today for live games so odds timestamps stay current.
+  // Preserve top_pick from schedule data if live data doesn't have one.
   const liveGameMap = new Map();
+  const scheduleMap = new Map();
+  for (const g of games) {
+    const gid = g.id || g.game_id;
+    if (gid) scheduleMap.set(gid, g);
+  }
   for (const g of liveGames) {
     const gid = g.id || g.game_id;
-    if (gid) liveGameMap.set(gid, g);
+    if (gid) {
+      const scheduleGame = scheduleMap.get(gid);
+      if (!g.top_pick && scheduleGame?.top_pick) {
+        g.top_pick = scheduleGame.top_pick;
+      }
+      liveGameMap.set(gid, g);
+    }
   }
 
   const todayGameIds = new Set(games.map((g) => g.id || g.game_id));

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Clock, MapPin, ChevronRight, TrendingUp, Target, Radio, AlertTriangle } from 'lucide-react';
+import { Clock, MapPin, ChevronRight, TrendingUp, Target, Radio, AlertTriangle, CheckCircle, XCircle, MinusCircle } from 'lucide-react';
 import { format, formatDistanceToNowStrict } from 'date-fns';
 import { teamName, teamAbbrev, teamLogo, confidencePct, parseAsUTC, formatBetType, formatPredictionValue } from '../utils/teams';
 import { getConfidenceColor } from '../utils/formatting';
@@ -426,10 +426,10 @@ function GameCard({ game }) {
         <OddsRow odds={odds} homeAbbr={homeAbbr} awayAbbr={awayAbbr} isLive={statusInfo.isLive} />
       )}
 
-      {/* Footer: Top Pick or Venue + Confidence */}
+      {/* Footer: Top Pick or Venue + Confidence + Outcome */}
       <div className="game-card-footer">
         {topPick ? (
-          <div className={`game-top-pick ${(topPick.is_fallback || topPick.heavy_juice) ? 'top-pick-fallback' : ''}`}>
+          <div className={`game-top-pick ${(topPick.is_fallback || topPick.heavy_juice) ? 'top-pick-fallback' : ''} ${topPick.outcome ? `pick-${topPick.outcome}` : ''}`}>
             {(topPick.is_fallback || topPick.heavy_juice) ? <AlertTriangle size={12} /> : <Target size={12} />}
             <span className="top-pick-type">{formatBetType(topPick.bet_type)}</span>
             <span className="top-pick-value">{formatPredictionValue(topPick.prediction_value)}</span>
@@ -441,17 +441,26 @@ function GameCard({ game }) {
             <span>{venue}</span>
           </div>
         ) : <div />}
-        {confidence != null && (
-          <div className="game-confidence" title={`Top prediction confidence: ${confidence.toFixed(0)}%`}>
-            <TrendingUp size={12} />
-            <span
-              className="confidence-text"
-              style={{ color: (topPick?.is_fallback || topPick?.heavy_juice) ? '#ff9800' : getConfidenceColor(confidence) }}
-            >
-              {confidence.toFixed(0)}%
-            </span>
-          </div>
-        )}
+        <div className="game-footer-right">
+          {confidence != null && (
+            <div className="game-confidence" title={`Top prediction confidence: ${confidence.toFixed(0)}%`}>
+              <TrendingUp size={12} />
+              <span
+                className="confidence-text"
+                style={{ color: (topPick?.is_fallback || topPick?.heavy_juice) ? '#ff9800' : getConfidenceColor(confidence) }}
+              >
+                {confidence.toFixed(0)}%
+              </span>
+            </div>
+          )}
+          {topPick?.outcome && (
+            <div className={`pick-outcome pick-outcome-${topPick.outcome}`} title={topPick.outcome === 'win' ? 'Won' : topPick.outcome === 'loss' ? 'Lost' : 'Push'}>
+              {topPick.outcome === 'win' && <CheckCircle size={20} />}
+              {topPick.outcome === 'loss' && <XCircle size={20} />}
+              {topPick.outcome === 'push' && <MinusCircle size={20} />}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="game-card-arrow">
