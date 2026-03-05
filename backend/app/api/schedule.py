@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES, composite_pick_score
+from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES, PROP_BET_TYPES, composite_pick_score
 from app.database import get_session
 from app.models.game import Game
 from app.models.prediction import Prediction
@@ -93,6 +93,8 @@ class ScheduleGame(BaseModel):
     away_shots: Optional[int] = None
     # Top prediction for this game
     top_pick: Optional[GameTopPick] = None
+    # Top prop prediction for this game (non-market bet)
+    top_prop: Optional[GameTopPick] = None
     # Sportsbook odds
     odds: Optional[GameOdds] = None
     pregame_odds: Optional[GameOdds] = None
@@ -195,6 +197,7 @@ def _build_schedule_game(
     home_brief: TeamBrief,
     away_brief: TeamBrief,
     top_pick: Optional[GameTopPick] = None,
+    top_prop: Optional[GameTopPick] = None,
 ) -> ScheduleGame:
     return ScheduleGame(
         id=game.id,
@@ -218,6 +221,7 @@ def _build_schedule_game(
         home_shots=game.home_shots,
         away_shots=game.away_shots,
         top_pick=top_pick,
+        top_prop=top_prop,
         odds=_build_game_odds(game),
         pregame_odds=_build_pregame_odds(game),
     )
@@ -428,6 +432,58 @@ async def _compute_top_picks(
     return top_picks
 
 
+async def _compute_top_props(
+    games: List[Game], session: AsyncSession
+) -> dict[int, GameTopPick]:
+    """Select the best prop prediction for each game (non-market bet types).
+
+    Props have no real sportsbook odds, so ranking is purely by confidence.
+    """
+    game_ids = [g.id for g in games]
+    game_by_id = {g.id: g for g in games}
+    top_props: dict[int, GameTopPick] = {}
+    if not game_ids:
+        return top_props
+
+    result = await session.execute(
+        select(Prediction).where(
+            Prediction.game_id.in_(game_ids),
+            Prediction.bet_type.in_(PROP_BET_TYPES),
+            Prediction.phase.in_(("prematch", "live")),
+        )
+    )
+    all_props = result.scalars().all()
+
+    # Deduplicate: prefer prematch over live
+    _seen: dict[tuple, Prediction] = {}
+    for p in all_props:
+        key = (p.game_id, p.bet_type, p.prediction_value)
+        existing = _seen.get(key)
+        if existing is None or (existing.phase == "live" and p.phase == "prematch"):
+            _seen[key] = p
+    deduped = list(_seen.values())
+
+    # Pick highest confidence prop per game
+    for pred in sorted(deduped, key=lambda p: p.confidence or 0, reverse=True):
+        if pred.game_id not in top_props:
+            top_props[pred.game_id] = GameTopPick(
+                bet_type=pred.bet_type,
+                prediction_value=pred.prediction_value,
+                confidence=pred.confidence,
+                edge=pred.edge,
+                is_fallback=False,
+                heavy_juice=False,
+            )
+
+    # Grade outcomes for final games
+    for game_id, prop in top_props.items():
+        game_obj = game_by_id.get(game_id)
+        if game_obj and game_obj.status and game_obj.status.lower() in GAME_FINAL_STATUSES:
+            prop.outcome = _grade_top_pick(prop, game_obj)
+
+    return top_props
+
+
 async def _games_for_date(
     target_date: date, session: AsyncSession
 ) -> List[ScheduleGame]:
@@ -441,6 +497,7 @@ async def _games_for_date(
 
     # Pre-fetch best prediction per game using composite score
     top_picks = await _compute_top_picks(games, session)
+    top_props = await _compute_top_props(games, session)
 
     # Batch-load team stats
     all_team_ids = list({g.home_team_id for g in games} | {g.away_team_id for g in games})
@@ -451,7 +508,10 @@ async def _games_for_date(
         home_brief = _build_team_brief(game.home_team, stats_map.get(game.home_team_id))
         away_brief = _build_team_brief(game.away_team, stats_map.get(game.away_team_id))
         schedule_games.append(
-            _build_schedule_game(game, home_brief, away_brief, top_picks.get(game.id))
+            _build_schedule_game(
+                game, home_brief, away_brief,
+                top_picks.get(game.id), top_props.get(game.id),
+            )
         )
     return schedule_games
 
@@ -519,8 +579,9 @@ async def get_live_games(
         )
         games = result.scalars().all()
 
-    # Compute top picks for live games (same logic as /today)
+    # Compute top picks and props for live games (same logic as /today)
     top_picks = await _compute_top_picks(games, session)
+    top_props = await _compute_top_props(games, session)
 
     # Batch-load team stats
     all_team_ids = list({g.home_team_id for g in games} | {g.away_team_id for g in games})
@@ -530,7 +591,10 @@ async def get_live_games(
     for game in games:
         home_brief = _build_team_brief(game.home_team, stats_map.get(game.home_team_id))
         away_brief = _build_team_brief(game.away_team, stats_map.get(game.away_team_id))
-        schedule_games.append(_build_schedule_game(game, home_brief, away_brief, top_picks.get(game.id)))
+        schedule_games.append(_build_schedule_game(
+            game, home_brief, away_brief,
+            top_picks.get(game.id), top_props.get(game.id),
+        ))
 
     today = date.today()
     return ScheduleResponse(date=today, game_count=len(schedule_games), games=schedule_games)

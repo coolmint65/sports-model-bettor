@@ -23,6 +23,16 @@ GAME_PREDICTABLE_STATUSES = (
 # The three core sportsbook market types the model generates predictions for.
 MARKET_BET_TYPES = ("ml", "total", "spread")
 
+# Non-market prop bet types (no real sportsbook odds, confidence-only).
+PROP_BET_TYPES = (
+    "period_total",
+    "period_winner",
+    "first_goal",
+    "both_score",
+    "overtime",
+    "odd_even",
+)
+
 
 def composite_pick_score(
     confidence: float | None,
