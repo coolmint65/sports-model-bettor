@@ -193,13 +193,16 @@ function BestBets() {
     refreshTrackedState();
   }, [refreshTrackedState]);
 
-  // Instantly refetch when WebSocket pushes odds/predictions updates
-  useWebSocketEvent('odds_update', useCallback((data) => {
-    if (data?.predictions_updated) {
-      silentRefetch();
-      refreshTrackedState();
-    }
+  // Refetch when predictions are regenerated (separate from odds updates)
+  useWebSocketEvent('predictions_update', useCallback(() => {
+    silentRefetch();
+    refreshTrackedState();
   }, [silentRefetch, refreshTrackedState]));
+
+  // Also refetch on odds updates in case line movements affect display
+  useWebSocketEvent('odds_update', useCallback(() => {
+    silentRefetch();
+  }, [silentRefetch]));
 
   // Fallback: poll best bets every 60 seconds
   useEffect(() => {
