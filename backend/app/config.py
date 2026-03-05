@@ -62,7 +62,7 @@ class Settings(BaseModel):
     # Application
     app_name: str = "Sports Model Bettor"
     app_version: str = "1.0.0"
-    debug: bool = True
+    debug: bool = os.environ.get("DEBUG", "false").lower() in ("true", "1", "yes")
 
     # Database
     db_dir: Path = DATA_DIR
@@ -110,7 +110,12 @@ class Settings(BaseModel):
     port: int = 8000
 
     # CORS
-    cors_origins: List[str] = ["*"]
+    cors_origins: List[str] = [
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:5173",
+    ]
 
     # Prediction thresholds
     min_confidence: float = 0.55
