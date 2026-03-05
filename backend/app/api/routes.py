@@ -205,6 +205,13 @@ async def health_check() -> HealthResponse:
     )
 
 
+@health_router.get("/health/scheduler")
+async def scheduler_health():
+    """Return scheduler status for debugging live odds freshness."""
+    from app.live import scheduler_status
+    return scheduler_status()
+
+
 # ---------------------------------------------------------------------------
 # Teams
 # ---------------------------------------------------------------------------

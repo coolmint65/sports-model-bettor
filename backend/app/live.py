@@ -115,40 +115,52 @@ async def _sync_odds_and_broadcast():
 
     This is the fast path: odds-only, no prediction regeneration.
     Predictions are regenerated separately on a slower cadence.
+
+    Uses two separate sessions:
+    1. Sync session — fetches odds, writes to DB, COMMITS immediately
+       so that the REST API serves fresh data to polling clients.
+    2. Read session — re-queries committed data for change detection
+       and WebSocket broadcast.
     """
     global _last_odds_snapshot
 
     try:
+        # Phase 1: Sync odds and COMMIT to DB immediately.
+        # This ensures the /schedule/live endpoint returns fresh data
+        # even before we broadcast via WebSocket.
+        matched = []
         async with get_session_context() as session:
             today = date.today()
 
-            # Snapshot pre-sync state
+            # Check if there are any non-final games to sync
             games_result = await session.execute(
-                select(Game)
-                .options(selectinload(Game.home_team), selectinload(Game.away_team))
-                .where(
+                select(func.count(Game.id)).where(
                     Game.date == today,
                     ~func.lower(Game.status).in_(GAME_FINAL_STATUSES),
                 )
             )
-            games = games_result.scalars().all()
+            game_count = games_result.scalar() or 0
 
-            if not games:
+            if not game_count:
+                logger.debug("Odds sync: no non-final games today")
                 return
-
-            for g in games:
-                _snapshot_game_odds(g)  # populate pre-sync snapshots
 
             # Odds-only sync (no prediction regen) — force=True to
             # bypass the service-layer throttle since the scheduler
             # already controls pacing.
             from app.services.odds import sync_odds
             matched = await sync_odds(session, force=True)
+            # Session commits on exit via get_session_context()
 
-            if not matched:
-                return
+        if not matched:
+            logger.debug("Odds sync: no games matched from sportsbooks")
+            return
 
-            # Re-query to get updated values
+        logger.info("Odds sync committed: %d games updated", len(matched))
+
+        # Phase 2: Re-query committed data, detect changes, broadcast.
+        async with get_session_context() as session:
+            today = date.today()
             games_result = await session.execute(
                 select(Game)
                 .options(selectinload(Game.home_team), selectinload(Game.away_team))
@@ -279,19 +291,32 @@ async def _scheduler_loop():
     _scheduler_running = True
     logger.info("Live odds scheduler started")
 
-    # Run a full data sync on startup
-    await _run_full_data_sync()
     loop = asyncio.get_event_loop()
+
+    # Launch the full data sync as a BACKGROUND task so it never blocks
+    # the fast odds polling loop.  Previous behaviour was to await the
+    # full sync here — if the H2H historical sync took 30-60+ minutes,
+    # the odds loop wouldn't start until it finished, leaving live odds
+    # stale the entire time.
+    _full_sync_task: Optional[asyncio.Task] = asyncio.create_task(
+        _run_full_data_sync()
+    )
     last_full_sync = loop.time()
     last_pred_regen = loop.time()
-    _full_sync_task: Optional[asyncio.Task] = None
+    _iteration = 0
+
+    # Brief pause to let the full sync populate today's schedule
+    # before we start querying for games.
+    await asyncio.sleep(5)
 
     while _scheduler_running:
         try:
+            _iteration += 1
             cycle_start = loop.time()
 
             # Determine current interval based on game state
             interval = IDLE_INTERVAL
+            live_count = 0
             try:
                 async with get_session_context() as session:
                     today = date.today()
@@ -319,18 +344,25 @@ async def _scheduler_loop():
             except Exception as exc:
                 logger.warning("Scheduler interval check failed: %s", exc)
 
-            # Always sync odds when there are upcoming/live games
-            has_upcoming = interval != IDLE_INTERVAL
-            has_clients = manager.client_count > 0
+            # Always sync odds — the interval already adjusts pacing.
+            # Even in "idle" mode, keep syncing so pregame odds stay
+            # fresh for any games that appear.
+            await _sync_odds_and_broadcast()
 
-            if has_upcoming or has_clients:
-                await _sync_odds_and_broadcast()
+            # Heartbeat log every 10 iterations (or every iteration
+            # when games are live) for observability.
+            if live_count > 0 or _iteration % 10 == 0:
+                logger.info(
+                    "Scheduler heartbeat: iter=%d, interval=%ds, "
+                    "live=%d, clients=%d",
+                    _iteration, interval, live_count,
+                    manager.client_count,
+                )
 
             # Regenerate predictions on a slower cadence
             now = loop.time()
             if now - last_pred_regen >= PRED_REGEN_INTERVAL:
-                if has_upcoming or has_clients:
-                    await _regenerate_predictions()
+                await _regenerate_predictions()
                 last_pred_regen = now
 
             # Periodic full data sync — run as background task so it
@@ -376,6 +408,16 @@ async def stop_scheduler():
         except asyncio.CancelledError:
             pass
         _scheduler_task = None
+
+
+def scheduler_status() -> Dict[str, Any]:
+    """Return scheduler health info for the /health endpoint."""
+    task_alive = _scheduler_task is not None and not _scheduler_task.done()
+    return {
+        "scheduler_running": _scheduler_running,
+        "scheduler_task_alive": task_alive,
+        "websocket_clients": manager.client_count,
+    }
 
 
 # ---------------------------------------------------------------------------
