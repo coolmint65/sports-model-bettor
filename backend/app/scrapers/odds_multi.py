@@ -415,6 +415,8 @@ async def _make_request(
     timeout: float = 10.0,
 ) -> Optional[Any]:
     """Make a GET request with error handling. Returns parsed JSON or None."""
+    # Strip API key from log output
+    _log_url = url.split("?")[0]
     try:
         resp = await client.get(
             url,
@@ -424,10 +426,18 @@ async def _make_request(
         )
         if resp.status_code == 200:
             return resp.json()
-        logger.warning("HTTP %d from %s", resp.status_code, url)
+        # Log body for non-200 responses (often contains error message)
+        body = resp.text[:200] if resp.text else ""
+        logger.warning("HTTP %d from %s: %s", resp.status_code, _log_url, body)
+        return None
+    except httpx.TimeoutException:
+        logger.warning("Timeout (%.0fs) for %s", timeout, _log_url)
+        return None
+    except httpx.ConnectError as exc:
+        logger.warning("Connection failed for %s: %s", _log_url, exc)
         return None
     except Exception as exc:
-        logger.warning("Request failed for %s: %s", url, exc)
+        logger.warning("Request failed for %s: %s", _log_url, exc)
         return None
 
 
@@ -1454,8 +1464,79 @@ async def _fetch_kambi(client: httpx.AsyncClient) -> List[OddsEvent]:
                                 "away_price": prices["away_price"],
                             })
 
+                # 1st Period Total (Over/Under)
+                elif ("1st" in criterion_label or "period 1" in criterion_label) and (
+                    "total" in criterion_label or "over" in criterion_label
+                ):
+                    for oc in outcomes if isinstance(outcomes, list) else []:
+                        oc_label = (oc.get("label", "") or "").lower()
+                        oc_type = (oc.get("type", "") or "").upper()
+                        line = oc.get("line", 0)
+                        decimal_odds_val = oc.get("odds", 0)
+                        if not decimal_odds_val:
+                            continue
+                        dec = decimal_odds_val / 1000.0 if decimal_odds_val > 100 else decimal_odds_val
+                        american = decimal_to_american(dec)
+                        try:
+                            line_val = float(line) / 1000.0 if abs(line) > 100 else float(line)
+                        except (ValueError, TypeError):
+                            continue
+                        if "over" in oc_label or oc_type == "OT_OVER":
+                            odds["p1_total_line"] = line_val
+                            odds["p1_over_price"] = american
+                        elif "under" in oc_label or oc_type == "OT_UNDER":
+                            odds["p1_under_price"] = american
+
+                # 1st Period Winner (3-way: home/away/draw)
+                elif ("1st" in criterion_label or "period 1" in criterion_label) and (
+                    "winner" in criterion_label or "result" in criterion_label
+                    or "money" in criterion_label
+                ):
+                    for oc in outcomes if isinstance(outcomes, list) else []:
+                        oc_label = oc.get("label", "")
+                        oc_type = (oc.get("type", "") or "").upper()
+                        decimal_odds_val = oc.get("odds", 0)
+                        if not decimal_odds_val:
+                            continue
+                        dec = decimal_odds_val / 1000.0 if decimal_odds_val > 100 else decimal_odds_val
+                        american = decimal_to_american(dec)
+                        if oc_type == "OT_ONE" or oc_label == home_name:
+                            odds["p1_home_ml"] = american
+                        elif oc_type == "OT_TWO" or oc_label == away_name:
+                            odds["p1_away_ml"] = american
+                        elif oc_type == "OT_CROSS" or "draw" in oc_label.lower() or "tie" in oc_label.lower():
+                            odds["p1_draw_price"] = american
+
+                # Both Teams to Score
+                elif "both" in criterion_label and "score" in criterion_label:
+                    for oc in outcomes if isinstance(outcomes, list) else []:
+                        oc_label = (oc.get("label", "") or "").lower()
+                        decimal_odds_val = oc.get("odds", 0)
+                        if not decimal_odds_val:
+                            continue
+                        dec = decimal_odds_val / 1000.0 if decimal_odds_val > 100 else decimal_odds_val
+                        american = decimal_to_american(dec)
+                        if "yes" in oc_label:
+                            odds["btts_yes"] = american
+                        elif "no" in oc_label:
+                            odds["btts_no"] = american
+
+                # Overtime Yes/No
+                elif "overtime" in criterion_label or "extra time" in criterion_label:
+                    for oc in outcomes if isinstance(outcomes, list) else []:
+                        oc_label = (oc.get("label", "") or "").lower()
+                        decimal_odds_val = oc.get("odds", 0)
+                        if not decimal_odds_val:
+                            continue
+                        dec = decimal_odds_val / 1000.0 if decimal_odds_val > 100 else decimal_odds_val
+                        american = decimal_to_american(dec)
+                        if "yes" in oc_label:
+                            odds["ot_yes"] = american
+                        elif "no" in oc_label:
+                            odds["ot_no"] = american
+
                 # Totals (Over/Under) — collect ALL available lines
-                # Skip period-specific totals (e.g. "1st period total")
+                # Skip period-specific totals (already handled above)
                 elif ("total" in criterion_label or "over" in criterion_label) and not any(
                     tok in criterion_label for tok in ("1st", "2nd", "3rd", "period", "half", "quarter", "inning")
                 ):
@@ -1523,6 +1604,27 @@ async def _fetch_kambi(client: httpx.AsyncClient) -> List[OddsEvent]:
                 alt_totals=odds.get("kambi_alt_totals", []),
                 alt_spreads=odds.get("kambi_alt_spreads", []),
             )
+            # Set prop odds on the event
+            if odds.get("p1_total_line"):
+                event.p1_total_line = odds["p1_total_line"]
+            if odds.get("p1_over_price"):
+                event.p1_over_price = odds["p1_over_price"]
+            if odds.get("p1_under_price"):
+                event.p1_under_price = odds["p1_under_price"]
+            if odds.get("p1_home_ml"):
+                event.p1_home_ml = odds["p1_home_ml"]
+            if odds.get("p1_away_ml"):
+                event.p1_away_ml = odds["p1_away_ml"]
+            if odds.get("p1_draw_price"):
+                event.p1_draw_price = odds["p1_draw_price"]
+            if odds.get("btts_yes"):
+                event.btts_yes = odds["btts_yes"]
+            if odds.get("btts_no"):
+                event.btts_no = odds["btts_no"]
+            if odds.get("ot_yes"):
+                event.overtime_yes = odds["ot_yes"]
+            if odds.get("ot_no"):
+                event.overtime_no = odds["ot_no"]
             if event.home_abbr and event.away_abbr:
                 events.append(_validate_event(event))
             else:
@@ -1615,9 +1717,56 @@ async def _fetch_bovada(client: httpx.AsyncClient) -> List[OddsEvent]:
                         if not isinstance(outcomes, list):
                             continue
 
-                        # Only process main-game markets (not period-specific)
+                        # Determine if this is a period-specific market
                         period = market.get("period", {})
-                        if isinstance(period, dict) and not period.get("main", True):
+                        is_period_market = isinstance(period, dict) and not period.get("main", True)
+                        period_desc = (period.get("description", "") or "").lower() if isinstance(period, dict) else ""
+                        is_p1 = "1st" in period_desc or "first" in period_desc or period_desc == "1"
+
+                        # Period-specific prop markets (1st period only)
+                        if is_period_market and is_p1:
+                            # 1st Period Moneyline (3-way)
+                            if market_key == "3W-ML" or "moneyline" in market_desc or "winner" in market_desc:
+                                for oc in outcomes:
+                                    price_data = oc.get("price", {})
+                                    if not isinstance(price_data, dict):
+                                        continue
+                                    american_str = price_data.get("american", "")
+                                    try:
+                                        odds_val = float(str(american_str).replace("+", ""))
+                                    except (ValueError, TypeError):
+                                        continue
+                                    oc_type = (oc.get("type", "") or "").upper()
+                                    if oc_type == "H":
+                                        odds["p1_home_ml"] = odds_val
+                                    elif oc_type == "A":
+                                        odds["p1_away_ml"] = odds_val
+                                    elif oc_type == "D":
+                                        odds["p1_draw_price"] = odds_val
+
+                            # 1st Period Total
+                            elif market_key == "2W-OU" or "total" in market_desc:
+                                for oc in outcomes:
+                                    price_data = oc.get("price", {})
+                                    if not isinstance(price_data, dict):
+                                        continue
+                                    american_str = price_data.get("american", "")
+                                    handicap_str = price_data.get("handicap", "0")
+                                    try:
+                                        odds_val = float(str(american_str).replace("+", ""))
+                                        line_val = float(handicap_str)
+                                    except (ValueError, TypeError):
+                                        continue
+                                    oc_type = (oc.get("type", "") or "").upper()
+                                    odds["p1_total_line"] = line_val
+                                    if oc_type == "O":
+                                        odds["p1_over_price"] = odds_val
+                                    elif oc_type == "U":
+                                        odds["p1_under_price"] = odds_val
+                            continue
+
+                        # Skip other non-main period markets (2nd, 3rd)
+                        if is_period_market:
                             continue
 
                         # Moneyline
@@ -1725,6 +1874,40 @@ async def _fetch_bovada(client: httpx.AsyncClient) -> List[OddsEvent]:
                                     odds["over_price"] = bov_lines[best_line].get("over_price", -110)
                                     odds["under_price"] = bov_lines[best_line].get("under_price", -110)
 
+                        # Both Teams to Score (Yes/No)
+                        elif "both" in market_desc and "score" in market_desc:
+                            for oc in outcomes:
+                                price_data = oc.get("price", {})
+                                if not isinstance(price_data, dict):
+                                    continue
+                                american_str = price_data.get("american", "")
+                                try:
+                                    odds_val = float(str(american_str).replace("+", ""))
+                                except (ValueError, TypeError):
+                                    continue
+                                oc_desc = (oc.get("description", "") or "").lower()
+                                if "yes" in oc_desc:
+                                    odds["btts_yes"] = odds_val
+                                elif "no" in oc_desc:
+                                    odds["btts_no"] = odds_val
+
+                        # Overtime (Will there be overtime?)
+                        elif "overtime" in market_desc:
+                            for oc in outcomes:
+                                price_data = oc.get("price", {})
+                                if not isinstance(price_data, dict):
+                                    continue
+                                american_str = price_data.get("american", "")
+                                try:
+                                    odds_val = float(str(american_str).replace("+", ""))
+                                except (ValueError, TypeError):
+                                    continue
+                                oc_desc = (oc.get("description", "") or "").lower()
+                                if "yes" in oc_desc:
+                                    odds["ot_yes"] = odds_val
+                                elif "no" in oc_desc:
+                                    odds["ot_no"] = odds_val
+
                 # ---- Fix Bovada spread home/away inversion ----
                 # Bovada's "H"/"A" type on spread outcomes sometimes
                 # assigns the handicap to the wrong side.  The moneyline
@@ -1742,7 +1925,7 @@ async def _fetch_bovada(client: httpx.AsyncClient) -> List[OddsEvent]:
                         or (not _home_fav and _hs < 0)
                     )
                     if _signs_wrong:
-                        logger.info(
+                        logger.debug(
                             "Bovada %s @ %s: fixing spread H/A swap "
                             "(home %+.1f @ %+.0f ↔ away %+.1f @ %+.0f)",
                             away_name, home_name,
@@ -1784,6 +1967,27 @@ async def _fetch_bovada(client: httpx.AsyncClient) -> List[OddsEvent]:
                     alt_totals=odds.get("bov_alt_totals", []),
                     alt_spreads=odds.get("bov_alt_spreads", []),
                 )
+                # Set prop odds on the event
+                if odds.get("p1_total_line"):
+                    event.p1_total_line = odds["p1_total_line"]
+                if odds.get("p1_over_price"):
+                    event.p1_over_price = odds["p1_over_price"]
+                if odds.get("p1_under_price"):
+                    event.p1_under_price = odds["p1_under_price"]
+                if odds.get("p1_home_ml"):
+                    event.p1_home_ml = odds["p1_home_ml"]
+                if odds.get("p1_away_ml"):
+                    event.p1_away_ml = odds["p1_away_ml"]
+                if odds.get("p1_draw_price"):
+                    event.p1_draw_price = odds["p1_draw_price"]
+                if odds.get("btts_yes"):
+                    event.btts_yes = odds["btts_yes"]
+                if odds.get("btts_no"):
+                    event.btts_no = odds["btts_no"]
+                if odds.get("ot_yes"):
+                    event.overtime_yes = odds["ot_yes"]
+                if odds.get("ot_no"):
+                    event.overtime_no = odds["ot_no"]
                 if event.home_abbr and event.away_abbr:
                     events.append(_validate_event(event))
                 else:
@@ -1854,7 +2058,18 @@ async def _fetch_odds_api_raw(
         }
 
         data = await _make_request(client, url, params=params)
-        if data and isinstance(data, list) and len(data) > 0:
+        if data is None:
+            logger.warning(
+                "Odds API: '%s' region request failed (network error or HTTP error). "
+                "Check that api.the-odds-api.com is reachable.",
+                region,
+            )
+            continue
+        if isinstance(data, dict) and data.get("message"):
+            # API returns {"message": "..."} for auth errors
+            logger.warning("Odds API error: %s", data.get("message"))
+            return None
+        if isinstance(data, list) and len(data) > 0:
             # Check that at least one event has bookmaker data
             has_bookmakers = any(
                 len(ev.get("bookmakers", [])) > 0 for ev in data
@@ -1878,6 +2093,7 @@ async def _fetch_odds_api_raw(
                     region, len(data),
                 )
 
+    logger.warning("Odds API: all region attempts failed — no data returned")
     return None
 
 
@@ -3110,6 +3326,7 @@ class MultiSourceOddsScraper:
             else:
                 all_events.append(result)
                 if result:
+                    # Log per-event details at DEBUG level to reduce noise
                     for ev in result:
                         ml_str = (
                             f"ML {round(ev.home_ml)}/{round(ev.away_ml)}"
@@ -3121,7 +3338,7 @@ class MultiSourceOddsScraper:
                         )
                         n_alts = len(ev.alt_totals)
                         n_aspr = len(ev.alt_spreads)
-                        logger.info(
+                        logger.debug(
                             "[%s] %s@%s: %s, %s, %d alt totals, %d alt spreads",
                             source_names[i], ev.away_abbr, ev.home_abbr,
                             ml_str, ou_str, n_alts, n_aspr,
