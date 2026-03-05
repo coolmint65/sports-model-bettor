@@ -412,7 +412,7 @@ async def _make_request(
     url: str,
     headers: Optional[Dict[str, str]] = None,
     params: Optional[Dict[str, Any]] = None,
-    timeout: float = 15.0,
+    timeout: float = 10.0,
 ) -> Optional[Any]:
     """Make a GET request with error handling. Returns parsed JSON or None."""
     try:
@@ -1805,7 +1805,7 @@ async def _fetch_bovada(client: httpx.AsyncClient) -> List[OddsEvent]:
 # Hard Rock may also appear via the ``us2`` region — we try both if
 # the primary request returns no usable bookmaker data.
 _odds_api_cache: Dict[str, Any] = {"data": None, "timestamp": 0.0}
-_ODDS_API_CACHE_TTL = 30.0  # seconds
+_ODDS_API_CACHE_TTL = 10.0  # seconds
 
 
 async def _fetch_odds_api_raw(
