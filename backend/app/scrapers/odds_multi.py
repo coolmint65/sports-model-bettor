@@ -2046,7 +2046,7 @@ async def _fetch_odds_api_raw(
         params = {
             "apiKey": api_key,
             "regions": region,
-            "markets": "h2h,spreads,totals",
+            "markets": "h2h,spreads,totals,h2h_h1,spreads_h1,totals_h1",
             "oddsFormat": "american",
         }
 
@@ -2127,6 +2127,14 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
         all_away_spread: List[Tuple[float, float]] = []
         all_total: List[Tuple[float, float, float]] = []  # (line, over_price, under_price)
 
+        # 1st period markets (h2h_h1, spreads_h1, totals_h1)
+        all_p1_home_ml: List[float] = []
+        all_p1_away_ml: List[float] = []
+        all_p1_draw: List[float] = []
+        all_p1_home_spread: List[Tuple[float, float]] = []
+        all_p1_away_spread: List[Tuple[float, float]] = []
+        all_p1_total: List[Tuple[float, float, float]] = []
+
         for bm in ev.get("bookmakers", []):
             bm_key = bm.get("key", "").lower().replace("-", "_")
             bm_title = bm.get("title", "").lower()
@@ -2168,6 +2176,42 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
                             under_p = price
                     if line > 0:
                         all_total.append((line, over_p, under_p))
+
+                # --- 1st period markets ---
+                elif mkey == "h2h_h1":
+                    for oc in outcomes:
+                        name = oc.get("name", "")
+                        price = float(oc.get("price", 0))
+                        if name == home_team:
+                            all_p1_home_ml.append(price)
+                        elif name == away_team:
+                            all_p1_away_ml.append(price)
+                        elif name.lower() in ("draw", "tie"):
+                            all_p1_draw.append(price)
+
+                elif mkey == "spreads_h1":
+                    for oc in outcomes:
+                        name = oc.get("name", "")
+                        point = float(oc.get("point", 0))
+                        price = float(oc.get("price", 0))
+                        if name == home_team:
+                            all_p1_home_spread.append((point, price))
+                        elif name == away_team:
+                            all_p1_away_spread.append((point, price))
+
+                elif mkey == "totals_h1":
+                    p1_over = p1_under = 0.0
+                    p1_line = 0.0
+                    for oc in outcomes:
+                        point = float(oc.get("point", 0))
+                        price = float(oc.get("price", 0))
+                        if oc.get("name", "").lower() == "over":
+                            p1_over = price
+                            p1_line = point
+                        elif oc.get("name", "").lower() == "under":
+                            p1_under = price
+                    if p1_line > 0:
+                        all_p1_total.append((p1_line, p1_over, p1_under))
 
 
         # Best odds across books
@@ -2239,6 +2283,34 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
             under_price=round(under_price),
             alt_totals=oa_alt_totals,
         )
+
+        # Attach 1st period odds
+        if all_p1_home_ml:
+            event.p1_home_ml = round(max(all_p1_home_ml))
+        if all_p1_away_ml:
+            event.p1_away_ml = round(max(all_p1_away_ml))
+        if all_p1_draw:
+            event.p1_draw_price = round(max(all_p1_draw))
+        if all_p1_home_spread:
+            # Use the most common absolute line, best price
+            p1_sp_counts = Counter(abs(s[0]) for s in all_p1_home_spread)
+            p1_sp_consensus = p1_sp_counts.most_common(1)[0][0]
+            p1_sp_books = [s for s in all_p1_home_spread if abs(s[0]) == p1_sp_consensus]
+            event.p1_spread_line = round(p1_sp_books[0][0], 1)
+            event.p1_home_spread_price = round(max(s[1] for s in p1_sp_books))
+        if all_p1_away_spread:
+            p1_sp_counts = Counter(abs(s[0]) for s in all_p1_away_spread)
+            p1_sp_consensus = p1_sp_counts.most_common(1)[0][0]
+            p1_sp_books = [s for s in all_p1_away_spread if abs(s[0]) == p1_sp_consensus]
+            event.p1_away_spread_price = round(max(s[1] for s in p1_sp_books))
+        if all_p1_total:
+            # Consensus line, best prices
+            p1_tl_counts = Counter(t[0] for t in all_p1_total)
+            p1_tl_consensus = p1_tl_counts.most_common(1)[0][0]
+            p1_tl_books = [t for t in all_p1_total if t[0] == p1_tl_consensus]
+            event.p1_total_line = p1_tl_consensus
+            event.p1_over_price = round(max(t[1] for t in p1_tl_books))
+            event.p1_under_price = round(max(t[2] for t in p1_tl_books))
 
         if event.home_abbr and event.away_abbr:
             events.append(_validate_event(event))
@@ -2446,6 +2518,47 @@ async def _fetch_hardrock(client: httpx.AsyncClient) -> List[OddsEvent]:
                     elif oc.get("name", "").lower() == "under":
                         under_price = price
 
+        # Parse 1st period markets from Hard Rock
+        hr_p1_home_ml = hr_p1_away_ml = hr_p1_draw = 0.0
+        hr_p1_spread_line = hr_p1_hsp = hr_p1_asp = 0.0
+        hr_p1_total_line = hr_p1_over = hr_p1_under = 0.0
+
+        for market in hr_bm.get("markets", []):
+            mkey = market.get("key", "")
+            outcomes = market.get("outcomes", [])
+
+            if mkey == "h2h_h1":
+                for oc in outcomes:
+                    name = oc.get("name", "")
+                    price = float(oc.get("price", 0))
+                    if name == home_team:
+                        hr_p1_home_ml = price
+                    elif name == away_team:
+                        hr_p1_away_ml = price
+                    elif name.lower() in ("draw", "tie"):
+                        hr_p1_draw = price
+
+            elif mkey == "spreads_h1":
+                for oc in outcomes:
+                    name = oc.get("name", "")
+                    point = float(oc.get("point", 0))
+                    price = float(oc.get("price", 0))
+                    if name == home_team:
+                        hr_p1_spread_line = point
+                        hr_p1_hsp = price
+                    elif name == away_team:
+                        hr_p1_asp = price
+
+            elif mkey == "totals_h1":
+                for oc in outcomes:
+                    point = float(oc.get("point", 0))
+                    price = float(oc.get("price", 0))
+                    if oc.get("name", "").lower() == "over":
+                        hr_p1_over = price
+                        hr_p1_total_line = point
+                    elif oc.get("name", "").lower() == "under":
+                        hr_p1_under = price
+
         # Only add if we got at least moneyline data
         if home_ml == 0 and away_ml == 0:
             continue
@@ -2464,6 +2577,15 @@ async def _fetch_hardrock(client: httpx.AsyncClient) -> List[OddsEvent]:
             "total_line": total_line,
             "over_price": round(over_price),
             "under_price": round(under_price),
+            "p1_home_ml": round(hr_p1_home_ml) if hr_p1_home_ml else 0,
+            "p1_away_ml": round(hr_p1_away_ml) if hr_p1_away_ml else 0,
+            "p1_draw": round(hr_p1_draw) if hr_p1_draw else 0,
+            "p1_spread_line": round(hr_p1_spread_line, 1) if hr_p1_spread_line else 0,
+            "p1_hsp": round(hr_p1_hsp) if hr_p1_hsp else 0,
+            "p1_asp": round(hr_p1_asp) if hr_p1_asp else 0,
+            "p1_total_line": hr_p1_total_line,
+            "p1_over": round(hr_p1_over) if hr_p1_over else 0,
+            "p1_under": round(hr_p1_under) if hr_p1_under else 0,
         })
 
     # Second pass: fetch alt lines concurrently for all events
@@ -2511,6 +2633,26 @@ async def _fetch_hardrock(client: httpx.AsyncClient) -> List[OddsEvent]:
             alt_totals=alt_totals,
             alt_spreads=alt_spreads,
         )
+
+        # Attach 1st period odds from Hard Rock
+        if pd.get("p1_home_ml"):
+            event.p1_home_ml = pd["p1_home_ml"]
+        if pd.get("p1_away_ml"):
+            event.p1_away_ml = pd["p1_away_ml"]
+        if pd.get("p1_draw"):
+            event.p1_draw_price = pd["p1_draw"]
+        if pd.get("p1_spread_line"):
+            event.p1_spread_line = pd["p1_spread_line"]
+        if pd.get("p1_hsp"):
+            event.p1_home_spread_price = pd["p1_hsp"]
+        if pd.get("p1_asp"):
+            event.p1_away_spread_price = pd["p1_asp"]
+        if pd.get("p1_total_line"):
+            event.p1_total_line = pd["p1_total_line"]
+        if pd.get("p1_over"):
+            event.p1_over_price = pd["p1_over"]
+        if pd.get("p1_under"):
+            event.p1_under_price = pd["p1_under"]
 
         if event.home_abbr and event.away_abbr:
             events.append(_validate_event(event))
