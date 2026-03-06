@@ -300,6 +300,7 @@ class FeatureEngine:
         recent_start = result.scalars().first()
 
         if not recent_start:
+            logger.info("Goalie: no recent starter found for team_id=%d", team_id)
             return self._empty_goalie_features()
 
         goalie_id = recent_start.player_id
@@ -343,6 +344,16 @@ class FeatureEngine:
 
         last5_save_pct, last5_gaa = self._calc_goalie_recent(recent_games[:5])
         last10_save_pct, last10_gaa = self._calc_goalie_recent(recent_games[:10])
+
+        logger.info(
+            "Goalie: team_id=%d → %s (id=%d) | SV%% %.3f GAA %.2f | "
+            "L5 SV%% %.3f GAA %.2f | L10 SV%% %.3f GAA %.2f | %d GS",
+            team_id, goalie_name, goalie_id,
+            season_save_pct, season_gaa,
+            last5_save_pct, last5_gaa,
+            last10_save_pct, last10_gaa,
+            games_started,
+        )
 
         return {
             "goalie_name": goalie_name,

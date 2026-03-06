@@ -432,20 +432,14 @@ async def _compute_top_picks(
             _seen[key] = p
     all_preds = list(_seen.values())
 
-    # Compute fresh implied prob using the service layer.
-    # When fresh odds aren't available, fall back to the stored
-    # implied prob so we never give "benefit of the doubt" on juice.
+    # Compute fresh implied prob for heavy-juice detection only.
+    # Ranking uses the stored (snapshot) edge/implied_prob so that
+    # the top pick doesn't flip every time live odds shift.
     fresh_map: dict[int, Optional[float]] = {}
-    scoring_map: dict[int, Optional[float]] = {}
     for p in all_preds:
         game_obj = game_by_id.get(p.game_id)
         fresh = fresh_implied_prob(p, game_obj)
         fresh_map[p.id] = fresh if fresh is not None else p.odds_implied_prob
-        scoring_map[p.id] = (
-            fresh_map[p.id]
-            if fresh_map[p.id] is not None
-            else p.odds_implied_prob
-        )
 
     # --- Tier 1: best-bet criteria (edge + confidence) ---
     tier1 = [
@@ -455,8 +449,10 @@ async def _compute_top_picks(
     ]
 
     def _tier1_sort_key(p):
+        # Use the STORED edge and implied_prob (snapshot from prediction
+        # generation) so the ranking is stable across odds updates.
         score = composite_pick_score(
-            p.confidence, p.edge, scoring_map.get(p.id)
+            p.confidence, p.edge, p.odds_implied_prob
         )
         if (
             p.bet_type == "spread"
@@ -583,20 +579,29 @@ async def _compute_top_props(
             _seen[key] = p
     deduped = list(_seen.values())
 
-    # Refresh implied prob from current game odds when available
+    # Build a map of the best available implied prob per prediction.
+    # Fresh odds are used for tier promotion (does it have odds?), but
+    # the STORED edge/implied_prob is used for ranking so the top prop
+    # doesn't flip every time live odds shift.
+    effective_impl: dict[int, Optional[float]] = {}
+    effective_edge: dict[int, Optional[float]] = {}
     for pred in deduped:
         game_obj = game_by_id.get(pred.game_id)
         fresh_ip = fresh_implied_prob(pred, game_obj)
-        if fresh_ip is not None:
-            pred.odds_implied_prob = fresh_ip
-            pred.edge = (pred.confidence or 0) - fresh_ip
+        # For tier checks, prefer fresh (detects newly available odds)
+        # then fall back to stored value.
+        ip = fresh_ip if fresh_ip is not None else pred.odds_implied_prob
+        effective_impl[pred.id] = ip
+        if ip is not None:
+            effective_edge[pred.id] = (pred.confidence or 0) - ip
+        else:
+            effective_edge[pred.id] = pred.edge
 
     # --- Tier 1: props with real odds AND positive edge ---
     tier1 = [
         p for p in deduped
-        if p.odds_implied_prob is not None
-        and p.edge is not None
-        and p.edge > 0
+        if effective_impl.get(p.id) is not None
+        and (effective_edge.get(p.id) or 0) > 0
     ]
     for pred in sorted(
         tier1,
@@ -610,7 +615,7 @@ async def _compute_top_props(
                 bet_type=pred.bet_type,
                 prediction_value=pred.prediction_value,
                 confidence=pred.confidence,
-                edge=pred.edge,
+                edge=effective_edge.get(pred.id, pred.edge),
                 is_fallback=False,
                 heavy_juice=False,
             )
@@ -621,7 +626,7 @@ async def _compute_top_props(
         tier2 = [
             p for p in deduped
             if p.game_id in still_missing
-            and p.odds_implied_prob is not None
+            and effective_impl.get(p.id) is not None
         ]
         for pred in sorted(
             tier2,
@@ -635,7 +640,7 @@ async def _compute_top_props(
                     bet_type=pred.bet_type,
                     prediction_value=pred.prediction_value,
                     confidence=pred.confidence,
-                    edge=pred.edge,
+                    edge=effective_edge.get(pred.id, pred.edge),
                     is_fallback=False,
                     heavy_juice=False,
                 )
