@@ -2175,6 +2175,39 @@ async def _fetch_hardrock(client: httpx.AsyncClient) -> List[OddsEvent]:
 # Multi-source aggregation
 # ---------------------------------------------------------------------------
 
+def _american_to_implied(odds: float) -> float:
+    """Convert American odds to implied probability (0-1)."""
+    if odds > 0:
+        return 100.0 / (odds + 100.0)
+    return abs(odds) / (abs(odds) + 100.0)
+
+
+def _implied_to_american(prob: float) -> float:
+    """Convert implied probability (0-1) back to American odds."""
+    if prob >= 1.0:
+        return -10000.0
+    if prob <= 0.0:
+        return 10000.0
+    if prob > 0.5:
+        return -(prob / (1.0 - prob)) * 100.0
+    return ((1.0 - prob) / prob) * 100.0
+
+
+def _mean_odds(odds_list: List[float]) -> float:
+    """Average a list of American odds via implied probability.
+
+    Converts each American odds value to implied probability, averages
+    the probabilities, then converts back.  This is mathematically
+    correct because implied probability is linear while American odds
+    are not.
+    """
+    probs = [_american_to_implied(o) for o in odds_list if o != 0]
+    if not probs:
+        return 0.0
+    avg_prob = sum(probs) / len(probs)
+    return round(_implied_to_american(avg_prob))
+
+
 def _merge_odds_events(
     all_events: List[List[OddsEvent]],
 ) -> List[Dict[str, Any]]:
@@ -2204,13 +2237,16 @@ def _merge_odds_events(
     merged: List[Dict[str, Any]] = []
 
     for key, ev_list in matchup_odds.items():
-        # Consensus moneyline: average across all sources for a
-        # realistic market-center price rather than cherry-picked best.
+        # Consensus moneyline: average implied probabilities across all
+        # sources, then convert back to American odds.  Averaging American
+        # odds directly is mathematically wrong (non-linear scale) and can
+        # produce two positive sides; implied probability is the correct
+        # domain for averaging.
         home_mls = [e.home_ml for e in ev_list if e.has_moneyline()]
         away_mls = [e.away_ml for e in ev_list if e.has_moneyline()]
 
-        best_home_ml = round(sum(home_mls) / len(home_mls)) if home_mls else None
-        best_away_ml = round(sum(away_mls) / len(away_mls)) if away_mls else None
+        best_home_ml = _mean_odds(home_mls) if home_mls else None
+        best_away_ml = _mean_odds(away_mls) if away_mls else None
 
         # Consensus spread: most common absolute value across sources.
         # Use moneyline data to determine the correct sign so that
@@ -2352,9 +2388,9 @@ def _merge_odds_events(
                 consensus_away_books = reasonable_away
 
             if consensus_home_books:
-                best_home_spread_price = round(sum(s[1] for s in consensus_home_books) / len(consensus_home_books))
+                best_home_spread_price = _mean_odds([s[1] for s in consensus_home_books])
             if consensus_away_books:
-                best_away_spread_price = round(sum(s[1] for s in consensus_away_books) / len(consensus_away_books))
+                best_away_spread_price = _mean_odds([s[1] for s in consensus_away_books])
 
         # Consensus total — filter out implausible lines first.
         # Filter implausible O/U lines (pregame ~4.5-8.5, live can go higher).
@@ -2369,8 +2405,8 @@ def _merge_odds_events(
             consensus_line = line_counts.most_common(1)[0][0]
             consensus_totals = [t for t in total_data if t[0] == consensus_line]
             best_total = consensus_line
-            best_over = round(sum(t[1] for t in consensus_totals) / len(consensus_totals))
-            best_under = round(sum(t[2] for t in consensus_totals) / len(consensus_totals))
+            best_over = _mean_odds([t[1] for t in consensus_totals])
+            best_under = _mean_odds([t[2] for t in consensus_totals])
 
         # Aggregate ALL available total lines across all sources.
         # Pair-based selection: over/under prices for each line must come
