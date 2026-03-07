@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES, PROP_BET_TYPES, composite_pick_score, is_heavy_juice
+from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES, composite_pick_score, is_heavy_juice
 from app.database import get_session
 from app.models.game import Game, HeadToHead
 from app.models.player import GoalieStats, Player
@@ -598,10 +598,7 @@ async def _get_game_predictions(
         )
         # A pick that meets edge/confidence thresholds AND has acceptable
         # juice should be treated as recommended regardless of stale flag.
-        # Always enforce the juice ceiling using fresh odds — a prop may
-        # have been flagged recommended when odds were unavailable.
-        # For prop bets, we also require known implied probability —
-        # without it we can't verify juice, so demote to fallback.
+        # Always enforce the juice ceiling using fresh odds.
         _meets_thresholds = (
             p.recommended
             or (
@@ -609,11 +606,9 @@ async def _get_game_predictions(
                 and (p.edge or 0) >= min_edge
             )
         )
-        _is_prop = p.bet_type in PROP_BET_TYPES
         effectively_recommended = (
             _meets_thresholds
             and not is_heavy_juice(cur_impl, max_implied)
-            and (cur_impl is not None or not _is_prop)
             and not _is_always_heavy(p)
         )
         briefs.append(

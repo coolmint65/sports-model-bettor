@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import and_, case, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.constants import PERIOD_KEY_MAP, PERIOD_ODDS_FIELDS
+
 from app.models.game import Game, GameGoalieStats, GamePlayerStats, HeadToHead
 from app.models.player import GoalieStats, Player, PlayerStats
 from app.models.team import Team, TeamStats
@@ -490,111 +490,6 @@ class FeatureEngine:
         }
 
     # ------------------------------------------------------------------ #
-    #  Scoring patterns                                                   #
-    # ------------------------------------------------------------------ #
-
-    async def get_scoring_patterns(
-        self,
-        db: AsyncSession,
-        team_id: int,
-        last_n: int = 20,
-    ) -> Dict[str, Any]:
-        """
-        Analyze scoring patterns for a team across recent games.
-
-        Returns:
-            dict with keys: first_goal_pct, btts_pct (both teams to score),
-            over_5_5_pct, under_5_5_pct, odd_total_pct, even_total_pct,
-            games_found.
-        """
-        games = await self._get_recent_games(db, team_id, last_n)
-
-        if not games:
-            return {
-                "first_goal_pct": 0.5,
-                "btts_pct": 0.85,
-                "over_5_5_pct": 0.5,
-                "under_5_5_pct": 0.5,
-                "odd_total_pct": 0.5,
-                "even_total_pct": 0.5,
-                "games_found": 0,
-            }
-
-        first_goal_count = 0
-        btts_count = 0
-        over_55_count = 0
-        odd_total_count = 0
-        games_counted = 0
-
-        for game in games:
-            if game.home_score is None or game.away_score is None:
-                continue
-            games_counted += 1
-
-            is_home = game.home_team_id == team_id
-            gf = game.home_score if is_home else game.away_score
-            ga = game.away_score if is_home else game.home_score
-            total = gf + ga
-
-            # Both teams scored
-            if gf > 0 and ga > 0:
-                btts_count += 1
-
-            # Over 5.5
-            if total > 5:
-                over_55_count += 1
-
-            # Odd total
-            if total % 2 == 1:
-                odd_total_count += 1
-
-            # First goal (check per-period score columns)
-            if game.home_score_p1 is not None:
-                team_p = [
-                    (game.home_score_p1 or 0) if is_home else (game.away_score_p1 or 0),
-                    (game.home_score_p2 or 0) if is_home else (game.away_score_p2 or 0),
-                    (game.home_score_p3 or 0) if is_home else (game.away_score_p3 or 0),
-                ]
-                opp_p = [
-                    (game.away_score_p1 or 0) if is_home else (game.home_score_p1 or 0),
-                    (game.away_score_p2 or 0) if is_home else (game.home_score_p2 or 0),
-                    (game.away_score_p3 or 0) if is_home else (game.home_score_p3 or 0),
-                ]
-                for pi in range(3):
-                    if team_p[pi] > 0 and opp_p[pi] == 0:
-                        first_goal_count += 1
-                        break
-                    elif opp_p[pi] > 0 and team_p[pi] == 0:
-                        break
-                    elif team_p[pi] > 0 and opp_p[pi] > 0:
-                        first_goal_count += 0.5
-                        break
-
-        if games_counted == 0:
-            return {
-                "first_goal_pct": 0.5,
-                "btts_pct": 0.85,
-                "over_5_5_pct": 0.5,
-                "under_5_5_pct": 0.5,
-                "odd_total_pct": 0.5,
-                "even_total_pct": 0.5,
-                "games_found": 0,
-            }
-
-        n = games_counted
-        over_55_pct = round(over_55_count / n, 4)
-        odd_pct = round(odd_total_count / n, 4)
-        return {
-            "first_goal_pct": round(first_goal_count / n, 4),
-            "btts_pct": round(btts_count / n, 4),
-            "over_5_5_pct": over_55_pct,
-            "under_5_5_pct": round(1.0 - over_55_pct, 4),
-            "odd_total_pct": odd_pct,
-            "even_total_pct": round(1.0 - odd_pct, 4),
-            "games_found": games_counted,
-        }
-
-    # ------------------------------------------------------------------ #
     #  Skater talent / offensive depth                                   #
     # ------------------------------------------------------------------ #
 
@@ -905,7 +800,6 @@ class FeatureEngine:
         home_goalie = await self.get_goalie_features(db, home_id)
         home_periods = await self.get_period_stats(db, home_id)
         home_ot = await self.get_overtime_tendency(db, home_id)
-        home_patterns = await self.get_scoring_patterns(db, home_id)
 
         # Away team features
         away_form_5 = await self.get_team_form(db, away_id, last_n=5)
@@ -915,7 +809,6 @@ class FeatureEngine:
         away_goalie = await self.get_goalie_features(db, away_id)
         away_periods = await self.get_period_stats(db, away_id)
         away_ot = await self.get_overtime_tendency(db, away_id)
-        away_patterns = await self.get_scoring_patterns(db, away_id)
 
         # Player talent and lineup status
         home_skaters = await self.get_skater_impact(db, home_id)
@@ -949,34 +842,6 @@ class FeatureEngine:
                 "under_price": getattr(game, "under_price", None),
                 "all_total_lines": getattr(game, "all_total_lines", None) or [],
                 "all_spread_lines": getattr(game, "all_spread_lines", None) or [],
-                # Prop odds
-                "btts_yes_price": getattr(game, "btts_yes_price", None),
-                "btts_no_price": getattr(game, "btts_no_price", None),
-                "first_goal_home_price": getattr(game, "first_goal_home_price", None),
-                "first_goal_away_price": getattr(game, "first_goal_away_price", None),
-                "overtime_yes_price": getattr(game, "overtime_yes_price", None),
-                "overtime_no_price": getattr(game, "overtime_no_price", None),
-                "total_odd_price": getattr(game, "total_odd_price", None),
-                "total_even_price": getattr(game, "total_even_price", None),
-                # Period odds (all periods)
-                **{f"{db}_{f}": getattr(game, f"{db}_{f}", None)
-                   for db in PERIOD_KEY_MAP.values() for f in PERIOD_ODDS_FIELDS},
-                # P1-only extras
-                "period1_btts_yes_price": getattr(game, "period1_btts_yes_price", None),
-                "period1_btts_no_price": getattr(game, "period1_btts_no_price", None),
-                "regulation_home_price": getattr(game, "regulation_home_price", None),
-                "regulation_away_price": getattr(game, "regulation_away_price", None),
-                "regulation_draw_price": getattr(game, "regulation_draw_price", None),
-                "home_team_total_line": getattr(game, "home_team_total_line", None),
-                "home_team_over_price": getattr(game, "home_team_over_price", None),
-                "home_team_under_price": getattr(game, "home_team_under_price", None),
-                "away_team_total_line": getattr(game, "away_team_total_line", None),
-                "away_team_over_price": getattr(game, "away_team_over_price", None),
-                "away_team_under_price": getattr(game, "away_team_under_price", None),
-                "highest_period_p1_price": getattr(game, "highest_period_p1_price", None),
-                "highest_period_p2_price": getattr(game, "highest_period_p2_price", None),
-                "highest_period_p3_price": getattr(game, "highest_period_p3_price", None),
-                "highest_period_tie_price": getattr(game, "highest_period_tie_price", None),
             },
             # Home team features
             "home_form_5": home_form_5,
@@ -986,7 +851,6 @@ class FeatureEngine:
             "home_goalie": home_goalie,
             "home_periods": home_periods,
             "home_ot": home_ot,
-            "home_patterns": home_patterns,
             # Away team features
             "away_form_5": away_form_5,
             "away_form_10": away_form_10,
@@ -995,7 +859,6 @@ class FeatureEngine:
             "away_goalie": away_goalie,
             "away_periods": away_periods,
             "away_ot": away_ot,
-            "away_patterns": away_patterns,
             # Player talent and lineup
             "home_skaters": home_skaters,
             "away_skaters": away_skaters,

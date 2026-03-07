@@ -302,11 +302,7 @@ function PredictionsTab({ game }) {
     );
   }
 
-  // Split market bets from props, sort props by confidence descending
   const market = predictions.filter((p) => MARKET_BET_TYPES.has(p.bet_type));
-  const props = predictions
-    .filter((p) => !MARKET_BET_TYPES.has(p.bet_type))
-    .sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
 
   // Within market bets: recommended > fallback > rest
   const topPicks = market.filter((p) => p.recommended);
@@ -367,19 +363,6 @@ function PredictionsTab({ game }) {
         </div>
       )}
 
-      {/* --- Props / Exotics --- */}
-      {props.length > 0 && (
-        <div className="predictions-section">
-          <h3 className="predictions-section-title predictions-section-title-other">
-            Props
-          </h3>
-          <div className="predictions-list">
-            {props.map((pred, index) => (
-              <PredictionCard key={pred.id || index} prediction={pred} compact homeAbbr={homeAbbr} awayAbbr={awayAbbr} />
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Clock, MapPin, ChevronRight, TrendingUp, Target, Radio, AlertTriangle, CheckCircle, XCircle, MinusCircle, Sparkles } from 'lucide-react';
+import { Clock, MapPin, ChevronRight, TrendingUp, Target, Radio, AlertTriangle, CheckCircle, XCircle, MinusCircle } from 'lucide-react';
 import { format, formatDistanceToNowStrict } from 'date-fns';
 import { teamName, teamAbbrev, teamLogo, confidencePct, parseAsUTC, formatBetType, formatPredictionValue } from '../utils/teams';
 import { getConfidenceColor, formatAmericanOdds } from '../utils/formatting';
@@ -325,10 +325,8 @@ function GameCard({ game }) {
   const homeScore = game.home_score ?? game.score?.home ?? null;
   const venue = game.venue || game.arena || '';
   const topPick = game.top_pick || null;
-  const topProp = game.top_prop || null;
   const rawConf = topPick?.confidence || game.top_confidence || game.confidence || game.prediction_confidence || null;
   const confidence = rawConf != null ? confidencePct(rawConf) : null;
-  const propConf = topProp?.confidence != null ? confidencePct(topProp.confidence) : null;
   const hasBadge = !!statusInfo.label;
   const startTime = game.start_time || game.datetime;
   const odds = game.odds || null;
@@ -460,35 +458,6 @@ function GameCard({ game }) {
           )}
         </div>
       </div>
-
-      {/* Top Prop Row */}
-      {topProp && (
-        <div className={`game-card-footer game-card-prop-footer ${topProp.is_fallback ? 'top-pick-fallback' : ''} ${topProp.outcome ? `pick-${topProp.outcome}` : ''}`}>
-          <div className="game-top-prop">
-            {topProp.is_fallback ? <AlertTriangle size={12} /> : <Sparkles size={12} />}
-            <span className="top-prop-type">{formatBetType(topProp.bet_type)}</span>
-            <span className="top-prop-value">{formatPredictionValue(topProp.prediction_value, homeAbbr, awayAbbr)}</span>
-            {topProp.is_fallback && <span className="top-pick-fallback-label">No Odds</span>}
-          </div>
-          <div className="game-footer-right">
-            {propConf != null && (
-              <div className="game-confidence" title={`Top prop confidence: ${propConf.toFixed(0)}%`}>
-                <TrendingUp size={12} />
-                <span className="confidence-text" style={{ color: topProp.is_fallback ? '#ff9800' : getConfidenceColor(propConf) }}>
-                  {propConf.toFixed(0)}%
-                </span>
-              </div>
-            )}
-            {topProp.outcome && (
-              <div className={`pick-outcome pick-outcome-${topProp.outcome}`} title={topProp.outcome === 'win' ? 'Won' : topProp.outcome === 'loss' ? 'Lost' : 'Push'}>
-                {topProp.outcome === 'win' && <CheckCircle size={18} />}
-                {topProp.outcome === 'loss' && <XCircle size={18} />}
-                {topProp.outcome === 'push' && <MinusCircle size={18} />}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
 
       <div className="game-card-arrow">
         <ChevronRight size={18} />

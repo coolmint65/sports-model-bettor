@@ -91,9 +91,6 @@ function Dashboard() {
       if (!g.top_pick && scheduleGame?.top_pick) {
         g.top_pick = scheduleGame.top_pick;
       }
-      if (!g.top_prop && scheduleGame?.top_prop) {
-        g.top_prop = scheduleGame.top_prop;
-      }
       liveGameMap.set(gid, g);
     }
   }
