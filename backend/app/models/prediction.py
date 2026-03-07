@@ -40,6 +40,10 @@ BET_TYPES = (
     "both_score",
     "overtime",
     "odd_even",
+    "period1_btts",
+    "period1_spread",
+    "regulation_winner",
+    "highest_scoring_period",
 )
 
 # Valid phases for a prediction row.
