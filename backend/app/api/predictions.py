@@ -28,7 +28,7 @@ from sqlalchemy.orm import selectinload
 from app.config import settings
 from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES, composite_pick_score
 from app.database import get_session
-from app.services.odds import american_to_implied, implied_to_american as implied_prob_to_american
+from app.services.odds import american_to_implied, fresh_implied_prob, implied_to_american as implied_prob_to_american
 from app.models.game import Game
 from app.models.prediction import BetResult, Prediction, TrackedBet
 from app.models.team import Team
@@ -82,7 +82,9 @@ async def _backfill_prediction_odds(
     This function reads the current Game odds and writes them back onto the
     Prediction records so the DB-level filters in best-bets work correctly.
 
-    Handles ML, totals, and spreads — keeping ALL bet types in sync.
+    Handles ALL bet types — market bets (ML, totals, spreads) AND prop bets
+    (BTTS, first goal, overtime, period markets, etc.) — via the centralized
+    ``fresh_implied_prob()`` helper.
 
     Returns the number of predictions updated.
     """
@@ -99,16 +101,13 @@ async def _backfill_prediction_odds(
     if not games:
         return 0
 
-    # Fetch all predictions for these games
+    # Fetch ALL predictions for these games (market + prop types)
     pred_result = await session.execute(
         select(Prediction).where(
             Prediction.game_id.in_(list(games.keys())),
-            Prediction.bet_type.in_(MARKET_BET_TYPES),
         )
     )
     predictions = pred_result.scalars().all()
-
-    import json as _json
 
     updated = 0
     for pred in predictions:
@@ -116,62 +115,15 @@ async def _backfill_prediction_odds(
         if not game:
             continue
 
-        live_odds = None
-
-        if pred.bet_type == "ml":
-            home_abbr = game.home_team.abbreviation if game.home_team else ""
-            if pred.prediction_value == home_abbr:
-                live_odds = game.home_moneyline
-            else:
-                live_odds = game.away_moneyline
-
-        elif pred.bet_type == "total":
-            if pred.prediction_value and "over" in pred.prediction_value:
-                live_odds = game.over_price
-            else:
-                live_odds = game.under_price
-
-        elif pred.bet_type == "spread":
-            home_abbr = game.home_team.abbreviation if game.home_team else ""
-            pred_is_home = (
-                pred.prediction_value
-                and pred.prediction_value.startswith(home_abbr)
-            )
-
-            # Try all_spread_lines first for exact line match
-            spread_found = False
-            if game.all_spread_lines and pred.prediction_value:
-                try:
-                    parts = pred.prediction_value.rsplit("_", 1)
-                    if len(parts) == 2:
-                        spread_val = abs(float(parts[1]))
-                        all_sl = game.all_spread_lines
-                        if isinstance(all_sl, str):
-                            all_sl = _json.loads(all_sl)
-                        for sl in (all_sl or []):
-                            if abs(sl.get("line", 0) - spread_val) < 0.01:
-                                if pred_is_home:
-                                    live_odds = sl.get("home_price")
-                                else:
-                                    live_odds = sl.get("away_price")
-                                if live_odds is not None:
-                                    spread_found = True
-                                break
-                except (ValueError, TypeError, KeyError):
-                    pass
-
-            # Fall back to primary spread prices
-            if not spread_found:
-                if pred_is_home and game.home_spread_price:
-                    live_odds = game.home_spread_price
-                elif not pred_is_home and game.away_spread_price:
-                    live_odds = game.away_spread_price
-
-        if live_odds is None:
+        fresh_implied = fresh_implied_prob(pred, game)
+        if fresh_implied is None:
             continue
 
-        fresh_implied = american_to_implied(live_odds)
-        if fresh_implied is None:
+        # Skip if nothing changed (within rounding tolerance)
+        if (
+            pred.odds_implied_prob is not None
+            and abs(pred.odds_implied_prob - fresh_implied) < 0.0001
+        ):
             continue
 
         fresh_edge = round(pred.confidence - fresh_implied, 4) if pred.confidence else None
