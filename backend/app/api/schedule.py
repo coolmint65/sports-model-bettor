@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES, PROP_BET_TYPES, composite_pick_score
+from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES, PROP_BET_TYPES, composite_pick_score, is_heavy_juice
 from app.database import get_session
 from app.models.game import Game
 from app.models.prediction import Prediction
@@ -459,7 +459,7 @@ async def _compute_top_picks(
         p for p in all_preds
         if (p.edge or 0) >= settings.min_edge
         and (p.confidence or 0) >= settings.min_confidence
-        and (fresh_map.get(p.id) or p.odds_implied_prob or 0) < max_implied
+        and not is_heavy_juice(fresh_map.get(p.id) or p.odds_implied_prob, max_implied)
     ]
 
     def _tier1_sort_key(p):
@@ -535,8 +535,7 @@ async def _compute_top_picks(
                 # Exclude heavy-juice bets — if we have odds and they
                 # exceed the ceiling, skip entirely rather than show a
                 # bet with terrible risk/reward.
-                stored_impl = pred.odds_implied_prob
-                if stored_impl is not None and stored_impl >= max_implied:
+                if is_heavy_juice(pred.odds_implied_prob, max_implied):
                     continue
                 top_picks[pred.game_id] = GameTopPick(
                     bet_type=pred.bet_type,
@@ -626,7 +625,7 @@ async def _compute_top_props(
         p for p in deduped
         if effective_impl.get(p.id) is not None
         and (effective_edge.get(p.id) or 0) > 0
-        and (effective_impl.get(p.id) or 0) < max_implied
+        and not is_heavy_juice(effective_impl.get(p.id), max_implied)
     ]
     for pred in sorted(
         tier1,
@@ -652,7 +651,7 @@ async def _compute_top_props(
             p for p in deduped
             if p.game_id in still_missing
             and effective_impl.get(p.id) is not None
-            and (effective_impl.get(p.id) or 0) < max_implied
+            and not is_heavy_juice(effective_impl.get(p.id), max_implied)
         ]
         for pred in sorted(
             tier2,
@@ -689,15 +688,14 @@ async def _compute_top_props(
         ):
             if pred.game_id not in top_props:
                 # Exclude heavy-juice bets even in fallback tier
-                stored_impl = pred.odds_implied_prob
-                if stored_impl is not None and stored_impl >= max_implied:
+                if is_heavy_juice(pred.odds_implied_prob, max_implied):
                     continue
                 top_props[pred.game_id] = GameTopPick(
                     bet_type=pred.bet_type,
                     prediction_value=pred.prediction_value,
                     confidence=pred.confidence,
                     edge=pred.edge,
-                    is_fallback=stored_impl is None,
+                    is_fallback=pred.odds_implied_prob is None,
     
                 )
 

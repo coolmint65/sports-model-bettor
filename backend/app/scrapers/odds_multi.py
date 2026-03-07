@@ -1042,6 +1042,46 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
     return events
 
 
+# ---- FanDuel helpers ----
+
+
+def _parse_fd_odds(runner: dict) -> Optional[float]:
+    """Extract American odds from a FanDuel runner dict, or *None*."""
+    win_running = runner.get("winRunnerOdds", {})
+    american_odds_str = (
+        win_running.get("americanDisplayOdds", {}).get("americanOdds", "")
+        or win_running.get("americanOdds", "")
+    )
+    decimal_odds = win_running.get("trueOdds", {}).get("decimalOdds", {}).get("decimalOdds", 0)
+    try:
+        if american_odds_str:
+            return float(str(american_odds_str).replace("+", ""))
+        elif decimal_odds:
+            return decimal_to_american(float(decimal_odds))
+        return None
+    except (ValueError, TypeError):
+        return None
+
+
+def _parse_fd_yes_no_runners(
+    runners: Any,
+    eid: str,
+    game_odds: dict,
+    yes_key: str,
+    no_key: str,
+) -> None:
+    """Parse yes/no FanDuel runners (BTTS, OT) into *game_odds*."""
+    for runner in runners if isinstance(runners, list) else []:
+        runner_name = (runner.get("runnerName", "") or "").lower()
+        odds_val = _parse_fd_odds(runner)
+        if odds_val is None:
+            continue
+        if "yes" in runner_name:
+            game_odds[eid][yes_key] = odds_val
+        elif "no" in runner_name:
+            game_odds[eid][no_key] = odds_val
+
+
 # ---- FanDuel ----
 
 async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
@@ -1141,24 +1181,10 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
             if market_type in ("MATCH_BETTING", "MONEY_LINE", "HEAD_TO_HEAD", "MATCH_ODDS"):
                 ev_info = event_info[eid]
                 for runner in runners if isinstance(runners, list) else []:
-                    runner_name = runner.get("runnerName", "")
-                    win_running = runner.get("winRunnerOdds", {})
-                    american_odds_str = (
-                        win_running.get("americanDisplayOdds", {}).get("americanOdds", "")
-                        or win_running.get("americanOdds", "")
-                    )
-                    decimal_odds = win_running.get("trueOdds", {}).get("decimalOdds", {}).get("decimalOdds", 0)
-
-                    try:
-                        if american_odds_str:
-                            odds_val = float(str(american_odds_str).replace("+", ""))
-                        elif decimal_odds:
-                            odds_val = decimal_to_american(float(decimal_odds))
-                        else:
-                            continue
-                    except (ValueError, TypeError):
+                    odds_val = _parse_fd_odds(runner)
+                    if odds_val is None:
                         continue
-
+                    runner_name = runner.get("runnerName", "")
                     mapped = _map_team(runner_name)
                     home_mapped = _map_team(ev_info["home"])
                     if mapped and mapped == home_mapped:
@@ -1173,26 +1199,14 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
                 ev_info = event_info[eid]
                 fd_spread_lines: Dict[float, Dict[str, float]] = {}
                 for runner in runners if isinstance(runners, list) else []:
-                    runner_name = runner.get("runnerName", "")
-                    handicap = runner.get("handicap", 0)
-                    win_running = runner.get("winRunnerOdds", {})
-                    american_odds_str = (
-                        win_running.get("americanDisplayOdds", {}).get("americanOdds", "")
-                        or win_running.get("americanOdds", "")
-                    )
-                    decimal_odds = win_running.get("trueOdds", {}).get("decimalOdds", {}).get("decimalOdds", 0)
-
+                    odds_val = _parse_fd_odds(runner)
+                    if odds_val is None:
+                        continue
                     try:
-                        if american_odds_str:
-                            odds_val = float(str(american_odds_str).replace("+", ""))
-                        elif decimal_odds:
-                            odds_val = decimal_to_american(float(decimal_odds))
-                        else:
-                            continue
-                        line_val = float(handicap)
+                        line_val = float(runner.get("handicap", 0))
                     except (ValueError, TypeError):
                         continue
-
+                    runner_name = runner.get("runnerName", "")
                     mapped = _map_team(runner_name)
                     home_mapped = _map_team(ev_info["home"])
                     abs_line = abs(line_val)
@@ -1227,26 +1241,14 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
             elif market_type in ("TOTAL_GOALS", "MATCH_TOTAL", "TOTAL_POINTS", "OVER_UNDER", "TOTAL"):
                 fd_lines: Dict[float, Dict[str, float]] = {}
                 for runner in runners if isinstance(runners, list) else []:
-                    runner_name = (runner.get("runnerName", "") or "").lower()
-                    handicap = runner.get("handicap", 0)
-                    win_running = runner.get("winRunnerOdds", {})
-                    american_odds_str = (
-                        win_running.get("americanDisplayOdds", {}).get("americanOdds", "")
-                        or win_running.get("americanOdds", "")
-                    )
-                    decimal_odds = win_running.get("trueOdds", {}).get("decimalOdds", {}).get("decimalOdds", 0)
-
+                    odds_val = _parse_fd_odds(runner)
+                    if odds_val is None:
+                        continue
                     try:
-                        if american_odds_str:
-                            odds_val = float(str(american_odds_str).replace("+", ""))
-                        elif decimal_odds:
-                            odds_val = decimal_to_american(float(decimal_odds))
-                        else:
-                            continue
-                        line_val = float(handicap)
+                        line_val = float(runner.get("handicap", 0))
                     except (ValueError, TypeError):
                         continue
-
+                    runner_name = (runner.get("runnerName", "") or "").lower()
                     if line_val not in fd_lines:
                         fd_lines[line_val] = {}
                     if "over" in runner_name:
@@ -1283,55 +1285,11 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
 
             # Both Teams to Score (Yes/No)
             elif market_type in ("BOTH_TEAMS_TO_SCORE",):
-                for runner in runners if isinstance(runners, list) else []:
-                    runner_name = (runner.get("runnerName", "") or "").lower()
-                    win_running = runner.get("winRunnerOdds", {})
-                    american_odds_str = (
-                        win_running.get("americanDisplayOdds", {}).get("americanOdds", "")
-                        or win_running.get("americanOdds", "")
-                    )
-                    decimal_odds = win_running.get("trueOdds", {}).get("decimalOdds", {}).get("decimalOdds", 0)
-
-                    try:
-                        if american_odds_str:
-                            odds_val = float(str(american_odds_str).replace("+", ""))
-                        elif decimal_odds:
-                            odds_val = decimal_to_american(float(decimal_odds))
-                        else:
-                            continue
-                    except (ValueError, TypeError):
-                        continue
-
-                    if "yes" in runner_name:
-                        game_odds[eid]["btts_yes"] = odds_val
-                    elif "no" in runner_name:
-                        game_odds[eid]["btts_no"] = odds_val
+                _parse_fd_yes_no_runners(runners, eid, game_odds, "btts_yes", "btts_no")
 
             # Overtime (Will there be overtime?)
             elif market_type in ("OVERTIME_YES_NO", "OVERTIME"):
-                for runner in runners if isinstance(runners, list) else []:
-                    runner_name = (runner.get("runnerName", "") or "").lower()
-                    win_running = runner.get("winRunnerOdds", {})
-                    american_odds_str = (
-                        win_running.get("americanDisplayOdds", {}).get("americanOdds", "")
-                        or win_running.get("americanOdds", "")
-                    )
-                    decimal_odds = win_running.get("trueOdds", {}).get("decimalOdds", {}).get("decimalOdds", 0)
-
-                    try:
-                        if american_odds_str:
-                            odds_val = float(str(american_odds_str).replace("+", ""))
-                        elif decimal_odds:
-                            odds_val = decimal_to_american(float(decimal_odds))
-                        else:
-                            continue
-                    except (ValueError, TypeError):
-                        continue
-
-                    if "yes" in runner_name:
-                        game_odds[eid]["ot_yes"] = odds_val
-                    elif "no" in runner_name:
-                        game_odds[eid]["ot_no"] = odds_val
+                _parse_fd_yes_no_runners(runners, eid, game_odds, "ot_yes", "ot_no")
 
         # Build OddsEvent objects
         for eid, odds in game_odds.items():

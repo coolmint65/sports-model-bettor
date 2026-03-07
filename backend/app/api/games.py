@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES, composite_pick_score
+from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES, composite_pick_score, is_heavy_juice
 from app.database import get_session
 from app.models.game import Game, HeadToHead
 from app.models.player import GoalieStats, Player
@@ -581,8 +581,7 @@ async def _get_game_predictions(
             p.edge is not None
             and p.edge >= min_edge
             and (p.confidence or 0) >= min_conf
-            and cur_impl is not None
-            and cur_impl >= max_implied
+            and is_heavy_juice(cur_impl, max_implied)
         )
         # A pick that meets edge/confidence thresholds AND has acceptable
         # juice should be treated as recommended regardless of stale flag.
@@ -591,10 +590,7 @@ async def _get_game_predictions(
             or (
                 (p.confidence or 0) >= min_conf
                 and (p.edge or 0) >= min_edge
-                and (
-                    cur_impl is None
-                    or cur_impl < max_implied
-                )
+                and not is_heavy_juice(cur_impl, max_implied)
             )
         )
         briefs.append(

@@ -62,6 +62,11 @@ SCRAPER_HEADERS = {
 }
 
 
+def is_heavy_juice(implied_prob: float | None, ceiling: float) -> bool:
+    """Return True if *implied_prob* meets or exceeds the juice *ceiling*."""
+    return implied_prob is not None and implied_prob >= ceiling
+
+
 def composite_pick_score(
     confidence: float | None,
     edge: float | None,
