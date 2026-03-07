@@ -141,25 +141,39 @@ def fresh_implied_prob(pred: Prediction, game: Optional[Game]) -> Optional[float
             live_odds = game.total_even_price
 
     elif pred.bet_type == "period_winner":
-        # prediction_value like "p1_home", "p1_away", "p1_draw"
+        # prediction_value like "p1_home", "p2_away", "p3_draw"
         pv = pred.prediction_value or ""
-        if pv.startswith("p1_"):
-            side = pv[3:]  # "home", "away", or "draw"
-            if side == "home":
-                live_odds = game.period1_home_ml
-            elif side == "away":
-                live_odds = game.period1_away_ml
-            elif side == "draw":
-                live_odds = game.period1_draw_price
+        _period_ml_map = {
+            "p1": ("period1_home_ml", "period1_away_ml", "period1_draw_price"),
+            "p2": ("period2_home_ml", "period2_away_ml", "period2_draw_price"),
+            "p3": ("period3_home_ml", "period3_away_ml", "period3_draw_price"),
+        }
+        for prefix, (h_field, a_field, d_field) in _period_ml_map.items():
+            if pv.startswith(f"{prefix}_"):
+                side = pv[len(prefix) + 1:]
+                if side == "home":
+                    live_odds = getattr(game, h_field, None)
+                elif side == "away":
+                    live_odds = getattr(game, a_field, None)
+                elif side == "draw":
+                    live_odds = getattr(game, d_field, None)
+                break
 
     elif pred.bet_type == "period_total":
-        # prediction_value like "p1_over_1.5", "p1_under_1.5"
+        # prediction_value like "p1_over_1.5", "p2_under_1.5"
         pv = pred.prediction_value or ""
-        if pv.startswith("p1_"):
-            if "over" in pv:
-                live_odds = game.period1_over_price
-            elif "under" in pv:
-                live_odds = game.period1_under_price
+        _period_ou_map = {
+            "p1": ("period1_over_price", "period1_under_price"),
+            "p2": ("period2_over_price", "period2_under_price"),
+            "p3": ("period3_over_price", "period3_under_price"),
+        }
+        for prefix, (o_field, u_field) in _period_ou_map.items():
+            if pv.startswith(f"{prefix}_"):
+                if "over" in pv:
+                    live_odds = getattr(game, o_field, None)
+                elif "under" in pv:
+                    live_odds = getattr(game, u_field, None)
+                break
 
     elif pred.bet_type == "period1_btts":
         if pred.prediction_value == "yes":

@@ -460,6 +460,7 @@ async def _compute_top_picks(
         p for p in all_preds
         if (p.edge or 0) >= settings.min_edge
         and (p.confidence or 0) >= settings.min_confidence
+        and (fresh_map.get(p.id) or p.odds_implied_prob or 0) < max_implied
     ]
 
     def _tier1_sort_key(p):
@@ -479,22 +480,17 @@ async def _compute_top_picks(
     for pred in sorted(tier1, key=_tier1_sort_key, reverse=True):
         if pred.game_id not in top_picks:
             cur_impl = fresh_map.get(pred.id)
-            is_heavy = (
-                cur_impl is not None
-                and cur_impl >= max_implied
-            )
             if pred.bet_type == "spread":
                 game_obj = game_by_id.get(pred.game_id)
                 logger.debug(
                     "Spread top pick: game=%d val=%s cur_impl=%.4f "
-                    "max_implied=%.4f is_heavy=%s "
+                    "max_implied=%.4f "
                     "home_spread_price=%s away_spread_price=%s "
                     "stored_impl=%s",
                     pred.game_id,
                     pred.prediction_value,
                     cur_impl if cur_impl is not None else -1,
                     max_implied,
-                    is_heavy,
                     getattr(game_obj, "home_spread_price", "N/A") if game_obj else "no_game",
                     getattr(game_obj, "away_spread_price", "N/A") if game_obj else "no_game",
                     pred.odds_implied_prob,
@@ -505,7 +501,7 @@ async def _compute_top_picks(
                 confidence=pred.confidence,
                 edge=pred.edge,
                 is_fallback=False,
-                heavy_juice=is_heavy,
+                heavy_juice=False,
             )
 
     # --- Tier 3: confidence-only fallback when odds data is missing ---
@@ -537,19 +533,19 @@ async def _compute_top_picks(
             reverse=True,
         ):
             if pred.game_id not in top_picks:
-                # Check stored implied prob for heavy juice
+                # Exclude heavy-juice bets — if we have odds and they
+                # exceed the ceiling, skip entirely rather than show a
+                # bet with terrible risk/reward.
                 stored_impl = pred.odds_implied_prob
-                is_heavy = (
-                    stored_impl is not None
-                    and stored_impl >= max_implied
-                )
+                if stored_impl is not None and stored_impl >= max_implied:
+                    continue
                 top_picks[pred.game_id] = GameTopPick(
                     bet_type=pred.bet_type,
                     prediction_value=pred.prediction_value,
                     confidence=pred.confidence,
                     edge=pred.edge,
-                    is_fallback=False,
-                    heavy_juice=is_heavy,
+                    is_fallback=stored_impl is None,
+                    heavy_juice=False,
                 )
 
     # Grade outcomes for final games
@@ -624,11 +620,14 @@ async def _compute_top_props(
         else:
             effective_edge[pred.id] = pred.edge
 
+    max_implied = settings.best_bet_max_implied
+
     # --- Tier 1: props with real odds AND positive edge ---
     tier1 = [
         p for p in deduped
         if effective_impl.get(p.id) is not None
         and (effective_edge.get(p.id) or 0) > 0
+        and (effective_impl.get(p.id) or 0) < max_implied
     ]
     for pred in sorted(
         tier1,
@@ -654,6 +653,7 @@ async def _compute_top_props(
             p for p in deduped
             if p.game_id in still_missing
             and effective_impl.get(p.id) is not None
+            and (effective_impl.get(p.id) or 0) < max_implied
         ]
         for pred in sorted(
             tier2,
@@ -689,12 +689,16 @@ async def _compute_top_props(
             reverse=True,
         ):
             if pred.game_id not in top_props:
+                # Exclude heavy-juice bets even in fallback tier
+                stored_impl = pred.odds_implied_prob
+                if stored_impl is not None and stored_impl >= max_implied:
+                    continue
                 top_props[pred.game_id] = GameTopPick(
                     bet_type=pred.bet_type,
                     prediction_value=pred.prediction_value,
                     confidence=pred.confidence,
                     edge=pred.edge,
-                    is_fallback=True,
+                    is_fallback=stored_impl is None,
                     heavy_juice=False,
                 )
 
