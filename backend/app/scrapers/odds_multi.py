@@ -709,11 +709,16 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
                                     game_odds[eid].setdefault("even_prices", []).append(odds_val)
                             continue
 
-                        if ("first goal" in label or "1st goal" in label
+                        # First Team to Score — full-game, 2-way only.
+                        # Reject period-specific variants like
+                        # "1st Goal - 1st Period" (3-way with No Goal).
+                        _is_fg_label = ("first goal" in label or "1st goal" in label
                                 or "score first" in label or "first to score" in label
                                 or "1st to score" in label
                                 or "team to score" in label
-                                or ("score" in sub_name and "first" in sub_name and len(outcomes) == 2)):
+                                or ("score" in sub_name and "first" in sub_name and len(outcomes) == 2))
+                        _is_period_fg = "period" in label or "1st period" in label or "2nd period" in label or "3rd period" in label
+                        if _is_fg_label and not _is_period_fg and len(outcomes) == 2:
                             ev_info = event_map.get(eid, {})
                             home_mapped = _map_team(ev_info.get("home", ""))
                             for oc in outcomes:
@@ -1037,23 +1042,31 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
                 event.highest_period_p3 = round(max(odds["hp_p3_prices"]))
             if odds.get("hp_tie_prices"):
                 event.highest_period_tie = round(max(odds["hp_tie_prices"]))
-            # Team Total Goals
+            # Team Total Goals — reject lines where either side has
+            # extreme juice (worse than -250), as those are not actionable.
+            _TT_MAX_JUICE = -250
             home_tt_o = odds.get("home_tt_overs", [])
             home_tt_u = odds.get("home_tt_unders", [])
             if home_tt_o and home_tt_u:
                 htt_lines = Counter(t[0] for t in home_tt_o)
                 htt_best = htt_lines.most_common(1)[0][0]
-                event.home_team_total_line = htt_best
-                event.home_team_over = round(max(t[1] for t in home_tt_o if t[0] == htt_best))
-                event.home_team_under = round(max(t[1] for t in home_tt_u if t[0] == htt_best))
+                htt_over = round(max(t[1] for t in home_tt_o if t[0] == htt_best))
+                htt_under = round(max(t[1] for t in home_tt_u if t[0] == htt_best))
+                if htt_over >= _TT_MAX_JUICE and htt_under >= _TT_MAX_JUICE:
+                    event.home_team_total_line = htt_best
+                    event.home_team_over = htt_over
+                    event.home_team_under = htt_under
             away_tt_o = odds.get("away_tt_overs", [])
             away_tt_u = odds.get("away_tt_unders", [])
             if away_tt_o and away_tt_u:
                 att_lines = Counter(t[0] for t in away_tt_o)
                 att_best = att_lines.most_common(1)[0][0]
-                event.away_team_total_line = att_best
-                event.away_team_over = round(max(t[1] for t in away_tt_o if t[0] == att_best))
-                event.away_team_under = round(max(t[1] for t in away_tt_u if t[0] == att_best))
+                att_over = round(max(t[1] for t in away_tt_o if t[0] == att_best))
+                att_under = round(max(t[1] for t in away_tt_u if t[0] == att_best))
+                if att_over >= _TT_MAX_JUICE and att_under >= _TT_MAX_JUICE:
+                    event.away_team_total_line = att_best
+                    event.away_team_over = att_over
+                    event.away_team_under = att_under
 
             if event.home_abbr and event.away_abbr:
                 events.append(_validate_event(event))
@@ -1880,8 +1893,13 @@ async def _fetch_kambi(client: httpx.AsyncClient) -> List[OddsEvent]:
                         elif "no" in oc_label:
                             odds["ot_no"] = american
 
-                # First Goal / First Team to Score
-                elif ("first" in criterion_label or "1st" in criterion_label) and ("goal" in criterion_label or "score" in criterion_label):
+                # First Goal / First Team to Score (full-game, 2-way only)
+                elif (
+                    ("first" in criterion_label or "1st" in criterion_label)
+                    and ("goal" in criterion_label or "score" in criterion_label)
+                    and "period" not in criterion_label
+                    and len(outcomes) == 2
+                ):
                     home_mapped = _map_team(home_name)
                     for oc in outcomes if isinstance(outcomes, list) else []:
                         oc_label = oc.get("label", "")
@@ -2381,11 +2399,13 @@ async def _fetch_bovada(client: httpx.AsyncClient) -> List[OddsEvent]:
                                 elif "no" in oc_desc:
                                     odds["ot_no"] = odds_val
 
-                        # First Goal / First Team to Score
+                        # First Goal / First Team to Score (full-game, 2-way only)
                         elif (
-                            ("first" in market_desc or "1st" in market_desc)
-                            and ("goal" in market_desc or "score" in market_desc)
-                        ) or "score first" in market_desc:
+                            (
+                                ("first" in market_desc or "1st" in market_desc)
+                                and ("goal" in market_desc or "score" in market_desc)
+                            ) or "score first" in market_desc
+                        ) and "period" not in market_desc and len(outcomes) == 2:
                             for oc in outcomes:
                                 price_data = oc.get("price", {})
                                 if not isinstance(price_data, dict):
@@ -3820,12 +3840,27 @@ def _merge_odds_events(
         prop_reg_home = [e.reg_home_ml for e in ev_list]
         prop_reg_away = [e.reg_away_ml for e in ev_list]
         prop_reg_draw = [e.reg_draw_price for e in ev_list]
-        prop_htt_line = [e.home_team_total_line for e in ev_list if e.home_team_total_line and e.home_team_total_line != 0.0]
-        prop_htt_over = [e.home_team_over for e in ev_list]
-        prop_htt_under = [e.home_team_under for e in ev_list]
-        prop_att_line = [e.away_team_total_line for e in ev_list if e.away_team_total_line and e.away_team_total_line != 0.0]
-        prop_att_over = [e.away_team_over for e in ev_list]
-        prop_att_under = [e.away_team_under for e in ev_list]
+        # Team totals — reject sources where either side has extreme
+        # juice (worse than -250) as those lines are not actionable.
+        _TT_JUICE_LIMIT = -250
+        _htt_valid = [
+            e for e in ev_list
+            if e.home_team_total_line and e.home_team_total_line != 0.0
+            and e.home_team_over >= _TT_JUICE_LIMIT
+            and e.home_team_under >= _TT_JUICE_LIMIT
+        ]
+        prop_htt_line = [e.home_team_total_line for e in _htt_valid]
+        prop_htt_over = [e.home_team_over for e in _htt_valid]
+        prop_htt_under = [e.home_team_under for e in _htt_valid]
+        _att_valid = [
+            e for e in ev_list
+            if e.away_team_total_line and e.away_team_total_line != 0.0
+            and e.away_team_over >= _TT_JUICE_LIMIT
+            and e.away_team_under >= _TT_JUICE_LIMIT
+        ]
+        prop_att_line = [e.away_team_total_line for e in _att_valid]
+        prop_att_over = [e.away_team_over for e in _att_valid]
+        prop_att_under = [e.away_team_under for e in _att_valid]
         prop_hp_p1 = [e.highest_period_p1 for e in ev_list]
         prop_hp_p2 = [e.highest_period_p2 for e in ev_list]
         prop_hp_p3 = [e.highest_period_p3 for e in ev_list]
