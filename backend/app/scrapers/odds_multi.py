@@ -1592,8 +1592,102 @@ async def _fetch_kambi(client: httpx.AsyncClient) -> List[OddsEvent]:
                 offer_type = offer.get("betOfferType", {}).get("name", "").lower()
                 outcomes = offer.get("outcomes", [])
 
+                # Detect period-specific markets early so they don't
+                # get caught by the generic ML/spread/BTTS checks.
+                _is_p1 = "1st" in criterion_label or "period 1" in criterion_label
+                _is_period = _is_p1 or any(
+                    tok in criterion_label for tok in ("2nd", "3rd", "period 2", "period 3")
+                )
+
+                # --- 1st Period markets (checked first) ---
+
+                # 1st Period Total (Over/Under)
+                if _is_p1 and (
+                    "total" in criterion_label or "over" in criterion_label
+                ) and "both" not in criterion_label:
+                    for oc in outcomes if isinstance(outcomes, list) else []:
+                        oc_label = (oc.get("label", "") or "").lower()
+                        oc_type = (oc.get("type", "") or "").upper()
+                        line = oc.get("line", 0)
+                        decimal_odds_val = oc.get("odds", 0)
+                        if not decimal_odds_val:
+                            continue
+                        dec = decimal_odds_val / 1000.0 if decimal_odds_val > 100 else decimal_odds_val
+                        american = decimal_to_american(dec)
+                        try:
+                            line_val = float(line) / 1000.0 if abs(line) > 100 else float(line)
+                        except (ValueError, TypeError):
+                            continue
+                        if "over" in oc_label or oc_type == "OT_OVER":
+                            odds["p1_total_line"] = line_val
+                            odds["p1_over_price"] = american
+                        elif "under" in oc_label or oc_type == "OT_UNDER":
+                            odds["p1_under_price"] = american
+
+                # 1st Period Winner (3-way: home/away/draw)
+                elif _is_p1 and (
+                    "winner" in criterion_label or "result" in criterion_label
+                    or "money" in criterion_label
+                ):
+                    for oc in outcomes if isinstance(outcomes, list) else []:
+                        oc_label = oc.get("label", "")
+                        oc_type = (oc.get("type", "") or "").upper()
+                        decimal_odds_val = oc.get("odds", 0)
+                        if not decimal_odds_val:
+                            continue
+                        dec = decimal_odds_val / 1000.0 if decimal_odds_val > 100 else decimal_odds_val
+                        american = decimal_to_american(dec)
+                        if oc_type == "OT_ONE" or oc_label == home_name:
+                            odds["p1_home_ml"] = american
+                        elif oc_type == "OT_TWO" or oc_label == away_name:
+                            odds["p1_away_ml"] = american
+                        elif oc_type == "OT_CROSS" or "draw" in oc_label.lower() or "tie" in oc_label.lower():
+                            odds["p1_draw_price"] = american
+
+                # 1st Period Spread / Handicap
+                elif _is_p1 and (
+                    "handicap" in criterion_label or "spread" in criterion_label or "puck" in criterion_label
+                ):
+                    for oc in outcomes if isinstance(outcomes, list) else []:
+                        oc_label = oc.get("label", "")
+                        line = oc.get("line", 0)
+                        decimal_odds_val = oc.get("odds", 0)
+                        if not decimal_odds_val:
+                            continue
+                        dec = decimal_odds_val / 1000.0 if decimal_odds_val > 100 else decimal_odds_val
+                        american = decimal_to_american(dec)
+                        try:
+                            line_val = float(line) / 1000.0 if abs(line) > 100 else float(line)
+                        except (ValueError, TypeError):
+                            continue
+                        if oc_label == home_name:
+                            odds["p1_spread_line"] = abs(line_val)
+                            odds["p1_home_spread_price"] = american
+                        elif oc_label == away_name:
+                            odds["p1_away_spread_price"] = american
+
+                # 1st Period Both Teams to Score
+                elif _is_p1 and "both" in criterion_label and "score" in criterion_label:
+                    for oc in outcomes if isinstance(outcomes, list) else []:
+                        oc_label = (oc.get("label", "") or "").lower()
+                        decimal_odds_val = oc.get("odds", 0)
+                        if not decimal_odds_val:
+                            continue
+                        dec = decimal_odds_val / 1000.0 if decimal_odds_val > 100 else decimal_odds_val
+                        american = decimal_to_american(dec)
+                        if "yes" in oc_label:
+                            odds["p1_btts_yes"] = american
+                        elif "no" in oc_label:
+                            odds["p1_btts_no"] = american
+
+                # Skip other period-specific markets (2nd/3rd period)
+                elif _is_period:
+                    pass
+
+                # --- Full-game markets ---
+
                 # Moneyline (Match Winner / 1X2 without draw for hockey)
-                if "winner" in criterion_label or "match" in criterion_label or offer_type == "match":
+                elif "winner" in criterion_label or "match" in criterion_label or offer_type == "match":
                     for oc in outcomes if isinstance(outcomes, list) else []:
                         oc_label = oc.get("label", "")
                         oc_type = (oc.get("type", "") or "").upper()
@@ -1651,49 +1745,6 @@ async def _fetch_kambi(client: httpx.AsyncClient) -> List[OddsEvent]:
                                 "away_price": prices["away_price"],
                             })
 
-                # 1st Period Total (Over/Under)
-                elif ("1st" in criterion_label or "period 1" in criterion_label) and (
-                    "total" in criterion_label or "over" in criterion_label
-                ):
-                    for oc in outcomes if isinstance(outcomes, list) else []:
-                        oc_label = (oc.get("label", "") or "").lower()
-                        oc_type = (oc.get("type", "") or "").upper()
-                        line = oc.get("line", 0)
-                        decimal_odds_val = oc.get("odds", 0)
-                        if not decimal_odds_val:
-                            continue
-                        dec = decimal_odds_val / 1000.0 if decimal_odds_val > 100 else decimal_odds_val
-                        american = decimal_to_american(dec)
-                        try:
-                            line_val = float(line) / 1000.0 if abs(line) > 100 else float(line)
-                        except (ValueError, TypeError):
-                            continue
-                        if "over" in oc_label or oc_type == "OT_OVER":
-                            odds["p1_total_line"] = line_val
-                            odds["p1_over_price"] = american
-                        elif "under" in oc_label or oc_type == "OT_UNDER":
-                            odds["p1_under_price"] = american
-
-                # 1st Period Winner (3-way: home/away/draw)
-                elif ("1st" in criterion_label or "period 1" in criterion_label) and (
-                    "winner" in criterion_label or "result" in criterion_label
-                    or "money" in criterion_label
-                ):
-                    for oc in outcomes if isinstance(outcomes, list) else []:
-                        oc_label = oc.get("label", "")
-                        oc_type = (oc.get("type", "") or "").upper()
-                        decimal_odds_val = oc.get("odds", 0)
-                        if not decimal_odds_val:
-                            continue
-                        dec = decimal_odds_val / 1000.0 if decimal_odds_val > 100 else decimal_odds_val
-                        american = decimal_to_american(dec)
-                        if oc_type == "OT_ONE" or oc_label == home_name:
-                            odds["p1_home_ml"] = american
-                        elif oc_type == "OT_TWO" or oc_label == away_name:
-                            odds["p1_away_ml"] = american
-                        elif oc_type == "OT_CROSS" or "draw" in oc_label.lower() or "tie" in oc_label.lower():
-                            odds["p1_draw_price"] = american
-
                 # Both Teams to Score
                 elif "both" in criterion_label and "score" in criterion_label:
                     for oc in outcomes if isinstance(outcomes, list) else []:
@@ -1721,6 +1772,97 @@ async def _fetch_kambi(client: httpx.AsyncClient) -> List[OddsEvent]:
                             odds["ot_yes"] = american
                         elif "no" in oc_label:
                             odds["ot_no"] = american
+
+                # First Goal / First Team to Score
+                elif "first" in criterion_label and ("goal" in criterion_label or "score" in criterion_label):
+                    home_mapped = _map_team(home_name)
+                    for oc in outcomes if isinstance(outcomes, list) else []:
+                        oc_label = oc.get("label", "")
+                        decimal_odds_val = oc.get("odds", 0)
+                        if not decimal_odds_val:
+                            continue
+                        dec = decimal_odds_val / 1000.0 if decimal_odds_val > 100 else decimal_odds_val
+                        american = decimal_to_american(dec)
+                        mapped = _map_team(oc_label)
+                        if mapped and mapped == home_mapped:
+                            odds["fg_home"] = american
+                        elif mapped:
+                            odds["fg_away"] = american
+
+                # Odd/Even Total Goals
+                elif "odd" in criterion_label and "even" in criterion_label:
+                    for oc in outcomes if isinstance(outcomes, list) else []:
+                        oc_label = (oc.get("label", "") or "").lower()
+                        decimal_odds_val = oc.get("odds", 0)
+                        if not decimal_odds_val:
+                            continue
+                        dec = decimal_odds_val / 1000.0 if decimal_odds_val > 100 else decimal_odds_val
+                        american = decimal_to_american(dec)
+                        if "odd" in oc_label:
+                            odds["total_odd"] = american
+                        elif "even" in oc_label:
+                            odds["total_even"] = american
+
+                # Regulation Winner / 60 Minutes Result (3-way)
+                elif "regulation" in criterion_label or "60 min" in criterion_label:
+                    for oc in outcomes if isinstance(outcomes, list) else []:
+                        oc_label = oc.get("label", "")
+                        oc_type = (oc.get("type", "") or "").upper()
+                        decimal_odds_val = oc.get("odds", 0)
+                        if not decimal_odds_val:
+                            continue
+                        dec = decimal_odds_val / 1000.0 if decimal_odds_val > 100 else decimal_odds_val
+                        american = decimal_to_american(dec)
+                        if oc_type == "OT_ONE" or oc_label == home_name:
+                            odds["reg_home"] = american
+                        elif oc_type == "OT_TWO" or oc_label == away_name:
+                            odds["reg_away"] = american
+                        elif oc_type == "OT_CROSS" or "draw" in oc_label.lower() or "tie" in oc_label.lower():
+                            odds["reg_draw"] = american
+
+                # Team Totals (individual team over/under)
+                elif "team total" in criterion_label or (
+                    "total" in criterion_label
+                    and any(t in criterion_label for t in (home_name.lower(), away_name.lower()))
+                ):
+                    is_home_tt = home_name.lower() in criterion_label
+                    for oc in outcomes if isinstance(outcomes, list) else []:
+                        oc_label = (oc.get("label", "") or "").lower()
+                        oc_type = (oc.get("type", "") or "").upper()
+                        line = oc.get("line", 0)
+                        decimal_odds_val = oc.get("odds", 0)
+                        if not decimal_odds_val:
+                            continue
+                        dec = decimal_odds_val / 1000.0 if decimal_odds_val > 100 else decimal_odds_val
+                        american = decimal_to_american(dec)
+                        try:
+                            line_val = float(line) / 1000.0 if abs(line) > 100 else float(line)
+                        except (ValueError, TypeError):
+                            continue
+                        prefix = "home_tt" if is_home_tt else "away_tt"
+                        odds[f"{prefix}_line"] = line_val
+                        if "over" in oc_label or oc_type == "OT_OVER":
+                            odds[f"{prefix}_over"] = american
+                        elif "under" in oc_label or oc_type == "OT_UNDER":
+                            odds[f"{prefix}_under"] = american
+
+                # Highest Scoring Period
+                elif "highest scoring" in criterion_label or "most goals" in criterion_label:
+                    for oc in outcomes if isinstance(outcomes, list) else []:
+                        oc_label = (oc.get("label", "") or "").lower()
+                        decimal_odds_val = oc.get("odds", 0)
+                        if not decimal_odds_val:
+                            continue
+                        dec = decimal_odds_val / 1000.0 if decimal_odds_val > 100 else decimal_odds_val
+                        american = decimal_to_american(dec)
+                        if "1st" in oc_label or "first" in oc_label:
+                            odds["hp_p1"] = american
+                        elif "2nd" in oc_label or "second" in oc_label:
+                            odds["hp_p2"] = american
+                        elif "3rd" in oc_label or "third" in oc_label:
+                            odds["hp_p3"] = american
+                        elif "tie" in oc_label or "equal" in oc_label or "draw" in oc_label:
+                            odds["hp_tie"] = american
 
                 # Totals (Over/Under) — collect ALL available lines
                 # Skip period-specific totals (already handled above)
@@ -1804,14 +1946,30 @@ async def _fetch_kambi(client: httpx.AsyncClient) -> List[OddsEvent]:
                 event.p1_away_ml = odds["p1_away_ml"]
             if odds.get("p1_draw_price"):
                 event.p1_draw_price = odds["p1_draw_price"]
-            if odds.get("btts_yes"):
-                event.btts_yes = odds["btts_yes"]
-            if odds.get("btts_no"):
-                event.btts_no = odds["btts_no"]
-            if odds.get("ot_yes"):
-                event.overtime_yes = odds["ot_yes"]
-            if odds.get("ot_no"):
-                event.overtime_no = odds["ot_no"]
+            # Set all prop odds on the event
+            for prop_key, attr in (
+                ("btts_yes", "btts_yes"), ("btts_no", "btts_no"),
+                ("ot_yes", "overtime_yes"), ("ot_no", "overtime_no"),
+                ("fg_home", "first_goal_home"), ("fg_away", "first_goal_away"),
+                ("total_odd", "total_odd"), ("total_even", "total_even"),
+                ("reg_home", "reg_home_ml"), ("reg_away", "reg_away_ml"),
+                ("reg_draw", "reg_draw_price"),
+                ("home_tt_line", "home_team_total_line"),
+                ("home_tt_over", "home_team_over"),
+                ("home_tt_under", "home_team_under"),
+                ("away_tt_line", "away_team_total_line"),
+                ("away_tt_over", "away_team_over"),
+                ("away_tt_under", "away_team_under"),
+                ("hp_p1", "highest_period_p1"), ("hp_p2", "highest_period_p2"),
+                ("hp_p3", "highest_period_p3"), ("hp_tie", "highest_period_tie"),
+                ("p1_spread_line", "p1_spread_line"),
+                ("p1_home_spread_price", "p1_home_spread_price"),
+                ("p1_away_spread_price", "p1_away_spread_price"),
+                ("p1_btts_yes", "p1_btts_yes"), ("p1_btts_no", "p1_btts_no"),
+            ):
+                val = odds.get(prop_key)
+                if val:
+                    setattr(event, attr, val)
             if event.home_abbr and event.away_abbr:
                 events.append(_validate_event(event))
             else:

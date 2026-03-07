@@ -687,7 +687,9 @@ async def _compute_top_props(
         ):
             if pred.game_id not in top_props:
                 # Exclude heavy-juice bets even in fallback tier
-                if is_heavy_juice(pred.odds_implied_prob, max_implied):
+                # Use fresh odds when available, stored value otherwise.
+                t3_impl = effective_impl.get(pred.id, pred.odds_implied_prob)
+                if is_heavy_juice(t3_impl, max_implied):
                     continue
                 top_props[pred.game_id] = GameTopPick(
                     bet_type=pred.bet_type,

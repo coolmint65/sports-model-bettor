@@ -473,10 +473,11 @@ class PredictionManager:
             # Upgrade phase from prematch to live (never downgrade)
             if bet.get("phase") == "live":
                 existing.phase = "live"
-            impl = existing.odds_implied_prob or 0
+            impl = existing.odds_implied_prob
             existing.recommended = (
                 existing.confidence >= settings.min_confidence
                 and (existing.edge or 0) >= settings.min_edge
+                and impl is not None
                 and impl < settings.best_bet_max_implied
             )
             existing.best_bet = (
@@ -506,7 +507,8 @@ class PredictionManager:
             recommended=(
                 confidence >= settings.min_confidence
                 and (edge or 0) >= settings.min_edge
-                and (implied_prob or 0) < settings.best_bet_max_implied
+                and implied_prob is not None
+                and implied_prob < settings.best_bet_max_implied
             ),
             best_bet=is_best and (edge or 0) >= settings.best_bet_edge,
             reasoning=reasoning,
