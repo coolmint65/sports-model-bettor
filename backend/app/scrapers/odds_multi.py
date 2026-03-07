@@ -163,15 +163,24 @@ def _normalize_spread_line(val: float) -> float:
 
     NHL sportsbooks always use .5 lines (±1.5, ±2.5, etc.) but some
     scraped sources return whole numbers (±1, ±2).  Snap to .5.
+    Also enforces a minimum of ±1.5 since puck lines below that
+    (e.g. ±0.5) don't exist in standard NHL betting.
     """
     if val == 0:
         return val
     if val % 1 == 0.5 or val % 1 == -0.5:
+        sign = -1 if val < 0 else 1
+        # Enforce minimum ±1.5
+        if abs(val) < 1.5:
+            return sign * 1.5
         return val
     sign = -1 if val < 0 else 1
     result = sign * (round(abs(val) * 2) / 2)
     if result % 1 == 0:
         result += sign * 0.5
+    # Enforce minimum ±1.5
+    if abs(result) < 1.5:
+        result = sign * 1.5
     return result
 
 
@@ -2208,6 +2217,35 @@ def _mean_odds(odds_list: List[float]) -> float:
     return round(_implied_to_american(avg_prob))
 
 
+def _normalize_moneyline_pair(
+    home_ml: float, away_ml: float
+) -> Tuple[float, float]:
+    """Ensure a moneyline pair has one favorite (negative) and one underdog (positive).
+
+    When averaging implied probabilities independently per side, both can land
+    below 0.5 (both positive odds) if sources disagree on the favorite.  Fix
+    this by re-normalising the pair so probabilities sum to a realistic
+    overround (~1.03-1.05) while preserving the ratio between the two sides.
+    The higher-probability side is then guaranteed to exceed 0.5 and receive
+    negative American odds.
+    """
+    home_prob = _american_to_implied(home_ml)
+    away_prob = _american_to_implied(away_ml)
+    raw_sum = home_prob + away_prob
+
+    # If the pair already has one negative side, no adjustment needed.
+    if home_ml < 0 or away_ml < 0:
+        return home_ml, away_ml
+
+    # Both positive — re-normalise to a ~4% overround (typical sportsbook vig).
+    target_sum = 1.04
+    scale = target_sum / raw_sum
+    home_prob *= scale
+    away_prob *= scale
+
+    return round(_implied_to_american(home_prob)), round(_implied_to_american(away_prob))
+
+
 def _merge_odds_events(
     all_events: List[List[OddsEvent]],
 ) -> List[Dict[str, Any]]:
@@ -2248,6 +2286,15 @@ def _merge_odds_events(
         best_home_ml = _mean_odds(home_mls) if home_mls else None
         best_away_ml = _mean_odds(away_mls) if away_mls else None
 
+        # Guard against both sides showing positive odds.  This happens
+        # when sources disagree on the favorite and independent averaging
+        # pushes both implied probs below 0.5.  Re-normalise so the
+        # stronger side always gets negative odds.
+        if best_home_ml and best_away_ml:
+            best_home_ml, best_away_ml = _normalize_moneyline_pair(
+                best_home_ml, best_away_ml
+            )
+
         # Consensus spread: most common absolute value across sources.
         # Use moneyline data to determine the correct sign so that
         # conflicting source signs never flip the puck line.
@@ -2287,6 +2334,9 @@ def _merge_odds_events(
                 consensus = spread_vals.most_common(1)[0][0]
             else:
                 consensus = 1.5  # NHL standard puck line
+            # Enforce minimum ±1.5 — puck lines below that don't exist
+            if consensus < 1.5:
+                consensus = 1.5
 
             # Enforce correct sign based on moneyline-derived favorite.
             # This prevents conflicting source signs from flipping the
