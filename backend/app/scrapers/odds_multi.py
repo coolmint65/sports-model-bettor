@@ -1290,6 +1290,88 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
             elif market_type in ("OVERTIME_YES_NO", "OVERTIME"):
                 _parse_fd_yes_no_runners(runners, eid, game_odds, "ot_yes", "ot_no")
 
+            # First Goal (which team scores first)
+            elif market_type in ("FIRST_GOAL", "FIRST_TEAM_TO_SCORE", "FIRST_SCORER"):
+                ev_info = event_info[eid]
+                home_mapped = _map_team(ev_info["home"])
+                for runner in runners if isinstance(runners, list) else []:
+                    odds_val = _parse_fd_odds(runner)
+                    if odds_val is None:
+                        continue
+                    runner_name = runner.get("runnerName", "")
+                    mapped = _map_team(runner_name)
+                    if mapped and mapped == home_mapped:
+                        game_odds[eid]["fg_home"] = odds_val
+                    elif mapped:
+                        game_odds[eid]["fg_away"] = odds_val
+
+            # Odd/Even Total Goals
+            elif market_type in ("ODD_EVEN", "TOTAL_ODD_EVEN"):
+                for runner in runners if isinstance(runners, list) else []:
+                    odds_val = _parse_fd_odds(runner)
+                    if odds_val is None:
+                        continue
+                    runner_name = (runner.get("runnerName", "") or "").lower()
+                    if "odd" in runner_name:
+                        game_odds[eid]["total_odd"] = odds_val
+                    elif "even" in runner_name:
+                        game_odds[eid]["total_even"] = odds_val
+
+            # Regulation Winner (3-way, excludes OT)
+            elif market_type in ("MATCH_RESULT_60_MINUTES", "REGULATION_TIME", "THREE_WAY"):
+                ev_info = event_info[eid]
+                home_mapped = _map_team(ev_info["home"])
+                for runner in runners if isinstance(runners, list) else []:
+                    odds_val = _parse_fd_odds(runner)
+                    if odds_val is None:
+                        continue
+                    runner_name = (runner.get("runnerName", "") or "").lower()
+                    mapped = _map_team(runner.get("runnerName", ""))
+                    if "draw" in runner_name or "tie" in runner_name:
+                        game_odds[eid]["reg_draw"] = odds_val
+                    elif mapped and mapped == home_mapped:
+                        game_odds[eid]["reg_home"] = odds_val
+                    elif mapped:
+                        game_odds[eid]["reg_away"] = odds_val
+
+            # Team Total Goals (individual team O/U)
+            elif market_type in ("HOME_TEAM_TOTAL", "AWAY_TEAM_TOTAL", "TEAM_TOTAL"):
+                is_home_tt = market_type == "HOME_TEAM_TOTAL" or (
+                    market_type == "TEAM_TOTAL"
+                    and _map_team(market_name) == _map_team(event_info[eid]["home"])
+                )
+                prefix = "home_tt" if is_home_tt else "away_tt"
+                for runner in runners if isinstance(runners, list) else []:
+                    odds_val = _parse_fd_odds(runner)
+                    if odds_val is None:
+                        continue
+                    try:
+                        line_val = float(runner.get("handicap", 0))
+                    except (ValueError, TypeError):
+                        continue
+                    runner_name = (runner.get("runnerName", "") or "").lower()
+                    game_odds[eid][f"{prefix}_line"] = line_val
+                    if "over" in runner_name:
+                        game_odds[eid][f"{prefix}_over"] = odds_val
+                    elif "under" in runner_name:
+                        game_odds[eid][f"{prefix}_under"] = odds_val
+
+            # Highest Scoring Period
+            elif market_type in ("HIGHEST_SCORING_PERIOD", "HIGHEST_SCORING_HALF"):
+                for runner in runners if isinstance(runners, list) else []:
+                    odds_val = _parse_fd_odds(runner)
+                    if odds_val is None:
+                        continue
+                    runner_name = (runner.get("runnerName", "") or "").lower()
+                    if "1st" in runner_name or "first" in runner_name:
+                        game_odds[eid]["hp_p1"] = odds_val
+                    elif "2nd" in runner_name or "second" in runner_name:
+                        game_odds[eid]["hp_p2"] = odds_val
+                    elif "3rd" in runner_name or "third" in runner_name:
+                        game_odds[eid]["hp_p3"] = odds_val
+                    elif "tie" in runner_name or "equal" in runner_name or "draw" in runner_name:
+                        game_odds[eid]["hp_tie"] = odds_val
+
         # Build OddsEvent objects
         for eid, odds in game_odds.items():
             ev_info = event_info.get(eid, {})
@@ -1319,14 +1401,25 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
                 alt_spreads=odds.get("fd_alt_spreads", []),
             )
             # Set prop odds on the event
-            if odds.get("btts_yes"):
-                event.btts_yes = odds["btts_yes"]
-            if odds.get("btts_no"):
-                event.btts_no = odds["btts_no"]
-            if odds.get("ot_yes"):
-                event.overtime_yes = odds["ot_yes"]
-            if odds.get("ot_no"):
-                event.overtime_no = odds["ot_no"]
+            for prop_key, attr in (
+                ("btts_yes", "btts_yes"), ("btts_no", "btts_no"),
+                ("ot_yes", "overtime_yes"), ("ot_no", "overtime_no"),
+                ("fg_home", "first_goal_home"), ("fg_away", "first_goal_away"),
+                ("total_odd", "total_odd"), ("total_even", "total_even"),
+                ("reg_home", "reg_home_ml"), ("reg_away", "reg_away_ml"),
+                ("reg_draw", "reg_draw_price"),
+                ("home_tt_line", "home_team_total_line"),
+                ("home_tt_over", "home_team_over"),
+                ("home_tt_under", "home_team_under"),
+                ("away_tt_line", "away_team_total_line"),
+                ("away_tt_over", "away_team_over"),
+                ("away_tt_under", "away_team_under"),
+                ("hp_p1", "highest_period_p1"), ("hp_p2", "highest_period_p2"),
+                ("hp_p3", "highest_period_p3"), ("hp_tie", "highest_period_tie"),
+            ):
+                val = odds.get(prop_key)
+                if val:
+                    setattr(event, attr, val)
             if event.home_abbr and event.away_abbr:
                 events.append(_validate_event(event))
             else:
@@ -1338,19 +1431,6 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
 
     except Exception as exc:
         logger.warning("FanDuel parse error: %s", exc)
-
-    # Log prop coverage
-    prop_events = [e for e in events if e.btts_yes or e.overtime_yes]
-    if prop_events:
-        for pe in prop_events:
-            logger.info(
-                "FanDuel prop: %s@%s BTTS=%s/%s OT=%s/%s",
-                pe.away_abbr, pe.home_abbr,
-                pe.btts_yes or "-", pe.btts_no or "-",
-                pe.overtime_yes or "-", pe.overtime_no or "-",
-            )
-    else:
-        logger.info("FanDuel: no BTTS/OT props found in %d events", len(events))
 
     logger.info(
         "FanDuel: fetched odds for %d events (from %d raw events)",
@@ -1958,6 +2038,106 @@ async def _fetch_bovada(client: httpx.AsyncClient) -> List[OddsEvent]:
                                 elif "no" in oc_desc:
                                     odds["ot_no"] = odds_val
 
+                        # First Goal Scorer (team level: which team scores first)
+                        elif ("first" in market_desc and "goal" in market_desc) or "score first" in market_desc:
+                            for oc in outcomes:
+                                price_data = oc.get("price", {})
+                                if not isinstance(price_data, dict):
+                                    continue
+                                american_str = price_data.get("american", "")
+                                try:
+                                    odds_val = float(str(american_str).replace("+", ""))
+                                except (ValueError, TypeError):
+                                    continue
+                                oc_type = (oc.get("type", "") or "").upper()
+                                if oc_type == "H":
+                                    odds["fg_home"] = odds_val
+                                elif oc_type == "A":
+                                    odds["fg_away"] = odds_val
+
+                        # Odd/Even Total Goals
+                        elif "odd" in market_desc and "even" in market_desc:
+                            for oc in outcomes:
+                                price_data = oc.get("price", {})
+                                if not isinstance(price_data, dict):
+                                    continue
+                                american_str = price_data.get("american", "")
+                                try:
+                                    odds_val = float(str(american_str).replace("+", ""))
+                                except (ValueError, TypeError):
+                                    continue
+                                oc_desc = (oc.get("description", "") or "").lower()
+                                if "odd" in oc_desc:
+                                    odds["total_odd"] = odds_val
+                                elif "even" in oc_desc:
+                                    odds["total_even"] = odds_val
+
+                        # Regulation Winner (3-way: excludes OT)
+                        elif ("regulation" in market_desc or "60 min" in market_desc) and "winner" in market_desc:
+                            for oc in outcomes:
+                                price_data = oc.get("price", {})
+                                if not isinstance(price_data, dict):
+                                    continue
+                                american_str = price_data.get("american", "")
+                                try:
+                                    odds_val = float(str(american_str).replace("+", ""))
+                                except (ValueError, TypeError):
+                                    continue
+                                oc_type = (oc.get("type", "") or "").upper()
+                                oc_desc = (oc.get("description", "") or "").lower()
+                                if oc_type == "H":
+                                    odds["reg_home"] = odds_val
+                                elif oc_type == "A":
+                                    odds["reg_away"] = odds_val
+                                elif oc_type == "D" or "draw" in oc_desc or "tie" in oc_desc:
+                                    odds["reg_draw"] = odds_val
+
+                        # Team Total Goals (individual team O/U)
+                        elif "team total" in market_desc or (
+                            "total" in market_desc
+                            and any(t in market_desc for t in (home_name.lower(), away_name.lower()))
+                        ):
+                            is_home_tt = home_name.lower() in market_desc
+                            for oc in outcomes:
+                                price_data = oc.get("price", {})
+                                if not isinstance(price_data, dict):
+                                    continue
+                                american_str = price_data.get("american", "")
+                                handicap_str = price_data.get("handicap", "0")
+                                try:
+                                    odds_val = float(str(american_str).replace("+", ""))
+                                    line_val = float(handicap_str)
+                                except (ValueError, TypeError):
+                                    continue
+                                oc_type = (oc.get("type", "") or "").upper()
+                                prefix = "home_tt" if is_home_tt else "away_tt"
+                                odds[f"{prefix}_line"] = line_val
+                                if oc_type == "O":
+                                    odds[f"{prefix}_over"] = odds_val
+                                elif oc_type == "U":
+                                    odds[f"{prefix}_under"] = odds_val
+
+                        # Highest Scoring Period
+                        elif "highest scoring" in market_desc or "most goals" in market_desc:
+                            for oc in outcomes:
+                                price_data = oc.get("price", {})
+                                if not isinstance(price_data, dict):
+                                    continue
+                                american_str = price_data.get("american", "")
+                                try:
+                                    odds_val = float(str(american_str).replace("+", ""))
+                                except (ValueError, TypeError):
+                                    continue
+                                oc_desc = (oc.get("description", "") or "").lower()
+                                if "1st" in oc_desc or "first" in oc_desc:
+                                    odds["hp_p1"] = odds_val
+                                elif "2nd" in oc_desc or "second" in oc_desc:
+                                    odds["hp_p2"] = odds_val
+                                elif "3rd" in oc_desc or "third" in oc_desc:
+                                    odds["hp_p3"] = odds_val
+                                elif "tie" in oc_desc or "equal" in oc_desc or "draw" in oc_desc:
+                                    odds["hp_tie"] = odds_val
+
                 # ---- Fix Bovada spread home/away inversion ----
                 # Bovada's "H"/"A" type on spread outcomes sometimes
                 # assigns the handicap to the wrong side.  The moneyline
@@ -2052,6 +2232,40 @@ async def _fetch_bovada(client: httpx.AsyncClient) -> List[OddsEvent]:
                     event.overtime_yes = odds["ot_yes"]
                 if odds.get("ot_no"):
                     event.overtime_no = odds["ot_no"]
+                if odds.get("fg_home"):
+                    event.first_goal_home = odds["fg_home"]
+                if odds.get("fg_away"):
+                    event.first_goal_away = odds["fg_away"]
+                if odds.get("total_odd"):
+                    event.total_odd = odds["total_odd"]
+                if odds.get("total_even"):
+                    event.total_even = odds["total_even"]
+                if odds.get("reg_home"):
+                    event.reg_home_ml = odds["reg_home"]
+                if odds.get("reg_away"):
+                    event.reg_away_ml = odds["reg_away"]
+                if odds.get("reg_draw"):
+                    event.reg_draw_price = odds["reg_draw"]
+                if odds.get("home_tt_line"):
+                    event.home_team_total_line = odds["home_tt_line"]
+                if odds.get("home_tt_over"):
+                    event.home_team_over = odds["home_tt_over"]
+                if odds.get("home_tt_under"):
+                    event.home_team_under = odds["home_tt_under"]
+                if odds.get("away_tt_line"):
+                    event.away_team_total_line = odds["away_tt_line"]
+                if odds.get("away_tt_over"):
+                    event.away_team_over = odds["away_tt_over"]
+                if odds.get("away_tt_under"):
+                    event.away_team_under = odds["away_tt_under"]
+                if odds.get("hp_p1"):
+                    event.highest_period_p1 = odds["hp_p1"]
+                if odds.get("hp_p2"):
+                    event.highest_period_p2 = odds["hp_p2"]
+                if odds.get("hp_p3"):
+                    event.highest_period_p3 = odds["hp_p3"]
+                if odds.get("hp_tie"):
+                    event.highest_period_tie = odds["hp_tie"]
                 if event.home_abbr and event.away_abbr:
                     events.append(_validate_event(event))
                 else:

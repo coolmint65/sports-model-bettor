@@ -288,6 +288,8 @@ const MARKET_BET_TYPES = new Set(['ml', 'total', 'spread']);
 
 function PredictionsTab({ game }) {
   const predictions = game.predictions || game.bets || [];
+  const homeAbbr = teamAbbrev(game.home_team || game.home_team_form);
+  const awayAbbr = teamAbbrev(game.away_team || game.away_team_form);
 
   if (predictions.length === 0) {
     return (
@@ -322,7 +324,7 @@ function PredictionsTab({ game }) {
           </h3>
           <div className="predictions-list">
             {topPicks.map((pred, index) => (
-              <PredictionCard key={pred.id || index} prediction={pred} />
+              <PredictionCard key={pred.id || index} prediction={pred} homeAbbr={homeAbbr} awayAbbr={awayAbbr} />
             ))}
           </div>
         </div>
@@ -340,7 +342,7 @@ function PredictionsTab({ game }) {
           </p>
           <div className="predictions-list">
             {heavyJuice.map((pred, index) => (
-              <PredictionCard key={pred.id || index} prediction={pred} isFallback />
+              <PredictionCard key={pred.id || index} prediction={pred} isFallback homeAbbr={homeAbbr} awayAbbr={awayAbbr} />
             ))}
           </div>
         </div>
@@ -359,7 +361,7 @@ function PredictionsTab({ game }) {
           </p>
           <div className="predictions-list">
             {otherMarket.map((pred, index) => (
-              <PredictionCard key={pred.id || index} prediction={pred} />
+              <PredictionCard key={pred.id || index} prediction={pred} homeAbbr={homeAbbr} awayAbbr={awayAbbr} />
             ))}
           </div>
         </div>
@@ -373,7 +375,7 @@ function PredictionsTab({ game }) {
           </h3>
           <div className="predictions-list">
             {props.map((pred, index) => (
-              <PredictionCard key={pred.id || index} prediction={pred} compact />
+              <PredictionCard key={pred.id || index} prediction={pred} compact homeAbbr={homeAbbr} awayAbbr={awayAbbr} />
             ))}
           </div>
         </div>
