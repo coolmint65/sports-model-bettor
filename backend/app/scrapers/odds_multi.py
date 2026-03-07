@@ -420,9 +420,8 @@ async def _make_request(
                             _log_url, wait, attempt + 1, max_retries)
                 await asyncio.sleep(wait)
                 continue
-            # Log body for non-200 responses (often contains error message)
-            body = resp.text[:200] if resp.text else ""
-            logger.warning("HTTP %d from %s: %s", resp.status_code, _log_url, body)
+            # Log non-200 without dumping raw HTML into the console.
+            logger.warning("HTTP %d from %s", resp.status_code, _log_url)
             return None
         except httpx.TimeoutException:
             logger.warning("Timeout (%.0fs) for %s", timeout, _log_url)
@@ -458,12 +457,12 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
 
     # DraftKings NHL event group ID: 42133
     # Try multiple endpoint variants (DK changes these periodically)
+    # Primary + two fallbacks.  State-specific subdomains frequently 403
+    # from non-US IPs, so keep the list short to reduce log noise.
     urls = [
         "https://sportsbook.draftkings.com/sites/US-SB/api/v5/eventgroups/42133?format=json",
         "https://sportsbook-us-nj.draftkings.com/sites/US-NJ-SB/api/v5/eventgroups/42133?format=json",
-        "https://sportsbook-us-il.draftkings.com/sites/US-IL-SB/api/v5/eventgroups/42133?format=json",
         "https://sportsbook-us-pa.draftkings.com/sites/US-PA-SB/api/v5/eventgroups/42133?format=json",
-        "https://sportsbook-us-co.draftkings.com/sites/US-CO-SB/api/v5/eventgroups/42133?format=json",
     ]
     data = None
     for url in urls:
