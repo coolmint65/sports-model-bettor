@@ -81,10 +81,14 @@ export function formatBetType(betType) {
  * Format a raw prediction_value string into a human-readable label.
  * e.g., "WPG_-1.5" → "WPG -1.5", "over_5.5" → "Over 5.5", "ANA" → "ANA"
  *
+ * When homeAbbr/awayAbbr are provided, "home"/"away" tokens are replaced
+ * with the actual team abbreviation so the UI shows e.g. "CBJ +0.5"
+ * instead of "Away +0.5".
+ *
  * Team abbreviations (2-3 uppercase letters) are kept as-is.
  * Spread signs (+/-) are preserved.
  */
-export function formatPredictionValue(value) {
+export function formatPredictionValue(value, homeAbbr, awayAbbr) {
   if (!value) return 'N/A';
   // Replace underscores with spaces
   let formatted = value.replace(/_/g, ' ');
@@ -92,6 +96,10 @@ export function formatPredictionValue(value) {
   formatted = formatted
     .split(' ')
     .map((w) => {
+      const lower = w.toLowerCase();
+      // Substitute "home"/"away" with actual team abbreviation when available
+      if (lower === 'home' && homeAbbr) return homeAbbr;
+      if (lower === 'away' && awayAbbr) return awayAbbr;
       // Keep team abbreviations uppercase (2-3 letter all-caps like WPG, ANA, TOR)
       if (/^[A-Z]{2,3}$/.test(w)) return w;
       // Keep period prefixes uppercase (p1, p2, p3)

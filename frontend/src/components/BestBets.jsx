@@ -24,6 +24,8 @@ function BestBetCard({ bet, rank, isFeatured, onTrack, tracked }) {
 
   const awayName = teamName(bet.away_team, 'Away');
   const homeName = teamName(bet.home_team, 'Home');
+  const homeAbbr = teamAbbrev(bet.home_team);
+  const awayAbbr = teamAbbrev(bet.away_team);
 
   const handleClick = () => {
     if (bet.game_id) {
@@ -83,7 +85,7 @@ function BestBetCard({ bet, rank, isFeatured, onTrack, tracked }) {
         </div>
 
         <div className="best-bet-selection">
-          {bet.line_display || formatPredictionValue(bet.prediction_value || bet.pick || bet.selection)}
+          {bet.line_display || formatPredictionValue(bet.prediction_value || bet.pick || bet.selection, homeAbbr, awayAbbr)}
         </div>
 
         <div className="best-bet-metrics">

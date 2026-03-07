@@ -1,5 +1,5 @@
 import { Target, TrendingUp, Star, CheckCircle, XCircle, AlertCircle, AlertTriangle } from 'lucide-react';
-import { confidencePct, formatBetType, formatPredictionValue } from '../utils/teams';
+import { confidencePct, formatBetType, formatPredictionValue, teamAbbrev } from '../utils/teams';
 import { getConfidenceColor } from '../utils/formatting';
 
 function getConfidenceLabel(confidence) {
@@ -21,7 +21,7 @@ function getOutcomeIcon(outcome) {
   return <AlertCircle size={16} className="outcome-push" />;
 }
 
-function PredictionCard({ prediction, showGame = false, compact = false, isFallback = false }) {
+function PredictionCard({ prediction, showGame = false, compact = false, isFallback = false, homeAbbr, awayAbbr }) {
   const confidence = confidencePct(prediction.confidence);
   const edge = confidencePct(prediction.edge);
   const confColor = isFallback ? '#ff9800' : getConfidenceColor(confidence);
@@ -29,7 +29,10 @@ function PredictionCard({ prediction, showGame = false, compact = false, isFallb
   const isBestBet = prediction.is_best_bet || prediction.best_bet || false;
   const outcome = prediction.outcome || prediction.result || null;
   const betType = formatBetType(prediction.bet_type || prediction.type);
-  const pick = formatPredictionValue(prediction.prediction_value || prediction.pick || prediction.selection);
+  // Use provided abbreviations, or derive from prediction's team objects
+  const hAbbr = homeAbbr || teamAbbrev(prediction.home_team, null);
+  const aAbbr = awayAbbr || teamAbbrev(prediction.away_team, null);
+  const pick = formatPredictionValue(prediction.prediction_value || prediction.pick || prediction.selection, hAbbr, aAbbr);
   const reasoning = prediction.reasoning || prediction.reason || prediction.analysis || '';
 
   const cardClasses = [
