@@ -929,11 +929,77 @@ class FeatureEngine:
             else:
                 break
 
+        # ---- Lookahead/letdown detection ----
+        is_lookahead = False
+        is_letdown = False
+
+        # Check next game: if it's a divisional matchup, this game may
+        # see reduced effort (lookahead spot).
+        from datetime import timedelta as _td
+        next_stmt = (
+            select(Game)
+            .where(
+                and_(
+                    or_(
+                        Game.home_team_id == team_id,
+                        Game.away_team_id == team_id,
+                    ),
+                    Game.date > game_date,
+                    Game.date <= game_date + _td(days=3),
+                )
+            )
+            .order_by(Game.date)
+            .limit(1)
+        )
+        next_result = await db.execute(next_stmt)
+        next_game = next_result.scalars().first()
+
+        if next_game:
+            next_opp_id = (
+                next_game.away_team_id
+                if next_game.home_team_id == team_id
+                else next_game.home_team_id
+            )
+            team_obj = await self._get_team(db, team_id)
+            next_opp_obj = await self._get_team(db, next_opp_id)
+            if team_obj and next_opp_obj:
+                if (
+                    team_obj.division
+                    and next_opp_obj.division
+                    and team_obj.division == next_opp_obj.division
+                ):
+                    is_lookahead = True
+
+        # Letdown: previous game was an OT divisional battle
+        if recent_games:
+            prev = recent_games[0]
+            prev_opp_id = (
+                prev.away_team_id
+                if prev.home_team_id == team_id
+                else prev.home_team_id
+            )
+            team_obj_ld = await self._get_team(db, team_id)
+            prev_opp_obj = await self._get_team(db, prev_opp_id)
+            if team_obj_ld and prev_opp_obj:
+                was_divisional = (
+                    team_obj_ld.division
+                    and prev_opp_obj.division
+                    and team_obj_ld.division == prev_opp_obj.division
+                )
+                if was_divisional and prev.went_to_overtime:
+                    is_letdown = True
+
+        # Travel disadvantage: extended road trips
+        is_travel_disadvantage = consecutive_road >= 3
+
         return {
             "is_back_to_back": is_b2b,
             "days_rest": days_rest,
             "games_last_7": games_last_7,
             "consecutive_road_games": consecutive_road,
+            "is_lookahead": is_lookahead,
+            "is_letdown": is_letdown,
+            "is_travel_disadvantage": is_travel_disadvantage,
         }
 
     # ------------------------------------------------------------------ #
@@ -1050,6 +1116,24 @@ class FeatureEngine:
             db, home_id, away_id
         )
 
+        # Divisional matchup detection (affects total scoring tendencies)
+        is_divisional = False
+        if home_team and away_team:
+            is_divisional = (
+                home_team.division is not None
+                and away_team.division is not None
+                and home_team.division == away_team.division
+            )
+
+        # Conference mismatch for travel (west vs east)
+        is_cross_conference = False
+        if home_team and away_team:
+            is_cross_conference = (
+                home_team.conference is not None
+                and away_team.conference is not None
+                and home_team.conference != away_team.conference
+            )
+
         features = {
             # Game metadata
             "game_id": game.id,
@@ -1111,6 +1195,9 @@ class FeatureEngine:
             "away_player_matchup": away_player_matchup,
             # Team matchup profile (scoring tendencies between these teams)
             "team_matchup": team_matchup,
+            # Schedule spot / situational awareness
+            "is_divisional": is_divisional,
+            "is_cross_conference": is_cross_conference,
         }
 
         return features

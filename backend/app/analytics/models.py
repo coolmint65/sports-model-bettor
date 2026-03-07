@@ -147,11 +147,14 @@ class BettingModel:
 
         # ---- Defensive adjustments (opponent quality) ----
         # Home team faces away goalie/defense; away team faces home goalie/defense
+        # Blend goals-against with shots-against for more stable defense ratings.
         home_def_factor = self._defensive_factor(
-            features["home_season"]["goals_against_pg"]
+            features["home_season"]["goals_against_pg"],
+            features["home_season"].get("shots_against_pg", 0.0),
         )
         away_def_factor = self._defensive_factor(
-            features["away_season"]["goals_against_pg"]
+            features["away_season"]["goals_against_pg"],
+            features["away_season"].get("shots_against_pg", 0.0),
         )
 
         # Home team expected goals = home offense * away defensive weakness
@@ -278,6 +281,30 @@ class BettingModel:
             road_penalty = (away_road_games - _mc.road_trip_fatigue_threshold) * _mc.road_trip_fatigue_per_game
             away_xg -= min(road_penalty, 0.10)
 
+        # ---- Schedule spot / situational awareness ----
+        # Lookahead: team playing a weak opponent before a divisional rival
+        # tends to underperform (saving energy for the big game).
+        if home_schedule.get("is_lookahead", False):
+            home_xg -= _mc.lookahead_penalty
+        if away_schedule.get("is_lookahead", False):
+            away_xg -= _mc.lookahead_penalty
+
+        # Letdown: team coming off a hard-fought divisional OT game
+        if home_schedule.get("is_letdown", False):
+            home_xg -= _mc.lookahead_penalty * 0.75
+        if away_schedule.get("is_letdown", False):
+            away_xg -= _mc.lookahead_penalty * 0.75
+
+        # Divisional games tend to be tighter / go under
+        if features.get("is_divisional", False):
+            home_xg -= _mc.divisional_under_adj
+            away_xg -= _mc.divisional_under_adj
+
+        # Cross-conference travel (away team faces timezone disadvantage)
+        if features.get("is_cross_conference", False):
+            if away_schedule.get("is_travel_disadvantage", False):
+                away_xg -= _mc.timezone_penalty
+
         # ---- Special teams matchup adjustment ----
         # PP efficiency vs opponent PK, and vice versa.
         home_special = features.get("home_special_teams", {})
@@ -294,6 +321,33 @@ class BettingModel:
 
             home_xg += home_pp_advantage * SPECIAL_TEAMS_FACTOR
             away_xg += away_pp_advantage * SPECIAL_TEAMS_FACTOR
+
+        # ---- Period-specific scoring rate adjustment ----
+        # Teams with strong/weak period tendencies should have xG adjusted.
+        # A team that scores heavily in P1 but collapses in P3 has different
+        # value than raw goals-per-game suggests.
+        home_periods = features.get("home_periods", {})
+        away_periods = features.get("away_periods", {})
+        league_period_avg = self.league_avg / 3.0  # ~1.02 per period
+
+        if home_periods.get("games_found", 0) >= 10:
+            # Sum of period averages vs expected (league_avg)
+            home_period_total = (
+                home_periods.get("avg_p1_for", league_period_avg)
+                + home_periods.get("avg_p2_for", league_period_avg)
+                + home_periods.get("avg_p3_for", league_period_avg)
+            )
+            period_dev = home_period_total - self.league_avg
+            home_xg += period_dev * _mc.period_scoring_factor
+
+        if away_periods.get("games_found", 0) >= 10:
+            away_period_total = (
+                away_periods.get("avg_p1_for", league_period_avg)
+                + away_periods.get("avg_p2_for", league_period_avg)
+                + away_periods.get("avg_p3_for", league_period_avg)
+            )
+            period_dev = away_period_total - self.league_avg
+            away_xg += period_dev * _mc.period_scoring_factor
 
         # ---- Regression toward league average ----
         # Hot-streak form weights and weak-opponent defensive factors can
@@ -322,20 +376,38 @@ class BettingModel:
             + WEIGHT_SEASON * season
         )
 
-    def _defensive_factor(self, goals_against_pg: float) -> float:
+    def _defensive_factor(
+        self,
+        goals_against_pg: float,
+        shots_against_pg: float = 0.0,
+    ) -> float:
         """
-        Calculate a defensive quality factor.
+        Calculate a defensive quality factor blending goals-against with
+        shots-against for more stability.
 
         A team that allows more than league average has a factor > 1.0
         (making the opponent's xG higher), and vice versa.
 
-        The raw ratio is regressed 40% toward 1.0 to prevent compounding
-        when combined with form-weighted offense (which can already be
-        elevated during hot streaks).
+        Pure goals-against is noisy (small sample, goalie variance).
+        Blending in shots-against captures defensive structure (shot
+        suppression) which is more repeatable.
+
+        The blended ratio is regressed toward 1.0 to prevent compounding
+        when combined with form-weighted offense.
         """
         if self.league_avg == 0:
             return 1.0
-        raw = goals_against_pg / self.league_avg
+
+        ga_ratio = goals_against_pg / self.league_avg
+
+        # Blend in shots-against if available
+        shot_blend = _mc.defense_shot_blend
+        if shots_against_pg > 0 and shot_blend > 0:
+            sa_ratio = shots_against_pg / _mc.league_avg_shots_against
+            raw = ga_ratio * (1.0 - shot_blend) + sa_ratio * shot_blend
+        else:
+            raw = ga_ratio
+
         # Regress toward 1.0 using the configured regression factor
         return 1.0 + (raw - 1.0) * _mc.defensive_regression
 
@@ -387,20 +459,48 @@ class BettingModel:
         home_xg: float,
         away_xg: float,
         max_goals: int = POISSON_MAX_GOALS,
+        correlation: float | None = None,
     ) -> List[List[float]]:
         """
-        Build a joint probability matrix for (home_goals, away_goals).
+        Build a joint probability matrix for (home_goals, away_goals)
+        using a bivariate Poisson model.
 
-        Returns a (max_goals+1) x (max_goals+1) matrix where entry [i][j]
-        is P(home scores i goals AND away scores j goals).
+        The bivariate Poisson adds a shared "game pace" component (lambda_c)
+        that models the correlation between home and away scoring. In
+        high-event games (bad goaltending, fast pace), both teams tend to
+        score more. This improves total goals predictions specifically.
+
+        When correlation=0, this reduces to independent Poisson.
+
+        The model decomposes:
+          home_goals = X + Z,  away_goals = Y + Z
+        where X ~ Poisson(lam_h - lam_c), Y ~ Poisson(lam_a - lam_c),
+        Z ~ Poisson(lam_c), and all are independent.
+
+        P(home=i, away=j) = sum_{k=0}^{min(i,j)} P(X=i-k)*P(Y=j-k)*P(Z=k)
         """
-        matrix = []
+        if correlation is None:
+            correlation = _mc.scoring_correlation
+
+        # Clamp correlation so individual lambdas stay positive
+        lam_c = min(correlation, home_xg * 0.95, away_xg * 0.95)
+        lam_c = max(lam_c, 0.0)
+
+        lam_h = home_xg - lam_c
+        lam_a = away_xg - lam_c
+
+        # Precompute marginal PMFs
+        pmf_h = [float(poisson.pmf(k, lam_h)) for k in range(max_goals + 1)]
+        pmf_a = [float(poisson.pmf(k, lam_a)) for k in range(max_goals + 1)]
+        pmf_c = [float(poisson.pmf(k, lam_c)) for k in range(max_goals + 1)]
+
+        matrix = [[0.0] * (max_goals + 1) for _ in range(max_goals + 1)]
         for i in range(max_goals + 1):
-            row = []
             for j in range(max_goals + 1):
-                p = self._poisson_prob(home_xg, i) * self._poisson_prob(away_xg, j)
-                row.append(p)
-            matrix.append(row)
+                p = 0.0
+                for k in range(min(i, j) + 1):
+                    p += pmf_h[i - k] * pmf_a[j - k] * pmf_c[k]
+                matrix[i][j] = p
         return matrix
 
     # ------------------------------------------------------------------ #
@@ -707,6 +807,39 @@ class BettingModel:
         # Scale to remaining time
         rem_home = max(home_xg * remaining, 0.05)
         rem_away = max(away_xg * remaining, 0.05)
+
+        # ---- Score state tendencies ----
+        # NHL teams play differently based on the score state.
+        score_diff = home_score - away_score  # positive = home leads
+
+        if period >= 3 and remaining < 0.35:
+            if score_diff == -1:
+                # Home trailing by 1 in 3rd: desperation scoring boost
+                rem_home *= (1.0 + _mc.trailing_desperation_boost)
+                rem_away *= (1.0 - _mc.leading_shell_reduction * 0.5)
+            elif score_diff == 1:
+                # Home leading by 1 in 3rd: opponent desperation
+                rem_away *= (1.0 + _mc.trailing_desperation_boost)
+                rem_home *= (1.0 - _mc.leading_shell_reduction * 0.5)
+            elif score_diff <= -2:
+                # Home trailing by 2+ in 3rd: pulled goalie territory
+                if remaining < 0.10:  # last ~3.5 minutes
+                    rem_home *= (1.0 + _mc.pulled_goalie_boost)
+                    rem_away *= (1.0 + _mc.pulled_goalie_boost * 0.3)  # empty net goals
+                else:
+                    rem_home *= (1.0 + _mc.trailing_desperation_boost * 0.7)
+            elif score_diff >= 2:
+                # Home leading by 2+: conservative play, games go under
+                rem_home *= (1.0 - _mc.leading_shell_reduction)
+                rem_away *= (1.0 - _mc.leading_shell_reduction * 0.5)
+                if remaining < 0.10:
+                    # Opponent may pull goalie
+                    rem_away *= (1.0 + _mc.pulled_goalie_boost)
+                    rem_home *= (1.0 + _mc.pulled_goalie_boost * 0.3)
+
+        # Ensure minimums
+        rem_home = max(rem_home, 0.05)
+        rem_away = max(rem_away, 0.05)
 
         # Poisson matrix for *remaining* goals only
         matrix = self._score_matrix(rem_home, rem_away)

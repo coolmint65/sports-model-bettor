@@ -107,6 +107,27 @@ class ModelConfig(BaseModel):
     defensive_regression: float = 0.60
     mean_regression: float = 0.20
 
+    # Defense factor: blend goals-against with shots-against for stability.
+    # 0.0 = pure goals-against, 1.0 = pure shots-against.
+    defense_shot_blend: float = 0.35
+    league_avg_shots_against: float = 30.0
+
+    # Bivariate Poisson correlation parameter (0 = independent, higher = more correlated)
+    scoring_correlation: float = 0.12
+
+    # Period-specific scoring weights (how much period tendencies adjust xG)
+    period_scoring_factor: float = 0.08
+
+    # Schedule spot / situational awareness
+    lookahead_penalty: float = 0.08       # playing a weak team before a rival
+    divisional_under_adj: float = 0.06    # divisional games tend to go under
+    timezone_penalty: float = 0.06        # west coast team playing east coast afternoon
+
+    # Score state tendencies (live model)
+    trailing_desperation_boost: float = 0.25   # trailing by 1 in 3rd, boost scoring rate
+    leading_shell_reduction: float = 0.20      # leading by 2+, reduce scoring rate
+    pulled_goalie_boost: float = 0.40          # pulled goalie xG boost for trailing team
+
     # xG bounds
     xg_floor: float = 1.8
     xg_ceiling: float = 3.8

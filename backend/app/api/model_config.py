@@ -127,3 +127,42 @@ async def reset_model_config() -> Dict[str, Any]:
         "status": "reset",
         "config": await get_model_config(),
     }
+
+
+@router.get("/model/backtest")
+async def backtest_current(
+    days_back: int = 90,
+    limit: int = 200,
+) -> Dict[str, Any]:
+    """Run a backtest with the current model parameters.
+
+    Evaluates predictions against historical completed games and reports
+    hit rate, ROI, and log-loss metrics.
+    """
+    from app.analytics.backtest import run_backtest_api
+    from app.database import get_session_context
+
+    async with get_session_context() as db:
+        return await run_backtest_api(db, days_back=days_back, limit=limit)
+
+
+@router.post("/model/grid-search")
+async def grid_search(
+    days_back: int = 90,
+    limit: int = 200,
+    quick: bool = True,
+) -> Dict[str, Any]:
+    """Run a grid search to find optimal parameters.
+
+    Tests combinations of key model parameters against historical data.
+    Set quick=false for a more comprehensive (but slower) search.
+
+    Returns the top 5 parameter combinations ranked by log-loss.
+    """
+    from app.analytics.backtest import run_grid_search_api
+    from app.database import get_session_context
+
+    async with get_session_context() as db:
+        return await run_grid_search_api(
+            db, days_back=days_back, limit=limit, quick=quick
+        )
