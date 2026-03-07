@@ -619,12 +619,28 @@ async def _compute_top_props(
 
     max_implied = settings.best_bet_max_implied
 
+    # NHL puck-line ±0.5 is always heavily juiced (~-200 or worse).
+    # _best_price() can pick an outlier that slips past the ceiling,
+    # so block these unconditionally.
+    _ALWAYS_HEAVY = {
+        "period1_spread": {"0.5", "-0.5", "+0.5"},
+    }
+
+    def _is_always_heavy(p: Prediction) -> bool:
+        lines = _ALWAYS_HEAVY.get(p.bet_type)
+        if not lines or not p.prediction_value:
+            return False
+        # prediction_value is e.g. "home_-0.5" or "away_+0.5"
+        line_part = p.prediction_value.rsplit("_", 1)[-1]
+        return line_part in lines
+
     # --- Tier 1: props with real odds AND positive edge ---
     tier1 = [
         p for p in deduped
         if effective_impl.get(p.id) is not None
         and (effective_edge.get(p.id) or 0) > 0
         and not is_heavy_juice(effective_impl.get(p.id), max_implied)
+        and not _is_always_heavy(p)
     ]
     for pred in sorted(
         tier1,
@@ -651,6 +667,7 @@ async def _compute_top_props(
             if p.game_id in still_missing
             and effective_impl.get(p.id) is not None
             and not is_heavy_juice(effective_impl.get(p.id), max_implied)
+            and not _is_always_heavy(p)
         ]
         for pred in sorted(
             tier2,
@@ -698,6 +715,9 @@ async def _compute_top_props(
                 # Skip spread-type props with no odds — juice can't be
                 # verified and these are frequently heavy favorites.
                 if pred.bet_type in _JUICE_RISK_TYPES and t3_impl is None:
+                    continue
+                # Block puck-line ±0.5 unconditionally
+                if _is_always_heavy(pred):
                     continue
                 top_props[pred.game_id] = GameTopPick(
                     bet_type=pred.bet_type,
