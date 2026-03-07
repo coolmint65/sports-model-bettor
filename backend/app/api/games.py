@@ -585,13 +585,17 @@ async def _get_game_predictions(
         )
         # A pick that meets edge/confidence thresholds AND has acceptable
         # juice should be treated as recommended regardless of stale flag.
+        # Always enforce the juice ceiling using fresh odds — a prop may
+        # have been flagged recommended when odds were unavailable.
         effectively_recommended = (
-            p.recommended
-            or (
-                (p.confidence or 0) >= min_conf
-                and (p.edge or 0) >= min_edge
-                and not is_heavy_juice(cur_impl, max_implied)
+            (
+                p.recommended
+                or (
+                    (p.confidence or 0) >= min_conf
+                    and (p.edge or 0) >= min_edge
+                )
             )
+            and not is_heavy_juice(cur_impl, max_implied)
         )
         briefs.append(
             GamePredictionBrief(
