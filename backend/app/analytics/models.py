@@ -1198,6 +1198,8 @@ class BettingModel:
 
             for alt in all_spread_lines_data:
                 lv = alt.get("line", 1.5)
+                if lv < 1.5:
+                    continue  # NHL puck lines below ±1.5 don't exist
                 alt_hp = alt.get("home_price", -110)
                 alt_ap = alt.get("away_price", -110)
 

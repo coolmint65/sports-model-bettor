@@ -2701,6 +2701,7 @@ def _merge_odds_events(
             }
             for abs_lv, prices in all_spreads_map.items()
             if prices["home_price"] > -999 and prices["away_price"] > -999
+            and abs_lv >= 1.5  # NHL puck lines below ±1.5 don't exist
         ], key=lambda x: x["line"])
 
         all_spread_lines = validate_alt_spreads_monotonicity(

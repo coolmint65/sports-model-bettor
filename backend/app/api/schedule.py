@@ -329,11 +329,19 @@ async def _compute_top_picks(
     # Compute fresh implied prob for heavy-juice detection only.
     # Ranking uses the stored (snapshot) edge/implied_prob so that
     # the top pick doesn't flip every time live odds shift.
+    #
+    # When prefer_live=False (/today endpoint), use ONLY the stored
+    # snapshot implied prob.  Using live odds would cause valid prematch
+    # recommendations to vanish once a game goes live and the line moves
+    # to heavy juice (e.g., prematch -130 → live -400).
     fresh_map: dict[int, Optional[float]] = {}
     for p in all_preds:
-        game_obj = game_by_id.get(p.game_id)
-        fresh = fresh_implied_prob(p, game_obj)
-        fresh_map[p.id] = fresh if fresh is not None else p.odds_implied_prob
+        if prefer_live:
+            game_obj = game_by_id.get(p.game_id)
+            fresh = fresh_implied_prob(p, game_obj)
+            fresh_map[p.id] = fresh if fresh is not None else p.odds_implied_prob
+        else:
+            fresh_map[p.id] = p.odds_implied_prob
 
     # --- Tier 1: best-bet criteria (edge + confidence) ---
     tier1 = [
