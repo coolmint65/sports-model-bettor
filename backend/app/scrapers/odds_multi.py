@@ -28,6 +28,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.constants import PERIOD_KEY_MAP, PERIOD_ODDS_FIELDS, SCRAPER_HEADERS
 from app.models.game import Game
 from app.models.team import Team
 
@@ -192,19 +193,10 @@ class OddsEvent:
         "first_goal_home", "first_goal_away",
         "overtime_yes", "overtime_no",
         "total_odd", "total_even",
-        "p1_total_line", "p1_over_price", "p1_under_price",
-        "p1_home_ml", "p1_away_ml", "p1_draw_price",
-        # New prop odds (batch 2)
+        # Period odds (p1/p2/p3 x PERIOD_ODDS_FIELDS) — generated from constants
+        *(f"{pk}_{f}" for pk in PERIOD_KEY_MAP for f in PERIOD_ODDS_FIELDS),
+        # P1-only extras
         "p1_btts_yes", "p1_btts_no",
-        "p1_spread_line", "p1_home_spread_price", "p1_away_spread_price",
-        # Period 2 props
-        "p2_total_line", "p2_over_price", "p2_under_price",
-        "p2_home_ml", "p2_away_ml", "p2_draw_price",
-        "p2_spread_line", "p2_home_spread_price", "p2_away_spread_price",
-        # Period 3 props
-        "p3_total_line", "p3_over_price", "p3_under_price",
-        "p3_home_ml", "p3_away_ml", "p3_draw_price",
-        "p3_spread_line", "p3_home_spread_price", "p3_away_spread_price",
         "reg_home_ml", "reg_away_ml", "reg_draw_price",
         "home_team_total_line", "home_team_over", "home_team_under",
         "away_team_total_line", "away_team_over", "away_team_under",
@@ -258,38 +250,13 @@ class OddsEvent:
         self.overtime_no: float = 0.0
         self.total_odd: float = 0.0
         self.total_even: float = 0.0
-        self.p1_total_line: float = 0.0
-        self.p1_over_price: float = 0.0
-        self.p1_under_price: float = 0.0
-        self.p1_home_ml: float = 0.0
-        self.p1_away_ml: float = 0.0
-        self.p1_draw_price: float = 0.0
-        # New props (batch 2)
+        # Period odds defaults (p1/p2/p3 x PERIOD_ODDS_FIELDS)
+        for pk in PERIOD_KEY_MAP:
+            for f in PERIOD_ODDS_FIELDS:
+                setattr(self, f"{pk}_{f}", 0.0)
+        # P1-only extras
         self.p1_btts_yes: float = 0.0
         self.p1_btts_no: float = 0.0
-        self.p1_spread_line: float = 0.0
-        self.p1_home_spread_price: float = 0.0
-        self.p1_away_spread_price: float = 0.0
-        # Period 2 props
-        self.p2_total_line: float = 0.0
-        self.p2_over_price: float = 0.0
-        self.p2_under_price: float = 0.0
-        self.p2_home_ml: float = 0.0
-        self.p2_away_ml: float = 0.0
-        self.p2_draw_price: float = 0.0
-        self.p2_spread_line: float = 0.0
-        self.p2_home_spread_price: float = 0.0
-        self.p2_away_spread_price: float = 0.0
-        # Period 3 props
-        self.p3_total_line: float = 0.0
-        self.p3_over_price: float = 0.0
-        self.p3_under_price: float = 0.0
-        self.p3_home_ml: float = 0.0
-        self.p3_away_ml: float = 0.0
-        self.p3_draw_price: float = 0.0
-        self.p3_spread_line: float = 0.0
-        self.p3_home_spread_price: float = 0.0
-        self.p3_away_spread_price: float = 0.0
         self.reg_home_ml: float = 0.0
         self.reg_away_ml: float = 0.0
         self.reg_draw_price: float = 0.0
@@ -340,37 +307,10 @@ class OddsEvent:
             "overtime_no": self.overtime_no,
             "total_odd": self.total_odd,
             "total_even": self.total_even,
-            "p1_total_line": self.p1_total_line,
-            "p1_over_price": self.p1_over_price,
-            "p1_under_price": self.p1_under_price,
-            "p1_home_ml": self.p1_home_ml,
-            "p1_away_ml": self.p1_away_ml,
-            "p1_draw_price": self.p1_draw_price,
+            # Period odds (p1/p2/p3)
+            **{f"{pk}_{f}": getattr(self, f"{pk}_{f}") for pk in PERIOD_KEY_MAP for f in PERIOD_ODDS_FIELDS},
             "p1_btts_yes": self.p1_btts_yes,
             "p1_btts_no": self.p1_btts_no,
-            "p1_spread_line": self.p1_spread_line,
-            "p1_home_spread_price": self.p1_home_spread_price,
-            "p1_away_spread_price": self.p1_away_spread_price,
-            # Period 2
-            "p2_total_line": self.p2_total_line,
-            "p2_over_price": self.p2_over_price,
-            "p2_under_price": self.p2_under_price,
-            "p2_home_ml": self.p2_home_ml,
-            "p2_away_ml": self.p2_away_ml,
-            "p2_draw_price": self.p2_draw_price,
-            "p2_spread_line": self.p2_spread_line,
-            "p2_home_spread_price": self.p2_home_spread_price,
-            "p2_away_spread_price": self.p2_away_spread_price,
-            # Period 3
-            "p3_total_line": self.p3_total_line,
-            "p3_over_price": self.p3_over_price,
-            "p3_under_price": self.p3_under_price,
-            "p3_home_ml": self.p3_home_ml,
-            "p3_away_ml": self.p3_away_ml,
-            "p3_draw_price": self.p3_draw_price,
-            "p3_spread_line": self.p3_spread_line,
-            "p3_home_spread_price": self.p3_home_spread_price,
-            "p3_away_spread_price": self.p3_away_spread_price,
             "reg_home_ml": self.reg_home_ml,
             "reg_away_ml": self.reg_away_ml,
             "reg_draw_price": self.reg_draw_price,
@@ -508,14 +448,7 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
     """
     events: List[OddsEvent] = []
     headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/131.0.0.0 Safari/537.36"
-        ),
-        "Accept": "application/json",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
+        **SCRAPER_HEADERS,
         "Referer": "https://sportsbook.draftkings.com/",
         "Origin": "https://sportsbook.draftkings.com",
         "Sec-Fetch-Dest": "empty",
@@ -1118,10 +1051,7 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
     FanDuel uses a content-managed page API. NHL event type ID = 7524.
     """
     events: List[OddsEvent] = []
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/json",
-    }
+    headers = SCRAPER_HEADERS
 
     # FanDuel NHL page - try multiple states and page types
     params_variants = [
@@ -1482,16 +1412,7 @@ async def _fetch_kambi(client: httpx.AsyncClient) -> List[OddsEvent]:
     The offering API is publicly accessible and returns odds in decimal format.
     """
     events: List[OddsEvent] = []
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/131.0.0.0 Safari/537.36"
-        ),
-        "Accept": "application/json",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-    }
+    headers = SCRAPER_HEADERS
 
     # Kambi offering API — try one operator+path combo at a time with
     # a delay between attempts to avoid 429 rate-limiting from the CDN.
@@ -1524,7 +1445,7 @@ async def _fetch_kambi(client: httpx.AsyncClient) -> List[OddsEvent]:
     data = None
     for i, (host, path, label) in enumerate(_kambi_combos):
         if i > 0:
-            await asyncio.sleep(1.5)  # rate-limit between attempts
+            await asyncio.sleep(1.0)  # rate-limit between attempts
         url = host + path
         data = await _make_request(client, url, headers=headers, params=params)
         if data and data.get("events"):
@@ -1802,10 +1723,7 @@ async def _fetch_bovada(client: httpx.AsyncClient) -> List[OddsEvent]:
     in a clean, well-structured response.  No API key required.
     """
     events: List[OddsEvent] = []
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/json",
-    }
+    headers = SCRAPER_HEADERS
 
     url = "https://www.bovada.lv/services/sports/event/coupon/events/A/description/hockey/nhl"
     data = await _make_request(client, url, headers=headers)
@@ -3368,39 +3286,20 @@ def _merge_odds_events(
         prop_ot_no = [e.overtime_no for e in ev_list]
         prop_odd = [e.total_odd for e in ev_list]
         prop_even = [e.total_even for e in ev_list]
-        prop_p1_line = [e.p1_total_line for e in ev_list if e.p1_total_line and e.p1_total_line != 0.0]
-        prop_p1_over = [e.p1_over_price for e in ev_list]
-        prop_p1_under = [e.p1_under_price for e in ev_list]
-        prop_p1_home = [e.p1_home_ml for e in ev_list]
-        prop_p1_away = [e.p1_away_ml for e in ev_list]
-        prop_p1_draw = [e.p1_draw_price for e in ev_list]
+        # Collect period odds across sources (p1/p2/p3 x PERIOD_ODDS_FIELDS)
+        _period_vals: Dict[str, list] = {}
+        for pk in PERIOD_KEY_MAP:
+            for f in PERIOD_ODDS_FIELDS:
+                attr = f"{pk}_{f}"
+                is_line = f in ("total_line", "spread_line")
+                _period_vals[attr] = [
+                    getattr(e, attr) for e in ev_list
+                    if not is_line or (getattr(e, attr) and getattr(e, attr) != 0.0)
+                ]
 
-        # New props (batch 2)
+        # P1-only extras
         prop_p1_btts_yes = [e.p1_btts_yes for e in ev_list]
         prop_p1_btts_no = [e.p1_btts_no for e in ev_list]
-        prop_p1_sp_line = [e.p1_spread_line for e in ev_list if e.p1_spread_line and e.p1_spread_line != 0.0]
-        prop_p1_sp_home = [e.p1_home_spread_price for e in ev_list]
-        prop_p1_sp_away = [e.p1_away_spread_price for e in ev_list]
-        # Period 2 props
-        prop_p2_line = [e.p2_total_line for e in ev_list if e.p2_total_line and e.p2_total_line != 0.0]
-        prop_p2_over = [e.p2_over_price for e in ev_list]
-        prop_p2_under = [e.p2_under_price for e in ev_list]
-        prop_p2_home = [e.p2_home_ml for e in ev_list]
-        prop_p2_away = [e.p2_away_ml for e in ev_list]
-        prop_p2_draw = [e.p2_draw_price for e in ev_list]
-        prop_p2_sp_line = [e.p2_spread_line for e in ev_list if e.p2_spread_line and e.p2_spread_line != 0.0]
-        prop_p2_sp_home = [e.p2_home_spread_price for e in ev_list]
-        prop_p2_sp_away = [e.p2_away_spread_price for e in ev_list]
-        # Period 3 props
-        prop_p3_line = [e.p3_total_line for e in ev_list if e.p3_total_line and e.p3_total_line != 0.0]
-        prop_p3_over = [e.p3_over_price for e in ev_list]
-        prop_p3_under = [e.p3_under_price for e in ev_list]
-        prop_p3_home = [e.p3_home_ml for e in ev_list]
-        prop_p3_away = [e.p3_away_ml for e in ev_list]
-        prop_p3_draw = [e.p3_draw_price for e in ev_list]
-        prop_p3_sp_line = [e.p3_spread_line for e in ev_list if e.p3_spread_line and e.p3_spread_line != 0.0]
-        prop_p3_sp_home = [e.p3_home_spread_price for e in ev_list]
-        prop_p3_sp_away = [e.p3_away_spread_price for e in ev_list]
         prop_reg_home = [e.reg_home_ml for e in ev_list]
         prop_reg_away = [e.reg_away_ml for e in ev_list]
         prop_reg_draw = [e.reg_draw_price for e in ev_list]
@@ -3424,38 +3323,19 @@ def _merge_odds_events(
             "overtime_no_price": _best_price(prop_ot_no),
             "total_odd_price": _best_price(prop_odd),
             "total_even_price": _best_price(prop_even),
-            "period1_total_line": round(max(prop_p1_line) * 2) / 2 if prop_p1_line else None,
-            "period1_over_price": _best_price(prop_p1_over),
-            "period1_under_price": _best_price(prop_p1_under),
-            "period1_home_ml": _best_price(prop_p1_home),
-            "period1_away_ml": _best_price(prop_p1_away),
-            "period1_draw_price": _best_price(prop_p1_draw),
-            # Batch 2
+            # Period odds (p1/p2/p3) — generated from constants
+            **{
+                f"{db_prefix}_{f}": (
+                    (round(max(_period_vals[f"{pk}_{f}"]) * 2) / 2)
+                    if f == "total_line" and _period_vals[f"{pk}_{f}"]
+                    else (_period_vals[f"{pk}_{f}"][0] if f == "spread_line" and _period_vals[f"{pk}_{f}"] else _best_price(_period_vals[f"{pk}_{f}"]))
+                )
+                for pk, db_prefix in PERIOD_KEY_MAP.items()
+                for f in PERIOD_ODDS_FIELDS
+            },
+            # P1-only extras
             "period1_btts_yes_price": _best_price(prop_p1_btts_yes),
             "period1_btts_no_price": _best_price(prop_p1_btts_no),
-            "period1_spread_line": prop_p1_sp_line[0] if prop_p1_sp_line else None,
-            "period1_home_spread_price": _best_price(prop_p1_sp_home),
-            "period1_away_spread_price": _best_price(prop_p1_sp_away),
-            # Period 2
-            "period2_total_line": round(max(prop_p2_line) * 2) / 2 if prop_p2_line else None,
-            "period2_over_price": _best_price(prop_p2_over),
-            "period2_under_price": _best_price(prop_p2_under),
-            "period2_home_ml": _best_price(prop_p2_home),
-            "period2_away_ml": _best_price(prop_p2_away),
-            "period2_draw_price": _best_price(prop_p2_draw),
-            "period2_spread_line": prop_p2_sp_line[0] if prop_p2_sp_line else None,
-            "period2_home_spread_price": _best_price(prop_p2_sp_home),
-            "period2_away_spread_price": _best_price(prop_p2_sp_away),
-            # Period 3
-            "period3_total_line": round(max(prop_p3_line) * 2) / 2 if prop_p3_line else None,
-            "period3_over_price": _best_price(prop_p3_over),
-            "period3_under_price": _best_price(prop_p3_under),
-            "period3_home_ml": _best_price(prop_p3_home),
-            "period3_away_ml": _best_price(prop_p3_away),
-            "period3_draw_price": _best_price(prop_p3_draw),
-            "period3_spread_line": prop_p3_sp_line[0] if prop_p3_sp_line else None,
-            "period3_home_spread_price": _best_price(prop_p3_sp_home),
-            "period3_away_spread_price": _best_price(prop_p3_sp_away),
             "regulation_home_price": _best_price(prop_reg_home),
             "regulation_away_price": _best_price(prop_reg_away),
             "regulation_draw_price": _best_price(prop_reg_draw),
@@ -3470,11 +3350,14 @@ def _merge_odds_events(
             "highest_period_p3_price": _best_price(prop_hp_p3),
             "highest_period_tie_price": _best_price(prop_hp_tie),
         }
-        # Use the most common p1 total line across sources
-        if prop_p1_line:
-            best_prop_odds["period1_total_line"] = Counter(
-                round(v * 2) / 2 for v in prop_p1_line
-            ).most_common(1)[0][0]
+        # Consensus lines: use most common value across sources for all periods
+        for pk, db_prefix in PERIOD_KEY_MAP.items():
+            for line_field in ("total_line", "spread_line"):
+                vals = _period_vals[f"{pk}_{line_field}"]
+                if vals:
+                    best_prop_odds[f"{db_prefix}_{line_field}"] = Counter(
+                        round(v * 2) / 2 for v in vals
+                    ).most_common(1)[0][0]
         # Most common team total lines
         if prop_htt_line:
             best_prop_odds["home_team_total_line"] = Counter(
@@ -3483,28 +3366,6 @@ def _merge_odds_events(
         if prop_att_line:
             best_prop_odds["away_team_total_line"] = Counter(
                 round(v * 2) / 2 for v in prop_att_line
-            ).most_common(1)[0][0]
-        if prop_p1_sp_line:
-            best_prop_odds["period1_spread_line"] = Counter(
-                round(v * 2) / 2 for v in prop_p1_sp_line
-            ).most_common(1)[0][0]
-        # Period 2 consensus lines
-        if prop_p2_line:
-            best_prop_odds["period2_total_line"] = Counter(
-                round(v * 2) / 2 for v in prop_p2_line
-            ).most_common(1)[0][0]
-        if prop_p2_sp_line:
-            best_prop_odds["period2_spread_line"] = Counter(
-                round(v * 2) / 2 for v in prop_p2_sp_line
-            ).most_common(1)[0][0]
-        # Period 3 consensus lines
-        if prop_p3_line:
-            best_prop_odds["period3_total_line"] = Counter(
-                round(v * 2) / 2 for v in prop_p3_line
-            ).most_common(1)[0][0]
-        if prop_p3_sp_line:
-            best_prop_odds["period3_spread_line"] = Counter(
-                round(v * 2) / 2 for v in prop_p3_sp_line
             ).most_common(1)[0][0]
 
         # Count how many prop fields were found and log details
@@ -3923,22 +3784,10 @@ class MultiSourceOddsScraper:
                     "first_goal_home_price", "first_goal_away_price",
                     "overtime_yes_price", "overtime_no_price",
                     "total_odd_price", "total_even_price",
-                    "period1_total_line", "period1_over_price", "period1_under_price",
-                    "period1_home_ml", "period1_away_ml", "period1_draw_price",
-                    # Batch 2
+                    # Period odds (all periods)
+                    *(f"{db}_{f}" for db in PERIOD_KEY_MAP.values() for f in PERIOD_ODDS_FIELDS),
+                    # P1-only extras
                     "period1_btts_yes_price", "period1_btts_no_price",
-                    "period1_spread_line", "period1_home_spread_price",
-                    "period1_away_spread_price",
-                    # Period 2
-                    "period2_total_line", "period2_over_price", "period2_under_price",
-                    "period2_home_ml", "period2_away_ml", "period2_draw_price",
-                    "period2_spread_line", "period2_home_spread_price",
-                    "period2_away_spread_price",
-                    # Period 3
-                    "period3_total_line", "period3_over_price", "period3_under_price",
-                    "period3_home_ml", "period3_away_ml", "period3_draw_price",
-                    "period3_spread_line", "period3_home_spread_price",
-                    "period3_away_spread_price",
                     "regulation_home_price", "regulation_away_price",
                     "regulation_draw_price",
                     "home_team_total_line", "home_team_over_price",

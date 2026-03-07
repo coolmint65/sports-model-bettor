@@ -38,6 +38,29 @@ PROP_BET_TYPES = (
     "team_total",
 )
 
+# Period key mapping: short key (used in predictions/OddsEvent) → DB column prefix.
+PERIOD_KEY_MAP = {"p1": "period1", "p2": "period2", "p3": "period3"}
+
+# Per-period odds fields that every period shares.
+# Used to DRY up OddsEvent, Game model, merge pipeline, and features.
+PERIOD_ODDS_FIELDS = (
+    "total_line", "over_price", "under_price",
+    "home_ml", "away_ml", "draw_price",
+    "spread_line", "home_spread_price", "away_spread_price",
+)
+
+# Shared browser headers for sportsbook scraping.
+SCRAPER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/131.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+}
+
 
 def composite_pick_score(
     confidence: float | None,

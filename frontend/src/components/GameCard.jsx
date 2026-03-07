@@ -427,11 +427,11 @@ function GameCard({ game }) {
       {/* Footer: Top Pick or Venue + Confidence + Outcome */}
       <div className="game-card-footer">
         {topPick ? (
-          <div className={`game-top-pick ${(topPick.is_fallback || topPick.heavy_juice) ? 'top-pick-fallback' : ''} ${topPick.outcome ? `pick-${topPick.outcome}` : ''}`}>
-            {(topPick.is_fallback || topPick.heavy_juice) ? <AlertTriangle size={12} /> : <Target size={12} />}
+          <div className={`game-top-pick ${topPick.is_fallback ? 'top-pick-fallback' : ''} ${topPick.outcome ? `pick-${topPick.outcome}` : ''}`}>
+            {topPick.is_fallback ? <AlertTriangle size={12} /> : <Target size={12} />}
             <span className="top-pick-type">{formatBetType(topPick.bet_type)}</span>
             <span className="top-pick-value">{formatPredictionValue(topPick.prediction_value)}</span>
-            {(topPick.heavy_juice || topPick.is_fallback) && <span className="top-pick-fallback-label">Heavy Juice</span>}
+            {topPick.is_fallback && <span className="top-pick-fallback-label">Fallback</span>}
           </div>
         ) : venue ? (
           <div className="game-venue">
@@ -445,7 +445,7 @@ function GameCard({ game }) {
               <TrendingUp size={12} />
               <span
                 className="confidence-text"
-                style={{ color: (topPick?.is_fallback || topPick?.heavy_juice) ? '#ff9800' : getConfidenceColor(confidence) }}
+                style={{ color: topPick?.is_fallback ? '#ff9800' : getConfidenceColor(confidence) }}
               >
                 {confidence.toFixed(0)}%
               </span>

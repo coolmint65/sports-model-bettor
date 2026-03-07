@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import and_, case, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.constants import PERIOD_KEY_MAP, PERIOD_ODDS_FIELDS
 from app.models.game import Game, GameGoalieStats, GamePlayerStats, HeadToHead
 from app.models.player import GoalieStats, Player, PlayerStats
 from app.models.team import Team, TeamStats
@@ -957,38 +958,12 @@ class FeatureEngine:
                 "overtime_no_price": getattr(game, "overtime_no_price", None),
                 "total_odd_price": getattr(game, "total_odd_price", None),
                 "total_even_price": getattr(game, "total_even_price", None),
-                "period1_total_line": getattr(game, "period1_total_line", None),
-                "period1_over_price": getattr(game, "period1_over_price", None),
-                "period1_under_price": getattr(game, "period1_under_price", None),
-                "period1_home_ml": getattr(game, "period1_home_ml", None),
-                "period1_away_ml": getattr(game, "period1_away_ml", None),
-                "period1_draw_price": getattr(game, "period1_draw_price", None),
-                # Batch 2 props
+                # Period odds (all periods)
+                **{f"{db}_{f}": getattr(game, f"{db}_{f}", None)
+                   for db in PERIOD_KEY_MAP.values() for f in PERIOD_ODDS_FIELDS},
+                # P1-only extras
                 "period1_btts_yes_price": getattr(game, "period1_btts_yes_price", None),
                 "period1_btts_no_price": getattr(game, "period1_btts_no_price", None),
-                "period1_spread_line": getattr(game, "period1_spread_line", None),
-                "period1_home_spread_price": getattr(game, "period1_home_spread_price", None),
-                "period1_away_spread_price": getattr(game, "period1_away_spread_price", None),
-                # Period 2
-                "period2_total_line": getattr(game, "period2_total_line", None),
-                "period2_over_price": getattr(game, "period2_over_price", None),
-                "period2_under_price": getattr(game, "period2_under_price", None),
-                "period2_home_ml": getattr(game, "period2_home_ml", None),
-                "period2_away_ml": getattr(game, "period2_away_ml", None),
-                "period2_draw_price": getattr(game, "period2_draw_price", None),
-                "period2_spread_line": getattr(game, "period2_spread_line", None),
-                "period2_home_spread_price": getattr(game, "period2_home_spread_price", None),
-                "period2_away_spread_price": getattr(game, "period2_away_spread_price", None),
-                # Period 3
-                "period3_total_line": getattr(game, "period3_total_line", None),
-                "period3_over_price": getattr(game, "period3_over_price", None),
-                "period3_under_price": getattr(game, "period3_under_price", None),
-                "period3_home_ml": getattr(game, "period3_home_ml", None),
-                "period3_away_ml": getattr(game, "period3_away_ml", None),
-                "period3_draw_price": getattr(game, "period3_draw_price", None),
-                "period3_spread_line": getattr(game, "period3_spread_line", None),
-                "period3_home_spread_price": getattr(game, "period3_home_spread_price", None),
-                "period3_away_spread_price": getattr(game, "period3_away_spread_price", None),
                 "regulation_home_price": getattr(game, "regulation_home_price", None),
                 "regulation_away_price": getattr(game, "regulation_away_price", None),
                 "regulation_draw_price": getattr(game, "regulation_draw_price", None),
