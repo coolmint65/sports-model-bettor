@@ -1760,18 +1760,20 @@ class BettingModel:
                 if best_period_outcome[1] > 0.38:
                     po_team = home_name if best_period_outcome[0] == "home" else (away_name if best_period_outcome[0] == "away" else "Draw")
 
-                    # Use real P1 winner odds if available (only for P1)
+                    # Use real period winner odds if available
                     pw_implied = None
                     pw_odds = None
-                    if period_key == "p1":
-                        if best_period_outcome[0] == "home" and odds_data.get("period1_home_ml"):
-                            pw_odds = odds_data["period1_home_ml"]
+                    _pw_prefix_map = {"p1": "period1", "p2": "period2", "p3": "period3"}
+                    _pw_db_prefix = _pw_prefix_map.get(period_key)
+                    if _pw_db_prefix:
+                        if best_period_outcome[0] == "home" and odds_data.get(f"{_pw_db_prefix}_home_ml"):
+                            pw_odds = odds_data[f"{_pw_db_prefix}_home_ml"]
                             pw_implied = american_odds_to_implied_prob(pw_odds)
-                        elif best_period_outcome[0] == "away" and odds_data.get("period1_away_ml"):
-                            pw_odds = odds_data["period1_away_ml"]
+                        elif best_period_outcome[0] == "away" and odds_data.get(f"{_pw_db_prefix}_away_ml"):
+                            pw_odds = odds_data[f"{_pw_db_prefix}_away_ml"]
                             pw_implied = american_odds_to_implied_prob(pw_odds)
-                        elif best_period_outcome[0] == "draw" and odds_data.get("period1_draw_price"):
-                            pw_odds = odds_data["period1_draw_price"]
+                        elif best_period_outcome[0] == "draw" and odds_data.get(f"{_pw_db_prefix}_draw_price"):
+                            pw_odds = odds_data[f"{_pw_db_prefix}_draw_price"]
                             pw_implied = american_odds_to_implied_prob(pw_odds)
 
                     period_reason = (
@@ -1797,15 +1799,17 @@ class BettingModel:
                     pt_prob = max(over_15, under_15)
                     pt_direction = "Over" if "over" in pt_pred else "Under"
 
-                    # Use real P1 total odds if available (only for P1)
+                    # Use real period total odds if available
                     pt_implied = None
                     pt_odds = None
-                    if period_key == "p1" and odds_data.get("period1_total_line"):
-                        if "over" in pt_pred and odds_data.get("period1_over_price"):
-                            pt_odds = odds_data["period1_over_price"]
+                    _pt_prefix_map = {"p1": "period1", "p2": "period2", "p3": "period3"}
+                    _pt_db_prefix = _pt_prefix_map.get(period_key)
+                    if _pt_db_prefix and odds_data.get(f"{_pt_db_prefix}_total_line"):
+                        if "over" in pt_pred and odds_data.get(f"{_pt_db_prefix}_over_price"):
+                            pt_odds = odds_data[f"{_pt_db_prefix}_over_price"]
                             pt_implied = american_odds_to_implied_prob(pt_odds)
-                        elif "under" in pt_pred and odds_data.get("period1_under_price"):
-                            pt_odds = odds_data["period1_under_price"]
+                        elif "under" in pt_pred and odds_data.get(f"{_pt_db_prefix}_under_price"):
+                            pt_odds = odds_data[f"{_pt_db_prefix}_under_price"]
                             pt_implied = american_odds_to_implied_prob(pt_odds)
 
                     predictions.append({
