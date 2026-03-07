@@ -1168,13 +1168,82 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
             market_name = (market.get("marketName", "") or market.get("name", "") or "").lower()
             runners = market.get("runners", [])
 
-            # Skip period-specific markets
-            _FD_PERIOD_TOKENS = ("1st", "2nd", "3rd", "period", "half", "quarter", "inning")
-            if any(tok in market_name for tok in _FD_PERIOD_TOKENS):
+            # Detect period-specific markets.  Allow 1st period through
+            # (we generate predictions for P1 ML, total, spread, BTTS) but
+            # skip 2nd/3rd periods and non-hockey scopes.
+            _FD_SKIP_TOKENS = ("2nd", "3rd", "half", "quarter", "inning")
+            if any(tok in market_name for tok in _FD_SKIP_TOKENS):
                 continue
-            # Also skip market types that are explicitly period-scoped
-            if any(tok in market_type for tok in ("PERIOD", "HALF", "QUARTER", "INNING")):
+            if any(tok in market_type for tok in ("HALF", "QUARTER", "INNING")):
                 continue
+
+            is_period1 = (
+                "1st" in market_name
+                or "FIRST_PERIOD" in market_type
+                or "1ST_PERIOD" in market_type
+            )
+
+            # Parse 1st period markets into p1_ fields
+            if is_period1:
+                # P1 Moneyline
+                if "money" in market_name or "winner" in market_name or market_type in ("MONEY_LINE", "MATCH_BETTING"):
+                    ev_info = event_info[eid]
+                    home_mapped = _map_team(ev_info["home"])
+                    for runner in runners if isinstance(runners, list) else []:
+                        odds_val = _parse_fd_odds(runner)
+                        if odds_val is None:
+                            continue
+                        runner_name = runner.get("runnerName", "")
+                        mapped = _map_team(runner_name)
+                        rn_lower = (runner_name or "").lower()
+                        if "draw" in rn_lower or "tie" in rn_lower:
+                            game_odds[eid]["p1_draw"] = odds_val
+                        elif mapped and mapped == home_mapped:
+                            game_odds[eid]["p1_home_ml"] = odds_val
+                        elif mapped:
+                            game_odds[eid]["p1_away_ml"] = odds_val
+
+                # P1 Total (Over/Under)
+                elif "total" in market_name or "over" in market_name:
+                    for runner in runners if isinstance(runners, list) else []:
+                        odds_val = _parse_fd_odds(runner)
+                        if odds_val is None:
+                            continue
+                        try:
+                            line_val = float(runner.get("handicap", 0))
+                        except (ValueError, TypeError):
+                            continue
+                        runner_name = (runner.get("runnerName", "") or "").lower()
+                        game_odds[eid]["p1_total_line"] = line_val
+                        if "over" in runner_name:
+                            game_odds[eid]["p1_over"] = odds_val
+                        elif "under" in runner_name:
+                            game_odds[eid]["p1_under"] = odds_val
+
+                # P1 Spread / Puck Line
+                elif "spread" in market_name or "puck" in market_name or "handicap" in market_name:
+                    ev_info = event_info[eid]
+                    home_mapped = _map_team(ev_info["home"])
+                    for runner in runners if isinstance(runners, list) else []:
+                        odds_val = _parse_fd_odds(runner)
+                        if odds_val is None:
+                            continue
+                        try:
+                            line_val = float(runner.get("handicap", 0))
+                        except (ValueError, TypeError):
+                            continue
+                        mapped = _map_team(runner.get("runnerName", ""))
+                        if mapped and mapped == home_mapped:
+                            game_odds[eid]["p1_spread_line"] = abs(line_val)
+                            game_odds[eid]["p1_home_spread_price"] = odds_val
+                        elif mapped:
+                            game_odds[eid]["p1_away_spread_price"] = odds_val
+
+                # P1 Both Teams to Score
+                elif "both" in market_name and "score" in market_name or "btts" in market_name:
+                    _parse_fd_yes_no_runners(runners, eid, game_odds, "p1_btts_yes", "p1_btts_no")
+
+                continue  # Done with this period market
 
             # Moneyline
             if market_type in ("MATCH_BETTING", "MONEY_LINE", "HEAD_TO_HEAD", "MATCH_ODDS"):
@@ -1416,6 +1485,15 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
                 ("away_tt_under", "away_team_under"),
                 ("hp_p1", "highest_period_p1"), ("hp_p2", "highest_period_p2"),
                 ("hp_p3", "highest_period_p3"), ("hp_tie", "highest_period_tie"),
+                # P1 period props
+                ("p1_home_ml", "p1_home_ml"), ("p1_away_ml", "p1_away_ml"),
+                ("p1_draw", "p1_draw_price"),
+                ("p1_total_line", "p1_total_line"),
+                ("p1_over", "p1_over_price"), ("p1_under", "p1_under_price"),
+                ("p1_spread_line", "p1_spread_line"),
+                ("p1_home_spread_price", "p1_home_spread_price"),
+                ("p1_away_spread_price", "p1_away_spread_price"),
+                ("p1_btts_yes", "p1_btts_yes"), ("p1_btts_no", "p1_btts_no"),
             ):
                 val = odds.get(prop_key)
                 if val:
