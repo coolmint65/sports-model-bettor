@@ -3253,12 +3253,22 @@ def _merge_odds_events(
                 round(v * 2) / 2 for v in prop_p1_sp_line
             ).most_common(1)[0][0]
 
-        # Count how many prop fields were found
+        # Count how many prop fields were found and log details
         prop_count = sum(1 for v in best_prop_odds.values() if v is not None)
         if prop_count > 0:
+            found_props = [k for k, v in best_prop_odds.items() if v is not None]
             logger.info(
-                "Merge %s@%s: %d prop odds fields found",
+                "Merge %s@%s: %d prop odds fields found: %s",
                 first.away_abbr, first.home_abbr, prop_count,
+                ", ".join(found_props),
+            )
+        else:
+            # Log which sources were available for this game
+            src_list = [e.source for e in ev_list]
+            logger.info(
+                "Merge %s@%s: NO prop odds found (sources: %s)",
+                first.away_abbr, first.home_abbr,
+                ", ".join(src_list),
             )
 
         merged.append({
@@ -3652,6 +3662,7 @@ class MultiSourceOddsScraper:
 
             # Persist prop odds
             props = odds.get("best_prop_odds", {})
+            props_written = []
             if props:
                 for field in (
                     "btts_yes_price", "btts_no_price",
@@ -3676,6 +3687,13 @@ class MultiSourceOddsScraper:
                     val = props.get(field)
                     if val is not None:
                         setattr(game, field, val)
+                        props_written.append(field)
+
+            if props_written:
+                logger.info(
+                    "DB sync %s: wrote %d prop fields: %s",
+                    sync_label, len(props_written), ", ".join(props_written),
+                )
 
             game.odds_updated_at = datetime.now(timezone.utc)
 

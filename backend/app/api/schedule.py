@@ -397,11 +397,18 @@ def _grade_top_pick(pick: GameTopPick, game: Game) -> Optional[str]:
 
 
 async def _compute_top_picks(
-    games: List[Game], session: AsyncSession
+    games: List[Game], session: AsyncSession, *, prefer_live: bool = False,
 ) -> dict[int, GameTopPick]:
     """Compute the best top_pick prediction for each game.
 
     Shared by /today, /live, and date-specific schedule endpoints.
+
+    When *prefer_live* is False (default, used by /today), only prematch
+    predictions are considered so the original pre-game recommendation is
+    frozen and never changes once a game goes live.
+
+    When *prefer_live* is True (used by /live), live-phase predictions are
+    preferred; prematch is used as fallback when no live prediction exists.
     """
     max_implied = settings.best_bet_max_implied
     game_ids = [g.id for g in games]
@@ -410,27 +417,34 @@ async def _compute_top_picks(
     if not game_ids:
         return top_picks
 
+    # Choose which prediction phases to include
+    if prefer_live:
+        phase_filter = ("prematch", "live")
+    else:
+        phase_filter = ("prematch",)
+
     all_preds_result = await session.execute(
         select(Prediction).where(
             Prediction.game_id.in_(game_ids),
             Prediction.bet_type.in_(MARKET_BET_TYPES),
-            Prediction.phase.in_(("prematch", "live")),
+            Prediction.phase.in_(phase_filter),
             Prediction.edge.isnot(None),
             Prediction.odds_implied_prob.isnot(None),
         )
     )
     all_preds = all_preds_result.scalars().all()
 
-    # Prefer prematch predictions over live ones (prematch = original
-    # recommendation before game started). If only live exist, use those.
-    # Group by (game_id, bet_type, prediction_value) and keep prematch.
-    _seen: dict[tuple, Prediction] = {}
-    for p in all_preds:
-        key = (p.game_id, p.bet_type, p.prediction_value)
-        existing = _seen.get(key)
-        if existing is None or (existing.phase == "live" and p.phase == "prematch"):
-            _seen[key] = p
-    all_preds = list(_seen.values())
+    # Deduplicate when both phases are present.
+    # prefer_live=True  → keep live over prematch
+    # prefer_live=False → only prematch is queried, so no dedup needed
+    if prefer_live:
+        _seen: dict[tuple, Prediction] = {}
+        for p in all_preds:
+            key = (p.game_id, p.bet_type, p.prediction_value)
+            existing = _seen.get(key)
+            if existing is None or (existing.phase == "prematch" and p.phase == "live"):
+                _seen[key] = p
+        all_preds = list(_seen.values())
 
     # Compute fresh implied prob for heavy-juice detection only.
     # Ranking uses the stored (snapshot) edge/implied_prob so that
@@ -501,17 +515,21 @@ async def _compute_top_picks(
             select(Prediction).where(
                 Prediction.game_id.in_(list(still_missing)),
                 Prediction.bet_type.in_(MARKET_BET_TYPES),
-                Prediction.phase.in_(("prematch", "live")),
+                Prediction.phase.in_(phase_filter),
             )
         )
         no_odds_preds_raw = no_odds_result.scalars().all()
-        # Deduplicate: prefer prematch over live
+        # Deduplicate based on prefer_live setting
         _seen_t3: dict[tuple, Prediction] = {}
         for p in no_odds_preds_raw:
             key = (p.game_id, p.bet_type, p.prediction_value)
             existing = _seen_t3.get(key)
-            if existing is None or (existing.phase == "live" and p.phase == "prematch"):
-                _seen_t3[key] = p
+            if prefer_live:
+                if existing is None or (existing.phase == "prematch" and p.phase == "live"):
+                    _seen_t3[key] = p
+            else:
+                if existing is None:
+                    _seen_t3[key] = p
         no_odds_preds = list(_seen_t3.values())
         for pred in sorted(
             no_odds_preds,
@@ -544,7 +562,7 @@ async def _compute_top_picks(
 
 
 async def _compute_top_props(
-    games: List[Game], session: AsyncSession
+    games: List[Game], session: AsyncSession, *, prefer_live: bool = False,
 ) -> dict[int, GameTopPick]:
     """Select the best prop prediction for each game (non-market bet types).
 
@@ -554,6 +572,10 @@ async def _compute_top_props(
       Tier 3: No-odds fallback — only if nothing else exists for a game.
               Skips trivially high-confidence bets (e.g., BTTS No at 93%)
               that provide no useful betting signal.
+
+    When *prefer_live* is False (default), only prematch predictions are used
+    so the original recommendation stays frozen.  When True, live-phase
+    predictions are preferred with prematch as fallback.
     """
     game_ids = [g.id for g in games]
     game_by_id = {g.id: g for g in games}
@@ -561,23 +583,28 @@ async def _compute_top_props(
     if not game_ids:
         return top_props
 
+    phase_filter = ("prematch", "live") if prefer_live else ("prematch",)
+
     result = await session.execute(
         select(Prediction).where(
             Prediction.game_id.in_(game_ids),
             Prediction.bet_type.in_(PROP_BET_TYPES),
-            Prediction.phase.in_(("prematch", "live")),
+            Prediction.phase.in_(phase_filter),
         )
     )
     all_props = result.scalars().all()
 
-    # Deduplicate: prefer prematch over live
-    _seen: dict[tuple, Prediction] = {}
-    for p in all_props:
-        key = (p.game_id, p.bet_type, p.prediction_value)
-        existing = _seen.get(key)
-        if existing is None or (existing.phase == "live" and p.phase == "prematch"):
-            _seen[key] = p
-    deduped = list(_seen.values())
+    # Deduplicate when both phases are present
+    if prefer_live:
+        _seen: dict[tuple, Prediction] = {}
+        for p in all_props:
+            key = (p.game_id, p.bet_type, p.prediction_value)
+            existing = _seen.get(key)
+            if existing is None or (existing.phase == "prematch" and p.phase == "live"):
+                _seen[key] = p
+        deduped = list(_seen.values())
+    else:
+        deduped = list(all_props)
 
     # Build a map of the best available implied prob per prediction.
     # Fresh odds are used for tier promotion (does it have odds?), but
@@ -775,9 +802,10 @@ async def get_live_games(
         )
         games = result.scalars().all()
 
-    # Compute top picks and props for live games (same logic as /today)
-    top_picks = await _compute_top_picks(games, session)
-    top_props = await _compute_top_props(games, session)
+    # Compute top picks and props for live games — prefer live-phase
+    # predictions so the "Live Now" section shows updated recommendations.
+    top_picks = await _compute_top_picks(games, session, prefer_live=True)
+    top_props = await _compute_top_props(games, session, prefer_live=True)
 
     # Batch-load team stats
     all_team_ids = list({g.home_team_id for g in games} | {g.away_team_id for g in games})
