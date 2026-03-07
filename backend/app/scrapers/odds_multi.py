@@ -381,6 +381,18 @@ def _validate_event(event: OddsEvent) -> OddsEvent:
         event.alt_spreads, event.source, matchup,
     )
 
+    # Validate 1st period spread — only ±0.5 is a valid hockey 1st
+    # period puck line.  Lines of ±1.0, ±1.5, ±2.0, etc. are either
+    # alternate lines or data errors and should not be used.
+    if event.p1_spread_line and event.p1_spread_line != 0.5:
+        logger.debug(
+            "[%s] %s: rejecting P1 spread line %.1f (only ±0.5 valid)",
+            event.source, matchup, event.p1_spread_line,
+        )
+        event.p1_spread_line = 0.0
+        event.p1_home_spread_price = 0.0
+        event.p1_away_spread_price = 0.0
+
     return event
 
 
@@ -453,16 +465,20 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
         "Sec-Fetch-Dest": "empty",
         "Sec-Fetch-Mode": "cors",
         "Sec-Fetch-Site": "same-origin",
+        "Sec-Ch-Ua": '"Chromium";v="134", "Google Chrome";v="134", "Not:A-Brand";v="99"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
     }
 
     # DraftKings NHL event group ID: 42133
     # Try multiple endpoint variants (DK changes these periodically)
-    # Primary + two fallbacks.  State-specific subdomains frequently 403
-    # from non-US IPs, so keep the list short to reduce log noise.
+    # Include Illinois and Nashville subdomains which have been
+    # more reliable for non-US IPs in some reports.
     urls = [
         "https://sportsbook.draftkings.com/sites/US-SB/api/v5/eventgroups/42133?format=json",
+        "https://sportsbook-us-il.draftkings.com/sites/US-IL-SB/api/v5/eventgroups/42133?format=json",
+        "https://sportsbook-nash.draftkings.com/sites/US-SB/api/v5/eventgroups/42133?format=json",
         "https://sportsbook-us-nj.draftkings.com/sites/US-NJ-SB/api/v5/eventgroups/42133?format=json",
-        "https://sportsbook-us-pa.draftkings.com/sites/US-PA-SB/api/v5/eventgroups/42133?format=json",
     ]
     data = None
     for url in urls:
@@ -694,8 +710,10 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
                             continue
 
                         if ("first goal" in label or "1st goal" in label
-                                or "score first" in label or "first to score"in label
-                                or "team to score" in label):
+                                or "score first" in label or "first to score" in label
+                                or "1st to score" in label
+                                or "team to score" in label
+                                or ("score" in sub_name and "first" in sub_name and len(outcomes) == 2)):
                             ev_info = event_map.get(eid, {})
                             home_mapped = _map_team(ev_info.get("home", ""))
                             for oc in outcomes:
@@ -753,12 +771,18 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
 
                         # Team Total Goals (individual team O/U)
                         # DK may label as "Team Total", "Total Goals - Team Name",
-                        # or "Team Name Over/Under 2.5"
+                        # "Team Name Over/Under 2.5", or be under a "team totals"
+                        # subcategory with team-name-only labels.
                         _has_team_in_label = any(
                             _map_team(word) for word in label.replace("/", " ").split()
                         )
+                        _is_tt_sub = "team total" in sub_name
                         if ("total" in label and ("team" in label or "goals" in label)) or (
                             "total" in label and _has_team_in_label
+                        ) or (_is_tt_sub and _has_team_in_label) or (
+                            _is_tt_sub and len(outcomes) == 2 and any(
+                                "over" in (oc.get("label") or "").lower() for oc in outcomes
+                            )
                         ):
                             ev_info = event_map.get(eid, {})
                             home_mapped = _map_team(ev_info.get("home", ""))
@@ -1099,7 +1123,12 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
     FanDuel uses a content-managed page API. NHL event type ID = 7524.
     """
     events: List[OddsEvent] = []
-    headers = SCRAPER_HEADERS
+    headers = {
+        **SCRAPER_HEADERS,
+        "Sec-Ch-Ua": '"Chromium";v="134", "Google Chrome";v="134", "Not:A-Brand";v="99"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+    }
 
     # FanDuel NHL page - try multiple states and page types
     params_variants = [
@@ -1512,6 +1541,13 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
                         elif "under" in runner_name:
                             game_odds[eid][f"{prefix}_under"] = odds_val
 
+            # Log unmatched market types at DEBUG for diagnostics
+            else:
+                logger.debug(
+                    "FanDuel: unmatched market type=%r name=%r for event %s",
+                    market_type, market_name, eid,
+                )
+
         # Build OddsEvent objects
         for eid, odds in game_odds.items():
             ev_info = event_info.get(eid, {})
@@ -1845,7 +1881,7 @@ async def _fetch_kambi(client: httpx.AsyncClient) -> List[OddsEvent]:
                             odds["ot_no"] = american
 
                 # First Goal / First Team to Score
-                elif "first" in criterion_label and ("goal" in criterion_label or "score" in criterion_label):
+                elif ("first" in criterion_label or "1st" in criterion_label) and ("goal" in criterion_label or "score" in criterion_label):
                     home_mapped = _map_team(home_name)
                     for oc in outcomes if isinstance(outcomes, list) else []:
                         oc_label = oc.get("label", "")
@@ -2346,7 +2382,10 @@ async def _fetch_bovada(client: httpx.AsyncClient) -> List[OddsEvent]:
                                     odds["ot_no"] = odds_val
 
                         # First Goal / First Team to Score
-                        elif ("first" in market_desc and ("goal" in market_desc or "score" in market_desc)) or "score first" in market_desc:
+                        elif (
+                            ("first" in market_desc or "1st" in market_desc)
+                            and ("goal" in market_desc or "score" in market_desc)
+                        ) or "score first" in market_desc:
                             for oc in outcomes:
                                 price_data = oc.get("price", {})
                                 if not isinstance(price_data, dict):
