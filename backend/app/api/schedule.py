@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES, PROP_BET_TYPES, composite_pick_score, is_heavy_juice
+from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES, composite_pick_score, is_heavy_juice
 from app.database import get_session
 from app.models.game import Game
 from app.models.prediction import Prediction
@@ -92,8 +92,6 @@ class ScheduleGame(BaseModel):
     away_shots: Optional[int] = None
     # Top prediction for this game
     top_pick: Optional[GameTopPick] = None
-    # Top prop prediction for this game (non-market bet)
-    top_prop: Optional[GameTopPick] = None
     # Sportsbook odds
     odds: Optional[GameOdds] = None
     pregame_odds: Optional[GameOdds] = None
@@ -196,7 +194,6 @@ def _build_schedule_game(
     home_brief: TeamBrief,
     away_brief: TeamBrief,
     top_pick: Optional[GameTopPick] = None,
-    top_prop: Optional[GameTopPick] = None,
 ) -> ScheduleGame:
     return ScheduleGame(
         id=game.id,
@@ -220,7 +217,6 @@ def _build_schedule_game(
         home_shots=game.home_shots,
         away_shots=game.away_shots,
         top_pick=top_pick,
-        top_prop=top_prop,
         odds=_build_game_odds(game),
         pregame_odds=_build_pregame_odds(game),
     )
@@ -276,121 +272,6 @@ def _grade_top_pick(pick: GameTopPick, game: Game) -> Optional[str]:
         if adjusted == 0:
             return "push"
         return "win" if adjusted > 0 else "loss"
-
-    elif pick.bet_type == "both_score":
-        both = hs > 0 and aws > 0
-        return "win" if (val == "yes") == both else "loss"
-
-    elif pick.bet_type == "first_goal":
-        if hs > 0 or aws > 0:
-            actual = "home" if hs > 0 else "away"
-            return "win" if val == actual else "loss"
-
-    elif pick.bet_type == "overtime":
-        if game.went_to_overtime is None:
-            return None  # OT status not yet synced
-        return "win" if (val == "yes") == game.went_to_overtime else "loss"
-
-    elif pick.bet_type == "odd_even":
-        total = hs + aws
-        actual = "odd" if total % 2 == 1 else "even"
-        return "win" if val == actual else "loss"
-
-    elif pick.bet_type == "regulation_winner":
-        if game.went_to_overtime is None:
-            return None  # OT data not yet synced
-        if game.went_to_overtime:
-            # Game went to OT — regulation ended in a draw
-            actual = "draw"
-        else:
-            actual = "home" if hs > aws else "away"
-        return "win" if val == actual else "loss"
-
-    elif pick.bet_type == "team_total":
-        try:
-            line = float(val.split("_")[-1])
-            team_goals = hs if val.startswith("home") else aws
-            if "over" in val:
-                if team_goals == line:
-                    return "push"
-                return "win" if team_goals > line else "loss"
-            else:
-                if team_goals == line:
-                    return "push"
-                return "win" if team_goals < line else "loss"
-        except (ValueError, IndexError):
-            return None
-
-    elif pick.bet_type == "highest_scoring_period":
-        if game.home_score_p1 is None or game.away_score_p1 is None:
-            return None  # period scores not yet synced
-        hp1 = game.home_score_p1 or 0
-        ap1 = game.away_score_p1 or 0
-        hp2 = game.home_score_p2 or 0
-        ap2 = game.away_score_p2 or 0
-        hp3 = game.home_score_p3 or 0
-        ap3 = game.away_score_p3 or 0
-        periods = [hp1 + ap1, hp2 + ap2, hp3 + ap3]
-        max_p = max(periods)
-        if periods.count(max_p) > 1:
-            actual = "tie"
-        else:
-            actual = ["p1", "p2", "p3"][periods.index(max_p)]
-        return "win" if val == actual else "loss"
-
-    elif pick.bet_type == "period1_btts":
-        hp1 = game.home_score_p1
-        ap1 = game.away_score_p1
-        if hp1 is not None and ap1 is not None:
-            both = hp1 > 0 and ap1 > 0
-            return "win" if (val == "yes") == both else "loss"
-
-    elif pick.bet_type == "period1_spread":
-        hp1 = game.home_score_p1
-        ap1 = game.away_score_p1
-        if hp1 is not None and ap1 is not None:
-            try:
-                spread_val = float(val.split("_")[-1])
-                margin = hp1 - ap1
-                if val.startswith("home"):
-                    adjusted = margin + spread_val
-                else:
-                    adjusted = -margin + spread_val
-                if adjusted == 0:
-                    return "push"
-                return "win" if adjusted > 0 else "loss"
-            except (ValueError, IndexError):
-                return None
-
-    elif pick.bet_type == "period_winner":
-        hp1 = game.home_score_p1
-        ap1 = game.away_score_p1
-        if hp1 is not None and ap1 is not None and val and val.startswith("p1_"):
-            if hp1 > ap1:
-                actual = "p1_home"
-            elif ap1 > hp1:
-                actual = "p1_away"
-            else:
-                actual = "p1_draw"
-            return "win" if val == actual else "loss"
-
-    elif pick.bet_type == "period_total":
-        hp1 = game.home_score_p1
-        ap1 = game.away_score_p1
-        if hp1 is not None and ap1 is not None and val and val.startswith("p1_"):
-            p1_total = hp1 + ap1
-            try:
-                line = float(val.split("_")[-1])
-                if "over" in val:
-                    if p1_total == line:
-                        return "push"
-                    return "win" if p1_total > line else "loss"
-                elif "under" in val:
-                    if p1_total == line:
-                        return "push"
-                    return "win" if p1_total < line else "loss"
-            except (ValueError, IndexError):
-                return None
 
     return None
 
@@ -554,189 +435,6 @@ async def _compute_top_picks(
     return top_picks
 
 
-async def _compute_top_props(
-    games: List[Game], session: AsyncSession, *, prefer_live: bool = False,
-) -> dict[int, GameTopPick]:
-    """Select the best prop prediction for each game (non-market bet types).
-
-    Uses a tiered approach matching _compute_top_picks():
-      Tier 1: Props with real sportsbook odds AND positive edge (composite score).
-      Tier 2: Props with real odds, any edge (composite score).
-      Tier 3: No-odds fallback — only if nothing else exists for a game.
-              Skips trivially high-confidence bets (e.g., BTTS No at 93%)
-              that provide no useful betting signal.
-
-    When *prefer_live* is False (default), only prematch predictions are used
-    so the original recommendation stays frozen.  When True, live-phase
-    predictions are preferred with prematch as fallback.
-    """
-    game_ids = [g.id for g in games]
-    game_by_id = {g.id: g for g in games}
-    top_props: dict[int, GameTopPick] = {}
-    if not game_ids:
-        return top_props
-
-    phase_filter = ("prematch", "live") if prefer_live else ("prematch",)
-
-    result = await session.execute(
-        select(Prediction).where(
-            Prediction.game_id.in_(game_ids),
-            Prediction.bet_type.in_(PROP_BET_TYPES),
-            Prediction.phase.in_(phase_filter),
-        )
-    )
-    all_props = result.scalars().all()
-
-    # Deduplicate when both phases are present
-    if prefer_live:
-        _seen: dict[tuple, Prediction] = {}
-        for p in all_props:
-            key = (p.game_id, p.bet_type, p.prediction_value)
-            existing = _seen.get(key)
-            if existing is None or (existing.phase == "prematch" and p.phase == "live"):
-                _seen[key] = p
-        deduped = list(_seen.values())
-    else:
-        deduped = list(all_props)
-
-    # Build a map of the best available implied prob per prediction.
-    # Fresh odds are used for tier promotion (does it have odds?), but
-    # the STORED edge/implied_prob is used for ranking so the top prop
-    # doesn't flip every time live odds shift.
-    effective_impl: dict[int, Optional[float]] = {}
-    effective_edge: dict[int, Optional[float]] = {}
-    for pred in deduped:
-        game_obj = game_by_id.get(pred.game_id)
-        fresh_ip = fresh_implied_prob(pred, game_obj)
-        # For tier checks, prefer fresh (detects newly available odds)
-        # then fall back to stored value.
-        ip = fresh_ip if fresh_ip is not None else pred.odds_implied_prob
-        effective_impl[pred.id] = ip
-        if ip is not None:
-            effective_edge[pred.id] = (pred.confidence or 0) - ip
-        else:
-            effective_edge[pred.id] = pred.edge
-
-    max_implied = settings.best_bet_max_implied
-
-    # NHL puck-line ±0.5 is always heavily juiced (~-200 or worse).
-    # _best_price() can pick an outlier that slips past the ceiling,
-    # so block these unconditionally.
-    _ALWAYS_HEAVY = {
-        "period1_spread": {"0.5", "-0.5", "+0.5"},
-    }
-
-    def _is_always_heavy(p: Prediction) -> bool:
-        lines = _ALWAYS_HEAVY.get(p.bet_type)
-        if not lines or not p.prediction_value:
-            return False
-        # prediction_value is e.g. "home_-0.5" or "away_+0.5"
-        line_part = p.prediction_value.rsplit("_", 1)[-1]
-        return line_part in lines
-
-    # --- Tier 1: props with real odds AND positive edge ---
-    tier1 = [
-        p for p in deduped
-        if effective_impl.get(p.id) is not None
-        and (effective_edge.get(p.id) or 0) > 0
-        and not is_heavy_juice(effective_impl.get(p.id), max_implied)
-        and not _is_always_heavy(p)
-    ]
-    for pred in sorted(
-        tier1,
-        key=lambda p: composite_pick_score(
-            p.confidence, p.edge, p.odds_implied_prob
-        ),
-        reverse=True,
-    ):
-        if pred.game_id not in top_props:
-            top_props[pred.game_id] = GameTopPick(
-                bet_type=pred.bet_type,
-                prediction_value=pred.prediction_value,
-                confidence=pred.confidence,
-                edge=effective_edge.get(pred.id, pred.edge),
-                is_fallback=False,
-
-            )
-
-    # --- Tier 2: props with real odds, any edge ---
-    still_missing = set(gid for gid in game_ids if gid not in top_props)
-    if still_missing:
-        tier2 = [
-            p for p in deduped
-            if p.game_id in still_missing
-            and effective_impl.get(p.id) is not None
-            and not is_heavy_juice(effective_impl.get(p.id), max_implied)
-            and not _is_always_heavy(p)
-        ]
-        for pred in sorted(
-            tier2,
-            key=lambda p: composite_pick_score(
-                p.confidence, p.edge or 0, p.odds_implied_prob
-            ),
-            reverse=True,
-        ):
-            if pred.game_id not in top_props:
-                top_props[pred.game_id] = GameTopPick(
-                    bet_type=pred.bet_type,
-                    prediction_value=pred.prediction_value,
-                    confidence=pred.confidence,
-                    edge=effective_edge.get(pred.id, pred.edge),
-                    is_fallback=False,
-    
-                )
-
-    # --- Tier 3: no-odds fallback (confidence-only) ---
-    # Only for games that have NO odds-backed props at all.
-    # Skip trivially-confident bets that aren't useful betting signals
-    # (e.g., BTTS No at 90%+ — always true, not insightful).
-    # Also skip spread-type props with no odds — they are almost always
-    # heavily juiced (e.g., +0.5 puck line) and we can't verify juice
-    # without odds data.
-    _JUICE_RISK_TYPES = {"period1_spread", "spread"}
-    still_missing = set(gid for gid in game_ids if gid not in top_props)
-    if still_missing:
-        tier3 = [
-            p for p in deduped
-            if p.game_id in still_missing
-            and (p.confidence or 0) < 0.88  # skip trivially obvious bets
-        ]
-        for pred in sorted(
-            tier3,
-            key=lambda p: p.confidence or 0,
-            reverse=True,
-        ):
-            if pred.game_id not in top_props:
-                # Exclude heavy-juice bets even in fallback tier
-                # Use fresh odds when available, stored value otherwise.
-                t3_impl = effective_impl.get(pred.id, pred.odds_implied_prob)
-                if is_heavy_juice(t3_impl, max_implied):
-                    continue
-                # Skip spread-type props with no odds — juice can't be
-                # verified and these are frequently heavy favorites.
-                if pred.bet_type in _JUICE_RISK_TYPES and t3_impl is None:
-                    continue
-                # Block puck-line ±0.5 unconditionally
-                if _is_always_heavy(pred):
-                    continue
-                top_props[pred.game_id] = GameTopPick(
-                    bet_type=pred.bet_type,
-                    prediction_value=pred.prediction_value,
-                    confidence=pred.confidence,
-                    edge=pred.edge,
-                    is_fallback=pred.odds_implied_prob is None,
-
-                )
-
-    # Grade outcomes for final games
-    for game_id, prop in top_props.items():
-        game_obj = game_by_id.get(game_id)
-        if game_obj and game_obj.status and game_obj.status.lower() in GAME_FINAL_STATUSES:
-            prop.outcome = _grade_top_pick(prop, game_obj)
-
-    return top_props
-
-
 async def _games_for_date(
     target_date: date, session: AsyncSession
 ) -> List[ScheduleGame]:
@@ -750,7 +448,6 @@ async def _games_for_date(
 
     # Pre-fetch best prediction per game using composite score
     top_picks = await _compute_top_picks(games, session)
-    top_props = await _compute_top_props(games, session)
 
     # Batch-load team stats
     all_team_ids = list({g.home_team_id for g in games} | {g.away_team_id for g in games})
@@ -763,7 +460,7 @@ async def _games_for_date(
         schedule_games.append(
             _build_schedule_game(
                 game, home_brief, away_brief,
-                top_picks.get(game.id), top_props.get(game.id),
+                top_picks.get(game.id),
             )
         )
     return schedule_games
@@ -832,10 +529,9 @@ async def get_live_games(
         )
         games = result.scalars().all()
 
-    # Compute top picks and props for live games — prefer live-phase
+    # Compute top picks for live games — prefer live-phase
     # predictions so the "Live Now" section shows updated recommendations.
     top_picks = await _compute_top_picks(games, session, prefer_live=True)
-    top_props = await _compute_top_props(games, session, prefer_live=True)
 
     # Batch-load team stats
     all_team_ids = list({g.home_team_id for g in games} | {g.away_team_id for g in games})
@@ -847,7 +543,7 @@ async def get_live_games(
         away_brief = _build_team_brief(game.away_team, stats_map.get(game.away_team_id))
         schedule_games.append(_build_schedule_game(
             game, home_brief, away_brief,
-            top_picks.get(game.id), top_props.get(game.id),
+            top_picks.get(game.id),
         ))
 
     today = date.today()

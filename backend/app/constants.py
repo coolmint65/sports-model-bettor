@@ -23,32 +23,6 @@ GAME_PREDICTABLE_STATUSES = (
 # The three core sportsbook market types the model generates predictions for.
 MARKET_BET_TYPES = ("ml", "total", "spread")
 
-# Non-market prop bet types (with real sportsbook odds when available).
-PROP_BET_TYPES = (
-    "period_total",
-    "period_winner",
-    "first_goal",
-    "both_score",
-    "overtime",
-    "odd_even",
-    "period1_btts",
-    "period1_spread",
-    "highest_scoring_period",
-    "regulation_winner",
-    "team_total",
-)
-
-# Period key mapping: short key (used in predictions/OddsEvent) → DB column prefix.
-PERIOD_KEY_MAP = {"p1": "period1", "p2": "period2", "p3": "period3"}
-
-# Per-period odds fields that every period shares.
-# Used to DRY up OddsEvent, Game model, merge pipeline, and features.
-PERIOD_ODDS_FIELDS = (
-    "total_line", "over_price", "under_price",
-    "home_ml", "away_ml", "draw_price",
-    "spread_line", "home_spread_price", "away_spread_price",
-)
-
 # Shared browser headers for sportsbook scraping.
 SCRAPER_HEADERS = {
     "User-Agent": (
