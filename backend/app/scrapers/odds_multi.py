@@ -693,7 +693,9 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
                                     game_odds[eid].setdefault("even_prices", []).append(odds_val)
                             continue
 
-                        if "first goal" in label or "score first" in label or "first to score" in label:
+                        if ("first goal" in label or "1st goal" in label
+                                or "score first" in label or "first to score"in label
+                                or "team to score" in label):
                             ev_info = event_map.get(eid, {})
                             home_mapped = _map_team(ev_info.get("home", ""))
                             for oc in outcomes:
@@ -750,7 +752,14 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
                             continue
 
                         # Team Total Goals (individual team O/U)
-                        if "total" in label and ("team" in label or "goals" in label):
+                        # DK may label as "Team Total", "Total Goals - Team Name",
+                        # or "Team Name Over/Under 2.5"
+                        _has_team_in_label = any(
+                            _map_team(word) for word in label.replace("/", " ").split()
+                        )
+                        if ("total" in label and ("team" in label or "goals" in label)) or (
+                            "total" in label and _has_team_in_label
+                        ):
                             ev_info = event_map.get(eid, {})
                             home_mapped = _map_team(ev_info.get("home", ""))
                             # Determine which team this is for
@@ -2274,8 +2283,8 @@ async def _fetch_bovada(client: httpx.AsyncClient) -> List[OddsEvent]:
                                 elif "no" in oc_desc:
                                     odds["ot_no"] = odds_val
 
-                        # First Goal Scorer (team level: which team scores first)
-                        elif ("first" in market_desc and "goal" in market_desc) or "score first" in market_desc:
+                        # First Goal / First Team to Score
+                        elif ("first" in market_desc and ("goal" in market_desc or "score" in market_desc)) or "score first" in market_desc:
                             for oc in outcomes:
                                 price_data = oc.get("price", {})
                                 if not isinstance(price_data, dict):
