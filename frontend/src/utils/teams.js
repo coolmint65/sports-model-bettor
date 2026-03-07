@@ -53,17 +53,6 @@ const BET_TYPE_LABELS = {
   ml: 'Moneyline',
   total: 'Total Goals',
   spread: 'Puck Line',
-  team_total: 'Team Total',
-  period_total: '1st Period Total',
-  period_winner: '1st Period Winner',
-  first_goal: 'First Goal',
-  both_score: 'Both Teams Score',
-  overtime: 'Overtime',
-  odd_even: 'Odd/Even',
-  period1_btts: '1st Period BTTS',
-  period1_spread: '1st Period Spread',
-  regulation_winner: 'Regulation Winner',
-  highest_scoring_period: 'Highest Scoring Period',
 };
 
 export function formatBetType(betType) {

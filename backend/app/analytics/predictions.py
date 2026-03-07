@@ -139,10 +139,7 @@ class PredictionManager:
         if not all_predictions:
             return []
 
-        # Bet types that have real market odds from The Odds API.
-        # Only these are eligible for "best bets" since we can calculate
-        # true edge. Props (BTTS, first_goal, overtime, odd_even) don't
-        # have market odds and would show inflated fake edges.
+        # Bet types that have real market odds from sportsbooks.
         ODDS_BET_TYPES = set(MARKET_BET_TYPES)
 
         # Flatten all individual predictions across all games and persist ALL
@@ -614,88 +611,6 @@ class PredictionManager:
         elif bet_type == "spread":
             return f"margin_{margin}"
 
-        elif bet_type == "first_goal":
-            # We need period data to determine this properly
-            # Approximation: team that has more first-period goals
-            return "home" if home_score > 0 else "away"
-
-        elif bet_type == "both_score":
-            return "yes" if home_score > 0 and away_score > 0 else "no"
-
-        elif bet_type == "overtime":
-            if game.went_to_overtime is None:
-                return None  # OT status not yet synced
-            return "yes" if game.went_to_overtime else "no"
-
-        elif bet_type == "odd_even":
-            return "odd" if total % 2 == 1 else "even"
-
-        elif bet_type == "period_winner":
-            # P1 winner from period scores
-            hp1 = game.home_score_p1
-            ap1 = game.away_score_p1
-            if hp1 is not None and ap1 is not None:
-                if hp1 > ap1:
-                    return "p1_home"
-                elif ap1 > hp1:
-                    return "p1_away"
-                else:
-                    return "p1_draw"
-            return None
-
-        elif bet_type == "period_total":
-            hp1 = game.home_score_p1
-            ap1 = game.away_score_p1
-            if hp1 is not None and ap1 is not None:
-                return f"p1_total_{hp1 + ap1}"
-            return None
-
-        elif bet_type == "regulation_winner":
-            # Winner in regulation only (excl OT)
-            if game.went_to_overtime is None:
-                return None  # OT data not yet synced
-            if game.went_to_overtime:
-                return "draw"  # regulation ended tied
-            return "home" if home_score > away_score else "away"
-
-        elif bet_type == "team_total":
-            return f"home_{home_score}_away_{away_score}"
-
-        elif bet_type == "highest_scoring_period":
-            hp1 = game.home_score_p1 or 0
-            ap1 = game.away_score_p1 or 0
-            hp2 = game.home_score_p2 or 0
-            ap2 = game.away_score_p2 or 0
-            hp3 = game.home_score_p3 or 0
-            ap3 = game.away_score_p3 or 0
-            p1_total = hp1 + ap1
-            p2_total = hp2 + ap2
-            p3_total = hp3 + ap3
-            max_total = max(p1_total, p2_total, p3_total)
-            count_max = [p1_total, p2_total, p3_total].count(max_total)
-            if count_max > 1:
-                return "tie"
-            elif p1_total == max_total:
-                return "p1"
-            elif p2_total == max_total:
-                return "p2"
-            else:
-                return "p3"
-
-        elif bet_type == "period1_btts":
-            hp1 = game.home_score_p1
-            ap1 = game.away_score_p1
-            if hp1 is not None and ap1 is not None:
-                return "yes" if hp1 > 0 and ap1 > 0 else "no"
-            return None
-
-        elif bet_type == "period1_spread":
-            hp1 = game.home_score_p1
-            ap1 = game.away_score_p1
-            if hp1 is not None and ap1 is not None:
-                return f"p1_margin_{hp1 - ap1}"
-            return None
-
         return None
 
     @staticmethod
@@ -753,62 +668,6 @@ class PredictionManager:
                     # or -margin > -|spread| (for +1.5)
                     away_margin = -actual_margin
                     return away_margin > -spread_val if spread_val > 0 else away_margin > abs(spread_val)
-            except (ValueError, IndexError):
-                pass
-            return False
-
-        elif bet_type in ("first_goal", "both_score", "overtime", "odd_even",
-                          "regulation_winner", "highest_scoring_period", "period1_btts"):
-            return prediction_value == actual_outcome
-
-        elif bet_type == "period_winner":
-            return prediction_value == actual_outcome
-
-        elif bet_type == "period_total":
-            # prediction_value e.g. "p1_over_1.5", actual_outcome e.g. "p1_total_2"
-            try:
-                actual_total = int(actual_outcome.split("_")[-1])
-                if "over" in prediction_value:
-                    line = float(prediction_value.split("_")[-1])
-                    return actual_total > line
-                elif "under" in prediction_value:
-                    line = float(prediction_value.split("_")[-1])
-                    return actual_total < line
-            except (ValueError, IndexError):
-                pass
-            return False
-
-        elif bet_type == "team_total":
-            # prediction_value e.g. "home_over_2.5"
-            # actual_outcome e.g. "home_3_away_2"
-            try:
-                parts = actual_outcome.split("_")
-                home_goals = int(parts[1])
-                away_goals = int(parts[3])
-                if prediction_value.startswith("home_"):
-                    team_goals = home_goals
-                else:
-                    team_goals = away_goals
-                line = float(prediction_value.split("_")[-1])
-                if "over" in prediction_value:
-                    return team_goals > line
-                else:
-                    return team_goals < line
-            except (ValueError, IndexError):
-                pass
-            return False
-
-        elif bet_type == "period1_spread":
-            # prediction_value e.g. "home_-0.5" or "away_+0.5"
-            # actual_outcome e.g. "p1_margin_1"
-            try:
-                actual_margin = int(actual_outcome.split("_")[-1])
-                is_home = prediction_value.startswith("home")
-                spread_val = float(prediction_value.split("_")[-1])
-                if is_home:
-                    return actual_margin + spread_val > 0
-                else:
-                    return -actual_margin + spread_val > 0
             except (ValueError, IndexError):
                 pass
             return False
