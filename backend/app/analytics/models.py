@@ -1763,8 +1763,8 @@ class BettingModel:
                     # Use real period winner odds if available
                     pw_implied = None
                     pw_odds = None
-                    _pw_prefix_map = {"p1": "period1", "p2": "period2", "p3": "period3"}
-                    _pw_db_prefix = _pw_prefix_map.get(period_key)
+                    from app.constants import PERIOD_KEY_MAP
+                    _pw_db_prefix = PERIOD_KEY_MAP.get(period_key)
                     if _pw_db_prefix:
                         if best_period_outcome[0] == "home" and odds_data.get(f"{_pw_db_prefix}_home_ml"):
                             pw_odds = odds_data[f"{_pw_db_prefix}_home_ml"]
@@ -1802,8 +1802,7 @@ class BettingModel:
                     # Use real period total odds if available
                     pt_implied = None
                     pt_odds = None
-                    _pt_prefix_map = {"p1": "period1", "p2": "period2", "p3": "period3"}
-                    _pt_db_prefix = _pt_prefix_map.get(period_key)
+                    _pt_db_prefix = PERIOD_KEY_MAP.get(period_key)
                     if _pt_db_prefix and odds_data.get(f"{_pt_db_prefix}_total_line"):
                         if "over" in pt_pred and odds_data.get(f"{_pt_db_prefix}_over_price"):
                             pt_odds = odds_data[f"{_pt_db_prefix}_over_price"]
