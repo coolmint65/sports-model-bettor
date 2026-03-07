@@ -542,8 +542,7 @@ async def _compute_top_picks(
                     prediction_value=pred.prediction_value,
                     confidence=pred.confidence,
                     edge=pred.edge,
-                    is_fallback=stored_impl is None,
-    
+                    is_fallback=pred.odds_implied_prob is None,
                 )
 
     # Grade outcomes for final games
