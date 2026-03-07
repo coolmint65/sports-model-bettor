@@ -258,10 +258,10 @@ async def _regenerate_predictions():
 
 
 async def _run_full_data_sync():
-    """Run a full data sync (schedule, teams, rosters, odds, predictions).
+    """Run a full data sync (schedule, teams, rosters, odds, injuries, predictions).
 
     Delegates to the same pipeline as the manual sync button, but runs
-    automatically in the background.
+    automatically in the background. Also refreshes injury data.
     """
     try:
         from app.api.data import _run_full_sync, _sync_state
@@ -270,6 +270,16 @@ async def _run_full_data_sync():
             return
         await _run_full_sync()
         logger.info("Periodic full data sync completed")
+
+        # Sync injury reports
+        try:
+            from app.scrapers.injury_scraper import fetch_injury_reports
+            async with get_session_context() as session:
+                count = await fetch_injury_reports(session)
+                logger.info("Injury sync: %d records updated", count)
+        except Exception as inj_exc:
+            logger.error("Injury sync failed: %s", inj_exc)
+
     except Exception as exc:
         logger.error("Periodic full data sync failed: %s", exc, exc_info=True)
 

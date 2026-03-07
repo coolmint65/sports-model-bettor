@@ -418,6 +418,18 @@ class PredictionManager:
                 "h2h_games": features["h2h"]["games_found"],
                 "home_goalie": features["home_goalie"]["goalie_name"],
                 "away_goalie": features["away_goalie"]["goalie_name"],
+                # New feature summaries
+                "home_injured_count": features.get("home_injuries", {}).get("injured_count", 0),
+                "away_injured_count": features.get("away_injuries", {}).get("injured_count", 0),
+                "home_injury_xg_reduction": features.get("home_injuries", {}).get("xg_reduction", 0),
+                "away_injury_xg_reduction": features.get("away_injuries", {}).get("xg_reduction", 0),
+                "home_b2b": features.get("home_schedule", {}).get("is_back_to_back", False),
+                "away_b2b": features.get("away_schedule", {}).get("is_back_to_back", False),
+                "home_days_rest": features.get("home_schedule", {}).get("days_rest", 0),
+                "away_days_rest": features.get("away_schedule", {}).get("days_rest", 0),
+                "home_matchup_boost": features.get("home_player_matchup", {}).get("matchup_boost", 0),
+                "away_matchup_boost": features.get("away_player_matchup", {}).get("matchup_boost", 0),
+                "matchup_avg_total": features.get("team_matchup", {}).get("avg_total_goals"),
             },
         }
 
