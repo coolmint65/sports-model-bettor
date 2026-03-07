@@ -1274,6 +1274,58 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
                         game_odds[eid]["over_price"] = fd_lines[best_line].get("over_price", -110)
                         game_odds[eid]["under_price"] = fd_lines[best_line].get("under_price", -110)
 
+            # Both Teams to Score (Yes/No)
+            elif market_type in ("BOTH_TEAMS_TO_SCORE",):
+                for runner in runners if isinstance(runners, list) else []:
+                    runner_name = (runner.get("runnerName", "") or "").lower()
+                    win_running = runner.get("winRunnerOdds", {})
+                    american_odds_str = (
+                        win_running.get("americanDisplayOdds", {}).get("americanOdds", "")
+                        or win_running.get("americanOdds", "")
+                    )
+                    decimal_odds = win_running.get("trueOdds", {}).get("decimalOdds", {}).get("decimalOdds", 0)
+
+                    try:
+                        if american_odds_str:
+                            odds_val = float(str(american_odds_str).replace("+", ""))
+                        elif decimal_odds:
+                            odds_val = decimal_to_american(float(decimal_odds))
+                        else:
+                            continue
+                    except (ValueError, TypeError):
+                        continue
+
+                    if "yes" in runner_name:
+                        game_odds[eid]["btts_yes"] = odds_val
+                    elif "no" in runner_name:
+                        game_odds[eid]["btts_no"] = odds_val
+
+            # Overtime (Will there be overtime?)
+            elif market_type in ("OVERTIME_YES_NO", "OVERTIME"):
+                for runner in runners if isinstance(runners, list) else []:
+                    runner_name = (runner.get("runnerName", "") or "").lower()
+                    win_running = runner.get("winRunnerOdds", {})
+                    american_odds_str = (
+                        win_running.get("americanDisplayOdds", {}).get("americanOdds", "")
+                        or win_running.get("americanOdds", "")
+                    )
+                    decimal_odds = win_running.get("trueOdds", {}).get("decimalOdds", {}).get("decimalOdds", 0)
+
+                    try:
+                        if american_odds_str:
+                            odds_val = float(str(american_odds_str).replace("+", ""))
+                        elif decimal_odds:
+                            odds_val = decimal_to_american(float(decimal_odds))
+                        else:
+                            continue
+                    except (ValueError, TypeError):
+                        continue
+
+                    if "yes" in runner_name:
+                        game_odds[eid]["ot_yes"] = odds_val
+                    elif "no" in runner_name:
+                        game_odds[eid]["ot_no"] = odds_val
+
         # Build OddsEvent objects
         for eid, odds in game_odds.items():
             ev_info = event_info.get(eid, {})
@@ -1302,6 +1354,15 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
                 alt_totals=odds.get("fd_alt_totals", []),
                 alt_spreads=odds.get("fd_alt_spreads", []),
             )
+            # Set prop odds on the event
+            if odds.get("btts_yes"):
+                event.btts_yes = odds["btts_yes"]
+            if odds.get("btts_no"):
+                event.btts_no = odds["btts_no"]
+            if odds.get("ot_yes"):
+                event.overtime_yes = odds["ot_yes"]
+            if odds.get("ot_no"):
+                event.overtime_no = odds["ot_no"]
             if event.home_abbr and event.away_abbr:
                 events.append(_validate_event(event))
             else:
