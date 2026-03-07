@@ -230,9 +230,13 @@ async def _regenerate_predictions():
                     Game.date == today,
                     ~func.lower(Game.status).in_(GAME_FINAL_STATUSES),
                 )
+                # Only delete live-phase predictions; preserve prematch
+                # so the /schedule/today top_pick (bet tracker) persists
+                # through the entire game lifecycle.
                 await session.execute(
                     sa_delete(Prediction).where(
-                        Prediction.game_id.in_(non_final_ids)
+                        Prediction.game_id.in_(non_final_ids),
+                        Prediction.phase != "prematch",
                     )
                 )
                 await session.flush()

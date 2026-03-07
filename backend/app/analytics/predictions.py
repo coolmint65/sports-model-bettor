@@ -450,12 +450,17 @@ class PredictionManager:
             odds_str = f"+{int(odds)}" if odds > 0 else str(int(odds))
             reasoning = f"{reasoning} (Odds: {odds_str})"
 
-        # Check for existing prediction
+        # Check for existing prediction within the same phase.
+        # Prematch and live predictions coexist as separate rows so
+        # the /schedule/today bet tracker always has the original
+        # prematch pick available even after live predictions appear.
+        phase = bet.get("phase", "prematch")
         existing_stmt = select(Prediction).where(
             and_(
                 Prediction.game_id == game_id,
                 Prediction.bet_type == bet_type,
                 Prediction.prediction_value == prediction_value,
+                Prediction.phase == phase,
             )
         )
         existing_result = await db.execute(existing_stmt)
@@ -467,9 +472,6 @@ class PredictionManager:
             existing.odds_implied_prob = bet.get("implied_probability", existing.odds_implied_prob)
             existing.edge = bet.get("edge", existing.edge)
             existing.reasoning = reasoning or existing.reasoning
-            # Upgrade phase from prematch to live (never downgrade)
-            if bet.get("phase") == "live":
-                existing.phase = "live"
             impl = existing.odds_implied_prob
             existing.recommended = (
                 existing.confidence >= settings.min_confidence
@@ -491,8 +493,6 @@ class PredictionManager:
         edge = bet.get("edge")
         implied_prob = bet.get("implied_probability")
         is_best = bet.get("is_best_bet", False)
-
-        phase = bet.get("phase", "prematch")
 
         prediction = Prediction(
             game_id=game_id,

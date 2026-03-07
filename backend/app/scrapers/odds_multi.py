@@ -2204,12 +2204,13 @@ def _merge_odds_events(
     merged: List[Dict[str, Any]] = []
 
     for key, ev_list in matchup_odds.items():
-        # Best moneyline: highest value (best for bettor)
+        # Consensus moneyline: average across all sources for a
+        # realistic market-center price rather than cherry-picked best.
         home_mls = [e.home_ml for e in ev_list if e.has_moneyline()]
         away_mls = [e.away_ml for e in ev_list if e.has_moneyline()]
 
-        best_home_ml = max(home_mls) if home_mls else None
-        best_away_ml = max(away_mls) if away_mls else None
+        best_home_ml = round(sum(home_mls) / len(home_mls)) if home_mls else None
+        best_away_ml = round(sum(away_mls) / len(away_mls)) if away_mls else None
 
         # Consensus spread: most common absolute value across sources.
         # Use moneyline data to determine the correct sign so that
@@ -2351,9 +2352,9 @@ def _merge_odds_events(
                 consensus_away_books = reasonable_away
 
             if consensus_home_books:
-                best_home_spread_price = max(s[1] for s in consensus_home_books)
+                best_home_spread_price = round(sum(s[1] for s in consensus_home_books) / len(consensus_home_books))
             if consensus_away_books:
-                best_away_spread_price = max(s[1] for s in consensus_away_books)
+                best_away_spread_price = round(sum(s[1] for s in consensus_away_books) / len(consensus_away_books))
 
         # Consensus total — filter out implausible lines first.
         # Filter implausible O/U lines (pregame ~4.5-8.5, live can go higher).
@@ -2368,8 +2369,8 @@ def _merge_odds_events(
             consensus_line = line_counts.most_common(1)[0][0]
             consensus_totals = [t for t in total_data if t[0] == consensus_line]
             best_total = consensus_line
-            best_over = max(t[1] for t in consensus_totals)
-            best_under = max(t[2] for t in consensus_totals)
+            best_over = round(sum(t[1] for t in consensus_totals) / len(consensus_totals))
+            best_under = round(sum(t[2] for t in consensus_totals) / len(consensus_totals))
 
         # Aggregate ALL available total lines across all sources.
         # Pair-based selection: over/under prices for each line must come
