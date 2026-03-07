@@ -27,11 +27,40 @@ async def check_fanduel(client: httpx.AsyncClient):
 
             # Collect unique market types and names
             market_types = {}
+            btts_count = 0
+            ot_count = 0
             for mid, m in markets.items() if isinstance(markets, dict) else []:
-                mt = m.get("marketType", "UNKNOWN")
+                mt = (m.get("marketType", "UNKNOWN") or "").upper()
                 mn = m.get("marketName", "") or m.get("name", "")
                 if mt not in market_types:
                     market_types[mt] = mn
+
+                runners = m.get("runners", [])
+                # Check BTTS
+                if mt == "BOTH_TEAMS_TO_SCORE":
+                    btts_count += 1
+                    eid = str(m.get("eventId", ""))
+                    ev_name = events.get(eid, {}).get("name", "?") if isinstance(events, dict) else "?"
+                    for runner in runners if isinstance(runners, list) else []:
+                        rn = runner.get("runnerName", "")
+                        wo = runner.get("winRunnerOdds", {})
+                        am = wo.get("americanDisplayOdds", {}).get("americanOdds", "")
+                        if btts_count <= 2:  # Show first 2 games only
+                            print(f"    BTTS [{ev_name}]: {rn} = {am}")
+
+                # Check OT
+                if mt in ("OVERTIME_YES_NO", "OVERTIME"):
+                    ot_count += 1
+                    eid = str(m.get("eventId", ""))
+                    ev_name = events.get(eid, {}).get("name", "?") if isinstance(events, dict) else "?"
+                    for runner in runners if isinstance(runners, list) else []:
+                        rn = runner.get("runnerName", "")
+                        wo = runner.get("winRunnerOdds", {})
+                        am = wo.get("americanDisplayOdds", {}).get("americanOdds", "")
+                        if ot_count <= 2:
+                            print(f"    OT [{ev_name}]: {rn} = {am}")
+
+            print(f"  BTTS markets: {btts_count}, OT markets: {ot_count}")
             print(f"  Market types ({len(market_types)}):")
             for mt, mn in sorted(market_types.items()):
                 print(f"    {mt:35s} ({mn})")

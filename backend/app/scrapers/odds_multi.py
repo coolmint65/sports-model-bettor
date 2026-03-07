@@ -1375,6 +1375,19 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
     except Exception as exc:
         logger.warning("FanDuel parse error: %s", exc)
 
+    # Log prop coverage
+    prop_events = [e for e in events if e.btts_yes or e.overtime_yes]
+    if prop_events:
+        for pe in prop_events:
+            logger.info(
+                "FanDuel prop: %s@%s BTTS=%s/%s OT=%s/%s",
+                pe.away_abbr, pe.home_abbr,
+                pe.btts_yes or "-", pe.btts_no or "-",
+                pe.overtime_yes or "-", pe.overtime_no or "-",
+            )
+    else:
+        logger.info("FanDuel: no BTTS/OT props found in %d events", len(events))
+
     logger.info(
         "FanDuel: fetched odds for %d events (from %d raw events)",
         len(events), len(event_info),
@@ -1817,6 +1830,26 @@ async def _fetch_bovada(client: httpx.AsyncClient) -> List[OddsEvent]:
                                         odds["p1_over_price"] = odds_val
                                     elif oc_type == "U":
                                         odds["p1_under_price"] = odds_val
+
+                            # 1st Period Spread / Puck Line
+                            elif market_key == "2W-SPRD" or "spread" in market_desc or "puck" in market_desc:
+                                for oc in outcomes:
+                                    price_data = oc.get("price", {})
+                                    if not isinstance(price_data, dict):
+                                        continue
+                                    american_str = price_data.get("american", "")
+                                    handicap_str = price_data.get("handicap", "0")
+                                    try:
+                                        odds_val = float(str(american_str).replace("+", ""))
+                                        line_val = float(handicap_str)
+                                    except (ValueError, TypeError):
+                                        continue
+                                    oc_type = (oc.get("type", "") or "").upper()
+                                    if oc_type == "H":
+                                        odds["p1_spread_line"] = abs(line_val)
+                                        odds["p1_home_spread_price"] = odds_val
+                                    elif oc_type == "A":
+                                        odds["p1_away_spread_price"] = odds_val
                             continue
 
                         # Skip other non-main period markets (2nd, 3rd)
@@ -2034,6 +2067,12 @@ async def _fetch_bovada(client: httpx.AsyncClient) -> List[OddsEvent]:
                     event.p1_away_ml = odds["p1_away_ml"]
                 if odds.get("p1_draw_price"):
                     event.p1_draw_price = odds["p1_draw_price"]
+                if odds.get("p1_spread_line"):
+                    event.p1_spread_line = odds["p1_spread_line"]
+                if odds.get("p1_home_spread_price"):
+                    event.p1_home_spread_price = odds["p1_home_spread_price"]
+                if odds.get("p1_away_spread_price"):
+                    event.p1_away_spread_price = odds["p1_away_spread_price"]
                 if odds.get("btts_yes"):
                     event.btts_yes = odds["btts_yes"]
                 if odds.get("btts_no"):
