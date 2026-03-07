@@ -179,6 +179,26 @@ async def _migrate_add_columns() -> None:
         ("game", "highest_period_p2_price", "FLOAT"),
         ("game", "highest_period_p3_price", "FLOAT"),
         ("game", "highest_period_tie_price", "FLOAT"),
+        # Period 2 odds
+        ("game", "period2_total_line", "FLOAT"),
+        ("game", "period2_over_price", "FLOAT"),
+        ("game", "period2_under_price", "FLOAT"),
+        ("game", "period2_home_ml", "FLOAT"),
+        ("game", "period2_away_ml", "FLOAT"),
+        ("game", "period2_draw_price", "FLOAT"),
+        ("game", "period2_spread_line", "FLOAT"),
+        ("game", "period2_home_spread_price", "FLOAT"),
+        ("game", "period2_away_spread_price", "FLOAT"),
+        # Period 3 odds
+        ("game", "period3_total_line", "FLOAT"),
+        ("game", "period3_over_price", "FLOAT"),
+        ("game", "period3_under_price", "FLOAT"),
+        ("game", "period3_home_ml", "FLOAT"),
+        ("game", "period3_away_ml", "FLOAT"),
+        ("game", "period3_draw_price", "FLOAT"),
+        ("game", "period3_spread_line", "FLOAT"),
+        ("game", "period3_home_spread_price", "FLOAT"),
+        ("game", "period3_away_spread_price", "FLOAT"),
     ]
 
     async with engine.begin() as conn:
