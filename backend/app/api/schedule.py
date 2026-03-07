@@ -673,6 +673,10 @@ async def _compute_top_props(
     # Only for games that have NO odds-backed props at all.
     # Skip trivially-confident bets that aren't useful betting signals
     # (e.g., BTTS No at 90%+ — always true, not insightful).
+    # Also skip spread-type props with no odds — they are almost always
+    # heavily juiced (e.g., +0.5 puck line) and we can't verify juice
+    # without odds data.
+    _JUICE_RISK_TYPES = {"period1_spread", "spread"}
     still_missing = set(gid for gid in game_ids if gid not in top_props)
     if still_missing:
         tier3 = [
@@ -691,13 +695,17 @@ async def _compute_top_props(
                 t3_impl = effective_impl.get(pred.id, pred.odds_implied_prob)
                 if is_heavy_juice(t3_impl, max_implied):
                     continue
+                # Skip spread-type props with no odds — juice can't be
+                # verified and these are frequently heavy favorites.
+                if pred.bet_type in _JUICE_RISK_TYPES and t3_impl is None:
+                    continue
                 top_props[pred.game_id] = GameTopPick(
                     bet_type=pred.bet_type,
                     prediction_value=pred.prediction_value,
                     confidence=pred.confidence,
                     edge=pred.edge,
                     is_fallback=pred.odds_implied_prob is None,
-    
+
                 )
 
     # Grade outcomes for final games
