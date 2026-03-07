@@ -1450,6 +1450,68 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
                     elif "tie" in runner_name or "equal" in runner_name or "draw" in runner_name:
                         game_odds[eid]["hp_tie"] = odds_val
 
+            # ---------------------------------------------------------
+            # Description-based fallback matching.
+            # FanDuel market_type enums vary by region/state. When the
+            # enum doesn't match a known value, fall back to matching
+            # on the human-readable market_name (description string).
+            # ---------------------------------------------------------
+
+            # First Goal fallback — matches "first goal", "1st goal",
+            # "team to score first", "first team to score", etc.
+            elif (
+                "fg_home" not in game_odds.get(eid, {})
+                and (
+                    ("first" in market_name and ("goal" in market_name or "score" in market_name))
+                    or ("1st" in market_name and ("goal" in market_name or "score" in market_name))
+                )
+                and "period" not in market_name  # exclude P1 first goal
+            ):
+                ev_info = event_info[eid]
+                home_mapped = _map_team(ev_info["home"])
+                for runner in runners if isinstance(runners, list) else []:
+                    odds_val = _parse_fd_odds(runner)
+                    if odds_val is None:
+                        continue
+                    runner_name = runner.get("runnerName", "")
+                    mapped = _map_team(runner_name)
+                    if mapped and mapped == home_mapped:
+                        game_odds[eid]["fg_home"] = odds_val
+                    elif mapped:
+                        game_odds[eid]["fg_away"] = odds_val
+
+            # Team Total fallback — matches "team total", "home total",
+            # "away total", "<team name> total goals", etc.
+            elif (
+                ("team" in market_name and "total" in market_name)
+                or ("total" in market_name and "goal" in market_name and "period" not in market_name)
+            ):
+                # Determine if this is home or away team total
+                ev_info = event_info[eid]
+                home_mapped = _map_team(ev_info["home"])
+                name_mapped = _map_team(market.get("marketName", "") or market.get("name", "") or "")
+                is_home_tt = (
+                    "home" in market_name
+                    or (name_mapped and name_mapped == home_mapped)
+                )
+                prefix = "home_tt" if is_home_tt else "away_tt"
+                # Only fill if not already populated by enum-based matching
+                if f"{prefix}_line" not in game_odds.get(eid, {}):
+                    for runner in runners if isinstance(runners, list) else []:
+                        odds_val = _parse_fd_odds(runner)
+                        if odds_val is None:
+                            continue
+                        try:
+                            line_val = float(runner.get("handicap", 0))
+                        except (ValueError, TypeError):
+                            continue
+                        runner_name = (runner.get("runnerName", "") or "").lower()
+                        game_odds[eid][f"{prefix}_line"] = line_val
+                        if "over" in runner_name:
+                            game_odds[eid][f"{prefix}_over"] = odds_val
+                        elif "under" in runner_name:
+                            game_odds[eid][f"{prefix}_under"] = odds_val
+
         # Build OddsEvent objects
         for eid, odds in game_odds.items():
             ev_info = event_info.get(eid, {})

@@ -566,6 +566,19 @@ async def _get_game_predictions(
     min_edge = settings.min_edge
     min_conf = settings.min_confidence
 
+    # NHL puck-line ±0.5 is always heavily juiced (~-200 or worse).
+    # _best_price() can pick an outlier that slips past the ceiling.
+    _ALWAYS_HEAVY = {
+        "period1_spread": {"0.5", "-0.5", "+0.5"},
+    }
+
+    def _is_always_heavy(p) -> bool:
+        lines = _ALWAYS_HEAVY.get(p.bet_type)
+        if not lines or not p.prediction_value:
+            return False
+        line_part = p.prediction_value.rsplit("_", 1)[-1]
+        return line_part in lines
+
     briefs: List[GamePredictionBrief] = []
     # Map brief id → implied_prob for composite scoring.
     # Use fresh Game odds when available, fall back to stored value.
@@ -601,6 +614,7 @@ async def _get_game_predictions(
             _meets_thresholds
             and not is_heavy_juice(cur_impl, max_implied)
             and (cur_impl is not None or not _is_prop)
+            and not _is_always_heavy(p)
         )
         briefs.append(
             GamePredictionBrief(
