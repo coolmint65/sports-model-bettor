@@ -454,32 +454,46 @@ async def _make_request(
     headers: Optional[Dict[str, str]] = None,
     params: Optional[Dict[str, Any]] = None,
     timeout: float = 10.0,
+    max_retries: int = 2,
 ) -> Optional[Any]:
-    """Make a GET request with error handling. Returns parsed JSON or None."""
+    """Make a GET request with error handling. Returns parsed JSON or None.
+
+    Retries on 429 (rate limited) with exponential backoff up to
+    *max_retries* times.
+    """
     # Strip API key from log output
     _log_url = url.split("?")[0]
-    try:
-        resp = await client.get(
-            url,
-            headers=headers or {},
-            params=params,
-            timeout=timeout,
-        )
-        if resp.status_code == 200:
-            return resp.json()
-        # Log body for non-200 responses (often contains error message)
-        body = resp.text[:200] if resp.text else ""
-        logger.warning("HTTP %d from %s: %s", resp.status_code, _log_url, body)
-        return None
-    except httpx.TimeoutException:
-        logger.warning("Timeout (%.0fs) for %s", timeout, _log_url)
-        return None
-    except httpx.ConnectError as exc:
-        logger.warning("Connection failed for %s: %s", _log_url, exc)
-        return None
-    except Exception as exc:
-        logger.warning("Request failed for %s: %s", _log_url, exc)
-        return None
+    for attempt in range(1 + max_retries):
+        try:
+            resp = await client.get(
+                url,
+                headers=headers or {},
+                params=params,
+                timeout=timeout,
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            # Retry on 429 with exponential backoff
+            if resp.status_code == 429 and attempt < max_retries:
+                wait = 2 ** attempt  # 1s, 2s
+                logger.info("429 from %s — retrying in %ds (attempt %d/%d)",
+                            _log_url, wait, attempt + 1, max_retries)
+                await asyncio.sleep(wait)
+                continue
+            # Log body for non-200 responses (often contains error message)
+            body = resp.text[:200] if resp.text else ""
+            logger.warning("HTTP %d from %s: %s", resp.status_code, _log_url, body)
+            return None
+        except httpx.TimeoutException:
+            logger.warning("Timeout (%.0fs) for %s", timeout, _log_url)
+            return None
+        except httpx.ConnectError as exc:
+            logger.warning("Connection failed for %s: %s", _log_url, exc)
+            return None
+        except Exception as exc:
+            logger.warning("Request failed for %s: %s", _log_url, exc)
+            return None
+    return None
 
 
 # ---- DraftKings ----
@@ -494,8 +508,19 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
     """
     events: List[OddsEvent] = []
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/131.0.0.0 Safari/537.36"
+        ),
         "Accept": "application/json",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Referer": "https://sportsbook.draftkings.com/",
+        "Origin": "https://sportsbook.draftkings.com",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin",
     }
 
     # DraftKings NHL event group ID: 42133
@@ -509,6 +534,10 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
     ]
     data = None
     for url in urls:
+        # Use matching Referer/Origin for state-specific subdomains
+        domain = url.split("/sites/")[0] if "/sites/" in url else "https://sportsbook.draftkings.com"
+        headers["Referer"] = domain + "/"
+        headers["Origin"] = domain
         data = await _make_request(client, url, headers=headers)
         if data:
             logger.info("DraftKings: connected via %s", url.split("/sites/")[1].split("/")[0] if "/sites/" in url else url)
@@ -1454,45 +1483,52 @@ async def _fetch_kambi(client: httpx.AsyncClient) -> List[OddsEvent]:
     """
     events: List[OddsEvent] = []
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/131.0.0.0 Safari/537.36"
+        ),
         "Accept": "application/json",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
     }
 
-    # Kambi offering API - try multiple operator codes and CDN hosts
-    operators = [
-        ("rsiuspa", "BetRivers US PA"),
-        ("ub", "Unibet"),
-        ("888", "888sport"),
+    # Kambi offering API — try one operator+path combo at a time with
+    # a delay between attempts to avoid 429 rate-limiting from the CDN.
+    # The triple-nested loop previously hammered 12 URLs in rapid
+    # succession; now we flatten and throttle.
+    _kambi_combos = [
+        # Most reliable first
+        ("https://eu-offering-api.kambicdn.com",
+         "/offering/v2018/rsiuspa/listView/ice_hockey/nhl/all/all/matches.json",
+         "BetRivers PA"),
+        ("https://eu-offering-api.kambicdn.com",
+         "/offering/v2018/rsiuspa/listView/ice_hockey/nhl.json",
+         "BetRivers PA (alt)"),
+        ("https://eu-offering-api.kambicdn.com",
+         "/offering/v2018/ub/listView/ice_hockey/nhl/all/all/matches.json",
+         "Unibet"),
+        ("https://eu-offering.kambicdn.org",
+         "/offering/v2018/rsiuspa/listView/ice_hockey/nhl/all/all/matches.json",
+         "BetRivers PA (mirror)"),
     ]
-    cdn_hosts = [
-        "https://eu-offering-api.kambicdn.com",
-        "https://eu-offering.kambicdn.org",
-    ]
-    paths = [
-        "/offering/v2018/{op}/listView/ice_hockey/nhl/all/all/matches.json",
-        "/offering/v2018/{op}/listView/ice_hockey/nhl.json",
-    ]
+    params = {
+        "lang": "en_US",
+        "market": "US",
+        "client_id": "2",
+        "channel_id": "1",
+        "useCombined": "true",
+        "includeParticipants": "true",
+    }
 
     data = None
-    for host in cdn_hosts:
-        for op_code, op_name in operators:
-            for path_tmpl in paths:
-                url = host + path_tmpl.format(op=op_code)
-                params = {
-                    "lang": "en_US",
-                    "market": "US",
-                    "client_id": "2",
-                    "channel_id": "1",
-                    "useCombined": "true",
-                    "includeParticipants": "true",
-                }
-                data = await _make_request(client, url, headers=headers, params=params)
-                if data and data.get("events"):
-                    logger.info("Kambi: got data via %s (%s)", op_name, host.split("//")[1])
-                    break
-            if data and data.get("events"):
-                break
+    for i, (host, path, label) in enumerate(_kambi_combos):
+        if i > 0:
+            await asyncio.sleep(1.5)  # rate-limit between attempts
+        url = host + path
+        data = await _make_request(client, url, headers=headers, params=params)
         if data and data.get("events"):
+            logger.info("Kambi: got data via %s", label)
             break
 
     if not data:

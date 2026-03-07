@@ -3,8 +3,14 @@ import asyncio
 import httpx
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/131.0.0.0 Safari/537.36"
+    ),
     "Accept": "application/json",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
 }
 
 
@@ -136,7 +142,16 @@ async def check_draftkings(client: httpx.AsyncClient):
     ]
     for label, url in urls:
         try:
-            r = await client.get(url, headers=HEADERS, timeout=15)
+            domain = url.split("/sites/")[0]
+            dk_headers = {
+                **HEADERS,
+                "Referer": domain + "/",
+                "Origin": domain,
+                "Sec-Fetch-Dest": "empty",
+                "Sec-Fetch-Mode": "cors",
+                "Sec-Fetch-Site": "same-origin",
+            }
+            r = await client.get(url, headers=dk_headers, timeout=15)
             print(f"  {label}: HTTP {r.status_code} ({len(r.content):,} bytes)")
             if r.status_code == 200:
                 break
@@ -147,12 +162,19 @@ async def check_draftkings(client: httpx.AsyncClient):
 async def check_kambi(client: httpx.AsyncClient):
     """Check Kambi endpoint."""
     print("\n--- Kambi (BetRivers) ---")
-    url = "https://eu-offering-api.kambicdn.com/offering/v2018/betrivers/listView/ice_hockey/nhl.json?lang=en_US&market=US"
-    try:
-        r = await client.get(url, headers=HEADERS, timeout=15)
-        print(f"  HTTP {r.status_code} ({len(r.content):,} bytes)")
-    except Exception as e:
-        print(f"  ERROR: {e}")
+    urls = [
+        ("BetRivers PA", "https://eu-offering-api.kambicdn.com/offering/v2018/rsiuspa/listView/ice_hockey/nhl/all/all/matches.json?lang=en_US&market=US&client_id=2&channel_id=1&useCombined=true&includeParticipants=true"),
+        ("BetRivers (alt)", "https://eu-offering-api.kambicdn.com/offering/v2018/rsiuspa/listView/ice_hockey/nhl.json?lang=en_US&market=US"),
+    ]
+    for label, url in urls:
+        try:
+            r = await client.get(url, headers=HEADERS, timeout=15)
+            print(f"  {label}: HTTP {r.status_code} ({len(r.content):,} bytes)")
+            if r.status_code == 200:
+                return
+            await asyncio.sleep(1.5)  # rate-limit between attempts
+        except Exception as e:
+            print(f"  {label}: ERROR: {e}")
 
 
 async def main():
