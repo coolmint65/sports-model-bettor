@@ -3,6 +3,7 @@
 from app.props.types.btts import BTTSProp
 from app.props.types.first_goal import FirstGoalProp
 from app.props.types.overtime import OvertimeProp
+from app.props.types.period_spread import PeriodSpreadProp
 from app.props.types.period_total import PeriodTotalProp
 from app.props.types.period_winner import PeriodWinnerProp
 from app.props.types.regulation import RegulationWinnerProp
@@ -13,6 +14,7 @@ PROP_REGISTRY = [
     BTTSProp,
     PeriodTotalProp,
     PeriodWinnerProp,
+    PeriodSpreadProp,
     FirstGoalProp,
     OvertimeProp,
     RegulationWinnerProp,

@@ -2756,6 +2756,18 @@ def _merge_odds_events(
             },
             "all_total_lines": all_total_lines,
             "all_spread_lines": all_spread_lines,
+            # 1st period odds: best price across all sources
+            "p1_odds": {
+                "home_ml": _best_price([getattr(e, "p1_home_ml", None) for e in ev_list]),
+                "away_ml": _best_price([getattr(e, "p1_away_ml", None) for e in ev_list]),
+                "draw_price": _best_price([getattr(e, "p1_draw_price", None) for e in ev_list]),
+                "spread_line": getattr(first, "p1_spread_line", None) if hasattr(first, "p1_spread_line") else None,
+                "home_spread_price": _best_price([getattr(e, "p1_home_spread_price", None) for e in ev_list]),
+                "away_spread_price": _best_price([getattr(e, "p1_away_spread_price", None) for e in ev_list]),
+                "total_line": getattr(first, "p1_total_line", None) if hasattr(first, "p1_total_line") else None,
+                "over_price": _best_price([getattr(e, "p1_over_price", None) for e in ev_list]),
+                "under_price": _best_price([getattr(e, "p1_under_price", None) for e in ev_list]),
+            },
             "all_sources": [e.to_dict() for e in ev_list],
         })
 
@@ -3123,6 +3135,27 @@ class MultiSourceOddsScraper:
             asl = odds.get("all_spread_lines")
             if asl:
                 game.all_spread_lines = asl
+
+            # Persist 1st period odds
+            p1 = odds.get("p1_odds", {})
+            if p1.get("home_ml") is not None:
+                game.period1_home_ml = p1["home_ml"]
+            if p1.get("away_ml") is not None:
+                game.period1_away_ml = p1["away_ml"]
+            if p1.get("draw_price") is not None:
+                game.period1_draw_price = p1["draw_price"]
+            if p1.get("spread_line") is not None:
+                game.period1_spread_line = p1["spread_line"]
+            if p1.get("home_spread_price") is not None:
+                game.period1_home_spread_price = p1["home_spread_price"]
+            if p1.get("away_spread_price") is not None:
+                game.period1_away_spread_price = p1["away_spread_price"]
+            if p1.get("total_line") is not None:
+                game.period1_total_line = p1["total_line"]
+            if p1.get("over_price") is not None:
+                game.period1_over_price = p1["over_price"]
+            if p1.get("under_price") is not None:
+                game.period1_under_price = p1["under_price"]
 
             game.odds_updated_at = datetime.now(timezone.utc)
 
