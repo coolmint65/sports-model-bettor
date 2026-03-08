@@ -201,6 +201,15 @@ async def _migrate_add_columns() -> None:
         ("game", "period3_spread_line", "FLOAT"),
         ("game", "period3_home_spread_price", "FLOAT"),
         ("game", "period3_away_spread_price", "FLOAT"),
+        # Game closing line snapshots
+        ("game", "closing_home_moneyline", "FLOAT"),
+        ("game", "closing_away_moneyline", "FLOAT"),
+        ("game", "closing_over_under_line", "FLOAT"),
+        ("game", "closing_over_price", "FLOAT"),
+        ("game", "closing_under_price", "FLOAT"),
+        ("game", "closing_home_spread_line", "FLOAT"),
+        ("game", "closing_home_spread_price", "FLOAT"),
+        ("game", "closing_away_spread_price", "FLOAT"),
         # BetResult CLV tracking
         ("bet_result", "closing_implied_prob", "FLOAT"),
         ("bet_result", "clv", "FLOAT"),
