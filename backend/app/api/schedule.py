@@ -461,10 +461,12 @@ async def _compute_top_picks(
 async def _compute_top_props(
     games: List[Game], session: AsyncSession,
 ) -> dict[int, GameTopPick]:
-    """Pick the single highest-confidence prop prediction per game.
+    """Pick the single best prop prediction per game.
 
-    Uses the same GameTopPick schema so the frontend can render it
-    identically to a market top_pick.
+    Selects by edge first (when odds exist), then confidence as
+    tiebreaker. Deduplicates to one candidate per bet_type before
+    comparing across types. Uses the same GameTopPick schema so the
+    frontend can render it identically to a market top_pick.
     """
     from app.props.types import PROP_BY_BET_TYPE
 
@@ -484,17 +486,20 @@ async def _compute_top_props(
     )
     all_props = result.scalars().all()
 
-    # Pick highest confidence prop per game.
-    # Prefer non-regulation_winner props since reg_winner is conceptually
-    # redundant with the ML top pick. Fall back to reg_winner if nothing else.
-    by_game: dict[int, list] = {}
+    # Pick best prop per game by edge first (if available), then confidence.
+    # Deduplicate: keep only the best candidate per bet_type per game
+    # (e.g., only the strongest reg_winner side, not all three).
+    by_game: dict[int, dict[str, Prediction]] = {}
     for pred in all_props:
-        by_game.setdefault(pred.game_id, []).append(pred)
+        key = (pred.game_id, pred.bet_type)
+        existing = by_game.setdefault(pred.game_id, {}).get(pred.bet_type)
+        if existing is None or (pred.confidence or 0) > (existing.confidence or 0):
+            by_game[pred.game_id][pred.bet_type] = pred
 
-    for game_id, preds in by_game.items():
-        non_reg = [p for p in preds if p.bet_type != "regulation_winner"]
-        pool = non_reg if non_reg else preds
-        best = max(pool, key=lambda p: p.confidence or 0)
+    for game_id, type_map in by_game.items():
+        preds = list(type_map.values())
+        # Sort by edge (if we have odds), then by confidence as tiebreaker
+        best = max(preds, key=lambda p: (p.edge or 0, p.confidence or 0))
         top_props[game_id] = GameTopPick(
             bet_type=best.bet_type,
             prediction_value=best.prediction_value,
