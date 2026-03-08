@@ -7,10 +7,12 @@ import { useEffect, useRef, useState, useCallback } from 'react';
  * custom window events so any component can listen for specific update types.
  *
  * Events dispatched:
- *   - 'ws:odds_update'      — odds changed for one or more games
- *   - 'ws:initial_state'    — full state snapshot on connect
- *   - 'ws:connected'        — WebSocket connection established
- *   - 'ws:disconnected'     — WebSocket connection lost
+ *   - 'ws:odds_update'          — odds changed for one or more games
+ *   - 'ws:predictions_update'  — predictions regenerated
+ *   - 'ws:settlements_update'  — bets auto-settled (games went final)
+ *   - 'ws:initial_state'       — full state snapshot on connect
+ *   - 'ws:connected'           — WebSocket connection established
+ *   - 'ws:disconnected'        — WebSocket connection lost
  */
 
 const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 15000]; // exponential backoff

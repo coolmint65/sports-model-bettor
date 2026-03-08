@@ -1,81 +1,76 @@
-# Model Enhancement Plan — Implemented
+# Plan: Auto-Settlement & Smarter Bet Grading
 
-## What Changed
+## Current State
 
-### 1. Configurable Model Constants (`ModelConfig`)
-All prediction model weights and thresholds are now centralized in `config.py`
-under `ModelConfig`, `InjuryConfig`, and `MatchupConfig`. No more hard-coded
-constants scattered through the analytics code.
+Settlement has **three separate grading implementations** that are all manually triggered:
 
-**Key settings:** league averages, form weights, factor multipliers (H2H, goalie,
-skater talent, lineup depletion, injuries, matchups, schedule fatigue, special
-teams), blending ratios, xG bounds, and feature extraction windows.
+1. **`PredictionManager._grade_prediction()`** — grades `Prediction` → `BetResult` records, called only when `/predictions/stats` endpoint is hit
+2. **`settle_tracked_bets()` API route** — grades `TrackedBet` records, called only when user clicks "Settle" button on History page
+3. **`Backtester._check_outcome()`** — grades in backtest context only
 
-**Runtime API:** `GET /api/config/model` to view, `PUT /api/config/model` to
-update at runtime, `POST /api/config/model/reset` to restore defaults.
+**Closing odds snapshots** already work — `nhl_api.py` copies live odds to `closing_*` fields when a game goes final. CLV computation exists in `_get_closing_implied_prob()` but is rarely populated because grading is manual.
 
-### 2. Injury Reports
-- **Model:** `InjuryReport` — tracks player injuries with status, type, dates,
-  and snapshotted production metrics (PPG, GPG, TOI).
-- **Scraper:** `injury_scraper.py` — fetches from NHL API roster data, maps
-  injury designations to severity levels, auto-deactivates stale reports.
-- **Feature:** `get_injury_impact()` — computes xG reduction from active injuries
-  weighted by status severity and position importance.
-- **API:** `GET /api/injuries/{team_abbr}`, `POST /api/injuries/refresh`.
-- **Scheduler:** Injuries refresh automatically during full data sync.
+## What We're Building
 
-### 3. Player vs Team Matchup Tracking
-- **Model:** `PlayerMatchupStats` — per (player, opponent_team, season) stats
-  with PPG/GPG deviation from overall average.
-- **Engine:** `MatchupEngine.compute_player_matchup()` aggregates a player's
-  box score stats in games against a specific opponent.
-- **Feature:** `get_team_player_matchup_impact()` — weighted matchup boost/penalty
-  for a team's key players against the opponent.
-- **API:** `GET /api/matchups/player/{id}/vs/{team_abbr}`.
+A `SettlementService` that runs automatically when games go final, consolidating grading into one place.
 
-### 4. Enhanced Team vs Team Matchup Analytics
-- **Model:** `TeamMatchupProfile` — scoring patterns (avg total goals, variance),
-  period-level trends, OT rate, pace indicator between team pairs.
-- **Engine:** `MatchupEngine.compute_team_matchup_profile()` analyzes H2H games
-  for deeper tendencies beyond basic win/loss.
-- **Feature:** `get_team_matchup_features()` feeds scoring tendency data into
-  the xG calculation (TEAM_MATCHUP_SCORING_FACTOR).
-- **API:** `GET /api/matchups/team/{t1}/vs/{t2}`, `POST /api/matchups/refresh/{t1}/vs/{t2}`.
+## Implementation Steps
 
-### 5. Schedule Fatigue (Back-to-Back, Rest, Road Trips)
-- **Feature:** `get_schedule_context()` detects B2B games, rest days, games in
-  last 7 days, and consecutive road games.
-- **xG Impact:** B2B penalty (-0.15 xG), rest advantage (+0.05/day, capped),
-  road trip fatigue (-0.02/game after threshold).
+### Step 1: Create `backend/app/services/grading.py`
 
-### 6. Special Teams Matchup Integration
-- **Feature:** `get_special_teams_matchup()` pulls PP% and PK% from season stats.
-- **xG Impact:** Compares team PP vs opponent PK (and vice versa), adjusts xG
-  based on special teams advantage/disadvantage.
+Extract shared grading logic from the 3 duplicate implementations into one source of truth:
 
-## New Files
-- `backend/app/models/injury.py` — InjuryReport model
-- `backend/app/models/matchup.py` — PlayerMatchupStats, TeamMatchupProfile
-- `backend/app/scrapers/injury_scraper.py` — NHL injury data fetcher
-- `backend/app/analytics/matchups.py` — MatchupEngine
-- `backend/app/api/injuries.py` — Injury API endpoints
-- `backend/app/api/matchups.py` — Matchup API endpoints
-- `backend/app/api/model_config.py` — Config API endpoints
+- `check_outcome(bet_type, prediction_value, game) -> Optional[bool]` — determines if a bet won
+- `compute_profit_loss(was_correct, odds, units) -> float` — odds-aware P/L calculation
+- `determine_actual_outcome(game, bet_type, prediction_value) -> Optional[str]` — for BetResult records
 
-## Modified Files
-- `backend/app/config.py` — ModelConfig, InjuryConfig, MatchupConfig classes
-- `backend/app/analytics/models.py` — Config-driven constants + new xG adjustments
-- `backend/app/analytics/features.py` — New feature methods + build_game_features integration
-- `backend/app/analytics/predictions.py` — Extended features_summary
-- `backend/app/models/__init__.py` — Register new models
-- `backend/app/database.py` — Import new model modules for table creation
-- `backend/app/api/__init__.py` — Register new API routers
-- `backend/app/live.py` — Injury sync in scheduler
+Then update `PredictionManager`, `settle_tracked_bets` route, and `Backtester` to call these shared functions.
 
-## Future Expansion Points
-The architecture is designed for easy extension:
-- Add new sports by adding SportConfig entries and sport-specific FeatureEngine subclasses
-- Add new bet types by extending BET_TYPES and adding prediction methods
-- Add ML model training by reading features from the DB and training against outcomes
-- Add advanced metrics (Corsi, Fenwick, xGF) by extending GamePlayerStats and FeatureEngine
-- Add prop bet odds by connecting a prop odds data source
+### Step 2: Create `backend/app/services/settlement.py`
+
+A new service with a single public function: `settle_completed_games(session) -> dict`.
+
+This function:
+1. Queries for final games with unsettled predictions or tracked bets
+2. **Grades all `Prediction` records** → creates `BetResult` rows with `was_correct`, `profit_loss`, `clv`, `closing_implied_prob`
+3. **Settles all `TrackedBet` records** → sets `result`, `profit_loss`, `settled_at`
+4. Returns summary: `{"predictions_graded": N, "tracked_bets_settled": N}`
+
+### Step 3: Hook into the scheduler
+
+In `live.py`'s `_scheduler_loop()`, call `settle_completed_games()` after each data sync cycle. This is natural because the sync is what updates game statuses to "final".
+
+Broadcast a `settlements_update` WebSocket event when bets are settled.
+
+### Step 4: Simplify the `/tracked/settle` endpoint
+
+Change it from doing its own grading to calling `settle_completed_games()`. Manual button still works as fallback, same code path.
+
+### Step 5: Frontend — auto-refresh on settlement
+
+- Add listener for `settlements_update` WebSocket event to trigger History refetch
+- Change "Settle Bets" button to just trigger a refetch (or remove it)
+- Existing P/L chart and stats update automatically
+
+### Step 6: Add confidence-tier ROI breakdown
+
+Enhance the `/predictions/stats` response to include ROI grouped by confidence tier (50-60%, 60-70%, 70%+), validating model calibration.
+
+## Files Changed
+
+| File | Change |
+|------|--------|
+| `backend/app/services/grading.py` | **NEW** — shared grading functions |
+| `backend/app/services/settlement.py` | **NEW** — auto-settlement service |
+| `backend/app/live.py` | Hook settlement into scheduler loop |
+| `backend/app/api/predictions.py` | Simplify `/tracked/settle` to use service; remove duplicate grading |
+| `backend/app/analytics/predictions.py` | Use shared grading from `grading.py` |
+| `backend/app/analytics/backtest.py` | Use shared grading from `grading.py` |
+| `frontend/src/components/History.jsx` | Auto-refresh on settlement events |
+
+## What We're NOT Doing
+
+- No push detection for half-point lines (already impossible with .5 lines in NHL)
+- No streak detection or advanced analytics (future work)
+- No changes to prediction generation or model logic
+- No new database columns or migrations needed

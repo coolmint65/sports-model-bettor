@@ -257,6 +257,30 @@ async def _regenerate_predictions():
         logger.error("Prediction regeneration failed: %s", exc, exc_info=True)
 
 
+async def _settle_bets():
+    """Auto-settle predictions and tracked bets for completed games.
+
+    Runs after each scheduler cycle so bets are graded promptly
+    when a game goes final.
+    """
+    try:
+        from app.services.settlement import settle_completed_games
+
+        async with get_session_context() as session:
+            result = await settle_completed_games(session)
+
+        total = result["predictions_graded"] + result["tracked_bets_settled"]
+        if total > 0 and manager.client_count > 0:
+            await manager.broadcast({
+                "type": "settlements_update",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "predictions_graded": result["predictions_graded"],
+                "tracked_bets_settled": result["tracked_bets_settled"],
+            })
+    except Exception as exc:
+        logger.error("Auto-settlement failed: %s", exc, exc_info=True)
+
+
 async def _run_full_data_sync():
     """Run a full data sync (schedule, teams, rosters, odds, injuries, predictions).
 
@@ -378,6 +402,10 @@ async def _scheduler_loop():
             if now - last_pred_regen >= PRED_REGEN_INTERVAL:
                 await _regenerate_predictions()
                 last_pred_regen = now
+
+            # Auto-settle bets for any games that just went final.
+            # Runs every cycle (lightweight — only queries for unsettled).
+            await _settle_bets()
 
             # Periodic full data sync — run as background task so it
             # never blocks the fast odds loop

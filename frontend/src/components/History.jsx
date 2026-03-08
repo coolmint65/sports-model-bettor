@@ -86,6 +86,11 @@ function History() {
     silentRefetch();
   }, [silentRefetch]));
 
+  // Auto-refresh when the server settles bets (games went final)
+  useWebSocketEvent('settlements_update', useCallback(() => {
+    silentRefetch();
+  }, [silentRefetch]));
+
   const bets = data?.bets || [];
   const totalBets = data?.total_bets || 0;
   const winsCount = data?.wins || 0;

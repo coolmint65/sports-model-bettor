@@ -329,48 +329,10 @@ class Backtester:
         features: Dict[str, Any],
     ) -> Optional[bool]:
         """Check if a prediction was correct given actual game results."""
-        hs = game.home_score
-        as_ = game.away_score
-        if hs is None or as_ is None:
-            return None
+        from app.services.grading import check_outcome
 
-        if bet_type == "ml":
-            home_abbr = features.get("home_team_abbr", "")
-            if prediction_value == home_abbr or prediction_value == "home":
-                return hs > as_
-            else:
-                return as_ > hs
-
-        elif bet_type == "total":
-            try:
-                parts = prediction_value.split("_")
-                direction = parts[0]
-                line = float(parts[1])
-                total = hs + as_
-                if direction == "over":
-                    return total > line
-                elif direction == "under":
-                    return total < line
-            except (IndexError, ValueError):
-                pass
-            return None
-
-        elif bet_type == "spread":
-            try:
-                pred_parts = prediction_value.split("_", 1)
-                team_abbr = pred_parts[0]
-                spread_val = float(pred_parts[1])
-                home_abbr = features.get("home_team_abbr", "")
-                margin = hs - as_
-                if team_abbr == home_abbr:
-                    return margin + spread_val > 0
-                else:
-                    return -margin + spread_val > 0
-            except (IndexError, ValueError):
-                pass
-            return None
-
-        return None
+        home_abbr = features.get("home_team_abbr", "")
+        return check_outcome(bet_type, prediction_value, game, home_abbr)
 
     @staticmethod
     def _grid_size(grid: Dict[str, List[float]]) -> int:

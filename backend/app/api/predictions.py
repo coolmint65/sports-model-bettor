@@ -1248,53 +1248,14 @@ async def delete_tracked_bet(
 async def settle_tracked_bets(
     session: AsyncSession = Depends(get_session),
 ):
-    """Auto-settle tracked bets for games that are final."""
-    result = await session.execute(
-        select(TrackedBet)
-        .join(Game, Game.id == TrackedBet.game_id)
-        .where(
-            TrackedBet.result.is_(None),
-            func.lower(Game.status).in_(GAME_FINAL_STATUSES),
-        )
-    )
-    unsettled = result.scalars().all()
-    settled_count = 0
+    """Auto-settle tracked bets and predictions for games that are final."""
+    from app.services.settlement import settle_completed_games
 
-    for tb in unsettled:
-        game_result = await session.execute(
-            select(Game)
-            .options(selectinload(Game.home_team), selectinload(Game.away_team))
-            .where(Game.id == tb.game_id)
-        )
-        game = game_result.scalar_one_or_none()
-        if not game or game.home_score is None or game.away_score is None:
-            continue
-
-        was_correct = _grade_tracked_bet(tb, game)
-        if was_correct is None:
-            continue
-
-        tb.result = "win" if was_correct else "loss"
-        if was_correct:
-            # Calculate profit from American odds
-            odds = tb.odds
-            if odds and odds > 0:
-                tb.profit_loss = round((odds / 100) * tb.units, 2)
-            elif odds and odds < 0:
-                tb.profit_loss = round((100 / abs(odds)) * tb.units, 2)
-            else:
-                tb.profit_loss = round(1.0 * tb.units, 2)
-        else:
-            tb.profit_loss = round(-1.0 * tb.units, 2)
-        tb.settled_at = datetime.now(timezone.utc)
-        if tb.locked_at is None:
-            tb.locked_at = tb.settled_at
-        settled_count += 1
-
-    if settled_count > 0:
-        await session.flush()
-
-    return {"settled": settled_count}
+    result = await settle_completed_games(session)
+    return {
+        "settled": result["tracked_bets_settled"],
+        "predictions_graded": result["predictions_graded"],
+    }
 
 
 @router.delete("/tracked/all")
@@ -1339,51 +1300,6 @@ def _tracked_bet_to_response(
         created_at=str(tb.created_at) if tb.created_at else None,
         game_start_time=game_start_time,
     )
-
-
-def _grade_tracked_bet(tb: TrackedBet, game: Game) -> Optional[bool]:
-    """Determine if a tracked bet won. Returns True/False or None if unknown."""
-    hs = game.home_score
-    aws = game.away_score
-    val = tb.prediction_value
-
-    if tb.bet_type == "ml":
-        home_abbr = game.home_team.abbreviation if game.home_team else ""
-        if val == home_abbr:
-            return hs > aws
-        else:
-            return aws > hs
-
-    elif tb.bet_type == "total":
-        total = hs + aws
-        if "over" in val:
-            try:
-                line = float(val.split("_")[1])
-            except (IndexError, ValueError):
-                return None
-            return total > line
-        elif "under" in val:
-            try:
-                line = float(val.split("_")[1])
-            except (IndexError, ValueError):
-                return None
-            return total < line
-
-    elif tb.bet_type == "spread":
-        try:
-            parts = val.split("_")
-            team_abbr = parts[0]
-            spread_val = float(parts[1])
-        except (IndexError, ValueError):
-            return None
-        margin = hs - aws
-        home_abbr = game.home_team.abbreviation if game.home_team else ""
-        if team_abbr == home_abbr:
-            return margin + spread_val > 0
-        else:
-            return -margin + spread_val > 0
-
-    return None
 
 
 # ---------------------------------------------------------------------------
