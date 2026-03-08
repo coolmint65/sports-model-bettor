@@ -53,6 +53,12 @@ const BET_TYPE_LABELS = {
   ml: 'Moneyline',
   total: 'Total Goals',
   spread: 'Puck Line',
+  both_score: 'BTTS',
+  period_total: 'Period Total',
+  period_winner: 'Period Winner',
+  first_goal: 'First Goal',
+  overtime: 'Overtime',
+  regulation_winner: 'Reg. Winner',
 };
 
 export function formatBetType(betType) {

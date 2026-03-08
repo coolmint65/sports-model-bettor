@@ -303,6 +303,7 @@ function PredictionsTab({ game }) {
   }
 
   const market = predictions.filter((p) => MARKET_BET_TYPES.has(p.bet_type));
+  const props = predictions.filter((p) => !MARKET_BET_TYPES.has(p.bet_type));
 
   // Within market bets: recommended > fallback > rest
   const topPicks = market.filter((p) => p.recommended);
@@ -358,6 +359,21 @@ function PredictionsTab({ game }) {
           <div className="predictions-list">
             {otherMarket.map((pred, index) => (
               <PredictionCard key={pred.id || index} prediction={pred} homeAbbr={homeAbbr} awayAbbr={awayAbbr} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* --- Props --- */}
+      {props.length > 0 && (
+        <div className="predictions-section">
+          <h3 className="predictions-section-title predictions-section-title-props">
+            <Layers size={16} />
+            Props
+          </h3>
+          <div className="predictions-list">
+            {props.map((pred, index) => (
+              <PredictionCard key={pred.id || `prop-${index}`} prediction={pred} homeAbbr={homeAbbr} awayAbbr={awayAbbr} />
             ))}
           </div>
         </div>

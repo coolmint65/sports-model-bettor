@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Clock, MapPin, ChevronRight, TrendingUp, Target, Radio, AlertTriangle, CheckCircle, XCircle, MinusCircle } from 'lucide-react';
+import { Clock, MapPin, ChevronRight, TrendingUp, Target, Radio, AlertTriangle, CheckCircle, XCircle, MinusCircle, Layers } from 'lucide-react';
 import { format, formatDistanceToNowStrict } from 'date-fns';
 import { teamName, teamAbbrev, teamLogo, confidencePct, parseAsUTC, formatBetType, formatPredictionValue } from '../utils/teams';
 import { getConfidenceColor, formatAmericanOdds } from '../utils/formatting';
@@ -325,6 +325,7 @@ function GameCard({ game }) {
   const homeScore = game.home_score ?? game.score?.home ?? null;
   const venue = game.venue || game.arena || '';
   const topPick = game.top_pick || null;
+  const topProp = game.top_prop || null;
   const rawConf = topPick?.confidence || game.top_confidence || game.confidence || game.prediction_confidence || null;
   const confidence = rawConf != null ? confidencePct(rawConf) : null;
   const hasBadge = !!statusInfo.label;
@@ -458,6 +459,17 @@ function GameCard({ game }) {
           )}
         </div>
       </div>
+
+      {/* Prop row below the top pick */}
+      {topProp && (
+        <div className={`game-card-prop-footer ${topProp.outcome ? `pick-${topProp.outcome}` : ''}`}>
+          <div className="game-top-prop">
+            <Layers size={12} />
+            <span className="top-prop-type">{formatBetType(topProp.bet_type)}</span>
+            <span className="top-prop-value">{formatPredictionValue(topProp.prediction_value, homeAbbr, awayAbbr)}</span>
+          </div>
+        </div>
+      )}
 
       <div className="game-card-arrow">
         <ChevronRight size={18} />

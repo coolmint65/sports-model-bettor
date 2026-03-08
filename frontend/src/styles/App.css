@@ -1988,6 +1988,9 @@ a:hover {
   color: var(--text-muted);
   font-weight: 600;
 }
+.predictions-section-title-props {
+  color: var(--accent-purple, #b388ff);
+}
 .predictions-section-desc {
   font-size: 0.75rem;
   color: var(--text-muted);
