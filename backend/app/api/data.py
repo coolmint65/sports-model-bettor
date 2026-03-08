@@ -380,6 +380,40 @@ async def sync_results(
 
 
 @router.post(
+    "/sync/period-scores",
+    response_model=SyncResult,
+    summary="Backfill period scores",
+)
+async def sync_period_scores(
+    days_back: int = 90,
+    session: AsyncSession = Depends(get_session),
+):
+    """Backfill period scores for all final games missing boxscore data.
+
+    This fetches the NHL boxscore for each game that has a null
+    home_score_p1, populating period-by-period scores needed for
+    period props (totals, winners, first goal).
+
+    Args:
+        days_back: How far back to scan (default 90 days).
+    """
+    scraper = _get_scraper()
+    try:
+        await scraper.sync_recent_results(session, days_back=days_back)
+        return SyncResult(
+            success=True,
+            message=f"Period scores backfilled for games in last {days_back} days.",
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Period scores backfill failed: {exc}",
+        )
+    finally:
+        await scraper.close()
+
+
+@router.post(
     "/sync/odds",
     response_model=SyncResult,
     summary="Sync betting odds (multi-source)",
