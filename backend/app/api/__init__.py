@@ -17,6 +17,7 @@ from app.api.data import router as data_router
 from app.api.games import router as games_router
 from app.api.injuries import router as injuries_router
 from app.api.matchups import router as matchups_router
+from app.api.ml import router as ml_router
 from app.api.model_config import router as model_config_router
 from app.api.predictions import router as predictions_router
 from app.api.schedule import router as schedule_router
@@ -31,6 +32,7 @@ all_routers = [
     injuries_router,
     matchups_router,
     model_config_router,
+    ml_router,
 ]
 
 __all__ = [
@@ -43,4 +45,5 @@ __all__ = [
     "injuries_router",
     "matchups_router",
     "model_config_router",
+    "ml_router",
 ]

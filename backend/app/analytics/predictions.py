@@ -36,7 +36,21 @@ class PredictionManager:
 
     def __init__(self) -> None:
         self.feature_engine = FeatureEngine()
-        self.model = BettingModel()
+        self.ml_model = self._load_ml_model()
+        self.model = BettingModel(ml_model=self.ml_model)
+
+    @staticmethod
+    def _load_ml_model():
+        """Attempt to load a trained ML model from disk."""
+        try:
+            from app.analytics.ml_model import MLModel
+            model = MLModel()
+            if model.load(settings.model.ml_model_path):
+                logger.info("ML model loaded for prediction blending")
+                return model
+        except Exception as e:
+            logger.debug("ML model not available: %s", e)
+        return None
 
     # ------------------------------------------------------------------ #
     #  Generate predictions for a date's games                            #

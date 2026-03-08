@@ -88,13 +88,20 @@ class BettingModel:
     Statistical prediction model for NHL hockey betting.
 
     Uses Poisson distribution with weighted historical inputs to produce
-    probabilities for moneyline, totals, and spreads.
+    probabilities for moneyline, totals, and spreads. Optionally blends
+    with an ML model for improved xG estimation when trained.
     """
 
-    def __init__(self) -> None:
-        """Initialize the betting model with default parameters."""
+    def __init__(self, ml_model=None) -> None:
+        """Initialize the betting model with default parameters.
+
+        Args:
+            ml_model: Optional MLModel instance. If provided and trained,
+                      predictions will blend Poisson xG with ML xG.
+        """
         self.league_avg = LEAGUE_AVG_GOALS
         self.home_ice_adj = HOME_ICE_ADVANTAGE
+        self.ml_model = ml_model
 
     # ------------------------------------------------------------------ #
     #  Core: Expected goals calculation                                   #
@@ -390,6 +397,23 @@ class BettingModel:
         # ---- Floor / ceiling ----
         home_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, home_xg))
         away_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, away_xg))
+
+        # ---- ML model blend ----
+        # When a trained ML model is available, blend its xG predictions
+        # with the Poisson-based xG. The blend weight controls how much
+        # influence the ML model has (0 = pure Poisson, 1 = pure ML).
+        if self.ml_model and self.ml_model.is_trained:
+            blend = _mc.ml_blend_weight
+            if blend > 0:
+                try:
+                    ml_home, ml_away = self.ml_model.predict_xg(features)
+                    home_xg = home_xg * (1.0 - blend) + ml_home * blend
+                    away_xg = away_xg * (1.0 - blend) + ml_away * blend
+                    # Re-apply floor/ceiling after blending
+                    home_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, home_xg))
+                    away_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, away_xg))
+                except Exception as e:
+                    logger.warning("ML model prediction failed, using Poisson only: %s", e)
 
         return round(home_xg, 3), round(away_xg, 3)
 

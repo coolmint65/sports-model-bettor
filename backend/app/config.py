@@ -164,6 +164,11 @@ class ModelConfig(BaseModel):
     h2h_window: int = 20
     schedule_lookback: int = 7
 
+    # ML model settings
+    ml_blend_weight: float = 0.3           # 0.0 = pure Poisson, 1.0 = pure ML
+    ml_model_path: str = "data/ml_model.joblib"
+    ml_min_training_games: int = 100       # minimum games before ML kicks in
+
 
 class InjuryConfig(BaseModel):
     """Configuration for injury impact calculations."""

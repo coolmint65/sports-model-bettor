@@ -154,6 +154,7 @@ class Backtester:
         params: Dict[str, float],
         games: Optional[List[Game]] = None,
         features_cache: Optional[Dict[int, Dict]] = None,
+        ml_model=None,
     ) -> BacktestResult:
         """
         Run a backtest with given parameters against historical games.
@@ -166,13 +167,14 @@ class Backtester:
                 provided, skips the expensive build_game_features DB
                 queries (used by grid_search to avoid re-querying for
                 each parameter combination).
+            ml_model: Optional MLModel instance for ensemble backtesting.
         """
         import math
 
         if games is None:
             games = await self.get_completed_games(db)
 
-        model = BettingModel()
+        model = BettingModel(ml_model=ml_model)
 
         # Override settings temporarily via standard setattr (runs Pydantic validation)
         original_values = {}
@@ -400,6 +402,80 @@ async def run_grid_search_api(
     }
 
 
+async def run_ml_comparison_api(
+    db: AsyncSession,
+    days_back: int = 90,
+    limit: int = 200,
+) -> Dict[str, Any]:
+    """Compare Poisson-only vs ML-blended vs ML-only backtests.
+
+    Runs three backtests on the same games:
+    1. Poisson-only (ml_blend_weight=0)
+    2. Ensemble (ml_blend_weight from config, default 0.3)
+    3. ML-heavy (ml_blend_weight=0.8)
+
+    Returns side-by-side metrics for comparison.
+    """
+    from app.analytics.ml_model import MLModel
+
+    bt = Backtester()
+    end = date.today()
+    start = end - timedelta(days=days_back)
+    games = await bt.get_completed_games(db, start, end, limit)
+
+    if not games:
+        return {"error": "No completed games found", "games_checked": 0}
+
+    # Pre-build feature cache
+    features_cache: Dict[int, Dict] = {}
+    for game in games:
+        try:
+            features_cache[game.id] = await bt.feature_engine.build_game_features(
+                db, game.id
+            )
+        except Exception as e:
+            logger.debug("Feature build failed for game %d: %s", game.id, e)
+
+    # Load ML model
+    ml_model = MLModel()
+    ml_loaded = ml_model.load(settings.model.ml_model_path)
+
+    # 1. Poisson-only
+    original_blend = settings.model.ml_blend_weight
+    settings.model.ml_blend_weight = 0.0
+    poisson_result = await bt.run_backtest(db, {}, games, features_cache)
+
+    results = {
+        "games_checked": len(games),
+        "date_range": f"{start} to {end}",
+        "poisson_only": poisson_result.summary(),
+    }
+
+    if ml_loaded:
+        # 2. Ensemble (configured blend weight)
+        settings.model.ml_blend_weight = original_blend
+        ensemble_result = await bt.run_backtest(db, {}, games, features_cache, ml_model=ml_model)
+        results["ensemble"] = {
+            **ensemble_result.summary(),
+            "blend_weight": original_blend,
+        }
+
+        # 3. ML-heavy
+        settings.model.ml_blend_weight = 0.8
+        ml_heavy_result = await bt.run_backtest(db, {}, games, features_cache, ml_model=ml_model)
+        results["ml_heavy"] = {
+            **ml_heavy_result.summary(),
+            "blend_weight": 0.8,
+        }
+    else:
+        results["ml_status"] = "No trained ML model found. Run POST /api/ml/train first."
+
+    # Restore original setting
+    settings.model.ml_blend_weight = original_blend
+
+    return results
+
+
 # ------------------------------------------------------------------ #
 #  CLI entry point                                                     #
 # ------------------------------------------------------------------ #
@@ -418,6 +494,9 @@ async def _main():
         if "--grid" in sys.argv:
             print("Running grid search...")
             result = await run_grid_search_api(db, days_back=90, quick=True)
+        elif "--ml-compare" in sys.argv:
+            print("Running ML comparison backtest...")
+            result = await run_ml_comparison_api(db, days_back=90)
         else:
             print("Running backtest with current parameters...")
             result = await run_backtest_api(db, days_back=90)
