@@ -54,9 +54,9 @@ const BET_TYPE_LABELS = {
   total: 'Total Goals',
   spread: 'Puck Line',
   both_score: 'BTTS',
-  period_total: 'Period Total',
-  period_winner: 'Period Winner',
-  period_spread: 'Period Spread',
+  period_total: '1st Period Total',
+  period_winner: '1st Period Winner',
+  period_spread: '1st Period Spread',
   first_goal: 'First Goal',
   overtime: 'Overtime',
   regulation_winner: 'Reg. Winner',
@@ -100,6 +100,9 @@ export function formatPredictionValue(value, homeAbbr, awayAbbr, betType) {
       cleaned = cleaned.replace(/^first_goal_/i, '');
     } else if (bt === 'overtime') {
       cleaned = cleaned.replace(/^overtime_/i, '');
+    } else if (bt === 'period_winner' || bt === 'period_total' || bt === 'period_spread') {
+      // Strip "p1_" prefix — the badge already says "1st Period ..."
+      cleaned = cleaned.replace(/^p\d_/i, '');
     }
   }
 
