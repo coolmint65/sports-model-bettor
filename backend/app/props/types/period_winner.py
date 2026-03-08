@@ -98,8 +98,14 @@ class PeriodWinnerProp(BaseProp):
         return candidates
 
     def filter(self, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        # All three outcomes eligible
-        return candidates
+        # Keep only the highest-confidence outcome per period.
+        best: Dict[str, Dict[str, Any]] = {}  # key: "p1", "p2", "p3"
+        for c in candidates:
+            period = c["side"].split("_")[0]  # "p1"
+            prev = best.get(period)
+            if prev is None or c["confidence"] > prev["confidence"]:
+                best[period] = c
+        return list(best.values())
 
     def map_odds(
         self,

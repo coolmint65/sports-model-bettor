@@ -129,9 +129,19 @@ class PeriodTotalProp(BaseProp):
         return candidates
 
     def filter(self, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        # Both sides eligible — pick best edge per period+line combo
-        # For now, return all and let the engine sort by confidence
-        return candidates
+        # Keep only the best over and best under per period.
+        # "Best" = the candidate whose confidence is closest to 50%
+        # (i.e. the line where the model sees the most actionable edge).
+        best: Dict[str, Dict[str, Any]] = {}  # key: "p1_over", "p1_under", etc.
+        for c in candidates:
+            parts = c["side"].split("_")  # ["p1", "over", "1.5"]
+            if len(parts) < 3:
+                continue
+            key = f"{parts[0]}_{parts[1]}"  # "p1_over"
+            prev = best.get(key)
+            if prev is None or abs(c["confidence"] - 0.5) < abs(prev["confidence"] - 0.5):
+                best[key] = c
+        return list(best.values())
 
     def map_odds(
         self,

@@ -27,6 +27,13 @@ class PropEngine:
     ) -> List[Dict[str, Any]]:
         results: List[Dict[str, Any]] = []
 
+        home_pf = features.get("home_periods", {}).get("games_found", 0)
+        away_pf = features.get("away_periods", {}).get("games_found", 0)
+        logger.info(
+            "PropEngine: period data games_found home=%s away=%s (xG=%.2f/%.2f)",
+            home_pf, away_pf, home_xg, away_xg,
+        )
+
         for prop_cls in PROP_REGISTRY:
             prop = prop_cls()
             try:
