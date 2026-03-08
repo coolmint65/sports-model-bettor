@@ -749,7 +749,7 @@ class NHLScraper(BaseScraper):
             db: Async SQLAlchemy session.
             game_id: The NHL API game ID (external id).
         """
-        logger.info("Syncing game results for game_id=%d", game_id)
+        logger.debug("Syncing game results for game_id=%d", game_id)
 
         # Fetch boxscore
         try:
@@ -794,19 +794,24 @@ class NHLScraper(BaseScraper):
         linescore = boxscore.get("linescore", {})
         by_period = linescore.get("byPeriod", [])
 
-        # Reset period score columns
-        game.home_score_p1 = None
-        game.away_score_p1 = None
-        game.home_score_p2 = None
-        game.away_score_p2 = None
-        game.home_score_p3 = None
-        game.away_score_p3 = None
-        game.home_score_ot = None
-        game.away_score_ot = None
-
         ot_home_total = 0
         ot_away_total = 0
         went_to_ot = False
+
+        # Only reset period columns when the API actually provides
+        # period data.  Without this guard, games whose boxscore
+        # lacks a byPeriod breakdown get their scores reset to NULL
+        # on every sync, causing the backfill query (which checks
+        # home_score_p1 IS NULL) to re-select them indefinitely.
+        if by_period:
+            game.home_score_p1 = None
+            game.away_score_p1 = None
+            game.home_score_p2 = None
+            game.away_score_p2 = None
+            game.home_score_p3 = None
+            game.away_score_p3 = None
+            game.home_score_ot = None
+            game.away_score_ot = None
 
         for period in by_period:
             # Each byPeriod entry has periodDescriptor with number/periodType
@@ -894,7 +899,7 @@ class NHLScraper(BaseScraper):
         await self._update_head_to_head(db, game)
 
         await db.flush()
-        logger.info(
+        logger.debug(
             "Game results synced: %d (home %d - away %d, OT=%s)",
             game_id,
             home_score,
@@ -1361,36 +1366,45 @@ class NHLScraper(BaseScraper):
             db: Async SQLAlchemy session.
             days_back: Number of past days to scan.
         """
-        from sqlalchemy import or_
-
         cutoff = date.today() - timedelta(days=days_back)
         result = await db.execute(
             select(Game).where(
                 Game.sport == "nhl",
                 Game.date >= cutoff,
                 Game.status == "final",
-                or_(
-                    Game.home_score_p1.is_(None),
-                    Game.went_to_overtime.is_(None),
-                ),
+                # went_to_overtime is always set (True/False) after a
+                # successful sync, so it reliably gates re-processing.
+                # Previously used OR(home_score_p1 IS NULL, ...) but
+                # home_score_p1 can stay NULL if the API lacks period
+                # data, causing infinite re-sync loops.
+                Game.went_to_overtime.is_(None),
             )
         )
         games = result.scalars().all()
 
+        if not games:
+            logger.info("Period scores backfill: all games up to date")
+            return
+
         logger.info(
-            "Syncing results for %d recent games without boxscore data",
+            "Backfilling boxscore data for %d games (past %d days)",
             len(games),
+            days_back,
         )
 
+        synced = 0
         for game in games:
             try:
                 await self.sync_game_results(db, int(game.external_id))
+                synced += 1
             except Exception as exc:
                 logger.error(
                     "Failed to sync results for game %s: %s",
                     game.external_id,
                     exc,
                 )
+
+        logger.info("Period scores backfill complete: %d/%d games synced", synced, len(games))
 
         await db.flush()
 
