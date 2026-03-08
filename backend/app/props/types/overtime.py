@@ -17,6 +17,8 @@ class OvertimeProp(BaseProp):
 
     bet_type = "overtime"
     display_name = "Overtime"
+    # ~23% of NHL regular-season games go to OT/SO
+    baseline = 0.23
 
     # Weight for matrix-based vs historical OT tendency
     MATRIX_WEIGHT = 0.7

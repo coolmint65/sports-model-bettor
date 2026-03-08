@@ -17,6 +17,8 @@ class FirstGoalProp(BaseProp):
 
     bet_type = "first_goal"
     display_name = "First Goal"
+    # Home team scores first ~52% (slight home-ice advantage)
+    baseline = 0.52
 
     def predict(
         self,

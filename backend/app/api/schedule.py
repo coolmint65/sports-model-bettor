@@ -458,19 +458,49 @@ async def _compute_top_picks(
     return top_picks
 
 
+def _prop_signal_strength(confidence: float, baseline: float) -> float:
+    """Compute how far a prop's confidence deviates from the league norm.
+
+    Raw confidence is not comparable across prop types: 48% for
+    regulation-winner is unremarkable, while 30% for overtime-yes is a
+    strong signal.  Signal strength normalises them:
+
+        signal = (confidence - baseline) / baseline
+
+    Positive → model sees something above average for this prop type.
+    Higher → more interesting / more likely to represent real value.
+    """
+    if baseline <= 0:
+        return confidence
+    return (confidence - baseline) / baseline
+
+
 async def _compute_top_props(
     games: List[Game], session: AsyncSession,
 ) -> dict[int, GameTopPick]:
     """Pick the single best prop prediction per game.
 
-    Selects by edge first (when odds exist), then confidence as
-    tiebreaker. Deduplicates to one candidate per bet_type before
-    comparing across types. Uses the same GameTopPick schema so the
-    frontend can render it identically to a market top_pick.
+    Ranking order:
+    1. Real edge from sportsbook odds (when available).
+    2. Signal strength — how far the model's confidence deviates from
+       the league-average baseline for that prop type.  This makes
+       "OT Yes at 30%"  (signal +0.30 vs 23% baseline) beat
+       "Reg Winner at 48%" (signal +0.14 vs 42% baseline) because the
+       OT pick is genuinely surprising while the reg-winner pick is
+       just restating the obvious.
+
+    Deduplicates to one candidate per bet_type before comparing across
+    types.  Uses the same GameTopPick schema so the frontend can render
+    it identically to a market top_pick.
     """
     from app.props.types import PROP_BY_BET_TYPE
 
     prop_bet_types = tuple(PROP_BY_BET_TYPE.keys())
+    # Build baseline lookup from each prop class.
+    baselines: dict[str, float] = {
+        bt: cls.baseline for bt, cls in PROP_BY_BET_TYPE.items()
+    }
+
     game_ids = [g.id for g in games]
     game_by_id = {g.id: g for g in games}
     top_props: dict[int, GameTopPick] = {}
@@ -486,20 +516,13 @@ async def _compute_top_props(
     )
     all_props = result.scalars().all()
 
-    # Pick best prop per game by edge first (if available), then confidence.
     # Deduplicate: keep only the best candidate per bet_type per game
     # (e.g., only the strongest reg_winner side, not all three).
     by_game: dict[int, dict[str, Prediction]] = {}
     for pred in all_props:
-        key = (pred.game_id, pred.bet_type)
         existing = by_game.setdefault(pred.game_id, {}).get(pred.bet_type)
         if existing is None or (pred.confidence or 0) > (existing.confidence or 0):
             by_game[pred.game_id][pred.bet_type] = pred
-
-    # Prop types that overlap with the main top_pick (moneyline/spread).
-    # Only show these as the top prop when they have genuine edge from
-    # odds data — otherwise they just duplicate the main pick.
-    _REDUNDANT_PROP_TYPES = {"regulation_winner"}
 
     for game_id, type_map in by_game.items():
         preds = list(type_map.values())
@@ -509,10 +532,17 @@ async def _compute_top_props(
         if with_edge:
             best = max(with_edge, key=lambda p: (p.edge, p.confidence or 0))
         else:
-            # No edge data — pick most interesting non-redundant prop.
-            non_redundant = [p for p in preds if p.bet_type not in _REDUNDANT_PROP_TYPES]
-            pool = non_redundant if non_redundant else preds
-            best = max(pool, key=lambda p: (p.confidence or 0,))
+            # No odds available — rank by signal strength so that a
+            # genuinely surprising pick (high deviation from its
+            # baseline) beats a structurally high-confidence but
+            # obvious pick.
+            best = max(
+                preds,
+                key=lambda p: _prop_signal_strength(
+                    p.confidence or 0,
+                    baselines.get(p.bet_type, 0.50),
+                ),
+            )
 
         top_props[game_id] = GameTopPick(
             bet_type=best.bet_type,

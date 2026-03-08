@@ -18,6 +18,19 @@ class BaseProp(ABC):
     bet_type: str  # e.g. "both_score", "period_total"
     display_name: str  # e.g. "BTTS", "P1 Over/Under"
 
+    # League-average probability for this prop's best candidate after
+    # dedup.  Used to compute signal strength when sportsbook odds are
+    # unavailable.  Raw confidence is not comparable across prop types
+    # (e.g. 48% reg-winner vs 25% OT-yes) because each type lives on a
+    # different probability scale.  Signal strength normalises them:
+    #
+    #     signal = (confidence - baseline) / baseline
+    #
+    # A positive signal means the model sees something above the league
+    # norm; the higher the signal, the more interesting the pick.
+    # Subclasses MUST set this to a sensible NHL average.
+    baseline: float  # e.g. 0.23 for overtime_yes
+
     @abstractmethod
     def predict(
         self,

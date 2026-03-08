@@ -19,6 +19,8 @@ class PeriodWinnerProp(BaseProp):
 
     bet_type = "period_winner"
     display_name = "Period Winner"
+    # Average favourite wins a given period ~32%
+    baseline = 0.32
 
     def predict(
         self,

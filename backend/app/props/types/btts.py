@@ -17,6 +17,8 @@ class BTTSProp(BaseProp):
 
     bet_type = "both_score"
     display_name = "BTTS"
+    # ~9% of NHL games feature a shutout (BTTS No)
+    baseline = 0.09
 
     def predict(
         self,

@@ -16,6 +16,8 @@ class RegulationWinnerProp(BaseProp):
 
     bet_type = "regulation_winner"
     display_name = "Regulation Winner"
+    # Average favourite wins in regulation ~42% of the time
+    baseline = 0.42
 
     def predict(
         self,

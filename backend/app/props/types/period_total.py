@@ -54,6 +54,9 @@ class PeriodTotalProp(BaseProp):
 
     bet_type = "period_total"
     display_name = "Period Total"
+    # After dedup the best candidate is typically over/under 0.5
+    # at ~70%. That's the naive baseline for the winning side.
+    baseline = 0.70
 
     def predict(
         self,
