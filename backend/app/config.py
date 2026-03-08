@@ -128,11 +128,6 @@ class ModelConfig(BaseModel):
     leading_shell_reduction: float = 0.20      # leading by 2+, reduce scoring rate
     pulled_goalie_boost: float = 0.40          # pulled goalie xG boost for trailing team
 
-    # Kelly Criterion bet sizing
-    kelly_fraction: float = 0.25        # fractional Kelly (25% = quarter Kelly)
-    kelly_max_units: float = 3.0        # max units per bet
-    kelly_min_units: float = 0.5        # min units per bet
-
     # PDO regression: blend of shooting% + save% (league avg = 100)
     # Teams far from 100 are due for regression.
     pdo_regression_factor: float = 0.10

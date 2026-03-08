@@ -44,42 +44,6 @@ LIVE_UPDATE_THRESHOLD = 0.05
 # Unit sizing
 # ---------------------------------------------------------------------------
 
-def calculate_units(edge: Optional[float], confidence: Optional[float]) -> float:
-    """Return recommended unit size using fractional Kelly Criterion.
-
-    Kelly formula: f* = edge / (decimal_odds - 1)
-    We approximate with: f* = edge * confidence / (1 - confidence)
-
-    Then apply a fractional Kelly (default 25%) to protect against
-    model uncertainty, and cap at max_units to prevent over-exposure.
-
-    Falls back to a conservative 0.5u when edge or confidence data
-    is missing.
-    """
-    _mc = settings.model
-    kelly_fraction = getattr(_mc, "kelly_fraction", 0.25)
-    max_units = getattr(_mc, "kelly_max_units", 3.0)
-    min_units = getattr(_mc, "kelly_min_units", 0.5)
-
-    if edge is None or confidence is None or confidence <= 0.5:
-        return min_units
-
-    # Full Kelly: f* = (p * b - q) / b
-    # where p = confidence, q = 1-p, b = net payout per $1 wagered
-    # Simplified: f* ≈ edge / (1 / implied_prob - 1) when edge is small
-    # More practical: f* = edge * (confidence / (1 - confidence))
-    q = 1.0 - confidence
-    if q <= 0:
-        return max_units
-
-    full_kelly = edge * (confidence / q)
-
-    # Fractional Kelly for safety
-    recommended = full_kelly * kelly_fraction
-
-    # Snap to 0.5u increments for clean sizing
-    units = round(recommended * 2) / 2
-    return max(min_units, min(units, max_units))
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +179,6 @@ class BestBet(BaseModel):
     odds_display: Optional[float] = None
     line_display: Optional[str] = None
     phase: Optional[str] = None
-    units: Optional[float] = None
 
 
 class BestBetsResponse(BaseModel):
@@ -229,7 +192,6 @@ class BestBetsResponse(BaseModel):
 
 class TrackedBetRequest(BaseModel):
     prediction_id: int
-    units: Optional[float] = None  # override auto-calculated units
 
 
 class TrackedBetResponse(BaseModel):
@@ -242,7 +204,6 @@ class TrackedBetResponse(BaseModel):
     odds: Optional[float] = None
     implied_probability: Optional[float] = None
     edge: Optional[float] = None
-    units: float = 1.0
     phase: Optional[str] = None
     reasoning: Optional[str] = None
     home_team_name: Optional[str] = None
@@ -269,7 +230,6 @@ class TrackedBetsListResponse(BaseModel):
     pending: int
     win_rate: Optional[float] = None
     total_profit: float = 0.0
-    total_units_wagered: float = 0.0
 
 
 class GenerateResult(BaseModel):
@@ -954,7 +914,6 @@ async def get_best_bets(
         if live_odds is not None and live_odds < 0 and live_odds < settings.best_bet_max_favorite:
             return None
 
-        units = calculate_units(fresh_edge, pred.confidence)
         # Use the actual game status to determine phase — a prediction
         # created prematch is effectively "live" once the game starts.
         phase = "live" if game_status and game_status.lower() in ("in_progress", "live") else getattr(pred, "phase", "prematch")
@@ -1002,7 +961,6 @@ async def get_best_bets(
             odds_display=live_odds,
             line_display=line_display,
             phase=phase,
-            units=units,
         )
 
     for pred in top_preds:
@@ -1088,8 +1046,6 @@ async def track_bet(
     )
     game = game_result.scalar_one_or_none()
 
-    units = body.units or calculate_units(pred.edge, pred.confidence)
-
     # Resolve sportsbook odds for snapshot
     odds_val = _resolve_odds(pred.bet_type, pred.prediction_value, game) if game else None
 
@@ -1102,7 +1058,7 @@ async def track_bet(
         odds=odds_val,
         implied_probability=pred.odds_implied_prob,
         edge=pred.edge,
-        units=units,
+        units=1.0,
         phase=getattr(pred, "phase", "prematch"),
         reasoning=pred.reasoning,
         home_team_name=game.home_team.name if game and game.home_team else None,
@@ -1141,7 +1097,6 @@ async def list_tracked_bets(
     items: List[TrackedBetResponse] = []
     wins = losses = pushes = pending = 0
     total_profit = 0.0
-    total_units = 0.0
     dirty = False
 
     for tb in bets:
@@ -1184,11 +1139,9 @@ async def list_tracked_bets(
                     odds_val = _resolve_odds(pred.bet_type, pred.prediction_value, game)
                     if odds_val is not None:
                         tb.odds = odds_val
-                tb.units = calculate_units(tb.edge, tb.confidence)
                 dirty = True
 
         items.append(_tracked_bet_to_response(tb, game))
-        total_units += tb.units or 1.0
         if tb.result == "win":
             wins += 1
             total_profit += tb.profit_loss or 0.0
@@ -1215,12 +1168,10 @@ async def list_tracked_bets(
         pending=pending,
         win_rate=win_rate,
         total_profit=round(total_profit, 2),
-        total_units_wagered=round(total_units, 2),
     )
 
 
 class TrackedBetUpdateRequest(BaseModel):
-    units: Optional[float] = None
     prediction_id: Optional[int] = None  # swap to a different prediction
 
 
@@ -1271,12 +1222,6 @@ async def update_tracked_bet(
             odds_val = _resolve_odds(pred.bet_type, pred.prediction_value, game)
             if odds_val is not None:
                 tb.odds = odds_val
-
-    if body.units is not None:
-        tb.units = body.units
-    elif body.prediction_id is not None:
-        # Recalculate units from new prediction data
-        tb.units = calculate_units(tb.edge, tb.confidence)
 
     await session.flush()
     return _tracked_bet_to_response(tb, game)
@@ -1379,7 +1324,6 @@ def _tracked_bet_to_response(
         odds=tb.odds,
         implied_probability=tb.implied_probability,
         edge=tb.edge,
-        units=tb.units,
         phase=tb.phase,
         reasoning=tb.reasoning,
         home_team_name=tb.home_team_name,
