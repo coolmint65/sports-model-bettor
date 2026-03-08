@@ -115,6 +115,17 @@ async def _run_full_sync():
             except Exception as exc:
                 logger.warning("Core NHL sync failed (non-critical): %s", exc)
 
+            # 1b. Backfill period scores for completed games missing boxscore data.
+            # This populates home_score_p1/p2/p3 needed for period props.
+            # Only fetches games where home_score_p1 is NULL, so it's a no-op
+            # once the backfill is complete.
+            _sync_state["step"] = "Backfilling period scores..."
+            try:
+                async with get_session_context() as session:
+                    await scraper.sync_recent_results(session, days_back=90)
+            except Exception as exc:
+                logger.warning("Period scores backfill failed (non-critical): %s", exc)
+
             # 2. Historical H2H — each season in its own session
             _sync_state["step"] = "Syncing historical H2H data..."
             try:
