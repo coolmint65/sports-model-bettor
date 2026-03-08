@@ -61,8 +61,17 @@ class FeatureEngine:
         goals_for_total = 0
         goals_against_total = 0
         total_goals_sum = 0
+        shots_for_total = 0
+        shots_against_total = 0
         games_counted = len(games)
 
+        # Momentum-weighted scoring: exponential decay gives more recent
+        # games higher influence. Games are ordered most-recent-first.
+        decay = _mc.momentum_decay
+        weighted_gf = 0.0
+        weight_sum = 0.0
+
+        idx = 0
         for game in games:
             is_home = game.home_team_id == team_id
             gf = game.home_score if is_home else game.away_score
@@ -76,12 +85,31 @@ class FeatureEngine:
             goals_against_total += ga
             total_goals_sum += gf + ga
 
-            # Determine winner
+            # Accumulate shots for PDO calculation
+            sf = (game.home_shots if is_home else game.away_shots) or 0
+            sa = (game.away_shots if is_home else game.home_shots) or 0
+            shots_for_total += sf
+            shots_against_total += sa
+
+            # Momentum weighting: w = decay^idx (most recent = 1.0)
+            w = decay ** idx
+            weighted_gf += gf * w
+            weight_sum += w
+            idx += 1
+
             if gf > ga:
                 wins += 1
 
         if games_counted == 0:
             return self._empty_form()
+
+        # PDO = shooting% + save% (league average = 1.000)
+        shooting_pct = goals_for_total / shots_for_total if shots_for_total > 0 else 0.09
+        save_pct = 1.0 - (goals_against_total / shots_against_total) if shots_against_total > 0 else 0.91
+        pdo = shooting_pct + save_pct
+
+        # Momentum-weighted avg: captures scoring direction/trend
+        momentum_avg_gf = weighted_gf / weight_sum if weight_sum > 0 else goals_for_total / games_counted
 
         return {
             "win_rate": round(wins / games_counted, 4),
@@ -89,6 +117,10 @@ class FeatureEngine:
             "avg_goals_against": round(goals_against_total / games_counted, 3),
             "avg_total_goals": round(total_goals_sum / games_counted, 3),
             "games_found": games_counted,
+            "pdo": round(pdo, 4),
+            "shooting_pct": round(shooting_pct, 4),
+            "save_pct": round(save_pct, 4),
+            "momentum_avg_gf": round(momentum_avg_gf, 3),
         }
 
     # ------------------------------------------------------------------ #
@@ -351,14 +383,43 @@ class FeatureEngine:
         last5_save_pct, last5_gaa = self._calc_goalie_recent(recent_games[:5])
         last10_save_pct, last10_gaa = self._calc_goalie_recent(recent_games[:10])
 
+        # Count consecutive starts for workload/fatigue detection.
+        # recent_games is ordered by date desc, so count how many
+        # consecutive games this goalie started (all have decisions).
+        consecutive_starts = len(recent_games)  # all fetched have decisions = starts
+
+        # Also check if team had a game where a *different* goalie started
+        # (i.e., the backup played). Query the team's recent games to see
+        # if this goalie started all of them.
+        team_recent = await self._get_recent_games(db, team_id, 10)
+        consecutive_starts = 0
+        for tg in team_recent:
+            # Check if this goalie got the decision in this game
+            gs_stmt = (
+                select(GameGoalieStats)
+                .where(
+                    and_(
+                        GameGoalieStats.game_id == tg.id,
+                        GameGoalieStats.player_id == goalie_id,
+                        GameGoalieStats.decision.isnot(None),
+                    )
+                )
+                .limit(1)
+            )
+            gs_result = await db.execute(gs_stmt)
+            if gs_result.scalars().first():
+                consecutive_starts += 1
+            else:
+                break  # different goalie started — streak over
+
         logger.info(
             "Goalie: team_id=%d → %s (id=%d) | SV%% %.3f GAA %.2f | "
-            "L5 SV%% %.3f GAA %.2f | L10 SV%% %.3f GAA %.2f | %d GS",
+            "L5 SV%% %.3f GAA %.2f | L10 SV%% %.3f GAA %.2f | %d GS | %d consec",
             team_id, goalie_name, goalie_id,
             season_save_pct, season_gaa,
             last5_save_pct, last5_gaa,
             last10_save_pct, last10_gaa,
-            games_started,
+            games_started, consecutive_starts,
         )
 
         return {
@@ -371,6 +432,7 @@ class FeatureEngine:
             "last10_save_pct": round(last10_save_pct, 4),
             "last10_gaa": round(last10_gaa, 3),
             "games_started_season": games_started,
+            "consecutive_starts": consecutive_starts,
         }
 
     # ------------------------------------------------------------------ #

@@ -45,27 +45,41 @@ LIVE_UPDATE_THRESHOLD = 0.05
 # ---------------------------------------------------------------------------
 
 def calculate_units(edge: Optional[float], confidence: Optional[float]) -> float:
-    """Return recommended unit size based on edge.
+    """Return recommended unit size using fractional Kelly Criterion.
 
-    Tiered approach:
-      edge <  3% → 0.5u  (lean)
-      edge  3-5% → 1u    (standard)
-      edge  5-8% → 1.5u
-      edge 8-12% → 2u
-      edge  12%+ → 3u    (max play)
+    Kelly formula: f* = edge / (decimal_odds - 1)
+    We approximate with: f* = edge * confidence / (1 - confidence)
+
+    Then apply a fractional Kelly (default 25%) to protect against
+    model uncertainty, and cap at max_units to prevent over-exposure.
+
+    Falls back to a conservative 0.5u when edge or confidence data
+    is missing.
     """
-    if edge is None:
-        return 1.0
-    e = edge * 100  # convert to percentage points
-    if e < 3:
-        return 0.5
-    if e < 5:
-        return 1.0
-    if e < 8:
-        return 1.5
-    if e < 12:
-        return 2.0
-    return 3.0
+    _mc = settings.model
+    kelly_fraction = getattr(_mc, "kelly_fraction", 0.25)
+    max_units = getattr(_mc, "kelly_max_units", 3.0)
+    min_units = getattr(_mc, "kelly_min_units", 0.5)
+
+    if edge is None or confidence is None or confidence <= 0.5:
+        return min_units
+
+    # Full Kelly: f* = (p * b - q) / b
+    # where p = confidence, q = 1-p, b = net payout per $1 wagered
+    # Simplified: f* ≈ edge / (1 / implied_prob - 1) when edge is small
+    # More practical: f* = edge * (confidence / (1 - confidence))
+    q = 1.0 - confidence
+    if q <= 0:
+        return max_units
+
+    full_kelly = edge * (confidence / q)
+
+    # Fractional Kelly for safety
+    recommended = full_kelly * kelly_fraction
+
+    # Snap to 0.5u increments for clean sizing
+    units = round(recommended * 2) / 2
+    return max(min_units, min(units, max_units))
 
 
 # ---------------------------------------------------------------------------

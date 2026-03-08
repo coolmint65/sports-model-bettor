@@ -145,16 +145,32 @@ class BettingModel:
             features["away_season"]["goals_for_pg"],
         )
 
+        # ---- Momentum adjustment ----
+        # momentum_avg_gf weights recent games exponentially heavier.
+        # Compare to raw avg_goals_for to detect trending up/down.
+        home_momentum = features["home_form_5"].get("momentum_avg_gf")
+        away_momentum = features["away_form_5"].get("momentum_avg_gf")
+        home_raw_gf = features["home_form_5"]["avg_goals_for"]
+        away_raw_gf = features["away_form_5"]["avg_goals_for"]
+        if home_momentum and home_raw_gf > 0:
+            momentum_ratio = home_momentum / home_raw_gf - 1.0
+            home_off *= 1.0 + momentum_ratio * _mc.momentum_factor
+        if away_momentum and away_raw_gf > 0:
+            momentum_ratio = away_momentum / away_raw_gf - 1.0
+            away_off *= 1.0 + momentum_ratio * _mc.momentum_factor
+
         # ---- Defensive adjustments (opponent quality) ----
         # Home team faces away goalie/defense; away team faces home goalie/defense
         # Blend goals-against with shots-against for more stable defense ratings.
         home_def_factor = self._defensive_factor(
             features["home_season"]["goals_against_pg"],
             features["home_season"].get("shots_against_pg", 0.0),
+            features["home_season"].get("faceoff_pct", 50.0),
         )
         away_def_factor = self._defensive_factor(
             features["away_season"]["goals_against_pg"],
             features["away_season"].get("shots_against_pg", 0.0),
+            features["away_season"].get("faceoff_pct", 50.0),
         )
 
         # Home team expected goals = home offense * away defensive weakness
@@ -349,6 +365,20 @@ class BettingModel:
             period_dev = away_period_total - self.league_avg
             away_xg += period_dev * _mc.period_scoring_factor
 
+        # ---- PDO regression (luck adjustment) ----
+        # PDO = shooting% + save%. League average is ~1.000.
+        # Teams with PDO far from 1.0 are running hot/cold and due to regress.
+        # High PDO (>1.010) → xG inflated by luck → reduce.
+        # Low PDO (<0.990) → xG depressed by bad luck → increase.
+        pdo_factor = _mc.pdo_regression_factor
+        if pdo_factor > 0:
+            home_pdo = features.get("home_form_10", {}).get("pdo", 1.0)
+            away_pdo = features.get("away_form_10", {}).get("pdo", 1.0)
+            if home_pdo != 1.0:
+                home_xg -= (home_pdo - 1.0) * pdo_factor * self.league_avg
+            if away_pdo != 1.0:
+                away_xg -= (away_pdo - 1.0) * pdo_factor * self.league_avg
+
         # ---- Regression toward league average ----
         # Hot-streak form weights and weak-opponent defensive factors can
         # compound to produce unrealistic xG values.  Regress toward
@@ -380,20 +410,19 @@ class BettingModel:
         self,
         goals_against_pg: float,
         shots_against_pg: float = 0.0,
+        faceoff_pct: float = 50.0,
     ) -> float:
         """
-        Calculate a defensive quality factor blending goals-against with
-        shots-against for more stability.
+        Calculate a defensive quality factor blending goals-against,
+        shots-against, and faceoff win% for stability.
 
         A team that allows more than league average has a factor > 1.0
         (making the opponent's xG higher), and vice versa.
 
-        Pure goals-against is noisy (small sample, goalie variance).
-        Blending in shots-against captures defensive structure (shot
-        suppression) which is more repeatable.
-
-        The blended ratio is regressed toward 1.0 to prevent compounding
-        when combined with form-weighted offense.
+        Three inputs capture different defensive aspects:
+        - Goals-against: outcome (noisy, goalie-dependent)
+        - Shots-against: shot suppression (more repeatable)
+        - Faceoff%: possession control (most repeatable, ~0.68 YoY r)
         """
         if self.league_avg == 0:
             return 1.0
@@ -407,6 +436,15 @@ class BettingModel:
             raw = ga_ratio * (1.0 - shot_blend) + sa_ratio * shot_blend
         else:
             raw = ga_ratio
+
+        # Faceoff adjustment: teams winning >50% of draws control possession
+        # → fewer opponent shots → better defense. Scale effect modestly.
+        fo_weight = _mc.faceoff_defense_weight
+        if fo_weight > 0 and faceoff_pct != 50.0:
+            # Convert faceoff% to a ratio around 1.0 (50% = neutral)
+            # Higher faceoff% = better defense = lower factor
+            fo_adj = 1.0 - (faceoff_pct - 50.0) / 100.0
+            raw = raw * (1.0 - fo_weight) + fo_adj * raw * fo_weight
 
         # Regress toward 1.0 using the configured regression factor
         return 1.0 + (raw - 1.0) * _mc.defensive_regression
@@ -437,6 +475,14 @@ class BettingModel:
         # A better goalie (positive sv_diff) reduces expected goals
         adjustment = 1.0 - (sv_diff / (1.0 - LEAGUE_AVG_SAVE_PCT)) * GOALIE_FACTOR
         adjustment = max(0.7, min(1.3, adjustment))
+
+        # Goalie fatigue: consecutive starts degrade performance
+        consecutive = opposing_goalie.get("consecutive_starts", 0)
+        threshold = _mc.goalie_fatigue_starts_threshold
+        if consecutive > threshold:
+            fatigue_penalty = (consecutive - threshold) * _mc.goalie_fatigue_per_start
+            # Tired goalie = higher xG for the opponent (weaker saves)
+            adjustment += min(fatigue_penalty, 0.10)
 
         return xg * adjustment
 

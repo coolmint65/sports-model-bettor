@@ -128,6 +128,26 @@ class ModelConfig(BaseModel):
     leading_shell_reduction: float = 0.20      # leading by 2+, reduce scoring rate
     pulled_goalie_boost: float = 0.40          # pulled goalie xG boost for trailing team
 
+    # Kelly Criterion bet sizing
+    kelly_fraction: float = 0.25        # fractional Kelly (25% = quarter Kelly)
+    kelly_max_units: float = 3.0        # max units per bet
+    kelly_min_units: float = 0.5        # min units per bet
+
+    # PDO regression: blend of shooting% + save% (league avg = 100)
+    # Teams far from 100 are due for regression.
+    pdo_regression_factor: float = 0.10
+
+    # Faceoff contribution to defensive factor
+    faceoff_defense_weight: float = 0.10
+
+    # Momentum: weight recent results more heavily within form window
+    momentum_decay: float = 0.85        # exponential decay per game (0.85 = most recent game 5.7x most distant)
+    momentum_factor: float = 0.50       # how much momentum trend adjusts offensive rating
+
+    # Goalie workload fatigue
+    goalie_fatigue_starts_threshold: int = 3   # consecutive starts before fatigue kicks in
+    goalie_fatigue_per_start: float = 0.02     # xG penalty per start above threshold
+
     # xG bounds
     xg_floor: float = 1.8
     xg_ceiling: float = 3.8
