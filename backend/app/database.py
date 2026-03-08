@@ -29,10 +29,21 @@ db_write_lock = asyncio.Lock()
 # Create the async engine.
 # timeout=30 raises the SQLite busy-wait from 5 s to 30 s so the
 # background sync and API requests don't clash with "database is locked".
+#
+# Pool sizing: the app has several concurrent DB consumers:
+#   - Multiple FastAPI request handlers (schedule, best-bets, tracked bets)
+#   - Background scheduler tasks (odds sync, prediction regen, settlement)
+#   - Auto-track POST bursts from the frontend (up to ~3 concurrent)
+# The default pool_size=5 + max_overflow=10 exhausts under load.
+# Raise to pool_size=10 + max_overflow=20 to accommodate bursts.
 engine = create_async_engine(
     settings.database_url,
     echo=False,
     future=True,
+    pool_size=10,
+    max_overflow=20,
+    pool_timeout=60,
+    pool_recycle=3600,
     connect_args={"check_same_thread": False, "timeout": 30},
 )
 

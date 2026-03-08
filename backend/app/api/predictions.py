@@ -27,7 +27,7 @@ from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES, composite_pick_score
-from app.database import get_session
+from app.database import get_session, get_write_session_context
 from app.services.odds import american_to_implied, fresh_implied_prob, implied_to_american as implied_prob_to_american
 from app.models.game import Game
 from app.models.prediction import BetResult, Prediction, TrackedBet
@@ -525,23 +525,27 @@ async def get_best_bets(
     logger.info("Best-bets step 0: %d non-final games for today", games_today)
 
     if games_today == 0:
+        # Use a separate write session for the slow HTTP scraper call
+        # so we don't hold the request's pooled connection idle during
+        # network I/O (root cause of QueuePool exhaustion).
         try:
-            async with session.begin_nested():
+            async with get_write_session_context() as write_session:
                 from app.scrapers.nhl_api import NHLScraper
 
                 scraper = NHLScraper()
                 try:
-                    synced = await scraper.sync_schedule(session, str(today))
+                    synced = await scraper.sync_schedule(write_session, str(today))
                     synced_count = len(synced) if synced else 0
                     logger.info(
                         "Best-bets step 0: schedule sync added %d games", synced_count
                     )
-                    await session.flush()
-                    session.expire_all()
                 finally:
                     await scraper.close()
         except Exception as exc:
             logger.warning("Best-bets step 0: schedule sync failed: %s", exc)
+
+        # Expire cached state so the request session sees newly committed rows
+        session.expire_all()
 
         # Re-check
         game_count_result = await session.execute(
@@ -584,20 +588,24 @@ async def get_best_bets(
     )
 
     if needs_odds_refresh:
+        # Separate write session — odds scraper makes HTTP calls that can
+        # take seconds; holding the request connection idle during that time
+        # starves the pool for other concurrent API requests.
         try:
-            async with session.begin_nested():
+            async with get_write_session_context() as write_session:
                 from app.scrapers.odds_multi import MultiSourceOddsScraper
 
                 async with MultiSourceOddsScraper() as odds_scraper:
-                    matched = await odds_scraper.sync_odds(session)
+                    matched = await odds_scraper.sync_odds(write_session)
                     logger.info(
                         "Best-bets step 1: odds refresh matched %d games",
                         len(matched) if matched else 0,
                     )
-                    await session.flush()
-                    session.expire_all()
         except Exception as exc:
             logger.warning("Best-bets step 1: odds refresh failed: %s", exc)
+
+        # Expire so the request session picks up freshly committed odds
+        session.expire_all()
 
     # Log odds state after refresh
     odds_check = await session.execute(
@@ -635,17 +643,18 @@ async def get_best_bets(
     logger.info("Best-bets step 2: existing predictions=%d", pred_count_val)
 
     if not has_predictions:
-        # Generate / update predictions (respects prematch locks)
+        # Separate write session — prediction generation can be CPU/IO heavy.
         try:
-            async with session.begin_nested():
-                pred_count = await _try_generate_predictions(session, target_date=today)
-                await session.flush()
+            async with get_write_session_context() as write_session:
+                pred_count = await _try_generate_predictions(write_session, target_date=today)
                 logger.info("Best-bets step 2: generated %d predictions", pred_count)
         except Exception as exc:
             logger.warning(
                 "Best-bets step 2: prediction generation failed: %s",
                 getattr(exc, 'detail', str(exc)),
             )
+
+        session.expire_all()
 
     # Step 3: Backfill prediction odds from fresh Game records.
     # Predictions may have been generated before odds were synced
@@ -655,12 +664,14 @@ async def get_best_bets(
     # DB-level filter below can find them.  Handles ML, totals, AND
     # spreads — keeping all bet types in sync.
     try:
-        async with session.begin_nested():
-            backfilled = await _backfill_prediction_odds(session, today)
+        async with get_write_session_context() as write_session:
+            backfilled = await _backfill_prediction_odds(write_session, today)
             if backfilled:
                 logger.info("Best-bets step 3: backfilled odds on %d predictions", backfilled)
     except Exception as exc:
         logger.warning("Best-bets step 3: odds backfill failed: %s", exc)
+
+    session.expire_all()
 
     # Log prediction state before filtering
     all_pred_result = await session.execute(
@@ -1454,22 +1465,21 @@ async def regenerate_predictions(
     today = date.today()
     steps: list[str] = []
 
-    # Step 1: Sync today's schedule from NHL API so game statuses,
-    # scores, and any newly-added games are up to date.
+    # Step 1: Sync today's schedule via a separate write session so the
+    # request connection isn't held idle during slow HTTP calls.
     schedule_synced = 0
     try:
-        async with session.begin_nested():
+        async with get_write_session_context() as write_session:
             from app.scrapers.nhl_api import NHLScraper
 
             scraper = NHLScraper()
             try:
-                synced_games = await scraper.sync_schedule(session, str(today))
+                synced_games = await scraper.sync_schedule(write_session, str(today))
                 schedule_synced = len(synced_games) if synced_games else 0
-                await session.flush()
-                session.expire_all()
                 logger.info("Regenerate: schedule sync updated %s games", schedule_synced)
             finally:
                 await scraper.close()
+        session.expire_all()
         steps.append(f"schedule synced ({schedule_synced} games)")
     except Exception as exc:
         logger.warning("Regenerate: schedule sync failed: %s", exc)
@@ -1504,18 +1514,17 @@ async def regenerate_predictions(
     )
     steps.append(f"cleared {deleted} predictions")
 
-    # Step 3: Sync fresh odds from sportsbooks
+    # Step 3: Sync fresh odds via a separate write session (HTTP calls).
     odds_matched = 0
     try:
-        async with session.begin_nested():
+        async with get_write_session_context() as write_session:
             from app.scrapers.odds_multi import MultiSourceOddsScraper
 
             async with MultiSourceOddsScraper() as odds_scraper:
-                matched = await odds_scraper.sync_odds(session)
+                matched = await odds_scraper.sync_odds(write_session)
                 odds_matched = len(matched) if matched else 0
                 logger.info("Regenerate: odds sync matched %d games", odds_matched)
-                await session.flush()
-                session.expire_all()
+        session.expire_all()
         steps.append(f"odds synced ({odds_matched} games)")
     except Exception as exc:
         logger.warning("Regenerate: odds sync failed: %s", exc)

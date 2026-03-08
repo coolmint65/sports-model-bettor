@@ -228,21 +228,32 @@ function BestBets() {
     total: totalBets.length,
   };
 
-  // Auto-track best bets — fire-and-forget for any new predictions
-  // that haven't been tracked yet in this session.
+  // Auto-track best bets — serialize requests to avoid bursting
+  // multiple concurrent POST calls that exhaust the DB connection pool.
   useEffect(() => {
     if (!allBets.length) return;
     const toTrack = allBets.filter((bet) => {
       const predId = bet.prediction_id || bet.id;
       return predId && !autoTrackedRef.current.has(predId);
     });
+    if (!toTrack.length) return;
+
+    // Mark all as pending immediately so re-renders don't re-enqueue
     for (const bet of toTrack) {
-      const predId = bet.prediction_id || bet.id;
-      autoTrackedRef.current.add(predId);
-      trackBet(predId).catch(() => {
-        // 409 = already tracked; other errors are non-critical
-      });
+      autoTrackedRef.current.add(bet.prediction_id || bet.id);
     }
+
+    // Sequential tracking — one at a time to avoid pool exhaustion
+    (async () => {
+      for (const bet of toTrack) {
+        const predId = bet.prediction_id || bet.id;
+        try {
+          await trackBet(predId);
+        } catch {
+          // 409 = already tracked; other errors are non-critical
+        }
+      }
+    })();
   }, [allBets]);
 
   if (loading) {
