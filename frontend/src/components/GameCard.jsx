@@ -325,7 +325,7 @@ function GameCard({ game }) {
   const homeScore = game.home_score ?? game.score?.home ?? null;
   const venue = game.venue || game.arena || '';
   const topPick = game.top_pick || null;
-  const topProp = game.top_prop || null;
+  const topProps = game.top_props || (game.top_prop ? [game.top_prop] : []);
   const rawConf = topPick?.confidence || game.top_confidence || game.confidence || game.prediction_confidence || null;
   const confidence = rawConf != null ? confidencePct(rawConf) : null;
   const hasBadge = !!statusInfo.label;
@@ -460,14 +460,16 @@ function GameCard({ game }) {
         </div>
       </div>
 
-      {/* Prop row below the top pick */}
-      {topProp && (
-        <div className={`game-card-prop-footer ${topProp.outcome ? `pick-${topProp.outcome}` : ''}`}>
-          <div className="game-top-prop">
-            <Layers size={12} />
-            <span className="top-prop-type">{formatBetType(topProp.bet_type)}</span>
-            <span className="top-prop-value">{formatPredictionValue(topProp.prediction_value, homeAbbr, awayAbbr)}</span>
-          </div>
+      {/* Prop rows below the top pick */}
+      {topProps.length > 0 && (
+        <div className="game-card-prop-footer">
+          {topProps.map((prop, idx) => (
+            <div key={idx} className={`game-top-prop ${prop.outcome ? `pick-${prop.outcome}` : ''}`}>
+              <Layers size={12} />
+              <span className="top-prop-type">{formatBetType(prop.bet_type)}</span>
+              <span className="top-prop-value">{formatPredictionValue(prop.prediction_value, homeAbbr, awayAbbr)}</span>
+            </div>
+          ))}
         </div>
       )}
 

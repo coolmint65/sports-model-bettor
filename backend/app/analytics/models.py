@@ -1382,16 +1382,43 @@ class BettingModel:
                 return False
 
             # --- Phase 1: evaluate the primary sportsbook line ---
+            # Always use the primary line — it's the most liquid and
+            # what users actually see at sportsbooks.
             if primary_ou_val is not None and primary_ou_val in price_map:
                 for direction in ("over", "under"):
                     lk = f"{direction}_{primary_ou_val}"
                     if lk in lines:
                         _eval_line(lk, lines[lk])
 
-            # --- Phase 2: only scan alt lines if primary has no edge ---
-            if best_edge <= 0:
-                for line_key, prob in lines.items():
-                    _eval_line(line_key, prob)
+            primary_edge = best_edge
+
+            # --- Phase 2: only use an alt line if it offers
+            # substantially more edge (>5 pp) than the primary.
+            # A marginal edge on an illiquid alt line (e.g. Over 7.5
+            # at +2%) is less useful than showing the model's view
+            # on the primary line (e.g. Under 6.5 at 63%).
+            ALT_LINE_EDGE_THRESHOLD = 0.05  # 5 percentage points
+            for line_key, prob in lines.items():
+                _eval_line(line_key, prob)
+            # Revert to primary if the alt line didn't beat it by
+            # enough margin.
+            if (
+                best_pred
+                and primary_edge > -999
+                and best_edge - primary_edge < ALT_LINE_EDGE_THRESHOLD
+            ):
+                # Reset and re-evaluate primary only
+                best_edge = -999
+                best_pred = None
+                best_pred_prob = 0.0
+                best_pred_odds = -110.0
+                best_pred_implied = 0.5
+                best_pred_line = 0.0
+                if primary_ou_val is not None and primary_ou_val in price_map:
+                    for direction in ("over", "under"):
+                        lk = f"{direction}_{primary_ou_val}"
+                        if lk in lines:
+                            _eval_line(lk, lines[lk])
 
             if best_pred and best_edge > -999:
                 direction = "over" if "over" in best_pred else "under"

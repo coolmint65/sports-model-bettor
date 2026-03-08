@@ -1394,6 +1394,9 @@ a:hover {
   border-top: 1px dashed var(--border-primary);
   padding-top: 8px;
   margin-top: -2px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .game-top-prop {
@@ -1427,13 +1430,13 @@ a:hover {
 }
 
 /* Prop outcome styling */
-.game-card-prop-footer.pick-win .top-prop-type,
-.game-card-prop-footer.pick-win .top-prop-value {
+.game-top-prop.pick-win .top-prop-type,
+.game-top-prop.pick-win .top-prop-value {
   color: var(--accent-green, #00ff88);
 }
 
-.game-card-prop-footer.pick-loss .top-prop-type,
-.game-card-prop-footer.pick-loss .top-prop-value {
+.game-top-prop.pick-loss .top-prop-type,
+.game-top-prop.pick-loss .top-prop-value {
   color: var(--accent-red, #ff5252);
   opacity: 0.8;
 }
