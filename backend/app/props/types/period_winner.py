@@ -64,6 +64,7 @@ class PeriodWinnerProp(BaseProp):
                 {
                     "side": f"p{period_num}_{home_abbr}",
                     "confidence": round(p_home, 4),
+                    "_position": "home",
                     "reasoning": (
                         f"P{period_num} {home_name} win at {p_home:.1%} "
                         f"(period xG: {h_xg:.2f} vs {a_xg:.2f})."
@@ -72,6 +73,7 @@ class PeriodWinnerProp(BaseProp):
                 {
                     "side": f"p{period_num}_{away_abbr}",
                     "confidence": round(p_away, 4),
+                    "_position": "away",
                     "reasoning": (
                         f"P{period_num} {away_name} win at {p_away:.1%} "
                         f"(period xG: {a_xg:.2f} vs {h_xg:.2f})."
@@ -80,6 +82,7 @@ class PeriodWinnerProp(BaseProp):
                 {
                     "side": f"p{period_num}_draw",
                     "confidence": round(p_draw, 4),
+                    "_position": "draw",
                     "reasoning": (
                         f"P{period_num} draw at {p_draw:.1%} "
                         f"(period xG: {h_xg:.2f}-{a_xg:.2f})."
@@ -107,16 +110,10 @@ class PeriodWinnerProp(BaseProp):
                 continue
 
             period = parts[0]  # "p1"
-            outcome = parts[1]  # "EDM" or "draw"
+            position = c.get("_position", "")
 
-            if outcome == "draw":
-                price_key = f"{period}_draw_price"
-            else:
-                # We don't know home vs away from abbreviation alone
-                # Look for generic period winner keys
-                price_key = f"{period}_{outcome}_price"
-
-            price = odds_data.get(price_key)
+            price_key = f"{period}_{position}_price" if position else None
+            price = odds_data.get(price_key) if price_key else None
             if price is not None:
                 c["odds"] = price
                 c["implied_probability"] = round(self._american_to_prob(price), 4)

@@ -38,6 +38,7 @@ class RegulationWinnerProp(BaseProp):
             {
                 "side": f"reg_{home_abbr}",
                 "confidence": round(p_home, 4),
+                "_position": "home",
                 "reasoning": (
                     f"{home_name} wins in regulation at {p_home:.1%} "
                     f"(xG {home_xg:.2f} vs {away_xg:.2f})."
@@ -46,6 +47,7 @@ class RegulationWinnerProp(BaseProp):
             {
                 "side": f"reg_{away_abbr}",
                 "confidence": round(p_away, 4),
+                "_position": "away",
                 "reasoning": (
                     f"{away_name} wins in regulation at {p_away:.1%} "
                     f"(xG {away_xg:.2f} vs {home_xg:.2f})."
@@ -54,6 +56,7 @@ class RegulationWinnerProp(BaseProp):
             {
                 "side": "reg_draw",
                 "confidence": round(p_draw, 4),
+                "_position": "draw",
                 "reasoning": (
                     f"Regulation draw at {p_draw:.1%}. "
                     f"Game goes to OT with xG {home_xg:.2f}-{away_xg:.2f}."
@@ -71,26 +74,15 @@ class RegulationWinnerProp(BaseProp):
         candidates: List[Dict[str, Any]],
         odds_data: Dict[str, Any],
     ) -> List[Dict[str, Any]]:
-        odds_keys = {
-            "reg_home": "reg_home_price",
-            "reg_away": "reg_away_price",
-            "reg_draw": "reg_draw_price",
+        position_to_key = {
+            "home": "reg_home_price",
+            "away": "reg_away_price",
+            "draw": "reg_draw_price",
         }
         for c in candidates:
-            # Normalize side to generic key for odds lookup
-            side = c["side"]
-            if side.startswith("reg_") and side != "reg_draw":
-                generic = "reg_home" if "reg_" in side and side != "reg_draw" else side
-                # Can't reliably distinguish home/away from abbr alone;
-                # check if it matches the first or second candidate
-            key = odds_keys.get(side)
-            if not key:
-                # side is like "reg_EDM" — map to home or away
-                # We don't know which without context, so skip odds
-                c["implied_probability"] = None
-                c["odds"] = None
-                continue
-            price = odds_data.get(key)
+            position = c.get("_position", "")
+            price_key = position_to_key.get(position)
+            price = odds_data.get(price_key) if price_key else None
             if price is not None:
                 c["odds"] = price
                 c["implied_probability"] = round(self._american_to_prob(price), 4)

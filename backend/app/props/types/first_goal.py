@@ -53,6 +53,7 @@ class FirstGoalProp(BaseProp):
             {
                 "side": f"first_goal_{home_abbr}",
                 "confidence": round(p_home_first, 4),
+                "_position": "home",
                 "reasoning": (
                     f"{home_name} scores first at {p_home_first:.1%} "
                     f"(P1 xG: {h_p1_xg:.2f} vs {a_p1_xg:.2f})."
@@ -61,6 +62,7 @@ class FirstGoalProp(BaseProp):
             {
                 "side": f"first_goal_{away_abbr}",
                 "confidence": round(p_away_first, 4),
+                "_position": "away",
                 "reasoning": (
                     f"{away_name} scores first at {p_away_first:.1%} "
                     f"(P1 xG: {a_p1_xg:.2f} vs {h_p1_xg:.2f})."
@@ -79,14 +81,9 @@ class FirstGoalProp(BaseProp):
         odds_data: Dict[str, Any],
     ) -> List[Dict[str, Any]]:
         for c in candidates:
-            side = c["side"]  # "first_goal_EDM"
-            parts = side.rsplit("_", 1)
-            if len(parts) < 2:
-                c["odds"] = None
-                c["implied_probability"] = None
-                continue
-            price_key = f"first_goal_{parts[1]}_price"
-            price = odds_data.get(price_key)
+            position = c.get("_position", "")
+            price_key = f"first_goal_{position}_price" if position else None
+            price = odds_data.get(price_key) if price_key else None
             if price is not None:
                 c["odds"] = price
                 c["implied_probability"] = round(self._american_to_prob(price), 4)

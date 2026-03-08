@@ -496,10 +496,24 @@ async def _compute_top_props(
         if existing is None or (pred.confidence or 0) > (existing.confidence or 0):
             by_game[pred.game_id][pred.bet_type] = pred
 
+    # Prop types that overlap with the main top_pick (moneyline/spread).
+    # Only show these as the top prop when they have genuine edge from
+    # odds data — otherwise they just duplicate the main pick.
+    _REDUNDANT_PROP_TYPES = {"regulation_winner"}
+
     for game_id, type_map in by_game.items():
         preds = list(type_map.values())
-        # Sort by edge (if we have odds), then by confidence as tiebreaker
-        best = max(preds, key=lambda p: (p.edge or 0, p.confidence or 0))
+
+        # Prefer props with real edge from sportsbook odds.
+        with_edge = [p for p in preds if p.edge is not None and p.edge > 0]
+        if with_edge:
+            best = max(with_edge, key=lambda p: (p.edge, p.confidence or 0))
+        else:
+            # No edge data — pick most interesting non-redundant prop.
+            non_redundant = [p for p in preds if p.bet_type not in _REDUNDANT_PROP_TYPES]
+            pool = non_redundant if non_redundant else preds
+            best = max(pool, key=lambda p: (p.confidence or 0,))
+
         top_props[game_id] = GameTopPick(
             bet_type=best.bet_type,
             prediction_value=best.prediction_value,
