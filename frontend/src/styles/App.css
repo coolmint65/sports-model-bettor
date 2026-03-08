@@ -1382,6 +1382,34 @@ a:hover {
   color: rgba(255, 215, 0, 0.45);
 }
 
+/* Locked markets (e.g. spread/total in OT) */
+.odds-market-locked .odds-market-label {
+  color: var(--text-dim, #444) !important;
+  opacity: 0.5;
+}
+
+.odds-locked-values {
+  align-items: center;
+  justify-content: center;
+}
+
+.odds-lock-icon {
+  color: var(--text-dim, #555);
+  opacity: 0.4;
+}
+
+/* Detail page locked odds cards */
+.odds-card-locked {
+  opacity: 0.45;
+}
+
+.odds-locked-overlay {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+}
+
 .game-card-footer {
   display: flex;
   align-items: center;

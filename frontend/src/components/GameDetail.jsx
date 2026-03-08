@@ -13,6 +13,7 @@ import {
   DollarSign,
   Radio,
   AlertTriangle,
+  Lock,
 } from 'lucide-react';
 import { format, formatDistanceToNowStrict } from 'date-fns';
 import { fetchGameDetails } from '../utils/api';
@@ -118,55 +119,72 @@ function OverviewTab({ game }) {
         const live = isLiveStatus(game.status);
         const hasLiveOdds = live && pregame && odds;
 
-        const renderOddsGrid = (o) => (
-          <div className="odds-grid">
-            {(o.home_moneyline != null || o.away_moneyline != null) && (
-              <div className="odds-card">
-                <span className="odds-label">Moneyline</span>
-                <div className="odds-values">
-                  <div className="odds-team-line">
-                    <span className="odds-team-name">{away.abbreviation || 'Away'}</span>
-                    <span className="odds-value">{formatAmericanOdds(o.away_moneyline)}</span>
-                  </div>
-                  <div className="odds-team-line">
-                    <span className="odds-team-name">{home.abbreviation || 'Home'}</span>
-                    <span className="odds-value">{formatAmericanOdds(o.home_moneyline)}</span>
-                  </div>
-                </div>
-              </div>
-            )}
-            {o.over_under_line != null && (
-              <div className="odds-card">
-                <span className="odds-label">Over/Under</span>
-                <div className="odds-values">
-                  <div className="odds-team-line">
-                    <span className="odds-team-name">O {o.over_under_line}</span>
-                    <span className="odds-value">{formatAmericanOdds(o.over_price)}</span>
-                  </div>
-                  <div className="odds-team-line">
-                    <span className="odds-team-name">U {o.over_under_line}</span>
-                    <span className="odds-value">{formatAmericanOdds(o.under_price)}</span>
+        const isOT = game.period_type === 'OT' || game.period_type === 'SO';
+
+        const renderOddsGrid = (o, showLocks = false) => {
+          const locked = showLocks && isOT;
+          return (
+            <div className="odds-grid">
+              {(o.home_moneyline != null || o.away_moneyline != null) && (
+                <div className="odds-card">
+                  <span className="odds-label">Moneyline</span>
+                  <div className="odds-values">
+                    <div className="odds-team-line">
+                      <span className="odds-team-name">{away.abbreviation || 'Away'}</span>
+                      <span className="odds-value">{formatAmericanOdds(o.away_moneyline)}</span>
+                    </div>
+                    <div className="odds-team-line">
+                      <span className="odds-team-name">{home.abbreviation || 'Home'}</span>
+                      <span className="odds-value">{formatAmericanOdds(o.home_moneyline)}</span>
+                    </div>
                   </div>
                 </div>
-              </div>
-            )}
-            {o.home_spread_line != null && (
-              <div className="odds-card">
-                <span className="odds-label">Puck Line</span>
-                <div className="odds-values">
-                  <div className="odds-team-line">
-                    <span className="odds-team-name">{away.abbreviation} {o.away_spread_line != null ? (o.away_spread_line > 0 ? '+' : '') + o.away_spread_line : ''}</span>
-                    <span className="odds-value">{formatAmericanOdds(o.away_spread_price)}</span>
-                  </div>
-                  <div className="odds-team-line">
-                    <span className="odds-team-name">{home.abbreviation} {o.home_spread_line > 0 ? '+' : ''}{o.home_spread_line}</span>
-                    <span className="odds-value">{formatAmericanOdds(o.home_spread_price)}</span>
-                  </div>
+              )}
+              {o.over_under_line != null && (
+                <div className={`odds-card ${locked ? 'odds-card-locked' : ''}`}>
+                  <span className="odds-label">Over/Under</span>
+                  {locked ? (
+                    <div className="odds-values odds-locked-overlay">
+                      <Lock size={16} className="odds-lock-icon" />
+                    </div>
+                  ) : (
+                    <div className="odds-values">
+                      <div className="odds-team-line">
+                        <span className="odds-team-name">O {o.over_under_line}</span>
+                        <span className="odds-value">{formatAmericanOdds(o.over_price)}</span>
+                      </div>
+                      <div className="odds-team-line">
+                        <span className="odds-team-name">U {o.over_under_line}</span>
+                        <span className="odds-value">{formatAmericanOdds(o.under_price)}</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              </div>
-            )}
-          </div>
-        );
+              )}
+              {o.home_spread_line != null && (
+                <div className={`odds-card ${locked ? 'odds-card-locked' : ''}`}>
+                  <span className="odds-label">Puck Line</span>
+                  {locked ? (
+                    <div className="odds-values odds-locked-overlay">
+                      <Lock size={16} className="odds-lock-icon" />
+                    </div>
+                  ) : (
+                    <div className="odds-values">
+                      <div className="odds-team-line">
+                        <span className="odds-team-name">{away.abbreviation} {o.away_spread_line != null ? (o.away_spread_line > 0 ? '+' : '') + o.away_spread_line : ''}</span>
+                        <span className="odds-value">{formatAmericanOdds(o.away_spread_price)}</span>
+                      </div>
+                      <div className="odds-team-line">
+                        <span className="odds-team-name">{home.abbreviation} {o.home_spread_line > 0 ? '+' : ''}{o.home_spread_line}</span>
+                        <span className="odds-value">{formatAmericanOdds(o.home_spread_price)}</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        };
 
         if (hasLiveOdds) {
           // Show both sections for live games with pregame snapshot
@@ -195,7 +213,7 @@ function OverviewTab({ game }) {
                     </span>
                   )}
                 </h3>
-                {renderOddsGrid(odds)}
+                {renderOddsGrid(odds, true)}
               </div>
             </>
           );
