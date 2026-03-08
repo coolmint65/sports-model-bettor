@@ -92,10 +92,8 @@ class ScheduleGame(BaseModel):
     away_shots: Optional[int] = None
     # Top prediction for this game
     top_pick: Optional[GameTopPick] = None
-    # Top prop prediction for this game (first item of top_props for compat)
+    # Top prop prediction for this game
     top_prop: Optional[GameTopPick] = None
-    # Top prop predictions (up to 3) for richer card display
-    top_props: Optional[List[GameTopPick]] = None
     # Sportsbook odds
     odds: Optional[GameOdds] = None
     pregame_odds: Optional[GameOdds] = None
@@ -198,7 +196,7 @@ def _build_schedule_game(
     home_brief: TeamBrief,
     away_brief: TeamBrief,
     top_pick: Optional[GameTopPick] = None,
-    top_props_list: Optional[List[GameTopPick]] = None,
+    top_prop: Optional[GameTopPick] = None,
 ) -> ScheduleGame:
     return ScheduleGame(
         id=game.id,
@@ -222,8 +220,7 @@ def _build_schedule_game(
         home_shots=game.home_shots,
         away_shots=game.away_shots,
         top_pick=top_pick,
-        top_prop=top_props_list[0] if top_props_list else None,
-        top_props=top_props_list,
+        top_prop=top_prop,
         odds=_build_game_odds(game),
         pregame_odds=_build_pregame_odds(game),
     )
@@ -478,13 +475,10 @@ def _prop_signal_strength(confidence: float, baseline: float) -> float:
     return (confidence - baseline) / baseline
 
 
-MAX_CARD_PROPS = 3  # show up to 3 props on the schedule card
-
-
 async def _compute_top_props(
     games: List[Game], session: AsyncSession,
-) -> dict[int, List[GameTopPick]]:
-    """Pick the best prop predictions per game (up to MAX_CARD_PROPS).
+) -> dict[int, GameTopPick]:
+    """Pick the single best prop prediction per game.
 
     Ranking order:
     1. Real edge from sportsbook odds (when available).
@@ -509,7 +503,7 @@ async def _compute_top_props(
 
     game_ids = [g.id for g in games]
     game_by_id = {g.id: g for g in games}
-    top_props: dict[int, List[GameTopPick]] = {}
+    top_props: dict[int, GameTopPick] = {}
     if not game_ids:
         return top_props
 
@@ -533,36 +527,36 @@ async def _compute_top_props(
     for game_id, type_map in by_game.items():
         preds = list(type_map.values())
 
-        def _sort_key(p: Prediction) -> tuple:
-            """Sort key: props with edge first, then by signal strength."""
-            edge = p.edge if p.edge is not None else 0
-            signal = _prop_signal_strength(
-                p.confidence or 0,
-                baselines.get(p.bet_type, 0.50),
+        # Prefer props with real edge from sportsbook odds.
+        with_edge = [p for p in preds if p.edge is not None and p.edge > 0]
+        if with_edge:
+            best = max(with_edge, key=lambda p: (p.edge, p.confidence or 0))
+        else:
+            # No odds available — rank by signal strength so that a
+            # genuinely surprising pick (high deviation from its
+            # baseline) beats a structurally high-confidence but
+            # obvious pick.
+            best = max(
+                preds,
+                key=lambda p: _prop_signal_strength(
+                    p.confidence or 0,
+                    baselines.get(p.bet_type, 0.50),
+                ),
             )
-            has_edge = 1 if edge > 0 else 0
-            return (has_edge, edge, signal)
 
-        ranked = sorted(preds, key=_sort_key, reverse=True)[:MAX_CARD_PROPS]
-
-        picks = []
-        for pred in ranked:
-            picks.append(GameTopPick(
-                bet_type=pred.bet_type,
-                prediction_value=pred.prediction_value,
-                confidence=pred.confidence,
-                edge=pred.edge,
-                is_fallback=False,
-            ))
-
-        top_props[game_id] = picks
+        top_props[game_id] = GameTopPick(
+            bet_type=best.bet_type,
+            prediction_value=best.prediction_value,
+            confidence=best.confidence,
+            edge=best.edge,
+            is_fallback=False,
+        )
 
     # Grade outcomes for final games
-    for game_id, pick_list in top_props.items():
+    for game_id, pick in top_props.items():
         game_obj = game_by_id.get(game_id)
         if game_obj and game_obj.status and game_obj.status.lower() in GAME_FINAL_STATUSES:
-            for pick in pick_list:
-                pick.outcome = _grade_top_pick(pick, game_obj)
+            pick.outcome = _grade_top_pick(pick, game_obj)
 
     return top_props
 

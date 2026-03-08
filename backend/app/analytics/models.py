@@ -1304,17 +1304,10 @@ class BettingModel:
                 alt_up = alt.get("under_price", -110)
 
                 # Cross-validate alt line odds against the primary line.
-                # For lines below the primary, over implied should be HIGHER
-                # (easier to go over a lower number).  For lines above, it
-                # should be LOWER.  A line like O 4.5 at +110 when the main
-                # line is 7.5 at -110 is clearly bad data (period total, etc).
                 if primary_ou_val is not None and primary_over_implied is not None:
                     alt_over_implied = american_odds_to_implied_prob(alt_op)
                     if alt_over_implied is not None:
                         if lv < primary_ou_val and alt_over_implied <= primary_over_implied:
-                            # Alt line is BELOW primary but over implied is
-                            # not higher — odds are inconsistent (likely
-                            # period total or bad data).
                             logger.debug(
                                 "Rejecting alt total %.1f: over implied %.3f "
                                 "not > primary %.1f over implied %.3f",
@@ -1323,8 +1316,6 @@ class BettingModel:
                             )
                             continue
                         if lv > primary_ou_val and alt_over_implied >= primary_over_implied:
-                            # Alt line is ABOVE primary but over implied is
-                            # not lower — odds are inconsistent.
                             logger.debug(
                                 "Rejecting alt total %.1f: over implied %.3f "
                                 "not < primary %.1f over implied %.3f",
@@ -1338,154 +1329,73 @@ class BettingModel:
                     "under_price": alt_up,
                 }
 
-            # Evaluate lines to find the best totals bet.
-            # Prioritize the primary O/U line: if the main line has
-            # positive edge, use it — it's the most liquid, most
-            # reliable line closest to market consensus.  Only fall
-            # through to alternate lines when the primary offers no
-            # value.
-            best_edge = -999
-            best_pred = None
-            best_pred_prob = 0.0
-            best_pred_odds = -110.0
-            best_pred_implied = 0.5
-            best_pred_line = 0.0
-
-            def _eval_line(line_key: str, prob: float) -> bool:
-                """Evaluate a single line. Returns True if it became the
-                new best, False otherwise."""
-                nonlocal best_edge, best_pred, best_pred_prob
-                nonlocal best_pred_odds, best_pred_implied, best_pred_line
-                parts = line_key.split("_", 1)
-                if len(parts) != 2:
-                    return False
-                direction = parts[0]
-                try:
-                    line_val = float(parts[1])
-                except ValueError:
-                    return False
-                if line_val not in price_map:
-                    return False
-                price_key = f"{direction}_price"
-                odds_val = price_map[line_val].get(price_key, -110)
-                implied = american_odds_to_implied_prob(odds_val)
-                edge = prob - implied
-                if edge > best_edge:
-                    best_edge = edge
-                    best_pred = line_key
-                    best_pred_prob = prob
-                    best_pred_odds = odds_val
-                    best_pred_implied = implied
-                    best_pred_line = line_val
-                    return True
-                return False
-
-            # --- Phase 1: evaluate the primary sportsbook line ---
-            # Always use the primary line — it's the most liquid and
-            # what users actually see at sportsbooks.
-            if primary_ou_val is not None and primary_ou_val in price_map:
-                for direction in ("over", "under"):
-                    lk = f"{direction}_{primary_ou_val}"
-                    if lk in lines:
-                        _eval_line(lk, lines[lk])
-
-            primary_edge = best_edge
-
-            # --- Phase 2: only use an alt line if it offers
-            # substantially more edge (>5 pp) than the primary.
-            # A marginal edge on an illiquid alt line (e.g. Over 7.5
-            # at +2%) is less useful than showing the model's view
-            # on the primary line (e.g. Under 6.5 at 63%).
-            ALT_LINE_EDGE_THRESHOLD = 0.05  # 5 percentage points
-            for line_key, prob in lines.items():
-                _eval_line(line_key, prob)
-            # Revert to primary if the alt line didn't beat it by
-            # enough margin.
-            if (
-                best_pred
-                and primary_edge > -999
-                and best_edge - primary_edge < ALT_LINE_EDGE_THRESHOLD
-            ):
-                # Reset and re-evaluate primary only
-                best_edge = -999
-                best_pred = None
-                best_pred_prob = 0.0
-                best_pred_odds = -110.0
-                best_pred_implied = 0.5
-                best_pred_line = 0.0
-                if primary_ou_val is not None and primary_ou_val in price_map:
-                    for direction in ("over", "under"):
-                        lk = f"{direction}_{primary_ou_val}"
-                        if lk in lines:
-                            _eval_line(lk, lines[lk])
-
-            if best_pred and best_edge > -999:
-                direction = "over" if "over" in best_pred else "under"
-                predictions.append({
+            # Helper: build a prediction dict for one side of a total line.
+            def _make_total_pred(
+                direction: str, line_val: float, prob: float,
+                odds_val: float | None, implied: float | None,
+            ) -> Dict[str, Any]:
+                edge = round(prob - implied, 4) if implied else None
+                odds_display = (
+                    f" (Odds: {'+' if odds_val > 0 else ''}{int(odds_val)})"
+                    if odds_val else ""
+                )
+                implied_str = (
+                    f" vs {implied:.1%} implied (edge {edge:+.1%})"
+                    if implied is not None
+                    else ""
+                )
+                return {
                     "bet_type": "total",
-                    "prediction": best_pred,
-                    "confidence": round(best_pred_prob, 4),
-                    "probability": round(best_pred_prob, 4),
-                    "implied_probability": round(best_pred_implied, 4),
-                    "odds": best_pred_odds,
-                    "edge": round(best_edge, 4),
+                    "prediction": f"{direction}_{line_val}",
+                    "confidence": round(prob, 4),
+                    "probability": round(prob, 4),
+                    "implied_probability": round(implied, 4) if implied else None,
+                    "odds": odds_val,
+                    "edge": edge,
                     "reasoning": (
                         f"Model projects {total_xg:.1f} total goals. "
-                        f"{direction.capitalize()} {best_pred_line} at "
-                        f"{best_pred_prob:.1%} model prob vs "
-                        f"{best_pred_implied:.1%} implied "
-                        f"(edge {best_edge:+.1%}). "
+                        f"{direction.capitalize()} {line_val} at "
+                        f"{prob:.1%} model prob{implied_str}. "
                         f"Based on {home_abbr} xG {totals['home_xg']:.2f} + "
-                        f"{away_abbr} xG {totals['away_xg']:.2f}."
+                        f"{away_abbr} xG {totals['away_xg']:.2f}.{odds_display}"
                     ),
                     "details": totals,
-                })
-            elif ou_line is not None:
-                # Fallback: use primary sportsbook line if no price_map
-                ou_val = float(ou_line)
-                over_key = f"over_{ou_val}"
-                under_key = f"under_{ou_val}"
+                }
+
+            # Emit BOTH over and under for the primary sportsbook line
+            # so users can see the model's view on both sides.
+            if primary_ou_val is not None:
+                over_key = f"over_{primary_ou_val}"
+                under_key = f"under_{primary_ou_val}"
                 over_p = lines.get(over_key, 0.5)
                 under_p = lines.get(under_key, 0.5)
+                prices = price_map.get(primary_ou_val, {})
+                op_val = prices.get("over_price")
+                up_val = prices.get("under_price")
+                over_implied = american_odds_to_implied_prob(op_val) if op_val else None
+                under_implied = american_odds_to_implied_prob(up_val) if up_val else None
 
-                if over_p >= under_p:
-                    book_pred = over_key
-                    book_prob = over_p
+                # Put the side with more edge (or higher prob) first
+                # so the top_pick selector sees it as the "best" total.
+                over_edge = (over_p - over_implied) if over_implied else 0
+                under_edge = (under_p - under_implied) if under_implied else 0
+                if over_edge >= under_edge:
+                    order = [
+                        ("over", over_p, op_val, over_implied),
+                        ("under", under_p, up_val, under_implied),
+                    ]
                 else:
-                    book_pred = under_key
-                    book_prob = under_p
-
-                direction = "over" if "over" in book_pred else "under"
-                if direction == "over" and over_price is not None:
-                    total_odds_val = float(over_price)
-                elif direction == "under" and under_price is not None:
-                    total_odds_val = float(under_price)
-                else:
-                    total_odds_val = -110.0
-                total_implied_val = american_odds_to_implied_prob(total_odds_val)
-
-                predictions.append({
-                    "bet_type": "total",
-                    "prediction": book_pred,
-                    "confidence": round(book_prob, 4),
-                    "probability": round(book_prob, 4),
-                    "implied_probability": round(total_implied_val, 4),
-                    "odds": total_odds_val,
-                    "reasoning": (
-                        f"Model projects {total_xg:.1f} total goals. "
-                        f"{direction.capitalize()} {ou_val} (sportsbook line) at "
-                        f"{book_prob:.1%} probability. "
-                        f"Based on {home_abbr} xG {totals['home_xg']:.2f} + "
-                        f"{away_abbr} xG {totals['away_xg']:.2f}."
-                    ),
-                    "details": totals,
-                })
+                    order = [
+                        ("under", under_p, up_val, under_implied),
+                        ("over", over_p, op_val, over_implied),
+                    ]
+                for d, prob, odds_v, impl in order:
+                    predictions.append(
+                        _make_total_pred(d, primary_ou_val, prob, odds_v, impl)
+                    )
             else:
-                # No sportsbook lines at all — pick the standard line
-                # closest to the model's projected total, then recommend
-                # over or under on that line.  This avoids always picking
-                # the lowest line (e.g., over_5.5) just because it has the
-                # highest raw probability.
+                # No sportsbook line — use the standard line closest to
+                # the model's projected total.
                 best_line = min(
                     TOTAL_LINES,
                     key=lambda l: abs(l - total_xg),
@@ -1496,29 +1406,13 @@ class BettingModel:
                 under_p = lines.get(under_key, 0.5)
 
                 if over_p >= under_p:
-                    best_total_pred = over_key
-                    best_total_prob = over_p
+                    order = [("over", over_p), ("under", under_p)]
                 else:
-                    best_total_pred = under_key
-                    best_total_prob = under_p
-
-                direction = "over" if "over" in best_total_pred else "under"
-                predictions.append({
-                    "bet_type": "total",
-                    "prediction": best_total_pred,
-                    "confidence": round(best_total_prob, 4),
-                    "probability": round(best_total_prob, 4),
-                    "implied_probability": None,
-                    "odds": None,
-                    "reasoning": (
-                        f"Model projects {total_xg:.1f} total goals. "
-                        f"{direction.capitalize()} {best_line} at {best_total_prob:.1%} probability "
-                        f"(no sportsbook line available, using nearest standard line). "
-                        f"Based on {home_abbr} xG {totals['home_xg']:.2f} + "
-                        f"{away_abbr} xG {totals['away_xg']:.2f}."
-                    ),
-                    "details": totals,
-                })
+                    order = [("under", under_p), ("over", over_p)]
+                for d, prob in order:
+                    predictions.append(
+                        _make_total_pred(d, best_line, prob, None, None)
+                    )
         except Exception as e:
             logger.error("Total goals prediction failed: %s", e)
 
