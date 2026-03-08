@@ -1339,8 +1339,12 @@ class BettingModel:
                     "under_price": alt_up,
                 }
 
-            # Evaluate ALL lines and find the one with the best edge
-            # Edge = model_prob - implied_prob
+            # Evaluate lines to find the best totals bet.
+            # Prioritize the primary O/U line: if the main line has
+            # positive edge, use it — it's the most liquid, most
+            # reliable line closest to market consensus.  Only fall
+            # through to alternate lines when the primary offers no
+            # value.
             best_edge = -999
             best_pred = None
             best_pred_prob = 0.0
@@ -1348,31 +1352,46 @@ class BettingModel:
             best_pred_implied = 0.5
             best_pred_line = 0.0
 
-            for line_key, prob in lines.items():
-                # line_key is like "over_5.5" or "under_6.5"
+            def _eval_line(line_key: str, prob: float) -> bool:
+                """Evaluate a single line. Returns True if it became the
+                new best, False otherwise."""
+                nonlocal best_edge, best_pred, best_pred_prob
+                nonlocal best_pred_odds, best_pred_implied, best_pred_line
                 parts = line_key.split("_", 1)
                 if len(parts) != 2:
-                    continue
-                direction = parts[0]  # "over" or "under"
+                    return False
+                direction = parts[0]
                 try:
                     line_val = float(parts[1])
                 except ValueError:
-                    continue
+                    return False
+                if line_val not in price_map:
+                    return False
+                price_key = f"{direction}_price"
+                odds_val = price_map[line_val].get(price_key, -110)
+                implied = american_odds_to_implied_prob(odds_val)
+                edge = prob - implied
+                if edge > best_edge:
+                    best_edge = edge
+                    best_pred = line_key
+                    best_pred_prob = prob
+                    best_pred_odds = odds_val
+                    best_pred_implied = implied
+                    best_pred_line = line_val
+                    return True
+                return False
 
-                # Look up actual sportsbook price for this line+direction
-                if line_val in price_map:
-                    price_key = f"{direction}_price"
-                    odds_val = price_map[line_val].get(price_key, -110)
-                    implied = american_odds_to_implied_prob(odds_val)
-                    edge = prob - implied
+            # --- Phase 1: evaluate the primary sportsbook line ---
+            if primary_ou_val is not None and primary_ou_val in price_map:
+                for direction in ("over", "under"):
+                    lk = f"{direction}_{primary_ou_val}"
+                    if lk in lines:
+                        _eval_line(lk, lines[lk])
 
-                    if edge > best_edge:
-                        best_edge = edge
-                        best_pred = line_key
-                        best_pred_prob = prob
-                        best_pred_odds = odds_val
-                        best_pred_implied = implied
-                        best_pred_line = line_val
+            # --- Phase 2: only scan alt lines if primary has no edge ---
+            if best_edge <= 0:
+                for line_key, prob in lines.items():
+                    _eval_line(line_key, prob)
 
             if best_pred and best_edge > -999:
                 direction = "over" if "over" in best_pred else "under"
@@ -1390,7 +1409,6 @@ class BettingModel:
                         f"{best_pred_prob:.1%} model prob vs "
                         f"{best_pred_implied:.1%} implied "
                         f"(edge {best_edge:+.1%}). "
-                        f"Best line across {len(price_map)} available lines. "
                         f"Based on {home_abbr} xG {totals['home_xg']:.2f} + "
                         f"{away_abbr} xG {totals['away_xg']:.2f}."
                     ),
