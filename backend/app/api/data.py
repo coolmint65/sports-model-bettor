@@ -106,14 +106,50 @@ async def _run_full_sync():
 
         scraper = NHLScraper()
         try:
-            # 1. Core sync: teams, rosters, schedule, game results
-            _sync_state["step"] = "Syncing teams, rosters, schedule..."
+            # 1. Core sync: teams, rosters, schedule, game results.
+            # Each sub-step gets its own session so the SQLite write lock
+            # is released between steps, allowing the scheduler's fast
+            # odds sync to interleave without hitting "database is locked".
+            _sync_state["step"] = "Syncing teams..."
             try:
                 async with get_session_context() as session:
-                    await scraper.sync_all(session)
-                    await session.flush()
+                    await scraper.sync_teams(session)
             except Exception as exc:
-                logger.warning("Core NHL sync failed (non-critical): %s", exc)
+                logger.warning("Team sync failed (non-critical): %s", exc)
+
+            _sync_state["step"] = "Syncing rosters..."
+            try:
+                async with get_session_context() as session:
+                    await scraper.sync_rosters(session)
+            except Exception as exc:
+                logger.warning("Roster sync failed (non-critical): %s", exc)
+
+            _sync_state["step"] = "Syncing schedule..."
+            try:
+                from datetime import date as date_type
+                async with get_session_context() as session:
+                    today_str = date_type.today().isoformat()
+                    games = await scraper.sync_schedule(session, today_str)
+            except Exception as exc:
+                logger.warning("Schedule sync failed (non-critical): %s", exc)
+                games = []
+
+            _sync_state["step"] = "Syncing game results..."
+            try:
+                async with get_session_context() as session:
+                    completed = [g for g in games if g.status == "final"]
+                    for game in completed:
+                        try:
+                            await scraper.sync_game_results(
+                                session, int(game.external_id)
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "Game result sync failed for %s: %s",
+                                game.external_id, exc,
+                            )
+            except Exception as exc:
+                logger.warning("Game results sync failed (non-critical): %s", exc)
 
             # 1b. Backfill period scores for completed games missing boxscore data.
             # This populates home_score_p1/p2/p3 needed for period props.

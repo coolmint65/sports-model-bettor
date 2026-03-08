@@ -5,6 +5,7 @@ Provides the async engine, session factory, and database initialization
 utilities. Uses SQLAlchemy 2.0 async style throughout.
 """
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
@@ -19,6 +20,11 @@ from sqlalchemy.ext.asyncio import (
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Global write lock — serialises all DB write transactions so that
+# concurrent async tasks (odds sync, full data sync, predictions, etc.)
+# never collide on SQLite's single-writer constraint.
+db_write_lock = asyncio.Lock()
 
 # Create the async engine.
 # timeout=30 raises the SQLite busy-wait from 5 s to 30 s so the
@@ -79,6 +85,32 @@ async def get_session_context() -> AsyncGenerator[AsyncSession, None]:
             raise
         finally:
             await session.close()
+
+
+@asynccontextmanager
+async def get_write_session_context() -> AsyncGenerator[AsyncSession, None]:
+    """Session context that holds the global write lock for the entire
+    transaction lifetime.
+
+    Use this for operations that call ``session.flush()`` or execute
+    INSERT/UPDATE/DELETE statements, so that they cannot overlap with
+    other writers and trigger SQLite "database is locked" errors.
+
+    Usage:
+        async with get_write_session_context() as session:
+            session.add(obj)
+            await session.flush()   # safe — write lock already held
+    """
+    async with db_write_lock:
+        async with async_session_factory() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+            finally:
+                await session.close()
 
 
 async def init_db() -> None:

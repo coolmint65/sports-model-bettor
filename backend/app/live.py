@@ -20,7 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from app.constants import GAME_FINAL_STATUSES
-from app.database import get_session_context
+from app.database import get_session_context, get_write_session_context
 from app.models.game import Game
 
 logger = logging.getLogger(__name__)
@@ -128,8 +128,10 @@ async def _sync_odds_and_broadcast():
         # Phase 1: Sync odds and COMMIT to DB immediately.
         # This ensures the /schedule/live endpoint returns fresh data
         # even before we broadcast via WebSocket.
+        # Uses get_write_session_context() to hold the global write lock
+        # for the entire transaction, preventing SQLite "database is locked".
         matched = []
-        async with get_session_context() as session:
+        async with get_write_session_context() as session:
             today = date.today()
 
             # Check if there are any non-final games to sync
@@ -215,7 +217,7 @@ async def _regenerate_predictions():
     need to update every 30 seconds.
     """
     try:
-        async with get_session_context() as session:
+        async with get_write_session_context() as session:
             from datetime import date as date_type
 
             from sqlalchemy import delete as sa_delete
@@ -266,7 +268,7 @@ async def _settle_bets():
     try:
         from app.services.settlement import settle_completed_games
 
-        async with get_session_context() as session:
+        async with get_write_session_context() as session:
             result = await settle_completed_games(session)
 
         total = result["predictions_graded"] + result["tracked_bets_settled"]
@@ -298,7 +300,7 @@ async def _run_full_data_sync():
         # Sync injury reports
         try:
             from app.scrapers.injury_scraper import fetch_injury_reports
-            async with get_session_context() as session:
+            async with get_write_session_context() as session:
                 count = await fetch_injury_reports(session)
                 logger.info("Injury sync: %d records updated", count)
         except Exception as inj_exc:
