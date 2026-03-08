@@ -786,28 +786,43 @@ class NHLScraper(BaseScraper):
         ot_away_total = 0
         went_to_ot = False
 
-        for idx, period in enumerate(by_period):
-            home_p = period.get("home", 0)
-            away_p = period.get("away", 0)
+        for period in by_period:
+            # Each byPeriod entry has periodDescriptor with number/periodType
+            pd = period.get("periodDescriptor", {})
+            period_num = pd.get("number")
+            period_type = (pd.get("periodType") or "").upper()
 
-            if idx == 0:
-                game.home_score_p1 = home_p
-                game.away_score_p1 = away_p
-            elif idx == 1:
-                game.home_score_p2 = home_p
-                game.away_score_p2 = away_p
-            elif idx == 2:
-                game.home_score_p3 = home_p
-                game.away_score_p3 = away_p
-            else:
-                # All OT / SO periods get summed into the OT column
+            # Scores may be plain ints or objects with a "goals" sub-key
+            raw_home = period.get("home", 0)
+            raw_away = period.get("away", 0)
+            home_p = raw_home.get("goals", 0) if isinstance(raw_home, dict) else (raw_home or 0)
+            away_p = raw_away.get("goals", 0) if isinstance(raw_away, dict) else (raw_away or 0)
+
+            if period_type in ("OT", "SO") or (period_num is not None and period_num > 3):
                 ot_home_total += home_p
                 ot_away_total += away_p
                 went_to_ot = True
+            elif period_num == 1:
+                game.home_score_p1 = home_p
+                game.away_score_p1 = away_p
+            elif period_num == 2:
+                game.home_score_p2 = home_p
+                game.away_score_p2 = away_p
+            elif period_num == 3:
+                game.home_score_p3 = home_p
+                game.away_score_p3 = away_p
 
         if went_to_ot:
             game.home_score_ot = ot_home_total
             game.away_score_ot = ot_away_total
+
+        # Also check gameOutcome.lastPeriodType as a fallback for OT detection
+        if not went_to_ot:
+            last_period_type = (
+                self.safe_get(boxscore, "gameOutcome", "lastPeriodType") or ""
+            ).upper()
+            if last_period_type in ("OT", "SO"):
+                went_to_ot = True
 
         game.went_to_overtime = went_to_ot
 
