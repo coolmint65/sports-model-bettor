@@ -68,19 +68,24 @@ class PeriodTotalProp(BaseProp):
         home_periods = features.get("home_periods", {})
         away_periods = features.get("away_periods", {})
 
-        # Need enough history for period-level predictions
-        if (
-            home_periods.get("games_found", 0) < 5
-            or away_periods.get("games_found", 0) < 5
-        ):
-            return []
+        has_period_data = (
+            home_periods.get("games_found", 0) >= 5
+            and away_periods.get("games_found", 0) >= 5
+        )
 
         home_name = features.get("home_team_name", "Home")
         away_name = features.get("away_team_name", "Away")
         candidates = []
 
         for period_num in (1, 2, 3):
-            h_xg, a_xg = _period_xg(home_periods, away_periods, period_num)
+            if has_period_data:
+                h_xg, a_xg = _period_xg(home_periods, away_periods, period_num)
+            else:
+                # Fall back to full-game xG / 3 when period history
+                # is insufficient.  Slightly less accurate but still
+                # gives useful period prop predictions.
+                h_xg = max(home_xg / 3.0, 0.05)
+                a_xg = max(away_xg / 3.0, 0.05)
             total_xg = h_xg + a_xg
 
             # Build mini score matrix for this period (max 5 goals per side)

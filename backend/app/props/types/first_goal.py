@@ -30,14 +30,18 @@ class FirstGoalProp(BaseProp):
         home_periods = features.get("home_periods", {})
         away_periods = features.get("away_periods", {})
 
-        if (
-            home_periods.get("games_found", 0) < 5
-            or away_periods.get("games_found", 0) < 5
-        ):
-            return []
+        has_period_data = (
+            home_periods.get("games_found", 0) >= 5
+            and away_periods.get("games_found", 0) >= 5
+        )
 
         # Use P1 expected goals as proxy for first-goal probability
-        h_p1_xg, a_p1_xg = _period_xg(home_periods, away_periods, 1)
+        if has_period_data:
+            h_p1_xg, a_p1_xg = _period_xg(home_periods, away_periods, 1)
+        else:
+            # Fall back to full-game xG / 3
+            h_p1_xg = max(home_xg / 3.0, 0.05)
+            a_p1_xg = max(away_xg / 3.0, 0.05)
         total_p1 = h_p1_xg + a_p1_xg
 
         if total_p1 <= 0:

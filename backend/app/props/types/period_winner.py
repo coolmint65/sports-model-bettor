@@ -32,11 +32,10 @@ class PeriodWinnerProp(BaseProp):
         home_periods = features.get("home_periods", {})
         away_periods = features.get("away_periods", {})
 
-        if (
-            home_periods.get("games_found", 0) < 5
-            or away_periods.get("games_found", 0) < 5
-        ):
-            return []
+        has_period_data = (
+            home_periods.get("games_found", 0) >= 5
+            and away_periods.get("games_found", 0) >= 5
+        )
 
         home_abbr = features.get("home_team_abbr", "HOM")
         away_abbr = features.get("away_team_abbr", "AWY")
@@ -45,7 +44,11 @@ class PeriodWinnerProp(BaseProp):
         candidates = []
 
         for period_num in (1, 2, 3):
-            h_xg, a_xg = _period_xg(home_periods, away_periods, period_num)
+            if has_period_data:
+                h_xg, a_xg = _period_xg(home_periods, away_periods, period_num)
+            else:
+                h_xg = max(home_xg / 3.0, 0.05)
+                a_xg = max(away_xg / 3.0, 0.05)
 
             # Build mini score matrix
             max_g = 6

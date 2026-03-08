@@ -32,11 +32,20 @@ class PropEngine:
             try:
                 candidates = prop.predict(features, matrix, home_xg, away_xg)
                 if not candidates:
+                    logger.debug(
+                        "Prop %s: no candidates (home_periods.games_found=%s, "
+                        "away_periods.games_found=%s)",
+                        prop.bet_type,
+                        features.get("home_periods", {}).get("games_found", "N/A"),
+                        features.get("away_periods", {}).get("games_found", "N/A"),
+                    )
                     continue
                 filtered = prop.filter(candidates)
                 if not filtered:
+                    logger.debug("Prop %s: all %d candidates filtered out", prop.bet_type, len(candidates))
                     continue
                 with_odds = prop.map_odds(filtered, odds_data)
+                logger.info("Prop %s: emitting %d predictions", prop.bet_type, len(with_odds))
 
                 for c in with_odds:
                     results.append({
