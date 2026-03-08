@@ -108,7 +108,10 @@ def check_outcome(
         return check_total_outcome(prediction_value, game)
     elif bet_type == "spread":
         return check_spread_outcome(prediction_value, game, home_abbr)
-    return None
+
+    # Dispatch to prop engine for all other bet types
+    from app.props.grading import check_prop_outcome
+    return check_prop_outcome(bet_type, prediction_value, game, home_abbr)
 
 
 def determine_actual_outcome(
@@ -130,7 +133,10 @@ def determine_actual_outcome(
         return f"total_{hs + aws}"
     elif bet_type == "spread":
         return f"margin_{hs - aws}"
-    return None
+
+    # Dispatch to prop engine for all other bet types
+    from app.props.grading import determine_prop_outcome
+    return determine_prop_outcome(game, bet_type)
 
 
 def compute_tracked_bet_pl(

@@ -1714,6 +1714,15 @@ class BettingModel:
         except Exception as e:
             logger.error("Spread prediction failed: %s", e)
 
+        # ---- Props (isolated subsystem) ----
+        try:
+            from app.props import PropEngine
+            prop_engine = PropEngine()
+            prop_preds = prop_engine.run(features, odds_data, matrix, home_xg, away_xg)
+            predictions.extend(prop_preds)
+        except Exception as e:
+            logger.error("Prop predictions failed: %s", e)
+
         # Compute edge for all predictions that have implied probability
         # but no edge yet (props don't compute it inline).
         for pred in predictions:
