@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { Calendar, TrendingUp, Radio } from 'lucide-react';
 import { format } from 'date-fns';
 import BestBets from './BestBets';
@@ -42,7 +42,37 @@ function Dashboard() {
   }, [silentRefetch]));
 
   const today = format(new Date(), 'EEEE, MMMM d, yyyy');
-  const games = scheduleData?.games || scheduleData || [];
+  const rawGames = scheduleData?.games || scheduleData || [];
+
+  // Cache prematch top_pick/top_prop so they persist even if a schedule
+  // refresh temporarily loses them (race condition during live games).
+  const prematchPickCache = useRef(new Map());
+  const games = useMemo(() => {
+    return rawGames.map((g) => {
+      const gid = g.id || g.game_id;
+      if (!gid) return g;
+
+      // Store picks whenever the schedule provides them
+      if (g.top_pick) {
+        prematchPickCache.current.set(`${gid}:pick`, g.top_pick);
+      }
+      if (g.top_prop) {
+        prematchPickCache.current.set(`${gid}:prop`, g.top_prop);
+      }
+
+      // If picks are missing, restore from cache
+      const cachedPick = prematchPickCache.current.get(`${gid}:pick`);
+      const cachedProp = prematchPickCache.current.get(`${gid}:prop`);
+
+      if (!g.top_pick && cachedPick) {
+        return { ...g, top_pick: cachedPick, top_prop: g.top_prop || cachedProp };
+      }
+      if (!g.top_prop && cachedProp) {
+        return { ...g, top_prop: cachedProp };
+      }
+      return g;
+    });
+  }, [rawGames]);
 
   const todayHasLive = games.some((g) => isLiveStatus(g.status));
   const hasAnyLive = liveGames.length > 0 || todayHasLive;
@@ -90,6 +120,9 @@ function Dashboard() {
       const scheduleGame = scheduleMap.get(gid);
       if (!g.top_pick && scheduleGame?.top_pick) {
         g.top_pick = scheduleGame.top_pick;
+      }
+      if (!g.top_prop && scheduleGame?.top_prop) {
+        g.top_prop = scheduleGame.top_prop;
       }
       liveGameMap.set(gid, g);
     }
@@ -143,7 +176,7 @@ function Dashboard() {
           </div>
           <div className="games-grid">
             {allLive.map((game) => (
-              <GameCard key={game.game_id || game.id} game={game} />
+              <GameCard key={game.game_id || game.id} game={game} section="live" />
             ))}
           </div>
         </section>
@@ -181,7 +214,7 @@ function Dashboard() {
         {!scheduleLoading && !scheduleError && games.length > 0 && (
           <div className="games-grid">
             {games.map((game) => (
-              <GameCard key={game.game_id || game.id} game={game} />
+              <GameCard key={game.game_id || game.id} game={game} section="schedule" />
             ))}
           </div>
         )}

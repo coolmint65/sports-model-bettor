@@ -1264,7 +1264,7 @@ async def clear_all_tracked_bets(
 ):
     """Clear all tracked bets (reset history)."""
     await session.execute(delete(TrackedBet))
-    await session.flush()
+    await session.commit()
     return {"ok": True}
 
 

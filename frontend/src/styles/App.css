@@ -2828,6 +2828,7 @@ a:hover {
   gap: 4px;
   font-weight: 600;
   font-size: 0.82rem;
+  flex-wrap: wrap;
 }
 
 .col-result.result-win {
@@ -2838,8 +2839,21 @@ a:hover {
   color: var(--accent-red);
 }
 
+.col-result.result-push {
+  color: var(--accent-gold, #ffd700);
+}
+
 .col-result.result-pending {
   color: var(--text-dim);
+}
+
+.settled-at-label {
+  display: block;
+  width: 100%;
+  font-size: 0.68rem;
+  font-weight: 400;
+  color: var(--text-dim);
+  opacity: 0.7;
 }
 
 .col-profit {

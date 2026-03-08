@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Trophy, TrendingUp, Target, Star, ChevronRight, Radio, Plus, Check, Layers, RefreshCw } from 'lucide-react';
-import { fetchBestBets, trackBet, fetchTrackedBets, regeneratePredictions } from '../utils/api';
+import { Trophy, TrendingUp, Target, Star, ChevronRight, Radio, Layers, RefreshCw } from 'lucide-react';
+import { fetchBestBets, trackBet, regeneratePredictions } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import { useWebSocketEvent } from '../hooks/useWebSocket';
 import { teamName, teamAbbrev, confidencePct, formatBetType, formatPredictionValue, isLiveStatus } from '../utils/teams';
@@ -9,7 +9,7 @@ import { formatAmericanOdds, formatOddsFromProb, getConfidenceColor } from '../u
 
 const BEST_BETS_POLL_INTERVAL = 60_000; // 60 seconds
 
-function BestBetCard({ bet, rank, isFeatured, onTrack, tracked }) {
+function BestBetCard({ bet, rank, isFeatured }) {
   const navigate = useNavigate();
   const confidence = confidencePct(bet.confidence);
   const edge = confidencePct(bet.edge);
@@ -28,13 +28,6 @@ function BestBetCard({ bet, rank, isFeatured, onTrack, tracked }) {
   const handleClick = () => {
     if (bet.game_id) {
       navigate(`/games/${bet.game_id}`);
-    }
-  };
-
-  const handleTrack = (e) => {
-    e.stopPropagation();
-    if (!tracked && onTrack) {
-      onTrack(bet);
     }
   };
 
@@ -131,15 +124,6 @@ function BestBetCard({ bet, rank, isFeatured, onTrack, tracked }) {
       </div>
 
       <div className="best-bet-actions">
-        <button
-          className={`btn-track ${tracked ? 'btn-tracked' : ''}`}
-          onClick={handleTrack}
-          disabled={tracked}
-          title={tracked ? 'Already tracked' : 'Track this bet'}
-        >
-          {tracked ? <Check size={14} /> : <Plus size={14} />}
-          {tracked ? 'Tracked' : 'Track'}
-        </button>
         <div className="best-bet-arrow">
           <ChevronRight size={20} />
         </div>
@@ -158,40 +142,16 @@ const TABS = [
 function BestBets() {
   const { data, loading, error, silentRefetch } = useApi(fetchBestBets);
   const [activeTab, setActiveTab] = useState('all');
-  const [trackedIds, setTrackedIds] = useState(new Set());
-  // Track by game_id+bet_type as fallback (handles prediction ID changes)
-  const [trackedKeys, setTrackedKeys] = useState(new Set());
-  const [trackingId, setTrackingId] = useState(null);
   const [regenerating, setRegenerating] = useState(false);
   const [regenMessage, setRegenMessage] = useState('');
-
-  // Load already-tracked bets so the Track button is disabled
-  const refreshTrackedState = useCallback(async () => {
-    try {
-      const resp = await fetchTrackedBets();
-      const bets = resp.data?.bets || resp.data || [];
-      const ids = new Set(
-        bets.map((b) => b.prediction_id).filter(Boolean)
-      );
-      const keys = new Set(
-        bets.map((b) => `${b.game_id}:${b.bet_type}:${b.prediction_value}`)
-      );
-      setTrackedIds(ids);
-      setTrackedKeys(keys);
-    } catch {
-      // non-critical
-    }
-  }, []);
-
-  useEffect(() => {
-    refreshTrackedState();
-  }, [refreshTrackedState]);
+  // Track which prediction IDs we've already auto-tracked to avoid
+  // sending duplicate requests on every render/poll cycle.
+  const autoTrackedRef = useRef(new Set());
 
   // Refetch when predictions are regenerated (separate from odds updates)
   useWebSocketEvent('predictions_update', useCallback(() => {
     silentRefetch();
-    refreshTrackedState();
-  }, [silentRefetch, refreshTrackedState]));
+  }, [silentRefetch]));
 
   // Also refetch on odds updates in case line movements affect display
   useWebSocketEvent('odds_update', useCallback(() => {
@@ -206,42 +166,14 @@ function BestBets() {
     return () => clearInterval(interval);
   }, [silentRefetch]);
 
-  // Also refresh on manual data sync — refresh both bets and tracked state
+  // Also refresh on manual data sync
   useEffect(() => {
     const onSynced = () => {
       silentRefetch();
-      refreshTrackedState();
     };
     window.addEventListener('data-synced', onSynced);
     return () => window.removeEventListener('data-synced', onSynced);
-  }, [silentRefetch, refreshTrackedState]);
-
-  const isBetTracked = useCallback((bet) => {
-    const predId = bet.prediction_id || bet.id;
-    if (predId && trackedIds.has(predId)) return true;
-    const key = `${bet.game_id}:${bet.bet_type}:${bet.prediction_value}`;
-    return trackedKeys.has(key);
-  }, [trackedIds, trackedKeys]);
-
-  const handleTrack = useCallback(async (bet) => {
-    const predId = bet.prediction_id || bet.id;
-    if (!predId || isBetTracked(bet)) return;
-    setTrackingId(predId);
-    try {
-      await trackBet(predId);
-      setTrackedIds((prev) => new Set(prev).add(predId));
-      const key = `${bet.game_id}:${bet.bet_type}:${bet.prediction_value}`;
-      setTrackedKeys((prev) => new Set(prev).add(key));
-    } catch (err) {
-      if (err?.response?.status === 409) {
-        // Already tracked server-side — mark as tracked locally
-        setTrackedIds((prev) => new Set(prev).add(predId));
-      }
-      console.error('Failed to track bet:', err);
-    } finally {
-      setTrackingId(null);
-    }
-  }, [trackedIds]);
+  }, [silentRefetch]);
 
   const handleRegenerate = useCallback(async () => {
     if (regenerating) return;
@@ -295,6 +227,23 @@ function BestBets() {
     spread: spreadBets.length,
     total: totalBets.length,
   };
+
+  // Auto-track best bets — fire-and-forget for any new predictions
+  // that haven't been tracked yet in this session.
+  useEffect(() => {
+    if (!allBets.length) return;
+    const toTrack = allBets.filter((bet) => {
+      const predId = bet.prediction_id || bet.id;
+      return predId && !autoTrackedRef.current.has(predId);
+    });
+    for (const bet of toTrack) {
+      const predId = bet.prediction_id || bet.id;
+      autoTrackedRef.current.add(predId);
+      trackBet(predId).catch(() => {
+        // 409 = already tracked; other errors are non-critical
+      });
+    }
+  }, [allBets]);
 
   if (loading) {
     return (
@@ -399,8 +348,6 @@ function BestBets() {
               bet={bet}
               rank={index + 1}
               isFeatured={index === 0}
-              onTrack={handleTrack}
-              tracked={isBetTracked(bet)}
             />
           ))}
         </div>

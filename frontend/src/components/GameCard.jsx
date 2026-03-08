@@ -331,7 +331,7 @@ function OddsRow({ odds, homeAbbr, awayAbbr, isLive, label, periodType }) {
   );
 }
 
-function GameCard({ game }) {
+function GameCard({ game, section }) {
   const navigate = useNavigate();
   const gameId = game.game_id || game.id;
   const statusInfo = getStatusDisplay(game);
@@ -432,14 +432,17 @@ function GameCard({ game }) {
         </div>
       </div>
 
-      {/* Odds Row(s) — show pregame + live separately during live games */}
+      {/* Odds Row(s) — show pregame + live separately during live games.
+          In the schedule section, only show pregame lines (live lines are for Live Now only). */}
       {statusInfo.isLive && game.pregame_odds ? (
         <>
           <OddsRow odds={game.pregame_odds} homeAbbr={homeAbbr} awayAbbr={awayAbbr} label="PREGAME" />
-          <OddsRow odds={odds} homeAbbr={homeAbbr} awayAbbr={awayAbbr} isLive label="LIVE" periodType={game.period_type} />
+          {section !== 'schedule' && (
+            <OddsRow odds={odds} homeAbbr={homeAbbr} awayAbbr={awayAbbr} isLive label="LIVE" periodType={game.period_type} />
+          )}
         </>
       ) : (
-        <OddsRow odds={odds} homeAbbr={homeAbbr} awayAbbr={awayAbbr} isLive={statusInfo.isLive} />
+        <OddsRow odds={odds} homeAbbr={homeAbbr} awayAbbr={awayAbbr} isLive={statusInfo.isLive && section !== 'schedule'} />
       )}
 
       {/* Footer: Top Pick or Venue + Confidence + Outcome */}
