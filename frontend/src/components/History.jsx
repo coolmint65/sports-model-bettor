@@ -423,7 +423,7 @@ function History() {
                           {bet.home_team_abbr || bet.home_team_name || '?'}
                         </span>
                         <span className="col-type">{formatBetType(bet.bet_type)}</span>
-                        <span className="col-pick">{formatPredictionValue(bet.prediction_value, bet.home_team_abbr, bet.away_team_abbr)}</span>
+                        <span className="col-pick">{formatPredictionValue(bet.prediction_value, bet.home_team_abbr, bet.away_team_abbr, bet.bet_type)}</span>
                         <span className="col-odds">{oddsStr || '—'}</span>
                         <span className="col-confidence">
                           <span

@@ -429,7 +429,7 @@ function GameCard({ game }) {
           <div className={`game-top-pick ${topPick.is_fallback ? 'top-pick-fallback' : ''} ${topPick.outcome ? `pick-${topPick.outcome}` : ''}`}>
             {topPick.is_fallback ? <AlertTriangle size={12} /> : <Target size={12} />}
             <span className="top-pick-type">{formatBetType(topPick.bet_type)}</span>
-            <span className="top-pick-value">{formatPredictionValue(topPick.prediction_value, homeAbbr, awayAbbr)}</span>
+            <span className="top-pick-value">{formatPredictionValue(topPick.prediction_value, homeAbbr, awayAbbr, topPick.bet_type)}</span>
             {topPick.is_fallback && <span className="top-pick-fallback-label">Fallback</span>}
           </div>
         ) : venue ? (
@@ -466,7 +466,7 @@ function GameCard({ game }) {
           <div className="game-top-prop">
             <Layers size={12} />
             <span className="top-prop-type">{formatBetType(topProp.bet_type)}</span>
-            <span className="top-prop-value">{formatPredictionValue(topProp.prediction_value, homeAbbr, awayAbbr)}</span>
+            <span className="top-prop-value">{formatPredictionValue(topProp.prediction_value, homeAbbr, awayAbbr, topProp.bet_type)}</span>
           </div>
         </div>
       )}

@@ -83,7 +83,7 @@ function BestBetCard({ bet, rank, isFeatured, onTrack, tracked }) {
         </div>
 
         <div className="best-bet-selection">
-          {bet.line_display || formatPredictionValue(bet.prediction_value || bet.pick || bet.selection, homeAbbr, awayAbbr)}
+          {bet.line_display || formatPredictionValue(bet.prediction_value || bet.pick || bet.selection, homeAbbr, awayAbbr, bet.bet_type)}
         </div>
 
         <div className="best-bet-metrics">

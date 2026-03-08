@@ -56,6 +56,7 @@ const BET_TYPE_LABELS = {
   both_score: 'BTTS',
   period_total: 'Period Total',
   period_winner: 'Period Winner',
+  period_spread: 'Period Spread',
   first_goal: 'First Goal',
   overtime: 'Overtime',
   regulation_winner: 'Reg. Winner',
@@ -83,10 +84,27 @@ export function formatBetType(betType) {
  * Team abbreviations (2-3 uppercase letters) are kept as-is.
  * Spread signs (+/-) are preserved.
  */
-export function formatPredictionValue(value, homeAbbr, awayAbbr) {
+export function formatPredictionValue(value, homeAbbr, awayAbbr, betType) {
   if (!value) return 'N/A';
+
+  // Strip redundant prefixes that duplicate the bet-type badge.
+  // e.g. "both_score_no" → "no", "reg_DAL" → "DAL", "first_goal_PIT" → "PIT"
+  let cleaned = value;
+  if (betType) {
+    const bt = betType.toLowerCase();
+    if (bt === 'both_score') {
+      cleaned = cleaned.replace(/^both_score_/i, '');
+    } else if (bt === 'regulation_winner') {
+      cleaned = cleaned.replace(/^reg_/i, '');
+    } else if (bt === 'first_goal') {
+      cleaned = cleaned.replace(/^first_goal_/i, '');
+    } else if (bt === 'overtime') {
+      cleaned = cleaned.replace(/^overtime_/i, '');
+    }
+  }
+
   // Replace underscores with spaces
-  let formatted = value.replace(/_/g, ' ');
+  let formatted = cleaned.replace(/_/g, ' ');
   // Title-case each word, keeping abbreviations and special chars as-is
   formatted = formatted
     .split(' ')

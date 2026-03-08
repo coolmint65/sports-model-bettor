@@ -43,7 +43,7 @@ class PeriodWinnerProp(BaseProp):
         away_name = features.get("away_team_name", "Away")
         candidates = []
 
-        for period_num in (1, 2, 3):
+        for period_num in (1,):
             if has_period_data:
                 h_xg, a_xg = _period_xg(home_periods, away_periods, period_num)
             else:

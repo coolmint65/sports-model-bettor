@@ -32,7 +32,7 @@ function PredictionCard({ prediction, showGame = false, compact = false, isFallb
   // Use provided abbreviations, or derive from prediction's team objects
   const hAbbr = homeAbbr || teamAbbrev(prediction.home_team, null);
   const aAbbr = awayAbbr || teamAbbrev(prediction.away_team, null);
-  const pick = formatPredictionValue(prediction.prediction_value || prediction.pick || prediction.selection, hAbbr, aAbbr);
+  const pick = formatPredictionValue(prediction.prediction_value || prediction.pick || prediction.selection, hAbbr, aAbbr, prediction.bet_type || prediction.type);
   const reasoning = prediction.reasoning || prediction.reason || prediction.analysis || '';
 
   const cardClasses = [
