@@ -7,7 +7,7 @@ from app.models.game import Game
 from app.props.types.base import BaseProp
 
 # Standard lines to evaluate for each period
-PERIOD_LINES = [0.5, 1.5, 2.5]
+PERIOD_LINES = [1.5]
 
 # League average goals per period (~1.02)
 LEAGUE_PERIOD_AVG = 1.02
