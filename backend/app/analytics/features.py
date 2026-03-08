@@ -933,6 +933,9 @@ class FeatureEngine:
         is_lookahead = False
         is_letdown = False
 
+        # Fetch team object once for both checks
+        team_obj = await self._get_team(db, team_id)
+
         # Check next game: if it's a divisional matchup, this game may
         # see reduced effort (lookahead spot).
         from datetime import timedelta as _td
@@ -954,39 +957,19 @@ class FeatureEngine:
         next_result = await db.execute(next_stmt)
         next_game = next_result.scalars().first()
 
-        if next_game:
-            next_opp_id = (
-                next_game.away_team_id
-                if next_game.home_team_id == team_id
-                else next_game.home_team_id
-            )
-            team_obj = await self._get_team(db, team_id)
+        if next_game and team_obj:
+            next_opp_id = self._get_opponent_id(next_game, team_id)
             next_opp_obj = await self._get_team(db, next_opp_id)
-            if team_obj and next_opp_obj:
-                if (
-                    team_obj.division
-                    and next_opp_obj.division
-                    and team_obj.division == next_opp_obj.division
-                ):
-                    is_lookahead = True
+            if next_opp_obj and self._is_same_division(team_obj, next_opp_obj):
+                is_lookahead = True
 
         # Letdown: previous game was an OT divisional battle
-        if recent_games:
+        if recent_games and team_obj:
             prev = recent_games[0]
-            prev_opp_id = (
-                prev.away_team_id
-                if prev.home_team_id == team_id
-                else prev.home_team_id
-            )
-            team_obj_ld = await self._get_team(db, team_id)
+            prev_opp_id = self._get_opponent_id(prev, team_id)
             prev_opp_obj = await self._get_team(db, prev_opp_id)
-            if team_obj_ld and prev_opp_obj:
-                was_divisional = (
-                    team_obj_ld.division
-                    and prev_opp_obj.division
-                    and team_obj_ld.division == prev_opp_obj.division
-                )
-                if was_divisional and prev.went_to_overtime:
+            if prev_opp_obj and self._is_same_division(team_obj, prev_opp_obj):
+                if prev.went_to_overtime:
                     is_letdown = True
 
         # Travel disadvantage: extended road trips
@@ -1117,22 +1100,18 @@ class FeatureEngine:
         )
 
         # Divisional matchup detection (affects total scoring tendencies)
-        is_divisional = False
-        if home_team and away_team:
-            is_divisional = (
-                home_team.division is not None
-                and away_team.division is not None
-                and home_team.division == away_team.division
-            )
+        is_divisional = (
+            self._is_same_division(home_team, away_team)
+            if home_team and away_team
+            else False
+        )
 
         # Conference mismatch for travel (west vs east)
-        is_cross_conference = False
-        if home_team and away_team:
-            is_cross_conference = (
-                home_team.conference is not None
-                and away_team.conference is not None
-                and home_team.conference != away_team.conference
-            )
+        is_cross_conference = (
+            self._is_cross_conference(home_team, away_team)
+            if home_team and away_team
+            else False
+        )
 
         features = {
             # Game metadata
@@ -1239,6 +1218,29 @@ class FeatureEngine:
         stmt = select(Team).where(Team.id == team_id)
         result = await db.execute(stmt)
         return result.scalars().first()
+
+    @staticmethod
+    def _get_opponent_id(game: Game, team_id: int) -> int:
+        """Return the opponent team ID for a given team in a game."""
+        return game.away_team_id if game.home_team_id == team_id else game.home_team_id
+
+    @staticmethod
+    def _is_same_division(team_a: Team, team_b: Team) -> bool:
+        """Check if two teams are in the same division."""
+        return bool(
+            team_a.division
+            and team_b.division
+            and team_a.division == team_b.division
+        )
+
+    @staticmethod
+    def _is_cross_conference(team_a: Team, team_b: Team) -> bool:
+        """Check if two teams are in different conferences."""
+        return bool(
+            team_a.conference
+            and team_b.conference
+            and team_a.conference != team_b.conference
+        )
 
     @staticmethod
     def _parse_period_scores(

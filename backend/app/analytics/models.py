@@ -492,6 +492,15 @@ class BettingModel:
         # Precompute marginal PMFs
         pmf_h = [float(poisson.pmf(k, lam_h)) for k in range(max_goals + 1)]
         pmf_a = [float(poisson.pmf(k, lam_a)) for k in range(max_goals + 1)]
+
+        # Fast path: independent Poisson when no correlation
+        if lam_c == 0.0:
+            return [
+                [pmf_h[i] * pmf_a[j] for j in range(max_goals + 1)]
+                for i in range(max_goals + 1)
+            ]
+
+        # Full bivariate Poisson with shared game-pace component
         pmf_c = [float(poisson.pmf(k, lam_c)) for k in range(max_goals + 1)]
 
         matrix = [[0.0] * (max_goals + 1) for _ in range(max_goals + 1)]
@@ -532,6 +541,8 @@ class BettingModel:
     async def predict_total_goals(
         self,
         features: Dict[str, Any],
+        *,
+        _precomputed: Tuple[float, float, List[List[float]]] | None = None,
     ) -> Dict[str, Any]:
         """
         Predict total goals using the Poisson model.
@@ -543,10 +554,12 @@ class BettingModel:
             dict with home_xg, away_xg, total_xg, and probabilities for
             each over/under line.
         """
-        home_xg, away_xg = self._calc_expected_goals(features)
+        if _precomputed:
+            home_xg, away_xg, matrix = _precomputed
+        else:
+            home_xg, away_xg = self._calc_expected_goals(features)
+            matrix = self._score_matrix(home_xg, away_xg)
         total_xg = home_xg + away_xg
-
-        matrix = self._score_matrix(home_xg, away_xg)
         max_g = POISSON_MAX_GOALS
 
         # Build the set of lines to evaluate:
@@ -614,6 +627,8 @@ class BettingModel:
     async def predict_moneyline(
         self,
         features: Dict[str, Any],
+        *,
+        _precomputed: Tuple[float, float, List[List[float]]] | None = None,
     ) -> Dict[str, Any]:
         """
         Predict moneyline (win probability) for each team.
@@ -629,8 +644,11 @@ class BettingModel:
         Returns:
             dict with home_win_prob, away_win_prob, draw_prob_regulation.
         """
-        home_xg, away_xg = self._calc_expected_goals(features)
-        matrix = self._score_matrix(home_xg, away_xg)
+        if _precomputed:
+            home_xg, away_xg, matrix = _precomputed
+        else:
+            home_xg, away_xg = self._calc_expected_goals(features)
+            matrix = self._score_matrix(home_xg, away_xg)
         max_g = POISSON_MAX_GOALS
 
         home_win = 0.0
@@ -684,6 +702,8 @@ class BettingModel:
     async def predict_spread(
         self,
         features: Dict[str, Any],
+        *,
+        _precomputed: Tuple[float, float, List[List[float]]] | None = None,
     ) -> Dict[str, Any]:
         """
         Predict spread (puck line) probabilities.
@@ -697,8 +717,11 @@ class BettingModel:
         Returns:
             dict with predicted_margin, spread probabilities for each side.
         """
-        home_xg, away_xg = self._calc_expected_goals(features)
-        matrix = self._score_matrix(home_xg, away_xg)
+        if _precomputed:
+            home_xg, away_xg, matrix = _precomputed
+        else:
+            home_xg, away_xg = self._calc_expected_goals(features)
+            matrix = self._score_matrix(home_xg, away_xg)
         max_g = POISSON_MAX_GOALS
 
         predicted_margin = round(home_xg - away_xg, 3)
@@ -1066,6 +1089,12 @@ class BettingModel:
         home_abbr = features.get("home_team_abbr", "HOM")
         away_abbr = features.get("away_team_abbr", "AWY")
 
+        # Precompute xG and score matrix once for all prediction methods.
+        # Previously each method recomputed these independently.
+        home_xg, away_xg = self._calc_expected_goals(features)
+        matrix = self._score_matrix(home_xg, away_xg)
+        _pre = (home_xg, away_xg, matrix)
+
         # Extract betting odds for implied probability calculations
         odds_data = features.get("odds", {})
         home_ml = odds_data.get("home_moneyline")
@@ -1095,7 +1124,7 @@ class BettingModel:
 
         # ---- Moneyline ----
         try:
-            ml = await self.predict_moneyline(features)
+            ml = await self.predict_moneyline(features, _precomputed=_pre)
             home_wp = ml["home_win_prob"]
             away_wp = ml["away_win_prob"]
 
@@ -1151,7 +1180,7 @@ class BettingModel:
 
         # ---- Total goals (evaluate ALL available lines) ----
         try:
-            totals = await self.predict_total_goals(features)
+            totals = await self.predict_total_goals(features, _precomputed=_pre)
             lines = totals.get("lines", {})
             total_xg = totals["total_xg"]
 
@@ -1353,7 +1382,7 @@ class BettingModel:
 
         # ---- Spread / Puck Line (evaluate ALL available lines) ----
         try:
-            spread = await self.predict_spread(features)
+            spread = await self.predict_spread(features, _precomputed=_pre)
             spreads = spread.get("spreads", {})
             margin = spread["predicted_margin"]
 

@@ -13,20 +13,19 @@ Usage:
 import asyncio
 import itertools
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analytics.features import FeatureEngine
-from app.analytics.models import BettingModel, american_odds_to_implied_prob
+from app.analytics.models import BettingModel
 from app.config import settings
 from app.constants import GAME_FINAL_STATUSES
 from app.database import get_session_context
 from app.models.game import Game
-from app.models.team import Team
 
 logger = logging.getLogger(__name__)
 
@@ -154,34 +153,43 @@ class Backtester:
         db: AsyncSession,
         params: Dict[str, float],
         games: Optional[List[Game]] = None,
+        features_cache: Optional[Dict[int, Dict]] = None,
     ) -> BacktestResult:
         """
         Run a backtest with given parameters against historical games.
 
         Temporarily overrides model config, generates predictions for each
         game, then compares against actual outcomes.
+
+        Args:
+            features_cache: Pre-built features keyed by game ID. When
+                provided, skips the expensive build_game_features DB
+                queries (used by grid_search to avoid re-querying for
+                each parameter combination).
         """
         import math
 
         if games is None:
             games = await self.get_completed_games(db)
 
-        # Create a model with custom parameters
         model = BettingModel()
 
-        # Override settings temporarily
+        # Override settings temporarily via standard setattr (runs Pydantic validation)
         original_values = {}
         for key, val in params.items():
             if hasattr(settings.model, key):
                 original_values[key] = getattr(settings.model, key)
-                object.__setattr__(settings.model, key, val)
+                setattr(settings.model, key, val)
 
         result = BacktestResult(params=params)
 
         try:
             for game in games:
                 try:
-                    features = await self.feature_engine.build_game_features(db, game.id)
+                    if features_cache and game.id in features_cache:
+                        features = features_cache[game.id]
+                    else:
+                        features = await self.feature_engine.build_game_features(db, game.id)
                     predictions = await model.predict_all(features)
 
                     for pred in predictions:
@@ -229,7 +237,7 @@ class Backtester:
         finally:
             # Restore original settings
             for key, val in original_values.items():
-                object.__setattr__(settings.model, key, val)
+                setattr(settings.model, key, val)
 
         return result
 
@@ -267,6 +275,20 @@ class Backtester:
             self._grid_size(grid),
         )
 
+        # Pre-build features for all games once. Features are pure historical
+        # data that don't change with tuning parameters, so caching avoids
+        # re-querying ~27 DB calls per game per parameter combination.
+        features_cache: Dict[int, Dict] = {}
+        for game in games:
+            try:
+                features_cache[game.id] = await self.feature_engine.build_game_features(
+                    db, game.id
+                )
+            except Exception as e:
+                logger.debug("Feature build failed for game %d: %s", game.id, e)
+
+        logger.info("Pre-built features for %d/%d games", len(features_cache), len(games))
+
         # Generate all combinations
         keys = list(grid.keys())
         values = list(grid.values())
@@ -274,7 +296,7 @@ class Backtester:
 
         for combo in itertools.product(*values):
             params = dict(zip(keys, combo))
-            bt_result = await self.run_backtest(db, params, games)
+            bt_result = await self.run_backtest(db, params, games, features_cache)
             results.append(bt_result)
             logger.info(
                 "  params=%s -> hit=%.3f, roi=%.3f, ll=%.3f (%d preds)",
