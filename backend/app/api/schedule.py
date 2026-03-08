@@ -18,7 +18,7 @@ from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES, composite_pick_score, is_heavy_juice
-from app.database import get_session
+from app.database import get_session, get_write_session_context
 from app.models.game import Game
 from app.models.prediction import Prediction
 from app.models.team import Team, TeamStats
@@ -638,17 +638,19 @@ async def get_live_games(
     )
     games = result.scalars().all()
 
-    # Sync scores/clock from NHL API (not odds — scheduler handles that)
+    # Sync scores/clock from NHL API (not odds — scheduler handles that).
+    # Uses the global write lock so we don't collide with the background
+    # scheduler's concurrent writes to SQLite.
     if games:
         try:
-            async with session.begin_nested():
-                for game in games:
-                    await _try_sync_schedule(session, target_date=game.date)
-                await session.flush()
+            game_dates = {game.date for game in games}
+            async with get_write_session_context() as write_session:
+                for gd in game_dates:
+                    await _try_sync_schedule(write_session, target_date=gd)
         except Exception as exc:
             logger.warning("Live schedule sync failed: %s", exc)
 
-        # Re-query to get fresh ORM objects after savepoint
+        # Re-query with request session to see committed data
         result = await session.execute(
             select(Game)
             .options(selectinload(Game.home_team), selectinload(Game.away_team))
@@ -692,13 +694,16 @@ async def get_today_schedule(
     today = date.today()
     games = await _games_for_date(today, session)
 
-    # Sync scores/clock if live or if we have no games yet
+    # Sync scores/clock if live or if we have no games yet.
+    # Uses the global write lock so we don't collide with the
+    # background scheduler's concurrent writes to SQLite.
     has_live = any(g.status and g.status.lower() in ("in_progress", "live") for g in games)
     if not games or has_live:
         try:
-            async with session.begin_nested():
-                await _try_sync_schedule(session, target_date=today)
-                await session.flush()
+            async with get_write_session_context() as write_session:
+                await _try_sync_schedule(write_session, target_date=today)
+            # Re-read with the request session so the response sees
+            # the committed data.
             games = await _games_for_date(today, session)
         except Exception as exc:
             logger.warning("Today schedule sync failed: %s", exc)
@@ -726,10 +731,9 @@ async def get_schedule_by_date(
 
 
 @router.post("/sync", response_model=SyncResult)
-async def sync_schedule(
-    session: AsyncSession = Depends(get_session),
-):
-    count = await _try_sync_schedule(session)
+async def sync_schedule():
+    async with get_write_session_context() as session:
+        count = await _try_sync_schedule(session)
     return SyncResult(
         success=True,
         message=f"Successfully synced {count} games from the NHL API.",
@@ -738,13 +742,12 @@ async def sync_schedule(
 
 
 @router.post("/sync-odds")
-async def force_sync_odds(
-    session: AsyncSession = Depends(get_session),
-):
+async def force_sync_odds():
     """Force-sync odds from all sportsbook sources and regenerate predictions."""
     from app.services.odds import sync_odds_and_regenerate
 
-    matched, pred_count = await sync_odds_and_regenerate(session, force=True)
+    async with get_write_session_context() as session:
+        matched, pred_count = await sync_odds_and_regenerate(session, force=True)
 
     matched_pairs = [
         f"{m.get('away_abbrev', '')}@{m.get('home_abbrev', '')}"
