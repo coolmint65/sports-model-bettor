@@ -51,7 +51,7 @@ async def fetch_injury_reports(db: AsyncSession) -> int:
     updated_count = 0
 
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
             # Get all teams to iterate their rosters
             teams_resp = await client.get(f"{NHL_API_BASE}/standings/now")
             if teams_resp.status_code != 200:
