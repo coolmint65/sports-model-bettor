@@ -186,6 +186,27 @@ def _extract_ot(features: Dict[str, Any], prefix: str) -> Dict[str, float]:
     }
 
 
+def _extract_advanced(features: Dict[str, Any], prefix: str) -> Dict[str, float]:
+    """Extract advanced NHL metrics (Corsi-proxy, shot quality, PDO)."""
+    key = f"{prefix}_advanced"
+    adv = features.get(key, {})
+    tag = f"{prefix}_advanced"
+    return {
+        f"{tag}_cf_pct": _safe_float(adv.get("corsi_for_pct")),
+        f"{tag}_cf_per60": _safe_float(adv.get("corsi_for_per60")),
+        f"{tag}_ca_per60": _safe_float(adv.get("corsi_against_per60")),
+        f"{tag}_shot_share": _safe_float(adv.get("shot_share")),
+        f"{tag}_shooting_pct": _safe_float(adv.get("shooting_pct")),
+        f"{tag}_save_pct": _safe_float(adv.get("team_save_pct")),
+        f"{tag}_pdo": _safe_float(adv.get("pdo")),
+        f"{tag}_hd_proxy": _safe_float(adv.get("high_danger_proxy")),
+        f"{tag}_xgf_share": _safe_float(adv.get("xgf_share")),
+        f"{tag}_blocks_for": _safe_float(adv.get("avg_blocks_for")),
+        f"{tag}_blocks_against": _safe_float(adv.get("avg_blocks_against")),
+        f"{tag}_games": _safe_float(adv.get("games_found", 0)),
+    }
+
+
 def flatten_features(features: Dict[str, Any]) -> Dict[str, float]:
     """
     Convert a nested feature dict from build_game_features() into a flat
@@ -231,6 +252,9 @@ def flatten_features(features: Dict[str, Any]) -> Dict[str, float]:
         # OT tendency
         flat.update(_extract_ot(features, prefix))
 
+        # Advanced metrics (Corsi-proxy, shot quality)
+        flat.update(_extract_advanced(features, prefix))
+
     # --- Head-to-head ---
     h2h = features.get("h2h", {})
     flat["h2h_home_win_rate"] = _safe_float(h2h.get("team1_win_rate"))
@@ -270,6 +294,13 @@ def flatten_features(features: Dict[str, Any]) -> Dict[str, float]:
     flat["diff_pk_pct"] = flat.get("home_special_pk_pct", 0) - flat.get("away_special_pk_pct", 0)
     flat["diff_injury_impact"] = flat.get("home_injuries_xg_reduction", 0) - flat.get("away_injuries_xg_reduction", 0)
 
+    # Advanced metrics differentials
+    flat["diff_corsi_pct"] = flat.get("home_advanced_cf_pct", 0) - flat.get("away_advanced_cf_pct", 0)
+    flat["diff_shot_share"] = flat.get("home_advanced_shot_share", 0) - flat.get("away_advanced_shot_share", 0)
+    flat["diff_shooting_pct"] = flat.get("home_advanced_shooting_pct", 0) - flat.get("away_advanced_shooting_pct", 0)
+    flat["diff_pdo"] = flat.get("home_advanced_pdo", 0) - flat.get("away_advanced_pdo", 0)
+    flat["diff_hd_proxy"] = flat.get("home_advanced_hd_proxy", 0) - flat.get("away_advanced_hd_proxy", 0)
+
     return flat
 
 
@@ -277,6 +308,7 @@ def get_feature_names() -> List[str]:
     """Return the ordered list of feature names produced by flatten_features().
 
     Generates from a dummy feature dict on first call and caches the result.
+    This must be called after any changes to the feature set to refresh the cache.
     """
     global FEATURE_NAMES, _INITIALIZED
     if not _INITIALIZED:
@@ -285,6 +317,12 @@ def get_feature_names() -> List[str]:
         FEATURE_NAMES = list(dummy.keys())
         _INITIALIZED = True
     return FEATURE_NAMES
+
+
+def reset_feature_cache() -> None:
+    """Force re-computation of the feature name list on next call."""
+    global _INITIALIZED
+    _INITIALIZED = False
 
 
 def features_to_array(flat: Dict[str, float]) -> np.ndarray:

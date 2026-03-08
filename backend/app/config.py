@@ -132,6 +132,11 @@ class ModelConfig(BaseModel):
     # Teams far from 100 are due for regression.
     pdo_regression_factor: float = 0.10
 
+    # Advanced metrics (Corsi-proxy, shot quality)
+    corsi_possession_factor: float = 0.08     # how much CF% deviation adjusts xG
+    shot_quality_factor: float = 0.06         # shooting% deviation adjustment
+    advanced_metrics_min_games: int = 8       # min games before advanced metrics apply
+
     # Faceoff contribution to defensive factor
     faceoff_defense_weight: float = 0.10
 

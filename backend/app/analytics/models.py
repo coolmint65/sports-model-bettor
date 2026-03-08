@@ -372,6 +372,34 @@ class BettingModel:
             period_dev = away_period_total - self.league_avg
             away_xg += period_dev * _mc.period_scoring_factor
 
+        # ---- Advanced metrics adjustment (Corsi-proxy / shot quality) ----
+        # Teams that dominate possession (high Corsi%) tend to outperform
+        # raw scoring stats. Teams with high shooting% are due to regress
+        # while those with suppressed shooting% will bounce back.
+        home_advanced = features.get("home_advanced", {})
+        away_advanced = features.get("away_advanced", {})
+        adv_min_games = _mc.advanced_metrics_min_games
+
+        if home_advanced.get("games_found", 0) >= adv_min_games:
+            # Corsi possession: CF% above 50 means team controls play
+            home_cf_pct = home_advanced.get("corsi_for_pct", 50.0)
+            cf_deviation = (home_cf_pct - 50.0) / 100.0  # e.g., 54% → +0.04
+            home_xg *= 1.0 + cf_deviation * _mc.corsi_possession_factor
+
+            # Shot quality: shooting% above league avg (~8%) suggests better chances
+            home_sh_pct = home_advanced.get("shooting_pct", 8.0)
+            sh_deviation = (home_sh_pct - 8.0) / 100.0
+            home_xg *= 1.0 + sh_deviation * _mc.shot_quality_factor
+
+        if away_advanced.get("games_found", 0) >= adv_min_games:
+            away_cf_pct = away_advanced.get("corsi_for_pct", 50.0)
+            cf_deviation = (away_cf_pct - 50.0) / 100.0
+            away_xg *= 1.0 + cf_deviation * _mc.corsi_possession_factor
+
+            away_sh_pct = away_advanced.get("shooting_pct", 8.0)
+            sh_deviation = (away_sh_pct - 8.0) / 100.0
+            away_xg *= 1.0 + sh_deviation * _mc.shot_quality_factor
+
         # ---- PDO regression (luck adjustment) ----
         # PDO = shooting% + save%. League average is ~1.000.
         # Teams with PDO far from 1.0 are running hot/cold and due to regress.

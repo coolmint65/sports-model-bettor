@@ -1073,6 +1073,165 @@ class FeatureEngine:
         }
 
     # ------------------------------------------------------------------ #
+    #  Advanced NHL metrics (Corsi-proxy, shot quality, PDO)              #
+    # ------------------------------------------------------------------ #
+
+    async def get_advanced_metrics(
+        self,
+        db: AsyncSession,
+        team_id: int,
+        last_n: int = 15,
+    ) -> Dict[str, Any]:
+        """
+        Compute advanced possession and shot-quality metrics from existing data.
+
+        Uses shots on goal (from Game) and blocked shots (from GamePlayerStats)
+        to approximate Corsi (shot attempts) without needing missed-shot data.
+
+        Corsi-proxy: CF = team_sog + opponent_blocked_shots
+                     CA = opponent_sog + team_blocked_shots
+
+        Returns:
+            dict with corsi_for_pct, corsi_for_per60, shot_share,
+            shooting_pct, opp_save_pct, pdo, high_danger_proxy, games_found.
+        """
+        games = await self._get_recent_games(db, team_id, last_n)
+
+        if not games:
+            return self._empty_advanced_metrics()
+
+        total_cf = 0.0
+        total_ca = 0.0
+        total_shots_for = 0.0
+        total_shots_against = 0.0
+        total_goals_for = 0.0
+        total_goals_against = 0.0
+        total_blocked_for = 0.0     # blocks by this team (defensive)
+        total_blocked_against = 0.0  # blocks by opponent (defensive)
+        games_counted = 0
+
+        for game in games:
+            is_home = game.home_team_id == team_id
+            gf = (game.home_score if is_home else game.away_score) or 0
+            ga = (game.away_score if is_home else game.home_score) or 0
+            sf = (game.home_shots if is_home else game.away_shots) or 0
+            sa = (game.away_shots if is_home else game.home_shots) or 0
+
+            if sf == 0 and sa == 0:
+                continue
+
+            # Get blocked shots per team from GamePlayerStats
+            opp_id = game.away_team_id if is_home else game.home_team_id
+
+            # Team's blocked shots (defensive blocks by this team's players)
+            team_blocks = await self._get_team_game_blocks(db, game.id, team_id)
+            # Opponent's blocked shots (defensive blocks by opponent's players)
+            opp_blocks = await self._get_team_game_blocks(db, game.id, opp_id)
+
+            # Corsi-proxy: shot attempts = SOG + opponent's blocks
+            # (opponent blocked our shot attempts, so those are our unrecorded attempts)
+            cf = sf + opp_blocks   # our shot attempts
+            ca = sa + team_blocks  # their shot attempts
+
+            total_cf += cf
+            total_ca += ca
+            total_shots_for += sf
+            total_shots_against += sa
+            total_goals_for += gf
+            total_goals_against += ga
+            total_blocked_for += team_blocks
+            total_blocked_against += opp_blocks
+            games_counted += 1
+
+        if games_counted == 0:
+            return self._empty_advanced_metrics()
+
+        # Corsi metrics
+        corsi_total = total_cf + total_ca
+        cf_pct = (total_cf / corsi_total * 100.0) if corsi_total > 0 else 50.0
+        cf_per60 = (total_cf / games_counted) * 3.0  # ~3 periods * 20 min, rough per-60
+
+        # Shot share (SOG-based, simpler than Corsi)
+        shot_total = total_shots_for + total_shots_against
+        shot_share = (total_shots_for / shot_total * 100.0) if shot_total > 0 else 50.0
+
+        # Shooting percentage
+        shooting_pct = (total_goals_for / total_shots_for * 100.0) if total_shots_for > 0 else 8.0
+
+        # Opponent save percentage (inverse of our shooting effectiveness)
+        opp_save_pct = 1.0 - (total_goals_for / total_shots_for) if total_shots_for > 0 else 0.905
+
+        # Team save percentage
+        team_save_pct = 1.0 - (total_goals_against / total_shots_against) if total_shots_against > 0 else 0.905
+
+        # PDO = shooting% + save% (league average ≈ 1.000)
+        pdo = (total_goals_for / total_shots_for if total_shots_for > 0 else 0.08) + team_save_pct
+
+        # High-danger proxy: goals per shot attempt (Corsi-based)
+        # Higher = better quality chances
+        high_danger_proxy = (total_goals_for / total_cf * 100.0) if total_cf > 0 else 5.0
+
+        # Fenwick-proxy (unblocked shot attempts) = SOG only (we don't have missed shots)
+        # So Fenwick ≈ shot_share in our case. We'll compute a differential metric instead.
+        # Expected goals share proxy: weight goals by shot quality
+        xgf_share = cf_pct  # Corsi% is our best xGF% proxy with available data
+
+        return {
+            "corsi_for_pct": round(cf_pct, 2),
+            "corsi_for_per60": round(cf_per60, 2),
+            "corsi_against_per60": round((total_ca / games_counted) * 3.0, 2) if games_counted > 0 else 0.0,
+            "shot_share": round(shot_share, 2),
+            "shooting_pct": round(shooting_pct, 2),
+            "team_save_pct": round(team_save_pct, 4),
+            "pdo": round(pdo, 4),
+            "high_danger_proxy": round(high_danger_proxy, 2),
+            "xgf_share": round(xgf_share, 2),
+            "avg_blocks_for": round(total_blocked_for / games_counted, 2),
+            "avg_blocks_against": round(total_blocked_against / games_counted, 2),
+            "games_found": games_counted,
+        }
+
+    async def _get_team_game_blocks(
+        self,
+        db: AsyncSession,
+        game_id: int,
+        team_id: int,
+    ) -> int:
+        """Sum blocked_shots for all players on a team in a specific game."""
+        from app.models.player import Player
+
+        stmt = (
+            select(func.coalesce(func.sum(GamePlayerStats.blocked_shots), 0))
+            .join(Player, GamePlayerStats.player_id == Player.id)
+            .where(
+                and_(
+                    GamePlayerStats.game_id == game_id,
+                    Player.team_id == team_id,
+                )
+            )
+        )
+        result = await db.execute(stmt)
+        return int(result.scalar() or 0)
+
+    @staticmethod
+    def _empty_advanced_metrics() -> Dict[str, Any]:
+        """Return default advanced metrics when no data is available."""
+        return {
+            "corsi_for_pct": 50.0,
+            "corsi_for_per60": 0.0,
+            "corsi_against_per60": 0.0,
+            "shot_share": 50.0,
+            "shooting_pct": 8.0,
+            "team_save_pct": 0.905,
+            "pdo": 1.0,
+            "high_danger_proxy": 5.0,
+            "xgf_share": 50.0,
+            "avg_blocks_for": 0.0,
+            "avg_blocks_against": 0.0,
+            "games_found": 0,
+        }
+
+    # ------------------------------------------------------------------ #
     #  Build comprehensive feature set for a game                         #
     # ------------------------------------------------------------------ #
 
@@ -1147,6 +1306,10 @@ class FeatureEngine:
         # Special teams
         home_special = await self.get_special_teams_matchup(db, home_id)
         away_special = await self.get_special_teams_matchup(db, away_id)
+
+        # Advanced metrics (Corsi-proxy, shot quality, PDO)
+        home_advanced = await self.get_advanced_metrics(db, home_id)
+        away_advanced = await self.get_advanced_metrics(db, away_id)
 
         # Player and team matchups (uses MatchupEngine)
         from app.analytics.matchups import MatchupEngine
@@ -1231,6 +1394,9 @@ class FeatureEngine:
             # Special teams
             "home_special_teams": home_special,
             "away_special_teams": away_special,
+            # Advanced metrics
+            "home_advanced": home_advanced,
+            "away_advanced": away_advanced,
             # Player matchups (how key players perform vs this opponent)
             "home_player_matchup": home_player_matchup,
             "away_player_matchup": away_player_matchup,
