@@ -31,8 +31,8 @@ export const regeneratePredictions = () =>
   api.post('/predictions/regenerate', null, { timeout: 120000 });
 
 // Tracked bets endpoints
-export const trackBet = (predictionId, units) =>
-  api.post('/predictions/tracked', { prediction_id: predictionId, units });
+export const trackBet = (predictionId) =>
+  api.post('/predictions/tracked', { prediction_id: predictionId });
 export const fetchTrackedBets = () => api.get('/predictions/tracked');
 export const updateTrackedBet = (id, data) =>
   api.put(`/predictions/tracked/${id}`, data);

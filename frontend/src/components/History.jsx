@@ -93,11 +93,9 @@ function History() {
   const pushesCount = data?.pushes || 0;
   const pendingCount = data?.pending || 0;
   const totalProfit = data?.total_profit || 0;
-  const totalUnitsWagered = data?.total_units_wagered || 0;
 
   const totalGraded = winsCount + lossesCount;
   const winRate = totalGraded > 0 ? (winsCount / totalGraded) * 100 : 0;
-  const roi = totalUnitsWagered > 0 ? (totalProfit / totalUnitsWagered) * 100 : 0;
 
   const betTypes = useMemo(() => {
     const types = new Set();
@@ -259,7 +257,6 @@ function History() {
                   icon={DollarSign}
                   label="Total Profit"
                   value={`${totalProfit >= 0 ? '+' : ''}${totalProfit.toFixed(2)}u`}
-                  subValue={totalUnitsWagered > 0 ? `${roi.toFixed(1)}% ROI on ${totalUnitsWagered.toFixed(1)}u wagered` : undefined}
                   color={totalProfit >= 0 ? '#00ff88' : '#ff5252'}
                 />
                 <StatCard
@@ -383,7 +380,6 @@ function History() {
                   <span className="col-pick">Pick</span>
                   <span className="col-odds">Odds</span>
                   <span className="col-confidence">Conf.</span>
-                  <span className="col-units">Units</span>
                   <span className="col-phase">Phase</span>
                   <span className="col-status">Status</span>
                   <span className="col-result">Result</span>
@@ -433,7 +429,6 @@ function History() {
                           ></span>
                           {confidence.toFixed(0)}%
                         </span>
-                        <span className="col-units">{(bet.units || 1).toFixed(1)}u</span>
                         <span className={`col-phase phase-tag phase-${phase}`}>
                           <Layers size={10} />
                           {phase === 'live' ? 'Live' : 'Pre'}

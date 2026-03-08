@@ -201,6 +201,9 @@ async def _migrate_add_columns() -> None:
         ("game", "period3_spread_line", "FLOAT"),
         ("game", "period3_home_spread_price", "FLOAT"),
         ("game", "period3_away_spread_price", "FLOAT"),
+        # BetResult CLV tracking
+        ("bet_result", "closing_implied_prob", "FLOAT"),
+        ("bet_result", "clv", "FLOAT"),
     ]
 
     async with engine.begin() as conn:

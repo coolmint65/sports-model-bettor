@@ -16,8 +16,6 @@ function BestBetCard({ bet, rank, isFeatured, onTrack, tracked }) {
   const confColor = getConfidenceColor(confidence);
   const live = isLiveStatus(bet.game_status);
   const phase = bet.phase || 'prematch';
-  const units = bet.units || 1;
-
   const oddsDisplay = bet.odds_display != null
     ? formatAmericanOdds(bet.odds_display)
     : formatOddsFromProb(bet.odds_implied_prob);
@@ -123,12 +121,6 @@ function BestBetCard({ bet, rank, isFeatured, onTrack, tracked }) {
             </span>
           </div>
 
-          <div className="metric">
-            <span className="metric-label">Units</span>
-            <span className="metric-value units-value">
-              {units.toFixed(1)}u
-            </span>
-          </div>
         </div>
 
         {bet.reasoning && (
@@ -236,7 +228,7 @@ function BestBets() {
     if (!predId || isBetTracked(bet)) return;
     setTrackingId(predId);
     try {
-      await trackBet(predId, bet.units);
+      await trackBet(predId);
       setTrackedIds((prev) => new Set(prev).add(predId));
       const key = `${bet.game_id}:${bet.bet_type}:${bet.prediction_value}`;
       setTrackedKeys((prev) => new Set(prev).add(key));
