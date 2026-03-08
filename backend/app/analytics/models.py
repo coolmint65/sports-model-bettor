@@ -625,16 +625,15 @@ class BettingModel:
         produces prediction labels like "Under 7.0" that don't match what
         bettors actually see on the sportsbook.
 
-        Strategy: snap to the nearest .5 value.  If rounding lands on a
-        whole number, nudge up to .5 — e.g., 6 → 6.5, 7 → 6.5.
+        Strategy: snap whole numbers DOWN to .5 — e.g., 7 → 6.5, 6 → 5.5.
+        This matches the odds scraper convention (int(x) - 1 + 0.5) and the
+        assumption that whole numbers are rounded-up .5 lines.
         """
         if line % 1 == 0.5:
             return line  # already a .5 line
-        # Snap to nearest .5
-        normalized = round(line * 2) / 2
-        if normalized % 1 == 0:
-            normalized += 0.5
-        return normalized
+        # Whole number: snap down to the .5 below (7 → 6.5, 6 → 5.5).
+        # Consistent with odds_api.py: float(int(ou_raw) - 1) + 0.5
+        return float(int(line) - 1) + 0.5
 
     async def predict_total_goals(
         self,
