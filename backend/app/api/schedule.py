@@ -484,16 +484,24 @@ async def _compute_top_props(
     )
     all_props = result.scalars().all()
 
-    # Pick highest confidence prop per game
-    for pred in sorted(all_props, key=lambda p: p.confidence or 0, reverse=True):
-        if pred.game_id not in top_props:
-            top_props[pred.game_id] = GameTopPick(
-                bet_type=pred.bet_type,
-                prediction_value=pred.prediction_value,
-                confidence=pred.confidence,
-                edge=pred.edge,
-                is_fallback=False,
-            )
+    # Pick highest confidence prop per game.
+    # Prefer non-regulation_winner props since reg_winner is conceptually
+    # redundant with the ML top pick. Fall back to reg_winner if nothing else.
+    by_game: dict[int, list] = {}
+    for pred in all_props:
+        by_game.setdefault(pred.game_id, []).append(pred)
+
+    for game_id, preds in by_game.items():
+        non_reg = [p for p in preds if p.bet_type != "regulation_winner"]
+        pool = non_reg if non_reg else preds
+        best = max(pool, key=lambda p: p.confidence or 0)
+        top_props[game_id] = GameTopPick(
+            bet_type=best.bet_type,
+            prediction_value=best.prediction_value,
+            confidence=best.confidence,
+            edge=best.edge,
+            is_fallback=False,
+        )
 
     # Grade outcomes for final games
     for game_id, pick in top_props.items():

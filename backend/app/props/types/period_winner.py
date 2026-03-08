@@ -31,8 +31,8 @@ class PeriodWinnerProp(BaseProp):
         away_periods = features.get("away_periods", {})
 
         if (
-            home_periods.get("games_found", 0) < 10
-            or away_periods.get("games_found", 0) < 10
+            home_periods.get("games_found", 0) < 5
+            or away_periods.get("games_found", 0) < 5
         ):
             return []
 

@@ -40,8 +40,8 @@ class OvertimeProp(BaseProp):
         away_ot_pct = away_ot.get("ot_pct", 0.0)
 
         has_history = (
-            home_ot.get("games_found", 0) >= 10
-            and away_ot.get("games_found", 0) >= 10
+            home_ot.get("games_found", 0) >= 5
+            and away_ot.get("games_found", 0) >= 5
         )
 
         if has_history:
