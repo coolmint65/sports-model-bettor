@@ -504,6 +504,28 @@ class NHLScraper(BaseScraper):
                     setattr(stats, key, val)
 
         await db.flush()
+
+        # Mark teams not in the current standings as inactive (e.g. ARI
+        # after relocation to UTA).  This prevents sync_rosters from
+        # hitting 404s for defunct teams.
+        active_abbrevs = {
+            e.get("team_abbrev") for e in standings if e.get("team_abbrev")
+        }
+        if active_abbrevs:
+            all_teams_result = await db.execute(
+                select(Team).where(Team.sport == "nhl")
+            )
+            for t in all_teams_result.scalars():
+                if t.abbreviation not in active_abbrevs and t.active:
+                    t.active = False
+                    logger.info(
+                        "Deactivated team not in standings: %s (%s)",
+                        t.name, t.abbreviation,
+                    )
+                elif t.abbreviation in active_abbrevs and not t.active:
+                    t.active = True
+            await db.flush()
+
         logger.info("Teams sync complete: %d teams processed", len(standings))
 
     # ------------------------------------------------------------------
@@ -1210,7 +1232,9 @@ class NHLScraper(BaseScraper):
         Player records.
         """
         logger.info("Syncing rosters for all teams...")
-        result = await db.execute(select(Team).where(Team.sport == "nhl"))
+        result = await db.execute(
+            select(Team).where(Team.sport == "nhl", Team.active == True)  # noqa: E712
+        )
         teams = result.scalars().all()
 
         for team in teams:
