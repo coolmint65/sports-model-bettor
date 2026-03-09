@@ -147,14 +147,20 @@ function parseReasons(reasoning) {
   let cleaned = reasoning.replace(/\s*\(Odds:\s*[^)]*\)/g, '').trim();
   if (!cleaned) return [];
 
-  // Extract all {{tooltip:...}} markers BEFORE splitting, since tooltips
+  // Extract all {{team:...}} markers (team abbreviations for logos)
+  // and {{tooltip:...}} markers BEFORE splitting, since tooltips
   // may contain periods/semicolons that would break the line splitter.
-  // Collect them keyed by a placeholder, then strip from the text.
+  const teamMarkers = [];
   const tooltips = [];
-  const PLACEHOLDER = '\x00TT';
+  const TM_PH = '\x00TM';
+  const TT_PH = '\x00TT';
+  cleaned = cleaned.replace(/\{\{team:([^}]+)\}\}\s*/g, (_match, abbr) => {
+    teamMarkers.push(abbr.trim().toUpperCase());
+    return TM_PH + (teamMarkers.length - 1) + ' ';
+  });
   cleaned = cleaned.replace(/\s*\{\{tooltip:([\s\S]*?)\}\}/g, (_match, tip) => {
     tooltips.push(tip.trim());
-    return PLACEHOLDER + (tooltips.length - 1);
+    return TT_PH + (tooltips.length - 1);
   });
 
   // Try splitting by numbered items (1. xxx 2. xxx) or newlines or semicolons
@@ -171,15 +177,21 @@ function parseReasons(reasoning) {
       .filter((s) => s.length > 5);
   }
 
-  // Re-attach tooltips from placeholders
-  const placeholderRe = new RegExp(PLACEHOLDER + '(\\d+)', 'g');
+  // Re-attach team markers and tooltips from placeholders
+  const tmRe = new RegExp(TM_PH + '(\\d+)\\s*', 'g');
+  const ttRe = new RegExp(TT_PH + '(\\d+)', 'g');
   return lines.slice(0, 7).map((line) => {
     let tooltip = null;
-    const text = line.replace(placeholderRe, (_m, idx) => {
+    let team = null;
+    let text = line.replace(tmRe, (_m, idx) => {
+      team = teamMarkers[parseInt(idx, 10)] || null;
+      return '';
+    });
+    text = text.replace(ttRe, (_m, idx) => {
       tooltip = tooltips[parseInt(idx, 10)] || null;
       return '';
     }).trim();
-    return { text, tooltip };
+    return { text, tooltip, team };
   });
 }
 
@@ -290,6 +302,11 @@ function GameCard({ game, section, medal }) {
   const reasoning = topPick?.reasoning || topPick?.reason || topPick?.analysis || '';
   const reasons = parseReasons(reasoning);
 
+  // Map team abbreviation → team object for inline logos in analysis
+  const teamByAbbr = {};
+  if (game.home_team) teamByAbbr[teamAbbrev(game.home_team).toUpperCase()] = game.home_team;
+  if (game.away_team) teamByAbbr[teamAbbrev(game.away_team).toUpperCase()] = game.away_team;
+
   // Determine which team is the pick
   const pickTeamName = topPick?.pick_team || null;
 
@@ -356,16 +373,31 @@ function GameCard({ game, section, medal }) {
               <span>Analysis ({reasons.length})</span>
             </div>
             <ol className="pick-analysis-list">
-              {reasons.map((reason, i) => (
-                <li key={i}>
-                  {reason.text}
-                  {reason.tooltip && (
-                    <span className="pick-analysis-tooltip" title={reason.tooltip}>
-                      <Info size={13} />
-                    </span>
-                  )}
-                </li>
-              ))}
+              {reasons.map((reason, i) => {
+                const reasonTeam = reason.team ? teamByAbbr[reason.team] : null;
+                const reasonLogo = reasonTeam ? teamLogo(reasonTeam) : null;
+                return (
+                  <li key={i}>
+                    {reasonLogo && (
+                      <img
+                        className="pick-analysis-team-logo"
+                        src={reasonLogo}
+                        alt={reason.team}
+                        width={18}
+                        height={18}
+                        loading="lazy"
+                        onError={(e) => { e.target.style.display = 'none'; }}
+                      />
+                    )}
+                    {reason.text}
+                    {reason.tooltip && (
+                      <span className="pick-analysis-tooltip" title={reason.tooltip}>
+                        <Info size={13} />
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
             </ol>
           </div>
         )}

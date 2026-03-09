@@ -498,6 +498,9 @@ class PredictionManager:
                     include = True
                 if include:
                     text = sig["text"]
+                    # Embed team marker so the frontend can show a team logo
+                    if sig.get("team"):
+                        text = f"{{{{team:{sig['team']}}}}} {text}"
                     # Embed tooltip marker so the frontend can show an info icon
                     if sig.get("tooltip"):
                         text = f"{text} {{{{tooltip:{sig['tooltip']}}}}}"
