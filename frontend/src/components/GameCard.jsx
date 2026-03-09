@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Clock, ChevronRight, TrendingUp, Zap } from 'lucide-react';
 import { format } from 'date-fns';
