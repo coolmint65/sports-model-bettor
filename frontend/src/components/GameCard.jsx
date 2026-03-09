@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Clock, ChevronRight, TrendingUp, Zap } from 'lucide-react';
+import { Clock, ChevronRight, TrendingUp, Zap, Info } from 'lucide-react';
 import { format } from 'date-fns';
 import { teamName, teamAbbrev, teamLogo, confidencePct, parseAsUTC, formatBetType, formatPredictionValue } from '../utils/teams';
 import { getConfidenceColor, formatAmericanOdds } from '../utils/formatting';
@@ -138,6 +138,7 @@ function getConfidenceTier(confidence) {
  * Parse reasoning into individual bullet points.
  * The backend returns clean, semicolon-separated signal text.
  * Strips any leftover "(Odds: ...)" fragments from legacy data.
+ * Extracts {{tooltip:...}} markers into a separate tooltip field.
  */
 function parseReasons(reasoning) {
   if (!reasoning) return [];
@@ -147,20 +148,30 @@ function parseReasons(reasoning) {
   if (!cleaned) return [];
 
   // Try splitting by numbered items (1. xxx 2. xxx) or newlines or semicolons
-  const lines = cleaned
+  let lines = cleaned
     .split(/(?:\d+\.\s+|\n|;\s*)/)
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 
-  if (lines.length > 1) return lines.slice(0, 7);
+  if (lines.length <= 1) {
+    // Fall back: split by periods for multi-sentence reasoning
+    lines = cleaned
+      .split(/\.\s+/)
+      .map((s) => s.trim().replace(/\.$/, ''))
+      .filter((s) => s.length > 5);
+  }
 
-  // Fall back: split by periods for multi-sentence reasoning
-  const sentences = cleaned
-    .split(/\.\s+/)
-    .map((s) => s.trim().replace(/\.$/, ''))
-    .filter((s) => s.length > 5);
-
-  return sentences.slice(0, 7);
+  // Extract {{tooltip:...}} markers from each line
+  return lines.slice(0, 7).map((line) => {
+    const tooltipMatch = line.match(/\s*\{\{tooltip:(.*?)\}\}\s*/);
+    if (tooltipMatch) {
+      return {
+        text: line.replace(tooltipMatch[0], '').trim(),
+        tooltip: tooltipMatch[1],
+      };
+    }
+    return { text: line, tooltip: null };
+  });
 }
 
 function GameCard({ game, section }) {
@@ -325,7 +336,14 @@ function GameCard({ game, section }) {
             </div>
             <ol className="pick-analysis-list">
               {reasons.map((reason, i) => (
-                <li key={i}>{reason}</li>
+                <li key={i}>
+                  {reason.text}
+                  {reason.tooltip && (
+                    <span className="pick-analysis-tooltip" title={reason.tooltip}>
+                      <Info size={13} />
+                    </span>
+                  )}
+                </li>
               ))}
             </ol>
           </div>

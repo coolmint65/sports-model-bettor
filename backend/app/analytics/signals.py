@@ -41,8 +41,8 @@ class SignalGenerator:
         signals.extend(self._form_signals(features, home_abbr, away_abbr, home_name, away_name))
         signals.extend(self._goalie_signals(features, home_abbr, away_abbr))
         signals.extend(self._starter_signals(features, home_abbr, away_abbr))
-        signals.extend(self._ev_possession_signals(features, home_abbr, away_abbr))
-        signals.extend(self._close_game_signals(features, home_abbr, away_abbr))
+        signals.extend(self._ev_possession_signals(features, home_abbr, away_abbr, home_name, away_name))
+        signals.extend(self._close_game_signals(features, home_abbr, away_abbr, home_name, away_name))
         signals.extend(self._schedule_signals(features, home_abbr, away_abbr))
         signals.extend(self._injury_signals(features, home_abbr, away_abbr))
         signals.extend(self._special_teams_signals(features, home_abbr, away_abbr))
@@ -113,7 +113,7 @@ class SignalGenerator:
             ))
         if away_wr <= 0.20 and away_games >= 5:
             signals.append(_signal(
-                "form", "Opponent struggling", "negative", away_abbr, 0.65,
+                "form", f"{away_name} struggling", "negative", away_abbr, 0.65,
             ))
 
         return signals
@@ -161,7 +161,7 @@ class SignalGenerator:
                 sv = g.get("season_save_pct", 0.900)
                 signals.append(_signal(
                     "goalie",
-                    f"Elite goalie: {g.get('goalie_name', 'Unknown')} (.{int(sv*1000)} SV%)",
+                    f"Elite goalie: {g.get('goalie_name', 'Unknown')} ({abbr} Goalie) (.{int(sv*1000)} SV%)",
                     "positive", abbr, 0.55,
                     icon="shield",
                 ))
@@ -190,7 +190,7 @@ class SignalGenerator:
                 reason_text = "; ".join(reasons) if reasons else "uncertain"
                 signals.append(_signal(
                     "goalie",
-                    f"Starter status unconfirmed; goalie edge discounted",
+                    f"Starter status unconfirmed — goalie edge discounted",
                     "neutral", abbr,
                     0.55 if level == "low" else 0.40,
                     icon="warning",
@@ -207,6 +207,8 @@ class SignalGenerator:
         features: Dict[str, Any],
         home_abbr: str,
         away_abbr: str,
+        home_name: str = "Home",
+        away_name: str = "Away",
     ) -> List[Dict[str, Any]]:
         signals = []
         home_ev = features.get("home_ev_possession", {})
@@ -221,7 +223,7 @@ class SignalGenerator:
             if home_cf > away_cf:
                 signals.append(_signal(
                     "possession",
-                    f"Home team has significant 5v5 possession edge ({diff:.1f}%)",
+                    f"{home_name} has significant 5v5 possession edge ({diff:.1f}%)",
                     "positive", home_abbr,
                     min(0.85, 0.50 + diff / 20.0),
                     icon="chart",
@@ -229,7 +231,7 @@ class SignalGenerator:
             else:
                 signals.append(_signal(
                     "possession",
-                    f"Away team has significant 5v5 possession edge ({diff:.1f}%)",
+                    f"{away_name} has significant 5v5 possession edge ({diff:.1f}%)",
                     "positive", away_abbr,
                     min(0.85, 0.50 + diff / 20.0),
                     icon="chart",
@@ -257,14 +259,16 @@ class SignalGenerator:
         features: Dict[str, Any],
         home_abbr: str,
         away_abbr: str,
+        home_name: str = "Home",
+        away_name: str = "Away",
     ) -> List[Dict[str, Any]]:
         signals = []
         home_close = features.get("home_close_possession", {})
         away_close = features.get("away_close_possession", {})
 
         for abbr, close, label in [
-            (home_abbr, home_close, "Home team"),
-            (away_abbr, away_close, "Away team"),
+            (home_abbr, home_close, home_name),
+            (away_abbr, away_close, away_name),
         ]:
             cf = close.get("close_cf_pct", 50.0)
             diff = close.get("close_cf_differential", 0.0)
@@ -515,40 +519,8 @@ class SignalGenerator:
         home_abbr: str,
         away_abbr: str,
     ) -> List[Dict[str, Any]]:
-        signals = []
-
-        for pred in predictions:
-            if pred.get("bet_type") != "ml":
-                continue
-            conf = pred.get("confidence", 0.5)
-            implied = pred.get("implied_probability")
-            details = pred.get("details", {})
-            home_xg = details.get("home_xg", 0)
-            away_xg = details.get("away_xg", 0)
-
-            if home_xg and away_xg:
-                xg_diff = abs(home_xg - away_xg)
-                if xg_diff >= 0.30:
-                    favored = home_abbr if home_xg > away_xg else away_abbr
-                    signals.append(_signal(
-                        "model",
-                        f"xG model projects {xg_diff:.2f} goal advantage",
-                        "positive", favored,
-                        min(0.70, 0.40 + xg_diff / 2.0),
-                        icon="chart",
-                    ))
-
-            if implied is not None and conf > implied:
-                edge = conf - implied
-                if edge >= 0.05:
-                    signals.append(_signal(
-                        "model",
-                        f"Model finds {edge:.1%} edge over market",
-                        "positive", pred.get("prediction", ""),
-                        min(0.80, 0.45 + edge * 3.0),
-                    ))
-
-        return signals
+        # xG and model-edge bullets removed — too model-internal for end users.
+        return []
 
     # ------------------------------------------------------------------ #
     #  Composite edge signals                                             #
@@ -575,6 +547,7 @@ class SignalGenerator:
                     "positive", pred.get("prediction", ""),
                     min(0.85, 0.50 + (score - 50) / 50.0),
                     icon="chart",
+                    tooltip="V2 composite edge combines multiple model factors (possession, goaltending, form, matchup) into a single score. Higher values indicate a stronger overall edge.",
                 ))
             break
 
@@ -605,6 +578,7 @@ class SignalGenerator:
                 "positive", better,
                 min(0.75, 0.40 + diff / 10.0),
                 icon="chart",
+                tooltip="High-danger chances are scoring opportunities from the slot or close to the net, where goals are most likely to be scored.",
             ))
 
         return signals
@@ -706,7 +680,7 @@ class SignalGenerator:
             if diff >= 0.015:
                 signals.append(_signal(
                     "goalie",
-                    f"{name} on hot streak (.{int(last5_sv*1000)} L5 vs .{int(season_sv*1000)} season)",
+                    f"{name} ({abbr} Goalie) on hot streak (.{int(last5_sv*1000)} SV% L5 vs .{int(season_sv*1000)} SV% season)",
                     "positive", abbr,
                     min(0.65, 0.35 + diff * 10.0),
                     icon="fire",
@@ -714,7 +688,7 @@ class SignalGenerator:
             elif diff <= -0.015:
                 signals.append(_signal(
                     "goalie",
-                    f"{name} struggling recently (.{int(last5_sv*1000)} L5 vs .{int(season_sv*1000)} season)",
+                    f"{name} ({abbr} Goalie) struggling recently (.{int(last5_sv*1000)} SV% L5 vs .{int(season_sv*1000)} SV% season)",
                     "negative", abbr,
                     min(0.60, 0.35 + abs(diff) * 10.0),
                     icon="warning",
@@ -1007,9 +981,10 @@ def _signal(
     team: str,
     strength: float,
     icon: str = "",
+    tooltip: str = "",
 ) -> Dict[str, Any]:
     """Create a signal dict."""
-    return {
+    sig: Dict[str, Any] = {
         "category": category,
         "text": text,
         "impact": impact,
@@ -1017,3 +992,6 @@ def _signal(
         "strength": round(min(1.0, max(0.0, strength)), 3),
         "icon": icon,
     }
+    if tooltip:
+        sig["tooltip"] = tooltip
+    return sig

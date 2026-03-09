@@ -2961,6 +2961,29 @@ a:hover {
   margin-top: 1px;
 }
 
+/* Tooltip info icon next to analysis bullets */
+.pick-analysis-tooltip {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 5px;
+  color: var(--text-muted);
+  cursor: help;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.pick-analysis-tooltip:hover {
+  color: var(--accent-primary, #60a5fa);
+}
+
+.pick-analysis-tooltip svg {
+  opacity: 0.7;
+}
+
+.pick-analysis-tooltip:hover svg {
+  opacity: 1;
+}
+
 /* No pick fallback */
 .pick-card-no-pick {
   padding: 8px 0;

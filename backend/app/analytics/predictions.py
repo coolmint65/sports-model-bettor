@@ -484,17 +484,24 @@ class PredictionManager:
             for sig in signals:
                 sig_team = (sig.get("team") or "").lower()
                 impact = sig.get("impact", "")
+                include = False
                 if bt in ("ml", "spread"):
                     # Include: positive signals for picked team,
                     # negative signals about opponent, and game-level signals
                     if sig_team == pick_val and impact in ("positive", "neutral"):
-                        relevant.append(sig["text"])
+                        include = True
                     elif sig_team == opp_val and impact == "negative":
-                        relevant.append(sig["text"])
+                        include = True
                     elif sig_team == "":
-                        relevant.append(sig["text"])
+                        include = True
                 else:
-                    relevant.append(sig["text"])
+                    include = True
+                if include:
+                    text = sig["text"]
+                    # Embed tooltip marker so the frontend can show an info icon
+                    if sig.get("tooltip"):
+                        text = f"{text} {{{{tooltip:{sig['tooltip']}}}}}"
+                    relevant.append(text)
             if relevant:
                 pred["reasoning"] = "; ".join(relevant[:7])
 
