@@ -49,6 +49,16 @@ class SignalGenerator:
         signals.extend(self._matchup_signals(features, home_abbr, away_abbr))
         signals.extend(self._market_signals(features, predictions, home_abbr, away_abbr))
         signals.extend(self._composite_signals(predictions, home_abbr, away_abbr))
+        signals.extend(self._high_danger_signals(features, home_abbr, away_abbr))
+        signals.extend(self._splits_signals(features, home_abbr, away_abbr, home_name, away_name))
+        signals.extend(self._divisional_signals(features))
+        signals.extend(self._goalie_form_signals(features, home_abbr, away_abbr))
+        signals.extend(self._scoring_mismatch_signals(features, home_abbr, away_abbr, home_name, away_name))
+        signals.extend(self._shot_volume_signals(features, home_abbr, away_abbr))
+        signals.extend(self._first_period_signals(features, home_abbr, away_abbr, home_name, away_name))
+        signals.extend(self._overtime_signals(features, home_abbr, away_abbr, home_name, away_name))
+        signals.extend(self._offensive_depth_signals(features, home_abbr, away_abbr, home_name, away_name))
+        signals.extend(self._player_matchup_signals(features, home_abbr, away_abbr, home_name, away_name))
 
         # Filter noise and sort by strength
         signals = [s for s in signals if s.get("strength", 0) >= 0.2]
@@ -321,10 +331,22 @@ class SignalGenerator:
             signals.append(_signal(
                 "schedule", f"{home_abbr} on B2B", "negative", home_abbr, 0.50,
             ))
+            if not away_sched.get("is_back_to_back", False):
+                signals.append(_signal(
+                    "schedule",
+                    f"{home_abbr} on back-to-back (fatigue advantage for {away_abbr})",
+                    "positive", away_abbr, 0.45,
+                ))
         if away_sched.get("is_back_to_back", False):
             signals.append(_signal(
                 "schedule", f"{away_abbr} on B2B", "negative", away_abbr, 0.50,
             ))
+            if not home_sched.get("is_back_to_back", False):
+                signals.append(_signal(
+                    "schedule",
+                    f"{away_abbr} on back-to-back (fatigue advantage for {home_abbr})",
+                    "positive", home_abbr, 0.45,
+                ))
 
         # Rest advantage
         home_rest = home_sched.get("days_rest", 1)
@@ -555,6 +577,421 @@ class SignalGenerator:
                     icon="chart",
                 ))
             break
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    #  High-danger chances signals                                        #
+    # ------------------------------------------------------------------ #
+
+    def _high_danger_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+    ) -> List[Dict[str, Any]]:
+        signals = []
+        home_adv = features.get("home_advanced", {})
+        away_adv = features.get("away_advanced", {})
+        home_hd = home_adv.get("high_danger_proxy", 5.0)
+        away_hd = away_adv.get("high_danger_proxy", 5.0)
+
+        diff = abs(home_hd - away_hd)
+        if diff >= 1.5 and home_adv.get("games_found", 0) >= 5 and away_adv.get("games_found", 0) >= 5:
+            better = home_abbr if home_hd > away_hd else away_abbr
+            signals.append(_signal(
+                "quality",
+                f"{diff:.1f} more high-danger chances per game",
+                "positive", better,
+                min(0.75, 0.40 + diff / 10.0),
+                icon="chart",
+            ))
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    #  Home/away splits signals                                           #
+    # ------------------------------------------------------------------ #
+
+    def _splits_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+        home_name: str,
+        away_name: str,
+    ) -> List[Dict[str, Any]]:
+        signals = []
+        home_splits = features.get("home_splits", {})
+        away_splits = features.get("away_splits", {})
+
+        home_wr = home_splits.get("win_rate", 0.5)
+        away_wr = away_splits.get("win_rate", 0.5)
+        home_games = home_splits.get("games_found", 0)
+        away_games = away_splits.get("games_found", 0)
+
+        # Strong home team
+        if home_wr >= 0.70 and home_games >= 8:
+            signals.append(_signal(
+                "splits",
+                f"{home_name} dominant at home ({home_wr:.0%} win rate)",
+                "positive", home_abbr, 0.50,
+            ))
+        elif home_wr <= 0.35 and home_games >= 8:
+            signals.append(_signal(
+                "splits",
+                f"{home_name} weak at home ({home_wr:.0%} win rate)",
+                "negative", home_abbr, 0.40,
+            ))
+
+        # Away team road performance
+        if away_wr >= 0.65 and away_games >= 8:
+            signals.append(_signal(
+                "splits",
+                f"{away_name} strong on the road ({away_wr:.0%} win rate)",
+                "positive", away_abbr, 0.45,
+            ))
+        elif away_wr <= 0.30 and away_games >= 8:
+            signals.append(_signal(
+                "splits",
+                f"{away_name} struggles on the road ({away_wr:.0%} win rate)",
+                "negative", away_abbr, 0.40,
+            ))
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    #  Divisional matchup signals                                         #
+    # ------------------------------------------------------------------ #
+
+    def _divisional_signals(
+        self,
+        features: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        signals = []
+
+        if features.get("is_divisional", False):
+            signals.append(_signal(
+                "matchup",
+                "Divisional matchup — historically tighter games",
+                "neutral", "",
+                0.30,
+            ))
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    #  Goalie recent form signals                                         #
+    # ------------------------------------------------------------------ #
+
+    def _goalie_form_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+    ) -> List[Dict[str, Any]]:
+        signals = []
+
+        for abbr, key in [(home_abbr, "home_goalie"), (away_abbr, "away_goalie")]:
+            g = features.get(key, {})
+            season_sv = g.get("season_save_pct", 0.900)
+            last5_sv = g.get("last5_save_pct", 0.900)
+            name = g.get("goalie_name", "Goalie")
+
+            # Need meaningful season baseline
+            if season_sv <= 0.0:
+                continue
+
+            diff = last5_sv - season_sv
+            if diff >= 0.015:
+                signals.append(_signal(
+                    "goalie",
+                    f"{name} on hot streak (.{int(last5_sv*1000)} L5 vs .{int(season_sv*1000)} season)",
+                    "positive", abbr,
+                    min(0.65, 0.35 + diff * 10.0),
+                    icon="fire",
+                ))
+            elif diff <= -0.015:
+                signals.append(_signal(
+                    "goalie",
+                    f"{name} struggling recently (.{int(last5_sv*1000)} L5 vs .{int(season_sv*1000)} season)",
+                    "negative", abbr,
+                    min(0.60, 0.35 + abs(diff) * 10.0),
+                    icon="warning",
+                ))
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    #  Scoring mismatch signals                                           #
+    # ------------------------------------------------------------------ #
+
+    def _scoring_mismatch_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+        home_name: str,
+        away_name: str,
+    ) -> List[Dict[str, Any]]:
+        signals = []
+        home_season = features.get("home_season", {})
+        away_season = features.get("away_season", {})
+
+        home_gf = home_season.get("goals_for_pg", 3.0)
+        home_ga = home_season.get("goals_against_pg", 3.0)
+        away_gf = away_season.get("goals_for_pg", 3.0)
+        away_ga = away_season.get("goals_against_pg", 3.0)
+
+        # Home offense vs away defense
+        home_off_edge = home_gf - away_ga
+        if home_off_edge >= 0.5:
+            signals.append(_signal(
+                "matchup",
+                f"{home_name} offense ({home_gf:.1f} GF/g) vs weak defense ({away_ga:.1f} GA/g)",
+                "positive", home_abbr,
+                min(0.65, 0.35 + home_off_edge / 3.0),
+                icon="chart",
+            ))
+
+        # Away offense vs home defense
+        away_off_edge = away_gf - home_ga
+        if away_off_edge >= 0.5:
+            signals.append(_signal(
+                "matchup",
+                f"{away_name} offense ({away_gf:.1f} GF/g) vs weak defense ({home_ga:.1f} GA/g)",
+                "positive", away_abbr,
+                min(0.65, 0.35 + away_off_edge / 3.0),
+                icon="chart",
+            ))
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    #  Shot volume signals                                                #
+    # ------------------------------------------------------------------ #
+
+    def _shot_volume_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+    ) -> List[Dict[str, Any]]:
+        signals = []
+        home_adv = features.get("home_advanced", {})
+        away_adv = features.get("away_advanced", {})
+
+        home_share = home_adv.get("shot_share", 50.0)
+        away_share = away_adv.get("shot_share", 50.0)
+
+        diff = abs(home_share - away_share)
+        if diff >= 6.0 and home_adv.get("games_found", 0) >= 5 and away_adv.get("games_found", 0) >= 5:
+            better = home_abbr if home_share > away_share else away_abbr
+            better_share = max(home_share, away_share)
+            signals.append(_signal(
+                "possession",
+                f"Significant shot volume advantage ({better_share:.0f}% shot share)",
+                "positive", better,
+                min(0.60, 0.35 + diff / 20.0),
+                icon="chart",
+            ))
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    #  First period tendency signals                                      #
+    # ------------------------------------------------------------------ #
+
+    def _first_period_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+        home_name: str,
+        away_name: str,
+    ) -> List[Dict[str, Any]]:
+        signals = []
+
+        for abbr, name, key in [
+            (home_abbr, home_name, "home_periods"),
+            (away_abbr, away_name, "away_periods"),
+        ]:
+            periods = features.get(key, {})
+            p1_rate = periods.get("first_period_scoring_rate", 0.0)
+            p1_for = periods.get("avg_p1_for", 0.0)
+            games = periods.get("games_found", 0)
+
+            if games < 10:
+                continue
+
+            if p1_rate >= 0.70:
+                signals.append(_signal(
+                    "periods",
+                    f"{name} scores first in {p1_rate:.0%} of games",
+                    "positive", abbr, 0.40,
+                ))
+            elif p1_rate <= 0.30 and games >= 10:
+                signals.append(_signal(
+                    "periods",
+                    f"{name} slow starters — score first in only {p1_rate:.0%} of games",
+                    "negative", abbr, 0.35,
+                ))
+
+            if p1_for >= 1.2:
+                signals.append(_signal(
+                    "periods",
+                    f"{name} strong first period scoring ({p1_for:.1f} goals/game P1)",
+                    "positive", abbr, 0.35,
+                ))
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    #  Overtime tendency signals                                          #
+    # ------------------------------------------------------------------ #
+
+    def _overtime_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+        home_name: str,
+        away_name: str,
+    ) -> List[Dict[str, Any]]:
+        signals = []
+        home_ot = features.get("home_ot", {})
+        away_ot = features.get("away_ot", {})
+
+        # Both teams frequently go to OT
+        home_ot_pct = home_ot.get("ot_pct", 0.0)
+        away_ot_pct = away_ot.get("ot_pct", 0.0)
+        home_games = home_ot.get("games_found", 0)
+        away_games = away_ot.get("games_found", 0)
+
+        if (home_ot_pct >= 0.30 and away_ot_pct >= 0.30
+                and home_games >= 15 and away_games >= 15):
+            avg_pct = (home_ot_pct + away_ot_pct) / 2
+            signals.append(_signal(
+                "overtime",
+                f"Both teams frequently go to OT ({avg_pct:.0%} avg OT rate)",
+                "neutral", "",
+                0.40,
+            ))
+
+        for abbr, name, ot in [
+            (home_abbr, home_name, home_ot),
+            (away_abbr, away_name, away_ot),
+        ]:
+            ot_pct = ot.get("ot_pct", 0.0)
+            ot_wr = ot.get("ot_win_rate", 0.5)
+            games = ot.get("games_found", 0)
+
+            if games < 15:
+                continue
+
+            if ot_wr >= 0.70 and ot_pct >= 0.20:
+                signals.append(_signal(
+                    "overtime",
+                    f"{name} strong OT closer ({ot_wr:.0%} OT win rate)",
+                    "positive", abbr, 0.35,
+                ))
+            elif ot_wr <= 0.30 and ot_pct >= 0.20:
+                signals.append(_signal(
+                    "overtime",
+                    f"{name} struggles in OT ({ot_wr:.0%} OT win rate)",
+                    "negative", abbr, 0.30,
+                ))
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    #  Offensive depth signals                                            #
+    # ------------------------------------------------------------------ #
+
+    def _offensive_depth_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+        home_name: str,
+        away_name: str,
+    ) -> List[Dict[str, Any]]:
+        signals = []
+
+        for abbr, name, key in [
+            (home_abbr, home_name, "home_skaters"),
+            (away_abbr, away_name, "away_skaters"),
+        ]:
+            skaters = features.get(key, {})
+            top6 = skaters.get("top6_fwd_ppg", 0.0)
+            star = skaters.get("star_ppg", 0.0)
+            team_avg = skaters.get("team_skater_ppg", 0.0)
+            games = skaters.get("games_found", 0)
+
+            if games < 5:
+                continue
+
+            # Deep scoring: high top-6 production spread evenly
+            if top6 >= 0.80 and star <= top6 * 2.0:
+                signals.append(_signal(
+                    "talent",
+                    f"{name} has deep forward scoring ({top6:.2f} PPG top-6 avg)",
+                    "positive", abbr, 0.40,
+                ))
+
+            # Star-dependent: single player dominates
+            if star >= 1.5 and team_avg > 0 and star / team_avg >= 3.0:
+                signals.append(_signal(
+                    "talent",
+                    f"{name} heavily reliant on top scorer ({star:.2f} PPG)",
+                    "negative", abbr, 0.35,
+                    icon="warning",
+                ))
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    #  Player matchup advantage signals                                   #
+    # ------------------------------------------------------------------ #
+
+    def _player_matchup_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+        home_name: str,
+        away_name: str,
+    ) -> List[Dict[str, Any]]:
+        signals = []
+
+        for abbr, name, key in [
+            (home_abbr, home_name, "home_player_matchup"),
+            (away_abbr, away_name, "away_player_matchup"),
+        ]:
+            matchup = features.get(key, {})
+            boost = matchup.get("matchup_boost", 0.0)
+            players = matchup.get("players_with_data", 0)
+            games = matchup.get("games_analyzed", 0)
+
+            if players < 3 or games < 5:
+                continue
+
+            if boost >= 0.15:
+                signals.append(_signal(
+                    "matchup",
+                    f"{name} key players perform well vs this opponent (+{boost:.2f} PPG)",
+                    "positive", abbr,
+                    min(0.55, 0.30 + boost),
+                    icon="fire",
+                ))
+            elif boost <= -0.15:
+                signals.append(_signal(
+                    "matchup",
+                    f"{name} key players underperform vs this opponent ({boost:.2f} PPG)",
+                    "negative", abbr,
+                    min(0.50, 0.30 + abs(boost)),
+                    icon="warning",
+                ))
 
         return signals
 
