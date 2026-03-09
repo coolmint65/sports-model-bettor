@@ -32,7 +32,7 @@ db_write_lock = asyncio.Lock()
 # background sync and API requests don't clash with "database is locked".
 #
 # Pool sizing: the app has several concurrent DB consumers:
-#   - Multiple FastAPI request handlers (schedule, best-bets, tracked bets)
+#   - Multiple FastAPI request handlers (schedule, predictions, tracked bets)
 #   - Background scheduler tasks (odds sync, prediction regen, settlement)
 #   - Auto-track POST bursts from the frontend (up to ~3 concurrent)
 # The default pool_size=5 + max_overflow=10 exhausts under load.

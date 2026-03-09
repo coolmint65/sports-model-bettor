@@ -353,7 +353,7 @@ function History() {
             {filteredBets.length === 0 ? (
               <div className="empty-state">
                 <BarChart3 size={48} />
-                <p>No tracked bets yet. Best bets are automatically tracked and settled when games finish.</p>
+                <p>No tracked bets yet. Top picks are automatically tracked and settled when games finish.</p>
               </div>
             ) : (
               <div className="history-table">
