@@ -52,6 +52,7 @@ class GameTopPick(BaseModel):
     edge: Optional[float] = None
     is_fallback: bool = False
     outcome: Optional[str] = None  # "win", "loss", or None (pending/in-progress)
+    reasoning: Optional[str] = None
 
 
 class GameOdds(BaseModel):
@@ -404,7 +405,7 @@ async def _compute_top_picks(
                 confidence=pred.confidence,
                 edge=pred.edge,
                 is_fallback=False,
-
+                reasoning=pred.reasoning,
             )
 
     # --- Tier 3: confidence-only fallback when odds data is missing ---
@@ -447,6 +448,7 @@ async def _compute_top_picks(
                     confidence=pred.confidence,
                     edge=pred.edge,
                     is_fallback=pred.odds_implied_prob is None,
+                    reasoning=pred.reasoning,
                 )
 
     # Grade outcomes for final games
@@ -550,6 +552,7 @@ async def _compute_top_props(
             confidence=best.confidence,
             edge=best.edge,
             is_fallback=False,
+            reasoning=best.reasoning,
         )
 
     # Grade outcomes for final games

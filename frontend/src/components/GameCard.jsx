@@ -277,8 +277,8 @@ function GameCard({ game, section }) {
         {/* Team matchup header */}
         <div className="pick-card-matchup">
           <div className="pick-card-teams">
-            <TeamLogo team={game.away_team} size={28} />
-            <TeamLogo team={game.home_team} size={28} />
+            <TeamLogo team={game.away_team} size={40} />
+            <TeamLogo team={game.home_team} size={40} />
             <div className="pick-card-team-names">
               <span className="pick-matchup-text">{awayName} @ {homeName}</span>
               <span className="pick-game-time">

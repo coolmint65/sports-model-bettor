@@ -1202,6 +1202,108 @@ class BettingModel:
         return adjusted
 
     # ------------------------------------------------------------------ #
+    #  Clean reasoning builder                                            #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _build_clean_reasons(
+        features: Dict[str, Any],
+        pick_abbr: str,
+        opponent_abbr: str,
+        bet_type: str = "ml",
+        details: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Build clean, concise reasoning bullets separated by semicolons.
+
+        Generates human-readable reasons (like Buddy's Analysis) instead of
+        technical model stats. Returns semicolon-separated strings that the
+        frontend splits into numbered bullet points.
+        """
+        reasons: List[str] = []
+        home_abbr = features.get("home_team_abbr", "HOM")
+        away_abbr = features.get("away_team_abbr", "AWY")
+        is_home = pick_abbr == home_abbr
+        pick_name = features.get("home_team_name" if is_home else "away_team_name", pick_abbr)
+        opp_name = features.get("away_team_name" if is_home else "home_team_name", opponent_abbr)
+
+        # Form / recent results
+        pick_form = features.get("home_form_5" if is_home else "away_form_5", {})
+        opp_form = features.get("away_form_5" if is_home else "home_form_5", {})
+        pick_w = pick_form.get("wins", 0)
+        pick_l = pick_form.get("losses", 0)
+        opp_w = opp_form.get("wins", 0)
+        opp_l = opp_form.get("losses", 0)
+
+        if pick_w >= 4:
+            reasons.append(f"{pick_abbr} on a hot streak ({pick_w}-{pick_l} in last 5)")
+        elif pick_w >= 3:
+            reasons.append(f"{pick_abbr} strong recent form ({pick_w}-{pick_l} in last 5)")
+
+        if opp_l >= 4:
+            reasons.append(f"{opponent_abbr} struggling ({opp_w}-{opp_l} in last 5)")
+        elif opp_l >= 3:
+            reasons.append(f"{opponent_abbr} poor recent form ({opp_w}-{opp_l} in last 5)")
+
+        # Schedule / fatigue
+        home_sched = features.get("home_schedule", {})
+        away_sched = features.get("away_schedule", {})
+        opp_sched = away_sched if is_home else home_sched
+
+        if opp_sched.get("is_back_to_back"):
+            reasons.append(f"{opponent_abbr} on back-to-back (fatigue advantage for {pick_abbr})")
+        pick_sched = home_sched if is_home else away_sched
+        if pick_sched.get("rest_days", 0) >= 3:
+            reasons.append(f"{pick_abbr} well-rested ({pick_sched['rest_days']} days off)")
+
+        # Home/away advantage
+        if is_home:
+            home_season = features.get("home_season", {})
+            home_w = home_season.get("home_wins", 0)
+            home_l = home_season.get("home_losses", 0)
+            if home_w > 0 and home_w > home_l:
+                reasons.append(f"Strong home record ({home_w}-{home_l} at home)")
+        else:
+            away_season = features.get("away_season", {})
+            away_w = away_season.get("away_wins", 0)
+            away_l = away_season.get("away_losses", 0)
+            if away_w > 0 and away_w > away_l:
+                reasons.append(f"Strong road record ({away_w}-{away_l} away)")
+
+        # Head-to-head
+        h2h = features.get("h2h", {})
+        h2h_wins = h2h.get("home_wins" if is_home else "away_wins", 0)
+        h2h_total = h2h.get("total_games", 0)
+        if h2h_total >= 2 and h2h_wins > h2h_total / 2:
+            reasons.append(f"Favorable head-to-head record ({h2h_wins}-{h2h_total - h2h_wins} in matchup)")
+
+        # Lineup / injuries
+        opp_lineup = features.get("away_lineup" if is_home else "home_lineup", {})
+        if opp_lineup.get("missing_count", 0) >= 2:
+            reasons.append(f"{opponent_abbr} missing {opp_lineup['missing_count']} key players")
+        elif opp_lineup.get("missing_count", 0) == 1:
+            reasons.append(f"{opponent_abbr} missing a key player")
+
+        # Possession / advanced stats
+        pick_season = features.get("home_season" if is_home else "away_season", {})
+        opp_season = features.get("away_season" if is_home else "home_season", {})
+        pick_cf = pick_season.get("corsi_for_pct", 50.0)
+        opp_cf = opp_season.get("corsi_for_pct", 50.0)
+        if pick_cf and opp_cf and pick_cf > 52 and pick_cf > opp_cf + 2:
+            reasons.append("Possession advantage in recent games")
+
+        # Total-specific reasons
+        if bet_type == "total" and details:
+            proj = details.get("projected_total")
+            if proj is not None:
+                reasons.append(f"Projected goal total supports this line")
+
+        # Ensure at least one reason
+        if not reasons:
+            reasons.append(f"Model favors {pick_abbr} based on overall analysis")
+
+        return "; ".join(reasons[:5])
+
+    # ------------------------------------------------------------------ #
     #  Predict all: master method                                         #
     # ------------------------------------------------------------------ #
 
@@ -1271,29 +1373,15 @@ class BettingModel:
             if home_wp >= away_wp:
                 ml_pred = home_abbr
                 ml_prob = home_wp
-                odds_note = ""
-                if home_ml is not None:
-                    odds_str = f"+{int(home_ml)}" if home_ml > 0 else str(int(home_ml))
-                    odds_note = f" Sportsbook line: {odds_str}."
-                ml_reason = (
-                    f"{home_name} ({home_abbr}) are favored with {home_wp:.1%} win probability "
-                    f"(xG: {ml['home_xg']:.2f} vs {ml['away_xg']:.2f}).{odds_note}"
+                ml_reason = self._build_clean_reasons(
+                    features, home_abbr, away_abbr, "ml", ml
                 )
-                if lineup_note:
-                    ml_reason += f" Lineup: {lineup_note}."
             else:
                 ml_pred = away_abbr
                 ml_prob = away_wp
-                odds_note = ""
-                if away_ml is not None:
-                    odds_str = f"+{int(away_ml)}" if away_ml > 0 else str(int(away_ml))
-                    odds_note = f" Sportsbook line: {odds_str}."
-                ml_reason = (
-                    f"{away_name} ({away_abbr}) projected to win at {away_wp:.1%} "
-                    f"(xG: {ml['away_xg']:.2f} vs {ml['home_xg']:.2f}).{odds_note}"
+                ml_reason = self._build_clean_reasons(
+                    features, away_abbr, home_abbr, "ml", ml
                 )
-                if lineup_note:
-                    ml_reason += f" Lineup: {lineup_note}."
 
             # Calculate implied probability and edge from real odds
             ml_implied = None
@@ -1395,12 +1483,9 @@ class BettingModel:
                     "implied_probability": round(implied, 4) if implied else None,
                     "odds": odds_val,
                     "edge": edge,
-                    "reasoning": (
-                        f"Model projects {total_xg:.1f} total goals. "
-                        f"{direction.capitalize()} {line_val} at "
-                        f"{prob:.1%} model prob{implied_str}. "
-                        f"Based on {home_abbr} xG {totals['home_xg']:.2f} + "
-                        f"{away_abbr} xG {totals['away_xg']:.2f}.{odds_display}"
+                    "reasoning": self._build_clean_reasons(
+                        features, home_abbr, away_abbr, "total",
+                        {"projected_total": total_xg, "direction": direction, "line": line_val},
                     ),
                     "details": totals,
                 }
@@ -1618,13 +1703,10 @@ class BettingModel:
                     "implied_probability": round(best_spread_implied, 4),
                     "odds": best_spread_odds,
                     "edge": round(best_spread_edge, 4),
-                    "reasoning": (
-                        f"Predicted margin: {margin:+.2f} goals. "
-                        f"{best_spread_abbr} {best_spread_sign} covers at "
-                        f"{best_spread_prob:.1%} model prob vs "
-                        f"{best_spread_implied:.1%} implied "
-                        f"(edge {best_spread_edge:+.1%}). "
-                        f"Best across {len(spread_price_map)} spread lines."
+                    "reasoning": self._build_clean_reasons(
+                        features, best_spread_abbr,
+                        away_abbr if best_spread_abbr == home_abbr else home_abbr,
+                        "spread", spread,
                     ),
                     "details": spread,
                 })
@@ -1686,9 +1768,10 @@ class BettingModel:
                     "probability": round(sb_prob, 4),
                     "implied_probability": round(spread_implied, 4) if spread_implied else None,
                     "odds": spread_odds_display,
-                    "reasoning": (
-                        f"Predicted margin: {margin:+.2f} goals. "
-                        f"{sb_abbr} {sb_sign} covers at {sb_prob:.1%} probability."
+                    "reasoning": self._build_clean_reasons(
+                        features, sb_abbr,
+                        away_abbr if sb_abbr == home_abbr else home_abbr,
+                        "spread", spread,
                     ),
                     "details": spread,
                 })
