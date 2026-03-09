@@ -18,7 +18,7 @@ from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES, composite_pick_score, is_heavy_juice
-from app.database import get_session, get_write_session_context
+from app.database import get_session, get_session_context, get_write_session_context
 from app.models.game import Game
 from app.models.prediction import Prediction
 from app.models.team import Team, TeamStats
@@ -622,35 +622,38 @@ async def _try_sync_schedule(
 # ---------------------------------------------------------------------------
 
 @router.get("/live", response_model=ScheduleResponse)
-async def get_live_games(
-    session: AsyncSession = Depends(get_session),
-):
+async def get_live_games():
     """Return all currently in-progress games.
 
     Syncs scores/clock from NHL API for live games. Odds syncing is
     handled by the background scheduler — not inline in GET requests.
+
+    NOTE: Uses explicit session management (not Depends) to avoid holding
+    idle connections during write operations — prevents QueuePool exhaustion.
     """
-    result = await session.execute(
-        select(Game)
-        .options(selectinload(Game.home_team), selectinload(Game.away_team))
-        .where(func.lower(Game.status).in_(("in_progress", "live")))
-        .order_by(Game.start_time.asc().nulls_last(), Game.id.asc())
-    )
-    games = result.scalars().all()
+    # Check for live games with a short-lived read session.
+    async with get_session_context() as session:
+        result = await session.execute(
+            select(Game)
+            .options(selectinload(Game.home_team), selectinload(Game.away_team))
+            .where(func.lower(Game.status).in_(("in_progress", "live")))
+            .order_by(Game.start_time.asc().nulls_last(), Game.id.asc())
+        )
+        games = result.scalars().all()
+        game_dates = {game.date for game in games} if games else set()
+    # Session closed before write operation.
 
     # Sync scores/clock from NHL API (not odds — scheduler handles that).
-    # Uses the global write lock so we don't collide with the background
-    # scheduler's concurrent writes to SQLite.
-    if games:
+    if game_dates:
         try:
-            game_dates = {game.date for game in games}
             async with get_write_session_context() as write_session:
                 for gd in game_dates:
                     await _try_sync_schedule(write_session, target_date=gd)
         except Exception as exc:
             logger.warning("Live schedule sync failed: %s", exc)
 
-        # Re-query with request session to see committed data
+    # Re-read with a fresh session to pick up committed changes.
+    async with get_session_context() as session:
         result = await session.execute(
             select(Game)
             .options(selectinload(Game.home_team), selectinload(Game.away_team))
@@ -659,54 +662,57 @@ async def get_live_games(
         )
         games = result.scalars().all()
 
-    # Compute top picks for live games — prefer live-phase
-    # predictions so the "Live Now" section shows updated recommendations.
-    top_picks = await _compute_top_picks(games, session, prefer_live=True)
-    top_props = await _compute_top_props(games, session)
+        # Compute top picks for live games — prefer live-phase
+        # predictions so the "Live Now" section shows updated recommendations.
+        top_picks = await _compute_top_picks(games, session, prefer_live=True)
+        top_props = await _compute_top_props(games, session)
 
-    # Batch-load team stats
-    all_team_ids = list({g.home_team_id for g in games} | {g.away_team_id for g in games})
-    stats_map = await _batch_load_team_stats(all_team_ids, session)
+        # Batch-load team stats
+        all_team_ids = list({g.home_team_id for g in games} | {g.away_team_id for g in games})
+        stats_map = await _batch_load_team_stats(all_team_ids, session)
 
-    schedule_games: List[ScheduleGame] = []
-    for game in games:
-        home_brief = _build_team_brief(game.home_team, stats_map.get(game.home_team_id))
-        away_brief = _build_team_brief(game.away_team, stats_map.get(game.away_team_id))
-        schedule_games.append(_build_schedule_game(
-            game, home_brief, away_brief,
-            top_picks.get(game.id),
-            top_props.get(game.id),
-        ))
+        schedule_games: List[ScheduleGame] = []
+        for game in games:
+            home_brief = _build_team_brief(game.home_team, stats_map.get(game.home_team_id))
+            away_brief = _build_team_brief(game.away_team, stats_map.get(game.away_team_id))
+            schedule_games.append(_build_schedule_game(
+                game, home_brief, away_brief,
+                top_picks.get(game.id),
+                top_props.get(game.id),
+            ))
 
     today = date.today()
     return ScheduleResponse(date=today, game_count=len(schedule_games), games=schedule_games)
 
 
 @router.get("/today", response_model=ScheduleResponse)
-async def get_today_schedule(
-    session: AsyncSession = Depends(get_session),
-):
+async def get_today_schedule():
     """Return today's schedule.
 
     Syncs scores/clock from NHL API for live games. Odds and predictions
     are kept fresh by the background scheduler — this endpoint only reads.
+
+    NOTE: Uses explicit session management (not Depends) to avoid holding
+    idle connections during write operations — prevents QueuePool exhaustion.
     """
     today = date.today()
-    games = await _games_for_date(today, session)
 
-    # Sync scores/clock if live or if we have no games yet.
-    # Uses the global write lock so we don't collide with the
-    # background scheduler's concurrent writes to SQLite.
+    # Initial read with a short-lived session.
+    async with get_session_context() as session:
+        games = await _games_for_date(today, session)
+    # Session closed before potential write.
+
     has_live = any(g.status and g.status.lower() in ("in_progress", "live") for g in games)
     if not games or has_live:
         try:
             async with get_write_session_context() as write_session:
                 await _try_sync_schedule(write_session, target_date=today)
-            # Re-read with the request session so the response sees
-            # the committed data.
-            games = await _games_for_date(today, session)
         except Exception as exc:
             logger.warning("Today schedule sync failed: %s", exc)
+
+        # Re-read with a fresh session to see committed data.
+        async with get_session_context() as session:
+            games = await _games_for_date(today, session)
 
     return ScheduleResponse(date=today, game_count=len(games), games=games)
 
