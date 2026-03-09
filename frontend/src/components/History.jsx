@@ -26,7 +26,7 @@ import {
   ReferenceLine,
 } from 'recharts';
 import { format, parseISO } from 'date-fns';
-import { fetchTrackedBets, deleteTrackedBet, clearAllTrackedBets, updateTrackedBet } from '../utils/api';
+import { fetchTrackedBets, deleteTrackedBet, clearAllTrackedBets } from '../utils/api';
 import { useWebSocketEvent } from '../hooks/useWebSocket';
 import { useApi } from '../hooks/useApi';
 import { confidencePct, formatBetType, formatPredictionValue } from '../utils/teams';
