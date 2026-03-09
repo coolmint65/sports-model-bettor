@@ -383,8 +383,8 @@ function GameCard({ game, section, medal }) {
                         className="pick-analysis-team-logo"
                         src={reasonLogo}
                         alt={reason.team}
-                        width={18}
-                        height={18}
+                        width={24}
+                        height={24}
                         loading="lazy"
                         onError={(e) => { e.target.style.display = 'none'; }}
                       />
