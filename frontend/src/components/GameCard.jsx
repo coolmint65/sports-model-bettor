@@ -144,8 +144,18 @@ function parseReasons(reasoning) {
   if (!reasoning) return [];
 
   // Strip any "(Odds: ...)" fragments from legacy reasoning
-  const cleaned = reasoning.replace(/\s*\(Odds:\s*[^)]*\)/g, '').trim();
+  let cleaned = reasoning.replace(/\s*\(Odds:\s*[^)]*\)/g, '').trim();
   if (!cleaned) return [];
+
+  // Extract all {{tooltip:...}} markers BEFORE splitting, since tooltips
+  // may contain periods/semicolons that would break the line splitter.
+  // Collect them keyed by a placeholder, then strip from the text.
+  const tooltips = [];
+  const PLACEHOLDER = '\x00TT';
+  cleaned = cleaned.replace(/\s*\{\{tooltip:([\s\S]*?)\}\}/g, (_match, tip) => {
+    tooltips.push(tip.trim());
+    return PLACEHOLDER + (tooltips.length - 1);
+  });
 
   // Try splitting by numbered items (1. xxx 2. xxx) or newlines or semicolons
   let lines = cleaned
@@ -161,16 +171,15 @@ function parseReasons(reasoning) {
       .filter((s) => s.length > 5);
   }
 
-  // Extract {{tooltip:...}} markers from each line
+  // Re-attach tooltips from placeholders
+  const placeholderRe = new RegExp(PLACEHOLDER + '(\\d+)', 'g');
   return lines.slice(0, 7).map((line) => {
-    const tooltipMatch = line.match(/\s*\{\{tooltip:(.*?)\}\}\s*/);
-    if (tooltipMatch) {
-      return {
-        text: line.replace(tooltipMatch[0], '').trim(),
-        tooltip: tooltipMatch[1],
-      };
-    }
-    return { text: line, tooltip: null };
+    let tooltip = null;
+    const text = line.replace(placeholderRe, (_m, idx) => {
+      tooltip = tooltips[parseInt(idx, 10)] || null;
+      return '';
+    }).trim();
+    return { text, tooltip };
   });
 }
 
