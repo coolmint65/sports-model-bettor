@@ -243,33 +243,6 @@ a:hover {
   line-height: 1;
 }
 
-.sync-message {
-  font-size: 0.82rem;
-  font-weight: 500;
-  padding: 4px 10px;
-  border-radius: var(--radius-sm);
-  animation: fadeIn 0.3s ease;
-}
-
-.sync-success {
-  color: var(--accent-green);
-  background: var(--accent-green-bg);
-}
-
-.sync-error {
-  color: var(--accent-red);
-  background: var(--accent-red-bg);
-}
-
-.sync-progress {
-  color: var(--text-secondary);
-  background: rgba(255, 255, 255, 0.06);
-  max-width: 260px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* ─── Buttons ───────────────────────────────────────────────── */
 .btn {
   display: inline-flex;
@@ -296,22 +269,6 @@ a:hover {
 .btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-}
-
-.btn-sync {
-  border-color: var(--accent-blue-dim);
-  color: var(--accent-blue);
-  background: var(--accent-blue-bg);
-}
-
-.btn-sync:hover:not(:disabled) {
-  background: rgba(79, 195, 247, 0.15);
-}
-
-.btn-sync.syncing {
-  border-color: var(--accent-gold-dim);
-  color: var(--accent-gold);
-  background: var(--accent-gold-bg);
 }
 
 .btn-regen {
@@ -2456,14 +2413,6 @@ a:hover {
     padding: 8px 12px;
   }
 
-  .btn-sync span {
-    display: none;
-  }
-
-  .btn-sync {
-    padding: 8px 10px;
-  }
-
   .main-content {
     padding: 16px 14px 40px;
   }
@@ -2589,7 +2538,6 @@ a:hover {
   }
 
   .navbar,
-  .btn-sync,
   .btn-back,
   .game-card-arrow {
     display: none;
