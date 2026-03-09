@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -265,8 +266,12 @@ async def _migrate_add_columns() -> None:
                     text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
                 )
                 logger.info("Added column %s.%s", table, column)
-            except Exception:  # noqa: BLE001 — OperationalError when column exists
+            except OperationalError:
+                # Column already exists — expected on subsequent startups
                 pass
+            except Exception:
+                logger.error("Failed to add column %s.%s", table, column, exc_info=True)
+                raise
 
 
 async def close_db() -> None:

@@ -193,18 +193,6 @@ predictions_router = APIRouter(prefix="/api/predictions", tags=["predictions"])
 # ---------------------------------------------------------------------------
 
 
-@health_router.get("/health", response_model=HealthResponse)
-async def health_check() -> HealthResponse:
-    """Return application health status."""
-    return HealthResponse(
-        status="healthy",
-        app_name=settings.app_name,
-        version=settings.app_version,
-        sport=settings.default_sport,
-        timestamp=datetime.now(timezone.utc).isoformat(),
-    )
-
-
 @health_router.get("/health/scheduler")
 async def scheduler_health():
     """Return scheduler status for debugging live odds freshness."""

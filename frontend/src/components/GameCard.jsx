@@ -112,6 +112,8 @@ function Countdown({ startTime }) {
   const [timeLeft, setTimeLeft] = useState('');
 
   useEffect(() => {
+    let interval = null;
+
     function update() {
       const now = new Date();
       const start = parseAsUTC(startTime);
@@ -123,6 +125,7 @@ function Countdown({ startTime }) {
       const diff = start.getTime() - now.getTime();
       if (diff <= 0) {
         setTimeLeft('Starting');
+        if (interval) { clearInterval(interval); interval = null; }
         return;
       }
 
@@ -141,8 +144,8 @@ function Countdown({ startTime }) {
     }
 
     update();
-    const interval = setInterval(update, 1000);
-    return () => clearInterval(interval);
+    interval = setInterval(update, 1000);
+    return () => { if (interval) clearInterval(interval); };
   }, [startTime]);
 
   return <span className="game-countdown">{timeLeft}</span>;

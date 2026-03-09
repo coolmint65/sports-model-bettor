@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncGenerator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -131,6 +131,7 @@ def create_app() -> FastAPI:
     # Also register the basic CRUD routes
     from app.api.routes import (
         games_router,
+        health_router,
         players_router,
         predictions_router,
         teams_router,
@@ -140,6 +141,24 @@ def create_app() -> FastAPI:
     application.include_router(games_router)
     application.include_router(players_router)
     application.include_router(predictions_router)
+    application.include_router(health_router)
+
+    # Client error reporting endpoint
+    client_error_logger = logging.getLogger("client_errors")
+
+    @application.post("/api/client-error", tags=["health"])
+    async def report_client_error(request: Request):
+        try:
+            body = await request.json()
+            client_error_logger.error(
+                "Frontend error: %s | url=%s | stack=%s",
+                body.get("error", "unknown"),
+                body.get("url", ""),
+                (body.get("stack") or "")[:500],
+            )
+        except Exception:
+            pass
+        return {"ok": True}
 
     # WebSocket endpoint for live updates
     from fastapi import WebSocket as WS

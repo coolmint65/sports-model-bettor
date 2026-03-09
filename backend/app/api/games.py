@@ -796,9 +796,10 @@ async def get_game_features(
     except (ImportError, AttributeError):
         pass
     except Exception as exc:
+        logger.error("Error computing features: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Error computing features: {exc}",
+            detail="Error computing features",
         )
 
     # Fallback: construct a basic feature dict from available data

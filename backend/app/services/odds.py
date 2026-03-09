@@ -95,8 +95,11 @@ def fresh_implied_prob(pred: Prediction, game: Optional[Game]) -> Optional[float
                             price_key = "over_price" if is_over else "under_price"
                             live_odds = tl.get(price_key)
                             break
-            except (ValueError, TypeError, KeyError):
-                pass
+            except (ValueError, TypeError, KeyError) as exc:
+                logger.warning(
+                    "Failed to parse all_total_lines for game %s: %s",
+                    game.id, exc,
+                )
         # Fall back to the primary O/U prices
         if live_odds is None:
             if is_over:

@@ -48,6 +48,17 @@ function Dashboard() {
   // refresh temporarily loses them (race condition during live games).
   const prematchPickCache = useRef(new Map());
   const games = useMemo(() => {
+    // Prune stale cache entries for games no longer in today's schedule
+    const currentGameIds = new Set(
+      rawGames.map((g) => g.id || g.game_id).filter(Boolean)
+    );
+    for (const key of prematchPickCache.current.keys()) {
+      const gid = parseInt(key.split(':')[0], 10);
+      if (!currentGameIds.has(gid)) {
+        prematchPickCache.current.delete(key);
+      }
+    }
+
     return rawGames.map((g) => {
       const gid = g.id || g.game_id;
       if (!gid) return g;

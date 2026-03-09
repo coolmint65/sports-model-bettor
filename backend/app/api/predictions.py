@@ -97,6 +97,14 @@ async def _backfill_prediction_odds(
         if fresh_implied is None:
             continue
 
+        # Sanity check: implied probability must be in (0, 1)
+        if not (0 < fresh_implied < 1):
+            logger.warning(
+                "Skipping invalid implied prob %.4f for prediction %d",
+                fresh_implied, pred.id,
+            )
+            continue
+
         # Skip if nothing changed (within rounding tolerance)
         if (
             pred.odds_implied_prob is not None
@@ -254,16 +262,10 @@ class ModelPerformanceStats(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
-async def _build_prediction_detail(
-    pred: Prediction, session: AsyncSession
+def _build_prediction_detail_from_game(
+    pred: Prediction, game: Optional[Game]
 ) -> PredictionDetail:
-    game_result = await session.execute(
-        select(Game)
-        .options(selectinload(Game.home_team), selectinload(Game.away_team))
-        .where(Game.id == pred.game_id)
-    )
-    game: Optional[Game] = game_result.scalar_one_or_none()
-
+    """Build a PredictionDetail from a pre-loaded Prediction and Game."""
     home_team = None
     away_team = None
     game_date = None
@@ -311,6 +313,18 @@ async def _build_prediction_detail(
     )
 
 
+async def _build_prediction_detail(
+    pred: Prediction, session: AsyncSession
+) -> PredictionDetail:
+    game_result = await session.execute(
+        select(Game)
+        .options(selectinload(Game.home_team), selectinload(Game.away_team))
+        .where(Game.id == pred.game_id)
+    )
+    game: Optional[Game] = game_result.scalar_one_or_none()
+    return _build_prediction_detail_from_game(pred, game)
+
+
 async def _get_predictions_for_date(
     target_date: date, session: AsyncSession
 ) -> List[PredictionDetail]:
@@ -323,9 +337,20 @@ async def _get_predictions_for_date(
     )
     predictions = result.scalars().all()
 
+    # Batch-load all games to avoid N+1
+    game_ids = {p.game_id for p in predictions if p.game_id}
+    games_by_id = {}
+    if game_ids:
+        games_result = await session.execute(
+            select(Game)
+            .options(selectinload(Game.home_team), selectinload(Game.away_team))
+            .where(Game.id.in_(game_ids))
+        )
+        games_by_id = {g.id: g for g in games_result.scalars().all()}
+
     details: List[PredictionDetail] = []
     for pred in predictions:
-        detail = await _build_prediction_detail(pred, session)
+        detail = _build_prediction_detail_from_game(pred, games_by_id.get(pred.game_id))
         details.append(detail)
     return details
 
@@ -472,9 +497,10 @@ async def _try_generate_predictions(
             detail="Prediction engine is not available.",
         )
     except Exception as exc:
+        logger.error("Failed to generate predictions: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to generate predictions: {exc}",
+            detail="Failed to generate predictions",
         )
 
 
@@ -1100,19 +1126,33 @@ async def list_tracked_bets(
     )
     bets = result.scalars().all()
 
+    # Batch-load all games and predictions to avoid N+1 queries
+    game_ids = {tb.game_id for tb in bets if tb.game_id}
+    pred_ids = {tb.prediction_id for tb in bets if tb.prediction_id}
+
+    games_by_id = {}
+    if game_ids:
+        games_result = await session.execute(
+            select(Game)
+            .options(selectinload(Game.home_team), selectinload(Game.away_team))
+            .where(Game.id.in_(game_ids))
+        )
+        games_by_id = {g.id: g for g in games_result.scalars().all()}
+
+    preds_by_id = {}
+    if pred_ids:
+        preds_result = await session.execute(
+            select(Prediction).where(Prediction.id.in_(pred_ids))
+        )
+        preds_by_id = {p.id: p for p in preds_result.scalars().all()}
+
     items: List[TrackedBetResponse] = []
     wins = losses = pushes = pending = 0
     total_profit = 0.0
     dirty = False
 
     for tb in bets:
-        # Load the game for start_time and status
-        game_result = await session.execute(
-            select(Game)
-            .options(selectinload(Game.home_team), selectinload(Game.away_team))
-            .where(Game.id == tb.game_id)
-        )
-        game = game_result.scalar_one_or_none()
+        game = games_by_id.get(tb.game_id)
 
         # Auto-lock: once the game starts or is final, freeze the bet
         if tb.locked_at is None and game:
@@ -1127,10 +1167,7 @@ async def list_tracked_bets(
         # Auto-refresh: for unlocked, unsettled bets, sync from
         # the latest Prediction data so the user sees current values
         if tb.locked_at is None and tb.result is None and tb.prediction_id is not None:
-            pred_result = await session.execute(
-                select(Prediction).where(Prediction.id == tb.prediction_id)
-            )
-            pred = pred_result.scalar_one_or_none()
+            pred = preds_by_id.get(tb.prediction_id)
             if pred:
                 # Sync snapshot from the prediction
                 tb.bet_type = pred.bet_type

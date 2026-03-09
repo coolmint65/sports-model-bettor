@@ -611,9 +611,10 @@ async def _try_sync_schedule(
             detail="NHL scraper module is not available.",
         )
     except Exception as exc:
+        logger.error("Failed to sync schedule from NHL API: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=502,
-            detail=f"Failed to sync schedule from NHL API: {exc}",
+            detail="Failed to sync schedule from NHL API",
         )
 
 

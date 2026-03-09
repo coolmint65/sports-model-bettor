@@ -144,6 +144,7 @@ function BestBets() {
   const [activeTab, setActiveTab] = useState('all');
   const [regenerating, setRegenerating] = useState(false);
   const [regenMessage, setRegenMessage] = useState('');
+  const regeneratingRef = useRef(false);
   // Track which prediction IDs we've already auto-tracked to avoid
   // sending duplicate requests on every render/poll cycle.
   const autoTrackedRef = useRef(new Set());
@@ -176,7 +177,8 @@ function BestBets() {
   }, [silentRefetch]);
 
   const handleRegenerate = useCallback(async () => {
-    if (regenerating) return;
+    if (regeneratingRef.current) return;
+    regeneratingRef.current = true;
     setRegenerating(true);
     setRegenMessage('Syncing schedule & odds...');
     try {
@@ -196,9 +198,10 @@ function BestBets() {
       console.error('Failed to regenerate predictions:', err);
       setTimeout(() => setRegenMessage(''), 6000);
     } finally {
+      regeneratingRef.current = false;
       setRegenerating(false);
     }
-  }, [regenerating, silentRefetch]);
+  }, [silentRefetch]);
 
   let allBets = data?.best_bets || data?.bets || (Array.isArray(data) ? data : []);
   const mlBets = data?.ml_bets || [];
@@ -252,8 +255,11 @@ function BestBets() {
         const predId = bet.prediction_id || bet.id;
         try {
           await trackBet(predId);
-        } catch {
-          // 409 = already tracked; other errors are non-critical
+        } catch (err) {
+          const status = err?.response?.status;
+          if (status !== 409) {
+            console.error(`Failed to auto-track prediction ${predId}:`, err);
+          }
         }
       }
     })();

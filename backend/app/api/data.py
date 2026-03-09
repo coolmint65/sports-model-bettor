@@ -369,9 +369,10 @@ async def sync_teams(
             message="Teams synced successfully.",
         )
     except Exception as exc:
+        logger.error("Team sync failed: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=502,
-            detail=f"Team sync failed: {exc}",
+            detail="Team sync failed",
         )
     finally:
         await scraper.close()
@@ -394,9 +395,10 @@ async def sync_schedule(
             message="Schedule synced successfully.",
         )
     except Exception as exc:
+        logger.error("Schedule sync failed: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=502,
-            detail=f"Schedule sync failed: {exc}",
+            detail="Schedule sync failed",
         )
     finally:
         await scraper.close()
@@ -419,9 +421,10 @@ async def sync_results(
             message="Game results synced successfully.",
         )
     except Exception as exc:
+        logger.error("Results sync failed: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=502,
-            detail=f"Results sync failed: {exc}",
+            detail="Results sync failed",
         )
     finally:
         await scraper.close()
@@ -453,9 +456,10 @@ async def sync_period_scores(
             message=f"Period scores backfilled for games in last {days_back} days.",
         )
     except Exception as exc:
+        logger.error("Period scores backfill failed: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=502,
-            detail=f"Period scores backfill failed: {exc}",
+            detail="Period scores backfill failed",
         )
     finally:
         await scraper.close()
@@ -490,9 +494,10 @@ async def sync_odds(
                     f"Updated moneyline, spread, and totals odds.",
         )
     except Exception as exc:
+        logger.error("Multi-source odds sync failed: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=502,
-            detail=f"Multi-source odds sync failed: {exc}",
+            detail="Multi-source odds sync failed",
         )
 
 
@@ -537,9 +542,10 @@ async def sync_historical(
             total_games += count
             synced_seasons.append(season_str)
     except Exception as exc:
+        logger.error("Historical sync failed: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=502,
-            detail=f"Historical sync failed: {exc}",
+            detail="Historical sync failed",
         )
     finally:
         await scraper.close()

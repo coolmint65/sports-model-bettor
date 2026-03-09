@@ -38,11 +38,7 @@ async def settle_completed_games(db: AsyncSession) -> Dict[str, Any]:
     tracked_bets_settled = await _settle_tracked_bets(db)
 
     if predictions_graded > 0 or tracked_bets_settled > 0:
-        try:
-            await db.flush()
-        except Exception as e:
-            logger.error("Failed to flush settlement results: %s", e)
-
+        await db.flush()
         logger.info(
             "Settlement complete: %d predictions graded, %d tracked bets settled",
             predictions_graded,

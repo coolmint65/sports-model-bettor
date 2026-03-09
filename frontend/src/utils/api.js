@@ -49,8 +49,9 @@ export const fetchSyncStatus = () => api.get('/data/sync/status');
 
 export const triggerDataSync = async (onProgress) => {
   await startDataSync();
-  // Poll until done
-  while (true) {
+  // Poll until done (max ~5 minutes to avoid infinite loop)
+  const MAX_POLLS = 200;
+  for (let i = 0; i < MAX_POLLS; i++) {
     await new Promise((r) => setTimeout(r, 1500));
     const { data } = await fetchSyncStatus();
     if (onProgress) onProgress(data.step);
@@ -61,6 +62,7 @@ export const triggerDataSync = async (onProgress) => {
       return data;
     }
   }
+  throw new Error('Data sync timed out');
 };
 
 export default api;

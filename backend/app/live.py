@@ -94,8 +94,11 @@ def _snapshot_game_odds(game: Game) -> Dict[str, Any]:
     }
 
 
-def _odds_changed(game_id: int, current: Dict[str, Any]) -> bool:
-    """Check if odds changed from last known snapshot."""
+def _odds_changed_unlocked(game_id: int, current: Dict[str, Any]) -> bool:
+    """Check if odds changed from last known snapshot.
+
+    MUST be called while holding ``_snapshot_lock``.
+    """
     previous = _last_odds_snapshot.get(game_id)
     if previous is None:
         return True
@@ -178,7 +181,7 @@ async def _sync_odds_and_broadcast():
             async with _snapshot_lock:
                 for game in games:
                     current = _snapshot_game_odds(game)
-                    if _odds_changed(game.id, current):
+                    if _odds_changed_unlocked(game.id, current):
                         _last_odds_snapshot[game.id] = current
                         changed_games.append({
                             "game_id": game.id,
