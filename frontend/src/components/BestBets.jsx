@@ -230,11 +230,14 @@ function BestBets() {
 
   // Auto-track best bets — serialize requests to avoid bursting
   // multiple concurrent POST calls that exhaust the DB connection pool.
+  // Only track prematch bets; live bets are ephemeral and shouldn't
+  // count toward the user's tracked bet history.
   useEffect(() => {
     if (!allBets.length) return;
     const toTrack = allBets.filter((bet) => {
       const predId = bet.prediction_id || bet.id;
-      return predId && !autoTrackedRef.current.has(predId);
+      const phase = bet.phase || 'prematch';
+      return predId && phase !== 'live' && !autoTrackedRef.current.has(predId);
     });
     if (!toTrack.length) return;
 

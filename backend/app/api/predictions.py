@@ -1233,6 +1233,16 @@ async def update_tracked_bet(
     return _tracked_bet_to_response(tb, game)
 
 
+@router.delete("/tracked/all")
+async def clear_all_tracked_bets(
+    session: AsyncSession = Depends(get_session),
+):
+    """Clear all tracked bets (reset history)."""
+    await session.execute(delete(TrackedBet))
+    await session.flush()
+    return {"ok": True}
+
+
 @router.delete("/tracked/{tracked_id}")
 async def delete_tracked_bet(
     tracked_id: int,
@@ -1262,16 +1272,6 @@ async def settle_tracked_bets(
         "settled": result["tracked_bets_settled"],
         "predictions_graded": result["predictions_graded"],
     }
-
-
-@router.delete("/tracked/all")
-async def clear_all_tracked_bets(
-    session: AsyncSession = Depends(get_session),
-):
-    """Clear all tracked bets (reset history)."""
-    await session.execute(delete(TrackedBet))
-    await session.commit()
-    return {"ok": True}
 
 
 def _tracked_bet_to_response(
