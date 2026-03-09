@@ -5,7 +5,7 @@ import GameCard from './GameCard';
 import { fetchTodaySchedule, fetchLiveGames, regeneratePredictions, trackBet } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import { useWebSocketEvent } from '../hooks/useWebSocket';
-import { isLiveStatus } from '../utils/teams';
+import { isLiveStatus, confidencePct } from '../utils/teams';
 
 const LIVE_POLL_INTERVAL = 5_000;
 const IDLE_POLL_INTERVAL = 60_000;
@@ -146,6 +146,25 @@ function Dashboard() {
     return !isLiveStatus(status) && status !== 'final' && status !== 'completed' && status !== 'off';
   });
 
+  // Compute medal rankings across all prematch games with picks
+  const medalMap = useMemo(() => {
+    const map = new Map();
+    const scored = prematchGames
+      .filter((g) => g.top_pick?.confidence != null)
+      .map((g) => {
+        const conf = g.top_pick.confidence;
+        const edge = Math.min(g.top_pick.edge || 0, 0.25) / 0.25;
+        const score = 0.45 * conf + 0.35 * edge + 0.20 * 0.5;
+        return { gameId: g.id || g.game_id, score };
+      })
+      .sort((a, b) => b.score - a.score);
+    const medals = ['gold', 'silver', 'bronze'];
+    scored.forEach((item, i) => {
+      if (i < 3) map.set(item.gameId, medals[i]);
+    });
+    return map;
+  }, [prematchGames]);
+
   // Auto-track all top picks (prematch only) to the bet tracker.
   // Sequential requests to avoid DB pool exhaustion.
   const autoTrackedRef = useRef(new Set());
@@ -275,7 +294,7 @@ function Dashboard() {
         {!scheduleLoading && !scheduleError && prematchGames.length > 0 && (
           <div className="games-grid">
             {prematchGames.map((game) => (
-              <GameCard key={game.game_id || game.id} game={game} section="schedule" />
+              <GameCard key={game.game_id || game.id} game={game} section="schedule" medal={medalMap.get(game.id || game.game_id)} />
             ))}
           </div>
         )}

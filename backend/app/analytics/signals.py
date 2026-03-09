@@ -227,6 +227,7 @@ class SignalGenerator:
                     "positive", home_abbr,
                     min(0.85, 0.50 + diff / 20.0),
                     icon="chart",
+                    tooltip="5v5 possession is measured by Corsi For % (CF%) — the share of all shot attempts (goals, saves, misses, blocks) a team generates at even strength. Higher CF% = more time controlling the puck.",
                 ))
             else:
                 signals.append(_signal(
@@ -235,6 +236,7 @@ class SignalGenerator:
                     "positive", away_abbr,
                     min(0.85, 0.50 + diff / 20.0),
                     icon="chart",
+                    tooltip="5v5 possession is measured by Corsi For % (CF%) — the share of all shot attempts (goals, saves, misses, blocks) a team generates at even strength. Higher CF% = more time controlling the puck.",
                 ))
 
         # General possession note
@@ -282,6 +284,7 @@ class SignalGenerator:
                         "positive", abbr,
                         min(0.75, 0.45 + abs(diff) / 20.0),
                         icon="chart",
+                        tooltip="CF (Corsi For) measures shot attempt share. Close-game CF% filters to games decided by 1 goal or OT, removing blowout noise for a more predictive possession signal.",
                     ))
                 else:
                     signals.append(_signal(
@@ -289,6 +292,7 @@ class SignalGenerator:
                         f"{label} struggles in close games ({diff:.1f}% CF)",
                         "negative", abbr,
                         min(0.60, 0.30 + abs(diff) / 20.0),
+                        tooltip="CF (Corsi For) measures shot attempt share. Close-game CF% filters to games decided by 1 goal or OT, removing blowout noise for a more predictive possession signal.",
                     ))
 
         # Both 5v5 and close-game favor same team
@@ -497,6 +501,7 @@ class SignalGenerator:
                     f"{abbr} due for regression (high PDO: {pdo:.3f})",
                     "negative", abbr, 0.35,
                     icon="chart",
+                    tooltip="PDO = shooting% + save%. League average is ~1.000. A PDO above 1.020 suggests the team is running hot (lucky bounces) and likely to regress back toward average.",
                 ))
             elif pdo < 0.98:
                 signals.append(_signal(
@@ -504,6 +509,7 @@ class SignalGenerator:
                     f"{abbr} due for positive regression (low PDO: {pdo:.3f})",
                     "positive", abbr, 0.35,
                     icon="chart",
+                    tooltip="PDO = shooting% + save%. League average is ~1.000. A PDO below 0.980 suggests the team has been unlucky and is due to bounce back toward average performance.",
                 ))
 
         return signals

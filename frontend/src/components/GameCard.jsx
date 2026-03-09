@@ -174,7 +174,13 @@ function parseReasons(reasoning) {
   });
 }
 
-function GameCard({ game, section }) {
+const MEDAL_CONFIG = {
+  gold:   { icon: '🥇', label: '#1 Pick' },
+  silver: { icon: '🥈', label: '#2 Pick' },
+  bronze: { icon: '🥉', label: '#3 Pick' },
+};
+
+function GameCard({ game, section, medal }) {
   const navigate = useNavigate();
   const gameId = game.game_id || game.id;
   const statusInfo = getStatusDisplay(game);
@@ -321,6 +327,12 @@ function GameCard({ game, section }) {
           <div className="pick-card-selection">
             <div className="pick-card-badges">
               {betType && <span className="pick-badge pick-badge-type">{betType}</span>}
+              {medal && MEDAL_CONFIG[medal] && (
+                <span className={`pick-badge-medal medal-${medal}`}>
+                  <span className="medal-icon">{MEDAL_CONFIG[medal].icon}</span>
+                  {MEDAL_CONFIG[medal].label}
+                </span>
+              )}
             </div>
             <div className="pick-card-value">{pickValue}</div>
             {oddsDisplay && <div className="pick-card-odds">{oddsDisplay}</div>}

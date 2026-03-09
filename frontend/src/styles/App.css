@@ -508,12 +508,15 @@ a:hover {
   color: var(--accent-red, #ff5252) !important;
 }
 
-/* ─── Games Grid ────────────────────────────────────────────── */
+/* ─── Games Grid (masonry-style columns) ───────────────────── */
 .games-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 14px;
-  align-items: start;
+  columns: 3 300px;
+  column-gap: 14px;
+}
+
+.games-grid > * {
+  break-inside: avoid;
+  margin-bottom: 14px;
 }
 
 /* ─── Game Card ─────────────────────────────────────────────── */
@@ -2879,6 +2882,42 @@ a:hover {
   background: rgba(79, 195, 247, 0.12);
   color: var(--accent-blue);
   border: 1px solid rgba(79, 195, 247, 0.25);
+}
+
+/* Medal badges for top 3 picks */
+.pick-badge-medal {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 8px;
+  border-radius: 20px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.pick-badge-medal.medal-gold {
+  background: rgba(255, 215, 0, 0.15);
+  color: #ffd700;
+  border: 1px solid rgba(255, 215, 0, 0.35);
+}
+
+.pick-badge-medal.medal-silver {
+  background: rgba(192, 192, 192, 0.12);
+  color: #c0c0c0;
+  border: 1px solid rgba(192, 192, 192, 0.3);
+}
+
+.pick-badge-medal.medal-bronze {
+  background: rgba(205, 127, 50, 0.12);
+  color: #cd7f32;
+  border: 1px solid rgba(205, 127, 50, 0.3);
+}
+
+.pick-badge-medal .medal-icon {
+  font-size: 0.75rem;
+  line-height: 1;
 }
 
 .pick-badge-odds {
