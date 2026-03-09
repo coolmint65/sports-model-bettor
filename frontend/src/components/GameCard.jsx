@@ -136,26 +136,31 @@ function getConfidenceTier(confidence) {
 
 /**
  * Parse reasoning into individual bullet points.
- * The backend may return reasoning as a single string with sentences,
- * or as a string with numbered items, or newline-separated items.
+ * The backend returns clean, semicolon-separated signal text.
+ * Strips any leftover "(Odds: ...)" fragments from legacy data.
  */
 function parseReasons(reasoning) {
   if (!reasoning) return [];
-  // Try splitting by numbered items (1. xxx 2. xxx) or newlines
-  const lines = reasoning
+
+  // Strip any "(Odds: ...)" fragments from legacy reasoning
+  const cleaned = reasoning.replace(/\s*\(Odds:\s*[^)]*\)/g, '').trim();
+  if (!cleaned) return [];
+
+  // Try splitting by numbered items (1. xxx 2. xxx) or newlines or semicolons
+  const lines = cleaned
     .split(/(?:\d+\.\s+|\n|;\s*)/)
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 
-  if (lines.length > 1) return lines.slice(0, 5);
+  if (lines.length > 1) return lines.slice(0, 7);
 
   // Fall back: split by periods for multi-sentence reasoning
-  const sentences = reasoning
+  const sentences = cleaned
     .split(/\.\s+/)
     .map((s) => s.trim().replace(/\.$/, ''))
     .filter((s) => s.length > 5);
 
-  return sentences.slice(0, 5);
+  return sentences.slice(0, 7);
 }
 
 function GameCard({ game, section }) {
@@ -305,9 +310,9 @@ function GameCard({ game, section }) {
           <div className="pick-card-selection">
             <div className="pick-card-badges">
               {betType && <span className="pick-badge pick-badge-type">{betType}</span>}
-              {oddsDisplay && <span className="pick-badge pick-badge-odds">{oddsDisplay}</span>}
             </div>
             <div className="pick-card-value">{pickValue}</div>
+            {oddsDisplay && <div className="pick-card-odds">{oddsDisplay}</div>}
           </div>
         )}
 

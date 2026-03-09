@@ -33,7 +33,9 @@ function PredictionCard({ prediction, showGame = false, compact = false, isFallb
   const hAbbr = homeAbbr || teamAbbrev(prediction.home_team, null);
   const aAbbr = awayAbbr || teamAbbrev(prediction.away_team, null);
   const pick = formatPredictionValue(prediction.prediction_value || prediction.pick || prediction.selection, hAbbr, aAbbr, prediction.bet_type || prediction.type);
-  const reasoning = prediction.reasoning || prediction.reason || prediction.analysis || '';
+  const rawReasoning = prediction.reasoning || prediction.reason || prediction.analysis || '';
+  // Strip legacy "(Odds: ...)" fragments from reasoning text
+  const reasoning = rawReasoning.replace(/\s*\(Odds:\s*[^)]*\)/g, '').trim();
 
   const cardClasses = [
     'prediction-card',

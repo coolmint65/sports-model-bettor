@@ -462,6 +462,42 @@ class PredictionManager:
         signal_gen = SignalGenerator()
         signals = signal_gen.generate(features, predictions)
 
+        # Enrich each prediction's reasoning with relevant signals.
+        # Signals provide clean, Buddy-style bullets; the old reasoning
+        # from _build_clean_reasons is kept as fallback only.
+        home_abbr_lower = features.get("home_team_abbr", "").lower()
+        away_abbr_lower = features.get("away_team_abbr", "").lower()
+
+        for pred in predictions:
+            pick_val = (pred.get("prediction") or "").lower()
+            bt = pred.get("bet_type", "")
+            # Determine opponent for this pick
+            if pick_val == home_abbr_lower:
+                opp_val = away_abbr_lower
+            elif pick_val == away_abbr_lower:
+                opp_val = home_abbr_lower
+            else:
+                opp_val = ""
+
+            # Collect signals relevant to this prediction
+            relevant = []
+            for sig in signals:
+                sig_team = (sig.get("team") or "").lower()
+                impact = sig.get("impact", "")
+                if bt in ("ml", "spread"):
+                    # Include: positive signals for picked team,
+                    # negative signals about opponent, and game-level signals
+                    if sig_team == pick_val and impact in ("positive", "neutral"):
+                        relevant.append(sig["text"])
+                    elif sig_team == opp_val and impact == "negative":
+                        relevant.append(sig["text"])
+                    elif sig_team == "":
+                        relevant.append(sig["text"])
+                else:
+                    relevant.append(sig["text"])
+            if relevant:
+                pred["reasoning"] = "; ".join(relevant[:7])
+
         return {
             "game_id": game.id,
             "status": game.status,
@@ -531,12 +567,7 @@ class PredictionManager:
         if not game_id or not bet_type or not prediction_value:
             return None
 
-        # Build reasoning text with odds info
         reasoning = bet.get("reasoning", "")
-        odds = bet.get("odds")
-        if odds is not None and reasoning:
-            odds_str = f"+{int(odds)}" if odds > 0 else str(int(odds))
-            reasoning = f"{reasoning} (Odds: {odds_str})"
 
         # Check for existing prediction within the same phase.
         # Prematch and live predictions coexist as separate rows so

@@ -54,6 +54,7 @@ class GameTopPick(BaseModel):
     is_fallback: bool = False
     outcome: Optional[str] = None  # "win", "loss", or None (pending/in-progress)
     reasoning: Optional[str] = None
+    odds_display: Optional[float] = None
 
 
 class GameOdds(BaseModel):
@@ -226,6 +227,38 @@ def _build_schedule_game(
         odds=_build_game_odds(game),
         pregame_odds=_build_pregame_odds(game),
     )
+
+
+def _pick_odds_display(pred: Prediction, game: Optional[Game]) -> Optional[float]:
+    """Extract the American odds for the specific pick from the game's odds."""
+    if game is None:
+        return None
+    bt = pred.bet_type
+    val = (pred.prediction_value or "").lower()
+
+    home_abbr = ""
+    away_abbr = ""
+    if game.home_team:
+        home_abbr = getattr(game.home_team, "abbreviation", "").lower()
+    if game.away_team:
+        away_abbr = getattr(game.away_team, "abbreviation", "").lower()
+
+    if bt == "ml":
+        if val == "home" or val == home_abbr:
+            return game.home_moneyline
+        if val == "away" or val == away_abbr:
+            return game.away_moneyline
+    elif bt == "total":
+        if "over" in val:
+            return game.over_price
+        if "under" in val:
+            return game.under_price
+    elif bt == "spread":
+        if val.startswith("home") or (home_abbr and val.startswith(home_abbr)):
+            return game.home_spread_price
+        if val.startswith("away") or (away_abbr and val.startswith(away_abbr)):
+            return game.away_spread_price
+    return None
 
 
 def _grade_top_pick(pick: GameTopPick, game: Game) -> Optional[str]:
@@ -408,6 +441,7 @@ async def _compute_top_picks(
                 edge=pred.edge,
                 is_fallback=False,
                 reasoning=pred.reasoning,
+                odds_display=_pick_odds_display(pred, game_by_id.get(pred.game_id)),
             )
 
     # --- Tier 3: confidence-only fallback when odds data is missing ---
@@ -452,6 +486,7 @@ async def _compute_top_picks(
                     edge=pred.edge,
                     is_fallback=pred.odds_implied_prob is None,
                     reasoning=pred.reasoning,
+                    odds_display=_pick_odds_display(pred, game_by_id.get(pred.game_id)),
                 )
 
     # Grade outcomes for final games
