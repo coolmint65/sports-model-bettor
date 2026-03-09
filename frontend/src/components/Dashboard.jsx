@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { Calendar, Radio, RefreshCw } from 'lucide-react';
 import { format } from 'date-fns';
 import GameCard from './GameCard';
-import { fetchTodaySchedule, fetchLiveGames, regeneratePredictions } from '../utils/api';
+import { fetchTodaySchedule, fetchLiveGames, regeneratePredictions, trackBet } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import { useWebSocketEvent } from '../hooks/useWebSocket';
 import { isLiveStatus } from '../utils/teams';
@@ -145,6 +145,32 @@ function Dashboard() {
     const status = (g.status || '').toLowerCase();
     return !isLiveStatus(status) && status !== 'final' && status !== 'completed' && status !== 'off';
   });
+
+  // Auto-track all top picks (prematch only) to the bet tracker.
+  // Sequential requests to avoid DB pool exhaustion.
+  const autoTrackedRef = useRef(new Set());
+  useEffect(() => {
+    const picks = games
+      .map((g) => g.top_pick)
+      .filter((p) => p && p.prediction_id && !autoTrackedRef.current.has(p.prediction_id));
+    if (!picks.length) return;
+
+    for (const pick of picks) {
+      autoTrackedRef.current.add(pick.prediction_id);
+    }
+
+    (async () => {
+      for (const pick of picks) {
+        try {
+          await trackBet(pick.prediction_id);
+        } catch (err) {
+          if (err?.response?.status !== 409) {
+            console.error(`Failed to auto-track prediction ${pick.prediction_id}:`, err);
+          }
+        }
+      }
+    })();
+  }, [games]);
 
   const handleRegenerate = useCallback(async () => {
     if (regeneratingRef.current) return;

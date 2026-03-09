@@ -46,6 +46,7 @@ class TeamBrief(BaseModel):
 
 
 class GameTopPick(BaseModel):
+    prediction_id: Optional[int] = None
     bet_type: Optional[str] = None
     prediction_value: Optional[str] = None
     confidence: Optional[float] = None
@@ -400,6 +401,7 @@ async def _compute_top_picks(
                     pred.odds_implied_prob,
                 )
             top_picks[pred.game_id] = GameTopPick(
+                prediction_id=pred.id,
                 bet_type=pred.bet_type,
                 prediction_value=pred.prediction_value,
                 confidence=pred.confidence,
@@ -443,6 +445,7 @@ async def _compute_top_picks(
                 if is_heavy_juice(pred.odds_implied_prob, max_implied):
                     continue
                 top_picks[pred.game_id] = GameTopPick(
+                    prediction_id=pred.id,
                     bet_type=pred.bet_type,
                     prediction_value=pred.prediction_value,
                     confidence=pred.confidence,
@@ -547,6 +550,7 @@ async def _compute_top_props(
             )
 
         top_props[game_id] = GameTopPick(
+            prediction_id=best.id,
             bet_type=best.bet_type,
             prediction_value=best.prediction_value,
             confidence=best.confidence,
