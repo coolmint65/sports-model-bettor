@@ -8,7 +8,6 @@ import {
   Target,
   Users,
   TrendingUp,
-  Activity,
   Layers,
   DollarSign,
   Radio,
@@ -28,9 +27,6 @@ const LIVE_POLL_INTERVAL = 30_000;
 const TABS = [
   { id: 'overview', label: 'Overview', icon: BarChart3 },
   { id: 'predictions', label: 'Predictions', icon: Target },
-  { id: 'h2h', label: 'H2H', icon: Users },
-  { id: 'form', label: 'Form', icon: TrendingUp },
-  { id: 'periods', label: 'Periods', icon: Layers },
 ];
 
 function formatGameDateTime(game) {
@@ -298,6 +294,134 @@ function OverviewTab({ game }) {
           <p>No team stats available for this game yet.</p>
         </div>
       )}
+
+      {/* Head-to-Head */}
+      <OverviewH2H game={game} />
+
+      {/* Recent Form */}
+      <OverviewForm game={game} />
+    </div>
+  );
+}
+
+function OverviewH2H({ game }) {
+  const h2h = game.head_to_head || game.h2h || null;
+  if (!h2h) return null;
+
+  const awayLabel = game.away_team_form?.team_name || 'Away';
+  const homeLabel = game.home_team_form?.team_name || 'Home';
+  const homeId = game.home_team_form?.team_id ?? game.home_team?.id;
+  const team1IsHome = h2h.team1_id === homeId;
+  const label1 = team1IsHome ? homeLabel : awayLabel;
+  const label2 = team1IsHome ? awayLabel : homeLabel;
+
+  return (
+    <div className="overview-h2h-section">
+      <h3 className="subsection-title">
+        <Users size={16} />
+        Head-to-Head
+      </h3>
+      <div className="h2h-summary-grid">
+        {h2h.games_played != null && (
+          <div className="h2h-stat-box">
+            <span className="h2h-stat-value">{h2h.games_played}</span>
+            <span className="h2h-stat-label">Games Played</span>
+          </div>
+        )}
+        {h2h.team1_wins != null && (
+          <div className="h2h-stat-box">
+            <span className="h2h-stat-value">{h2h.team1_wins}</span>
+            <span className="h2h-stat-label">{label1} Wins</span>
+          </div>
+        )}
+        {h2h.team2_wins != null && (
+          <div className="h2h-stat-box">
+            <span className="h2h-stat-value">{h2h.team2_wins}</span>
+            <span className="h2h-stat-label">{label2} Wins</span>
+          </div>
+        )}
+        {h2h.team1_goals != null && h2h.team2_goals != null && h2h.games_played > 0 && (
+          <>
+            <div className="h2h-stat-box">
+              <span className="h2h-stat-value">
+                {((h2h.team1_goals + h2h.team2_goals) / h2h.games_played).toFixed(1)}
+              </span>
+              <span className="h2h-stat-label">Avg Total Goals</span>
+            </div>
+            <div className="h2h-stat-box">
+              <span className="h2h-stat-value">
+                {(h2h.team1_goals / h2h.games_played).toFixed(1)} - {(h2h.team2_goals / h2h.games_played).toFixed(1)}
+              </span>
+              <span className="h2h-stat-label">Avg Goals ({label1} - {label2})</span>
+            </div>
+          </>
+        )}
+        {h2h.last_meeting && (
+          <div className="h2h-stat-box">
+            <span className="h2h-stat-value">{h2h.last_meeting}</span>
+            <span className="h2h-stat-label">Last Meeting</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function OverviewForm({ game }) {
+  const awayForm = game.away_recent_games || game.away_form || game.away_recent || [];
+  const homeForm = game.home_recent_games || game.home_form || game.home_recent || [];
+  const awayTeamLabel = game.away_team_form?.team_name || teamName(game.away_team, 'Away');
+  const homeTeamLabel = game.home_team_form?.team_name || teamName(game.home_team, 'Home');
+
+  if (awayForm.length === 0 && homeForm.length === 0) return null;
+
+  const calcRecord = (games) => {
+    const wins = games.filter((g) => g.result === 'W').length;
+    const losses = games.filter((g) => g.result === 'L').length;
+    const otl = games.filter((g) => g.result === 'OTL').length;
+    return `${wins}-${losses}${otl > 0 ? `-${otl}` : ''}`;
+  };
+
+  const renderTeamForm = (form, label) => {
+    if (!form || form.length === 0) return null;
+    const last10 = form.slice(0, 10);
+
+    return (
+      <div className="overview-form-team">
+        <h4 className="overview-form-team-name">{label}</h4>
+        <div className="overview-form-record">
+          L10: {calcRecord(last10)}
+        </div>
+        <div className="form-results-strip">
+          {[...last10].reverse().map((g, i) => {
+            const resultClass =
+              g.result === 'W'
+                ? 'result-win'
+                : g.result === 'OTL'
+                  ? 'result-otl'
+                  : 'result-loss';
+            const title = `${g.result} ${g.score_display || ''} ${g.home_away === 'home' ? 'vs' : '@'} ${g.opponent_abbrev || ''}${g.overtime ? ' (OT)' : ''}`;
+            return (
+              <div key={i} className={`form-result-dot ${resultClass}`} title={title}>
+                {g.result}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="overview-form-section">
+      <h3 className="subsection-title">
+        <TrendingUp size={16} />
+        Recent Form
+      </h3>
+      <div className="overview-form-grid">
+        {renderTeamForm(awayForm, awayTeamLabel)}
+        {renderTeamForm(homeForm, homeTeamLabel)}
+      </div>
     </div>
   );
 }
@@ -401,278 +525,6 @@ function PredictionsTab({ game }) {
   );
 }
 
-function H2HTab({ game }) {
-  const h2h = game.head_to_head || game.h2h || null;
-  const awayLabel = game.away_team_form?.team_name || 'Away';
-  const homeLabel = game.home_team_form?.team_name || 'Home';
-
-  if (!h2h) {
-    return (
-      <div className="tab-content h2h-tab">
-        <div className="empty-state">
-          <Users size={48} />
-          <p>No head-to-head history available. Sync historical data to populate matchup records.</p>
-        </div>
-      </div>
-    );
-  }
-
-  const homeId = game.home_team_form?.team_id ?? game.home_team?.id;
-  const team1IsHome = h2h.team1_id === homeId;
-  const label1 = team1IsHome ? homeLabel : awayLabel;
-  const label2 = team1IsHome ? awayLabel : homeLabel;
-
-  return (
-    <div className="tab-content h2h-tab">
-      <div className="h2h-summary">
-        <div className="h2h-summary-grid">
-          {h2h.games_played != null && (
-            <div className="h2h-stat-box">
-              <span className="h2h-stat-value">{h2h.games_played}</span>
-              <span className="h2h-stat-label">Games Played</span>
-            </div>
-          )}
-          {h2h.team1_wins != null && (
-            <div className="h2h-stat-box">
-              <span className="h2h-stat-value">{h2h.team1_wins}</span>
-              <span className="h2h-stat-label">{label1} Wins</span>
-            </div>
-          )}
-          {h2h.team2_wins != null && (
-            <div className="h2h-stat-box">
-              <span className="h2h-stat-value">{h2h.team2_wins}</span>
-              <span className="h2h-stat-label">{label2} Wins</span>
-            </div>
-          )}
-          {h2h.team1_goals != null && h2h.team2_goals != null && h2h.games_played > 0 && (
-            <>
-              <div className="h2h-stat-box">
-                <span className="h2h-stat-value">
-                  {((h2h.team1_goals + h2h.team2_goals) / h2h.games_played).toFixed(1)}
-                </span>
-                <span className="h2h-stat-label">Avg Total Goals</span>
-              </div>
-              <div className="h2h-stat-box">
-                <span className="h2h-stat-value">
-                  {(h2h.team1_goals / h2h.games_played).toFixed(1)} - {(h2h.team2_goals / h2h.games_played).toFixed(1)}
-                </span>
-                <span className="h2h-stat-label">Avg Goals ({label1} - {label2})</span>
-              </div>
-            </>
-          )}
-          {h2h.last_meeting && (
-            <div className="h2h-stat-box">
-              <span className="h2h-stat-value">{h2h.last_meeting}</span>
-              <span className="h2h-stat-label">Last Meeting</span>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function FormTab({ game }) {
-  const awayForm = game.away_recent_games || game.away_form || game.away_recent || [];
-  const homeForm = game.home_recent_games || game.home_form || game.home_recent || [];
-  const awayTeamLabel = game.away_team_form?.team_name || teamName(game.away_team, 'Away');
-  const homeTeamLabel = game.home_team_form?.team_name || teamName(game.home_team, 'Home');
-
-  const renderFormList = (form, label) => {
-    if (!form || form.length === 0) {
-      return (
-        <div className="empty-state-small">
-          <p>No recent form data for {label}. Sync historical data to populate.</p>
-        </div>
-      );
-    }
-
-    const last5 = form.slice(0, 5);
-    const last10 = form.slice(0, 10);
-    const last20 = form.slice(0, 20);
-
-    const calcRecord = (games) => {
-      const wins = games.filter((g) => g.result === 'W').length;
-      const losses = games.filter((g) => g.result === 'L').length;
-      const otl = games.filter((g) => g.result === 'OTL').length;
-      return `${wins}-${losses}${otl > 0 ? `-${otl}` : ''}`;
-    };
-
-    const calcAvgGoals = (games) => {
-      if (games.length === 0) return '0.0';
-      const total = games.reduce((sum, g) => sum + (g.goals_for || 0), 0);
-      return (total / games.length).toFixed(1);
-    };
-
-    const calcAvgGA = (games) => {
-      if (games.length === 0) return '0.0';
-      const total = games.reduce((sum, g) => sum + (g.goals_against || 0), 0);
-      return (total / games.length).toFixed(1);
-    };
-
-    return (
-      <div className="form-section">
-        <div className="form-summary-grid">
-          {last5.length > 0 && (
-            <div className="form-period">
-              <span className="form-period-label">Last 5</span>
-              <span className="form-period-record">{calcRecord(last5)}</span>
-              <span className="form-period-goals">{calcAvgGoals(last5)} GF/G | {calcAvgGA(last5)} GA/G</span>
-            </div>
-          )}
-          {last10.length >= 6 && (
-            <div className="form-period">
-              <span className="form-period-label">Last 10</span>
-              <span className="form-period-record">{calcRecord(last10)}</span>
-              <span className="form-period-goals">{calcAvgGoals(last10)} GF/G | {calcAvgGA(last10)} GA/G</span>
-            </div>
-          )}
-          {last20.length >= 11 && (
-            <div className="form-period">
-              <span className="form-period-label">Last 20</span>
-              <span className="form-period-record">{calcRecord(last20)}</span>
-              <span className="form-period-goals">{calcAvgGoals(last20)} GF/G | {calcAvgGA(last20)} GA/G</span>
-            </div>
-          )}
-        </div>
-
-        <div className="form-results-strip">
-          {[...last10].reverse().map((g, i) => {
-            const resultClass =
-              g.result === 'W'
-                ? 'result-win'
-                : g.result === 'OTL'
-                  ? 'result-otl'
-                  : 'result-loss';
-            const title = `${g.result} ${g.score_display || ''} ${g.home_away === 'home' ? 'vs' : '@'} ${g.opponent_abbrev || ''}${g.overtime ? ' (OT)' : ''}`;
-            return (
-              <div key={i} className={`form-result-dot ${resultClass}`} title={title}>
-                {g.result}
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Recent Games Table */}
-        <div className="form-games-table">
-          <div className="form-games-header">
-            <span>Date</span>
-            <span>Opp</span>
-            <span>Score</span>
-            <span>Result</span>
-          </div>
-          {last10.map((g, i) => {
-            const resultClass =
-              g.result === 'W' ? 'result-win' : g.result === 'OTL' ? 'result-otl' : 'result-loss';
-            return (
-              <div key={i} className="form-games-row">
-                <span className="form-game-date">{g.game_date}</span>
-                <span className="form-game-opp">
-                  {g.home_away === 'away' ? '@' : 'vs'} {g.opponent_abbrev}
-                </span>
-                <span className="form-game-score">{g.score_display}{g.overtime ? ' OT' : ''}</span>
-                <span className={`form-game-result ${resultClass}`}>{g.result}</span>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    );
-  };
-
-  return (
-    <div className="tab-content form-tab">
-      <div className="form-teams-grid">
-        <div className="form-team-section">
-          <h3 className="form-team-title">{awayTeamLabel}</h3>
-          {renderFormList(awayForm, awayTeamLabel)}
-        </div>
-        <div className="form-team-section">
-          <h3 className="form-team-title">{homeTeamLabel}</h3>
-          {renderFormList(homeForm, homeTeamLabel)}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function PeriodsTab({ game }) {
-  const homePeriod = game.home_period_scoring || {};
-  const awayPeriod = game.away_period_scoring || {};
-  const hasPeriodData = homePeriod.period_1_avg != null || awayPeriod.period_1_avg != null;
-  const periodData = hasPeriodData ? [
-    { period: '1st', away: awayPeriod.period_1_avg, home: homePeriod.period_1_avg },
-    { period: '2nd', away: awayPeriod.period_2_avg, home: homePeriod.period_2_avg },
-    { period: '3rd', away: awayPeriod.period_3_avg, home: homePeriod.period_3_avg },
-  ] : (game.period_analysis || game.period_scoring || game.periods || null);
-  const awayTeamLabel = game.away_team_form?.team_name || teamName(game.away_team, 'Away');
-  const homeTeamLabel = game.home_team_form?.team_name || teamName(game.home_team, 'Home');
-
-  if (!periodData) {
-    return (
-      <div className="tab-content">
-        <div className="empty-state">
-          <Layers size={48} />
-          <p>No period analysis data available.</p>
-        </div>
-      </div>
-    );
-  }
-
-  const periods = Array.isArray(periodData)
-    ? periodData
-    : [
-        { period: '1st', away: periodData.first?.away || periodData.p1_away, home: periodData.first?.home || periodData.p1_home },
-        { period: '2nd', away: periodData.second?.away || periodData.p2_away, home: periodData.second?.home || periodData.p2_home },
-        { period: '3rd', away: periodData.third?.away || periodData.p3_away, home: periodData.third?.home || periodData.p3_home },
-      ];
-
-  return (
-    <div className="tab-content periods-tab">
-      <h3 className="subsection-title">Period-by-Period Scoring Averages</h3>
-      <div className="periods-table">
-        <div className="periods-table-header">
-          <span>Period</span>
-          <span>{awayTeamLabel}</span>
-          <span>{homeTeamLabel}</span>
-        </div>
-        {periods.map((p, index) => {
-          const periodLabel = p.period || p.label || `Period ${index + 1}`;
-          const awayVal = p.away ?? p.away_goals ?? p.away_avg ?? '-';
-          const homeVal = p.home ?? p.home_goals ?? p.home_avg ?? '-';
-
-          return (
-            <div className="periods-table-row" key={index}>
-              <span className="period-label">{periodLabel}</span>
-              <span className="period-value">{typeof awayVal === 'number' ? awayVal.toFixed(2) : awayVal}</span>
-              <span className="period-value">{typeof homeVal === 'number' ? homeVal.toFixed(2) : homeVal}</span>
-            </div>
-          );
-        })}
-      </div>
-
-      {(periodData.over_rate || periodData.scoring_patterns) && (
-        <div className="period-insights">
-          <h3 className="subsection-title">Scoring Patterns</h3>
-          <div className="insights-grid">
-            {periodData.over_rate && (
-              <div className="insight-card">
-                <Activity size={18} />
-                <span>Over Rate: {periodData.over_rate}%</span>
-              </div>
-            )}
-            {periodData.first_period_over_rate && (
-              <div className="insight-card">
-                <Activity size={18} />
-                <span>1st Period Scoring Rate: {periodData.first_period_over_rate}%</span>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
 
 function formatPeriodLabel(game) {
   const period = game.period;
@@ -777,12 +629,6 @@ function GameDetail() {
         return <OverviewTab game={game} />;
       case 'predictions':
         return <PredictionsTab game={game} />;
-      case 'h2h':
-        return <H2HTab game={game} />;
-      case 'form':
-        return <FormTab game={game} />;
-      case 'periods':
-        return <PeriodsTab game={game} />;
       default:
         return <OverviewTab game={game} />;
     }

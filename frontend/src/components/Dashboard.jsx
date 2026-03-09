@@ -169,7 +169,7 @@ function Dashboard() {
   // Sequential requests to avoid DB pool exhaustion.
   const autoTrackedRef = useRef(new Set());
   useEffect(() => {
-    const picks = games
+    const picks = prematchGames
       .map((g) => g.top_pick)
       .filter((p) => p && p.prediction_id && !autoTrackedRef.current.has(p.prediction_id));
     if (!picks.length) return;
@@ -189,7 +189,7 @@ function Dashboard() {
         }
       }
     })();
-  }, [games]);
+  }, [prematchGames]);
 
   const handleRegenerate = useCallback(async () => {
     if (regeneratingRef.current) return;

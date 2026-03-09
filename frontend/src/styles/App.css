@@ -1463,6 +1463,44 @@ a:hover {
   font-weight: 500;
 }
 
+/* ─── Overview: H2H Section ────────────────────────────────── */
+.overview-h2h-section {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-primary);
+}
+
+/* ─── Overview: Form Section ───────────────────────────────── */
+.overview-form-section {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-primary);
+}
+
+.overview-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.overview-form-team {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.overview-form-team-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.overview-form-record {
+  font-size: 0.78rem;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}
+
 /* ─── Predictions Tab ───────────────────────────────────────── */
 /* ─── Prediction Sections ──────────────────────────────────── */
 .predictions-section {
@@ -1691,6 +1729,70 @@ a:hover {
   font-size: 0.82rem;
   color: var(--text-muted);
   line-height: 1.6;
+}
+
+.reasoning-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.reasoning-bullet {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.reasoning-bullet::before {
+  content: '•';
+  color: var(--text-dim);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.reasoning-team-tag {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--accent-blue);
+  background: rgba(79, 195, 247, 0.1);
+  padding: 1px 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  text-transform: uppercase;
+}
+
+.reasoning-tooltip-trigger {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-dim);
+  cursor: help;
+  margin-left: 2px;
+  flex-shrink: 0;
+}
+
+.reasoning-tooltip-popup {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-card);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  width: 260px;
+  z-index: 100;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
 }
 
 .outcome-win {
