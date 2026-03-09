@@ -190,7 +190,7 @@ class SignalGenerator:
                 reason_text = "; ".join(reasons) if reasons else "uncertain"
                 signals.append(_signal(
                     "goalie",
-                    f"Starter status unconfirmed — goalie edge discounted",
+                    f"Starter status unconfirmed | goalie edge discounted",
                     "neutral", abbr,
                     0.55 if level == "low" else 0.40,
                     icon="warning",
@@ -653,7 +653,7 @@ class SignalGenerator:
         if features.get("is_divisional", False):
             signals.append(_signal(
                 "matchup",
-                "Divisional matchup — historically tighter games",
+                "Divisional matchup | historically tighter games",
                 "neutral", "",
                 0.30,
             ))
@@ -813,7 +813,7 @@ class SignalGenerator:
             elif p1_rate <= 0.30 and games >= 10:
                 signals.append(_signal(
                     "periods",
-                    f"{name} slow starters — score first in only {p1_rate:.0%} of games",
+                    f"{name} slow starters | score first in only {p1_rate:.0%} of games",
                     "negative", abbr, 0.35,
                 ))
 
