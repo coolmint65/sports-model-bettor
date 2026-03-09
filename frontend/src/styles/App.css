@@ -1,6 +1,6 @@
 /* ============================================================
-   Sports Betting Model - Dark Theme CSS
-   Professional sports analytics platform styling
+   MintPicks V2 - Dark Theme CSS
+   Sports analytics platform styling
    ============================================================ */
 
 /* ─── CSS Variables / Design Tokens ─────────────────────────── */
@@ -99,12 +99,18 @@ a:hover {
   flex-direction: column;
 }
 
+.app-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
 .main-content {
   flex: 1;
-  max-width: 1400px;
+  max-width: 1200px;
   width: 100%;
-  margin: 0 auto;
   padding: 24px 28px 60px;
+  min-width: 0;
 }
 
 /* ─── Navbar ────────────────────────────────────────────────── */
@@ -147,15 +153,26 @@ a:hover {
 }
 
 .brand-icon {
-  color: var(--accent-gold);
+  color: var(--accent-green);
   flex-shrink: 0;
 }
 
 .brand-text {
-  background: linear-gradient(135deg, var(--accent-gold), var(--accent-orange));
+  background: linear-gradient(135deg, var(--accent-green), #4fc3f7);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+}
+
+.brand-version {
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: var(--accent-green);
+  background: rgba(0, 255, 136, 0.12);
+  padding: 1px 6px;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+  align-self: center;
 }
 
 .navbar-links {
@@ -440,6 +457,17 @@ a:hover {
 
 .dashboard-header {
   margin-bottom: 32px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.dashboard-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .dashboard-title-section {
@@ -3115,8 +3143,539 @@ a:hover {
   .game-card,
   .prediction-card,
   .history-stat-card,
-  .best-bet-card {
+  .best-bet-card,
+  .pick-card {
     border-color: #ccc;
     break-inside: avoid;
+  }
+
+  .sports-sidebar {
+    display: none;
+  }
+
+  .sport-page-tabs {
+    flex-wrap: wrap;
+  }
+}
+
+/* ============================================================
+   MintPicks V2 - New Components
+   ============================================================ */
+
+/* ─── Sports Sidebar ───────────────────────────────────────── */
+.sports-sidebar {
+  width: 200px;
+  min-width: 200px;
+  background: var(--bg-navbar);
+  border-right: 1px solid var(--border-primary);
+  padding: 20px 0;
+  position: sticky;
+  top: 64px;
+  height: calc(100vh - 64px);
+  overflow-y: auto;
+}
+
+.sidebar-header {
+  padding: 0 16px 12px;
+  border-bottom: 1px solid var(--border-primary);
+  margin-bottom: 8px;
+}
+
+.sidebar-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 8px;
+}
+
+.sidebar-sport-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-decoration: none;
+  transition: all var(--transition-fast);
+  position: relative;
+}
+
+.sidebar-sport-link:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+}
+
+.sidebar-sport-active {
+  background: var(--accent-green-bg);
+  color: var(--accent-green);
+  font-weight: 600;
+}
+
+.sidebar-sport-active:hover {
+  background: var(--accent-green-bg);
+  color: var(--accent-green);
+}
+
+.sidebar-sport-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.sidebar-sport-disabled:hover {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.sidebar-sport-icon {
+  font-size: 1.2rem;
+  width: 24px;
+  text-align: center;
+}
+
+.sidebar-sport-label {
+  flex: 1;
+}
+
+.sidebar-coming-soon {
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.05);
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+/* ─── Sport Page Tabs ──────────────────────────────────────── */
+.sport-page {
+  animation: fadeIn 0.4s ease;
+}
+
+.sport-page-tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+  padding: 4px;
+  border: 1px solid var(--border-primary);
+  margin-bottom: 24px;
+}
+
+.sport-tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: 1;
+  padding: 10px 16px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  font-family: var(--font-sans);
+}
+
+.sport-tab:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.sport-tab-active {
+  background: var(--bg-card);
+  color: var(--accent-green);
+  box-shadow: var(--shadow-sm);
+}
+
+.sport-tab-active:hover {
+  background: var(--bg-card);
+  color: var(--accent-green);
+}
+
+.sport-page-content {
+  /* content area */
+}
+
+.coming-soon-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 80px 24px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.coming-soon-section svg {
+  opacity: 0.3;
+}
+
+.coming-soon-section h2 {
+  font-size: 1.3rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.coming-soon-section p {
+  font-size: 0.9rem;
+}
+
+/* ─── Pick Cards (Buddy's Analysis Style) ──────────────────── */
+.pick-cards-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.pick-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  transition: all var(--transition-base);
+  animation: fadeIn 0.3s ease;
+}
+
+.pick-card:hover {
+  border-color: var(--border-secondary);
+  box-shadow: var(--shadow-md);
+}
+
+.pick-card.tier-high {
+  border-color: rgba(0, 255, 136, 0.3);
+  box-shadow: 0 0 12px rgba(0, 255, 136, 0.06);
+}
+
+.pick-card.tier-high:hover {
+  border-color: rgba(0, 255, 136, 0.5);
+  box-shadow: 0 0 20px rgba(0, 255, 136, 0.1);
+}
+
+.pick-card.tier-medium {
+  border-color: rgba(79, 195, 247, 0.25);
+}
+
+.pick-card.tier-low {
+  border-color: rgba(255, 215, 0, 0.2);
+}
+
+/* Confidence tier banner */
+.pick-card-tier {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 0;
+  background: rgba(0, 255, 136, 0.06);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--accent-green);
+  border-bottom: 1px solid rgba(0, 255, 136, 0.12);
+}
+
+.tier-medium .pick-card-tier {
+  background: rgba(79, 195, 247, 0.06);
+  color: var(--accent-blue);
+  border-color: rgba(79, 195, 247, 0.12);
+}
+
+.tier-low .pick-card-tier {
+  background: rgba(255, 215, 0, 0.06);
+  color: var(--accent-gold);
+  border-color: rgba(255, 215, 0, 0.12);
+}
+
+.tier-spec .pick-card-tier {
+  background: rgba(255, 82, 82, 0.06);
+  color: var(--accent-red);
+  border-color: rgba(255, 82, 82, 0.12);
+}
+
+/* Card body */
+.pick-card-body {
+  padding: 16px 20px;
+  cursor: pointer;
+}
+
+/* Matchup header */
+.pick-card-matchup {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.pick-card-teams {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pick-card-team-names {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pick-matchup-text {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.pick-game-time {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.pick-card-confidence {
+  font-size: 1.6rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+
+/* Selection / Pick */
+.pick-card-selection {
+  margin-bottom: 12px;
+}
+
+.pick-card-badges {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+
+.pick-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.pick-badge-type {
+  background: rgba(79, 195, 247, 0.12);
+  color: var(--accent-blue);
+  border: 1px solid rgba(79, 195, 247, 0.25);
+}
+
+.pick-badge-odds {
+  background: rgba(255, 215, 0, 0.08);
+  color: var(--accent-gold);
+  border: 1px solid rgba(255, 215, 0, 0.2);
+  font-family: var(--font-mono);
+}
+
+.pick-card-value {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+/* Reason tags (quick preview) */
+.pick-card-reason-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.pick-reason-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: rgba(0, 255, 136, 0.06);
+  border: 1px solid rgba(0, 255, 136, 0.12);
+  border-radius: 20px;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pick-reason-tag svg {
+  color: var(--accent-green);
+  flex-shrink: 0;
+}
+
+/* Expand button */
+.pick-card-expand-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 6px 0;
+  transition: color var(--transition-fast);
+  font-family: var(--font-sans);
+}
+
+.pick-card-expand-btn:hover {
+  color: var(--text-secondary);
+}
+
+.pick-card-expand-btn svg:first-child {
+  color: var(--accent-green);
+}
+
+/* Analysis section */
+.pick-card-analysis {
+  padding: 12px 0;
+  border-top: 1px solid var(--border-primary);
+  margin-top: 8px;
+  animation: fadeIn 0.2s ease;
+}
+
+.pick-analysis-list {
+  list-style: none;
+  counter-reset: analysis;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0;
+  margin: 0;
+}
+
+.pick-analysis-list li {
+  counter-increment: analysis;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.pick-analysis-list li::before {
+  content: counter(analysis);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--bg-tertiary);
+  color: var(--accent-green);
+  font-size: 0.75rem;
+  font-weight: 700;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+/* No pick fallback */
+.pick-card-no-pick {
+  padding: 8px 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+/* Odds bar at bottom */
+.pick-card-odds-bar {
+  display: flex;
+  gap: 0;
+  border-top: 1px solid var(--border-primary);
+  background: rgba(0, 0, 0, 0.15);
+  padding: 8px 20px;
+  font-size: 0.78rem;
+}
+
+.pick-odds-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+
+.pick-odds-label {
+  color: var(--text-dim);
+  font-weight: 700;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  min-width: 24px;
+}
+
+.pick-odds-values {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.pick-odds-sep {
+  color: var(--text-dim);
+  margin: 0 4px;
+}
+
+/* ─── Responsive: Sidebar ──────────────────────────────────── */
+@media (max-width: 900px) {
+  .sports-sidebar {
+    display: none;
+  }
+}
+
+@media (max-width: 600px) {
+  .sport-page-tabs {
+    flex-wrap: wrap;
+  }
+
+  .sport-tab {
+    font-size: 0.78rem;
+    padding: 8px 12px;
+  }
+
+  .pick-card-matchup {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .pick-card-confidence {
+    font-size: 1.3rem;
+  }
+
+  .pick-card-odds-bar {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .pick-card-reason-tags {
+    flex-direction: column;
+  }
+
+  .pick-reason-tag {
+    max-width: 100%;
   }
 }

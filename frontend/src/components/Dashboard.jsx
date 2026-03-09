@@ -1,15 +1,14 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { Calendar, TrendingUp, Radio } from 'lucide-react';
+import { Calendar, Radio, RefreshCw } from 'lucide-react';
 import { format } from 'date-fns';
-import BestBets from './BestBets';
 import GameCard from './GameCard';
-import { fetchTodaySchedule, fetchLiveGames } from '../utils/api';
+import { fetchTodaySchedule, fetchLiveGames, regeneratePredictions } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import { useWebSocketEvent } from '../hooks/useWebSocket';
 import { isLiveStatus } from '../utils/teams';
 
-const LIVE_POLL_INTERVAL = 5_000; // 5 seconds when live
-const IDLE_POLL_INTERVAL = 60_000; // 1 minute when no live games
+const LIVE_POLL_INTERVAL = 5_000;
+const IDLE_POLL_INTERVAL = 60_000;
 
 function Dashboard() {
   const {
@@ -20,6 +19,9 @@ function Dashboard() {
   } = useApi(fetchTodaySchedule);
 
   const [liveGames, setLiveGames] = useState([]);
+  const [regenerating, setRegenerating] = useState(false);
+  const [regenMessage, setRegenMessage] = useState('');
+  const regeneratingRef = useRef(false);
 
   const pollLive = useCallback(async () => {
     try {
@@ -27,11 +29,10 @@ function Dashboard() {
       const games = res?.data?.games || res?.data || [];
       setLiveGames(games);
     } catch {
-      // Silently fail — live section just won't show
+      // Silently fail
     }
   }, []);
 
-  // Instantly refetch when WebSocket pushes odds or predictions updates
   useWebSocketEvent('odds_update', useCallback(() => {
     silentRefetch();
     pollLive();
@@ -44,11 +45,8 @@ function Dashboard() {
   const today = format(new Date(), 'EEEE, MMMM d, yyyy');
   const rawGames = scheduleData?.games || scheduleData || [];
 
-  // Cache prematch top_pick/top_prop so they persist even if a schedule
-  // refresh temporarily loses them (race condition during live games).
   const prematchPickCache = useRef(new Map());
   const games = useMemo(() => {
-    // Prune stale cache entries for games no longer in today's schedule
     const currentGameIds = new Set(
       rawGames.map((g) => g.id || g.game_id).filter(Boolean)
     );
@@ -63,7 +61,6 @@ function Dashboard() {
       const gid = g.id || g.game_id;
       if (!gid) return g;
 
-      // Store picks whenever the schedule provides them
       if (g.top_pick) {
         prematchPickCache.current.set(`${gid}:pick`, g.top_pick);
       }
@@ -71,7 +68,6 @@ function Dashboard() {
         prematchPickCache.current.set(`${gid}:prop`, g.top_prop);
       }
 
-      // If picks are missing, restore from cache
       const cachedPick = prematchPickCache.current.get(`${gid}:pick`);
       const cachedProp = prematchPickCache.current.get(`${gid}:prop`);
 
@@ -88,8 +84,6 @@ function Dashboard() {
   const todayHasLive = games.some((g) => isLiveStatus(g.status));
   const hasAnyLive = liveGames.length > 0 || todayHasLive;
 
-  // Always poll — faster when live, slower when idle.
-  // This replaces the manual sync-only model.
   const intervalRef = useRef(null);
   useEffect(() => {
     pollLive();
@@ -108,17 +102,12 @@ function Dashboard() {
     };
   }, [hasAnyLive, silentRefetch, pollLive]);
 
-  // Also refresh immediately on manual sync
   useEffect(() => {
     const onSynced = () => silentRefetch();
     window.addEventListener('data-synced', onSynced);
     return () => window.removeEventListener('data-synced', onSynced);
   }, [silentRefetch]);
 
-  // Build a lookup of live game data (from /schedule/live which has
-  // the freshest odds via live odds sync).  Prefer this data over
-  // /schedule/today for live games so odds timestamps stay current.
-  // Preserve top_pick from schedule data if live data doesn't have one.
   const liveGameMap = new Map();
   const scheduleMap = new Map();
   for (const g of games) {
@@ -144,8 +133,6 @@ function Dashboard() {
     (g) => !todayGameIds.has(g.id) && !todayGameIds.has(g.game_id)
   );
 
-  // For live games in today's schedule, prefer the /schedule/live data
-  // which carries freshly-synced odds.
   const allLive = [
     ...games
       .filter((g) => isLiveStatus(g.status))
@@ -153,25 +140,62 @@ function Dashboard() {
     ...extraLiveGames,
   ];
 
+  // Prematch games only (not live, not final)
+  const prematchGames = games.filter((g) => {
+    const status = (g.status || '').toLowerCase();
+    return !isLiveStatus(status) && status !== 'final' && status !== 'completed' && status !== 'off';
+  });
+
+  const handleRegenerate = useCallback(async () => {
+    if (regeneratingRef.current) return;
+    regeneratingRef.current = true;
+    setRegenerating(true);
+    setRegenMessage('Syncing schedule & odds...');
+    try {
+      const resp = await regeneratePredictions();
+      const count = resp.data?.predictions_generated ?? 0;
+      const msg = count > 0
+        ? `Regenerated ${count} predictions`
+        : 'No predictions generated (check data sync)';
+      setRegenMessage(msg);
+      await silentRefetch();
+      window.dispatchEvent(new Event('data-synced'));
+      setTimeout(() => setRegenMessage(''), 6000);
+    } catch (err) {
+      const detail = err?.response?.data?.detail || err?.message || '';
+      setRegenMessage(`Regeneration failed${detail ? `: ${detail}` : ''}`);
+      setTimeout(() => setRegenMessage(''), 6000);
+    } finally {
+      regeneratingRef.current = false;
+      setRegenerating(false);
+    }
+  }, [silentRefetch]);
+
   return (
     <div className="dashboard">
       <div className="dashboard-header">
         <div className="dashboard-title-section">
-          <h1 className="dashboard-title">
-            <TrendingUp size={28} />
-            Today's Action
-          </h1>
+          <h1 className="dashboard-title">Today's Action</h1>
           <p className="dashboard-date">
             <Calendar size={16} />
             {today}
           </p>
         </div>
+        <div className="dashboard-actions">
+          <button
+            className="btn btn-regen"
+            onClick={handleRegenerate}
+            disabled={regenerating}
+            title="Sync schedule, fetch latest odds, and regenerate all predictions"
+          >
+            <RefreshCw size={14} className={regenerating ? 'spin' : ''} />
+            {regenerating ? (regenMessage || 'Regenerating...') : 'Regenerate'}
+          </button>
+          {regenMessage && !regenerating && (
+            <span className="regen-message">{regenMessage}</span>
+          )}
+        </div>
       </div>
-
-      {/* Best Bets Section */}
-      <section className="section">
-        <BestBets />
-      </section>
 
       {/* Live Games Section */}
       {allLive.length > 0 && (
@@ -198,7 +222,7 @@ function Dashboard() {
         <div className="section-header">
           <h2 className="section-title">Today's Schedule</h2>
           <span className="game-count">
-            {games.length} {games.length === 1 ? 'Game' : 'Games'}
+            {prematchGames.length} {prematchGames.length === 1 ? 'Game' : 'Games'}
           </span>
         </div>
 
@@ -215,16 +239,16 @@ function Dashboard() {
           </div>
         )}
 
-        {!scheduleLoading && !scheduleError && games.length === 0 && (
+        {!scheduleLoading && !scheduleError && prematchGames.length === 0 && (
           <div className="empty-state">
             <Calendar size={48} />
-            <p>No games scheduled for today</p>
+            <p>No upcoming games scheduled for today</p>
           </div>
         )}
 
-        {!scheduleLoading && !scheduleError && games.length > 0 && (
-          <div className="games-grid">
-            {games.map((game) => (
+        {!scheduleLoading && !scheduleError && prematchGames.length > 0 && (
+          <div className="pick-cards-list">
+            {prematchGames.map((game) => (
               <GameCard key={game.game_id || game.id} game={game} section="schedule" />
             ))}
           </div>
