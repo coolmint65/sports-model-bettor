@@ -29,14 +29,6 @@ from app.models.team import Team, TeamStats
 # ---------------------------------------------------------------------------
 
 
-class HealthResponse(BaseModel):
-    status: str
-    app_name: str
-    version: str
-    sport: str
-    timestamp: str
-
-
 class TeamResponse(BaseModel):
     id: int
     external_id: str

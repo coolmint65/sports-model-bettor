@@ -52,13 +52,16 @@ async def get_team_injuries(
     result = await db.execute(stmt)
     injuries = result.scalars().all()
 
-    # Get player names
+    # Batch-load players to avoid N+1 queries
+    player_ids = {inj.player_id for inj in injuries if inj.player_id}
+    players_by_id = {}
+    if player_ids:
+        p_result = await db.execute(select(Player).where(Player.id.in_(player_ids)))
+        players_by_id = {p.id: p for p in p_result.scalars().all()}
+
     injury_list = []
     for inj in injuries:
-        player_stmt = select(Player).where(Player.id == inj.player_id)
-        p_result = await db.execute(player_stmt)
-        player = p_result.scalars().first()
-
+        player = players_by_id.get(inj.player_id)
         injury_list.append({
             "player_name": player.name if player else "Unknown",
             "player_id": inj.player_id,
