@@ -204,12 +204,31 @@ class BettingModel:
             home_xg = home_xg * (1 - h2h_goal_adj) + h2h_home_goals * h2h_goal_adj
             away_xg = away_xg * (1 - h2h_goal_adj) + h2h_away_goals * h2h_goal_adj
 
-        # ---- Goalie quality adjustment ----
+        # ---- Goalie quality adjustment (with starter confidence discount) ----
         away_goalie = features.get("away_goalie", {})
         home_goalie = features.get("home_goalie", {})
+        home_starter_conf = features.get("home_starter_status", {}).get("starter_confidence", 1.0)
+        away_starter_conf = features.get("away_starter_status", {}).get("starter_confidence", 1.0)
 
+        # Apply goalie adjustment but scale by starter confidence
+        home_xg_before = home_xg
         home_xg = self._apply_goalie_adjustment(home_xg, away_goalie)
+        goalie_delta = home_xg - home_xg_before
+        home_xg = home_xg_before + goalie_delta * away_starter_conf
+
+        away_xg_before = away_xg
         away_xg = self._apply_goalie_adjustment(away_xg, home_goalie)
+        goalie_delta = away_xg - away_xg_before
+        away_xg = away_xg_before + goalie_delta * home_starter_conf
+
+        # ---- Goalie tier mismatch ----
+        home_tier = home_goalie.get("tier_rank", 2)
+        away_tier = away_goalie.get("tier_rank", 2)
+        tier_diff = home_tier - away_tier  # positive = home has better goalie
+        if abs(tier_diff) >= 1:
+            mismatch_adj = tier_diff * _mc.goalie_mismatch_factor
+            away_xg *= (1.0 - mismatch_adj * 0.5)
+            home_xg *= (1.0 + mismatch_adj * 0.5)
 
         # ---- Home/away splits adjustment ----
         home_splits = features.get("home_splits", {})
@@ -399,6 +418,30 @@ class BettingModel:
             away_sh_pct = away_advanced.get("shooting_pct", 8.0)
             sh_deviation = (away_sh_pct - 8.0) / 100.0
             away_xg *= 1.0 + sh_deviation * _mc.shot_quality_factor
+
+        # ---- 5v5 Even-strength possession adjustment ----
+        # True 5v5 Corsi from MoneyPuck is more predictive than our
+        # all-situations Corsi proxy since it filters out PP/PK noise.
+        home_ev = features.get("home_ev_possession", {})
+        away_ev = features.get("away_ev_possession", {})
+        if home_ev.get("games_found", 0) >= _mc.ev_corsi_min_games:
+            ev_deviation = (home_ev.get("ev_cf_pct", 50.0) - 50.0) / 100.0
+            home_xg *= 1.0 + ev_deviation * _mc.ev_corsi_factor
+        if away_ev.get("games_found", 0) >= _mc.ev_corsi_min_games:
+            ev_deviation = (away_ev.get("ev_cf_pct", 50.0) - 50.0) / 100.0
+            away_xg *= 1.0 + ev_deviation * _mc.ev_corsi_factor
+
+        # ---- Close-game possession adjustment ----
+        # CF% in close games (1-goal margin / OT) filters out score effects
+        # from blowouts and is a better predictor of sustained quality.
+        home_close = features.get("home_close_possession", {})
+        away_close = features.get("away_close_possession", {})
+        if home_close.get("close_games_found", 0) >= _mc.close_game_min_games:
+            close_dev = (home_close.get("close_cf_pct", 50.0) - 50.0) / 100.0
+            home_xg *= 1.0 + close_dev * _mc.close_game_corsi_factor
+        if away_close.get("close_games_found", 0) >= _mc.close_game_min_games:
+            close_dev = (away_close.get("close_cf_pct", 50.0) - 50.0) / 100.0
+            away_xg *= 1.0 + close_dev * _mc.close_game_corsi_factor
 
         # ---- PDO regression (luck adjustment) ----
         # PDO = shooting% + save%. League average is ~1.000.
@@ -1670,7 +1713,144 @@ class BettingModel:
                     4,
                 )
 
+        # Compute composite edge score for each prediction
+        for pred in predictions:
+            pred["composite_edge"] = self.compute_composite_edge(features, pred)
+
         # Sort by confidence descending
         predictions.sort(key=lambda p: p["confidence"], reverse=True)
 
         return predictions
+
+    # ------------------------------------------------------------------ #
+    #  Composite edge score                                               #
+    # ------------------------------------------------------------------ #
+
+    def compute_composite_edge(
+        self,
+        features: Dict[str, Any],
+        prediction: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Compute a composite edge score (0-100) aggregating all factors.
+
+        Each component is normalized to 0-1, then weighted and summed
+        to produce a single signal-strength metric.
+        """
+        pred_team = prediction.get("prediction", "")
+        home_abbr = features.get("home_team_abbr", "")
+        is_home_pick = pred_team == home_abbr
+
+        scores: Dict[str, float] = {}
+
+        # Form: compare L5 win rates
+        home_wr = features.get("home_form_5", {}).get("win_rate", 0.5)
+        away_wr = features.get("away_form_5", {}).get("win_rate", 0.5)
+        if is_home_pick:
+            scores["form"] = min(1.0, max(0.0, (home_wr - away_wr + 1.0) / 2.0))
+        else:
+            scores["form"] = min(1.0, max(0.0, (away_wr - home_wr + 1.0) / 2.0))
+
+        # Goalie: tier advantage
+        home_tier = features.get("home_goalie", {}).get("tier_rank", 2)
+        away_tier = features.get("away_goalie", {}).get("tier_rank", 2)
+        tier_diff = (home_tier - away_tier) if is_home_pick else (away_tier - home_tier)
+        scores["goalie"] = min(1.0, max(0.0, (tier_diff + 2.0) / 4.0))
+
+        # 5v5 Possession
+        home_ev = features.get("home_ev_possession", {}).get("ev_cf_pct", 50.0)
+        away_ev = features.get("away_ev_possession", {}).get("ev_cf_pct", 50.0)
+        my_ev = home_ev if is_home_pick else away_ev
+        scores["possession"] = min(1.0, max(0.0, (my_ev - 45.0) / 10.0))
+
+        # Close-game possession
+        home_close = features.get("home_close_possession", {}).get("close_cf_pct", 50.0)
+        away_close = features.get("away_close_possession", {}).get("close_cf_pct", 50.0)
+        my_close = home_close if is_home_pick else away_close
+        scores["close_possession"] = min(1.0, max(0.0, (my_close - 45.0) / 10.0))
+
+        # Special teams
+        home_pp = features.get("home_special_teams", {}).get("pp_pct", 20.0)
+        away_pk = features.get("away_special_teams", {}).get("pk_pct", 80.0)
+        away_pp = features.get("away_special_teams", {}).get("pp_pct", 20.0)
+        home_pk = features.get("home_special_teams", {}).get("pk_pct", 80.0)
+        if is_home_pick:
+            st_edge = (home_pp - 20.0) + (home_pk - 80.0) - (away_pp - 20.0) - (away_pk - 80.0)
+        else:
+            st_edge = (away_pp - 20.0) + (away_pk - 80.0) - (home_pp - 20.0) - (home_pk - 80.0)
+        scores["special_teams"] = min(1.0, max(0.0, (st_edge + 10.0) / 20.0))
+
+        # Schedule (rest advantage, B2B)
+        my_sched = features.get("home_schedule" if is_home_pick else "away_schedule", {})
+        opp_sched = features.get("away_schedule" if is_home_pick else "home_schedule", {})
+        sched_score = 0.5
+        if opp_sched.get("is_back_to_back", False) and not my_sched.get("is_back_to_back", False):
+            sched_score = 0.8
+        elif my_sched.get("is_back_to_back", False) and not opp_sched.get("is_back_to_back", False):
+            sched_score = 0.2
+        my_rest = my_sched.get("days_rest", 1)
+        opp_rest = opp_sched.get("days_rest", 1)
+        if my_rest > opp_rest:
+            sched_score = min(1.0, sched_score + 0.1)
+        scores["schedule"] = sched_score
+
+        # Injuries (opponent's injuries help us)
+        opp_injuries = features.get("away_injuries" if is_home_pick else "home_injuries", {})
+        my_injuries = features.get("home_injuries" if is_home_pick else "away_injuries", {})
+        opp_reduction = opp_injuries.get("xg_reduction", 0.0)
+        my_reduction = my_injuries.get("xg_reduction", 0.0)
+        inj_edge = opp_reduction - my_reduction
+        scores["injuries"] = min(1.0, max(0.0, (inj_edge + 0.1) / 0.2 * 0.5 + 0.5))
+
+        # H2H
+        h2h = features.get("h2h", {})
+        if h2h.get("games_found", 0) >= 3:
+            h2h_wr = h2h.get("team1_win_rate", 0.5)
+            scores["h2h"] = h2h_wr if is_home_pick else (1.0 - h2h_wr)
+        else:
+            scores["h2h"] = 0.5
+
+        # Player matchup
+        my_matchup = features.get(
+            "home_player_matchup" if is_home_pick else "away_player_matchup", {}
+        )
+        boost = my_matchup.get("matchup_boost", 0.0)
+        scores["matchup"] = min(1.0, max(0.0, (boost + 0.1) / 0.2))
+
+        # Market edge
+        conf = prediction.get("confidence", 0.5) or 0.5
+        implied = prediction.get("implied_probability") or conf
+        edge = conf - implied
+        scores["market_edge"] = min(1.0, max(0.0, (edge + 0.1) / 0.2))
+
+        # Weighted sum
+        weights = {
+            "form": _mc.composite_weight_form,
+            "goalie": _mc.composite_weight_goalie,
+            "possession": _mc.composite_weight_possession,
+            "close_possession": _mc.composite_weight_close_possession,
+            "special_teams": _mc.composite_weight_special_teams,
+            "schedule": _mc.composite_weight_schedule,
+            "injuries": _mc.composite_weight_injuries,
+            "h2h": _mc.composite_weight_h2h,
+            "matchup": _mc.composite_weight_matchup,
+            "market_edge": _mc.composite_weight_market_edge,
+        }
+
+        composite = sum(scores.get(k, 0.5) * w for k, w in weights.items())
+        total_weight = sum(weights.values())
+        composite_score = round((composite / total_weight) * 100, 1) if total_weight > 0 else 50.0
+
+        if composite_score >= 71:
+            grade = "very_strong"
+        elif composite_score >= 51:
+            grade = "strong"
+        elif composite_score >= 31:
+            grade = "moderate"
+        else:
+            grade = "weak"
+
+        return {
+            "composite_score": composite_score,
+            "composite_grade": grade,
+            "component_scores": {k: round(v, 3) for k, v in scores.items()},
+        }

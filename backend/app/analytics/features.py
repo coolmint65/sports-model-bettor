@@ -1232,6 +1232,228 @@ class FeatureEngine:
         }
 
     # ------------------------------------------------------------------ #
+    #  5v5 Even-strength possession (from MoneyPuck)                     #
+    # ------------------------------------------------------------------ #
+
+    async def get_ev_possession_metrics(
+        self,
+        db: AsyncSession,
+        team_id: int,
+    ) -> Dict[str, Any]:
+        """Fetch 5v5 even-strength possession metrics from TeamEVStats.
+
+        Returns MoneyPuck-sourced Corsi, Fenwick, and xGF percentages
+        at 5-on-5, which are more predictive than all-situations metrics.
+        """
+        from app.models.team import TeamEVStats
+
+        stmt = (
+            select(TeamEVStats)
+            .where(TeamEVStats.team_id == team_id)
+            .order_by(TeamEVStats.scrape_date.desc())
+            .limit(1)
+        )
+        result = await db.execute(stmt)
+        row = result.scalars().first()
+
+        if not row:
+            return self._empty_ev_possession()
+
+        return {
+            "ev_cf_pct": row.ev_cf_pct or 50.0,
+            "ev_ff_pct": row.ev_ff_pct or 50.0,
+            "ev_xgf_pct": row.ev_xgf_pct or 50.0,
+            "ev_shots_for_pct": row.ev_shots_for_pct or 50.0,
+            "games_found": row.games_played or 0,
+        }
+
+    @staticmethod
+    def _empty_ev_possession() -> Dict[str, Any]:
+        return {
+            "ev_cf_pct": 50.0,
+            "ev_ff_pct": 50.0,
+            "ev_xgf_pct": 50.0,
+            "ev_shots_for_pct": 50.0,
+            "games_found": 0,
+        }
+
+    # ------------------------------------------------------------------ #
+    #  Close-game possession (CF% in tight games)                        #
+    # ------------------------------------------------------------------ #
+
+    async def get_close_game_possession(
+        self,
+        db: AsyncSession,
+        team_id: int,
+        last_n: int = 20,
+    ) -> Dict[str, Any]:
+        """Compute Corsi-proxy filtered to close games only.
+
+        Close games = final score margin <= config threshold OR went to OT.
+        CF% in close games is more predictive than overall CF% because
+        blowout Corsi is heavily influenced by score effects.
+        """
+        games = await self._get_recent_games(db, team_id, last_n)
+        if not games:
+            return self._empty_close_game_possession()
+
+        margin_threshold = _mc.close_game_margin
+        total_cf = 0.0
+        total_ca = 0.0
+        close_wins = 0
+        close_games = 0
+
+        for game in games:
+            is_home = game.home_team_id == team_id
+            hs = game.home_score or 0
+            aws = game.away_score or 0
+            margin = abs(hs - aws)
+            went_ot = getattr(game, "went_to_overtime", False) or False
+
+            # Only count close games
+            if margin > margin_threshold and not went_ot:
+                continue
+
+            sf = (game.home_shots if is_home else game.away_shots) or 0
+            sa = (game.away_shots if is_home else game.home_shots) or 0
+            if sf == 0 and sa == 0:
+                continue
+
+            opp_id = game.away_team_id if is_home else game.home_team_id
+            team_blocks = await self._get_team_game_blocks(db, game.id, team_id)
+            opp_blocks = await self._get_team_game_blocks(db, game.id, opp_id)
+
+            total_cf += sf + opp_blocks
+            total_ca += sa + team_blocks
+            close_games += 1
+
+            # Did we win?
+            gf = hs if is_home else aws
+            ga = aws if is_home else hs
+            if gf > ga:
+                close_wins += 1
+
+        if close_games == 0:
+            return self._empty_close_game_possession()
+
+        corsi_total = total_cf + total_ca
+        cf_pct = (total_cf / corsi_total * 100.0) if corsi_total > 0 else 50.0
+
+        return {
+            "close_cf_pct": round(cf_pct, 2),
+            "close_cf_differential": round(cf_pct - 50.0, 2),
+            "close_game_win_rate": round(close_wins / close_games, 3) if close_games > 0 else 0.5,
+            "close_games_found": close_games,
+            "total_games_checked": len(games),
+        }
+
+    @staticmethod
+    def _empty_close_game_possession() -> Dict[str, Any]:
+        return {
+            "close_cf_pct": 50.0,
+            "close_cf_differential": 0.0,
+            "close_game_win_rate": 0.5,
+            "close_games_found": 0,
+            "total_games_checked": 0,
+        }
+
+    # ------------------------------------------------------------------ #
+    #  Goalie tier classification                                        #
+    # ------------------------------------------------------------------ #
+
+    def classify_goalie_tier(self, goalie: Dict[str, Any]) -> Dict[str, Any]:
+        """Add tier classification to goalie features.
+
+        Tiers:
+        - elite (3): SV% >= .920 AND games_started >= threshold
+        - starter (2): SV% >= .905 AND games_started >= threshold
+        - backup (1): everything else
+
+        Returns the goalie dict augmented with 'tier' and 'tier_rank'.
+        """
+        sv_pct = goalie.get("season_save_pct", 0.900)
+        gs = goalie.get("games_started_season", 0)
+        min_gs = _mc.goalie_tier_starter_min_gs
+
+        if sv_pct >= _mc.goalie_tier_elite_sv and gs >= min_gs:
+            tier = "elite"
+            tier_rank = 3
+        elif sv_pct >= _mc.goalie_tier_starter_sv and gs >= min_gs:
+            tier = "starter"
+            tier_rank = 2
+        else:
+            tier = "backup"
+            tier_rank = 1
+
+        return {
+            **goalie,
+            "tier": tier,
+            "tier_rank": tier_rank,
+        }
+
+    # ------------------------------------------------------------------ #
+    #  Starter confirmation confidence                                   #
+    # ------------------------------------------------------------------ #
+
+    def assess_starter_confidence(
+        self,
+        goalie: Dict[str, Any],
+        schedule: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Assess how confident we are that the projected starter will play.
+
+        Factors that reduce confidence:
+        - Team on a back-to-back
+        - High consecutive starts (fatigue)
+        - Goalie not the regular starter (low games_started)
+
+        Returns dict with starter_confidence (0-1), confidence_level, reasons.
+        """
+        confidence = _mc.starter_confidence_high
+        reasons = []
+
+        consecutive = goalie.get("consecutive_starts", 0)
+        is_b2b = schedule.get("is_back_to_back", False)
+        gs = goalie.get("games_started_season", 0)
+        fatigue_threshold = _mc.starter_fatigue_threshold
+
+        # Back-to-back reduces confidence
+        if is_b2b:
+            confidence = min(confidence, _mc.starter_confidence_medium)
+            reasons.append("Team on back-to-back")
+
+        # High consecutive starts (fatigue)
+        if consecutive >= fatigue_threshold:
+            extra = consecutive - fatigue_threshold
+            confidence -= 0.10 * (1 + extra)
+            reasons.append(f"{consecutive} consecutive starts")
+
+        # Low games started = not the clear #1
+        if gs < _mc.goalie_tier_starter_min_gs // 2:
+            confidence -= 0.10
+            reasons.append("Limited starts this season")
+
+        # Clamp
+        confidence = max(_mc.starter_confidence_low, min(1.0, confidence))
+
+        if confidence >= _mc.starter_confidence_high:
+            level = "high"
+        elif confidence >= _mc.starter_confidence_medium:
+            level = "medium"
+        else:
+            level = "low"
+
+        if not reasons:
+            reasons.append("Regular starter, well rested")
+
+        return {
+            "projected_starter": goalie.get("goalie_name", "Unknown"),
+            "starter_confidence": round(confidence, 2),
+            "confidence_level": level,
+            "confidence_reasons": reasons,
+        }
+
+    # ------------------------------------------------------------------ #
     #  Build comprehensive feature set for a game                         #
     # ------------------------------------------------------------------ #
 
@@ -1310,6 +1532,22 @@ class FeatureEngine:
         # Advanced metrics (Corsi-proxy, shot quality, PDO)
         home_advanced = await self.get_advanced_metrics(db, home_id)
         away_advanced = await self.get_advanced_metrics(db, away_id)
+
+        # 5v5 even-strength possession (MoneyPuck)
+        home_ev_possession = await self.get_ev_possession_metrics(db, home_id)
+        away_ev_possession = await self.get_ev_possession_metrics(db, away_id)
+
+        # Close-game possession
+        home_close_possession = await self.get_close_game_possession(db, home_id)
+        away_close_possession = await self.get_close_game_possession(db, away_id)
+
+        # Goalie tier classification (augments existing goalie features)
+        home_goalie = self.classify_goalie_tier(home_goalie)
+        away_goalie = self.classify_goalie_tier(away_goalie)
+
+        # Starter confirmation confidence
+        home_starter_status = self.assess_starter_confidence(home_goalie, home_schedule)
+        away_starter_status = self.assess_starter_confidence(away_goalie, away_schedule)
 
         # Player and team matchups (uses MatchupEngine)
         from app.analytics.matchups import MatchupEngine
@@ -1417,6 +1655,15 @@ class FeatureEngine:
             # Advanced metrics
             "home_advanced": home_advanced,
             "away_advanced": away_advanced,
+            # 5v5 even-strength possession (MoneyPuck)
+            "home_ev_possession": home_ev_possession,
+            "away_ev_possession": away_ev_possession,
+            # Close-game possession
+            "home_close_possession": home_close_possession,
+            "away_close_possession": away_close_possession,
+            # Starter confidence
+            "home_starter_status": home_starter_status,
+            "away_starter_status": away_starter_status,
             # Player matchups (how key players perform vs this opponent)
             "home_player_matchup": home_player_matchup,
             "away_player_matchup": away_player_matchup,

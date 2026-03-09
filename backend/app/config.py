@@ -137,6 +137,40 @@ class ModelConfig(BaseModel):
     shot_quality_factor: float = 0.06         # shooting% deviation adjustment
     advanced_metrics_min_games: int = 8       # min games before advanced metrics apply
 
+    # 5v5 even-strength possession (from MoneyPuck)
+    ev_corsi_factor: float = 0.10             # xG multiplier for 5v5 CF% deviation
+    ev_corsi_min_games: int = 8               # min games before 5v5 factor applies
+    ev_corsi_significance_threshold: float = 4.0  # CF% deviation to flag as "significant"
+
+    # Close-game possession (CF% in 1-goal games / OT)
+    close_game_corsi_factor: float = 0.06     # xG multiplier for close-game CF%
+    close_game_min_games: int = 6             # min close games before applying
+    close_game_margin: int = 1                # max score margin to qualify as "close"
+
+    # Goalie tier classification
+    goalie_tier_elite_sv: float = 0.920       # elite: >= .920 SV%
+    goalie_tier_starter_sv: float = 0.905     # starter: >= .905 SV%
+    goalie_tier_starter_min_gs: int = 20      # min games started to be "starter"
+    goalie_mismatch_factor: float = 0.08      # additional xG adjustment for tier mismatch
+
+    # Starter confirmation confidence
+    starter_confidence_high: float = 0.90     # confirmed / obvious pattern
+    starter_confidence_medium: float = 0.65   # likely but not confirmed
+    starter_confidence_low: float = 0.40      # uncertain (B2B, fatigue)
+    starter_fatigue_threshold: int = 3        # consecutive starts before fatigue concern
+
+    # Composite edge score component weights (should sum to ~1.0)
+    composite_weight_form: float = 0.15
+    composite_weight_goalie: float = 0.15
+    composite_weight_possession: float = 0.12
+    composite_weight_close_possession: float = 0.08
+    composite_weight_special_teams: float = 0.10
+    composite_weight_schedule: float = 0.08
+    composite_weight_injuries: float = 0.10
+    composite_weight_h2h: float = 0.07
+    composite_weight_matchup: float = 0.05
+    composite_weight_market_edge: float = 0.10
+
     # Faceoff contribution to defensive factor
     faceoff_defense_weight: float = 0.10
 

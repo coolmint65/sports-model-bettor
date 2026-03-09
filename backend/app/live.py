@@ -309,6 +309,15 @@ async def _run_full_data_sync():
         except Exception as inj_exc:
             logger.error("Injury sync failed: %s", inj_exc)
 
+        # Sync MoneyPuck 5v5 possession data
+        try:
+            from app.scrapers.moneypuck import sync_moneypuck_ev_stats
+            async with get_write_session_context() as session:
+                count = await sync_moneypuck_ev_stats(session)
+                logger.info("MoneyPuck 5v5 sync: %d teams updated", count)
+        except Exception as mp_exc:
+            logger.error("MoneyPuck sync failed: %s", mp_exc)
+
     except Exception as exc:
         logger.error("Periodic full data sync failed: %s", exc, exc_info=True)
 
