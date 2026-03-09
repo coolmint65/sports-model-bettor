@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Clock, ChevronRight, ChevronDown, ChevronUp, TrendingUp, Radio, Zap } from 'lucide-react';
+import { Clock, ChevronRight, TrendingUp, Zap } from 'lucide-react';
 import { format } from 'date-fns';
 import { teamName, teamAbbrev, teamLogo, confidencePct, parseAsUTC, formatBetType, formatPredictionValue } from '../utils/teams';
 import { getConfidenceColor, formatAmericanOdds } from '../utils/formatting';
@@ -162,7 +162,6 @@ function GameCard({ game, section }) {
   const navigate = useNavigate();
   const gameId = game.game_id || game.id;
   const statusInfo = getStatusDisplay(game);
-  const [expanded, setExpanded] = useState(false);
 
   const awayName = teamName(game.away_team, 'Away');
   const homeName = teamName(game.home_team, 'Home');
@@ -312,35 +311,13 @@ function GameCard({ game, section }) {
           </div>
         )}
 
-        {/* Quick reason tags */}
+        {/* Analysis reasons — always visible */}
         {reasons.length > 0 && (
-          <div className="pick-card-reason-tags">
-            {reasons.slice(0, 3).map((r, i) => (
-              <span key={i} className="pick-reason-tag">
-                <TrendingUp size={12} />
-                {r.length > 50 ? r.substring(0, 50) + '...' : r}
-              </span>
-            ))}
-          </div>
-        )}
-
-        {/* Expandable analysis section */}
-        {reasons.length > 0 && (
-          <button
-            className="pick-card-expand-btn"
-            onClick={(e) => {
-              e.stopPropagation();
-              setExpanded(!expanded);
-            }}
-          >
-            <TrendingUp size={14} />
-            <span>Analysis ({reasons.length})</span>
-            {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-          </button>
-        )}
-
-        {expanded && reasons.length > 0 && (
           <div className="pick-card-analysis">
+            <div className="pick-analysis-header">
+              <TrendingUp size={14} />
+              <span>Analysis ({reasons.length})</span>
+            </div>
             <ol className="pick-analysis-list">
               {reasons.map((reason, i) => (
                 <li key={i}>{reason}</li>

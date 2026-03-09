@@ -247,7 +247,7 @@ function Dashboard() {
         )}
 
         {!scheduleLoading && !scheduleError && prematchGames.length > 0 && (
-          <div className="pick-cards-list">
+          <div className="games-grid">
             {prematchGames.map((game) => (
               <GameCard key={game.game_id || game.id} game={game} section="schedule" />
             ))}

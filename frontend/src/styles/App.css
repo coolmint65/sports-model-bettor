@@ -3336,12 +3336,6 @@ a:hover {
 }
 
 /* ─── Pick Cards (Buddy's Analysis Style) ──────────────────── */
-.pick-cards-list {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
 .pick-card {
   background: var(--bg-card);
   border: 1px solid var(--border-primary);
@@ -3498,65 +3492,27 @@ a:hover {
   color: var(--text-primary);
 }
 
-/* Reason tags (quick preview) */
-.pick-card-reason-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 10px;
+/* Analysis section — always visible on card */
+.pick-card-analysis {
+  padding: 12px 0 0;
+  border-top: 1px solid var(--border-primary);
+  margin-top: 12px;
 }
 
-.pick-reason-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
-  background: rgba(0, 255, 136, 0.06);
-  border: 1px solid rgba(0, 255, 136, 0.12);
-  border-radius: 20px;
-  font-size: 0.72rem;
-  color: var(--text-secondary);
-  max-width: 280px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.pick-reason-tag svg {
-  color: var(--accent-green);
-  flex-shrink: 0;
-}
-
-/* Expand button */
-.pick-card-expand-btn {
+.pick-analysis-header {
   display: flex;
   align-items: center;
   gap: 6px;
-  background: none;
-  border: none;
-  color: var(--text-muted);
   font-size: 0.8rem;
   font-weight: 600;
-  cursor: pointer;
-  padding: 6px 0;
-  transition: color var(--transition-fast);
-  font-family: var(--font-sans);
+  color: var(--text-muted);
+  margin-bottom: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
 }
 
-.pick-card-expand-btn:hover {
-  color: var(--text-secondary);
-}
-
-.pick-card-expand-btn svg:first-child {
+.pick-analysis-header svg {
   color: var(--accent-green);
-}
-
-/* Analysis section */
-.pick-card-analysis {
-  padding: 12px 0;
-  border-top: 1px solid var(--border-primary);
-  margin-top: 8px;
-  animation: fadeIn 0.2s ease;
 }
 
 .pick-analysis-list {
@@ -3669,13 +3625,5 @@ a:hover {
   .pick-card-odds-bar {
     flex-direction: column;
     gap: 6px;
-  }
-
-  .pick-card-reason-tags {
-    flex-direction: column;
-  }
-
-  .pick-reason-tag {
-    max-width: 100%;
   }
 }
