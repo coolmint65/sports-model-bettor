@@ -180,7 +180,7 @@ function parseReasons(reasoning) {
   // Re-attach team markers and tooltips from placeholders
   const tmRe = new RegExp(TM_PH + '(\\d+)\\s*', 'g');
   const ttRe = new RegExp(TT_PH + '(\\d+)', 'g');
-  return lines.slice(0, 7).map((line) => {
+  return lines.slice(0, 5).map((line) => {
     let tooltip = null;
     let team = null;
     let text = line.replace(tmRe, (_m, idx) => {

@@ -478,6 +478,11 @@ async def _compute_top_picks(
                 # bet with terrible risk/reward.
                 if is_heavy_juice(pred.odds_implied_prob, max_implied):
                     continue
+                # Enforce min_confidence even for fallback picks —
+                # without this, low-conviction predictions that failed
+                # Tier 1 sneak back onto the dashboard.
+                if (pred.confidence or 0) < settings.min_confidence:
+                    continue
                 top_picks[pred.game_id] = GameTopPick(
                     prediction_id=pred.id,
                     bet_type=pred.bet_type,
