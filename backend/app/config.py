@@ -147,7 +147,7 @@ class Settings(BaseModel):
 
     # Scheduling
     scrape_interval_minutes: int = 30
-    odds_refresh_interval_minutes: int = 15
+    odds_refresh_interval_minutes: int = 10  # 20k tier: ~144 API calls/day
 
     def get_sport_config(self, sport: Optional[str] = None) -> SportConfig:
         """Get configuration for a specific sport, defaulting to the default sport."""

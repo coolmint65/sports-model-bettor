@@ -1,19 +1,15 @@
 """
-Odds scraper for NHL games — Hard Rock Bet + DraftKings.
+Odds scraper for NHL games — The Odds API (primary) + sportsbook scrapers (fallback).
 
-Hard Rock Bet (primary) provides moneyline, spread, and totals odds
-via The Odds API us2 region. Known for accurate, round-number pricing
-in clean increments of 5. Alternate spreads and totals are fetched
-per-event from the Odds API event endpoint.
+PRIMARY: The Odds API (paid 20k tier) fetches odds from ALL major US
+sportsbooks (Hard Rock, FanDuel, DraftKings, BetMGM, Caesars, PointsBet,
+etc.) in a single API call.  Hard Rock data is extracted separately for
+its clean round-number pricing.
 
-DraftKings (secondary) supplements with additional alternate spread
-and total lines from its public sportsbook API.
+FALLBACK: If The Odds API fails or returns no data, we fall back to
+direct sportsbook scrapers (DraftKings, FanDuel, Kambi, Bovada).
 
-The ODDS_API_KEY environment variable is required for Hard Rock.
-
-Other sportsbook scrapers (FanDuel, Kambi, Bovada, generic Odds API)
-are retained in the codebase but disabled. They can be re-enabled
-in ``fetch_best_odds()`` if needed.
+The ODDS_API_KEY environment variable is required for the primary source.
 """
 
 import asyncio
@@ -1576,11 +1572,11 @@ async def _fetch_odds_api_raw(
 
 async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
     """
-    Fetch NHL odds from The Odds API (v4).
+    Fetch NHL odds from The Odds API (v4) — PRIMARY source.
 
     Requires ODDS_API_KEY environment variable. Returns empty list if
-    no key is configured. This is a paid/rate-limited source — we use
-    it as a fallback/supplementary source.
+    no key is configured. With the paid 20k tier, this is the primary
+    odds source providing all major US sportsbooks.
 
     Uses a combined us+us2 region request shared with ``_fetch_hardrock``
     to avoid doubling API quota usage.
@@ -2755,29 +2751,77 @@ class MultiSourceOddsScraper:
 
     async def fetch_best_odds(self) -> List[Dict[str, Any]]:
         """
-        Fetch odds from ALL available sources and merge to find best lines.
+        Fetch odds with The Odds API as PRIMARY source, scrapers as FALLBACK.
 
-        Sources (all enabled):
-        - Hard Rock Bet (via The Odds API us2 region, clean pricing)
-        - The Odds API generic (all US bookmakers: FanDuel, BetMGM, Caesars,
-          DraftKings, PointsBet, etc.)
-        - DraftKings (public sportsbook API, alt lines)
-        - FanDuel (public sportsbook API, alt lines)
-        - Kambi (powers BetRivers, Unibet, 888sport)
-        - Bovada (public coupon API)
-
-        The Odds API sources (Hard Rock + generic) share a single cached
-        request so they don't double-count against the API quota.
+        Pipeline:
+        1. Try The Odds API first (Hard Rock + all US bookmakers via a single
+           cached request).  With a paid subscription (20k requests/month),
+           this gives us FanDuel, DraftKings, BetMGM, Caesars, PointsBet,
+           Hard Rock, and more in one call.
+        2. Only if The Odds API fails or returns no data, fall back to the
+           direct sportsbook scrapers (DraftKings, FanDuel, Kambi, Bovada).
 
         The merge validates spread prices against moneyline data to reject
         any source that returns swapped home/away spread prices.
         """
         client = self._get_client()
 
-        # Fetch from ALL sources concurrently for maximum coverage
-        results = await asyncio.gather(
-            _fetch_hardrock(client),
-            _fetch_odds_api(client),
+        # ── PRIMARY: The Odds API (includes ALL US sportsbooks) ──
+        primary_events: List[List[OddsEvent]] = []
+        primary_names: List[str] = []
+        primary_ok = False
+
+        try:
+            hr_result, api_result = await asyncio.gather(
+                _fetch_hardrock(client),
+                _fetch_odds_api(client),
+                return_exceptions=True,
+            )
+
+            for name, result in [("Hard Rock", hr_result), ("Odds API", api_result)]:
+                if isinstance(result, Exception):
+                    logger.warning("%s fetch failed: %s", name, result)
+                    primary_events.append([])
+                else:
+                    primary_events.append(result)
+                primary_names.append(name)
+
+            primary_total = sum(len(evts) for evts in primary_events)
+            primary_sources = sum(1 for evts in primary_events if evts)
+
+            if primary_total > 0:
+                primary_ok = True
+                for i, evts in enumerate(primary_events):
+                    for ev in (evts or []):
+                        ml_str = (
+                            f"ML {round(ev.home_ml)}/{round(ev.away_ml)}"
+                            if ev.has_moneyline() else "ML --"
+                        )
+                        ou_str = (
+                            f"O/U {ev.total_line:.1f} ({round(ev.over_price)}/{round(ev.under_price)})"
+                            if ev.has_total() else "O/U --"
+                        )
+                        logger.debug(
+                            "[%s] %s@%s: %s, %s, %d alt totals, %d alt spreads",
+                            primary_names[i], ev.away_abbr, ev.home_abbr,
+                            ml_str, ou_str, len(ev.alt_totals), len(ev.alt_spreads),
+                        )
+                logger.info(
+                    "Odds API PRIMARY: %d events from %d/%d sources",
+                    primary_total, primary_sources, len(primary_names),
+                )
+        except Exception as exc:
+            logger.error("Odds API primary pipeline failed: %s", exc)
+
+        if primary_ok:
+            return _merge_odds_events(primary_events)
+
+        # ── FALLBACK: Direct sportsbook scrapers ──
+        logger.warning(
+            "Odds API returned no data — falling back to sportsbook scrapers"
+        )
+
+        fallback_results = await asyncio.gather(
             _fetch_draftkings(client),
             _fetch_fanduel(client),
             _fetch_kambi(client),
@@ -2785,20 +2829,16 @@ class MultiSourceOddsScraper:
             return_exceptions=True,
         )
 
-        all_events: List[List[OddsEvent]] = []
-        source_names = [
-            "Hard Rock", "Odds API", "DraftKings",
-            "FanDuel", "Kambi", "Bovada",
-        ]
+        fallback_events: List[List[OddsEvent]] = []
+        fallback_names = ["DraftKings", "FanDuel", "Kambi", "Bovada"]
 
-        for i, result in enumerate(results):
+        for i, result in enumerate(fallback_results):
             if isinstance(result, Exception):
-                logger.warning("%s fetch failed: %s", source_names[i], result)
-                all_events.append([])
+                logger.warning("%s scraper failed: %s", fallback_names[i], result)
+                fallback_events.append([])
             else:
-                all_events.append(result)
+                fallback_events.append(result)
                 if result:
-                    # Log per-event details at DEBUG level to reduce noise
                     for ev in result:
                         ml_str = (
                             f"ML {round(ev.home_ml)}/{round(ev.away_ml)}"
@@ -2808,26 +2848,24 @@ class MultiSourceOddsScraper:
                             f"O/U {ev.total_line:.1f} ({round(ev.over_price)}/{round(ev.under_price)})"
                             if ev.has_total() else "O/U --"
                         )
-                        n_alts = len(ev.alt_totals)
-                        n_aspr = len(ev.alt_spreads)
                         logger.debug(
                             "[%s] %s@%s: %s, %s, %d alt totals, %d alt spreads",
-                            source_names[i], ev.away_abbr, ev.home_abbr,
-                            ml_str, ou_str, n_alts, n_aspr,
+                            fallback_names[i], ev.away_abbr, ev.home_abbr,
+                            ml_str, ou_str, len(ev.alt_totals), len(ev.alt_spreads),
                         )
 
-        total_events = sum(len(evts) for evts in all_events)
-        sources_with_data = sum(1 for evts in all_events if evts)
+        fallback_total = sum(len(evts) for evts in fallback_events)
+        fallback_sources = sum(1 for evts in fallback_events if evts)
         logger.info(
-            "Odds fetched: %d total events from %d/%d sources",
-            total_events, sources_with_data, len(source_names),
+            "Scraper FALLBACK: %d events from %d/%d sources",
+            fallback_total, fallback_sources, len(fallback_names),
         )
 
-        if total_events == 0:
-            logger.warning("No odds data from any source!")
+        if fallback_total == 0:
+            logger.warning("No odds data from any source (primary or fallback)!")
             return []
 
-        return _merge_odds_events(all_events)
+        return _merge_odds_events(fallback_events)
 
     async def sync_odds(self, db: AsyncSession) -> List[Dict[str, Any]]:
         """
