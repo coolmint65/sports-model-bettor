@@ -408,6 +408,31 @@ function OverviewForm({ game }) {
             );
           })}
         </div>
+        <div className="form-games-table">
+          <div className="form-games-header">
+            <span>Date</span>
+            <span>Opp</span>
+            <span>Score</span>
+            <span>Result</span>
+          </div>
+          {last10.map((g, i) => {
+            const resultClass =
+              g.result === 'W'
+                ? 'result-win'
+                : g.result === 'OTL'
+                  ? 'result-otl'
+                  : 'result-loss';
+            const prefix = g.home_away === 'home' ? 'vs' : '@';
+            return (
+              <div key={i} className="form-games-row">
+                <span className="form-game-date">{g.game_date}</span>
+                <span className="form-game-opp">{prefix} {g.opponent_abbrev}</span>
+                <span className="form-game-score">{g.score_display}{g.overtime ? ' (OT)' : ''}</span>
+                <span className={`form-game-result ${resultClass}`}>{g.result}</span>
+              </div>
+            );
+          })}
+        </div>
       </div>
     );
   };
