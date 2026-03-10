@@ -18,6 +18,7 @@ in ``fetch_best_odds()`` if needed.
 
 import asyncio
 import logging
+import time as _time_mod
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -1500,6 +1501,16 @@ async def _fetch_bovada(client: httpx.AsyncClient) -> List[OddsEvent]:
 _odds_api_cache: Dict[str, Any] = {"data": None, "timestamp": 0.0}
 _ODDS_API_CACHE_TTL = 10.0  # seconds
 
+# ---------------------------------------------------------------------------
+# Alternate-line cache — fetched once pregame, reused across fast sync cycles.
+# Keyed by Odds API event_id → (alt_totals, alt_spreads).
+# Refreshed on a slow cadence (default 30 min) to avoid per-event API calls
+# on every sync cycle.
+# ---------------------------------------------------------------------------
+_alt_line_cache: Dict[str, Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]] = {}
+_alt_line_cache_ts: float = 0.0  # monotonic timestamp of last full refresh
+_ALT_LINE_CACHE_TTL: float = 1800.0  # 30 minutes
+
 
 async def _fetch_odds_api_raw(
     client: httpx.AsyncClient,
@@ -1922,7 +1933,10 @@ async def _fetch_hardrock_alt_lines(
     return alt_totals, alt_spreads
 
 
-async def _fetch_hardrock(client: httpx.AsyncClient) -> List[OddsEvent]:
+async def _fetch_hardrock(
+    client: httpx.AsyncClient,
+    skip_alternates: bool = False,
+) -> List[OddsEvent]:
     """
     Fetch NHL odds specifically from Hard Rock Bet via The Odds API (us2 region).
 
@@ -1935,6 +1949,10 @@ async def _fetch_hardrock(client: httpx.AsyncClient) -> List[OddsEvent]:
     ``_fetch_odds_api_raw``).  Alternate spreads and totals are fetched
     per-event from ``/events/{eventId}/odds`` with the
     ``alternate_spreads,alternate_totals`` markets.
+
+    When ``skip_alternates`` is True, per-event alternate line API calls are
+    skipped and cached data is used instead.  This dramatically reduces API
+    credit usage during fast sync cycles.
 
     Requires ODDS_API_KEY.  Returns empty list if no key is configured or
     Hard Rock data is not present in the response.
@@ -2081,29 +2099,55 @@ async def _fetch_hardrock(client: httpx.AsyncClient) -> List[OddsEvent]:
             "p1_under": round(hr_p1_under) if hr_p1_under else 0,
         })
 
-    # Second pass: fetch alt lines concurrently for all events
-    alt_results = await asyncio.gather(
-        *(
-            _fetch_hardrock_alt_lines(
-                client, pd["event_id"], pd["home_team"], pd["away_team"]
-            )
-            for pd in primary_data
-            if pd["event_id"]
-        ),
-        return_exceptions=True,
+    # Second pass: fetch alt lines — either fresh (full sync) or from cache
+    # (fast sync).  The alt-line cache avoids per-event API calls that burn
+    # through Odds API credits on every 60-second sync cycle.
+    global _alt_line_cache, _alt_line_cache_ts
+
+    now_mono = _time_mod.monotonic()
+    cache_fresh = (
+        _alt_line_cache
+        and (now_mono - _alt_line_cache_ts) < _ALT_LINE_CACHE_TTL
     )
 
-    # Map event_id → alt data
-    alt_map: Dict[str, Tuple[List, List]] = {}
-    alt_idx = 0
-    for pd in primary_data:
-        if pd["event_id"]:
-            result = alt_results[alt_idx]
-            alt_idx += 1
-            if isinstance(result, tuple):
-                alt_map[pd["event_id"]] = result
-            else:
-                logger.warning("Hard Rock alt-line fetch failed for %s: %s", pd["event_id"], result)
+    if skip_alternates and cache_fresh:
+        # Use cached alt lines — zero API calls
+        alt_map = _alt_line_cache
+        logger.debug(
+            "Hard Rock: using cached alt lines for %d events (age %.0fs)",
+            len(alt_map), now_mono - _alt_line_cache_ts,
+        )
+    else:
+        # Full fetch: one API call per event
+        alt_results = await asyncio.gather(
+            *(
+                _fetch_hardrock_alt_lines(
+                    client, pd["event_id"], pd["home_team"], pd["away_team"]
+                )
+                for pd in primary_data
+                if pd["event_id"]
+            ),
+            return_exceptions=True,
+        )
+
+        alt_map: Dict[str, Tuple[List, List]] = {}
+        alt_idx = 0
+        for pd in primary_data:
+            if pd["event_id"]:
+                result = alt_results[alt_idx]
+                alt_idx += 1
+                if isinstance(result, tuple):
+                    alt_map[pd["event_id"]] = result
+                else:
+                    logger.warning("Hard Rock alt-line fetch failed for %s: %s", pd["event_id"], result)
+
+        # Update the cache
+        _alt_line_cache = dict(alt_map)
+        _alt_line_cache_ts = now_mono
+        logger.info(
+            "Hard Rock: refreshed alt-line cache for %d events",
+            len(alt_map),
+        )
 
     # Build OddsEvent objects with alt lines
     for pd in primary_data:
@@ -2816,7 +2860,10 @@ class MultiSourceOddsScraper:
         await self.close()
         return False
 
-    async def fetch_best_odds(self) -> List[Dict[str, Any]]:
+    async def fetch_best_odds(
+        self,
+        skip_alternates: bool = False,
+    ) -> List[Dict[str, Any]]:
         """
         Fetch odds from ALL available sources and merge to find best lines.
 
@@ -2832,6 +2879,10 @@ class MultiSourceOddsScraper:
         The Odds API sources (Hard Rock + generic) share a single cached
         request so they don't double-count against the API quota.
 
+        When ``skip_alternates`` is True, per-event alternate line API calls
+        are skipped in favour of cached data, dramatically reducing API
+        credit usage for fast sync cycles.
+
         The merge validates spread prices against moneyline data to reject
         any source that returns swapped home/away spread prices.
         """
@@ -2839,7 +2890,7 @@ class MultiSourceOddsScraper:
 
         # Fetch from ALL sources concurrently for maximum coverage
         results = await asyncio.gather(
-            _fetch_hardrock(client),
+            _fetch_hardrock(client, skip_alternates=skip_alternates),
             _fetch_odds_api(client),
             _fetch_draftkings(client),
             _fetch_fanduel(client),
@@ -2892,16 +2943,23 @@ class MultiSourceOddsScraper:
 
         return _merge_odds_events(all_events)
 
-    async def sync_odds(self, db: AsyncSession) -> List[Dict[str, Any]]:
+    async def sync_odds(
+        self,
+        db: AsyncSession,
+        skip_alternates: bool = False,
+    ) -> List[Dict[str, Any]]:
         """
         Fetch odds from all sources and sync them to Game records in the DB.
 
         Matches odds to existing Game records by team abbreviations and date.
         Updates Game model odds fields with the best available lines.
 
+        When ``skip_alternates`` is True, per-event alternate line API calls
+        are skipped (cached data is used instead).
+
         Returns the list of matched odds dicts.
         """
-        odds_list = await self.fetch_best_odds()
+        odds_list = await self.fetch_best_odds(skip_alternates=skip_alternates)
 
         if not odds_list:
             logger.info("No odds to sync")

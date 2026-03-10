@@ -125,10 +125,19 @@ def fresh_implied_prob(pred: Prediction, game: Optional[Game]) -> Optional[float
 # Centralized odds sync
 # ---------------------------------------------------------------------------
 
-async def sync_odds(session: AsyncSession, force: bool = False) -> List[Dict[str, Any]]:
+async def sync_odds(
+    session: AsyncSession,
+    force: bool = False,
+    skip_alternates: bool = False,
+) -> List[Dict[str, Any]]:
     """Sync odds from all sportsbook sources.
 
     Throttled to avoid API rate limits. Use force=True to bypass throttle.
+
+    When ``skip_alternates`` is True, the per-event alternate line API calls
+    are skipped in favour of cached data.  This is the "fast path" used by
+    the live scheduler to dramatically reduce Odds API credit consumption.
+
     Returns list of matched game dicts.
     """
     global _last_sync_at
@@ -147,11 +156,16 @@ async def sync_odds(session: AsyncSession, force: bool = False) -> List[Dict[str
             from app.scrapers.odds_multi import MultiSourceOddsScraper
 
             async with MultiSourceOddsScraper() as scraper:
-                matched = await scraper.sync_odds(session)
+                matched = await scraper.sync_odds(
+                    session, skip_alternates=skip_alternates,
+                )
                 await session.flush()
                 session.expire_all()
                 _last_sync_at = now
-                logger.info("Odds sync: matched %d games", len(matched) if matched else 0)
+                logger.info(
+                    "Odds sync: matched %d games (skip_alt=%s)",
+                    len(matched) if matched else 0, skip_alternates,
+                )
                 return matched or []
         except Exception as exc:
             _last_sync_at = now  # Still throttle on failure
