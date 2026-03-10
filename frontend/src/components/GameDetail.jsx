@@ -543,7 +543,7 @@ function GameDetail() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('overview');
 
-  const { data: game, loading, error, refetch } = useApi(fetchGameDetails, [id]);
+  const { data: game, loading, error, refetch, silentRefetch } = useApi(fetchGameDetails, [id]);
 
   // Auto-poll for live games (fallback)
   const isLive = game && isLiveStatus(game.status);
@@ -551,7 +551,7 @@ function GameDetail() {
   useEffect(() => {
     if (isLive) {
       intervalRef.current = setInterval(() => {
-        refetch();
+        silentRefetch();
       }, LIVE_POLL_INTERVAL);
     }
     return () => {
@@ -560,15 +560,15 @@ function GameDetail() {
         intervalRef.current = null;
       }
     };
-  }, [isLive, refetch]);
+  }, [isLive, silentRefetch]);
 
   // Instantly refetch when WebSocket pushes odds update for this game
   useWebSocketEvent('odds_update', useCallback((data) => {
     const changedIds = (data?.changed_games || []).map((g) => g.game_id);
     if (changedIds.includes(Number(id))) {
-      refetch();
+      silentRefetch();
     }
-  }, [id, refetch]));
+  }, [id, silentRefetch]));
 
   if (loading) {
     return (
