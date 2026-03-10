@@ -100,6 +100,8 @@ async def init_db() -> None:
     import app.models.player  # noqa: F401
     import app.models.game  # noqa: F401
     import app.models.prediction  # noqa: F401
+    import app.models.odds_history  # noqa: F401
+    import app.models.injury  # noqa: F401
 
     async with engine.begin() as conn:
         # Enable WAL mode so readers don't block on the background sync writer.

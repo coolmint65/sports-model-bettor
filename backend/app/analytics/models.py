@@ -230,6 +230,22 @@ class BettingModel:
             depletion = (1.0 - away_strength) * LINEUP_DEPLETION_FACTOR
             away_xg *= (1.0 - depletion)
 
+        # ---- Injury report adjustment ----
+        # Supplements lineup depletion with data from dedicated injury feeds.
+        # Only applies when injury data provides additional signal beyond
+        # what lineup detection already captured.
+        home_injuries = features.get("home_injuries", {})
+        away_injuries = features.get("away_injuries", {})
+        home_inj_impact = home_injuries.get("injury_impact", 1.0)
+        away_inj_impact = away_injuries.get("injury_impact", 1.0)
+        # Apply additional depletion only if injury data is worse than lineup data
+        if home_inj_impact < home_strength:
+            extra = (home_strength - home_inj_impact) * LINEUP_DEPLETION_FACTOR
+            home_xg *= (1.0 - extra)
+        if away_inj_impact < away_strength:
+            extra = (away_strength - away_inj_impact) * LINEUP_DEPLETION_FACTOR
+            away_xg *= (1.0 - extra)
+
         # ---- Regression toward league average ----
         # Hot-streak form weights and weak-opponent defensive factors can
         # compound to produce unrealistic xG values.  Regress 20% toward

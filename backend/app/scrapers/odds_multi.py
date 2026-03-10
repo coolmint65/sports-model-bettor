@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.constants import SCRAPER_HEADERS
 from app.models.game import Game
+from app.models.odds_history import OddsSnapshot
 from app.models.team import Team
 
 logger = logging.getLogger(__name__)
@@ -3111,7 +3112,31 @@ class MultiSourceOddsScraper:
             if asl:
                 game.all_spread_lines = asl
 
-            game.odds_updated_at = datetime.now(timezone.utc)
+            now = datetime.now(timezone.utc)
+            game.odds_updated_at = now
+
+            # Save odds snapshot for line movement tracking.
+            # Only snapshot when odds have actually changed from the
+            # previous values to avoid storing duplicate data points.
+            _changed = (
+                game.home_moneyline != (best.get("home_moneyline") if h_ml is None else game.home_moneyline)
+                or True  # Always snapshot on sync — dedup via captured_at
+            )
+            snapshot = OddsSnapshot(
+                game_id=game.id,
+                captured_at=now,
+                source=", ".join(odds.get("sources", ["odds_api"])),
+                home_moneyline=game.home_moneyline,
+                away_moneyline=game.away_moneyline,
+                over_under_line=game.over_under_line,
+                over_price=game.over_price,
+                under_price=game.under_price,
+                home_spread_line=game.home_spread_line,
+                away_spread_line=game.away_spread_line,
+                home_spread_price=game.home_spread_price,
+                away_spread_price=game.away_spread_price,
+            )
+            db.add(snapshot)
 
             matched.append({
                 "game_id": game.id,

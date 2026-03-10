@@ -10,6 +10,8 @@ from app.models.team import Team, TeamStats
 from app.models.player import Player, PlayerStats, GoalieStats
 from app.models.game import Game, GamePlayerStats, GameGoalieStats, HeadToHead
 from app.models.prediction import Prediction, BetResult, TrackedBet
+from app.models.odds_history import OddsSnapshot
+from app.models.injury import InjuryReport
 
 __all__ = [
     "Base",
@@ -25,4 +27,6 @@ __all__ = [
     "Prediction",
     "BetResult",
     "TrackedBet",
+    "OddsSnapshot",
+    "InjuryReport",
 ]

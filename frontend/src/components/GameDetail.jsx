@@ -4,10 +4,11 @@ import {
   ArrowLeft, Clock, MapPin, BarChart3, Target, TrendingUp,
   Activity, DollarSign, Radio, Shield, Zap, CheckCircle,
   AlertTriangle, Info, Users, Star, ChevronRight, Cloud,
+  HeartPulse, GitBranch,
 } from 'lucide-react';
 import { format, formatDistanceToNowStrict } from 'date-fns';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
-import { fetchGameDetails } from '../utils/api';
+import { BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import { fetchGameDetails, fetchLineMovement, fetchGameInjuries } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import { useWebSocketEvent } from '../hooks/useWebSocket';
 import { teamName, teamAbbrev, teamLogo, parseAsUTC, isLiveStatus, confidencePct, formatBetType, formatPredictionValue } from '../utils/teams';
@@ -696,6 +697,168 @@ function PerformanceAnalysis({ homeForm, awayForm, homeRecent, awayRecent }) {
   );
 }
 
+/* ── Line Movement Section ── */
+
+function LineMovementSection({ gameId, homeAbbr, awayAbbr }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchLineMovement(gameId)
+      .then(res => { if (!cancelled) setData(res.data); })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [gameId]);
+
+  if (loading) return null;
+  if (!data || !data.snapshots || data.snapshots.length === 0) return null;
+
+  const snapshots = data.snapshots;
+  const opening = data.opening;
+  const current = data.current;
+
+  // Build chart data for moneyline movement
+  const chartData = snapshots.map((s, i) => {
+    let label;
+    try {
+      const dt = new Date(s.captured_at);
+      label = format(dt, 'HH:mm');
+    } catch {
+      label = `#${i + 1}`;
+    }
+    return {
+      time: label,
+      [homeAbbr]: s.home_moneyline,
+      [awayAbbr]: s.away_moneyline,
+      ou: s.over_under_line,
+    };
+  });
+
+  const mlMoved = opening && current &&
+    (opening.home_moneyline !== current.home_moneyline || opening.away_moneyline !== current.away_moneyline);
+  const ouMoved = opening && current &&
+    opening.over_under_line !== current.over_under_line;
+
+  return (
+    <div className="gd-section gd-line-movement">
+      <h3><GitBranch size={16} /> Line Movement</h3>
+      <div className="gd-lm-summary">
+        <div className="gd-lm-box">
+          <span className="gd-lm-label">Opening ML</span>
+          <span className="gd-lm-value">
+            {homeAbbr} {formatAmericanOddsOrDash(opening?.home_moneyline)} / {awayAbbr} {formatAmericanOddsOrDash(opening?.away_moneyline)}
+          </span>
+        </div>
+        <div className="gd-lm-box">
+          <span className="gd-lm-label">Current ML</span>
+          <span className={`gd-lm-value ${mlMoved ? 'gd-lm-moved' : ''}`}>
+            {homeAbbr} {formatAmericanOddsOrDash(current?.home_moneyline)} / {awayAbbr} {formatAmericanOddsOrDash(current?.away_moneyline)}
+          </span>
+        </div>
+        {opening?.over_under_line != null && (
+          <>
+            <div className="gd-lm-box">
+              <span className="gd-lm-label">Opening O/U</span>
+              <span className="gd-lm-value">{opening.over_under_line}</span>
+            </div>
+            <div className="gd-lm-box">
+              <span className="gd-lm-label">Current O/U</span>
+              <span className={`gd-lm-value ${ouMoved ? 'gd-lm-moved' : ''}`}>{current?.over_under_line ?? '—'}</span>
+            </div>
+          </>
+        )}
+      </div>
+
+      {chartData.length > 1 && (
+        <div className="gd-chart-wrap">
+          <ResponsiveContainer width="100%" height={180}>
+            <LineChart data={chartData}>
+              <XAxis dataKey="time" stroke="#6a6a88" fontSize={11} />
+              <YAxis stroke="#6a6a88" fontSize={11} />
+              <Tooltip
+                contentStyle={{ background: '#1a1a2e', border: '1px solid #2a2a4a', borderRadius: 8 }}
+                labelStyle={{ color: '#e8e8f0' }}
+              />
+              <Line type="monotone" dataKey={homeAbbr} stroke="#00ff88" strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey={awayAbbr} stroke="#ff5252" strokeWidth={2} dot={false} />
+            </LineChart>
+          </ResponsiveContainer>
+          <div className="gd-chart-legend">
+            <span><span className="gd-legend-dot" style={{ background: '#00ff88' }} /> {homeAbbr} ML</span>
+            <span><span className="gd-legend-dot" style={{ background: '#ff5252' }} /> {awayAbbr} ML</span>
+          </div>
+        </div>
+      )}
+
+      <p className="gd-lm-snapshots">{snapshots.length} snapshot{snapshots.length !== 1 ? 's' : ''} captured</p>
+    </div>
+  );
+}
+
+/* ── Injury Report Section ── */
+
+function InjuryReportSection({ gameId, homeForm, awayForm }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchGameInjuries(gameId)
+      .then(res => { if (!cancelled) setData(res.data); })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [gameId]);
+
+  if (loading) return null;
+
+  const homeInj = data?.home_injuries || [];
+  const awayInj = data?.away_injuries || [];
+  const hasInjuries = homeInj.length > 0 || awayInj.length > 0;
+
+  const statusColor = (status) => {
+    const s = (status || '').toLowerCase();
+    if (s === 'out' || s.includes('ir')) return '#ff5252';
+    if (s === 'day-to-day' || s === 'questionable') return '#ffd700';
+    return '#6a6a88';
+  };
+
+  const renderTeamInjuries = (injuries, teamName) => (
+    <div className="gd-inj-team">
+      <h4>{teamName}</h4>
+      {injuries.length === 0 ? (
+        <p className="gd-inj-healthy"><CheckCircle size={14} /> No injuries reported</p>
+      ) : (
+        <div className="gd-inj-list">
+          {injuries.map((inj, i) => (
+            <div key={i} className="gd-inj-row">
+              <span className="gd-inj-status" style={{ color: statusColor(inj.status) }}>{inj.status}</span>
+              <span className="gd-inj-name">{inj.player_name}</span>
+              <span className="gd-inj-pos">{inj.position || ''}</span>
+              <span className="gd-inj-type">{inj.injury_type || ''}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <div className="gd-section gd-injuries">
+      <h3>
+        <HeartPulse size={16} /> Injury Report
+        {hasInjuries && <span className="gd-inj-count">{homeInj.length + awayInj.length} player{homeInj.length + awayInj.length !== 1 ? 's' : ''}</span>}
+      </h3>
+      <div className="gd-inj-grid">
+        {renderTeamInjuries(homeInj, homeForm.team_name || 'Home')}
+        {renderTeamInjuries(awayInj, awayForm.team_name || 'Away')}
+      </div>
+    </div>
+  );
+}
+
 /* ════════════════════════════════════════════════════════════
    Main GameDetail Component
    ════════════════════════════════════════════════════════════ */
@@ -761,6 +924,11 @@ function GameDetail() {
         homeAbbr={homeAbbr} awayAbbr={awayAbbr} topPred={topPred} venue={venue} />
 
       <OddsSection odds={odds} homeAbbr={homeAbbr} awayAbbr={awayAbbr} />
+
+      <div className="gd-two-col">
+        <LineMovementSection gameId={id} homeAbbr={homeAbbr} awayAbbr={awayAbbr} />
+        <InjuryReportSection gameId={id} homeForm={homeForm} awayForm={awayForm} />
+      </div>
 
       <MatchAnalysis topPred={topPred} predictions={predictions}
         homeForm={homeForm} awayForm={awayForm} h2h={h2h}

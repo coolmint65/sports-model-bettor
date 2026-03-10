@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 
 from app.models.game import Game, GameGoalieStats, GamePlayerStats, HeadToHead
+from app.models.injury import InjuryReport
 from app.models.player import GoalieStats, Player, PlayerStats
 from app.models.team import Team, TeamStats
 
@@ -705,6 +706,121 @@ class FeatureEngine:
         }
 
     # ------------------------------------------------------------------ #
+    #  Injury report (from InjuryReport table)                            #
+    # ------------------------------------------------------------------ #
+
+    async def get_injury_report(
+        self,
+        db: AsyncSession,
+        team_id: int,
+    ) -> Dict[str, Any]:
+        """
+        Retrieve active injury reports for a team.
+
+        Queries the InjuryReport table for players with active injuries
+        and computes an injury impact score based on the injured players'
+        season stats.
+
+        Returns:
+            dict with keys: injured_count, injured_players (list),
+            injured_ppg_lost (total PPG of injured players),
+            injury_impact (0.0-1.0 multiplier, 1.0 = healthy).
+        """
+        result = await db.execute(
+            select(InjuryReport)
+            .join(Player, InjuryReport.player_id == Player.id)
+            .where(
+                and_(
+                    InjuryReport.team_id == team_id,
+                    InjuryReport.is_active.is_(True),
+                    Player.position != "G",  # Goalies handled separately
+                )
+            )
+        )
+        reports = result.scalars().all()
+
+        if not reports:
+            return {
+                "injured_count": 0,
+                "injured_players": [],
+                "injured_ppg_lost": 0.0,
+                "goalie_injured": False,
+                "injury_impact": 1.0,
+            }
+
+        # Look up season stats for each injured player
+        injured_players = []
+        total_ppg_lost = 0.0
+        for report in reports:
+            stats_result = await db.execute(
+                select(PlayerStats)
+                .where(PlayerStats.player_id == report.player_id)
+                .order_by(PlayerStats.season.desc())
+                .limit(1)
+            )
+            stats = stats_result.scalar_one_or_none()
+
+            ppg = 0.0
+            if stats and stats.games_played > 0:
+                ppg = stats.points / stats.games_played
+
+            player_result = await db.execute(
+                select(Player).where(Player.id == report.player_id)
+            )
+            player = player_result.scalar_one_or_none()
+
+            injured_players.append({
+                "name": player.name if player else "Unknown",
+                "position": player.position if player else None,
+                "status": report.status,
+                "injury_type": report.injury_type,
+                "ppg": round(ppg, 3),
+            })
+            total_ppg_lost += ppg
+
+        # Check for injured goalies separately
+        goalie_result = await db.execute(
+            select(InjuryReport)
+            .join(Player, InjuryReport.player_id == Player.id)
+            .where(
+                and_(
+                    InjuryReport.team_id == team_id,
+                    InjuryReport.is_active.is_(True),
+                    Player.position == "G",
+                )
+            )
+        )
+        goalie_injured = len(goalie_result.scalars().all()) > 0
+
+        # Compute injury impact: compare lost PPG to team's total PPG
+        # Use a weighted approach where losing more production = more impact
+        team_stats = await db.execute(
+            select(TeamStats)
+            .where(TeamStats.team_id == team_id)
+            .order_by(TeamStats.season.desc())
+            .limit(1)
+        )
+        ts = team_stats.scalar_one_or_none()
+        team_ppg = ts.goals_for_per_game * 2.5 if ts and ts.goals_for_per_game else 8.0  # rough team PPG
+
+        # Impact multiplier: 1.0 = healthy, lower = more depleted
+        if team_ppg > 0 and total_ppg_lost > 0:
+            impact = max(0.70, 1.0 - (total_ppg_lost / team_ppg) * 0.5)
+        else:
+            impact = 1.0
+
+        if goalie_injured:
+            impact = max(0.70, impact - 0.05)  # Additional penalty for goalie injury
+
+        return {
+            "injured_count": len(injured_players),
+            "injured_players": injured_players,
+            "injured_ppg_lost": round(total_ppg_lost, 3),
+            "goalie_injured": goalie_injured,
+            "injury_impact": round(impact, 4),
+        }
+
+    # ------------------------------------------------------------------ #
     #  Season-level team stats (from TeamStats table)                     #
     # ------------------------------------------------------------------ #
 
@@ -816,6 +932,10 @@ class FeatureEngine:
         home_lineup = await self.get_lineup_status(db, home_id)
         away_lineup = await self.get_lineup_status(db, away_id)
 
+        # Injury reports (from dedicated injury data source)
+        home_injuries = await self.get_injury_report(db, home_id)
+        away_injuries = await self.get_injury_report(db, away_id)
+
         # Head-to-head
         h2h = await self.get_h2h_stats(db, home_id, away_id)
 
@@ -864,6 +984,9 @@ class FeatureEngine:
             "away_skaters": away_skaters,
             "home_lineup": home_lineup,
             "away_lineup": away_lineup,
+            # Injury reports
+            "home_injuries": home_injuries,
+            "away_injuries": away_injuries,
             # Head-to-head
             "h2h": h2h,
         }

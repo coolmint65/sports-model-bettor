@@ -3867,6 +3867,28 @@ a:hover {
   vertical-align: middle;
 }
 
+/* ── Line Movement Section ── */
+.gd-line-movement h3 { display: flex; align-items: center; gap: 8px; font-size: 1rem; color: #e8e8f0; margin-bottom: 12px; }
+.gd-lm-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px; }
+.gd-lm-box { background: #1a1a2e; border-radius: 8px; padding: 10px 14px; display: flex; flex-direction: column; gap: 4px; }
+.gd-lm-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.5px; color: #6a6a88; }
+.gd-lm-value { font-size: 0.85rem; font-weight: 600; color: #e8e8f0; font-family: 'JetBrains Mono', monospace; }
+.gd-lm-moved { color: #ffd700; }
+.gd-lm-snapshots { font-size: 0.75rem; color: #6a6a88; text-align: center; margin-top: 8px; }
+
+/* ── Injury Report Section ── */
+.gd-injuries h3 { display: flex; align-items: center; gap: 8px; font-size: 1rem; color: #e8e8f0; margin-bottom: 12px; }
+.gd-inj-count { font-size: 0.7rem; background: rgba(255, 82, 82, 0.15); color: #ff5252; padding: 2px 8px; border-radius: 10px; margin-left: 8px; }
+.gd-inj-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.gd-inj-team h4 { font-size: 0.85rem; color: #a0a0c0; margin-bottom: 8px; font-weight: 600; }
+.gd-inj-healthy { color: #00ff88; font-size: 0.8rem; display: flex; align-items: center; gap: 6px; }
+.gd-inj-list { display: flex; flex-direction: column; gap: 6px; }
+.gd-inj-row { display: grid; grid-template-columns: 80px 1fr 40px auto; gap: 8px; align-items: center; font-size: 0.8rem; padding: 6px 10px; background: #1a1a2e; border-radius: 6px; }
+.gd-inj-status { font-weight: 700; font-size: 0.7rem; text-transform: uppercase; }
+.gd-inj-name { color: #e8e8f0; font-weight: 500; }
+.gd-inj-pos { color: #6a6a88; font-size: 0.7rem; text-align: center; }
+.gd-inj-type { color: #a0a0c0; font-size: 0.75rem; }
+
 /* Responsive adjustments */
 @media (max-width: 600px) {
   .gd-odds-row { grid-template-columns: 1fr; }
@@ -3876,4 +3898,8 @@ a:hover {
   .gd-form-teams { grid-template-columns: 1fr; }
   .gd-stats-teams { grid-template-columns: 1fr; }
   .gd-key-stats-grid { grid-template-columns: 1fr; }
+  .gd-lm-summary { grid-template-columns: 1fr; }
+  .gd-inj-grid { grid-template-columns: 1fr; }
+  .gd-inj-row { grid-template-columns: 70px 1fr auto; }
+  .gd-inj-pos { display: none; }
 }

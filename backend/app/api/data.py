@@ -147,6 +147,21 @@ async def _run_full_sync():
             except Exception as exc:
                 logger.warning("Multi-source odds sync failed: %s", exc, exc_info=True)
 
+            # 3.5. Injury reports (own session)
+            _sync_state["step"] = "Syncing injury reports..."
+            try:
+                from app.scrapers.injuries import InjuryScraper
+
+                inj_scraper = InjuryScraper()
+                try:
+                    async with get_session_context() as session:
+                        inj_count = await inj_scraper.sync_injuries(session)
+                        logger.info("Injury sync: %d active injuries", inj_count)
+                finally:
+                    await inj_scraper.close()
+            except Exception as exc:
+                logger.warning("Injury sync failed (non-critical): %s", exc)
+
             # 4. Predictions (own session with savepoint)
             _sync_state["step"] = "Generating predictions..."
             try:
