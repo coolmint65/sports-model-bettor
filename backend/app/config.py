@@ -105,7 +105,7 @@ class ModelConfig(BaseModel):
     goalie_recent_weight: float = 0.60
     h2h_goal_adj_weight: float = 0.05
     defensive_regression: float = 0.60
-    mean_regression: float = 0.20
+    mean_regression: float = 0.25
 
     # Defense factor: blend goals-against with shots-against for stability.
     # 0.0 = pure goals-against, 1.0 = pure shots-against.
@@ -176,7 +176,7 @@ class ModelConfig(BaseModel):
 
     # Momentum: weight recent results more heavily within form window
     momentum_decay: float = 0.85        # exponential decay per game (0.85 = most recent game 5.7x most distant)
-    momentum_factor: float = 0.50       # how much momentum trend adjusts offensive rating
+    momentum_factor: float = 0.30       # how much momentum trend adjusts offensive rating
 
     # Goalie workload fatigue
     goalie_fatigue_starts_threshold: int = 3   # consecutive starts before fatigue kicks in
@@ -323,8 +323,8 @@ class Settings(BaseModel):
     ]
 
     # Prediction thresholds
-    min_confidence: float = 0.55
-    min_edge: float = 0.03
+    min_confidence: float = 0.58
+    min_edge: float = 0.05
     best_bet_edge: float = 0.08
 
     # Best-bet juice limits (American odds).
@@ -332,11 +332,11 @@ class Settings(BaseModel):
     # the juice makes them poor value even if the model is confident.
     # Favorites: no steeper than -180 (risk $180 to win $100)
     # Underdogs: no floor needed (all plus-money is fine)
-    best_bet_max_favorite: float = -180.0
+    best_bet_max_favorite: float = -160.0
     # Overall implied-probability ceiling for best-bet candidates.
-    # Synced with best_bet_max_favorite: -180 → 180/280 ≈ 0.6429.
+    # Synced with best_bet_max_favorite: -160 → 160/260 ≈ 0.6154.
     # Applied at the DB level where we only have implied prob.
-    best_bet_max_implied: float = 0.6429
+    best_bet_max_implied: float = 0.6154
 
     # Scheduling
     scrape_interval_minutes: int = 30
