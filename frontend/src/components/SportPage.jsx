@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { BarChart3, Clock as ClockIcon, Users } from 'lucide-react';
 import Dashboard from './Dashboard';
+import PlayerProps from './PlayerProps';
 import History from './History';
 
 const TABS = [
@@ -37,13 +38,7 @@ function SportPage() {
 
       <div className="sport-page-content">
         {activeTab === 'dashboard' && <Dashboard />}
-        {activeTab === 'props' && (
-          <div className="coming-soon-section">
-            <Users size={48} />
-            <h2>Player Props</h2>
-            <p>{sportLabel} player props are coming soon.</p>
-          </div>
-        )}
+        {activeTab === 'props' && <PlayerProps />}
         {activeTab === 'history' && <History />}
       </div>
     </div>

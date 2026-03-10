@@ -3207,3 +3207,292 @@ a:hover {
     gap: 6px;
   }
 }
+
+/* ─── Player Props ─────────────────────────────────────────── */
+
+.player-props {
+  animation: fadeIn 0.4s ease;
+}
+
+.props-header {
+  margin-bottom: 20px;
+}
+
+.props-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.props-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.props-count {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+}
+
+/* Market filter pills */
+.props-market-filters {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.props-filter-pill {
+  padding: 6px 14px;
+  border-radius: 20px;
+  border: 1px solid var(--border-primary);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-base);
+}
+
+.props-filter-pill:hover {
+  border-color: var(--border-secondary);
+  color: var(--text-primary);
+}
+
+.props-filter-active {
+  background: rgba(0, 255, 136, 0.08);
+  border-color: var(--accent-green);
+  color: var(--accent-green);
+}
+
+/* Game cards */
+.props-games-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.props-game-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  transition: border-color var(--transition-base);
+}
+
+.props-game-card:hover {
+  border-color: var(--border-secondary);
+}
+
+.props-game-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 14px 18px;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 0.95rem;
+}
+
+.props-game-header:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.props-game-matchup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.props-team-abbr {
+  font-size: 0.95rem;
+  letter-spacing: 0.5px;
+}
+
+.props-at {
+  color: var(--text-muted);
+  font-weight: 400;
+  font-size: 0.8rem;
+}
+
+.props-game-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-muted);
+}
+
+.props-game-count {
+  font-size: 0.78rem;
+}
+
+/* Game body (expanded) */
+.props-game-body {
+  padding: 0 18px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: fadeIn 0.2s ease;
+}
+
+/* Market sections */
+.props-market-section {
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.props-market-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.props-market-count {
+  margin-left: auto;
+  font-size: 0.72rem;
+  opacity: 0.6;
+  font-weight: 400;
+}
+
+/* ATG (yes/no) grid */
+.props-atg-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 1px;
+  background: var(--border-primary);
+}
+
+.props-atg-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  background: var(--bg-card);
+  font-size: 0.82rem;
+}
+
+.props-player-name {
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.props-odds-value {
+  font-weight: 600;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', monospace);
+  font-size: 0.82rem;
+}
+
+/* Over/under table */
+.props-ou-table {
+  font-size: 0.82rem;
+}
+
+.props-ou-header-row {
+  display: grid;
+  grid-template-columns: 1fr 60px 70px 70px;
+  gap: 4px;
+  padding: 8px 14px;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.props-ou-row {
+  display: grid;
+  grid-template-columns: 1fr 60px 70px 70px;
+  gap: 4px;
+  padding: 7px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  transition: background var(--transition-base);
+}
+
+.props-ou-row:last-child {
+  border-bottom: none;
+}
+
+.props-ou-row:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.props-ou-col-player {
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.props-ou-col-line {
+  text-align: center;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.props-ou-col-odds {
+  text-align: center;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', monospace);
+  font-weight: 500;
+}
+
+.props-over {
+  color: var(--accent-green);
+}
+
+.props-under {
+  color: var(--accent-red);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .props-market-filters {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 4px;
+  }
+
+  .props-filter-pill {
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .props-atg-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .props-ou-header-row,
+  .props-ou-row {
+    grid-template-columns: 1fr 50px 60px 60px;
+    font-size: 0.76rem;
+  }
+
+  .props-game-header {
+    padding: 12px 14px;
+  }
+
+  .props-game-body {
+    padding: 0 14px 14px;
+  }
+}

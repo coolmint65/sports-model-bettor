@@ -25,6 +25,12 @@ export const fetchGameDetails = (gameId) => api.get(`/games/${gameId}`);
 export const regeneratePredictions = () =>
   api.post('/predictions/regenerate', null, { timeout: 120000 });
 
+// Player props endpoints
+export const fetchTodayProps = (market) =>
+  api.get('/props/today', { params: market ? { market } : {} });
+export const fetchGameProps = (gameId, market) =>
+  api.get(`/props/game/${gameId}`, { params: market ? { market } : {} });
+
 // Tracked bets endpoints
 export const trackBet = (predictionId) =>
   api.post('/predictions/tracked', { prediction_id: predictionId });
