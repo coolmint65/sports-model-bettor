@@ -219,6 +219,22 @@ async def _sync_odds_and_broadcast(skip_alternates: bool = True):
         logger.error("Background odds sync failed: %s", exc, exc_info=True)
 
 
+async def _sync_player_props():
+    """Fetch and persist player prop odds for today's games.
+
+    Runs on the same 30-minute cadence as alt-line refresh.
+    Uses per-event Odds API calls (5 credits per game).
+    """
+    try:
+        async with get_write_session_context() as session:
+            from app.services.odds import sync_player_props
+            count = await sync_player_props(session)
+            if count:
+                logger.info("Player props sync: %d lines updated", count)
+    except Exception as exc:
+        logger.error("Player props sync failed: %s", exc, exc_info=True)
+
+
 async def _regenerate_predictions():
     """Regenerate predictions for today's non-final games.
 
@@ -460,6 +476,12 @@ async def _scheduler_loop():
                 if need_alt_refresh:
                     last_alt_refresh = now
                     logger.info("Alt-line cache refreshed")
+
+                    # Sync player props on the same cadence as alt lines
+                    # (every 30 min).  Props use per-event API calls so
+                    # we bundle them with the alt refresh to stay within
+                    # the credit budget.
+                    await _sync_player_props()
 
             # Heartbeat log every 10 iterations (or every iteration
             # when games are live) for observability.

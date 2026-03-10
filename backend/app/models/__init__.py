@@ -12,6 +12,7 @@ from app.models.game import Game, GamePlayerStats, GameGoalieStats, HeadToHead
 from app.models.prediction import Prediction, BetResult, TrackedBet
 from app.models.injury import InjuryReport
 from app.models.matchup import PlayerMatchupStats, TeamMatchupProfile
+from app.models.player_prop import PlayerPropOdds
 
 __all__ = [
     "Base",
@@ -31,4 +32,5 @@ __all__ = [
     "InjuryReport",
     "PlayerMatchupStats",
     "TeamMatchupProfile",
+    "PlayerPropOdds",
 ]

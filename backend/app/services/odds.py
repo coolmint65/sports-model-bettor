@@ -173,6 +173,27 @@ async def sync_odds(
             return []
 
 
+async def sync_player_props(session: AsyncSession) -> int:
+    """Sync player prop odds from The Odds API.
+
+    Fetches ATG, SOG, Points, Assists, and Saves props for today's
+    games and upserts them into the PlayerPropOdds table.
+
+    Uses a 30-minute cache so repeated calls within the window are free.
+    Returns the number of prop lines synced.
+    """
+    try:
+        from app.scrapers.player_props import sync_player_props as _sync
+
+        count = await _sync(session)
+        await session.flush()
+        session.expire_all()
+        return count
+    except Exception as exc:
+        logger.error("Player props sync failed: %s", exc, exc_info=True)
+        return 0
+
+
 async def sync_odds_and_regenerate(
     session: AsyncSession,
     force: bool = False,

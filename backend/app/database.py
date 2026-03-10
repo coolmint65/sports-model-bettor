@@ -146,6 +146,7 @@ async def init_db() -> None:
     import app.models.prediction  # noqa: F401
     import app.models.injury  # noqa: F401
     import app.models.matchup  # noqa: F401
+    import app.models.player_prop  # noqa: F401
 
     async with engine.begin() as conn:
         # Enable WAL mode so readers don't block on the background sync writer.
