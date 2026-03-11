@@ -10,7 +10,7 @@ Provides:
 import asyncio
 import json
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -20,7 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from app.constants import GAME_FINAL_STATUSES
-from app.database import get_session_context
+from app.database import get_session_context, get_write_session_context
 from app.models.game import Game
 
 logger = logging.getLogger(__name__)
@@ -94,8 +94,11 @@ def _snapshot_game_odds(game: Game) -> Dict[str, Any]:
     }
 
 
-def _odds_changed(game_id: int, current: Dict[str, Any]) -> bool:
-    """Check if odds changed from last known snapshot."""
+def _odds_changed_unlocked(game_id: int, current: Dict[str, Any]) -> bool:
+    """Check if odds changed from last known snapshot.
+
+    MUST be called while holding ``_snapshot_lock``.
+    """
     previous = _last_odds_snapshot.get(game_id)
     if previous is None:
         return True
@@ -110,11 +113,15 @@ _scheduler_task: Optional[asyncio.Task] = None
 _scheduler_running = False
 
 
-async def _sync_odds_and_broadcast():
+async def _sync_odds_and_broadcast(skip_alternates: bool = True):
     """Fetch latest odds, detect changes, broadcast.
 
     This is the fast path: odds-only, no prediction regeneration.
     Predictions are regenerated separately on a slower cadence.
+
+    When ``skip_alternates`` is True (the default for fast cycles),
+    per-event alternate line API calls are skipped and cached data is
+    used instead, dramatically reducing Odds API credit consumption.
 
     Uses two separate sessions:
     1. Sync session — fetches odds, writes to DB, COMMITS immediately
@@ -128,8 +135,10 @@ async def _sync_odds_and_broadcast():
         # Phase 1: Sync odds and COMMIT to DB immediately.
         # This ensures the /schedule/live endpoint returns fresh data
         # even before we broadcast via WebSocket.
+        # Uses get_write_session_context() to hold the global write lock
+        # for the entire transaction, preventing SQLite "database is locked".
         matched = []
-        async with get_session_context() as session:
+        async with get_write_session_context() as session:
             today = date.today()
 
             # Check if there are any non-final games to sync
@@ -149,7 +158,9 @@ async def _sync_odds_and_broadcast():
             # bypass the service-layer throttle since the scheduler
             # already controls pacing.
             from app.services.odds import sync_odds
-            matched = await sync_odds(session, force=True)
+            matched = await sync_odds(
+                session, force=True, skip_alternates=skip_alternates,
+            )
             # Session commits on exit via get_session_context()
 
         if not matched:
@@ -176,7 +187,7 @@ async def _sync_odds_and_broadcast():
             async with _snapshot_lock:
                 for game in games:
                     current = _snapshot_game_odds(game)
-                    if _odds_changed(game.id, current):
+                    if _odds_changed_unlocked(game.id, current):
                         _last_odds_snapshot[game.id] = current
                         changed_games.append({
                             "game_id": game.id,
@@ -208,6 +219,22 @@ async def _sync_odds_and_broadcast():
         logger.error("Background odds sync failed: %s", exc, exc_info=True)
 
 
+async def _sync_player_props():
+    """Fetch and persist player prop odds for today's games.
+
+    Runs on the same 30-minute cadence as alt-line refresh.
+    Uses per-event Odds API calls (5 credits per game).
+    """
+    try:
+        async with get_write_session_context() as session:
+            from app.services.odds import sync_player_props
+            count = await sync_player_props(session)
+            if count:
+                logger.info("Player props sync: %d lines updated", count)
+    except Exception as exc:
+        logger.error("Player props sync failed: %s", exc, exc_info=True)
+
+
 async def _regenerate_predictions():
     """Regenerate predictions for today's non-final games.
 
@@ -215,7 +242,7 @@ async def _regenerate_predictions():
     need to update every 30 seconds.
     """
     try:
-        async with get_session_context() as session:
+        async with get_write_session_context() as session:
             from datetime import date as date_type
 
             from sqlalchemy import delete as sa_delete
@@ -257,6 +284,30 @@ async def _regenerate_predictions():
         logger.error("Prediction regeneration failed: %s", exc, exc_info=True)
 
 
+async def _settle_bets():
+    """Auto-settle predictions and tracked bets for completed games.
+
+    Runs after each scheduler cycle so bets are graded promptly
+    when a game goes final.
+    """
+    try:
+        from app.services.settlement import settle_completed_games
+
+        async with get_write_session_context() as session:
+            result = await settle_completed_games(session)
+
+        total = result["predictions_graded"] + result["tracked_bets_settled"]
+        if total > 0 and manager.client_count > 0:
+            await manager.broadcast({
+                "type": "settlements_update",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "predictions_graded": result["predictions_graded"],
+                "tracked_bets_settled": result["tracked_bets_settled"],
+            })
+    except Exception as exc:
+        logger.error("Auto-settlement failed: %s", exc, exc_info=True)
+
+
 async def _run_full_data_sync():
     """Run a full data sync (schedule, teams, rosters, odds, injuries, predictions).
 
@@ -270,6 +321,25 @@ async def _run_full_data_sync():
             return
         await _run_full_sync()
         logger.info("Periodic full data sync completed")
+
+        # Sync injury reports
+        try:
+            from app.scrapers.injury_scraper import fetch_injury_reports
+            async with get_write_session_context() as session:
+                count = await fetch_injury_reports(session)
+                logger.info("Injury sync: %d records updated", count)
+        except Exception as inj_exc:
+            logger.error("Injury sync failed: %s", inj_exc)
+
+        # Sync MoneyPuck 5v5 possession data
+        try:
+            from app.scrapers.moneypuck import sync_moneypuck_ev_stats
+            async with get_write_session_context() as session:
+                count = await sync_moneypuck_ev_stats(session)
+                logger.info("MoneyPuck 5v5 sync: %d teams updated", count)
+        except Exception as mp_exc:
+            logger.error("MoneyPuck sync failed: %s", mp_exc)
+
     except Exception as exc:
         logger.error("Periodic full data sync failed: %s", exc, exc_info=True)
 
@@ -277,23 +347,34 @@ async def _run_full_data_sync():
 async def _scheduler_loop():
     """Adaptive scheduler: fast odds when live, slower predictions & full sync.
 
-    Timing strategy:
-    - Live games: odds every 30s, predictions every 5min
-    - Pregame: odds every 90s, predictions every 5min
-    - Idle: odds every 5min, predictions every 10min
-    - Full data sync: every 30min, runs in a separate task so it never
-      blocks the odds loop
+    Timing strategy (optimised for Odds API credit conservation):
+    - Live games: odds every 60s (main lines only, alternates cached)
+    - Pregame (within 2h of first game): odds every 120s
+    - Idle (no games within 2h): odds every 10min
+    - Off days (no games scheduled): no odds sync at all
+    - Alternate lines: refreshed every 30min via full sync
+    - Full data sync: every 30min, runs in a separate task
+
+    Credit budget math (assuming 1 bulk API call per sync):
+    - Live (~3h window): 3×60 = 180 syncs × 1 call = 180 credits
+    - Pregame (~4h): 4×30 = 120 syncs × 1 call = 120 credits
+    - Idle: negligible (~6/hr × remaining hours)
+    - Alt-line refresh: ~8 calls every 30min = ~16/hr
+    - Daily total: ~400-600 credits/game day vs ~8,000-12,000 before
     """
     global _scheduler_running
 
-    LIVE_INTERVAL = 30       # 30 seconds when games are live
-    PREGAME_INTERVAL = 90    # 90 seconds for pregame odds
-    IDLE_INTERVAL = 300      # 5 minutes when nothing happening
+    LIVE_INTERVAL = 60       # 60 seconds when games are live
+    PREGAME_INTERVAL = 120   # 120 seconds for pregame odds
+    IDLE_INTERVAL = 600      # 10 minutes when no games within 2h
+    OFF_DAY_INTERVAL = 1800  # 30 minutes on off days (schedule check only)
+    PREGAME_WINDOW_HOURS = 2 # Start syncing 2h before first game
     PRED_REGEN_INTERVAL = 300  # 5 minutes between prediction regenerations
     FULL_SYNC_INTERVAL = 1800  # 30 minutes for full data refresh
+    ALT_REFRESH_INTERVAL = 1800  # 30 min — refresh alternate lines
 
     _scheduler_running = True
-    logger.info("Live odds scheduler started")
+    logger.info("Live odds scheduler started (credit-optimised)")
 
     loop = asyncio.get_event_loop()
 
@@ -307,6 +388,7 @@ async def _scheduler_loop():
     )
     last_full_sync = loop.time()
     last_pred_regen = loop.time()
+    last_alt_refresh = 0.0  # force alt refresh on first sync
     _iteration = 0
 
     # Brief pause to let the full sync populate today's schedule
@@ -318,9 +400,11 @@ async def _scheduler_loop():
             _iteration += 1
             cycle_start = loop.time()
 
-            # Determine current interval based on game state
-            interval = IDLE_INTERVAL
+            # Determine current state: live / pregame / idle / off-day
+            interval = OFF_DAY_INTERVAL
             live_count = 0
+            upcoming_count = 0
+            games_within_window = False
             try:
                 async with get_session_context() as session:
                     today = date.today()
@@ -336,31 +420,83 @@ async def _scheduler_loop():
                     if live_count > 0:
                         interval = LIVE_INTERVAL
                     else:
+                        # Check for upcoming (non-final) games today
                         upcoming_result = await session.execute(
                             select(func.count(Game.id)).where(
                                 Game.date == today,
                                 ~func.lower(Game.status).in_(GAME_FINAL_STATUSES),
                             )
                         )
-                        upcoming = upcoming_result.scalar() or 0
-                        if upcoming > 0:
-                            interval = PREGAME_INTERVAL
+                        upcoming_count = upcoming_result.scalar() or 0
+
+                        if upcoming_count > 0:
+                            # Check if any game starts within the pregame window
+                            now_utc = datetime.now(timezone.utc)
+                            window_cutoff = now_utc + timedelta(
+                                hours=PREGAME_WINDOW_HOURS
+                            )
+                            near_result = await session.execute(
+                                select(func.count(Game.id)).where(
+                                    Game.date == today,
+                                    ~func.lower(Game.status).in_(
+                                        GAME_FINAL_STATUSES
+                                    ),
+                                    Game.start_time <= window_cutoff,
+                                )
+                            )
+                            near_count = near_result.scalar() or 0
+                            if near_count > 0:
+                                games_within_window = True
+                                interval = PREGAME_INTERVAL
+                            else:
+                                # Games today but not for a while — idle
+                                interval = IDLE_INTERVAL
+                        # else: no games today → OFF_DAY_INTERVAL
             except Exception as exc:
                 logger.warning("Scheduler interval check failed: %s", exc)
+                interval = IDLE_INTERVAL  # safe fallback
 
-            # Always sync odds — the interval already adjusts pacing.
-            # Even in "idle" mode, keep syncing so pregame odds stay
-            # fresh for any games that appear.
-            await _sync_odds_and_broadcast()
+            # Decide whether to sync odds at all
+            should_sync = live_count > 0 or games_within_window
+
+            # On idle/off-day, skip odds sync entirely to save credits.
+            # The full data sync (every 30min) still runs and will pick
+            # up schedule changes.
+            if should_sync:
+                # Decide whether this cycle should also refresh alt lines.
+                # Alt lines are refreshed every ALT_REFRESH_INTERVAL or on
+                # the first sync of the session.
+                now = loop.time()
+                need_alt_refresh = (
+                    now - last_alt_refresh >= ALT_REFRESH_INTERVAL
+                )
+                await _sync_odds_and_broadcast(
+                    skip_alternates=not need_alt_refresh,
+                )
+                if need_alt_refresh:
+                    last_alt_refresh = now
+                    logger.info("Alt-line cache refreshed")
+
+                    # Sync player props on the same cadence as alt lines
+                    # (every 30 min).  Props use per-event API calls so
+                    # we bundle them with the alt refresh to stay within
+                    # the credit budget.
+                    await _sync_player_props()
 
             # Heartbeat log every 10 iterations (or every iteration
             # when games are live) for observability.
             if live_count > 0 or _iteration % 10 == 0:
+                state = (
+                    "LIVE" if live_count > 0
+                    else "PREGAME" if games_within_window
+                    else "IDLE" if upcoming_count > 0
+                    else "OFF_DAY"
+                )
                 logger.info(
-                    "Scheduler heartbeat: iter=%d, interval=%ds, "
-                    "live=%d, clients=%d",
-                    _iteration, interval, live_count,
-                    manager.client_count,
+                    "Scheduler heartbeat: iter=%d, interval=%ds, state=%s, "
+                    "live=%d, upcoming=%d, clients=%d",
+                    _iteration, interval, state, live_count,
+                    upcoming_count, manager.client_count,
                 )
 
             # Regenerate predictions on a slower cadence
@@ -368,6 +504,10 @@ async def _scheduler_loop():
             if now - last_pred_regen >= PRED_REGEN_INTERVAL:
                 await _regenerate_predictions()
                 last_pred_regen = now
+
+            # Auto-settle bets for any games that just went final.
+            # Runs every cycle (lightweight — only queries for unsettled).
+            await _settle_bets()
 
             # Periodic full data sync — run as background task so it
             # never blocks the fast odds loop

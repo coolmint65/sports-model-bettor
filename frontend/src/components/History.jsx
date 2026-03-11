@@ -11,7 +11,6 @@ import {
   Percent,
   Filter,
   Trash2,
-  RefreshCw,
   Layers,
   Lock,
   Unlock,
@@ -27,7 +26,7 @@ import {
   ReferenceLine,
 } from 'recharts';
 import { format, parseISO } from 'date-fns';
-import { fetchTrackedBets, deleteTrackedBet, settleTrackedBets, clearAllTrackedBets, updateTrackedBet } from '../utils/api';
+import { fetchTrackedBets, deleteTrackedBet, clearAllTrackedBets } from '../utils/api';
 import { useWebSocketEvent } from '../hooks/useWebSocket';
 import { useApi } from '../hooks/useApi';
 import { confidencePct, formatBetType, formatPredictionValue } from '../utils/teams';
@@ -71,7 +70,6 @@ function CustomTooltip({ active, payload, label }) {
 function History() {
   const { data, loading, error, refetch, silentRefetch } = useApi(fetchTrackedBets);
   const [betTypeFilter, setBetTypeFilter] = useState('all');
-  const [settling, setSettling] = useState(false);
   const [clearing, setClearing] = useState(false);
 
   // Listen for data syncs to auto-settle
@@ -86,6 +84,11 @@ function History() {
     silentRefetch();
   }, [silentRefetch]));
 
+  // Auto-refresh when the server settles bets (games went final)
+  useWebSocketEvent('settlements_update', useCallback(() => {
+    silentRefetch();
+  }, [silentRefetch]));
+
   const bets = data?.bets || [];
   const totalBets = data?.total_bets || 0;
   const winsCount = data?.wins || 0;
@@ -93,11 +96,9 @@ function History() {
   const pushesCount = data?.pushes || 0;
   const pendingCount = data?.pending || 0;
   const totalProfit = data?.total_profit || 0;
-  const totalUnitsWagered = data?.total_units_wagered || 0;
 
   const totalGraded = winsCount + lossesCount;
   const winRate = totalGraded > 0 ? (winsCount / totalGraded) * 100 : 0;
-  const roi = totalUnitsWagered > 0 ? (totalProfit / totalUnitsWagered) * 100 : 0;
 
   const betTypes = useMemo(() => {
     const types = new Set();
@@ -161,26 +162,17 @@ function History() {
     return maxStreak;
   }, [bets]);
 
-  const handleSettle = useCallback(async () => {
-    setSettling(true);
-    try {
-      await settleTrackedBets();
-      await refetch();
-    } catch (err) {
-      console.error('Failed to settle bets:', err);
-    } finally {
-      setSettling(false);
-    }
-  }, [refetch]);
-
   const handleClearAll = useCallback(async () => {
     if (!window.confirm('Clear all tracked bets? This cannot be undone.')) return;
     setClearing(true);
     try {
       await clearAllTrackedBets();
-      await refetch();
+      // Optimistic update — clear local state immediately
+      // (the backend commit may not be visible to a refetch yet)
+      refetch();
     } catch (err) {
       console.error('Failed to clear bets:', err);
+      await refetch();
     } finally {
       setClearing(false);
     }
@@ -203,19 +195,9 @@ function History() {
             <BarChart3 size={28} />
             Bet Tracker
           </h1>
-          <p className="history-subtitle">Track your picks from the dashboard and monitor performance</p>
+          <p className="history-subtitle">Your picks are automatically tracked and settled when games finish</p>
         </div>
         <div className="history-actions">
-          {pendingCount > 0 && (
-            <button
-              className="btn btn-settle"
-              onClick={handleSettle}
-              disabled={settling}
-            >
-              <RefreshCw size={14} className={settling ? 'spin' : ''} />
-              {settling ? 'Settling...' : `Settle (${pendingCount})`}
-            </button>
-          )}
           {totalBets > 0 && (
             <button
               className="btn btn-clear"
@@ -259,7 +241,6 @@ function History() {
                   icon={DollarSign}
                   label="Total Profit"
                   value={`${totalProfit >= 0 ? '+' : ''}${totalProfit.toFixed(2)}u`}
-                  subValue={totalUnitsWagered > 0 ? `${roi.toFixed(1)}% ROI on ${totalUnitsWagered.toFixed(1)}u wagered` : undefined}
                   color={totalProfit >= 0 ? '#00ff88' : '#ff5252'}
                 />
                 <StatCard
@@ -372,7 +353,7 @@ function History() {
             {filteredBets.length === 0 ? (
               <div className="empty-state">
                 <BarChart3 size={48} />
-                <p>No tracked bets yet. Use the "Track" button on best bets to start tracking your picks.</p>
+                <p>No tracked bets yet. Top picks are automatically tracked and settled when games finish.</p>
               </div>
             ) : (
               <div className="history-table">
@@ -383,7 +364,6 @@ function History() {
                   <span className="col-pick">Pick</span>
                   <span className="col-odds">Odds</span>
                   <span className="col-confidence">Conf.</span>
-                  <span className="col-units">Units</span>
                   <span className="col-phase">Phase</span>
                   <span className="col-status">Status</span>
                   <span className="col-result">Result</span>
@@ -395,6 +375,7 @@ function History() {
                     const isWin = bet.result === 'win';
                     const isLoss = bet.result === 'loss';
                     const isPending = !bet.result;
+                    const isPush = bet.result === 'push';
                     const profit = bet.profit_loss || 0;
                     const confidence = confidencePct(bet.confidence);
                     const isLocked = bet.locked;
@@ -406,6 +387,18 @@ function History() {
                       }
                     } catch {
                       // keep original
+                    }
+
+                    let settledDisplay = null;
+                    if (bet.settled_at) {
+                      try {
+                        const settledDate = new Date(bet.settled_at);
+                        if (!isNaN(settledDate.getTime())) {
+                          settledDisplay = format(settledDate, 'MMM d, h:mm a');
+                        }
+                      } catch {
+                        // skip
+                      }
                     }
 
                     const oddsStr = formatAmericanOdds(bet.odds);
@@ -422,7 +415,7 @@ function History() {
                           {bet.home_team_abbr || bet.home_team_name || '?'}
                         </span>
                         <span className="col-type">{formatBetType(bet.bet_type)}</span>
-                        <span className="col-pick">{formatPredictionValue(bet.prediction_value, bet.home_team_abbr, bet.away_team_abbr)}</span>
+                        <span className="col-pick">{formatPredictionValue(bet.prediction_value, bet.home_team_abbr, bet.away_team_abbr, bet.bet_type)}</span>
                         <span className="col-odds">{oddsStr || '—'}</span>
                         <span className="col-confidence">
                           <span
@@ -433,7 +426,6 @@ function History() {
                           ></span>
                           {confidence.toFixed(0)}%
                         </span>
-                        <span className="col-units">{(bet.units || 1).toFixed(1)}u</span>
                         <span className={`col-phase phase-tag phase-${phase}`}>
                           <Layers size={10} />
                           {phase === 'live' ? 'Live' : 'Pre'}
@@ -442,11 +434,17 @@ function History() {
                           {isLocked ? <Lock size={13} /> : <Unlock size={13} />}
                           {isLocked ? 'Locked' : 'Open'}
                         </span>
-                        <span className={`col-result ${isWin ? 'result-win' : isLoss ? 'result-loss' : 'result-pending'}`}>
+                        <span className={`col-result ${isWin ? 'result-win' : isLoss ? 'result-loss' : isPush ? 'result-push' : 'result-pending'}`}>
                           {isWin && <CheckCircle size={14} />}
                           {isLoss && <XCircle size={14} />}
+                          {isPush && <Clock size={14} />}
                           {isPending && <Clock size={14} />}
-                          {isWin ? 'Win' : isLoss ? 'Loss' : 'Pending'}
+                          {isWin ? 'Win' : isLoss ? 'Loss' : isPush ? 'Push' : 'Pending'}
+                          {settledDisplay && (
+                            <span className="settled-at-label" title={`Settled ${settledDisplay}`}>
+                              {settledDisplay}
+                            </span>
+                          )}
                         </span>
                         <span className={`col-profit ${!isPending && profit >= 0 ? 'profit-positive' : !isPending ? 'profit-negative' : ''}`}>
                           {isPending ? '—' : `${profit >= 0 ? '+' : ''}${typeof profit === 'number' ? profit.toFixed(2) : profit}u`}

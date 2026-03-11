@@ -504,6 +504,28 @@ class NHLScraper(BaseScraper):
                     setattr(stats, key, val)
 
         await db.flush()
+
+        # Mark teams not in the current standings as inactive (e.g. ARI
+        # after relocation to UTA).  This prevents sync_rosters from
+        # hitting 404s for defunct teams.
+        active_abbrevs = {
+            e.get("team_abbrev") for e in standings if e.get("team_abbrev")
+        }
+        if active_abbrevs:
+            all_teams_result = await db.execute(
+                select(Team).where(Team.sport == "nhl")
+            )
+            for t in all_teams_result.scalars():
+                if t.abbreviation not in active_abbrevs and t.active:
+                    t.active = False
+                    logger.info(
+                        "Deactivated team not in standings: %s (%s)",
+                        t.name, t.abbreviation,
+                    )
+                elif t.abbreviation in active_abbrevs and not t.active:
+                    t.active = True
+            await db.flush()
+
         logger.info("Teams sync complete: %d teams processed", len(standings))
 
     # ------------------------------------------------------------------
@@ -727,7 +749,7 @@ class NHLScraper(BaseScraper):
             db: Async SQLAlchemy session.
             game_id: The NHL API game ID (external id).
         """
-        logger.info("Syncing game results for game_id=%d", game_id)
+        logger.debug("Syncing game results for game_id=%d", game_id)
 
         # Fetch boxscore
         try:
@@ -772,42 +794,62 @@ class NHLScraper(BaseScraper):
         linescore = boxscore.get("linescore", {})
         by_period = linescore.get("byPeriod", [])
 
-        # Reset period score columns
-        game.home_score_p1 = None
-        game.away_score_p1 = None
-        game.home_score_p2 = None
-        game.away_score_p2 = None
-        game.home_score_p3 = None
-        game.away_score_p3 = None
-        game.home_score_ot = None
-        game.away_score_ot = None
-
         ot_home_total = 0
         ot_away_total = 0
         went_to_ot = False
 
-        for idx, period in enumerate(by_period):
-            home_p = period.get("home", 0)
-            away_p = period.get("away", 0)
+        # Only reset period columns when the API actually provides
+        # period data.  Without this guard, games whose boxscore
+        # lacks a byPeriod breakdown get their scores reset to NULL
+        # on every sync, causing the backfill query (which checks
+        # home_score_p1 IS NULL) to re-select them indefinitely.
+        if by_period:
+            game.home_score_p1 = None
+            game.away_score_p1 = None
+            game.home_score_p2 = None
+            game.away_score_p2 = None
+            game.home_score_p3 = None
+            game.away_score_p3 = None
+            game.home_score_ot = None
+            game.away_score_ot = None
 
-            if idx == 0:
-                game.home_score_p1 = home_p
-                game.away_score_p1 = away_p
-            elif idx == 1:
-                game.home_score_p2 = home_p
-                game.away_score_p2 = away_p
-            elif idx == 2:
-                game.home_score_p3 = home_p
-                game.away_score_p3 = away_p
-            else:
-                # All OT / SO periods get summed into the OT column
+        for period in by_period:
+            # Each byPeriod entry has periodDescriptor with number/periodType
+            pd = period.get("periodDescriptor", {})
+            period_num = pd.get("number")
+            period_type = (pd.get("periodType") or "").upper()
+
+            # Scores may be plain ints or objects with a "goals" sub-key
+            raw_home = period.get("home", 0)
+            raw_away = period.get("away", 0)
+            home_p = raw_home.get("goals", 0) if isinstance(raw_home, dict) else (raw_home or 0)
+            away_p = raw_away.get("goals", 0) if isinstance(raw_away, dict) else (raw_away or 0)
+
+            if period_type in ("OT", "SO") or (period_num is not None and period_num > 3):
                 ot_home_total += home_p
                 ot_away_total += away_p
                 went_to_ot = True
+            elif period_num == 1:
+                game.home_score_p1 = home_p
+                game.away_score_p1 = away_p
+            elif period_num == 2:
+                game.home_score_p2 = home_p
+                game.away_score_p2 = away_p
+            elif period_num == 3:
+                game.home_score_p3 = home_p
+                game.away_score_p3 = away_p
 
         if went_to_ot:
             game.home_score_ot = ot_home_total
             game.away_score_ot = ot_away_total
+
+        # Also check gameOutcome.lastPeriodType as a fallback for OT detection
+        if not went_to_ot:
+            last_period_type = (
+                self.safe_get(boxscore, "gameOutcome", "lastPeriodType") or ""
+            ).upper()
+            if last_period_type in ("OT", "SO"):
+                went_to_ot = True
 
         game.went_to_overtime = went_to_ot
 
@@ -857,7 +899,7 @@ class NHLScraper(BaseScraper):
         await self._update_head_to_head(db, game)
 
         await db.flush()
-        logger.info(
+        logger.debug(
             "Game results synced: %d (home %d - away %d, OT=%s)",
             game_id,
             home_score,
@@ -1195,7 +1237,9 @@ class NHLScraper(BaseScraper):
         Player records.
         """
         logger.info("Syncing rosters for all teams...")
-        result = await db.execute(select(Team).where(Team.sport == "nhl"))
+        result = await db.execute(
+            select(Team).where(Team.sport == "nhl", Team.active == True)  # noqa: E712
+        )
         teams = result.scalars().all()
 
         for team in teams:
@@ -1322,36 +1366,45 @@ class NHLScraper(BaseScraper):
             db: Async SQLAlchemy session.
             days_back: Number of past days to scan.
         """
-        from sqlalchemy import or_
-
         cutoff = date.today() - timedelta(days=days_back)
         result = await db.execute(
             select(Game).where(
                 Game.sport == "nhl",
                 Game.date >= cutoff,
                 Game.status == "final",
-                or_(
-                    Game.home_score_p1.is_(None),
-                    Game.went_to_overtime.is_(None),
-                ),
+                # went_to_overtime is always set (True/False) after a
+                # successful sync, so it reliably gates re-processing.
+                # Previously used OR(home_score_p1 IS NULL, ...) but
+                # home_score_p1 can stay NULL if the API lacks period
+                # data, causing infinite re-sync loops.
+                Game.went_to_overtime.is_(None),
             )
         )
         games = result.scalars().all()
 
+        if not games:
+            logger.info("Period scores backfill: all games up to date")
+            return
+
         logger.info(
-            "Syncing results for %d recent games without boxscore data",
+            "Backfilling boxscore data for %d games (past %d days)",
             len(games),
+            days_back,
         )
 
+        synced = 0
         for game in games:
             try:
                 await self.sync_game_results(db, int(game.external_id))
+                synced += 1
             except Exception as exc:
                 logger.error(
                     "Failed to sync results for game %s: %s",
                     game.external_id,
                     exc,
                 )
+
+        logger.info("Period scores backfill complete: %d/%d games synced", synced, len(games))
 
         await db.flush()
 

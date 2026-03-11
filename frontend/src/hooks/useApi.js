@@ -35,7 +35,7 @@ export function useApi(apiFunc, args = [], immediate = true) {
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [immediate]);
+  }, [immediate, execute]);
 
   const refetch = useCallback(() => {
     return execute(...args);

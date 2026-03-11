@@ -105,7 +105,7 @@ class ModelConfig(BaseModel):
     goalie_recent_weight: float = 0.60
     h2h_goal_adj_weight: float = 0.05
     defensive_regression: float = 0.60
-    mean_regression: float = 0.20
+    mean_regression: float = 0.25
 
     # Defense factor: blend goals-against with shots-against for stability.
     # 0.0 = pure goals-against, 1.0 = pure shots-against.
@@ -128,6 +128,60 @@ class ModelConfig(BaseModel):
     leading_shell_reduction: float = 0.20      # leading by 2+, reduce scoring rate
     pulled_goalie_boost: float = 0.40          # pulled goalie xG boost for trailing team
 
+    # PDO regression: blend of shooting% + save% (league avg = 100)
+    # Teams far from 100 are due for regression.
+    pdo_regression_factor: float = 0.10
+
+    # Advanced metrics (Corsi-proxy, shot quality)
+    corsi_possession_factor: float = 0.08     # how much CF% deviation adjusts xG
+    shot_quality_factor: float = 0.06         # shooting% deviation adjustment
+    advanced_metrics_min_games: int = 8       # min games before advanced metrics apply
+
+    # 5v5 even-strength possession (from MoneyPuck)
+    ev_corsi_factor: float = 0.10             # xG multiplier for 5v5 CF% deviation
+    ev_corsi_min_games: int = 8               # min games before 5v5 factor applies
+    ev_corsi_significance_threshold: float = 4.0  # CF% deviation to flag as "significant"
+
+    # Close-game possession (CF% in 1-goal games / OT)
+    close_game_corsi_factor: float = 0.06     # xG multiplier for close-game CF%
+    close_game_min_games: int = 6             # min close games before applying
+    close_game_margin: int = 1                # max score margin to qualify as "close"
+
+    # Goalie tier classification
+    goalie_tier_elite_sv: float = 0.920       # elite: >= .920 SV%
+    goalie_tier_starter_sv: float = 0.905     # starter: >= .905 SV%
+    goalie_tier_starter_min_gs: int = 20      # min games started to be "starter"
+    goalie_mismatch_factor: float = 0.08      # additional xG adjustment for tier mismatch
+
+    # Starter confirmation confidence
+    starter_confidence_high: float = 0.90     # confirmed / obvious pattern
+    starter_confidence_medium: float = 0.65   # likely but not confirmed
+    starter_confidence_low: float = 0.40      # uncertain (B2B, fatigue)
+    starter_fatigue_threshold: int = 3        # consecutive starts before fatigue concern
+
+    # Composite edge score component weights (should sum to ~1.0)
+    composite_weight_form: float = 0.15
+    composite_weight_goalie: float = 0.15
+    composite_weight_possession: float = 0.12
+    composite_weight_close_possession: float = 0.08
+    composite_weight_special_teams: float = 0.10
+    composite_weight_schedule: float = 0.08
+    composite_weight_injuries: float = 0.10
+    composite_weight_h2h: float = 0.07
+    composite_weight_matchup: float = 0.05
+    composite_weight_market_edge: float = 0.10
+
+    # Faceoff contribution to defensive factor
+    faceoff_defense_weight: float = 0.10
+
+    # Momentum: weight recent results more heavily within form window
+    momentum_decay: float = 0.85        # exponential decay per game (0.85 = most recent game 5.7x most distant)
+    momentum_factor: float = 0.30       # how much momentum trend adjusts offensive rating
+
+    # Goalie workload fatigue
+    goalie_fatigue_starts_threshold: int = 3   # consecutive starts before fatigue kicks in
+    goalie_fatigue_per_start: float = 0.02     # xG penalty per start above threshold
+
     # xG bounds
     xg_floor: float = 1.8
     xg_ceiling: float = 3.8
@@ -148,6 +202,11 @@ class ModelConfig(BaseModel):
     lineup_appearance_threshold: float = 0.70
     h2h_window: int = 20
     schedule_lookback: int = 7
+
+    # ML model settings
+    ml_blend_weight: float = 0.3           # 0.0 = pure Poisson, 1.0 = pure ML
+    ml_model_path: str = "data/ml_model.joblib"
+    ml_min_training_games: int = 100       # minimum games before ML kicks in
 
 
 class InjuryConfig(BaseModel):
@@ -264,8 +323,8 @@ class Settings(BaseModel):
     ]
 
     # Prediction thresholds
-    min_confidence: float = 0.55
-    min_edge: float = 0.03
+    min_confidence: float = 0.58
+    min_edge: float = 0.05
     best_bet_edge: float = 0.08
 
     # Best-bet juice limits (American odds).
@@ -273,15 +332,15 @@ class Settings(BaseModel):
     # the juice makes them poor value even if the model is confident.
     # Favorites: no steeper than -180 (risk $180 to win $100)
     # Underdogs: no floor needed (all plus-money is fine)
-    best_bet_max_favorite: float = -180.0
+    best_bet_max_favorite: float = -160.0
     # Overall implied-probability ceiling for best-bet candidates.
-    # Synced with best_bet_max_favorite: -180 → 180/280 ≈ 0.6429.
+    # Synced with best_bet_max_favorite: -160 → 160/260 ≈ 0.6154.
     # Applied at the DB level where we only have implied prob.
-    best_bet_max_implied: float = 0.6429
+    best_bet_max_implied: float = 0.6154
 
     # Scheduling
     scrape_interval_minutes: int = 30
-    odds_refresh_interval_minutes: int = 10  # 20k tier budget
+    odds_refresh_interval_minutes: int = 15
 
     # Model tuning
     model: ModelConfig = ModelConfig()

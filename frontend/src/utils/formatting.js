@@ -1,9 +1,8 @@
 /**
  * Shared formatting utilities.
  *
- * Single source of truth for odds formatting, confidence colors,
- * and game ID normalization. Eliminates duplication across
- * BestBets, GameDetail, GameCard, History, and PredictionCard.
+ * Single source of truth for odds formatting and confidence colors.
+ * Used by GameDetail, GameCard, History, and PredictionCard.
  */
 
 /**
@@ -26,20 +25,6 @@ export function formatAmericanOddsOrDash(odds) {
 }
 
 /**
- * Convert implied probability to American odds display string.
- */
-export function formatOddsFromProb(impliedProb) {
-  if (!impliedProb || impliedProb <= 0 || impliedProb >= 1) return null;
-  if (impliedProb > 0.5) {
-    const odds = Math.round(-(impliedProb / (1 - impliedProb)) * 100);
-    return odds.toString();
-  } else {
-    const odds = Math.round(((1 - impliedProb) / impliedProb) * 100);
-    return `+${odds}`;
-  }
-}
-
-/**
  * Get the themed color for a confidence percentage.
  */
 export function getConfidenceColor(confidence) {
@@ -49,9 +34,3 @@ export function getConfidenceColor(confidence) {
   return '#ff5252';
 }
 
-/**
- * Normalize game ID from objects that use either `id` or `game_id`.
- */
-export function getGameId(game) {
-  return game?.game_id ?? game?.id ?? null;
-}

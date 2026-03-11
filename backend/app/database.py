@@ -5,11 +5,13 @@ Provides the async engine, session factory, and database initialization
 utilities. Uses SQLAlchemy 2.0 async style throughout.
 """
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -20,13 +22,29 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Global write lock — serialises all DB write transactions so that
+# concurrent async tasks (odds sync, full data sync, predictions, etc.)
+# never collide on SQLite's single-writer constraint.
+db_write_lock = asyncio.Lock()
+
 # Create the async engine.
 # timeout=30 raises the SQLite busy-wait from 5 s to 30 s so the
 # background sync and API requests don't clash with "database is locked".
+#
+# Pool sizing: the app has several concurrent DB consumers:
+#   - Multiple FastAPI request handlers (schedule, predictions, tracked bets)
+#   - Background scheduler tasks (odds sync, prediction regen, settlement)
+#   - Auto-track POST bursts from the frontend (up to ~3 concurrent)
+# The default pool_size=5 + max_overflow=10 exhausts under load.
+# Raise to pool_size=10 + max_overflow=20 to accommodate bursts.
 engine = create_async_engine(
     settings.database_url,
     echo=False,
     future=True,
+    pool_size=10,
+    max_overflow=20,
+    pool_timeout=60,
+    pool_recycle=3600,
     connect_args={"check_same_thread": False, "timeout": 30},
 )
 
@@ -81,6 +99,32 @@ async def get_session_context() -> AsyncGenerator[AsyncSession, None]:
             await session.close()
 
 
+@asynccontextmanager
+async def get_write_session_context() -> AsyncGenerator[AsyncSession, None]:
+    """Session context that holds the global write lock for the entire
+    transaction lifetime.
+
+    Use this for operations that call ``session.flush()`` or execute
+    INSERT/UPDATE/DELETE statements, so that they cannot overlap with
+    other writers and trigger SQLite "database is locked" errors.
+
+    Usage:
+        async with get_write_session_context() as session:
+            session.add(obj)
+            await session.flush()   # safe — write lock already held
+    """
+    async with db_write_lock:
+        async with async_session_factory() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+            finally:
+                await session.close()
+
+
 async def init_db() -> None:
     """
     Initialize the database by creating all tables defined in the models.
@@ -100,9 +144,9 @@ async def init_db() -> None:
     import app.models.player  # noqa: F401
     import app.models.game  # noqa: F401
     import app.models.prediction  # noqa: F401
-    import app.models.odds_history  # noqa: F401
     import app.models.injury  # noqa: F401
     import app.models.matchup  # noqa: F401
+    import app.models.player_prop  # noqa: F401
 
     async with engine.begin() as conn:
         # Enable WAL mode so readers don't block on the background sync writer.
@@ -202,7 +246,7 @@ async def _migrate_add_columns() -> None:
         ("game", "period3_spread_line", "FLOAT"),
         ("game", "period3_home_spread_price", "FLOAT"),
         ("game", "period3_away_spread_price", "FLOAT"),
-        # Closing odds snapshot (CLV tracking)
+        # Game closing line snapshots
         ("game", "closing_home_moneyline", "FLOAT"),
         ("game", "closing_away_moneyline", "FLOAT"),
         ("game", "closing_over_under_line", "FLOAT"),
@@ -211,7 +255,7 @@ async def _migrate_add_columns() -> None:
         ("game", "closing_home_spread_line", "FLOAT"),
         ("game", "closing_home_spread_price", "FLOAT"),
         ("game", "closing_away_spread_price", "FLOAT"),
-        # BetResult CLV fields
+        # BetResult CLV tracking
         ("bet_result", "closing_implied_prob", "FLOAT"),
         ("bet_result", "clv", "FLOAT"),
     ]
@@ -223,8 +267,12 @@ async def _migrate_add_columns() -> None:
                     text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
                 )
                 logger.info("Added column %s.%s", table, column)
-            except Exception:  # noqa: BLE001 — OperationalError when column exists
+            except OperationalError:
+                # Column already exists — expected on subsequent startups
                 pass
+            except Exception:
+                logger.error("Failed to add column %s.%s", table, column, exc_info=True)
+                raise
 
 
 async def close_db() -> None:

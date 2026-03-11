@@ -51,7 +51,7 @@ async def fetch_injury_reports(db: AsyncSession) -> int:
     updated_count = 0
 
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
             # Get all teams to iterate their rosters
             teams_resp = await client.get(f"{NHL_API_BASE}/standings/now")
             if teams_resp.status_code != 200:
@@ -135,7 +135,7 @@ async def _process_team_injuries(
             existing_stmt = select(InjuryReport).where(
                 and_(
                     InjuryReport.player_id == player.id,
-                    InjuryReport.is_active.is_(True),
+                    InjuryReport.active == True,
                 )
             )
             existing_result = await db.execute(existing_stmt)
@@ -148,15 +148,22 @@ async def _process_team_injuries(
             if existing:
                 existing.status = injury_status
                 existing.injury_type = injury_type
+                existing.player_ppg = ppg
+                existing.player_gpg = gpg
+                existing.player_toi = toi
+                existing.updated_at = datetime.now(timezone.utc)
             else:
                 report = InjuryReport(
                     player_id=player.id,
                     team_id=player.team_id,
                     status=injury_status,
                     injury_type=injury_type,
-                    reported_at=datetime.now(timezone.utc),
+                    reported_date=date.today(),
                     source="nhl_api",
-                    is_active=True,
+                    active=True,
+                    player_ppg=ppg,
+                    player_gpg=gpg,
+                    player_toi=toi,
                 )
                 db.add(report)
 
@@ -254,7 +261,7 @@ async def _deactivate_stale_reports(db: AsyncSession) -> None:
         select(InjuryReport)
         .where(
             and_(
-                InjuryReport.is_active.is_(True),
+                InjuryReport.active == True,
                 InjuryReport.updated_at < cutoff,
             )
         )
@@ -263,7 +270,7 @@ async def _deactivate_stale_reports(db: AsyncSession) -> None:
     stale = result.scalars().all()
 
     for report in stale:
-        report.is_active = False
+        report.active = False
         logger.info(
             "Deactivated stale injury report: player_id=%d, status=%s",
             report.player_id, report.status,

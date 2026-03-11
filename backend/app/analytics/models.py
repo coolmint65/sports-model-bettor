@@ -88,13 +88,20 @@ class BettingModel:
     Statistical prediction model for NHL hockey betting.
 
     Uses Poisson distribution with weighted historical inputs to produce
-    probabilities for moneyline, totals, and spreads.
+    probabilities for moneyline, totals, and spreads. Optionally blends
+    with an ML model for improved xG estimation when trained.
     """
 
-    def __init__(self) -> None:
-        """Initialize the betting model with default parameters."""
+    def __init__(self, ml_model=None) -> None:
+        """Initialize the betting model with default parameters.
+
+        Args:
+            ml_model: Optional MLModel instance. If provided and trained,
+                      predictions will blend Poisson xG with ML xG.
+        """
         self.league_avg = LEAGUE_AVG_GOALS
         self.home_ice_adj = HOME_ICE_ADVANTAGE
+        self.ml_model = ml_model
 
     # ------------------------------------------------------------------ #
     #  Core: Expected goals calculation                                   #
@@ -145,16 +152,32 @@ class BettingModel:
             features["away_season"]["goals_for_pg"],
         )
 
+        # ---- Momentum adjustment ----
+        # momentum_avg_gf weights recent games exponentially heavier.
+        # Compare to raw avg_goals_for to detect trending up/down.
+        home_momentum = features["home_form_5"].get("momentum_avg_gf")
+        away_momentum = features["away_form_5"].get("momentum_avg_gf")
+        home_raw_gf = features["home_form_5"]["avg_goals_for"]
+        away_raw_gf = features["away_form_5"]["avg_goals_for"]
+        if home_momentum and home_raw_gf > 0:
+            momentum_ratio = home_momentum / home_raw_gf - 1.0
+            home_off *= 1.0 + momentum_ratio * _mc.momentum_factor
+        if away_momentum and away_raw_gf > 0:
+            momentum_ratio = away_momentum / away_raw_gf - 1.0
+            away_off *= 1.0 + momentum_ratio * _mc.momentum_factor
+
         # ---- Defensive adjustments (opponent quality) ----
         # Home team faces away goalie/defense; away team faces home goalie/defense
         # Blend goals-against with shots-against for more stable defense ratings.
         home_def_factor = self._defensive_factor(
             features["home_season"]["goals_against_pg"],
             features["home_season"].get("shots_against_pg", 0.0),
+            features["home_season"].get("faceoff_pct", 50.0),
         )
         away_def_factor = self._defensive_factor(
             features["away_season"]["goals_against_pg"],
             features["away_season"].get("shots_against_pg", 0.0),
+            features["away_season"].get("faceoff_pct", 50.0),
         )
 
         # Home team expected goals = home offense * away defensive weakness
@@ -181,12 +204,31 @@ class BettingModel:
             home_xg = home_xg * (1 - h2h_goal_adj) + h2h_home_goals * h2h_goal_adj
             away_xg = away_xg * (1 - h2h_goal_adj) + h2h_away_goals * h2h_goal_adj
 
-        # ---- Goalie quality adjustment ----
+        # ---- Goalie quality adjustment (with starter confidence discount) ----
         away_goalie = features.get("away_goalie", {})
         home_goalie = features.get("home_goalie", {})
+        home_starter_conf = features.get("home_starter_status", {}).get("starter_confidence", 1.0)
+        away_starter_conf = features.get("away_starter_status", {}).get("starter_confidence", 1.0)
 
+        # Apply goalie adjustment but scale by starter confidence
+        home_xg_before = home_xg
         home_xg = self._apply_goalie_adjustment(home_xg, away_goalie)
+        goalie_delta = home_xg - home_xg_before
+        home_xg = home_xg_before + goalie_delta * away_starter_conf
+
+        away_xg_before = away_xg
         away_xg = self._apply_goalie_adjustment(away_xg, home_goalie)
+        goalie_delta = away_xg - away_xg_before
+        away_xg = away_xg_before + goalie_delta * home_starter_conf
+
+        # ---- Goalie tier mismatch ----
+        home_tier = home_goalie.get("tier_rank", 2)
+        away_tier = away_goalie.get("tier_rank", 2)
+        tier_diff = home_tier - away_tier  # positive = home has better goalie
+        if abs(tier_diff) >= 1:
+            mismatch_adj = tier_diff * _mc.goalie_mismatch_factor
+            away_xg *= (1.0 - mismatch_adj * 0.5)
+            home_xg *= (1.0 + mismatch_adj * 0.5)
 
         # ---- Home/away splits adjustment ----
         home_splits = features.get("home_splits", {})
@@ -349,6 +391,72 @@ class BettingModel:
             period_dev = away_period_total - self.league_avg
             away_xg += period_dev * _mc.period_scoring_factor
 
+        # ---- Advanced metrics adjustment (Corsi-proxy / shot quality) ----
+        # Teams that dominate possession (high Corsi%) tend to outperform
+        # raw scoring stats. Teams with high shooting% are due to regress
+        # while those with suppressed shooting% will bounce back.
+        home_advanced = features.get("home_advanced", {})
+        away_advanced = features.get("away_advanced", {})
+        adv_min_games = _mc.advanced_metrics_min_games
+
+        if home_advanced.get("games_found", 0) >= adv_min_games:
+            # Corsi possession: CF% above 50 means team controls play
+            home_cf_pct = home_advanced.get("corsi_for_pct", 50.0)
+            cf_deviation = (home_cf_pct - 50.0) / 100.0  # e.g., 54% → +0.04
+            home_xg *= 1.0 + cf_deviation * _mc.corsi_possession_factor
+
+            # Shot quality: shooting% above league avg (~8%) suggests better chances
+            home_sh_pct = home_advanced.get("shooting_pct", 8.0)
+            sh_deviation = (home_sh_pct - 8.0) / 100.0
+            home_xg *= 1.0 + sh_deviation * _mc.shot_quality_factor
+
+        if away_advanced.get("games_found", 0) >= adv_min_games:
+            away_cf_pct = away_advanced.get("corsi_for_pct", 50.0)
+            cf_deviation = (away_cf_pct - 50.0) / 100.0
+            away_xg *= 1.0 + cf_deviation * _mc.corsi_possession_factor
+
+            away_sh_pct = away_advanced.get("shooting_pct", 8.0)
+            sh_deviation = (away_sh_pct - 8.0) / 100.0
+            away_xg *= 1.0 + sh_deviation * _mc.shot_quality_factor
+
+        # ---- 5v5 Even-strength possession adjustment ----
+        # True 5v5 Corsi from MoneyPuck is more predictive than our
+        # all-situations Corsi proxy since it filters out PP/PK noise.
+        home_ev = features.get("home_ev_possession", {})
+        away_ev = features.get("away_ev_possession", {})
+        if home_ev.get("games_found", 0) >= _mc.ev_corsi_min_games:
+            ev_deviation = (home_ev.get("ev_cf_pct", 50.0) - 50.0) / 100.0
+            home_xg *= 1.0 + ev_deviation * _mc.ev_corsi_factor
+        if away_ev.get("games_found", 0) >= _mc.ev_corsi_min_games:
+            ev_deviation = (away_ev.get("ev_cf_pct", 50.0) - 50.0) / 100.0
+            away_xg *= 1.0 + ev_deviation * _mc.ev_corsi_factor
+
+        # ---- Close-game possession adjustment ----
+        # CF% in close games (1-goal margin / OT) filters out score effects
+        # from blowouts and is a better predictor of sustained quality.
+        home_close = features.get("home_close_possession", {})
+        away_close = features.get("away_close_possession", {})
+        if home_close.get("close_games_found", 0) >= _mc.close_game_min_games:
+            close_dev = (home_close.get("close_cf_pct", 50.0) - 50.0) / 100.0
+            home_xg *= 1.0 + close_dev * _mc.close_game_corsi_factor
+        if away_close.get("close_games_found", 0) >= _mc.close_game_min_games:
+            close_dev = (away_close.get("close_cf_pct", 50.0) - 50.0) / 100.0
+            away_xg *= 1.0 + close_dev * _mc.close_game_corsi_factor
+
+        # ---- PDO regression (luck adjustment) ----
+        # PDO = shooting% + save%. League average is ~1.000.
+        # Teams with PDO far from 1.0 are running hot/cold and due to regress.
+        # High PDO (>1.010) → xG inflated by luck → reduce.
+        # Low PDO (<0.990) → xG depressed by bad luck → increase.
+        pdo_factor = _mc.pdo_regression_factor
+        if pdo_factor > 0:
+            home_pdo = features.get("home_form_10", {}).get("pdo", 1.0)
+            away_pdo = features.get("away_form_10", {}).get("pdo", 1.0)
+            if home_pdo != 1.0:
+                home_xg -= (home_pdo - 1.0) * pdo_factor * self.league_avg
+            if away_pdo != 1.0:
+                away_xg -= (away_pdo - 1.0) * pdo_factor * self.league_avg
+
         # ---- Regression toward league average ----
         # Hot-streak form weights and weak-opponent defensive factors can
         # compound to produce unrealistic xG values.  Regress toward
@@ -360,6 +468,23 @@ class BettingModel:
         # ---- Floor / ceiling ----
         home_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, home_xg))
         away_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, away_xg))
+
+        # ---- ML model blend ----
+        # When a trained ML model is available, blend its xG predictions
+        # with the Poisson-based xG. The blend weight controls how much
+        # influence the ML model has (0 = pure Poisson, 1 = pure ML).
+        if self.ml_model and self.ml_model.is_trained:
+            blend = _mc.ml_blend_weight
+            if blend > 0:
+                try:
+                    ml_home, ml_away = self.ml_model.predict_xg(features)
+                    home_xg = home_xg * (1.0 - blend) + ml_home * blend
+                    away_xg = away_xg * (1.0 - blend) + ml_away * blend
+                    # Re-apply floor/ceiling after blending
+                    home_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, home_xg))
+                    away_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, away_xg))
+                except Exception as e:
+                    logger.warning("ML model prediction failed, using Poisson only: %s", e)
 
         return round(home_xg, 3), round(away_xg, 3)
 
@@ -380,20 +505,19 @@ class BettingModel:
         self,
         goals_against_pg: float,
         shots_against_pg: float = 0.0,
+        faceoff_pct: float = 50.0,
     ) -> float:
         """
-        Calculate a defensive quality factor blending goals-against with
-        shots-against for more stability.
+        Calculate a defensive quality factor blending goals-against,
+        shots-against, and faceoff win% for stability.
 
         A team that allows more than league average has a factor > 1.0
         (making the opponent's xG higher), and vice versa.
 
-        Pure goals-against is noisy (small sample, goalie variance).
-        Blending in shots-against captures defensive structure (shot
-        suppression) which is more repeatable.
-
-        The blended ratio is regressed toward 1.0 to prevent compounding
-        when combined with form-weighted offense.
+        Three inputs capture different defensive aspects:
+        - Goals-against: outcome (noisy, goalie-dependent)
+        - Shots-against: shot suppression (more repeatable)
+        - Faceoff%: possession control (most repeatable, ~0.68 YoY r)
         """
         if self.league_avg == 0:
             return 1.0
@@ -407,6 +531,15 @@ class BettingModel:
             raw = ga_ratio * (1.0 - shot_blend) + sa_ratio * shot_blend
         else:
             raw = ga_ratio
+
+        # Faceoff adjustment: teams winning >50% of draws control possession
+        # → fewer opponent shots → better defense. Scale effect modestly.
+        fo_weight = _mc.faceoff_defense_weight
+        if fo_weight > 0 and faceoff_pct != 50.0:
+            # Convert faceoff% to a ratio around 1.0 (50% = neutral)
+            # Higher faceoff% = better defense = lower factor
+            fo_adj = 1.0 - (faceoff_pct - 50.0) / 100.0
+            raw = raw * (1.0 - fo_weight) + fo_adj * raw * fo_weight
 
         # Regress toward 1.0 using the configured regression factor
         return 1.0 + (raw - 1.0) * _mc.defensive_regression
@@ -437,6 +570,14 @@ class BettingModel:
         # A better goalie (positive sv_diff) reduces expected goals
         adjustment = 1.0 - (sv_diff / (1.0 - LEAGUE_AVG_SAVE_PCT)) * GOALIE_FACTOR
         adjustment = max(0.7, min(1.3, adjustment))
+
+        # Goalie fatigue: consecutive starts degrade performance
+        consecutive = opposing_goalie.get("consecutive_starts", 0)
+        threshold = _mc.goalie_fatigue_starts_threshold
+        if consecutive > threshold:
+            fatigue_penalty = (consecutive - threshold) * _mc.goalie_fatigue_per_start
+            # Tired goalie = higher xG for the opponent (weaker saves)
+            adjustment += min(fatigue_penalty, 0.10)
 
         return xg * adjustment
 
@@ -492,6 +633,15 @@ class BettingModel:
         # Precompute marginal PMFs
         pmf_h = [float(poisson.pmf(k, lam_h)) for k in range(max_goals + 1)]
         pmf_a = [float(poisson.pmf(k, lam_a)) for k in range(max_goals + 1)]
+
+        # Fast path: independent Poisson when no correlation
+        if lam_c == 0.0:
+            return [
+                [pmf_h[i] * pmf_a[j] for j in range(max_goals + 1)]
+                for i in range(max_goals + 1)
+            ]
+
+        # Full bivariate Poisson with shared game-pace component
         pmf_c = [float(poisson.pmf(k, lam_c)) for k in range(max_goals + 1)]
 
         matrix = [[0.0] * (max_goals + 1) for _ in range(max_goals + 1)]
@@ -518,20 +668,21 @@ class BettingModel:
         produces prediction labels like "Under 7.0" that don't match what
         bettors actually see on the sportsbook.
 
-        Strategy: snap to the nearest .5 value.  If rounding lands on a
-        whole number, nudge up to .5 — e.g., 6 → 6.5, 7 → 6.5.
+        Strategy: snap whole numbers DOWN to .5 — e.g., 7 → 6.5, 6 → 5.5.
+        This matches the odds scraper convention (int(x) - 1 + 0.5) and the
+        assumption that whole numbers are rounded-up .5 lines.
         """
         if line % 1 == 0.5:
             return line  # already a .5 line
-        # Snap to nearest .5
-        normalized = round(line * 2) / 2
-        if normalized % 1 == 0:
-            normalized += 0.5
-        return normalized
+        # Whole number: snap down to the .5 below (7 → 6.5, 6 → 5.5).
+        # Consistent with odds_api.py: float(int(ou_raw) - 1) + 0.5
+        return float(int(line) - 1) + 0.5
 
     async def predict_total_goals(
         self,
         features: Dict[str, Any],
+        *,
+        _precomputed: Tuple[float, float, List[List[float]]] | None = None,
     ) -> Dict[str, Any]:
         """
         Predict total goals using the Poisson model.
@@ -543,10 +694,12 @@ class BettingModel:
             dict with home_xg, away_xg, total_xg, and probabilities for
             each over/under line.
         """
-        home_xg, away_xg = self._calc_expected_goals(features)
+        if _precomputed:
+            home_xg, away_xg, matrix = _precomputed
+        else:
+            home_xg, away_xg = self._calc_expected_goals(features)
+            matrix = self._score_matrix(home_xg, away_xg)
         total_xg = home_xg + away_xg
-
-        matrix = self._score_matrix(home_xg, away_xg)
         max_g = POISSON_MAX_GOALS
 
         # Build the set of lines to evaluate:
@@ -614,6 +767,8 @@ class BettingModel:
     async def predict_moneyline(
         self,
         features: Dict[str, Any],
+        *,
+        _precomputed: Tuple[float, float, List[List[float]]] | None = None,
     ) -> Dict[str, Any]:
         """
         Predict moneyline (win probability) for each team.
@@ -629,8 +784,11 @@ class BettingModel:
         Returns:
             dict with home_win_prob, away_win_prob, draw_prob_regulation.
         """
-        home_xg, away_xg = self._calc_expected_goals(features)
-        matrix = self._score_matrix(home_xg, away_xg)
+        if _precomputed:
+            home_xg, away_xg, matrix = _precomputed
+        else:
+            home_xg, away_xg = self._calc_expected_goals(features)
+            matrix = self._score_matrix(home_xg, away_xg)
         max_g = POISSON_MAX_GOALS
 
         home_win = 0.0
@@ -684,6 +842,8 @@ class BettingModel:
     async def predict_spread(
         self,
         features: Dict[str, Any],
+        *,
+        _precomputed: Tuple[float, float, List[List[float]]] | None = None,
     ) -> Dict[str, Any]:
         """
         Predict spread (puck line) probabilities.
@@ -697,8 +857,11 @@ class BettingModel:
         Returns:
             dict with predicted_margin, spread probabilities for each side.
         """
-        home_xg, away_xg = self._calc_expected_goals(features)
-        matrix = self._score_matrix(home_xg, away_xg)
+        if _precomputed:
+            home_xg, away_xg, matrix = _precomputed
+        else:
+            home_xg, away_xg = self._calc_expected_goals(features)
+            matrix = self._score_matrix(home_xg, away_xg)
         max_g = POISSON_MAX_GOALS
 
         predicted_margin = round(home_xg - away_xg, 3)
@@ -1039,6 +1202,108 @@ class BettingModel:
         return adjusted
 
     # ------------------------------------------------------------------ #
+    #  Clean reasoning builder                                            #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _build_clean_reasons(
+        features: Dict[str, Any],
+        pick_abbr: str,
+        opponent_abbr: str,
+        bet_type: str = "ml",
+        details: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Build clean, concise reasoning bullets separated by semicolons.
+
+        Generates human-readable reasons (like Buddy's Analysis) instead of
+        technical model stats. Returns semicolon-separated strings that the
+        frontend splits into numbered bullet points.
+        """
+        reasons: List[str] = []
+        home_abbr = features.get("home_team_abbr", "HOM")
+        away_abbr = features.get("away_team_abbr", "AWY")
+        is_home = pick_abbr == home_abbr
+        pick_name = features.get("home_team_name" if is_home else "away_team_name", pick_abbr)
+        opp_name = features.get("away_team_name" if is_home else "home_team_name", opponent_abbr)
+
+        # Form / recent results
+        pick_form = features.get("home_form_5" if is_home else "away_form_5", {})
+        opp_form = features.get("away_form_5" if is_home else "home_form_5", {})
+        pick_w = pick_form.get("wins", 0)
+        pick_l = pick_form.get("losses", 0)
+        opp_w = opp_form.get("wins", 0)
+        opp_l = opp_form.get("losses", 0)
+
+        if pick_w >= 4:
+            reasons.append(f"{pick_abbr} on a hot streak ({pick_w}-{pick_l} in last 5)")
+        elif pick_w >= 3:
+            reasons.append(f"{pick_abbr} strong recent form ({pick_w}-{pick_l} in last 5)")
+
+        if opp_l >= 4:
+            reasons.append(f"{opponent_abbr} struggling ({opp_w}-{opp_l} in last 5)")
+        elif opp_l >= 3:
+            reasons.append(f"{opponent_abbr} poor recent form ({opp_w}-{opp_l} in last 5)")
+
+        # Schedule / fatigue
+        home_sched = features.get("home_schedule", {})
+        away_sched = features.get("away_schedule", {})
+        opp_sched = away_sched if is_home else home_sched
+
+        if opp_sched.get("is_back_to_back"):
+            reasons.append(f"{opponent_abbr} on back-to-back (fatigue advantage for {pick_abbr})")
+        pick_sched = home_sched if is_home else away_sched
+        if pick_sched.get("rest_days", 0) >= 3:
+            reasons.append(f"{pick_abbr} well-rested ({pick_sched['rest_days']} days off)")
+
+        # Home/away advantage
+        if is_home:
+            home_season = features.get("home_season", {})
+            home_w = home_season.get("home_wins", 0)
+            home_l = home_season.get("home_losses", 0)
+            if home_w > 0 and home_w > home_l:
+                reasons.append(f"Strong home record ({home_w}-{home_l} at home)")
+        else:
+            away_season = features.get("away_season", {})
+            away_w = away_season.get("away_wins", 0)
+            away_l = away_season.get("away_losses", 0)
+            if away_w > 0 and away_w > away_l:
+                reasons.append(f"Strong road record ({away_w}-{away_l} away)")
+
+        # Head-to-head
+        h2h = features.get("h2h", {})
+        h2h_wins = h2h.get("home_wins" if is_home else "away_wins", 0)
+        h2h_total = h2h.get("total_games", 0)
+        if h2h_total >= 2 and h2h_wins > h2h_total / 2:
+            reasons.append(f"Favorable head-to-head record ({h2h_wins}-{h2h_total - h2h_wins} in matchup)")
+
+        # Lineup / injuries
+        opp_lineup = features.get("away_lineup" if is_home else "home_lineup", {})
+        if opp_lineup.get("missing_count", 0) >= 2:
+            reasons.append(f"{opponent_abbr} missing {opp_lineup['missing_count']} key players")
+        elif opp_lineup.get("missing_count", 0) == 1:
+            reasons.append(f"{opponent_abbr} missing a key player")
+
+        # Possession / advanced stats
+        pick_season = features.get("home_season" if is_home else "away_season", {})
+        opp_season = features.get("away_season" if is_home else "home_season", {})
+        pick_cf = pick_season.get("corsi_for_pct", 50.0)
+        opp_cf = opp_season.get("corsi_for_pct", 50.0)
+        if pick_cf and opp_cf and pick_cf > 52 and pick_cf > opp_cf + 2:
+            reasons.append("Possession advantage in recent games")
+
+        # Total-specific reasons
+        if bet_type == "total" and details:
+            proj = details.get("projected_total")
+            if proj is not None:
+                reasons.append(f"Projected goal total supports this line")
+
+        # Ensure at least one reason
+        if not reasons:
+            reasons.append(f"Model favors {pick_abbr} based on overall analysis")
+
+        return "; ".join(reasons[:5])
+
+    # ------------------------------------------------------------------ #
     #  Predict all: master method                                         #
     # ------------------------------------------------------------------ #
 
@@ -1065,6 +1330,12 @@ class BettingModel:
         away_name = features.get("away_team_name", "Away")
         home_abbr = features.get("home_team_abbr", "HOM")
         away_abbr = features.get("away_team_abbr", "AWY")
+
+        # Precompute xG and score matrix once for all prediction methods.
+        # Previously each method recomputed these independently.
+        home_xg, away_xg = self._calc_expected_goals(features)
+        matrix = self._score_matrix(home_xg, away_xg)
+        _pre = (home_xg, away_xg, matrix)
 
         # Extract betting odds for implied probability calculations
         odds_data = features.get("odds", {})
@@ -1095,36 +1366,22 @@ class BettingModel:
 
         # ---- Moneyline ----
         try:
-            ml = await self.predict_moneyline(features)
+            ml = await self.predict_moneyline(features, _precomputed=_pre)
             home_wp = ml["home_win_prob"]
             away_wp = ml["away_win_prob"]
 
             if home_wp >= away_wp:
                 ml_pred = home_abbr
                 ml_prob = home_wp
-                odds_note = ""
-                if home_ml is not None:
-                    odds_str = f"+{int(home_ml)}" if home_ml > 0 else str(int(home_ml))
-                    odds_note = f" Sportsbook line: {odds_str}."
-                ml_reason = (
-                    f"{home_name} ({home_abbr}) are favored with {home_wp:.1%} win probability "
-                    f"(xG: {ml['home_xg']:.2f} vs {ml['away_xg']:.2f}).{odds_note}"
+                ml_reason = self._build_clean_reasons(
+                    features, home_abbr, away_abbr, "ml", ml
                 )
-                if lineup_note:
-                    ml_reason += f" Lineup: {lineup_note}."
             else:
                 ml_pred = away_abbr
                 ml_prob = away_wp
-                odds_note = ""
-                if away_ml is not None:
-                    odds_str = f"+{int(away_ml)}" if away_ml > 0 else str(int(away_ml))
-                    odds_note = f" Sportsbook line: {odds_str}."
-                ml_reason = (
-                    f"{away_name} ({away_abbr}) projected to win at {away_wp:.1%} "
-                    f"(xG: {ml['away_xg']:.2f} vs {ml['home_xg']:.2f}).{odds_note}"
+                ml_reason = self._build_clean_reasons(
+                    features, away_abbr, home_abbr, "ml", ml
                 )
-                if lineup_note:
-                    ml_reason += f" Lineup: {lineup_note}."
 
             # Calculate implied probability and edge from real odds
             ml_implied = None
@@ -1151,7 +1408,7 @@ class BettingModel:
 
         # ---- Total goals (evaluate ALL available lines) ----
         try:
-            totals = await self.predict_total_goals(features)
+            totals = await self.predict_total_goals(features, _precomputed=_pre)
             lines = totals.get("lines", {})
             total_xg = totals["total_xg"]
 
@@ -1178,17 +1435,10 @@ class BettingModel:
                 alt_up = alt.get("under_price", -110)
 
                 # Cross-validate alt line odds against the primary line.
-                # For lines below the primary, over implied should be HIGHER
-                # (easier to go over a lower number).  For lines above, it
-                # should be LOWER.  A line like O 4.5 at +110 when the main
-                # line is 7.5 at -110 is clearly bad data (period total, etc).
                 if primary_ou_val is not None and primary_over_implied is not None:
                     alt_over_implied = american_odds_to_implied_prob(alt_op)
                     if alt_over_implied is not None:
                         if lv < primary_ou_val and alt_over_implied <= primary_over_implied:
-                            # Alt line is BELOW primary but over implied is
-                            # not higher — odds are inconsistent (likely
-                            # period total or bad data).
                             logger.debug(
                                 "Rejecting alt total %.1f: over implied %.3f "
                                 "not > primary %.1f over implied %.3f",
@@ -1197,8 +1447,6 @@ class BettingModel:
                             )
                             continue
                         if lv > primary_ou_val and alt_over_implied >= primary_over_implied:
-                            # Alt line is ABOVE primary but over implied is
-                            # not lower — odds are inconsistent.
                             logger.debug(
                                 "Rejecting alt total %.1f: over implied %.3f "
                                 "not < primary %.1f over implied %.3f",
@@ -1212,109 +1460,70 @@ class BettingModel:
                     "under_price": alt_up,
                 }
 
-            # Evaluate ALL lines and find the one with the best edge
-            # Edge = model_prob - implied_prob
-            best_edge = -999
-            best_pred = None
-            best_pred_prob = 0.0
-            best_pred_odds = -110.0
-            best_pred_implied = 0.5
-            best_pred_line = 0.0
-
-            for line_key, prob in lines.items():
-                # line_key is like "over_5.5" or "under_6.5"
-                parts = line_key.split("_", 1)
-                if len(parts) != 2:
-                    continue
-                direction = parts[0]  # "over" or "under"
-                try:
-                    line_val = float(parts[1])
-                except ValueError:
-                    continue
-
-                # Look up actual sportsbook price for this line+direction
-                if line_val in price_map:
-                    price_key = f"{direction}_price"
-                    odds_val = price_map[line_val].get(price_key, -110)
-                    implied = american_odds_to_implied_prob(odds_val)
-                    edge = prob - implied
-
-                    if edge > best_edge:
-                        best_edge = edge
-                        best_pred = line_key
-                        best_pred_prob = prob
-                        best_pred_odds = odds_val
-                        best_pred_implied = implied
-                        best_pred_line = line_val
-
-            if best_pred and best_edge > -999:
-                direction = "over" if "over" in best_pred else "under"
-                predictions.append({
+            # Helper: build a prediction dict for one side of a total line.
+            def _make_total_pred(
+                direction: str, line_val: float, prob: float,
+                odds_val: float | None, implied: float | None,
+            ) -> Dict[str, Any]:
+                edge = round(prob - implied, 4) if implied else None
+                odds_display = (
+                    f" (Odds: {'+' if odds_val > 0 else ''}{int(odds_val)})"
+                    if odds_val else ""
+                )
+                implied_str = (
+                    f" vs {implied:.1%} implied (edge {edge:+.1%})"
+                    if implied is not None
+                    else ""
+                )
+                return {
                     "bet_type": "total",
-                    "prediction": best_pred,
-                    "confidence": round(best_pred_prob, 4),
-                    "probability": round(best_pred_prob, 4),
-                    "implied_probability": round(best_pred_implied, 4),
-                    "odds": best_pred_odds,
-                    "edge": round(best_edge, 4),
-                    "reasoning": (
-                        f"Model projects {total_xg:.1f} total goals. "
-                        f"{direction.capitalize()} {best_pred_line} at "
-                        f"{best_pred_prob:.1%} model prob vs "
-                        f"{best_pred_implied:.1%} implied "
-                        f"(edge {best_edge:+.1%}). "
-                        f"Best line across {len(price_map)} available lines. "
-                        f"Based on {home_abbr} xG {totals['home_xg']:.2f} + "
-                        f"{away_abbr} xG {totals['away_xg']:.2f}."
+                    "prediction": f"{direction}_{line_val}",
+                    "confidence": round(prob, 4),
+                    "probability": round(prob, 4),
+                    "implied_probability": round(implied, 4) if implied else None,
+                    "odds": odds_val,
+                    "edge": edge,
+                    "reasoning": self._build_clean_reasons(
+                        features, home_abbr, away_abbr, "total",
+                        {"projected_total": total_xg, "direction": direction, "line": line_val},
                     ),
                     "details": totals,
-                })
-            elif ou_line is not None:
-                # Fallback: use primary sportsbook line if no price_map
-                ou_val = float(ou_line)
-                over_key = f"over_{ou_val}"
-                under_key = f"under_{ou_val}"
+                }
+
+            # Emit BOTH over and under for the primary sportsbook line
+            # so users can see the model's view on both sides.
+            if primary_ou_val is not None:
+                over_key = f"over_{primary_ou_val}"
+                under_key = f"under_{primary_ou_val}"
                 over_p = lines.get(over_key, 0.5)
                 under_p = lines.get(under_key, 0.5)
+                prices = price_map.get(primary_ou_val, {})
+                op_val = prices.get("over_price")
+                up_val = prices.get("under_price")
+                over_implied = american_odds_to_implied_prob(op_val) if op_val else None
+                under_implied = american_odds_to_implied_prob(up_val) if up_val else None
 
-                if over_p >= under_p:
-                    book_pred = over_key
-                    book_prob = over_p
+                # Put the side with more edge (or higher prob) first
+                # so the top_pick selector sees it as the "best" total.
+                over_edge = (over_p - over_implied) if over_implied else 0
+                under_edge = (under_p - under_implied) if under_implied else 0
+                if over_edge >= under_edge:
+                    order = [
+                        ("over", over_p, op_val, over_implied),
+                        ("under", under_p, up_val, under_implied),
+                    ]
                 else:
-                    book_pred = under_key
-                    book_prob = under_p
-
-                direction = "over" if "over" in book_pred else "under"
-                if direction == "over" and over_price is not None:
-                    total_odds_val = float(over_price)
-                elif direction == "under" and under_price is not None:
-                    total_odds_val = float(under_price)
-                else:
-                    total_odds_val = -110.0
-                total_implied_val = american_odds_to_implied_prob(total_odds_val)
-
-                predictions.append({
-                    "bet_type": "total",
-                    "prediction": book_pred,
-                    "confidence": round(book_prob, 4),
-                    "probability": round(book_prob, 4),
-                    "implied_probability": round(total_implied_val, 4),
-                    "odds": total_odds_val,
-                    "reasoning": (
-                        f"Model projects {total_xg:.1f} total goals. "
-                        f"{direction.capitalize()} {ou_val} (sportsbook line) at "
-                        f"{book_prob:.1%} probability. "
-                        f"Based on {home_abbr} xG {totals['home_xg']:.2f} + "
-                        f"{away_abbr} xG {totals['away_xg']:.2f}."
-                    ),
-                    "details": totals,
-                })
+                    order = [
+                        ("under", under_p, up_val, under_implied),
+                        ("over", over_p, op_val, over_implied),
+                    ]
+                for d, prob, odds_v, impl in order:
+                    predictions.append(
+                        _make_total_pred(d, primary_ou_val, prob, odds_v, impl)
+                    )
             else:
-                # No sportsbook lines at all — pick the standard line
-                # closest to the model's projected total, then recommend
-                # over or under on that line.  This avoids always picking
-                # the lowest line (e.g., over_5.5) just because it has the
-                # highest raw probability.
+                # No sportsbook line — use the standard line closest to
+                # the model's projected total.
                 best_line = min(
                     TOTAL_LINES,
                     key=lambda l: abs(l - total_xg),
@@ -1325,35 +1534,19 @@ class BettingModel:
                 under_p = lines.get(under_key, 0.5)
 
                 if over_p >= under_p:
-                    best_total_pred = over_key
-                    best_total_prob = over_p
+                    order = [("over", over_p), ("under", under_p)]
                 else:
-                    best_total_pred = under_key
-                    best_total_prob = under_p
-
-                direction = "over" if "over" in best_total_pred else "under"
-                predictions.append({
-                    "bet_type": "total",
-                    "prediction": best_total_pred,
-                    "confidence": round(best_total_prob, 4),
-                    "probability": round(best_total_prob, 4),
-                    "implied_probability": None,
-                    "odds": None,
-                    "reasoning": (
-                        f"Model projects {total_xg:.1f} total goals. "
-                        f"{direction.capitalize()} {best_line} at {best_total_prob:.1%} probability "
-                        f"(no sportsbook line available, using nearest standard line). "
-                        f"Based on {home_abbr} xG {totals['home_xg']:.2f} + "
-                        f"{away_abbr} xG {totals['away_xg']:.2f}."
-                    ),
-                    "details": totals,
-                })
+                    order = [("under", under_p), ("over", over_p)]
+                for d, prob in order:
+                    predictions.append(
+                        _make_total_pred(d, best_line, prob, None, None)
+                    )
         except Exception as e:
             logger.error("Total goals prediction failed: %s", e)
 
         # ---- Spread / Puck Line (evaluate ALL available lines) ----
         try:
-            spread = await self.predict_spread(features)
+            spread = await self.predict_spread(features, _precomputed=_pre)
             spreads = spread.get("spreads", {})
             margin = spread["predicted_margin"]
 
@@ -1510,13 +1703,10 @@ class BettingModel:
                     "implied_probability": round(best_spread_implied, 4),
                     "odds": best_spread_odds,
                     "edge": round(best_spread_edge, 4),
-                    "reasoning": (
-                        f"Predicted margin: {margin:+.2f} goals. "
-                        f"{best_spread_abbr} {best_spread_sign} covers at "
-                        f"{best_spread_prob:.1%} model prob vs "
-                        f"{best_spread_implied:.1%} implied "
-                        f"(edge {best_spread_edge:+.1%}). "
-                        f"Best across {len(spread_price_map)} spread lines."
+                    "reasoning": self._build_clean_reasons(
+                        features, best_spread_abbr,
+                        away_abbr if best_spread_abbr == home_abbr else home_abbr,
+                        "spread", spread,
                     ),
                     "details": spread,
                 })
@@ -1578,14 +1768,24 @@ class BettingModel:
                     "probability": round(sb_prob, 4),
                     "implied_probability": round(spread_implied, 4) if spread_implied else None,
                     "odds": spread_odds_display,
-                    "reasoning": (
-                        f"Predicted margin: {margin:+.2f} goals. "
-                        f"{sb_abbr} {sb_sign} covers at {sb_prob:.1%} probability."
+                    "reasoning": self._build_clean_reasons(
+                        features, sb_abbr,
+                        away_abbr if sb_abbr == home_abbr else home_abbr,
+                        "spread", spread,
                     ),
                     "details": spread,
                 })
         except Exception as e:
             logger.error("Spread prediction failed: %s", e)
+
+        # ---- Props (isolated subsystem) ----
+        try:
+            from app.props import PropEngine
+            prop_engine = PropEngine()
+            prop_preds = prop_engine.run(features, odds_data, matrix, home_xg, away_xg)
+            predictions.extend(prop_preds)
+        except Exception as e:
+            logger.error("Prop predictions failed: %s", e)
 
         # Compute edge for all predictions that have implied probability
         # but no edge yet (props don't compute it inline).
@@ -1596,7 +1796,144 @@ class BettingModel:
                     4,
                 )
 
+        # Compute composite edge score for each prediction
+        for pred in predictions:
+            pred["composite_edge"] = self.compute_composite_edge(features, pred)
+
         # Sort by confidence descending
         predictions.sort(key=lambda p: p["confidence"], reverse=True)
 
         return predictions
+
+    # ------------------------------------------------------------------ #
+    #  Composite edge score                                               #
+    # ------------------------------------------------------------------ #
+
+    def compute_composite_edge(
+        self,
+        features: Dict[str, Any],
+        prediction: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Compute a composite edge score (0-100) aggregating all factors.
+
+        Each component is normalized to 0-1, then weighted and summed
+        to produce a single signal-strength metric.
+        """
+        pred_team = prediction.get("prediction", "")
+        home_abbr = features.get("home_team_abbr", "")
+        is_home_pick = pred_team == home_abbr
+
+        scores: Dict[str, float] = {}
+
+        # Form: compare L5 win rates
+        home_wr = features.get("home_form_5", {}).get("win_rate", 0.5)
+        away_wr = features.get("away_form_5", {}).get("win_rate", 0.5)
+        if is_home_pick:
+            scores["form"] = min(1.0, max(0.0, (home_wr - away_wr + 1.0) / 2.0))
+        else:
+            scores["form"] = min(1.0, max(0.0, (away_wr - home_wr + 1.0) / 2.0))
+
+        # Goalie: tier advantage
+        home_tier = features.get("home_goalie", {}).get("tier_rank", 2)
+        away_tier = features.get("away_goalie", {}).get("tier_rank", 2)
+        tier_diff = (home_tier - away_tier) if is_home_pick else (away_tier - home_tier)
+        scores["goalie"] = min(1.0, max(0.0, (tier_diff + 2.0) / 4.0))
+
+        # 5v5 Possession
+        home_ev = features.get("home_ev_possession", {}).get("ev_cf_pct", 50.0)
+        away_ev = features.get("away_ev_possession", {}).get("ev_cf_pct", 50.0)
+        my_ev = home_ev if is_home_pick else away_ev
+        scores["possession"] = min(1.0, max(0.0, (my_ev - 45.0) / 10.0))
+
+        # Close-game possession
+        home_close = features.get("home_close_possession", {}).get("close_cf_pct", 50.0)
+        away_close = features.get("away_close_possession", {}).get("close_cf_pct", 50.0)
+        my_close = home_close if is_home_pick else away_close
+        scores["close_possession"] = min(1.0, max(0.0, (my_close - 45.0) / 10.0))
+
+        # Special teams
+        home_pp = features.get("home_special_teams", {}).get("pp_pct", 20.0)
+        away_pk = features.get("away_special_teams", {}).get("pk_pct", 80.0)
+        away_pp = features.get("away_special_teams", {}).get("pp_pct", 20.0)
+        home_pk = features.get("home_special_teams", {}).get("pk_pct", 80.0)
+        if is_home_pick:
+            st_edge = (home_pp - 20.0) + (home_pk - 80.0) - (away_pp - 20.0) - (away_pk - 80.0)
+        else:
+            st_edge = (away_pp - 20.0) + (away_pk - 80.0) - (home_pp - 20.0) - (home_pk - 80.0)
+        scores["special_teams"] = min(1.0, max(0.0, (st_edge + 10.0) / 20.0))
+
+        # Schedule (rest advantage, B2B)
+        my_sched = features.get("home_schedule" if is_home_pick else "away_schedule", {})
+        opp_sched = features.get("away_schedule" if is_home_pick else "home_schedule", {})
+        sched_score = 0.5
+        if opp_sched.get("is_back_to_back", False) and not my_sched.get("is_back_to_back", False):
+            sched_score = 0.8
+        elif my_sched.get("is_back_to_back", False) and not opp_sched.get("is_back_to_back", False):
+            sched_score = 0.2
+        my_rest = my_sched.get("days_rest", 1)
+        opp_rest = opp_sched.get("days_rest", 1)
+        if my_rest > opp_rest:
+            sched_score = min(1.0, sched_score + 0.1)
+        scores["schedule"] = sched_score
+
+        # Injuries (opponent's injuries help us)
+        opp_injuries = features.get("away_injuries" if is_home_pick else "home_injuries", {})
+        my_injuries = features.get("home_injuries" if is_home_pick else "away_injuries", {})
+        opp_reduction = opp_injuries.get("xg_reduction", 0.0)
+        my_reduction = my_injuries.get("xg_reduction", 0.0)
+        inj_edge = opp_reduction - my_reduction
+        scores["injuries"] = min(1.0, max(0.0, (inj_edge + 0.1) / 0.2 * 0.5 + 0.5))
+
+        # H2H
+        h2h = features.get("h2h", {})
+        if h2h.get("games_found", 0) >= 3:
+            h2h_wr = h2h.get("team1_win_rate", 0.5)
+            scores["h2h"] = h2h_wr if is_home_pick else (1.0 - h2h_wr)
+        else:
+            scores["h2h"] = 0.5
+
+        # Player matchup
+        my_matchup = features.get(
+            "home_player_matchup" if is_home_pick else "away_player_matchup", {}
+        )
+        boost = my_matchup.get("matchup_boost", 0.0)
+        scores["matchup"] = min(1.0, max(0.0, (boost + 0.1) / 0.2))
+
+        # Market edge
+        conf = prediction.get("confidence", 0.5) or 0.5
+        implied = prediction.get("implied_probability") or conf
+        edge = conf - implied
+        scores["market_edge"] = min(1.0, max(0.0, (edge + 0.1) / 0.2))
+
+        # Weighted sum
+        weights = {
+            "form": _mc.composite_weight_form,
+            "goalie": _mc.composite_weight_goalie,
+            "possession": _mc.composite_weight_possession,
+            "close_possession": _mc.composite_weight_close_possession,
+            "special_teams": _mc.composite_weight_special_teams,
+            "schedule": _mc.composite_weight_schedule,
+            "injuries": _mc.composite_weight_injuries,
+            "h2h": _mc.composite_weight_h2h,
+            "matchup": _mc.composite_weight_matchup,
+            "market_edge": _mc.composite_weight_market_edge,
+        }
+
+        composite = sum(scores.get(k, 0.5) * w for k, w in weights.items())
+        total_weight = sum(weights.values())
+        composite_score = round((composite / total_weight) * 100, 1) if total_weight > 0 else 50.0
+
+        if composite_score >= 71:
+            grade = "very_strong"
+        elif composite_score >= 51:
+            grade = "strong"
+        elif composite_score >= 31:
+            grade = "moderate"
+        else:
+            grade = "weak"
+
+        return {
+            "composite_score": composite_score,
+            "composite_grade": grade,
+            "component_scores": {k: round(v, 3) for k, v in scores.items()},
+        }

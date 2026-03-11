@@ -2,10 +2,11 @@ import { NavLink, useParams } from 'react-router-dom';
 
 const SPORTS = [
   { key: 'nhl', label: 'NHL', icon: '🏒', active: true },
-  { key: 'nba', label: 'NBA', icon: '🏀', active: false },
-  { key: 'mlb', label: 'MLB', icon: '⚾', active: false },
   { key: 'nfl', label: 'NFL', icon: '🏈', active: false },
+  { key: 'nba', label: 'NBA', icon: '🏀', active: false },
   { key: 'ncaab', label: 'NCAAB', icon: '🎓', active: false },
+  { key: 'mlb', label: 'MLB', icon: '⚾', active: false },
+  { key: 'soccer', label: 'Soccer', icon: '⚽', active: false },
 ];
 
 function SportsSidebar() {

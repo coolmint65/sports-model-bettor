@@ -18,7 +18,7 @@ from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES, composite_pick_score, is_heavy_juice
-from app.database import get_session
+from app.database import get_session, get_session_context, get_write_session_context
 from app.models.game import Game
 from app.models.prediction import Prediction
 from app.models.team import Team, TeamStats
@@ -46,12 +46,15 @@ class TeamBrief(BaseModel):
 
 
 class GameTopPick(BaseModel):
+    prediction_id: Optional[int] = None
     bet_type: Optional[str] = None
     prediction_value: Optional[str] = None
     confidence: Optional[float] = None
     edge: Optional[float] = None
     is_fallback: bool = False
     outcome: Optional[str] = None  # "win", "loss", or None (pending/in-progress)
+    reasoning: Optional[str] = None
+    odds_display: Optional[float] = None
 
 
 class GameOdds(BaseModel):
@@ -92,6 +95,8 @@ class ScheduleGame(BaseModel):
     away_shots: Optional[int] = None
     # Top prediction for this game
     top_pick: Optional[GameTopPick] = None
+    # Top prop prediction for this game
+    top_prop: Optional[GameTopPick] = None
     # Sportsbook odds
     odds: Optional[GameOdds] = None
     pregame_odds: Optional[GameOdds] = None
@@ -194,6 +199,7 @@ def _build_schedule_game(
     home_brief: TeamBrief,
     away_brief: TeamBrief,
     top_pick: Optional[GameTopPick] = None,
+    top_prop: Optional[GameTopPick] = None,
 ) -> ScheduleGame:
     return ScheduleGame(
         id=game.id,
@@ -217,9 +223,42 @@ def _build_schedule_game(
         home_shots=game.home_shots,
         away_shots=game.away_shots,
         top_pick=top_pick,
+        top_prop=top_prop,
         odds=_build_game_odds(game),
         pregame_odds=_build_pregame_odds(game),
     )
+
+
+def _pick_odds_display(pred: Prediction, game: Optional[Game]) -> Optional[float]:
+    """Extract the American odds for the specific pick from the game's odds."""
+    if game is None:
+        return None
+    bt = pred.bet_type
+    val = (pred.prediction_value or "").lower()
+
+    home_abbr = ""
+    away_abbr = ""
+    if game.home_team:
+        home_abbr = getattr(game.home_team, "abbreviation", "").lower()
+    if game.away_team:
+        away_abbr = getattr(game.away_team, "abbreviation", "").lower()
+
+    if bt == "ml":
+        if val == "home" or val == home_abbr:
+            return game.home_moneyline
+        if val == "away" or val == away_abbr:
+            return game.away_moneyline
+    elif bt == "total":
+        if "over" in val:
+            return game.over_price
+        if "under" in val:
+            return game.under_price
+    elif bt == "spread":
+        if val.startswith("home") or (home_abbr and val.startswith(home_abbr)):
+            return game.home_spread_price
+        if val.startswith("away") or (away_abbr and val.startswith(away_abbr)):
+            return game.away_spread_price
+    return None
 
 
 def _grade_top_pick(pick: GameTopPick, game: Game) -> Optional[str]:
@@ -272,6 +311,17 @@ def _grade_top_pick(pick: GameTopPick, game: Game) -> Optional[str]:
         if adjusted == 0:
             return "push"
         return "win" if adjusted > 0 else "loss"
+
+    else:
+        # Dispatch to prop grading
+        from app.props.grading import check_prop_outcome
+        home_abbr = game.home_team.abbreviation if game.home_team else ""
+        result = check_prop_outcome(pick.bet_type, val, game, home_abbr)
+        if result is True:
+            return "win"
+        elif result is False:
+            return "loss"
+        return None
 
     return None
 
@@ -329,11 +379,19 @@ async def _compute_top_picks(
     # Compute fresh implied prob for heavy-juice detection only.
     # Ranking uses the stored (snapshot) edge/implied_prob so that
     # the top pick doesn't flip every time live odds shift.
+    #
+    # When prefer_live=False (/today endpoint), use ONLY the stored
+    # snapshot implied prob.  Using live odds would cause valid prematch
+    # recommendations to vanish once a game goes live and the line moves
+    # to heavy juice (e.g., prematch -130 → live -400).
     fresh_map: dict[int, Optional[float]] = {}
     for p in all_preds:
-        game_obj = game_by_id.get(p.game_id)
-        fresh = fresh_implied_prob(p, game_obj)
-        fresh_map[p.id] = fresh if fresh is not None else p.odds_implied_prob
+        if prefer_live:
+            game_obj = game_by_id.get(p.game_id)
+            fresh = fresh_implied_prob(p, game_obj)
+            fresh_map[p.id] = fresh if fresh is not None else p.odds_implied_prob
+        else:
+            fresh_map[p.id] = p.odds_implied_prob
 
     # --- Tier 1: best-bet criteria (edge + confidence) ---
     tier1 = [
@@ -376,12 +434,14 @@ async def _compute_top_picks(
                     pred.odds_implied_prob,
                 )
             top_picks[pred.game_id] = GameTopPick(
+                prediction_id=pred.id,
                 bet_type=pred.bet_type,
                 prediction_value=pred.prediction_value,
                 confidence=pred.confidence,
                 edge=pred.edge,
                 is_fallback=False,
-
+                reasoning=pred.reasoning,
+                odds_display=_pick_odds_display(pred, game_by_id.get(pred.game_id)),
             )
 
     # --- Tier 3: confidence-only fallback when odds data is missing ---
@@ -418,12 +478,20 @@ async def _compute_top_picks(
                 # bet with terrible risk/reward.
                 if is_heavy_juice(pred.odds_implied_prob, max_implied):
                     continue
+                # Enforce min_confidence even for fallback picks —
+                # without this, low-conviction predictions that failed
+                # Tier 1 sneak back onto the dashboard.
+                if (pred.confidence or 0) < settings.min_confidence:
+                    continue
                 top_picks[pred.game_id] = GameTopPick(
+                    prediction_id=pred.id,
                     bet_type=pred.bet_type,
                     prediction_value=pred.prediction_value,
                     confidence=pred.confidence,
                     edge=pred.edge,
                     is_fallback=pred.odds_implied_prob is None,
+                    reasoning=pred.reasoning,
+                    odds_display=_pick_odds_display(pred, game_by_id.get(pred.game_id)),
                 )
 
     # Grade outcomes for final games
@@ -433,6 +501,111 @@ async def _compute_top_picks(
             pick.outcome = _grade_top_pick(pick, game_obj)
 
     return top_picks
+
+
+def _prop_signal_strength(confidence: float, baseline: float) -> float:
+    """Compute how far a prop's confidence deviates from the league norm.
+
+    Raw confidence is not comparable across prop types: 48% for
+    regulation-winner is unremarkable, while 30% for overtime-yes is a
+    strong signal.  Signal strength normalises them:
+
+        signal = (confidence - baseline) / baseline
+
+    Positive → model sees something above average for this prop type.
+    Higher → more interesting / more likely to represent real value.
+    """
+    if baseline <= 0:
+        return confidence
+    return (confidence - baseline) / baseline
+
+
+async def _compute_top_props(
+    games: List[Game], session: AsyncSession,
+) -> dict[int, GameTopPick]:
+    """Pick the single best prop prediction per game.
+
+    Ranking order:
+    1. Real edge from sportsbook odds (when available).
+    2. Signal strength — how far the model's confidence deviates from
+       the league-average baseline for that prop type.  This makes
+       "OT Yes at 30%"  (signal +0.30 vs 23% baseline) beat
+       "Reg Winner at 48%" (signal +0.14 vs 42% baseline) because the
+       OT pick is genuinely surprising while the reg-winner pick is
+       just restating the obvious.
+
+    Deduplicates to one candidate per bet_type before comparing across
+    types.  Uses the same GameTopPick schema so the frontend can render
+    it identically to a market top_pick.
+    """
+    from app.props.types import PROP_BY_BET_TYPE
+
+    prop_bet_types = tuple(PROP_BY_BET_TYPE.keys())
+    # Build baseline lookup from each prop class.
+    baselines: dict[str, float] = {
+        bt: cls.baseline for bt, cls in PROP_BY_BET_TYPE.items()
+    }
+
+    game_ids = [g.id for g in games]
+    game_by_id = {g.id: g for g in games}
+    top_props: dict[int, GameTopPick] = {}
+    if not game_ids:
+        return top_props
+
+    result = await session.execute(
+        select(Prediction).where(
+            Prediction.game_id.in_(game_ids),
+            Prediction.bet_type.in_(prop_bet_types),
+            Prediction.phase == "prematch",
+        )
+    )
+    all_props = result.scalars().all()
+
+    # Deduplicate: keep only the best candidate per bet_type per game
+    # (e.g., only the strongest reg_winner side, not all three).
+    by_game: dict[int, dict[str, Prediction]] = {}
+    for pred in all_props:
+        existing = by_game.setdefault(pred.game_id, {}).get(pred.bet_type)
+        if existing is None or (pred.confidence or 0) > (existing.confidence or 0):
+            by_game[pred.game_id][pred.bet_type] = pred
+
+    for game_id, type_map in by_game.items():
+        preds = list(type_map.values())
+
+        # Prefer props with real edge from sportsbook odds.
+        with_edge = [p for p in preds if p.edge is not None and p.edge > 0]
+        if with_edge:
+            best = max(with_edge, key=lambda p: (p.edge, p.confidence or 0))
+        else:
+            # No odds available — rank by signal strength so that a
+            # genuinely surprising pick (high deviation from its
+            # baseline) beats a structurally high-confidence but
+            # obvious pick.
+            best = max(
+                preds,
+                key=lambda p: _prop_signal_strength(
+                    p.confidence or 0,
+                    baselines.get(p.bet_type, 0.50),
+                ),
+            )
+
+        top_props[game_id] = GameTopPick(
+            prediction_id=best.id,
+            bet_type=best.bet_type,
+            prediction_value=best.prediction_value,
+            confidence=best.confidence,
+            edge=best.edge,
+            is_fallback=False,
+            reasoning=best.reasoning,
+        )
+
+    # Grade outcomes for final games
+    for game_id, pick in top_props.items():
+        game_obj = game_by_id.get(game_id)
+        if game_obj and game_obj.status and game_obj.status.lower() in GAME_FINAL_STATUSES:
+            pick.outcome = _grade_top_pick(pick, game_obj)
+
+    return top_props
 
 
 async def _games_for_date(
@@ -448,6 +621,7 @@ async def _games_for_date(
 
     # Pre-fetch best prediction per game using composite score
     top_picks = await _compute_top_picks(games, session)
+    top_props = await _compute_top_props(games, session)
 
     # Batch-load team stats
     all_team_ids = list({g.home_team_id for g in games} | {g.away_team_id for g in games})
@@ -461,6 +635,7 @@ async def _games_for_date(
             _build_schedule_game(
                 game, home_brief, away_brief,
                 top_picks.get(game.id),
+                top_props.get(game.id),
             )
         )
     return schedule_games
@@ -483,9 +658,10 @@ async def _try_sync_schedule(
             detail="NHL scraper module is not available.",
         )
     except Exception as exc:
+        logger.error("Failed to sync schedule from NHL API: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=502,
-            detail=f"Failed to sync schedule from NHL API: {exc}",
+            detail="Failed to sync schedule from NHL API",
         )
 
 
@@ -494,33 +670,38 @@ async def _try_sync_schedule(
 # ---------------------------------------------------------------------------
 
 @router.get("/live", response_model=ScheduleResponse)
-async def get_live_games(
-    session: AsyncSession = Depends(get_session),
-):
+async def get_live_games():
     """Return all currently in-progress games.
 
     Syncs scores/clock from NHL API for live games. Odds syncing is
     handled by the background scheduler — not inline in GET requests.
-    """
-    result = await session.execute(
-        select(Game)
-        .options(selectinload(Game.home_team), selectinload(Game.away_team))
-        .where(func.lower(Game.status).in_(("in_progress", "live")))
-        .order_by(Game.start_time.asc().nulls_last(), Game.id.asc())
-    )
-    games = result.scalars().all()
 
-    # Sync scores/clock from NHL API (not odds — scheduler handles that)
-    if games:
+    NOTE: Uses explicit session management (not Depends) to avoid holding
+    idle connections during write operations — prevents QueuePool exhaustion.
+    """
+    # Check for live games with a short-lived read session.
+    async with get_session_context() as session:
+        result = await session.execute(
+            select(Game)
+            .options(selectinload(Game.home_team), selectinload(Game.away_team))
+            .where(func.lower(Game.status).in_(("in_progress", "live")))
+            .order_by(Game.start_time.asc().nulls_last(), Game.id.asc())
+        )
+        games = result.scalars().all()
+        game_dates = {game.date for game in games} if games else set()
+    # Session closed before write operation.
+
+    # Sync scores/clock from NHL API (not odds — scheduler handles that).
+    if game_dates:
         try:
-            async with session.begin_nested():
-                for game in games:
-                    await _try_sync_schedule(session, target_date=game.date)
-                await session.flush()
+            async with get_write_session_context() as write_session:
+                for gd in game_dates:
+                    await _try_sync_schedule(write_session, target_date=gd)
         except Exception as exc:
             logger.warning("Live schedule sync failed: %s", exc)
 
-        # Re-query to get fresh ORM objects after savepoint
+    # Re-read with a fresh session to pick up committed changes.
+    async with get_session_context() as session:
         result = await session.execute(
             select(Game)
             .options(selectinload(Game.home_team), selectinload(Game.away_team))
@@ -529,49 +710,57 @@ async def get_live_games(
         )
         games = result.scalars().all()
 
-    # Compute top picks for live games — prefer live-phase
-    # predictions so the "Live Now" section shows updated recommendations.
-    top_picks = await _compute_top_picks(games, session, prefer_live=True)
+        # Compute top picks for live games — prefer live-phase
+        # predictions so the "Live Now" section shows updated recommendations.
+        top_picks = await _compute_top_picks(games, session, prefer_live=True)
+        top_props = await _compute_top_props(games, session)
 
-    # Batch-load team stats
-    all_team_ids = list({g.home_team_id for g in games} | {g.away_team_id for g in games})
-    stats_map = await _batch_load_team_stats(all_team_ids, session)
+        # Batch-load team stats
+        all_team_ids = list({g.home_team_id for g in games} | {g.away_team_id for g in games})
+        stats_map = await _batch_load_team_stats(all_team_ids, session)
 
-    schedule_games: List[ScheduleGame] = []
-    for game in games:
-        home_brief = _build_team_brief(game.home_team, stats_map.get(game.home_team_id))
-        away_brief = _build_team_brief(game.away_team, stats_map.get(game.away_team_id))
-        schedule_games.append(_build_schedule_game(
-            game, home_brief, away_brief,
-            top_picks.get(game.id),
-        ))
+        schedule_games: List[ScheduleGame] = []
+        for game in games:
+            home_brief = _build_team_brief(game.home_team, stats_map.get(game.home_team_id))
+            away_brief = _build_team_brief(game.away_team, stats_map.get(game.away_team_id))
+            schedule_games.append(_build_schedule_game(
+                game, home_brief, away_brief,
+                top_picks.get(game.id),
+                top_props.get(game.id),
+            ))
 
     today = date.today()
     return ScheduleResponse(date=today, game_count=len(schedule_games), games=schedule_games)
 
 
 @router.get("/today", response_model=ScheduleResponse)
-async def get_today_schedule(
-    session: AsyncSession = Depends(get_session),
-):
+async def get_today_schedule():
     """Return today's schedule.
 
     Syncs scores/clock from NHL API for live games. Odds and predictions
     are kept fresh by the background scheduler — this endpoint only reads.
+
+    NOTE: Uses explicit session management (not Depends) to avoid holding
+    idle connections during write operations — prevents QueuePool exhaustion.
     """
     today = date.today()
-    games = await _games_for_date(today, session)
 
-    # Sync scores/clock if live or if we have no games yet
+    # Initial read with a short-lived session.
+    async with get_session_context() as session:
+        games = await _games_for_date(today, session)
+    # Session closed before potential write.
+
     has_live = any(g.status and g.status.lower() in ("in_progress", "live") for g in games)
     if not games or has_live:
         try:
-            async with session.begin_nested():
-                await _try_sync_schedule(session, target_date=today)
-                await session.flush()
-            games = await _games_for_date(today, session)
+            async with get_write_session_context() as write_session:
+                await _try_sync_schedule(write_session, target_date=today)
         except Exception as exc:
             logger.warning("Today schedule sync failed: %s", exc)
+
+        # Re-read with a fresh session to see committed data.
+        async with get_session_context() as session:
+            games = await _games_for_date(today, session)
 
     return ScheduleResponse(date=today, game_count=len(games), games=games)
 
@@ -596,10 +785,9 @@ async def get_schedule_by_date(
 
 
 @router.post("/sync", response_model=SyncResult)
-async def sync_schedule(
-    session: AsyncSession = Depends(get_session),
-):
-    count = await _try_sync_schedule(session)
+async def sync_schedule():
+    async with get_write_session_context() as session:
+        count = await _try_sync_schedule(session)
     return SyncResult(
         success=True,
         message=f"Successfully synced {count} games from the NHL API.",
@@ -608,13 +796,12 @@ async def sync_schedule(
 
 
 @router.post("/sync-odds")
-async def force_sync_odds(
-    session: AsyncSession = Depends(get_session),
-):
+async def force_sync_odds():
     """Force-sync odds from all sportsbook sources and regenerate predictions."""
     from app.services.odds import sync_odds_and_regenerate
 
-    matched, pred_count = await sync_odds_and_regenerate(session, force=True)
+    async with get_write_session_context() as session:
+        matched, pred_count = await sync_odds_and_regenerate(session, force=True)
 
     matched_pairs = [
         f"{m.get('away_abbrev', '')}@{m.get('home_abbrev', '')}"

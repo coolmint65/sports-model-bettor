@@ -5,7 +5,10 @@ Provides endpoints for retrieving team and player statistics, including
 season-level aggregates, goalie metrics, and roster-level data.
 """
 
+import logging
 from typing import List, Optional
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -515,7 +518,8 @@ async def sync_stats(
             detail="NHL scraper module is not available.",
         )
     except Exception as exc:
+        logger.error("Failed to sync stats: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=502,
-            detail=f"Failed to sync stats: {exc}",
+            detail="Failed to sync stats",
         )

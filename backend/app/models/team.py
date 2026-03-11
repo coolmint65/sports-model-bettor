@@ -68,6 +68,42 @@ class Team(TimestampMixin, Base):
         return f"<Team(id={self.id}, name='{self.name}', abbreviation='{self.abbreviation}')>"
 
 
+class TeamEVStats(TimestampMixin, Base):
+    """
+    Even-strength (5v5) advanced stats sourced from MoneyPuck.
+
+    One row per team per season, refreshed daily. Provides true 5v5
+    Corsi, Fenwick, and expected goals data that cannot be derived
+    from standard boxscore stats alone.
+    """
+
+    team_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("team.id"), nullable=False, index=True
+    )
+    season: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+
+    # 5v5 possession metrics (percentages, 0-100)
+    ev_cf_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    ev_ff_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    ev_xgf_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    ev_shots_for_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # Raw counts for context
+    games_played: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # When this row was last fetched from MoneyPuck
+    scrape_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+
+    # Relationship
+    team: Mapped["Team"] = relationship("Team")
+
+    def __repr__(self) -> str:
+        return (
+            f"<TeamEVStats(team_id={self.team_id}, season='{self.season}', "
+            f"ev_cf_pct={self.ev_cf_pct})>"
+        )
+
+
 class TeamStats(TimestampMixin, Base):
     """
     Aggregated season-level statistics for a team.

@@ -61,8 +61,17 @@ class FeatureEngine:
         goals_for_total = 0
         goals_against_total = 0
         total_goals_sum = 0
+        shots_for_total = 0
+        shots_against_total = 0
         games_counted = len(games)
 
+        # Momentum-weighted scoring: exponential decay gives more recent
+        # games higher influence. Games are ordered most-recent-first.
+        decay = _mc.momentum_decay
+        weighted_gf = 0.0
+        weight_sum = 0.0
+
+        idx = 0
         for game in games:
             is_home = game.home_team_id == team_id
             gf = game.home_score if is_home else game.away_score
@@ -76,12 +85,31 @@ class FeatureEngine:
             goals_against_total += ga
             total_goals_sum += gf + ga
 
-            # Determine winner
+            # Accumulate shots for PDO calculation
+            sf = (game.home_shots if is_home else game.away_shots) or 0
+            sa = (game.away_shots if is_home else game.home_shots) or 0
+            shots_for_total += sf
+            shots_against_total += sa
+
+            # Momentum weighting: w = decay^idx (most recent = 1.0)
+            w = decay ** idx
+            weighted_gf += gf * w
+            weight_sum += w
+            idx += 1
+
             if gf > ga:
                 wins += 1
 
         if games_counted == 0:
             return self._empty_form()
+
+        # PDO = shooting% + save% (league average = 1.000)
+        shooting_pct = goals_for_total / shots_for_total if shots_for_total > 0 else 0.09
+        save_pct = 1.0 - (goals_against_total / shots_against_total) if shots_against_total > 0 else 0.91
+        pdo = shooting_pct + save_pct
+
+        # Momentum-weighted avg: captures scoring direction/trend
+        momentum_avg_gf = weighted_gf / weight_sum if weight_sum > 0 else goals_for_total / games_counted
 
         return {
             "win_rate": round(wins / games_counted, 4),
@@ -89,6 +117,10 @@ class FeatureEngine:
             "avg_goals_against": round(goals_against_total / games_counted, 3),
             "avg_total_goals": round(total_goals_sum / games_counted, 3),
             "games_found": games_counted,
+            "pdo": round(pdo, 4),
+            "shooting_pct": round(shooting_pct, 4),
+            "save_pct": round(save_pct, 4),
+            "momentum_avg_gf": round(momentum_avg_gf, 3),
         }
 
     # ------------------------------------------------------------------ #
@@ -351,14 +383,43 @@ class FeatureEngine:
         last5_save_pct, last5_gaa = self._calc_goalie_recent(recent_games[:5])
         last10_save_pct, last10_gaa = self._calc_goalie_recent(recent_games[:10])
 
+        # Count consecutive starts for workload/fatigue detection.
+        # recent_games is ordered by date desc, so count how many
+        # consecutive games this goalie started (all have decisions).
+        consecutive_starts = len(recent_games)  # all fetched have decisions = starts
+
+        # Also check if team had a game where a *different* goalie started
+        # (i.e., the backup played). Query the team's recent games to see
+        # if this goalie started all of them.
+        team_recent = await self._get_recent_games(db, team_id, 10)
+        consecutive_starts = 0
+        for tg in team_recent:
+            # Check if this goalie got the decision in this game
+            gs_stmt = (
+                select(GameGoalieStats)
+                .where(
+                    and_(
+                        GameGoalieStats.game_id == tg.id,
+                        GameGoalieStats.player_id == goalie_id,
+                        GameGoalieStats.decision.isnot(None),
+                    )
+                )
+                .limit(1)
+            )
+            gs_result = await db.execute(gs_stmt)
+            if gs_result.scalars().first():
+                consecutive_starts += 1
+            else:
+                break  # different goalie started — streak over
+
         logger.info(
             "Goalie: team_id=%d → %s (id=%d) | SV%% %.3f GAA %.2f | "
-            "L5 SV%% %.3f GAA %.2f | L10 SV%% %.3f GAA %.2f | %d GS",
+            "L5 SV%% %.3f GAA %.2f | L10 SV%% %.3f GAA %.2f | %d GS | %d consec",
             team_id, goalie_name, goalie_id,
             season_save_pct, season_gaa,
             last5_save_pct, last5_gaa,
             last10_save_pct, last10_gaa,
-            games_started,
+            games_started, consecutive_starts,
         )
 
         return {
@@ -371,6 +432,7 @@ class FeatureEngine:
             "last10_save_pct": round(last10_save_pct, 4),
             "last10_gaa": round(last10_gaa, 3),
             "games_started_season": games_started,
+            "consecutive_starts": consecutive_starts,
         }
 
     # ------------------------------------------------------------------ #
@@ -786,7 +848,7 @@ class FeatureEngine:
             .where(
                 and_(
                     InjuryReport.team_id == team_id,
-                    InjuryReport.is_active.is_(True),
+                    InjuryReport.active == True,
                 )
             )
         )
@@ -802,30 +864,18 @@ class FeatureEngine:
         injured_players = []
 
         for inj in injuries:
-            status_weight = _ic.status_weights.get(inj.status.lower() if inj.status else "out", 0.5)
+            status_weight = _ic.status_weights.get(inj.status, 0.5)
 
-            # Get player position and stats for impact calculation
-            player_stmt = select(Player).where(Player.id == inj.player_id)
-            p_result = await db.execute(player_stmt)
-            player_obj = p_result.scalars().first()
-            position = player_obj.position if player_obj else "C"
-
-            # Look up season stats to compute PPG/GPG
-            stats_stmt = (
-                select(PlayerStats)
-                .where(PlayerStats.player_id == inj.player_id)
-                .order_by(desc(PlayerStats.season))
-                .limit(1)
-            )
-            stats_result = await db.execute(stats_stmt)
-            pstats = stats_result.scalars().first()
-            player_ppg = (pstats.points / pstats.games_played) if pstats and pstats.games_played > 0 else 0.0
-            player_gpg = (pstats.goals / pstats.games_played) if pstats and pstats.games_played > 0 else 0.0
+            # Get player position for multiplier
+            player_stmt = select(Player.position).where(Player.id == inj.player_id)
+            pos_result = await db.execute(player_stmt)
+            pos_row = pos_result.one_or_none()
+            position = pos_row[0] if pos_row else "C"
 
             pos_mult = _ic.position_multipliers.get(position, 1.0)
 
-            ppg_impact = player_ppg * status_weight * pos_mult
-            gpg_impact = player_gpg * status_weight * pos_mult
+            ppg_impact = (inj.player_ppg or 0) * status_weight * pos_mult
+            gpg_impact = (inj.player_gpg or 0) * status_weight * pos_mult
 
             total_ppg_lost += ppg_impact
             total_gpg_lost += gpg_impact
@@ -945,6 +995,9 @@ class FeatureEngine:
         is_lookahead = False
         is_letdown = False
 
+        # Fetch team object once for both checks
+        team_obj = await self._get_team(db, team_id)
+
         # Check next game: if it's a divisional matchup, this game may
         # see reduced effort (lookahead spot).
         from datetime import timedelta as _td
@@ -966,39 +1019,19 @@ class FeatureEngine:
         next_result = await db.execute(next_stmt)
         next_game = next_result.scalars().first()
 
-        if next_game:
-            next_opp_id = (
-                next_game.away_team_id
-                if next_game.home_team_id == team_id
-                else next_game.home_team_id
-            )
-            team_obj = await self._get_team(db, team_id)
+        if next_game and team_obj:
+            next_opp_id = self._get_opponent_id(next_game, team_id)
             next_opp_obj = await self._get_team(db, next_opp_id)
-            if team_obj and next_opp_obj:
-                if (
-                    team_obj.division
-                    and next_opp_obj.division
-                    and team_obj.division == next_opp_obj.division
-                ):
-                    is_lookahead = True
+            if next_opp_obj and self._is_same_division(team_obj, next_opp_obj):
+                is_lookahead = True
 
         # Letdown: previous game was an OT divisional battle
-        if recent_games:
+        if recent_games and team_obj:
             prev = recent_games[0]
-            prev_opp_id = (
-                prev.away_team_id
-                if prev.home_team_id == team_id
-                else prev.home_team_id
-            )
-            team_obj_ld = await self._get_team(db, team_id)
+            prev_opp_id = self._get_opponent_id(prev, team_id)
             prev_opp_obj = await self._get_team(db, prev_opp_id)
-            if team_obj_ld and prev_opp_obj:
-                was_divisional = (
-                    team_obj_ld.division
-                    and prev_opp_obj.division
-                    and team_obj_ld.division == prev_opp_obj.division
-                )
-                if was_divisional and prev.went_to_overtime:
+            if prev_opp_obj and self._is_same_division(team_obj, prev_opp_obj):
+                if prev.went_to_overtime:
                     is_letdown = True
 
         # Travel disadvantage: extended road trips
@@ -1037,6 +1070,387 @@ class FeatureEngine:
         return {
             "pp_pct": season.get("pp_pct", 20.0),
             "pk_pct": season.get("pk_pct", 80.0),
+        }
+
+    # ------------------------------------------------------------------ #
+    #  Advanced NHL metrics (Corsi-proxy, shot quality, PDO)              #
+    # ------------------------------------------------------------------ #
+
+    async def get_advanced_metrics(
+        self,
+        db: AsyncSession,
+        team_id: int,
+        last_n: int = 15,
+    ) -> Dict[str, Any]:
+        """
+        Compute advanced possession and shot-quality metrics from existing data.
+
+        Uses shots on goal (from Game) and blocked shots (from GamePlayerStats)
+        to approximate Corsi (shot attempts) without needing missed-shot data.
+
+        Corsi-proxy: CF = team_sog + opponent_blocked_shots
+                     CA = opponent_sog + team_blocked_shots
+
+        Returns:
+            dict with corsi_for_pct, corsi_for_per60, shot_share,
+            shooting_pct, opp_save_pct, pdo, high_danger_proxy, games_found.
+        """
+        games = await self._get_recent_games(db, team_id, last_n)
+
+        if not games:
+            return self._empty_advanced_metrics()
+
+        total_cf = 0.0
+        total_ca = 0.0
+        total_shots_for = 0.0
+        total_shots_against = 0.0
+        total_goals_for = 0.0
+        total_goals_against = 0.0
+        total_blocked_for = 0.0     # blocks by this team (defensive)
+        total_blocked_against = 0.0  # blocks by opponent (defensive)
+        games_counted = 0
+
+        for game in games:
+            is_home = game.home_team_id == team_id
+            gf = (game.home_score if is_home else game.away_score) or 0
+            ga = (game.away_score if is_home else game.home_score) or 0
+            sf = (game.home_shots if is_home else game.away_shots) or 0
+            sa = (game.away_shots if is_home else game.home_shots) or 0
+
+            if sf == 0 and sa == 0:
+                continue
+
+            # Get blocked shots per team from GamePlayerStats
+            opp_id = game.away_team_id if is_home else game.home_team_id
+
+            # Team's blocked shots (defensive blocks by this team's players)
+            team_blocks = await self._get_team_game_blocks(db, game.id, team_id)
+            # Opponent's blocked shots (defensive blocks by opponent's players)
+            opp_blocks = await self._get_team_game_blocks(db, game.id, opp_id)
+
+            # Corsi-proxy: shot attempts = SOG + opponent's blocks
+            # (opponent blocked our shot attempts, so those are our unrecorded attempts)
+            cf = sf + opp_blocks   # our shot attempts
+            ca = sa + team_blocks  # their shot attempts
+
+            total_cf += cf
+            total_ca += ca
+            total_shots_for += sf
+            total_shots_against += sa
+            total_goals_for += gf
+            total_goals_against += ga
+            total_blocked_for += team_blocks
+            total_blocked_against += opp_blocks
+            games_counted += 1
+
+        if games_counted == 0:
+            return self._empty_advanced_metrics()
+
+        # Corsi metrics
+        corsi_total = total_cf + total_ca
+        cf_pct = (total_cf / corsi_total * 100.0) if corsi_total > 0 else 50.0
+        cf_per60 = (total_cf / games_counted) * 3.0  # ~3 periods * 20 min, rough per-60
+
+        # Shot share (SOG-based, simpler than Corsi)
+        shot_total = total_shots_for + total_shots_against
+        shot_share = (total_shots_for / shot_total * 100.0) if shot_total > 0 else 50.0
+
+        # Shooting percentage
+        shooting_pct = (total_goals_for / total_shots_for * 100.0) if total_shots_for > 0 else 8.0
+
+        # Opponent save percentage (inverse of our shooting effectiveness)
+        opp_save_pct = 1.0 - (total_goals_for / total_shots_for) if total_shots_for > 0 else 0.905
+
+        # Team save percentage
+        team_save_pct = 1.0 - (total_goals_against / total_shots_against) if total_shots_against > 0 else 0.905
+
+        # PDO = shooting% + save% (league average ≈ 1.000)
+        pdo = (total_goals_for / total_shots_for if total_shots_for > 0 else 0.08) + team_save_pct
+
+        # High-danger proxy: goals per shot attempt (Corsi-based)
+        # Higher = better quality chances
+        high_danger_proxy = (total_goals_for / total_cf * 100.0) if total_cf > 0 else 5.0
+
+        # Fenwick-proxy (unblocked shot attempts) = SOG only (we don't have missed shots)
+        # So Fenwick ≈ shot_share in our case. We'll compute a differential metric instead.
+        # Expected goals share proxy: weight goals by shot quality
+        xgf_share = cf_pct  # Corsi% is our best xGF% proxy with available data
+
+        return {
+            "corsi_for_pct": round(cf_pct, 2),
+            "corsi_for_per60": round(cf_per60, 2),
+            "corsi_against_per60": round((total_ca / games_counted) * 3.0, 2) if games_counted > 0 else 0.0,
+            "shot_share": round(shot_share, 2),
+            "shooting_pct": round(shooting_pct, 2),
+            "team_save_pct": round(team_save_pct, 4),
+            "pdo": round(pdo, 4),
+            "high_danger_proxy": round(high_danger_proxy, 2),
+            "xgf_share": round(xgf_share, 2),
+            "avg_blocks_for": round(total_blocked_for / games_counted, 2),
+            "avg_blocks_against": round(total_blocked_against / games_counted, 2),
+            "games_found": games_counted,
+        }
+
+    async def _get_team_game_blocks(
+        self,
+        db: AsyncSession,
+        game_id: int,
+        team_id: int,
+    ) -> int:
+        """Sum blocked_shots for all players on a team in a specific game."""
+        from app.models.player import Player
+
+        stmt = (
+            select(func.coalesce(func.sum(GamePlayerStats.blocked_shots), 0))
+            .join(Player, GamePlayerStats.player_id == Player.id)
+            .where(
+                and_(
+                    GamePlayerStats.game_id == game_id,
+                    Player.team_id == team_id,
+                )
+            )
+        )
+        result = await db.execute(stmt)
+        return int(result.scalar() or 0)
+
+    @staticmethod
+    def _empty_advanced_metrics() -> Dict[str, Any]:
+        """Return default advanced metrics when no data is available."""
+        return {
+            "corsi_for_pct": 50.0,
+            "corsi_for_per60": 0.0,
+            "corsi_against_per60": 0.0,
+            "shot_share": 50.0,
+            "shooting_pct": 8.0,
+            "team_save_pct": 0.905,
+            "pdo": 1.0,
+            "high_danger_proxy": 5.0,
+            "xgf_share": 50.0,
+            "avg_blocks_for": 0.0,
+            "avg_blocks_against": 0.0,
+            "games_found": 0,
+        }
+
+    # ------------------------------------------------------------------ #
+    #  5v5 Even-strength possession (from MoneyPuck)                     #
+    # ------------------------------------------------------------------ #
+
+    async def get_ev_possession_metrics(
+        self,
+        db: AsyncSession,
+        team_id: int,
+    ) -> Dict[str, Any]:
+        """Fetch 5v5 even-strength possession metrics from TeamEVStats.
+
+        Returns MoneyPuck-sourced Corsi, Fenwick, and xGF percentages
+        at 5-on-5, which are more predictive than all-situations metrics.
+        """
+        from app.models.team import TeamEVStats
+
+        stmt = (
+            select(TeamEVStats)
+            .where(TeamEVStats.team_id == team_id)
+            .order_by(TeamEVStats.scrape_date.desc())
+            .limit(1)
+        )
+        result = await db.execute(stmt)
+        row = result.scalars().first()
+
+        if not row:
+            return self._empty_ev_possession()
+
+        return {
+            "ev_cf_pct": row.ev_cf_pct or 50.0,
+            "ev_ff_pct": row.ev_ff_pct or 50.0,
+            "ev_xgf_pct": row.ev_xgf_pct or 50.0,
+            "ev_shots_for_pct": row.ev_shots_for_pct or 50.0,
+            "games_found": row.games_played or 0,
+        }
+
+    @staticmethod
+    def _empty_ev_possession() -> Dict[str, Any]:
+        return {
+            "ev_cf_pct": 50.0,
+            "ev_ff_pct": 50.0,
+            "ev_xgf_pct": 50.0,
+            "ev_shots_for_pct": 50.0,
+            "games_found": 0,
+        }
+
+    # ------------------------------------------------------------------ #
+    #  Close-game possession (CF% in tight games)                        #
+    # ------------------------------------------------------------------ #
+
+    async def get_close_game_possession(
+        self,
+        db: AsyncSession,
+        team_id: int,
+        last_n: int = 20,
+    ) -> Dict[str, Any]:
+        """Compute Corsi-proxy filtered to close games only.
+
+        Close games = final score margin <= config threshold OR went to OT.
+        CF% in close games is more predictive than overall CF% because
+        blowout Corsi is heavily influenced by score effects.
+        """
+        games = await self._get_recent_games(db, team_id, last_n)
+        if not games:
+            return self._empty_close_game_possession()
+
+        margin_threshold = _mc.close_game_margin
+        total_cf = 0.0
+        total_ca = 0.0
+        close_wins = 0
+        close_games = 0
+
+        for game in games:
+            is_home = game.home_team_id == team_id
+            hs = game.home_score or 0
+            aws = game.away_score or 0
+            margin = abs(hs - aws)
+            went_ot = getattr(game, "went_to_overtime", False) or False
+
+            # Only count close games
+            if margin > margin_threshold and not went_ot:
+                continue
+
+            sf = (game.home_shots if is_home else game.away_shots) or 0
+            sa = (game.away_shots if is_home else game.home_shots) or 0
+            if sf == 0 and sa == 0:
+                continue
+
+            opp_id = game.away_team_id if is_home else game.home_team_id
+            team_blocks = await self._get_team_game_blocks(db, game.id, team_id)
+            opp_blocks = await self._get_team_game_blocks(db, game.id, opp_id)
+
+            total_cf += sf + opp_blocks
+            total_ca += sa + team_blocks
+            close_games += 1
+
+            # Did we win?
+            gf = hs if is_home else aws
+            ga = aws if is_home else hs
+            if gf > ga:
+                close_wins += 1
+
+        if close_games == 0:
+            return self._empty_close_game_possession()
+
+        corsi_total = total_cf + total_ca
+        cf_pct = (total_cf / corsi_total * 100.0) if corsi_total > 0 else 50.0
+
+        return {
+            "close_cf_pct": round(cf_pct, 2),
+            "close_cf_differential": round(cf_pct - 50.0, 2),
+            "close_game_win_rate": round(close_wins / close_games, 3) if close_games > 0 else 0.5,
+            "close_games_found": close_games,
+            "total_games_checked": len(games),
+        }
+
+    @staticmethod
+    def _empty_close_game_possession() -> Dict[str, Any]:
+        return {
+            "close_cf_pct": 50.0,
+            "close_cf_differential": 0.0,
+            "close_game_win_rate": 0.5,
+            "close_games_found": 0,
+            "total_games_checked": 0,
+        }
+
+    # ------------------------------------------------------------------ #
+    #  Goalie tier classification                                        #
+    # ------------------------------------------------------------------ #
+
+    def classify_goalie_tier(self, goalie: Dict[str, Any]) -> Dict[str, Any]:
+        """Add tier classification to goalie features.
+
+        Tiers:
+        - elite (3): SV% >= .920 AND games_started >= threshold
+        - starter (2): SV% >= .905 AND games_started >= threshold
+        - backup (1): everything else
+
+        Returns the goalie dict augmented with 'tier' and 'tier_rank'.
+        """
+        sv_pct = goalie.get("season_save_pct", 0.900)
+        gs = goalie.get("games_started_season", 0)
+        min_gs = _mc.goalie_tier_starter_min_gs
+
+        if sv_pct >= _mc.goalie_tier_elite_sv and gs >= min_gs:
+            tier = "elite"
+            tier_rank = 3
+        elif sv_pct >= _mc.goalie_tier_starter_sv and gs >= min_gs:
+            tier = "starter"
+            tier_rank = 2
+        else:
+            tier = "backup"
+            tier_rank = 1
+
+        return {
+            **goalie,
+            "tier": tier,
+            "tier_rank": tier_rank,
+        }
+
+    # ------------------------------------------------------------------ #
+    #  Starter confirmation confidence                                   #
+    # ------------------------------------------------------------------ #
+
+    def assess_starter_confidence(
+        self,
+        goalie: Dict[str, Any],
+        schedule: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Assess how confident we are that the projected starter will play.
+
+        Factors that reduce confidence:
+        - Team on a back-to-back
+        - High consecutive starts (fatigue)
+        - Goalie not the regular starter (low games_started)
+
+        Returns dict with starter_confidence (0-1), confidence_level, reasons.
+        """
+        confidence = _mc.starter_confidence_high
+        reasons = []
+
+        consecutive = goalie.get("consecutive_starts", 0)
+        is_b2b = schedule.get("is_back_to_back", False)
+        gs = goalie.get("games_started_season", 0)
+        fatigue_threshold = _mc.starter_fatigue_threshold
+
+        # Back-to-back reduces confidence
+        if is_b2b:
+            confidence = min(confidence, _mc.starter_confidence_medium)
+            reasons.append("Team on back-to-back")
+
+        # High consecutive starts (fatigue)
+        if consecutive >= fatigue_threshold:
+            extra = consecutive - fatigue_threshold
+            confidence -= 0.10 * (1 + extra)
+            reasons.append(f"{consecutive} consecutive starts")
+
+        # Low games started = not the clear #1
+        if gs < _mc.goalie_tier_starter_min_gs // 2:
+            confidence -= 0.10
+            reasons.append("Limited starts this season")
+
+        # Clamp
+        confidence = max(_mc.starter_confidence_low, min(1.0, confidence))
+
+        if confidence >= _mc.starter_confidence_high:
+            level = "high"
+        elif confidence >= _mc.starter_confidence_medium:
+            level = "medium"
+        else:
+            level = "low"
+
+        if not reasons:
+            reasons.append("Regular starter, well rested")
+
+        return {
+            "projected_starter": goalie.get("goalie_name", "Unknown"),
+            "starter_confidence": round(confidence, 2),
+            "confidence_level": level,
+            "confidence_reasons": reasons,
         }
 
     # ------------------------------------------------------------------ #
@@ -1115,6 +1529,26 @@ class FeatureEngine:
         home_special = await self.get_special_teams_matchup(db, home_id)
         away_special = await self.get_special_teams_matchup(db, away_id)
 
+        # Advanced metrics (Corsi-proxy, shot quality, PDO)
+        home_advanced = await self.get_advanced_metrics(db, home_id)
+        away_advanced = await self.get_advanced_metrics(db, away_id)
+
+        # 5v5 even-strength possession (MoneyPuck)
+        home_ev_possession = await self.get_ev_possession_metrics(db, home_id)
+        away_ev_possession = await self.get_ev_possession_metrics(db, away_id)
+
+        # Close-game possession
+        home_close_possession = await self.get_close_game_possession(db, home_id)
+        away_close_possession = await self.get_close_game_possession(db, away_id)
+
+        # Goalie tier classification (augments existing goalie features)
+        home_goalie = self.classify_goalie_tier(home_goalie)
+        away_goalie = self.classify_goalie_tier(away_goalie)
+
+        # Starter confirmation confidence
+        home_starter_status = self.assess_starter_confidence(home_goalie, home_schedule)
+        away_starter_status = self.assess_starter_confidence(away_goalie, away_schedule)
+
         # Player and team matchups (uses MatchupEngine)
         from app.analytics.matchups import MatchupEngine
         matchup_engine = MatchupEngine()
@@ -1129,22 +1563,18 @@ class FeatureEngine:
         )
 
         # Divisional matchup detection (affects total scoring tendencies)
-        is_divisional = False
-        if home_team and away_team:
-            is_divisional = (
-                home_team.division is not None
-                and away_team.division is not None
-                and home_team.division == away_team.division
-            )
+        is_divisional = (
+            self._is_same_division(home_team, away_team)
+            if home_team and away_team
+            else False
+        )
 
         # Conference mismatch for travel (west vs east)
-        is_cross_conference = False
-        if home_team and away_team:
-            is_cross_conference = (
-                home_team.conference is not None
-                and away_team.conference is not None
-                and home_team.conference != away_team.conference
-            )
+        is_cross_conference = (
+            self._is_cross_conference(home_team, away_team)
+            if home_team and away_team
+            else False
+        )
 
         features = {
             # Game metadata
@@ -1169,6 +1599,26 @@ class FeatureEngine:
                 "under_price": getattr(game, "under_price", None),
                 "all_total_lines": getattr(game, "all_total_lines", None) or [],
                 "all_spread_lines": getattr(game, "all_spread_lines", None) or [],
+                # 1st period odds (from Game model columns)
+                "p1_over_price": getattr(game, "period1_over_price", None),
+                "p1_under_price": getattr(game, "period1_under_price", None),
+                "p1_total_line": getattr(game, "period1_total_line", None),
+                "p1_home_price": getattr(game, "period1_home_ml", None),
+                "p1_away_price": getattr(game, "period1_away_ml", None),
+                "p1_draw_price": getattr(game, "period1_draw_price", None),
+                "p1_spread_line": getattr(game, "period1_spread_line", None),
+                "p1_home_spread_price": getattr(game, "period1_home_spread_price", None),
+                "p1_away_spread_price": getattr(game, "period1_away_spread_price", None),
+                # Other prop odds (keys match what each prop type expects)
+                "btts_yes_price": getattr(game, "btts_yes_price", None),
+                "btts_no_price": getattr(game, "btts_no_price", None),
+                "first_goal_home_price": getattr(game, "first_goal_home_price", None),
+                "first_goal_away_price": getattr(game, "first_goal_away_price", None),
+                "ot_yes_price": getattr(game, "overtime_yes_price", None),
+                "ot_no_price": getattr(game, "overtime_no_price", None),
+                "reg_home_price": getattr(game, "regulation_home_price", None),
+                "reg_away_price": getattr(game, "regulation_away_price", None),
+                "reg_draw_price": getattr(game, "regulation_draw_price", None),
             },
             # Home team features
             "home_form_5": home_form_5,
@@ -1202,6 +1652,18 @@ class FeatureEngine:
             # Special teams
             "home_special_teams": home_special,
             "away_special_teams": away_special,
+            # Advanced metrics
+            "home_advanced": home_advanced,
+            "away_advanced": away_advanced,
+            # 5v5 even-strength possession (MoneyPuck)
+            "home_ev_possession": home_ev_possession,
+            "away_ev_possession": away_ev_possession,
+            # Close-game possession
+            "home_close_possession": home_close_possession,
+            "away_close_possession": away_close_possession,
+            # Starter confidence
+            "home_starter_status": home_starter_status,
+            "away_starter_status": away_starter_status,
             # Player matchups (how key players perform vs this opponent)
             "home_player_matchup": home_player_matchup,
             "away_player_matchup": away_player_matchup,
@@ -1251,6 +1713,29 @@ class FeatureEngine:
         stmt = select(Team).where(Team.id == team_id)
         result = await db.execute(stmt)
         return result.scalars().first()
+
+    @staticmethod
+    def _get_opponent_id(game: Game, team_id: int) -> int:
+        """Return the opponent team ID for a given team in a game."""
+        return game.away_team_id if game.home_team_id == team_id else game.home_team_id
+
+    @staticmethod
+    def _is_same_division(team_a: Team, team_b: Team) -> bool:
+        """Check if two teams are in the same division."""
+        return bool(
+            team_a.division
+            and team_b.division
+            and team_a.division == team_b.division
+        )
+
+    @staticmethod
+    def _is_cross_conference(team_a: Team, team_b: Team) -> bool:
+        """Check if two teams are in different conferences."""
+        return bool(
+            team_a.conference
+            and team_b.conference
+            and team_a.conference != team_b.conference
+        )
 
     @staticmethod
     def _parse_period_scores(
