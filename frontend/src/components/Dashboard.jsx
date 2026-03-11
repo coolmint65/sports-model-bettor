@@ -140,13 +140,25 @@ function Dashboard() {
     ...extraLiveGames,
   ];
 
-  // Prematch games only (not live, not final)
-  const prematchGames = games.filter((g) => {
-    const status = (g.status || '').toLowerCase();
-    return !isLiveStatus(status) && status !== 'final' && status !== 'completed' && status !== 'off';
-  });
+  // Prematch games only (not live, not final) — sorted by bet quality
+  const prematchGames = useMemo(() => {
+    const prematch = games.filter((g) => {
+      const status = (g.status || '').toLowerCase();
+      return !isLiveStatus(status) && status !== 'final' && status !== 'completed' && status !== 'off';
+    });
 
-  // Compute medal rankings across all prematch games with picks
+    return prematch.sort((a, b) => {
+      const confA = a.top_pick?.confidence != null ? confidencePct(a.top_pick.confidence) : 0;
+      const confB = b.top_pick?.confidence != null ? confidencePct(b.top_pick.confidence) : 0;
+      const edgeA = a.top_pick?.edge || 0;
+      const edgeB = b.top_pick?.edge || 0;
+      const scoreA = 0.6 * confA + 0.4 * (Math.min(edgeA, 0.25) / 0.25) * 100;
+      const scoreB = 0.6 * confB + 0.4 * (Math.min(edgeB, 0.25) / 0.25) * 100;
+      return scoreB - scoreA;
+    });
+  }, [games]);
+
+  // Compute medal rankings
   const medalMap = useMemo(() => {
     const map = new Map();
     const scored = prematchGames
@@ -166,7 +178,6 @@ function Dashboard() {
   }, [prematchGames]);
 
   // Auto-track all top picks (prematch only) to the bet tracker.
-  // Sequential requests to avoid DB pool exhaustion.
   const autoTrackedRef = useRef(new Set());
   useEffect(() => {
     const picks = prematchGames
@@ -262,10 +273,15 @@ function Dashboard() {
         </section>
       )}
 
-      {/* Today's Schedule */}
+      {/* Upcoming Games */}
       <section className="section">
         <div className="section-header">
-          <h2 className="section-title">Today's Schedule</h2>
+          <div className="section-title-group">
+            <h2 className="section-title upcoming-title">Upcoming Games</h2>
+            <p className="section-subtitle">
+              Search and explore matchups. Games sorted by bet quality &mdash; GOOD bets shown first.
+            </p>
+          </div>
           <span className="game-count">
             {prematchGames.length} {prematchGames.length === 1 ? 'Game' : 'Games'}
           </span>
@@ -292,7 +308,7 @@ function Dashboard() {
         )}
 
         {!scheduleLoading && !scheduleError && prematchGames.length > 0 && (
-          <div className="games-grid">
+          <div className="dc-grid">
             {prematchGames.map((game) => (
               <GameCard key={game.game_id || game.id} game={game} section="schedule" medal={medalMap.get(game.id || game.game_id)} />
             ))}
