@@ -21,6 +21,8 @@ export const fetchTodaySchedule = () => api.get('/schedule/today');
 export const fetchLiveGames = () => api.get('/schedule/live');
 export const fetchScheduleByDate = (date) => api.get(`/schedule/${date}`);
 export const fetchGameDetails = (gameId) => api.get(`/games/${gameId}`);
+export const fetchLineMovement = (gameId) => api.get(`/games/${gameId}/line-movement`);
+export const fetchGameInjuries = (gameId) => api.get(`/games/${gameId}/injuries`);
 
 // Prediction endpoints
 export const fetchTodayPredictions = () => api.get('/predictions/today');

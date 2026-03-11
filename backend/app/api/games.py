@@ -22,6 +22,8 @@ from app.config import settings
 from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES, composite_pick_score, is_heavy_juice
 from app.database import get_session
 from app.models.game import Game, HeadToHead
+from app.models.injury import InjuryReport
+from app.models.odds_history import OddsSnapshot
 from app.models.player import GoalieStats, Player
 from app.models.prediction import Prediction
 from app.models.team import Team, TeamStats
@@ -843,3 +845,156 @@ async def get_game_features(
         features["h2h_team2_goals"] = h2h.team2_goals
 
     return FeatureResponse(game_id=game_id, features=features)
+
+
+# ---------------------------------------------------------------------------
+# Line movement endpoint
+# ---------------------------------------------------------------------------
+
+class OddsSnapshotResponse(BaseModel):
+    """Single point-in-time odds snapshot."""
+
+    captured_at: str
+    source: Optional[str] = None
+    home_moneyline: Optional[float] = None
+    away_moneyline: Optional[float] = None
+    over_under_line: Optional[float] = None
+    over_price: Optional[float] = None
+    under_price: Optional[float] = None
+    home_spread_line: Optional[float] = None
+    away_spread_line: Optional[float] = None
+    home_spread_price: Optional[float] = None
+    away_spread_price: Optional[float] = None
+
+
+class LineMovementResponse(BaseModel):
+    """Line movement history for a game."""
+
+    game_id: int
+    snapshots: List[OddsSnapshotResponse]
+    opening: Optional[OddsSnapshotResponse] = None
+    current: Optional[OddsSnapshotResponse] = None
+
+
+@router.get(
+    "/{game_id}/line-movement",
+    response_model=LineMovementResponse,
+    summary="Get line movement history for a game",
+)
+async def get_line_movement(
+    game_id: int,
+    session: AsyncSession = Depends(get_session),
+):
+    """
+    Return historical odds snapshots for a game, ordered chronologically.
+
+    Includes opening and current (latest) snapshots for quick comparison.
+    """
+    await _get_game_or_404(game_id, session)
+
+    result = await session.execute(
+        select(OddsSnapshot)
+        .where(OddsSnapshot.game_id == game_id)
+        .order_by(OddsSnapshot.captured_at.asc())
+    )
+    snapshots = result.scalars().all()
+
+    snap_list = [
+        OddsSnapshotResponse(
+            captured_at=s.captured_at.isoformat() if s.captured_at else "",
+            source=s.source,
+            home_moneyline=s.home_moneyline,
+            away_moneyline=s.away_moneyline,
+            over_under_line=s.over_under_line,
+            over_price=s.over_price,
+            under_price=s.under_price,
+            home_spread_line=s.home_spread_line,
+            away_spread_line=s.away_spread_line,
+            home_spread_price=s.home_spread_price,
+            away_spread_price=s.away_spread_price,
+        )
+        for s in snapshots
+    ]
+
+    opening = snap_list[0] if snap_list else None
+    current = snap_list[-1] if snap_list else None
+
+    return LineMovementResponse(
+        game_id=game_id,
+        snapshots=snap_list,
+        opening=opening,
+        current=current,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Injury report endpoint
+# ---------------------------------------------------------------------------
+
+class InjuryInfo(BaseModel):
+    """Injury information for a single player."""
+
+    player_name: str
+    position: Optional[str] = None
+    status: str
+    injury_type: Optional[str] = None
+    detail: Optional[str] = None
+    reported_at: Optional[str] = None
+
+
+class GameInjuryResponse(BaseModel):
+    """Injury reports for both teams in a game."""
+
+    game_id: int
+    home_injuries: List[InjuryInfo]
+    away_injuries: List[InjuryInfo]
+
+
+@router.get(
+    "/{game_id}/injuries",
+    response_model=GameInjuryResponse,
+    summary="Get injury reports for both teams in a game",
+)
+async def get_game_injuries(
+    game_id: int,
+    session: AsyncSession = Depends(get_session),
+):
+    """Return active injury reports for both teams in the specified game."""
+    game = await _get_game_or_404(game_id, session)
+
+    async def _team_injuries(team_id: int) -> List[InjuryInfo]:
+        result = await session.execute(
+            select(InjuryReport)
+            .join(Player, InjuryReport.player_id == Player.id)
+            .where(
+                and_(
+                    InjuryReport.team_id == team_id,
+                    InjuryReport.is_active.is_(True),
+                )
+            )
+        )
+        reports = result.scalars().all()
+        infos = []
+        for r in reports:
+            player_result = await session.execute(
+                select(Player).where(Player.id == r.player_id)
+            )
+            player = player_result.scalar_one_or_none()
+            infos.append(InjuryInfo(
+                player_name=player.name if player else "Unknown",
+                position=player.position if player else None,
+                status=r.status,
+                injury_type=r.injury_type,
+                detail=r.detail,
+                reported_at=r.reported_at.isoformat() if r.reported_at else None,
+            ))
+        return infos
+
+    home_inj = await _team_injuries(game.home_team_id)
+    away_inj = await _team_injuries(game.away_team_id)
+
+    return GameInjuryResponse(
+        game_id=game_id,
+        home_injuries=home_inj,
+        away_injuries=away_inj,
+    )

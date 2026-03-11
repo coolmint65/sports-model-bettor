@@ -258,10 +258,10 @@ async def _regenerate_predictions():
 
 
 async def _run_full_data_sync():
-    """Run a full data sync (schedule, teams, rosters, odds, predictions).
+    """Run a full data sync (schedule, teams, rosters, odds, injuries, predictions).
 
     Delegates to the same pipeline as the manual sync button, but runs
-    automatically in the background.
+    automatically in the background. Also refreshes injury data.
     """
     try:
         from app.api.data import _run_full_sync, _sync_state

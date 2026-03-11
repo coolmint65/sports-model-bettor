@@ -14,11 +14,16 @@ from sqlalchemy import and_, case, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
+from app.config import settings
 from app.models.game import Game, GameGoalieStats, GamePlayerStats, HeadToHead
+from app.models.injury import InjuryReport
 from app.models.player import GoalieStats, Player, PlayerStats
 from app.models.team import Team, TeamStats
 
 logger = logging.getLogger(__name__)
+
+_mc = settings.model
+_ic = settings.injury
 
 
 class FeatureEngine:
@@ -756,6 +761,285 @@ class FeatureEngine:
         }
 
     # ------------------------------------------------------------------ #
+    #  Injury impact features                                              #
+    # ------------------------------------------------------------------ #
+
+    async def get_injury_impact(
+        self,
+        db: AsyncSession,
+        team_id: int,
+    ) -> Dict[str, Any]:
+        """
+        Calculate the impact of known injuries on a team's expected output.
+
+        Uses active InjuryReport records to determine which players are
+        out or limited, then estimates xG reduction based on their
+        production metrics and position importance.
+
+        Returns:
+            dict with xg_reduction (float 0-1), injured_players (list),
+            total_missing_ppg, total_missing_gpg, goalie_injured (bool).
+        """
+        stmt = (
+            select(InjuryReport)
+            .join(Player, InjuryReport.player_id == Player.id)
+            .where(
+                and_(
+                    InjuryReport.team_id == team_id,
+                    InjuryReport.is_active.is_(True),
+                )
+            )
+        )
+        result = await db.execute(stmt)
+        injuries = result.scalars().all()
+
+        if not injuries:
+            return self._empty_injury_impact()
+
+        total_ppg_lost = 0.0
+        total_gpg_lost = 0.0
+        goalie_injured = False
+        injured_players = []
+
+        for inj in injuries:
+            status_weight = _ic.status_weights.get(inj.status.lower() if inj.status else "out", 0.5)
+
+            # Get player position and stats for impact calculation
+            player_stmt = select(Player).where(Player.id == inj.player_id)
+            p_result = await db.execute(player_stmt)
+            player_obj = p_result.scalars().first()
+            position = player_obj.position if player_obj else "C"
+
+            # Look up season stats to compute PPG/GPG
+            stats_stmt = (
+                select(PlayerStats)
+                .where(PlayerStats.player_id == inj.player_id)
+                .order_by(desc(PlayerStats.season))
+                .limit(1)
+            )
+            stats_result = await db.execute(stats_stmt)
+            pstats = stats_result.scalars().first()
+            player_ppg = (pstats.points / pstats.games_played) if pstats and pstats.games_played > 0 else 0.0
+            player_gpg = (pstats.goals / pstats.games_played) if pstats and pstats.games_played > 0 else 0.0
+
+            pos_mult = _ic.position_multipliers.get(position, 1.0)
+
+            ppg_impact = player_ppg * status_weight * pos_mult
+            gpg_impact = player_gpg * status_weight * pos_mult
+
+            total_ppg_lost += ppg_impact
+            total_gpg_lost += gpg_impact
+
+            if position == "G":
+                goalie_injured = True
+
+            injured_players.append({
+                "player_id": inj.player_id,
+                "status": inj.status,
+                "position": position,
+                "ppg_impact": round(ppg_impact, 3),
+                "gpg_impact": round(gpg_impact, 3),
+                "injury_type": inj.injury_type,
+            })
+
+        # Calculate xG reduction as a fraction of team's expected output
+        # Use team's season goals-per-game as denominator
+        season_stats = await self.get_season_stats(db, team_id)
+        team_gpg = season_stats.get("goals_for_pg", 3.0)
+
+        xg_reduction = 0.0
+        if team_gpg > 0:
+            xg_reduction = min(
+                total_gpg_lost / team_gpg,
+                _ic.max_injury_reduction,
+            )
+
+        return {
+            "xg_reduction": round(xg_reduction, 4),
+            "total_missing_ppg": round(total_ppg_lost, 3),
+            "total_missing_gpg": round(total_gpg_lost, 3),
+            "injured_count": len(injuries),
+            "goalie_injured": goalie_injured,
+            "injured_players": injured_players,
+        }
+
+    # ------------------------------------------------------------------ #
+    #  Schedule context (B2B, rest, road trips)                           #
+    # ------------------------------------------------------------------ #
+
+    async def get_schedule_context(
+        self,
+        db: AsyncSession,
+        team_id: int,
+        game_date: Any,
+    ) -> Dict[str, Any]:
+        """
+        Compute schedule fatigue factors for a team.
+
+        Detects back-to-back games, rest days, games in last 7 days,
+        and consecutive road games.
+
+        Args:
+            game_date: The date of the game being predicted.
+
+        Returns:
+            dict with is_back_to_back, days_rest, games_last_7,
+            consecutive_road_games.
+        """
+        from datetime import timedelta
+
+        if isinstance(game_date, str):
+            from datetime import date as date_type
+            game_date = date_type.fromisoformat(game_date)
+
+        # Get recent games for this team ordered by date
+        lookback = _mc.schedule_lookback
+        start_date = game_date - timedelta(days=lookback)
+
+        stmt = (
+            select(Game)
+            .where(
+                and_(
+                    or_(
+                        Game.home_team_id == team_id,
+                        Game.away_team_id == team_id,
+                    ),
+                    Game.date >= start_date,
+                    Game.date < game_date,
+                    Game.status == "final",
+                )
+            )
+            .order_by(desc(Game.date))
+        )
+        result = await db.execute(stmt)
+        recent_games = result.scalars().all()
+
+        if not recent_games:
+            return {
+                "is_back_to_back": False,
+                "days_rest": 3,
+                "games_last_7": 0,
+                "consecutive_road_games": 0,
+            }
+
+        # Days rest
+        last_game = recent_games[0]
+        days_rest = (game_date - last_game.date).days
+
+        # Back-to-back (played yesterday)
+        is_b2b = days_rest <= 1
+
+        # Games in last 7 days
+        week_ago = game_date - timedelta(days=7)
+        games_last_7 = sum(1 for g in recent_games if g.date >= week_ago)
+
+        # Consecutive road games
+        consecutive_road = 0
+        for game in recent_games:
+            if game.away_team_id == team_id:
+                consecutive_road += 1
+            else:
+                break
+
+        # ---- Lookahead/letdown detection ----
+        is_lookahead = False
+        is_letdown = False
+
+        # Check next game: if it's a divisional matchup, this game may
+        # see reduced effort (lookahead spot).
+        from datetime import timedelta as _td
+        next_stmt = (
+            select(Game)
+            .where(
+                and_(
+                    or_(
+                        Game.home_team_id == team_id,
+                        Game.away_team_id == team_id,
+                    ),
+                    Game.date > game_date,
+                    Game.date <= game_date + _td(days=3),
+                )
+            )
+            .order_by(Game.date)
+            .limit(1)
+        )
+        next_result = await db.execute(next_stmt)
+        next_game = next_result.scalars().first()
+
+        if next_game:
+            next_opp_id = (
+                next_game.away_team_id
+                if next_game.home_team_id == team_id
+                else next_game.home_team_id
+            )
+            team_obj = await self._get_team(db, team_id)
+            next_opp_obj = await self._get_team(db, next_opp_id)
+            if team_obj and next_opp_obj:
+                if (
+                    team_obj.division
+                    and next_opp_obj.division
+                    and team_obj.division == next_opp_obj.division
+                ):
+                    is_lookahead = True
+
+        # Letdown: previous game was an OT divisional battle
+        if recent_games:
+            prev = recent_games[0]
+            prev_opp_id = (
+                prev.away_team_id
+                if prev.home_team_id == team_id
+                else prev.home_team_id
+            )
+            team_obj_ld = await self._get_team(db, team_id)
+            prev_opp_obj = await self._get_team(db, prev_opp_id)
+            if team_obj_ld and prev_opp_obj:
+                was_divisional = (
+                    team_obj_ld.division
+                    and prev_opp_obj.division
+                    and team_obj_ld.division == prev_opp_obj.division
+                )
+                if was_divisional and prev.went_to_overtime:
+                    is_letdown = True
+
+        # Travel disadvantage: extended road trips
+        is_travel_disadvantage = consecutive_road >= 3
+
+        return {
+            "is_back_to_back": is_b2b,
+            "days_rest": days_rest,
+            "games_last_7": games_last_7,
+            "consecutive_road_games": consecutive_road,
+            "is_lookahead": is_lookahead,
+            "is_letdown": is_letdown,
+            "is_travel_disadvantage": is_travel_disadvantage,
+        }
+
+    # ------------------------------------------------------------------ #
+    #  Special teams matchup                                               #
+    # ------------------------------------------------------------------ #
+
+    async def get_special_teams_matchup(
+        self,
+        db: AsyncSession,
+        team_id: int,
+    ) -> Dict[str, Any]:
+        """
+        Get a team's special teams metrics for matchup comparison.
+
+        Returns PP% and PK% from season stats plus recent form.
+
+        Returns:
+            dict with pp_pct, pk_pct, pp_goals_per_game,
+            pk_goals_against_per_game, penalty_minutes_per_game.
+        """
+        season = await self.get_season_stats(db, team_id)
+
+        return {
+            "pp_pct": season.get("pp_pct", 20.0),
+            "pk_pct": season.get("pk_pct", 80.0),
+        }
+
+    # ------------------------------------------------------------------ #
     #  Build comprehensive feature set for a game                         #
     # ------------------------------------------------------------------ #
 
@@ -819,6 +1103,49 @@ class FeatureEngine:
         # Head-to-head
         h2h = await self.get_h2h_stats(db, home_id, away_id)
 
+        # Injury impact
+        home_injuries = await self.get_injury_impact(db, home_id)
+        away_injuries = await self.get_injury_impact(db, away_id)
+
+        # Schedule context
+        home_schedule = await self.get_schedule_context(db, home_id, game.date)
+        away_schedule = await self.get_schedule_context(db, away_id, game.date)
+
+        # Special teams
+        home_special = await self.get_special_teams_matchup(db, home_id)
+        away_special = await self.get_special_teams_matchup(db, away_id)
+
+        # Player and team matchups (uses MatchupEngine)
+        from app.analytics.matchups import MatchupEngine
+        matchup_engine = MatchupEngine()
+        home_player_matchup = await matchup_engine.get_team_player_matchup_impact(
+            db, home_id, away_id
+        )
+        away_player_matchup = await matchup_engine.get_team_player_matchup_impact(
+            db, away_id, home_id
+        )
+        team_matchup = await matchup_engine.get_team_matchup_features(
+            db, home_id, away_id
+        )
+
+        # Divisional matchup detection (affects total scoring tendencies)
+        is_divisional = False
+        if home_team and away_team:
+            is_divisional = (
+                home_team.division is not None
+                and away_team.division is not None
+                and home_team.division == away_team.division
+            )
+
+        # Conference mismatch for travel (west vs east)
+        is_cross_conference = False
+        if home_team and away_team:
+            is_cross_conference = (
+                home_team.conference is not None
+                and away_team.conference is not None
+                and home_team.conference != away_team.conference
+            )
+
         features = {
             # Game metadata
             "game_id": game.id,
@@ -866,6 +1193,23 @@ class FeatureEngine:
             "away_lineup": away_lineup,
             # Head-to-head
             "h2h": h2h,
+            # Injury impact
+            "home_injuries": home_injuries,
+            "away_injuries": away_injuries,
+            # Schedule context
+            "home_schedule": home_schedule,
+            "away_schedule": away_schedule,
+            # Special teams
+            "home_special_teams": home_special,
+            "away_special_teams": away_special,
+            # Player matchups (how key players perform vs this opponent)
+            "home_player_matchup": home_player_matchup,
+            "away_player_matchup": away_player_matchup,
+            # Team matchup profile (scoring tendencies between these teams)
+            "team_matchup": team_matchup,
+            # Schedule spot / situational awareness
+            "is_divisional": is_divisional,
+            "is_cross_conference": is_cross_conference,
         }
 
         return features
@@ -1009,4 +1353,16 @@ class FeatureEngine:
             "missing_goals_per_game": 0.0,
             "lineup_strength": 1.0,
             "total_regular_ppg": 0.0,
+        }
+
+    @staticmethod
+    def _empty_injury_impact() -> Dict[str, Any]:
+        """Return default injury impact when no injuries are known."""
+        return {
+            "xg_reduction": 0.0,
+            "total_missing_ppg": 0.0,
+            "total_missing_gpg": 0.0,
+            "injured_count": 0,
+            "goalie_injured": False,
+            "injured_players": [],
         }

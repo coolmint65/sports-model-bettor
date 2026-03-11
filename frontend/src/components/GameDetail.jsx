@@ -1,886 +1,958 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
-  ArrowLeft,
-  Clock,
-  MapPin,
-  BarChart3,
-  Target,
-  Users,
-  TrendingUp,
-  Activity,
-  Layers,
-  DollarSign,
-  Radio,
-  AlertTriangle,
+  ArrowLeft, Clock, MapPin, BarChart3, Target, TrendingUp,
+  Activity, DollarSign, Radio, Shield, Zap, CheckCircle,
+  AlertTriangle, Info, Users, Star, ChevronRight, Cloud,
+  HeartPulse, GitBranch,
 } from 'lucide-react';
 import { format, formatDistanceToNowStrict } from 'date-fns';
-import { fetchGameDetails } from '../utils/api';
+import { BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import { fetchGameDetails, fetchLineMovement, fetchGameInjuries } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import { useWebSocketEvent } from '../hooks/useWebSocket';
-import PredictionCard from './PredictionCard';
-import { teamName, teamAbbrev, teamLogo, parseAsUTC, isLiveStatus } from '../utils/teams';
-import { formatAmericanOddsOrDash } from '../utils/formatting';
+import { teamName, teamAbbrev, teamLogo, parseAsUTC, isLiveStatus, confidencePct, formatBetType, formatPredictionValue } from '../utils/teams';
+import { formatAmericanOddsOrDash, formatAmericanOdds, getConfidenceColor } from '../utils/formatting';
 
 const LIVE_POLL_INTERVAL = 30_000;
 
-const TABS = [
-  { id: 'overview', label: 'Overview', icon: BarChart3 },
-  { id: 'predictions', label: 'Predictions', icon: Target },
-  { id: 'h2h', label: 'H2H', icon: Users },
-  { id: 'form', label: 'Form', icon: TrendingUp },
-  { id: 'periods', label: 'Periods', icon: Layers },
-];
+/* ════════════════════════════════════════════════════════════
+   Utility functions
+   ════════════════════════════════════════════════════════════ */
 
-function formatGameDateTime(game) {
-  try {
-    const dateStr = game.start_time || game.datetime;
-    if (!dateStr) return 'TBD';
-    const date = parseAsUTC(dateStr);
-    if (!date || isNaN(date.getTime())) return 'TBD';
-    return format(date, 'EEEE, MMM d, yyyy - h:mm a');
-  } catch {
-    return game.time || 'TBD';
+function americanToImplied(odds) {
+  if (odds == null) return null;
+  if (odds < 0) return Math.abs(odds) / (Math.abs(odds) + 100);
+  return 100 / (odds + 100);
+}
+
+function getConfidenceRating(conf) {
+  if (conf >= 75) return { label: 'EXCELLENT', cls: 'gd-rating-excellent' };
+  if (conf >= 65) return { label: 'GOOD', cls: 'gd-rating-good' };
+  if (conf >= 55) return { label: 'FAIR', cls: 'gd-rating-fair' };
+  return { label: 'CAUTION', cls: 'gd-rating-caution' };
+}
+
+function computeRisk(conf, edge) {
+  if (conf >= 70 && edge >= 7) return { score: Math.max(20, 35 - edge), level: 'Low', color: '#00ff88' };
+  if (conf >= 60 && edge >= 5) return { score: Math.max(40, 55 - edge), level: 'Medium', color: '#ffd700' };
+  return { score: Math.min(80, 60 + (100 - conf) * 0.25), level: 'High', color: '#ff5252' };
+}
+
+function getSuggestedStake(conf, edge) {
+  if (conf >= 72 && edge >= 8) return 'Heavy';
+  if (conf >= 62 && edge >= 5) return 'Medium';
+  return 'Light';
+}
+
+function generateFactors(homeForm, awayForm, h2h, homeRecent, awayRecent) {
+  const factors = [];
+  const hGP = (homeForm.wins || 0) + (homeForm.losses || 0) + (homeForm.ot_losses || 0);
+  const aGP = (awayForm.wins || 0) + (awayForm.losses || 0) + (awayForm.ot_losses || 0);
+
+  if (hGP > 0 && (homeForm.wins / hGP) >= 0.55) {
+    factors.push({ text: `${homeForm.team_name}'s overall strong season record (${homeForm.wins}-${homeForm.losses})`, type: 'positive' });
   }
+  if (aGP > 0 && (awayForm.wins / aGP) >= 0.55) {
+    factors.push({ text: `${awayForm.team_name}'s strong season record (${awayForm.wins}-${awayForm.losses})`, type: 'positive' });
+  }
+  if (hGP > 0 && (homeForm.wins / hGP) < 0.42) {
+    factors.push({ text: `${homeForm.team_name}'s struggling season (${homeForm.wins}-${homeForm.losses})`, type: 'warning' });
+  }
+  if (aGP > 0 && (awayForm.wins / aGP) < 0.42) {
+    factors.push({ text: `${awayForm.team_name}'s struggling season (${awayForm.wins}-${awayForm.losses})`, type: 'warning' });
+  }
+
+  const hLast5 = (homeRecent || []).slice(0, 5);
+  const aLast5 = (awayRecent || []).slice(0, 5);
+  const hW = hLast5.filter(g => g.result === 'W').length;
+  const hL = hLast5.length - hW;
+  const aW = aLast5.filter(g => g.result === 'W').length;
+  const aL = aLast5.length - aW;
+
+  if (hLast5.length >= 3) {
+    if (hW >= 4) factors.push({ text: `${homeForm.team_name}'s hot streak in recent form (${hW}W-${hL}L)`, type: 'trend' });
+    else if (hW <= 1) factors.push({ text: `${homeForm.team_name}'s current losing streak in recent form (${hW}W-${hL}L)`, type: 'trend' });
+  }
+  if (aLast5.length >= 3) {
+    if (aW >= 4) factors.push({ text: `${awayForm.team_name}'s hot recent form (${aW}W-${aL}L)`, type: 'trend' });
+    else if (aW <= 1) factors.push({ text: `${awayForm.team_name}'s poor recent form (${aW}W-${aL}L)`, type: 'trend' });
+    else if (aW >= 3) factors.push({ text: `${awayForm.team_name}'s positive recent form (${aW}W-${aL}L)`, type: 'positive' });
+  }
+
+  if (h2h && h2h.games_played >= 2) {
+    const homeIsT1 = h2h.team1_id === homeForm.team_id;
+    const homeH2H = homeIsT1 ? h2h.team1_wins : h2h.team2_wins;
+    const awayH2H = homeIsT1 ? h2h.team2_wins : h2h.team1_wins;
+    if (awayH2H > homeH2H) {
+      factors.push({ text: `${awayForm.team_name} winning ${awayH2H > 1 ? `${awayH2H}` : 'recent'} head-to-head matchups`, type: 'warning' });
+    } else if (homeH2H > awayH2H) {
+      factors.push({ text: `${homeForm.team_name} dominant in head-to-head matchups`, type: 'positive' });
+    }
+  }
+
+  return factors.slice(0, 6);
 }
 
-function StatComparison({ label, awayValue, homeValue, higherIsBetter = true, format: formatFn }) {
-  const awayNum = parseFloat(awayValue) || 0;
-  const homeNum = parseFloat(homeValue) || 0;
-  const awayBetter = higherIsBetter ? awayNum > homeNum : awayNum < homeNum;
-  const homeBetter = higherIsBetter ? homeNum > awayNum : homeNum < awayNum;
-  const displayAway = formatFn ? formatFn(awayValue) : awayValue;
-  const displayHome = formatFn ? formatFn(homeValue) : homeValue;
+/* ════════════════════════════════════════════════════════════
+   Section Components
+   ════════════════════════════════════════════════════════════ */
+
+function GameHeader({ game, homeForm, awayForm, homeAbbr, awayAbbr, topPred, venue }) {
+  const isLive = isLiveStatus(game.status);
+  const isFinal = game.status === 'final';
+  const conf = topPred ? confidencePct(topPred.confidence) : null;
+  const rating = conf != null ? getConfidenceRating(conf) : null;
+
+  let dateStr = '', timeStr = '';
+  try {
+    const dt = parseAsUTC(game.start_time);
+    if (dt && !isNaN(dt.getTime())) {
+      dateStr = format(dt, 'EEEE, MMMM d, yyyy');
+      timeStr = format(dt, 'h:mm a');
+    }
+  } catch {}
 
   return (
-    <div className="stat-comparison-row">
-      <span className={`stat-value stat-away ${awayBetter ? 'stat-better' : ''}`}>
-        {displayAway ?? '-'}
-      </span>
-      <span className="stat-label">{label}</span>
-      <span className={`stat-value stat-home ${homeBetter ? 'stat-better' : ''}`}>
-        {displayHome ?? '-'}
-      </span>
+    <div className="gd-header">
+      <div className="gd-header-teams">
+        <div className="gd-header-team">
+          <div className="gd-team-box">
+            {homeForm.logo_url ? (
+              <img src={homeForm.logo_url} alt="" width={40} height={40} onError={e => e.target.style.display='none'} />
+            ) : (
+              <span className="gd-team-box-abbr">{homeAbbr}</span>
+            )}
+          </div>
+          <div className="gd-team-label">{homeForm.team_name || 'Home'}</div>
+          <div className="gd-team-role">Home</div>
+        </div>
+
+        <div className="gd-header-center">
+          {isLive ? (
+            <div className="gd-live-center">
+              <div className="gd-live-badge"><Radio size={14} /> LIVE</div>
+              <div className="gd-live-score">
+                <span className={game.away_score > game.home_score ? 'gd-score-lead' : ''}>{game.away_score ?? 0}</span>
+                <span className="gd-score-sep">-</span>
+                <span className={game.home_score > game.away_score ? 'gd-score-lead' : ''}>{game.home_score ?? 0}</span>
+              </div>
+            </div>
+          ) : isFinal ? (
+            <div className="gd-final-center">
+              <div className="gd-final-badge">Final{game.overtime ? ' (OT)' : ''}</div>
+              <div className="gd-live-score">
+                <span className={game.away_score > game.home_score ? 'gd-score-lead' : ''}>{game.away_score ?? 0}</span>
+                <span className="gd-score-sep">-</span>
+                <span className={game.home_score > game.away_score ? 'gd-score-lead' : ''}>{game.home_score ?? 0}</span>
+              </div>
+            </div>
+          ) : (
+            <span className="gd-vs-text">VS</span>
+          )}
+        </div>
+
+        <div className="gd-header-team">
+          <div className="gd-team-box">
+            {awayForm.logo_url ? (
+              <img src={awayForm.logo_url} alt="" width={40} height={40} onError={e => e.target.style.display='none'} />
+            ) : (
+              <span className="gd-team-box-abbr">{awayAbbr}</span>
+            )}
+          </div>
+          <div className="gd-team-label">{awayForm.team_name || 'Away'}</div>
+          <div className="gd-team-role">Away</div>
+        </div>
+      </div>
+
+      <div className="gd-header-meta">
+        <div className="gd-header-badges">
+          <span className="gc-badge gc-badge-sport">Hockey</span>
+          {rating && (
+            <span className={`gc-badge ${rating.cls}`}>
+              <TrendingUp size={12} /> {rating.label} - {Math.round(conf)}%
+            </span>
+          )}
+        </div>
+        <div className="gd-header-info">
+          {dateStr && <div><Calendar size={14} /> {dateStr}</div>}
+          {timeStr && <div><Clock size={14} /> {timeStr}</div>}
+          {venue && <div><MapPin size={14} /> {venue}</div>}
+        </div>
+      </div>
     </div>
   );
 }
 
-const formatAmericanOdds = formatAmericanOddsOrDash;
-
-function RecordPill({ label, value }) {
-  if (!value) return null;
+function OddsSection({ odds, homeAbbr, awayAbbr }) {
+  if (!odds) return null;
   return (
-    <div className="record-pill">
-      <span className="record-pill-label">{label}</span>
-      <span className="record-pill-value">{value}</span>
+    <div className="gd-odds-row">
+      {(odds.home_moneyline != null || odds.away_moneyline != null) && (
+        <div className="gd-odds-card">
+          <div className="gd-odds-card-title"><Target size={14} /> Moneyline</div>
+          <div className="gd-odds-card-body">
+            <div className="gd-odds-side">
+              <span className="gd-odds-team">{homeAbbr}</span>
+              <span className="gd-odds-val gd-odds-primary">{formatAmericanOddsOrDash(odds.home_moneyline)}</span>
+            </div>
+            <span className="gd-odds-vs">VS</span>
+            <div className="gd-odds-side">
+              <span className="gd-odds-team">{awayAbbr}</span>
+              <span className="gd-odds-val gd-odds-primary">{formatAmericanOddsOrDash(odds.away_moneyline)}</span>
+            </div>
+          </div>
+        </div>
+      )}
+      {odds.home_spread_line != null && (
+        <div className="gd-odds-card">
+          <div className="gd-odds-card-title"><Activity size={14} /> Spread</div>
+          <div className="gd-odds-card-body">
+            <div className="gd-odds-side">
+              <span className="gd-odds-team">{homeAbbr}</span>
+              <span className="gd-odds-val gd-odds-primary">{odds.home_spread_line > 0 ? '+' : ''}{odds.home_spread_line}</span>
+              {odds.home_spread_price != null && <span className="gd-odds-price">({formatAmericanOddsOrDash(odds.home_spread_price)})</span>}
+            </div>
+            <span className="gd-odds-vs">VS</span>
+            <div className="gd-odds-side">
+              <span className="gd-odds-team">{awayAbbr}</span>
+              <span className="gd-odds-val gd-odds-primary">{odds.away_spread_line > 0 ? '+' : ''}{odds.away_spread_line}</span>
+              {odds.away_spread_price != null && <span className="gd-odds-price">({formatAmericanOddsOrDash(odds.away_spread_price)})</span>}
+            </div>
+          </div>
+        </div>
+      )}
+      {odds.over_under_line != null && (
+        <div className="gd-odds-card">
+          <div className="gd-odds-card-title"><Zap size={14} /> Total (O/U)</div>
+          <div className="gd-odds-card-body">
+            <div className="gd-odds-side">
+              <span className="gd-odds-team">Over</span>
+              <span className="gd-odds-val gd-odds-primary">{odds.over_under_line}</span>
+              {odds.over_price != null && <span className="gd-odds-price">({formatAmericanOddsOrDash(odds.over_price)})</span>}
+            </div>
+            <span className="gd-odds-vs">/</span>
+            <div className="gd-odds-side">
+              <span className="gd-odds-team">Under</span>
+              <span className="gd-odds-val gd-odds-primary">{odds.over_under_line}</span>
+              {odds.under_price != null && <span className="gd-odds-price">({formatAmericanOddsOrDash(odds.under_price)})</span>}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function OverviewTab({ game }) {
-  const away = game.away_team_form || {};
-  const home = game.home_team_form || {};
-  const awayRecord = `${away.wins || 0}-${away.losses || 0}-${away.ot_losses || 0}`;
-  const homeRecord = `${home.wins || 0}-${home.losses || 0}-${home.ot_losses || 0}`;
-  const odds = game.odds;
+function MatchAnalysis({ topPred, predictions, homeForm, awayForm, h2h, homeRecent, awayRecent, homeAbbr, awayAbbr }) {
+  const hasPred = predictions && predictions.length > 0;
+  const recommended = predictions?.find(p => p.recommended);
+  const pick = recommended || topPred || (predictions && predictions[0]);
+  if (!pick) return null;
 
-  const awayLogo = away.logo_url || teamLogo(game.away_team) || teamLogo(game.away_team_form);
-  const homeLogo = home.logo_url || teamLogo(game.home_team) || teamLogo(game.home_team_form);
+  const conf = confidencePct(pick.confidence);
+  const edge = confidencePct(pick.edge);
+  const risk = computeRisk(conf, edge);
+  const stake = getSuggestedStake(conf, edge);
+  const isQualified = pick.recommended || (conf >= 58 && edge >= 5);
+  const factors = generateFactors(homeForm, awayForm, h2h, homeRecent, awayRecent);
+  const reasoning = pick.reasoning || '';
 
-  const fmtDiff = (v) => {
-    if (v == null) return '-';
-    return v > 0 ? `+${v}` : `${v}`;
+  // Derive pick team name
+  const pickValue = formatPredictionValue(pick.prediction_value, homeAbbr, awayAbbr);
+  const betType = formatBetType(pick.bet_type);
+  const isHome = pick.prediction_value === 'home' || (pick.prediction_value && pick.prediction_value.includes(homeAbbr));
+  const pickTeamName = isHome ? homeForm.team_name : awayForm.team_name;
+
+  return (
+    <div className="gd-section gd-analysis">
+      <div className="gd-section-header">
+        <h3><BarChart3 size={18} /> AI Match Analysis</h3>
+        {isQualified ? (
+          <span className="gd-badge-qualified"><CheckCircle size={14} /> QUALIFIED BET</span>
+        ) : (
+          <span className="gd-badge-nobet">No Qualified Bet</span>
+        )}
+      </div>
+
+      {/* Main narrative */}
+      {reasoning && (
+        <div className="gd-narrative">
+          <p>{reasoning}</p>
+        </div>
+      )}
+
+      {/* Key Insight */}
+      {reasoning && (
+        <div className="gd-callout gd-callout-gold">
+          <Star size={16} />
+          <div>
+            <strong>Key Insight:</strong> {
+              edge >= 5
+                ? `The model sees ${edge.toFixed(1)}% edge on this line — the market may be undervaluing ${pickTeamName || pickValue}.`
+                : `Close market line with limited edge. Proceed with caution.`
+            }
+          </div>
+        </div>
+      )}
+
+      {/* Analysis Factors */}
+      {factors.length > 0 && (
+        <>
+          <h4 className="gd-factors-title"><CheckCircle size={14} /> Analysis Factors</h4>
+          <div className="gd-factors-grid">
+            {factors.map((f, i) => (
+              <div key={i} className={`gd-factor gd-factor-${f.type}`}>
+                {f.type === 'positive' && <CheckCircle size={13} />}
+                {f.type === 'trend' && <TrendingUp size={13} />}
+                {f.type === 'warning' && <AlertTriangle size={13} />}
+                {f.text}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* AI Confidence */}
+      <div className="gd-confidence-row">
+        <div className="gd-confidence-big">
+          <span className="gd-conf-pct">{Math.round(conf)}%</span>
+          <span className="gd-conf-label"><Info size={12} /> AI Confidence</span>
+        </div>
+        <span className={`gd-risk-badge gd-risk-${risk.level.toLowerCase()}`}>{risk.level} Risk</span>
+      </div>
+
+      {/* Suggested Action */}
+      {isQualified && (
+        <div className="gd-action">
+          <div className="gd-action-title"><TrendingUp size={16} /> Suggested Action</div>
+          <div className="gd-action-grid">
+            <div className="gd-action-cell">
+              <span className="gd-action-label">Pick</span>
+              <span className="gd-action-value">{pickValue}</span>
+              <span className="gd-action-sub">{betType}</span>
+            </div>
+            <div className="gd-action-cell">
+              <span className="gd-action-label">Confidence</span>
+              <span className="gd-action-value">{Math.round(conf)}%</span>
+            </div>
+            <div className="gd-action-cell">
+              <span className="gd-action-label">Risk Level</span>
+              <span className="gd-action-value" style={{ color: risk.color }}>{risk.level}</span>
+            </div>
+            <div className="gd-action-cell">
+              <span className="gd-action-label">Suggested Stake</span>
+              <span className="gd-action-value">{stake}</span>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RiskAssessment({ conf, edge, odds }) {
+  const risk = computeRisk(conf || 0, edge || 0);
+  const score = Math.round(risk.score);
+  let description = 'Limited data available';
+  if (conf >= 70 && edge >= 7) description = 'Strong model confidence with significant edge';
+  else if (conf >= 60 && edge >= 5) description = 'Moderate confidence with reasonable edge';
+  else if (odds?.home_spread_line && Math.abs(odds.home_spread_line) <= 1.5) description = 'Very close spread - coin flip territory';
+  else description = 'Lower confidence or minimal edge';
+
+  return (
+    <div className="gd-section gd-risk">
+      <h3><Shield size={16} /> Risk Assessment</h3>
+      <div className="gd-risk-header">
+        <span>Risk Level: {risk.level}</span>
+        <span>{score}/100</span>
+      </div>
+      <div className="gd-risk-bar">
+        <div className="gd-risk-fill" style={{ width: `${score}%`, backgroundColor: risk.color }} />
+      </div>
+      <p className="gd-risk-desc"><AlertTriangle size={13} /> {description}</p>
+    </div>
+  );
+}
+
+function MarketInterest({ odds, homeForm, awayForm }) {
+  const homeImpl = americanToImplied(odds?.home_moneyline);
+  const awayImpl = americanToImplied(odds?.away_moneyline);
+  if (!homeImpl && !awayImpl) return (
+    <div className="gd-section gd-market">
+      <h3><TrendingUp size={16} /> Market Interest Index</h3>
+      <p className="gd-muted">No odds data available</p>
+    </div>
+  );
+  const total = (homeImpl || 0.5) + (awayImpl || 0.5);
+  const homePct = Math.round(((homeImpl || 0.5) / total) * 100);
+  const awayPct = 100 - homePct;
+  const underdog = homePct < awayPct ? homeForm : awayForm;
+  const underdogPct = Math.min(homePct, awayPct);
+
+  return (
+    <div className="gd-section gd-market">
+      <h3><TrendingUp size={16} /> Market Interest Index</h3>
+      <div className="gd-market-pcts">
+        <div className="gd-market-team">
+          <span className="gd-market-abbr">{homeForm.abbreviation}</span>
+          <span className="gd-market-pct">{homePct}%</span>
+        </div>
+        <div className="gd-market-team">
+          <span className="gd-market-abbr">{awayForm.abbreviation}</span>
+          <span className="gd-market-pct">{awayPct}%</span>
+        </div>
+      </div>
+      {underdogPct >= 25 && (
+        <div className="gd-market-insight">
+          <Info size={14} />
+          <div>
+            <strong>Clear underdog value on {underdog.team_name}</strong>
+            <p>Derived from league importance, team popularity, and event timing.</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SeasonStatsCard({ homeForm, awayForm }) {
+  const homeRecord = `${homeForm.wins || 0}-${homeForm.losses || 0}`;
+  const awayRecord = `${awayForm.wins || 0}-${awayForm.losses || 0}`;
+  const hGP = (homeForm.wins || 0) + (homeForm.losses || 0) + (homeForm.ot_losses || 0);
+  const aGP = (awayForm.wins || 0) + (awayForm.losses || 0) + (awayForm.ot_losses || 0);
+  const hWinPct = hGP > 0 ? Math.round((homeForm.wins / hGP) * 100) : 0;
+  const aWinPct = aGP > 0 ? Math.round((awayForm.wins / aGP) * 100) : 0;
+
+  // Streak from recent record
+  const parseStreak = (rec) => {
+    if (!rec) return null;
+    const match = rec.match(/^(\d+)-(\d+)/);
+    if (!match) return null;
+    const w = parseInt(match[1]), l = parseInt(match[2]);
+    if (w > l) return { label: `W${w - l > 1 ? w : ''}`, cls: 'gd-streak-w' };
+    if (l > w) return { label: `L${l - w > 1 ? l : ''}`, cls: 'gd-streak-l' };
+    return null;
   };
-  const fmtPct = (v) => {
-    if (v == null) return '-';
-    return typeof v === 'number' ? `${(v * 100).toFixed(1)}%` : v;
-  };
+
+  const hStreak = parseStreak(homeForm.record_last_5);
+  const aStreak = parseStreak(awayForm.record_last_5);
 
   const stats = [
-    { label: 'Goals/Game', away: away.goals_for_per_game, home: home.goals_for_per_game, higher: true },
-    { label: 'Goals Against/Game', away: away.goals_against_per_game, home: home.goals_against_per_game, higher: false },
-    { label: 'Goal Differential', away: away.goal_diff, home: home.goal_diff, higher: true, fmt: fmtDiff },
-    { label: 'Power Play %', away: away.power_play_pct, home: home.power_play_pct, higher: true },
-    { label: 'Penalty Kill %', away: away.penalty_kill_pct, home: home.penalty_kill_pct, higher: true },
-    { label: 'Shots/Game', away: away.shots_for_per_game, home: home.shots_for_per_game, higher: true },
-    { label: 'Shots Against/Game', away: away.shots_against_per_game, home: home.shots_against_per_game, higher: false },
-    { label: 'Faceoff Win %', away: away.faceoff_win_pct, home: home.faceoff_win_pct, higher: true },
-    { label: 'Points %', away: away.points_pct, home: home.points_pct, higher: true, fmt: fmtPct },
+    { label: 'GF/G', home: homeForm.goals_for_per_game, away: awayForm.goals_for_per_game, higher: true },
+    { label: 'GAA', home: homeForm.goals_against_per_game, away: awayForm.goals_against_per_game, higher: false },
+    { label: 'PP%', home: homeForm.power_play_pct, away: awayForm.power_play_pct, higher: true },
+    { label: 'PK%', home: homeForm.penalty_kill_pct, away: awayForm.penalty_kill_pct, higher: true },
   ];
 
-  const hasAnyStats = stats.some(s => s.away != null || s.home != null);
-
   return (
-    <div className="tab-content overview-tab">
-      {/* Odds — show pregame + live separately for live games */}
-      {(() => {
-        const pregame = game.pregame_odds;
-        const live = isLiveStatus(game.status);
-        const hasLiveOdds = live && pregame && odds;
-
-        const renderOddsGrid = (o) => (
-          <div className="odds-grid">
-            {(o.home_moneyline != null || o.away_moneyline != null) && (
-              <div className="odds-card">
-                <span className="odds-label">Moneyline</span>
-                <div className="odds-values">
-                  <div className="odds-team-line">
-                    <span className="odds-team-name">{away.abbreviation || 'Away'}</span>
-                    <span className="odds-value">{formatAmericanOdds(o.away_moneyline)}</span>
-                  </div>
-                  <div className="odds-team-line">
-                    <span className="odds-team-name">{home.abbreviation || 'Home'}</span>
-                    <span className="odds-value">{formatAmericanOdds(o.home_moneyline)}</span>
-                  </div>
-                </div>
-              </div>
-            )}
-            {o.over_under_line != null && (
-              <div className="odds-card">
-                <span className="odds-label">Over/Under</span>
-                <div className="odds-values">
-                  <div className="odds-team-line">
-                    <span className="odds-team-name">O {o.over_under_line}</span>
-                    <span className="odds-value">{formatAmericanOdds(o.over_price)}</span>
-                  </div>
-                  <div className="odds-team-line">
-                    <span className="odds-team-name">U {o.over_under_line}</span>
-                    <span className="odds-value">{formatAmericanOdds(o.under_price)}</span>
-                  </div>
-                </div>
-              </div>
-            )}
-            {o.home_spread_line != null && (
-              <div className="odds-card">
-                <span className="odds-label">Puck Line</span>
-                <div className="odds-values">
-                  <div className="odds-team-line">
-                    <span className="odds-team-name">{away.abbreviation} {o.away_spread_line != null ? (o.away_spread_line > 0 ? '+' : '') + o.away_spread_line : ''}</span>
-                    <span className="odds-value">{formatAmericanOdds(o.away_spread_price)}</span>
-                  </div>
-                  <div className="odds-team-line">
-                    <span className="odds-team-name">{home.abbreviation} {o.home_spread_line > 0 ? '+' : ''}{o.home_spread_line}</span>
-                    <span className="odds-value">{formatAmericanOdds(o.home_spread_price)}</span>
-                  </div>
-                </div>
-              </div>
-            )}
+    <div className="gd-section gd-stats">
+      <h3><BarChart3 size={16} /> Season Stats & Standings</h3>
+      <div className="gd-stats-teams">
+        <div className="gd-stats-team">
+          <span className="gd-stats-name">{homeForm.team_name}</span>
+          <span className="gd-stats-record">{homeRecord}</span>
+          <div className="gd-stats-badges">
+            {hStreak && <span className={`gd-mini-badge ${hStreak.cls}`}>{hStreak.label}</span>}
           </div>
-        );
-
-        if (hasLiveOdds) {
-          // Show both sections for live games with pregame snapshot
-          return (
-            <>
-              <div className="odds-section">
-                <h3 className="subsection-title">
-                  <DollarSign size={16} />
-                  Pregame Lines
-                </h3>
-                {renderOddsGrid(pregame)}
-              </div>
-              <div className="odds-section odds-section-live">
-                <h3 className="subsection-title">
-                  <DollarSign size={16} />
-                  Live Lines
-                  {odds.odds_updated_at && (
-                    <span className="odds-updated-ago-detail">
-                      {(() => {
-                        try {
-                          const dt = new Date(odds.odds_updated_at);
-                          if (isNaN(dt.getTime())) return '';
-                          return formatDistanceToNowStrict(dt, { addSuffix: true });
-                        } catch { return ''; }
-                      })()}
-                    </span>
-                  )}
-                </h3>
-                {renderOddsGrid(odds)}
-              </div>
-            </>
-          );
-        }
-
-        if (!odds) return null;
-
-        // Single section for pregame or when no pregame snapshot
-        return (
-          <div className="odds-section">
-            <h3 className="subsection-title">
-              <DollarSign size={16} />
-              {live ? 'Pregame Lines' : 'Sportsbook Odds'}
-              {odds.odds_updated_at && (
-                <span className="odds-updated-ago-detail">
-                  {(() => {
-                    try {
-                      const dt = new Date(odds.odds_updated_at);
-                      if (isNaN(dt.getTime())) return '';
-                      return formatDistanceToNowStrict(dt, { addSuffix: true });
-                    } catch { return ''; }
-                  })()}
-                </span>
-              )}
-            </h3>
-            {renderOddsGrid(odds)}
-          </div>
-        );
-      })()}
-
-      {/* Team Records Section */}
-      <div className="overview-records-section">
-        <div className="overview-team-records">
-          <div className="overview-team-header">
-            {awayLogo && <img className="overview-team-logo" src={awayLogo} alt="" width={28} height={28} onError={(e) => { e.target.style.display = 'none'; }} />}
-            <span className="overview-team-name">{away.abbreviation || 'Away'}</span>
-            <span className="overview-team-record">{awayRecord}</span>
-          </div>
-          <div className="record-pills">
-            <RecordPill label="L5" value={away.record_last_5} />
-            <RecordPill label="L10" value={away.record_last_10} />
-            <RecordPill label="L20" value={away.record_last_20} />
-            <RecordPill label="Home" value={away.home_record} />
-            <RecordPill label="Away" value={away.away_record} />
-          </div>
+          <span className="gd-stats-winpct">Win%: {hWinPct}%</span>
         </div>
-        <div className="overview-team-records">
-          <div className="overview-team-header">
-            {homeLogo && <img className="overview-team-logo" src={homeLogo} alt="" width={28} height={28} onError={(e) => { e.target.style.display = 'none'; }} />}
-            <span className="overview-team-name">{home.abbreviation || 'Home'}</span>
-            <span className="overview-team-record">{homeRecord}</span>
+        <div className="gd-stats-team">
+          <span className="gd-stats-name">{awayForm.team_name}</span>
+          <span className="gd-stats-record">{awayRecord}</span>
+          <div className="gd-stats-badges">
+            {aStreak && <span className={`gd-mini-badge ${aStreak.cls}`}>{aStreak.label}</span>}
           </div>
-          <div className="record-pills">
-            <RecordPill label="L5" value={home.record_last_5} />
-            <RecordPill label="L10" value={home.record_last_10} />
-            <RecordPill label="L20" value={home.record_last_20} />
-            <RecordPill label="Home" value={home.home_record} />
-            <RecordPill label="Away" value={home.away_record} />
-          </div>
+          <span className="gd-stats-winpct">Win%: {aWinPct}%</span>
         </div>
       </div>
-
-      {hasAnyStats ? (
-        <div className="stat-comparison-table">
-          {stats.map(
-            (stat) =>
-              (stat.away != null || stat.home != null) && (
-                <StatComparison
-                  key={stat.label}
-                  label={stat.label}
-                  awayValue={stat.away}
-                  homeValue={stat.home}
-                  higherIsBetter={stat.higher}
-                  format={stat.fmt || ((v) => (v != null ? (typeof v === 'number' ? v.toFixed(2) : v) : '-'))}
-                />
-              )
-          )}
-        </div>
-      ) : (
-        <div className="empty-state">
-          <BarChart3 size={48} />
-          <p>No team stats available for this game yet.</p>
-        </div>
-      )}
-    </div>
-  );
-}
-
-const MARKET_BET_TYPES = new Set(['ml', 'total', 'spread']);
-
-function PredictionsTab({ game }) {
-  const predictions = game.predictions || game.bets || [];
-  const homeAbbr = teamAbbrev(game.home_team || game.home_team_form);
-  const awayAbbr = teamAbbrev(game.away_team || game.away_team_form);
-
-  if (predictions.length === 0) {
-    return (
-      <div className="tab-content">
-        <div className="empty-state">
-          <Target size={48} />
-          <p>No predictions available for this game yet.</p>
-        </div>
-      </div>
-    );
-  }
-
-  const market = predictions.filter((p) => MARKET_BET_TYPES.has(p.bet_type));
-
-  // Within market bets: recommended > fallback > rest
-  const topPicks = market.filter((p) => p.recommended);
-  const heavyJuice = market.filter((p) => p.is_fallback && !p.recommended);
-  const otherMarket = market.filter((p) => !p.recommended && !p.is_fallback);
-
-  return (
-    <div className="tab-content predictions-tab">
-      {/* --- Top Picks (recommended market bets) --- */}
-      {topPicks.length > 0 && (
-        <div className="predictions-section">
-          <h3 className="predictions-section-title">
-            <Target size={16} />
-            Top Picks
-          </h3>
-          <div className="predictions-list">
-            {topPicks.map((pred, index) => (
-              <PredictionCard key={pred.id || index} prediction={pred} homeAbbr={homeAbbr} awayAbbr={awayAbbr} />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* --- Heavy Juice (market bets with edge but steep lines) --- */}
-      {heavyJuice.length > 0 && (
-        <div className="predictions-section">
-          <h3 className="predictions-section-title predictions-section-title-fallback">
-            <AlertTriangle size={16} />
-            Heavy Juice Picks
-          </h3>
-          <p className="predictions-section-desc">
-            These picks have real edge but are on heavy favourite lines. Proceed with caution.
-          </p>
-          <div className="predictions-list">
-            {heavyJuice.map((pred, index) => (
-              <PredictionCard key={pred.id || index} prediction={pred} isFallback homeAbbr={homeAbbr} awayAbbr={awayAbbr} />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* --- Other market bets (no edge or below threshold) --- */}
-      {otherMarket.length > 0 && (
-        <div className="predictions-section">
-          <h3 className="predictions-section-title predictions-section-title-other">
-            Market Analysis
-          </h3>
-          <p className="predictions-section-desc">
-            {topPicks.length === 0 && heavyJuice.length === 0
-              ? 'No actionable edge found for this game.'
-              : 'Other market predictions below threshold.'}
-          </p>
-          <div className="predictions-list">
-            {otherMarket.map((pred, index) => (
-              <PredictionCard key={pred.id || index} prediction={pred} homeAbbr={homeAbbr} awayAbbr={awayAbbr} />
-            ))}
-          </div>
-        </div>
-      )}
-
-    </div>
-  );
-}
-
-function H2HTab({ game }) {
-  const h2h = game.head_to_head || game.h2h || null;
-  const awayLabel = game.away_team_form?.team_name || 'Away';
-  const homeLabel = game.home_team_form?.team_name || 'Home';
-
-  if (!h2h) {
-    return (
-      <div className="tab-content h2h-tab">
-        <div className="empty-state">
-          <Users size={48} />
-          <p>No head-to-head history available. Sync historical data to populate matchup records.</p>
-        </div>
-      </div>
-    );
-  }
-
-  const homeId = game.home_team_form?.team_id ?? game.home_team?.id;
-  const team1IsHome = h2h.team1_id === homeId;
-  const label1 = team1IsHome ? homeLabel : awayLabel;
-  const label2 = team1IsHome ? awayLabel : homeLabel;
-
-  return (
-    <div className="tab-content h2h-tab">
-      <div className="h2h-summary">
-        <div className="h2h-summary-grid">
-          {h2h.games_played != null && (
-            <div className="h2h-stat-box">
-              <span className="h2h-stat-value">{h2h.games_played}</span>
-              <span className="h2h-stat-label">Games Played</span>
-            </div>
-          )}
-          {h2h.team1_wins != null && (
-            <div className="h2h-stat-box">
-              <span className="h2h-stat-value">{h2h.team1_wins}</span>
-              <span className="h2h-stat-label">{label1} Wins</span>
-            </div>
-          )}
-          {h2h.team2_wins != null && (
-            <div className="h2h-stat-box">
-              <span className="h2h-stat-value">{h2h.team2_wins}</span>
-              <span className="h2h-stat-label">{label2} Wins</span>
-            </div>
-          )}
-          {h2h.team1_goals != null && h2h.team2_goals != null && h2h.games_played > 0 && (
-            <>
-              <div className="h2h-stat-box">
-                <span className="h2h-stat-value">
-                  {((h2h.team1_goals + h2h.team2_goals) / h2h.games_played).toFixed(1)}
+      <div className="gd-key-stats">
+        <h4>KEY PERFORMANCE STATS</h4>
+        <div className="gd-key-stats-grid">
+          <div className="gd-key-stats-col">
+            <span className="gd-key-stats-header">{homeForm.team_name}</span>
+            {stats.map(s => (
+              <div key={s.label} className="gd-stat-row">
+                <span className="gd-stat-label">{s.label}</span>
+                <span className={`gd-stat-val ${s.home != null && s.away != null && ((s.higher && s.home > s.away) || (!s.higher && s.home < s.away)) ? 'gd-stat-better' : ''}`}>
+                  {s.home != null ? (typeof s.home === 'number' ? s.home.toFixed(s.label.includes('%') ? 1 : 2) : s.home) : '-'}
                 </span>
-                <span className="h2h-stat-label">Avg Total Goals</span>
               </div>
-              <div className="h2h-stat-box">
-                <span className="h2h-stat-value">
-                  {(h2h.team1_goals / h2h.games_played).toFixed(1)} - {(h2h.team2_goals / h2h.games_played).toFixed(1)}
+            ))}
+          </div>
+          <div className="gd-key-stats-col">
+            <span className="gd-key-stats-header">{awayForm.team_name}</span>
+            {stats.map(s => (
+              <div key={s.label} className="gd-stat-row">
+                <span className="gd-stat-label">{s.label}</span>
+                <span className={`gd-stat-val ${s.home != null && s.away != null && ((s.higher && s.away > s.home) || (!s.higher && s.away < s.home)) ? 'gd-stat-better' : ''}`}>
+                  {s.away != null ? (typeof s.away === 'number' ? s.away.toFixed(s.label.includes('%') ? 1 : 2) : s.away) : '-'}
                 </span>
-                <span className="h2h-stat-label">Avg Goals ({label1} - {label2})</span>
               </div>
-            </>
-          )}
-          {h2h.last_meeting && (
-            <div className="h2h-stat-box">
-              <span className="h2h-stat-value">{h2h.last_meeting}</span>
-              <span className="h2h-stat-label">Last Meeting</span>
-            </div>
-          )}
+            ))}
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-function FormTab({ game }) {
-  const awayForm = game.away_recent_games || game.away_form || game.away_recent || [];
-  const homeForm = game.home_recent_games || game.home_form || game.home_recent || [];
-  const awayTeamLabel = game.away_team_form?.team_name || teamName(game.away_team, 'Away');
-  const homeTeamLabel = game.home_team_form?.team_name || teamName(game.home_team, 'Home');
+function BettingTrendsCard({ homeForm, awayForm, homeRecent, awayRecent }) {
+  const homeRec = homeForm.home_record || homeForm.away_record;
+  const overallHome = `${homeForm.wins || 0}-${homeForm.losses || 0}-${homeForm.ot_losses || 0}`;
 
-  const renderFormList = (form, label) => {
-    if (!form || form.length === 0) {
-      return (
-        <div className="empty-state-small">
-          <p>No recent form data for {label}. Sync historical data to populate.</p>
+  return (
+    <div className="gd-section gd-trends">
+      <h3><TrendingUp size={16} /> Betting Trends</h3>
+      <div className="gd-trends-teams">
+        <div className="gd-trends-team">
+          <span className="gd-trends-name">{homeForm.team_name}</span>
+          {homeRec && <div className="gd-trends-ats">Record: <strong>{homeRec}</strong></div>}
+          <div className="gd-trends-overall">Overall record {overallHome}</div>
         </div>
-      );
-    }
-
-    const last5 = form.slice(0, 5);
-    const last10 = form.slice(0, 10);
-    const last20 = form.slice(0, 20);
-
-    const calcRecord = (games) => {
-      const wins = games.filter((g) => g.result === 'W').length;
-      const losses = games.filter((g) => g.result === 'L').length;
-      const otl = games.filter((g) => g.result === 'OTL').length;
-      return `${wins}-${losses}${otl > 0 ? `-${otl}` : ''}`;
-    };
-
-    const calcAvgGoals = (games) => {
-      if (games.length === 0) return '0.0';
-      const total = games.reduce((sum, g) => sum + (g.goals_for || 0), 0);
-      return (total / games.length).toFixed(1);
-    };
-
-    const calcAvgGA = (games) => {
-      if (games.length === 0) return '0.0';
-      const total = games.reduce((sum, g) => sum + (g.goals_against || 0), 0);
-      return (total / games.length).toFixed(1);
-    };
-
-    return (
-      <div className="form-section">
-        <div className="form-summary-grid">
-          {last5.length > 0 && (
-            <div className="form-period">
-              <span className="form-period-label">Last 5</span>
-              <span className="form-period-record">{calcRecord(last5)}</span>
-              <span className="form-period-goals">{calcAvgGoals(last5)} GF/G | {calcAvgGA(last5)} GA/G</span>
-            </div>
-          )}
-          {last10.length >= 6 && (
-            <div className="form-period">
-              <span className="form-period-label">Last 10</span>
-              <span className="form-period-record">{calcRecord(last10)}</span>
-              <span className="form-period-goals">{calcAvgGoals(last10)} GF/G | {calcAvgGA(last10)} GA/G</span>
-            </div>
-          )}
-          {last20.length >= 11 && (
-            <div className="form-period">
-              <span className="form-period-label">Last 20</span>
-              <span className="form-period-record">{calcRecord(last20)}</span>
-              <span className="form-period-goals">{calcAvgGoals(last20)} GF/G | {calcAvgGA(last20)} GA/G</span>
-            </div>
-          )}
+        <div className="gd-trends-team">
+          <span className="gd-trends-name">{awayForm.team_name}</span>
+          {awayForm.away_record && <div className="gd-trends-ats">Away: <strong>{awayForm.away_record}</strong></div>}
+          <div className="gd-trends-overall">Overall record {awayForm.wins || 0}-{awayForm.losses || 0}-{awayForm.ot_losses || 0}</div>
         </div>
+      </div>
+    </div>
+  );
+}
 
-        <div className="form-results-strip">
-          {[...last10].reverse().map((g, i) => {
-            const resultClass =
-              g.result === 'W'
-                ? 'result-win'
-                : g.result === 'OTL'
-                  ? 'result-otl'
-                  : 'result-loss';
-            const title = `${g.result} ${g.score_display || ''} ${g.home_away === 'home' ? 'vs' : '@'} ${g.opponent_abbrev || ''}${g.overtime ? ' (OT)' : ''}`;
-            return (
-              <div key={i} className={`form-result-dot ${resultClass}`} title={title}>
+function VenueSection({ venue }) {
+  if (!venue) return null;
+  return (
+    <div className="gd-section gd-venue">
+      <h3><MapPin size={16} /> Venue & Conditions</h3>
+      <div className="gd-venue-grid">
+        <div className="gd-venue-item">
+          <MapPin size={18} />
+          <div>
+            <span className="gd-venue-label">Venue</span>
+            <strong>{venue}</strong>
+          </div>
+        </div>
+        <div className="gd-venue-item">
+          <Cloud size={18} />
+          <div>
+            <span className="gd-venue-label">Setting</span>
+            <strong>Indoor</strong>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FormAndH2H({ homeForm, awayForm, h2h, homeRecent, awayRecent }) {
+  const hLast5 = (homeRecent || []).slice(0, 5);
+  const aLast5 = (awayRecent || []).slice(0, 5);
+  const hW = hLast5.filter(g => g.result === 'W').length;
+  const hL = hLast5.length - hW;
+  const aW = aLast5.filter(g => g.result === 'W').length;
+  const aL = aLast5.length - aW;
+  const hLast3 = (homeRecent || []).slice(0, 3);
+  const aLast3 = (awayRecent || []).slice(0, 3);
+
+  const homeIsT1 = h2h ? h2h.team1_id === homeForm.team_id : true;
+  const homeH2HWins = h2h ? (homeIsT1 ? h2h.team1_wins : h2h.team2_wins) : 0;
+  const awayH2HWins = h2h ? (homeIsT1 ? h2h.team2_wins : h2h.team1_wins) : 0;
+
+  return (
+    <div className="gd-section gd-form">
+      <h3><Users size={16} /> Recent Form & Head-to-Head</h3>
+
+      {/* Last 5 W/L pills */}
+      <div className="gd-form-teams">
+        <div className="gd-form-team">
+          <div className="gd-form-team-header">
+            <TrendingUp size={14} /> {homeForm.team_name}
+            <span className={`gd-form-record ${hW > hL ? 'gd-form-pos' : 'gd-form-neg'}`}>{hW}-{hL} Last 5</span>
+          </div>
+          <div className="gd-form-pills">
+            {hLast5.map((g, i) => (
+              <span key={i} className={`gd-form-pill ${g.result === 'W' ? 'gd-pill-w' : g.result === 'OTL' ? 'gd-pill-otl' : 'gd-pill-l'}`}>
                 {g.result}
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Recent Games Table */}
-        <div className="form-games-table">
-          <div className="form-games-header">
-            <span>Date</span>
-            <span>Opp</span>
-            <span>Score</span>
-            <span>Result</span>
+              </span>
+            ))}
           </div>
-          {last10.map((g, i) => {
-            const resultClass =
-              g.result === 'W' ? 'result-win' : g.result === 'OTL' ? 'result-otl' : 'result-loss';
-            return (
-              <div key={i} className="form-games-row">
-                <span className="form-game-date">{g.game_date}</span>
-                <span className="form-game-opp">
-                  {g.home_away === 'away' ? '@' : 'vs'} {g.opponent_abbrev}
-                </span>
-                <span className="form-game-score">{g.score_display}{g.overtime ? ' OT' : ''}</span>
-                <span className={`form-game-result ${resultClass}`}>{g.result}</span>
+          <div className="gd-form-games">
+            {hLast3.map((g, i) => (
+              <div key={i} className="gd-form-game">
+                <span>{g.home_away === 'away' ? '@' : 'vs'} {g.opponent_abbrev || g.opponent_name}</span>
+                <span className={g.result === 'W' ? 'gd-form-w' : 'gd-form-l'}>{g.result} {g.score_display}{g.overtime ? ' (OT)' : ''}</span>
               </div>
-            );
-          })}
+            ))}
+          </div>
+        </div>
+        <div className="gd-form-team">
+          <div className="gd-form-team-header">
+            <TrendingUp size={14} /> {awayForm.team_name}
+            <span className={`gd-form-record ${aW > aL ? 'gd-form-pos' : 'gd-form-neg'}`}>{aW}-{aL} Last 5</span>
+          </div>
+          <div className="gd-form-pills">
+            {aLast5.map((g, i) => (
+              <span key={i} className={`gd-form-pill ${g.result === 'W' ? 'gd-pill-w' : g.result === 'OTL' ? 'gd-pill-otl' : 'gd-pill-l'}`}>
+                {g.result}
+              </span>
+            ))}
+          </div>
+          <div className="gd-form-games">
+            {aLast3.map((g, i) => (
+              <div key={i} className="gd-form-game">
+                <span>{g.home_away === 'away' ? '@' : 'vs'} {g.opponent_abbrev || g.opponent_name}</span>
+                <span className={g.result === 'W' ? 'gd-form-w' : 'gd-form-l'}>{g.result} {g.score_display}{g.overtime ? ' (OT)' : ''}</span>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
-    );
+
+      {/* H2H */}
+      <div className="gd-h2h">
+        <div className="gd-h2h-header">
+          <strong>Head-to-Head (Last 5)</strong>
+          {h2h && h2h.games_played < 3 && <span className="gd-h2h-limited"><AlertTriangle size={12} /> Limited Data</span>}
+        </div>
+        {!h2h || h2h.games_played === 0 ? (
+          <p className="gd-muted">No head-to-head data available.</p>
+        ) : (
+          <div className="gd-h2h-record">
+            <div className="gd-h2h-wins">
+              <span className="gd-h2h-count">{homeH2HWins}</span>
+              <span>{homeForm.team_name}</span>
+            </div>
+            <span className="gd-h2h-vs">vs</span>
+            <div className="gd-h2h-wins">
+              <span className="gd-h2h-count">{awayH2HWins}</span>
+              <span>{awayForm.team_name}</span>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PerformanceAnalysis({ homeForm, awayForm, homeRecent, awayRecent }) {
+  const hLast5 = (homeRecent || []).slice(0, 5);
+  const aLast5 = (awayRecent || []).slice(0, 5);
+  const hW = hLast5.filter(g => g.result === 'W').length;
+  const hL = hLast5.length - hW;
+  const aW = aLast5.filter(g => g.result === 'W').length;
+  const aL = aLast5.length - aW;
+
+  // Build chart data (most recent 5 games, reversed so oldest first)
+  const maxLen = Math.min(hLast5.length, aLast5.length, 5);
+  const chartData = [];
+  for (let i = maxLen - 1; i >= 0; i--) {
+    chartData.push({
+      name: `G${maxLen - i}`,
+      [homeForm.abbreviation || 'Home']: hLast5[i]?.goals_for || 0,
+      [awayForm.abbreviation || 'Away']: aLast5[i]?.goals_for || 0,
+    });
+  }
+
+  return (
+    <div className="gd-section gd-perf">
+      <h3><BarChart3 size={16} /> Performance Analysis</h3>
+      <div className="gd-perf-records">
+        <div className={`gd-perf-box ${hW > hL ? 'gd-perf-pos' : 'gd-perf-neg'}`}>
+          <span className="gd-perf-name">{homeForm.team_name}</span>
+          <span className="gd-perf-rec">{hW}-{hL}</span>
+          <span className="gd-perf-sub">Last 5</span>
+        </div>
+        <div className={`gd-perf-box ${aW > aL ? 'gd-perf-pos' : 'gd-perf-neg'}`}>
+          <span className="gd-perf-name">{awayForm.team_name}</span>
+          <span className="gd-perf-rec">{aW}-{aL}</span>
+          <span className="gd-perf-sub">Last 5</span>
+        </div>
+      </div>
+
+      {chartData.length > 0 && (
+        <>
+          <h4 className="gd-chart-title"><TrendingUp size={14} /> Recent Scoring</h4>
+          <div className="gd-chart-wrap">
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={chartData} barGap={4}>
+                <XAxis dataKey="name" stroke="#6a6a88" fontSize={12} />
+                <YAxis stroke="#6a6a88" fontSize={12} />
+                <Tooltip
+                  contentStyle={{ background: '#1a1a2e', border: '1px solid #2a2a4a', borderRadius: 8 }}
+                  labelStyle={{ color: '#e8e8f0' }}
+                />
+                <Bar dataKey={homeForm.abbreviation || 'Home'} fill="#00ff88" radius={[4, 4, 0, 0]} />
+                <Bar dataKey={awayForm.abbreviation || 'Away'} fill="#ff5252" radius={[4, 4, 0, 0]} opacity={0.6} />
+              </BarChart>
+            </ResponsiveContainer>
+            <div className="gd-chart-legend">
+              <span><span className="gd-legend-dot" style={{ background: '#00ff88' }} /> {homeForm.team_name}</span>
+              <span><span className="gd-legend-dot" style={{ background: '#ff5252' }} /> {awayForm.team_name}</span>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ── Line Movement Section ── */
+
+function LineMovementSection({ gameId, homeAbbr, awayAbbr }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchLineMovement(gameId)
+      .then(res => { if (!cancelled) setData(res.data); })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [gameId]);
+
+  if (loading) return null;
+  if (!data || !data.snapshots || data.snapshots.length === 0) return null;
+
+  const snapshots = data.snapshots;
+  const opening = data.opening;
+  const current = data.current;
+
+  // Build chart data for moneyline movement
+  const chartData = snapshots.map((s, i) => {
+    let label;
+    try {
+      const dt = new Date(s.captured_at);
+      label = format(dt, 'HH:mm');
+    } catch {
+      label = `#${i + 1}`;
+    }
+    return {
+      time: label,
+      [homeAbbr]: s.home_moneyline,
+      [awayAbbr]: s.away_moneyline,
+      ou: s.over_under_line,
+    };
+  });
+
+  const mlMoved = opening && current &&
+    (opening.home_moneyline !== current.home_moneyline || opening.away_moneyline !== current.away_moneyline);
+  const ouMoved = opening && current &&
+    opening.over_under_line !== current.over_under_line;
+
+  return (
+    <div className="gd-section gd-line-movement">
+      <h3><GitBranch size={16} /> Line Movement</h3>
+      <div className="gd-lm-summary">
+        <div className="gd-lm-box">
+          <span className="gd-lm-label">Opening ML</span>
+          <span className="gd-lm-value">
+            {homeAbbr} {formatAmericanOddsOrDash(opening?.home_moneyline)} / {awayAbbr} {formatAmericanOddsOrDash(opening?.away_moneyline)}
+          </span>
+        </div>
+        <div className="gd-lm-box">
+          <span className="gd-lm-label">Current ML</span>
+          <span className={`gd-lm-value ${mlMoved ? 'gd-lm-moved' : ''}`}>
+            {homeAbbr} {formatAmericanOddsOrDash(current?.home_moneyline)} / {awayAbbr} {formatAmericanOddsOrDash(current?.away_moneyline)}
+          </span>
+        </div>
+        {opening?.over_under_line != null && (
+          <>
+            <div className="gd-lm-box">
+              <span className="gd-lm-label">Opening O/U</span>
+              <span className="gd-lm-value">{opening.over_under_line}</span>
+            </div>
+            <div className="gd-lm-box">
+              <span className="gd-lm-label">Current O/U</span>
+              <span className={`gd-lm-value ${ouMoved ? 'gd-lm-moved' : ''}`}>{current?.over_under_line ?? '—'}</span>
+            </div>
+          </>
+        )}
+      </div>
+
+      {chartData.length > 1 && (
+        <div className="gd-chart-wrap">
+          <ResponsiveContainer width="100%" height={180}>
+            <LineChart data={chartData}>
+              <XAxis dataKey="time" stroke="#6a6a88" fontSize={11} />
+              <YAxis stroke="#6a6a88" fontSize={11} />
+              <Tooltip
+                contentStyle={{ background: '#1a1a2e', border: '1px solid #2a2a4a', borderRadius: 8 }}
+                labelStyle={{ color: '#e8e8f0' }}
+              />
+              <Line type="monotone" dataKey={homeAbbr} stroke="#00ff88" strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey={awayAbbr} stroke="#ff5252" strokeWidth={2} dot={false} />
+            </LineChart>
+          </ResponsiveContainer>
+          <div className="gd-chart-legend">
+            <span><span className="gd-legend-dot" style={{ background: '#00ff88' }} /> {homeAbbr} ML</span>
+            <span><span className="gd-legend-dot" style={{ background: '#ff5252' }} /> {awayAbbr} ML</span>
+          </div>
+        </div>
+      )}
+
+      <p className="gd-lm-snapshots">{snapshots.length} snapshot{snapshots.length !== 1 ? 's' : ''} captured</p>
+    </div>
+  );
+}
+
+/* ── Injury Report Section ── */
+
+function InjuryReportSection({ gameId, homeForm, awayForm }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchGameInjuries(gameId)
+      .then(res => { if (!cancelled) setData(res.data); })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [gameId]);
+
+  if (loading) return null;
+
+  const homeInj = data?.home_injuries || [];
+  const awayInj = data?.away_injuries || [];
+  const hasInjuries = homeInj.length > 0 || awayInj.length > 0;
+
+  const statusColor = (status) => {
+    const s = (status || '').toLowerCase();
+    if (s === 'out' || s.includes('ir')) return '#ff5252';
+    if (s === 'day-to-day' || s === 'questionable') return '#ffd700';
+    return '#6a6a88';
   };
 
-  return (
-    <div className="tab-content form-tab">
-      <div className="form-teams-grid">
-        <div className="form-team-section">
-          <h3 className="form-team-title">{awayTeamLabel}</h3>
-          {renderFormList(awayForm, awayTeamLabel)}
-        </div>
-        <div className="form-team-section">
-          <h3 className="form-team-title">{homeTeamLabel}</h3>
-          {renderFormList(homeForm, homeTeamLabel)}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function PeriodsTab({ game }) {
-  const homePeriod = game.home_period_scoring || {};
-  const awayPeriod = game.away_period_scoring || {};
-  const hasPeriodData = homePeriod.period_1_avg != null || awayPeriod.period_1_avg != null;
-  const periodData = hasPeriodData ? [
-    { period: '1st', away: awayPeriod.period_1_avg, home: homePeriod.period_1_avg },
-    { period: '2nd', away: awayPeriod.period_2_avg, home: homePeriod.period_2_avg },
-    { period: '3rd', away: awayPeriod.period_3_avg, home: homePeriod.period_3_avg },
-  ] : (game.period_analysis || game.period_scoring || game.periods || null);
-  const awayTeamLabel = game.away_team_form?.team_name || teamName(game.away_team, 'Away');
-  const homeTeamLabel = game.home_team_form?.team_name || teamName(game.home_team, 'Home');
-
-  if (!periodData) {
-    return (
-      <div className="tab-content">
-        <div className="empty-state">
-          <Layers size={48} />
-          <p>No period analysis data available.</p>
-        </div>
-      </div>
-    );
-  }
-
-  const periods = Array.isArray(periodData)
-    ? periodData
-    : [
-        { period: '1st', away: periodData.first?.away || periodData.p1_away, home: periodData.first?.home || periodData.p1_home },
-        { period: '2nd', away: periodData.second?.away || periodData.p2_away, home: periodData.second?.home || periodData.p2_home },
-        { period: '3rd', away: periodData.third?.away || periodData.p3_away, home: periodData.third?.home || periodData.p3_home },
-      ];
-
-  return (
-    <div className="tab-content periods-tab">
-      <h3 className="subsection-title">Period-by-Period Scoring Averages</h3>
-      <div className="periods-table">
-        <div className="periods-table-header">
-          <span>Period</span>
-          <span>{awayTeamLabel}</span>
-          <span>{homeTeamLabel}</span>
-        </div>
-        {periods.map((p, index) => {
-          const periodLabel = p.period || p.label || `Period ${index + 1}`;
-          const awayVal = p.away ?? p.away_goals ?? p.away_avg ?? '-';
-          const homeVal = p.home ?? p.home_goals ?? p.home_avg ?? '-';
-
-          return (
-            <div className="periods-table-row" key={index}>
-              <span className="period-label">{periodLabel}</span>
-              <span className="period-value">{typeof awayVal === 'number' ? awayVal.toFixed(2) : awayVal}</span>
-              <span className="period-value">{typeof homeVal === 'number' ? homeVal.toFixed(2) : homeVal}</span>
+  const renderTeamInjuries = (injuries, teamName) => (
+    <div className="gd-inj-team">
+      <h4>{teamName}</h4>
+      {injuries.length === 0 ? (
+        <p className="gd-inj-healthy"><CheckCircle size={14} /> No injuries reported</p>
+      ) : (
+        <div className="gd-inj-list">
+          {injuries.map((inj, i) => (
+            <div key={i} className="gd-inj-row">
+              <span className="gd-inj-status" style={{ color: statusColor(inj.status) }}>{inj.status}</span>
+              <span className="gd-inj-name">{inj.player_name}</span>
+              <span className="gd-inj-pos">{inj.position || ''}</span>
+              <span className="gd-inj-type">{inj.injury_type || ''}</span>
             </div>
-          );
-        })}
-      </div>
-
-      {(periodData.over_rate || periodData.scoring_patterns) && (
-        <div className="period-insights">
-          <h3 className="subsection-title">Scoring Patterns</h3>
-          <div className="insights-grid">
-            {periodData.over_rate && (
-              <div className="insight-card">
-                <Activity size={18} />
-                <span>Over Rate: {periodData.over_rate}%</span>
-              </div>
-            )}
-            {periodData.first_period_over_rate && (
-              <div className="insight-card">
-                <Activity size={18} />
-                <span>1st Period Scoring Rate: {periodData.first_period_over_rate}%</span>
-              </div>
-            )}
-          </div>
+          ))}
         </div>
       )}
     </div>
   );
+
+  return (
+    <div className="gd-section gd-injuries">
+      <h3>
+        <HeartPulse size={16} /> Injury Report
+        {hasInjuries && <span className="gd-inj-count">{homeInj.length + awayInj.length} player{homeInj.length + awayInj.length !== 1 ? 's' : ''}</span>}
+      </h3>
+      <div className="gd-inj-grid">
+        {renderTeamInjuries(homeInj, homeForm.team_name || 'Home')}
+        {renderTeamInjuries(awayInj, awayForm.team_name || 'Away')}
+      </div>
+    </div>
+  );
 }
 
-function formatPeriodLabel(game) {
-  const period = game.period;
-  const periodType = game.period_type;
-  if (!period) return 'LIVE';
-  if (periodType === 'OT') return 'OT';
-  if (periodType === 'SO') return 'SO';
-  if (period === 1) return '1st';
-  if (period === 2) return '2nd';
-  if (period === 3) return '3rd';
-  return `${period}th`;
-}
+/* ════════════════════════════════════════════════════════════
+   Main GameDetail Component
+   ════════════════════════════════════════════════════════════ */
 
 function GameDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState('overview');
-
   const { data: game, loading, error, refetch } = useApi(fetchGameDetails, [id]);
 
-  // Auto-poll for live games (fallback)
   const isLive = game && isLiveStatus(game.status);
   const intervalRef = useRef(null);
   useEffect(() => {
     if (isLive) {
-      intervalRef.current = setInterval(() => {
-        refetch();
-      }, LIVE_POLL_INTERVAL);
+      intervalRef.current = setInterval(() => refetch(), LIVE_POLL_INTERVAL);
     }
-    return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
-    };
+    return () => { if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; } };
   }, [isLive, refetch]);
 
-  // Instantly refetch when WebSocket pushes odds update for this game
   useWebSocketEvent('odds_update', useCallback((data) => {
     const changedIds = (data?.changed_games || []).map((g) => g.game_id);
-    if (changedIds.includes(Number(id))) {
-      refetch();
-    }
+    if (changedIds.includes(Number(id))) refetch();
   }, [id, refetch]));
 
-  if (loading) {
-    return (
-      <div className="game-detail-page">
-        <div className="loading-container large">
-          <div className="loading-spinner"></div>
-          <p>Loading game analysis...</p>
-        </div>
-      </div>
-    );
-  }
+  if (loading) return (
+    <div className="game-detail-page">
+      <div className="loading-container large"><div className="loading-spinner"></div><p>Loading game analysis...</p></div>
+    </div>
+  );
+  if (error) return (
+    <div className="game-detail-page">
+      <button className="btn btn-back" onClick={() => navigate(-1)}><ArrowLeft size={18} /> Back</button>
+      <div className="error-container"><p>Failed to load game details: {error}</p></div>
+    </div>
+  );
+  if (!game) return (
+    <div className="game-detail-page">
+      <button className="btn btn-back" onClick={() => navigate(-1)}><ArrowLeft size={18} /> Back</button>
+      <div className="empty-state"><p>Game not found</p></div>
+    </div>
+  );
 
-  if (error) {
-    return (
-      <div className="game-detail-page">
-        <button className="btn btn-back" onClick={() => navigate(-1)}>
-          <ArrowLeft size={18} />
-          Back
-        </button>
-        <div className="error-container">
-          <p>Failed to load game details: {error}</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (!game) {
-    return (
-      <div className="game-detail-page">
-        <button className="btn btn-back" onClick={() => navigate(-1)}>
-          <ArrowLeft size={18} />
-          Back
-        </button>
-        <div className="empty-state">
-          <p>Game not found</p>
-        </div>
-      </div>
-    );
-  }
-
-  const awayForm = game.away_team_form || {};
   const homeForm = game.home_team_form || {};
-  const awayTeamLabel = awayForm.team_name || teamName(game.away_team, 'Away');
-  const homeTeamLabel = homeForm.team_name || teamName(game.home_team, 'Home');
-  const awayAbbr = awayForm.abbreviation || teamAbbrev(game.away_team, 'AWY');
+  const awayForm = game.away_team_form || {};
   const homeAbbr = homeForm.abbreviation || teamAbbrev(game.home_team, 'HME');
-  const awayRecord = awayForm.wins != null ? `${awayForm.wins}-${awayForm.losses}-${awayForm.ot_losses}` : '';
-  const homeRecord = homeForm.wins != null ? `${homeForm.wins}-${homeForm.losses}-${homeForm.ot_losses}` : '';
-  const venue = game.venue || game.arena || '';
-
-  // Team logos - check multiple possible sources
-  const awayLogoUrl = awayForm.logo_url || teamLogo(game.away_team) || teamLogo(game.away_team_form);
-  const homeLogoUrl = homeForm.logo_url || teamLogo(game.home_team) || teamLogo(game.home_team_form);
-
-  const renderTabContent = () => {
-    switch (activeTab) {
-      case 'overview':
-        return <OverviewTab game={game} />;
-      case 'predictions':
-        return <PredictionsTab game={game} />;
-      case 'h2h':
-        return <H2HTab game={game} />;
-      case 'form':
-        return <FormTab game={game} />;
-      case 'periods':
-        return <PeriodsTab game={game} />;
-      default:
-        return <OverviewTab game={game} />;
-    }
-  };
+  const awayAbbr = awayForm.abbreviation || teamAbbrev(game.away_team, 'AWY');
+  const venue = game.venue || '';
+  const odds = game.odds || null;
+  const predictions = game.predictions || [];
+  const topPred = predictions.find(p => p.recommended) || predictions[0] || null;
+  const topConf = topPred ? confidencePct(topPred.confidence) : 0;
+  const topEdge = topPred ? confidencePct(topPred.edge) : 0;
+  const homeRecent = game.home_recent_games || [];
+  const awayRecent = game.away_recent_games || [];
+  const h2h = game.head_to_head || null;
 
   return (
-    <div className="game-detail-page">
+    <div className="game-detail-page gd-page">
       <button className="btn btn-back" onClick={() => navigate(-1)}>
-        <ArrowLeft size={18} />
-        Back
+        <ArrowLeft size={18} /> Back
       </button>
 
-      {/* Game Header */}
-      <div className="game-detail-header">
-        <div className="game-detail-team away-team-detail">
-          {awayLogoUrl && (
-            <img
-              className="detail-team-logo"
-              src={awayLogoUrl}
-              alt={awayTeamLabel}
-              width={56}
-              height={56}
-              onError={(e) => { e.target.style.display = 'none'; }}
-            />
-          )}
-          <div className="detail-team-abbrev">{awayAbbr}</div>
-          <div className="detail-team-name">{awayTeamLabel}</div>
-          {awayRecord && <div className="detail-team-record">{awayRecord}</div>}
-        </div>
+      <GameHeader game={game} homeForm={homeForm} awayForm={awayForm}
+        homeAbbr={homeAbbr} awayAbbr={awayAbbr} topPred={topPred} venue={venue} />
 
-        <div className="game-detail-center">
-          {isLive ? (
-            <div className="game-detail-live-center">
-              <div className="detail-live-badge">
-                <Radio size={14} className="live-icon-pulse" />
-                LIVE
-              </div>
-              <div className="detail-live-score">
-                <span className={`detail-score ${game.away_score > game.home_score ? 'score-winning' : ''}`}>
-                  {game.away_score ?? 0}
-                </span>
-                <span className="detail-score-sep">-</span>
-                <span className={`detail-score ${game.home_score > game.away_score ? 'score-winning' : ''}`}>
-                  {game.home_score ?? 0}
-                </span>
-              </div>
-              <div className="detail-live-period">
-                {formatPeriodLabel(game)} {game.clock || '--:--'}
-              </div>
-              {(game.away_shots != null || game.home_shots != null) && (
-                <div className="detail-live-shots">
-                  SOG: {game.away_shots ?? 0} - {game.home_shots ?? 0}
-                </div>
-              )}
-            </div>
-          ) : game.status === 'final' ? (
-            <div className="game-detail-final-center">
-              <div className="detail-final-badge">Final{game.overtime ? ' (OT)' : ''}</div>
-              <div className="detail-live-score">
-                <span className={`detail-score ${game.away_score > game.home_score ? 'score-winning' : ''}`}>
-                  {game.away_score ?? 0}
-                </span>
-                <span className="detail-score-sep">-</span>
-                <span className={`detail-score ${game.home_score > game.away_score ? 'score-winning' : ''}`}>
-                  {game.home_score ?? 0}
-                </span>
-              </div>
-              <div className="game-detail-meta">
-                {venue && (
-                  <span className="game-detail-venue">
-                    <MapPin size={14} />
-                    {venue}
-                  </span>
-                )}
-              </div>
-            </div>
-          ) : (
-            <>
-              <div className="game-detail-vs">VS</div>
-              <div className="game-detail-meta">
-                <span className="game-detail-time">
-                  <Clock size={14} />
-                  {formatGameDateTime(game)}
-                </span>
-                {venue && (
-                  <span className="game-detail-venue">
-                    <MapPin size={14} />
-                    {venue}
-                  </span>
-                )}
-              </div>
-            </>
-          )}
-        </div>
+      <OddsSection odds={odds} homeAbbr={homeAbbr} awayAbbr={awayAbbr} />
 
-        <div className="game-detail-team home-team-detail">
-          {homeLogoUrl && (
-            <img
-              className="detail-team-logo"
-              src={homeLogoUrl}
-              alt={homeTeamLabel}
-              width={56}
-              height={56}
-              onError={(e) => { e.target.style.display = 'none'; }}
-            />
-          )}
-          <div className="detail-team-abbrev">{homeAbbr}</div>
-          <div className="detail-team-name">{homeTeamLabel}</div>
-          {homeRecord && <div className="detail-team-record">{homeRecord}</div>}
-        </div>
+      <div className="gd-two-col">
+        <LineMovementSection gameId={id} homeAbbr={homeAbbr} awayAbbr={awayAbbr} />
+        <InjuryReportSection gameId={id} homeForm={homeForm} awayForm={awayForm} />
       </div>
 
-      {/* Tab Navigation */}
-      <div className="game-detail-tabs">
-        {TABS.map((tab) => {
-          const Icon = tab.icon;
-          return (
-            <button
-              key={tab.id}
-              className={`tab-btn ${activeTab === tab.id ? 'tab-active' : ''}`}
-              onClick={() => setActiveTab(tab.id)}
-            >
-              <Icon size={16} />
-              <span>{tab.label}</span>
-            </button>
-          );
-        })}
+      <MatchAnalysis topPred={topPred} predictions={predictions}
+        homeForm={homeForm} awayForm={awayForm} h2h={h2h}
+        homeRecent={homeRecent} awayRecent={awayRecent}
+        homeAbbr={homeAbbr} awayAbbr={awayAbbr} />
+
+      <div className="gd-two-col">
+        <RiskAssessment conf={topConf} edge={topEdge} odds={odds} />
+        <MarketInterest odds={odds} homeForm={homeForm} awayForm={awayForm} />
       </div>
 
-      {/* Tab Content */}
-      <div className="game-detail-content">
-        {renderTabContent()}
+      <div className="gd-two-col">
+        <SeasonStatsCard homeForm={homeForm} awayForm={awayForm} />
+        <BettingTrendsCard homeForm={homeForm} awayForm={awayForm}
+          homeRecent={homeRecent} awayRecent={awayRecent} />
+      </div>
+
+      <VenueSection venue={venue} />
+
+      <div className="gd-two-col">
+        <FormAndH2H homeForm={homeForm} awayForm={awayForm} h2h={h2h}
+          homeRecent={homeRecent} awayRecent={awayRecent} />
+        <PerformanceAnalysis homeForm={homeForm} awayForm={awayForm}
+          homeRecent={homeRecent} awayRecent={awayRecent} />
       </div>
     </div>
   );

@@ -109,6 +109,19 @@ function Dashboard() {
     ...extraLiveGames,
   ];
 
+  // Sort games by bet quality: GOOD BET first, then BORDERLINE, then rest
+  const sortedGames = [...games].sort((a, b) => {
+    const qualityScore = (g) => {
+      const tp = g.top_pick;
+      if (!tp) return 0;
+      if (tp.is_fallback) return 1;
+      return 2;
+    };
+    const qs = qualityScore(b) - qualityScore(a);
+    if (qs !== 0) return qs;
+    return (b.top_pick?.confidence || 0) - (a.top_pick?.confidence || 0);
+  });
+
   return (
     <div className="dashboard">
       <div className="dashboard-header">
@@ -149,10 +162,13 @@ function Dashboard() {
         </section>
       )}
 
-      {/* Today's Schedule */}
+      {/* Upcoming Games */}
       <section className="section">
         <div className="section-header">
-          <h2 className="section-title">Today's Schedule</h2>
+          <div>
+            <h2 className="section-title" style={{ marginBottom: 4 }}>Upcoming Games</h2>
+            <p className="section-subtitle">Search and explore matchups. Games sorted by bet quality — GOOD bets shown first.</p>
+          </div>
           <span className="game-count">
             {games.length} {games.length === 1 ? 'Game' : 'Games'}
           </span>
@@ -180,8 +196,8 @@ function Dashboard() {
 
         {!scheduleLoading && !scheduleError && games.length > 0 && (
           <div className="games-grid">
-            {games.map((game) => (
-              <GameCard key={game.game_id || game.id} game={game} />
+            {sortedGames.map((game, idx) => (
+              <GameCard key={game.game_id || game.id} game={game} rank={idx + 1} />
             ))}
           </div>
         )}

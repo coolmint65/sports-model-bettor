@@ -63,6 +63,140 @@ class SportConfig(BaseModel):
     shootout: bool
 
 
+class ModelConfig(BaseModel):
+    """Tunable constants for the Poisson prediction model.
+
+    Every weight and threshold used in xG calculation and prediction
+    generation lives here so it can be adjusted without code changes.
+    """
+
+    # League baselines
+    league_avg_goals: float = 3.05
+    league_avg_save_pct: float = 0.905
+    league_avg_top6_ppg: float = 0.65
+
+    # Home ice advantage (added to home xG)
+    home_ice_advantage: float = 0.15
+
+    # Form window weights (must sum to 1.0)
+    weight_form_5: float = 0.50
+    weight_form_10: float = 0.30
+    weight_season: float = 0.20
+
+    # Feature factor weights (how much each factor adjusts xG)
+    h2h_factor: float = 0.10
+    goalie_factor: float = 0.20
+    skater_talent_factor: float = 0.10
+    lineup_depletion_factor: float = 0.15
+
+    # New factors from enhancements
+    player_matchup_factor: float = 0.08
+    team_matchup_scoring_factor: float = 0.06
+    injury_impact_factor: float = 0.18
+    special_teams_factor: float = 0.10
+    back_to_back_penalty: float = 0.15
+    rest_advantage_per_day: float = 0.05
+    rest_advantage_cap: float = 0.15
+    road_trip_fatigue_per_game: float = 0.02
+    road_trip_fatigue_threshold: int = 2
+
+    # Blending ratios
+    splits_blend_weight: float = 0.15
+    goalie_recent_weight: float = 0.60
+    h2h_goal_adj_weight: float = 0.05
+    defensive_regression: float = 0.60
+    mean_regression: float = 0.20
+
+    # Defense factor: blend goals-against with shots-against for stability.
+    # 0.0 = pure goals-against, 1.0 = pure shots-against.
+    defense_shot_blend: float = 0.35
+    league_avg_shots_against: float = 30.0
+
+    # Bivariate Poisson correlation parameter (0 = independent, higher = more correlated)
+    scoring_correlation: float = 0.12
+
+    # Period-specific scoring weights (how much period tendencies adjust xG)
+    period_scoring_factor: float = 0.08
+
+    # Schedule spot / situational awareness
+    lookahead_penalty: float = 0.08       # playing a weak team before a rival
+    divisional_under_adj: float = 0.06    # divisional games tend to go under
+    timezone_penalty: float = 0.06        # west coast team playing east coast afternoon
+
+    # Score state tendencies (live model)
+    trailing_desperation_boost: float = 0.25   # trailing by 1 in 3rd, boost scoring rate
+    leading_shell_reduction: float = 0.20      # leading by 2+, reduce scoring rate
+    pulled_goalie_boost: float = 0.40          # pulled goalie xG boost for trailing team
+
+    # xG bounds
+    xg_floor: float = 1.8
+    xg_ceiling: float = 3.8
+
+    # Poisson parameters
+    poisson_max_goals: int = 12
+    total_lines: List[float] = [3.5, 4.5, 5.5, 6.5, 7.5, 8.5]
+    puck_line: float = 1.5
+
+    # Feature extraction windows
+    form_window_short: int = 5
+    form_window_medium: int = 10
+    form_window_long: int = 20
+    ot_window: int = 30
+    skater_window: int = 10
+    lineup_window: int = 20
+    lineup_recent: int = 3
+    lineup_appearance_threshold: float = 0.70
+    h2h_window: int = 20
+    schedule_lookback: int = 7
+
+
+class InjuryConfig(BaseModel):
+    """Configuration for injury impact calculations."""
+
+    # How often to refresh injury data (minutes)
+    refresh_interval_minutes: int = 120
+
+    # Injury status weights (how much of player's production is lost)
+    status_weights: Dict[str, float] = {
+        "out": 1.0,
+        "ir": 1.0,
+        "day-to-day": 0.7,
+        "questionable": 0.5,
+        "probable": 0.2,
+    }
+
+    # Position impact multipliers (some positions matter more)
+    position_multipliers: Dict[str, float] = {
+        "C": 1.0,
+        "LW": 0.9,
+        "RW": 0.9,
+        "D": 0.85,
+        "G": 1.5,  # goalie injuries are most impactful
+    }
+
+    # Cap on total injury-based xG reduction
+    max_injury_reduction: float = 0.30
+
+
+class MatchupConfig(BaseModel):
+    """Configuration for player and team matchup analysis."""
+
+    # Minimum games required for matchup data to be considered
+    min_player_games_vs_team: int = 3
+    min_team_h2h_games: int = 3
+
+    # How many seasons back to look for matchup data
+    seasons_lookback: int = 3
+
+    # Weighting for recency in matchup data
+    current_season_weight: float = 0.70
+    prior_season_weight: float = 0.30
+
+    # Player matchup deviation threshold
+    # Only apply adjustment if player performs >X% different vs this team
+    deviation_threshold: float = 0.15
+
+
 class Settings(BaseModel):
     """
     Application-wide settings.
@@ -147,7 +281,12 @@ class Settings(BaseModel):
 
     # Scheduling
     scrape_interval_minutes: int = 30
-    odds_refresh_interval_minutes: int = 15
+    odds_refresh_interval_minutes: int = 10  # 20k tier budget
+
+    # Model tuning
+    model: ModelConfig = ModelConfig()
+    injury: InjuryConfig = InjuryConfig()
+    matchup: MatchupConfig = MatchupConfig()
 
     def get_sport_config(self, sport: Optional[str] = None) -> SportConfig:
         """Get configuration for a specific sport, defaulting to the default sport."""
