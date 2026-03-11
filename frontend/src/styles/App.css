@@ -99,12 +99,18 @@ a:hover {
   flex-direction: column;
 }
 
+.app-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
 .main-content {
   flex: 1;
-  max-width: 1400px;
+  max-width: 1200px;
   width: 100%;
-  margin: 0 auto;
   padding: 24px 28px 60px;
+  min-width: 0;
 }
 
 /* ─── Navbar ────────────────────────────────────────────────── */
@@ -147,49 +153,26 @@ a:hover {
 }
 
 .brand-icon {
-  color: var(--accent-gold);
+  color: var(--accent-green);
   flex-shrink: 0;
 }
 
 .brand-text {
-  background: linear-gradient(135deg, var(--accent-gold), var(--accent-orange));
+  background: linear-gradient(135deg, var(--accent-green), #4fc3f7);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
 
-.navbar-links {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.nav-link {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 16px;
-  border-radius: var(--radius-md);
-  color: var(--text-secondary);
-  font-size: 0.9rem;
-  font-weight: 500;
-  text-decoration: none;
-  transition: all var(--transition-fast);
-}
-
-.nav-link:hover {
-  color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.05);
-}
-
-.nav-link-active {
-  color: var(--accent-blue);
-  background: var(--accent-blue-bg);
-}
-
-.nav-link-active:hover {
-  color: var(--accent-blue);
-  background: var(--accent-blue-bg);
+.brand-version {
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: var(--accent-green);
+  background: rgba(0, 255, 136, 0.12);
+  padding: 1px 6px;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+  align-self: center;
 }
 
 .navbar-actions {
@@ -2890,16 +2873,8 @@ a:hover {
     display: none;
   }
 
-  .navbar-links {
-    gap: 0;
-  }
-
-  .nav-link span {
+  .brand-version {
     display: none;
-  }
-
-  .nav-link {
-    padding: 8px 12px;
   }
 
   .btn-sync span {
@@ -3902,4 +3877,199 @@ a:hover {
   .gd-inj-grid { grid-template-columns: 1fr; }
   .gd-inj-row { grid-template-columns: 70px 1fr auto; }
   .gd-inj-pos { display: none; }
+}
+
+/* ============================================================
+   MintPicks V2 - Sports Sidebar & Sport Page
+   ============================================================ */
+
+/* ─── Sports Sidebar ───────────────────────────────────────── */
+.sports-sidebar {
+  width: 200px;
+  min-width: 200px;
+  background: var(--bg-navbar);
+  border-right: 1px solid var(--border-primary);
+  padding: 20px 0;
+  position: sticky;
+  top: 64px;
+  height: calc(100vh - 64px);
+  overflow-y: auto;
+}
+
+.sidebar-header {
+  padding: 0 16px 12px;
+  border-bottom: 1px solid var(--border-primary);
+  margin-bottom: 8px;
+}
+
+.sidebar-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 8px;
+}
+
+.sidebar-sport-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-decoration: none;
+  transition: all var(--transition-fast);
+  position: relative;
+}
+
+.sidebar-sport-link:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+}
+
+.sidebar-sport-active {
+  background: var(--accent-green-bg);
+  color: var(--accent-green);
+  font-weight: 600;
+}
+
+.sidebar-sport-active:hover {
+  background: var(--accent-green-bg);
+  color: var(--accent-green);
+}
+
+.sidebar-sport-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.sidebar-sport-disabled:hover {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.sidebar-sport-icon {
+  font-size: 1.2rem;
+  width: 24px;
+  text-align: center;
+}
+
+.sidebar-sport-label {
+  flex: 1;
+}
+
+.sidebar-coming-soon {
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.05);
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+/* ─── Sport Page Tabs ──────────────────────────────────────── */
+.sport-page {
+  animation: fadeIn 0.4s ease;
+}
+
+.sport-page-tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+  padding: 4px;
+  border: 1px solid var(--border-primary);
+  margin-bottom: 24px;
+}
+
+.sport-tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: 1;
+  padding: 10px 16px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  font-family: var(--font-sans);
+}
+
+.sport-tab:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.sport-tab-active {
+  background: var(--bg-card);
+  color: var(--accent-green);
+  box-shadow: var(--shadow-sm);
+}
+
+.sport-tab-active:hover {
+  background: var(--bg-card);
+  color: var(--accent-green);
+}
+
+.sport-page-content {
+  /* content area */
+}
+
+.coming-soon-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 80px 24px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.coming-soon-section svg {
+  opacity: 0.3;
+}
+
+.coming-soon-section h2 {
+  font-size: 1.3rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.coming-soon-section p {
+  font-size: 0.9rem;
+}
+
+/* ─── Responsive: Sidebar ──────────────────────────────────── */
+@media (max-width: 900px) {
+  .sports-sidebar {
+    display: none;
+  }
+}
+
+@media (max-width: 600px) {
+  .sport-page-tabs {
+    flex-wrap: wrap;
+  }
+
+  .sport-tab {
+    font-size: 0.78rem;
+    padding: 8px 12px;
+  }
 }
