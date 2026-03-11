@@ -749,6 +749,18 @@ class NHLScraper(BaseScraper):
             )
             return
 
+        # -- Snapshot closing odds before marking final (for CLV tracking) --
+        # Only snapshot if we haven't already (closing fields still null)
+        if game.closing_home_moneyline is None and game.home_moneyline is not None:
+            game.closing_home_moneyline = game.home_moneyline
+            game.closing_away_moneyline = game.away_moneyline
+            game.closing_over_under_line = game.over_under_line
+            game.closing_over_price = game.over_price
+            game.closing_under_price = game.under_price
+            game.closing_home_spread_line = game.home_spread_line
+            game.closing_home_spread_price = game.home_spread_price
+            game.closing_away_spread_price = game.away_spread_price
+
         # -- Final scores --
         home_score = self.safe_get(boxscore, "homeTeam", "score") or 0
         away_score = self.safe_get(boxscore, "awayTeam", "score") or 0

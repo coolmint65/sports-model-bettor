@@ -125,6 +125,13 @@ class BetResult(TimestampMixin, Base):
         DateTime(timezone=True), nullable=True
     )
 
+    # Closing Line Value (CLV) tracking.
+    # closing_implied_prob: the market's closing implied probability for this side.
+    # clv: difference between closing implied prob and prediction-time implied prob.
+    #       Positive CLV means the line moved in your favor (model had real edge).
+    closing_implied_prob: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    clv: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
     # Relationships
     prediction: Mapped["Prediction"] = relationship(
         "Prediction", back_populates="result"
@@ -133,7 +140,8 @@ class BetResult(TimestampMixin, Base):
     def __repr__(self) -> str:
         return (
             f"<BetResult(id={self.id}, prediction_id={self.prediction_id}, "
-            f"was_correct={self.was_correct}, profit_loss={self.profit_loss:.2f})>"
+            f"was_correct={self.was_correct}, profit_loss={self.profit_loss:.2f}, "
+            f"clv={self.clv})>"
         )
 
 

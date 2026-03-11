@@ -162,6 +162,17 @@ class Game(TimestampMixin, Base):
     pregame_over_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     pregame_under_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
+    # Closing odds snapshot — captured when game status becomes final.
+    # These are the last odds before puck drop, used for CLV analysis.
+    closing_home_moneyline: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    closing_away_moneyline: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    closing_over_under_line: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    closing_over_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    closing_under_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    closing_home_spread_line: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    closing_home_spread_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    closing_away_spread_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
     # Relationships
     home_team: Mapped["Team"] = relationship(
         "Team",

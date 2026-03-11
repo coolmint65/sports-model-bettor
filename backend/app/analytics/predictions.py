@@ -331,6 +331,19 @@ class PredictionManager:
                 "roi": round(bt_profit / bt_total, 4) if bt_total > 0 else 0.0,
             }
 
+        # CLV aggregate: average CLV across all graded predictions with CLV data
+        clv_stmt = (
+            select(
+                func.count(BetResult.id).label("clv_count"),
+                func.avg(BetResult.clv).label("avg_clv"),
+            )
+            .where(BetResult.clv.isnot(None))
+        )
+        clv_result = await db.execute(clv_stmt)
+        clv_row = clv_result.one_or_none()
+        clv_count = clv_row.clv_count if clv_row and clv_row.clv_count else 0
+        avg_clv = round(clv_row.avg_clv, 4) if clv_row and clv_row.avg_clv else None
+
         return {
             "total_predictions": total,
             "newly_graded": graded_count,
@@ -340,6 +353,10 @@ class PredictionManager:
             "total_profit": round(total_profit, 2),
             "roi": roi,
             "by_bet_type": by_bet_type,
+            "clv": {
+                "predictions_with_clv": clv_count,
+                "avg_clv": avg_clv,
+            },
         }
 
     # ------------------------------------------------------------------ #
@@ -418,6 +435,18 @@ class PredictionManager:
                 "h2h_games": features["h2h"]["games_found"],
                 "home_goalie": features["home_goalie"]["goalie_name"],
                 "away_goalie": features["away_goalie"]["goalie_name"],
+                # New feature summaries
+                "home_injured_count": features.get("home_injuries", {}).get("injured_count", 0),
+                "away_injured_count": features.get("away_injuries", {}).get("injured_count", 0),
+                "home_injury_xg_reduction": features.get("home_injuries", {}).get("xg_reduction", 0),
+                "away_injury_xg_reduction": features.get("away_injuries", {}).get("xg_reduction", 0),
+                "home_b2b": features.get("home_schedule", {}).get("is_back_to_back", False),
+                "away_b2b": features.get("away_schedule", {}).get("is_back_to_back", False),
+                "home_days_rest": features.get("home_schedule", {}).get("days_rest", 0),
+                "away_days_rest": features.get("away_schedule", {}).get("days_rest", 0),
+                "home_matchup_boost": features.get("home_player_matchup", {}).get("matchup_boost", 0),
+                "away_matchup_boost": features.get("away_player_matchup", {}).get("matchup_boost", 0),
+                "matchup_avg_total": features.get("team_matchup", {}).get("avg_total_goals"),
             },
         }
 
@@ -566,12 +595,21 @@ class PredictionManager:
         # Flat-bet P/L: +1.0 for win, -1.0 for loss
         profit_loss = 1.0 if was_correct else -1.0
 
+        # Compute Closing Line Value (CLV)
+        closing_implied = self._get_closing_implied_prob(game, prediction)
+        clv = None
+        if closing_implied is not None and prediction.odds_implied_prob is not None:
+            # Positive CLV = line moved against you (you got a better price)
+            clv = round(closing_implied - prediction.odds_implied_prob, 4)
+
         bet_result = BetResult(
             prediction_id=prediction.id,
             actual_outcome=actual_outcome,
             was_correct=was_correct,
             profit_loss=profit_loss,
             settled_at=datetime.now(timezone.utc),
+            closing_implied_prob=closing_implied,
+            clv=clv,
         )
         db.add(bet_result)
 
@@ -673,6 +711,57 @@ class PredictionManager:
             return False
 
         return False
+
+    # ------------------------------------------------------------------ #
+    #  Private: CLV computation                                           #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _get_closing_implied_prob(game: Game, prediction: Prediction) -> float | None:
+        """
+        Get the closing implied probability for a prediction's side.
+
+        Uses the closing odds snapshot on the Game record (captured when
+        the game went final) to determine what the market's closing line
+        was for the side the prediction picked.
+
+        Returns None if closing odds aren't available.
+        """
+        from app.analytics.models import american_odds_to_implied_prob
+
+        bt = prediction.bet_type
+        pv = prediction.prediction_value
+
+        if bt == "ml":
+            home_team_obj = getattr(game, "home_team", None)
+            home_abbr = getattr(home_team_obj, "abbreviation", "") if home_team_obj else ""
+            if pv == "home" or pv == home_abbr:
+                odds = game.closing_home_moneyline
+            else:
+                odds = game.closing_away_moneyline
+            if odds is not None:
+                return round(american_odds_to_implied_prob(odds), 4)
+
+        elif bt == "total":
+            if "over" in pv:
+                odds = game.closing_over_price
+            elif "under" in pv:
+                odds = game.closing_under_price
+            else:
+                return None
+            if odds is not None:
+                return round(american_odds_to_implied_prob(odds), 4)
+
+        elif bt == "spread":
+            home_team_obj = getattr(game, "home_team", None)
+            home_abbr = getattr(home_team_obj, "abbreviation", "") if home_team_obj else ""
+            pred_team = pv.split("_", 1)[0] if "_" in pv else ""
+            is_home = pred_team == home_abbr
+            odds = game.closing_home_spread_price if is_home else game.closing_away_spread_price
+            if odds is not None:
+                return round(american_odds_to_implied_prob(float(odds)), 4)
+
+        return None
 
     # ------------------------------------------------------------------ #
     #  Private: utility methods                                           #
