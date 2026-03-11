@@ -4667,13 +4667,10 @@ a:hover {
   font-size: 1.3rem;
   font-weight: 800;
   font-family: var(--font-mono);
+  color: var(--text-primary);
 }
 
-.dc-ml-fav {
-  color: var(--accent-green);
-}
-
-.dc-ml-dog {
+.dc-ml-pick {
   color: var(--accent-green);
 }
 
@@ -4735,59 +4732,19 @@ a:hover {
   font-weight: 600;
 }
 
-/* Parlay value */
-.dc-parlay-value {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.78rem;
-  font-weight: 600;
+/* Pick highlight in odds pills */
+.dc-pick-highlight {
   color: var(--accent-green);
-}
-
-/* Parlay button */
-.dc-parlay-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  width: 100%;
-  padding: 10px;
-  border: 1px solid rgba(0, 255, 136, 0.3);
-  border-radius: var(--radius-md);
-  background: rgba(0, 255, 136, 0.05);
-  color: var(--accent-green);
-  font-size: 0.85rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all var(--transition-fast);
-  font-family: var(--font-sans);
-}
-
-.dc-parlay-btn:hover {
-  background: rgba(0, 255, 136, 0.12);
-  border-color: rgba(0, 255, 136, 0.5);
-}
-
-.dc-parlay-icon {
-  font-weight: 800;
+  font-weight: 700;
 }
 
 /* Footer */
 .dc-footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   padding-top: 8px;
   border-top: 1px solid var(--border-primary);
-}
-
-.dc-popularity {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 0.75rem;
-  color: var(--text-muted);
 }
 
 .dc-details-link {

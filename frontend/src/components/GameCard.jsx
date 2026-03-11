@@ -6,7 +6,6 @@ import {
   TrendingUp,
   Radio,
   Calendar,
-  Star,
   Minus,
 } from 'lucide-react';
 import { format } from 'date-fns';
@@ -232,9 +231,14 @@ function GameCard({ game, section, medal }) {
   const awayML = odds?.away_moneyline;
   const homeML = odds?.home_moneyline;
   const spreadLine = odds?.home_spread_line;
+  const awaySpreadLine = odds?.away_spread_line;
   const ouLine = odds?.over_under_line;
 
-  const hasGoodValue = confidence != null && confidence >= 70 && topPick?.edge > 0;
+  // Determine which side the pick is on
+  const pickValue = (topPick?.prediction_value || '').toLowerCase();
+  const pickBetType = (topPick?.bet_type || '').toLowerCase();
+  const pickIsHome = pickValue === 'home' || pickValue.includes(homeAbbr.toLowerCase());
+  const pickIsAway = pickValue === 'away' || pickValue.includes(awayAbbr.toLowerCase());
 
   return (
     <div className="dc-card" onClick={handleClick} role="button" tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && handleClick()}>
@@ -246,10 +250,7 @@ function GameCard({ game, section, medal }) {
       {/* Top tags row */}
       <div className="dc-tags">
         <span className="dc-tag dc-tag-sport">Hockey</span>
-        <span className="dc-tag dc-tag-league">
-          <Star size={10} />
-          NHL
-        </span>
+        <span className="dc-tag dc-tag-league">NHL</span>
         {badge && (
           <span className={`dc-tag dc-tag-confidence ${badge.className}`}>
             <badge.icon size={12} />
@@ -280,7 +281,7 @@ function GameCard({ game, section, medal }) {
           <TeamLogo team={game.away_team} size={48} />
           <div className="dc-team-name">{awayName}</div>
           {awayML != null && (
-            <div className={`dc-ml ${awayML < 0 ? 'dc-ml-fav' : 'dc-ml-dog'}`}>
+            <div className={`dc-ml ${pickIsAway && pickBetType === 'ml' ? 'dc-ml-pick' : ''}`}>
               {formatAmericanOdds(awayML)}
             </div>
           )}
@@ -295,7 +296,7 @@ function GameCard({ game, section, medal }) {
           <TeamLogo team={game.home_team} size={48} />
           <div className="dc-team-name">{homeName}</div>
           {homeML != null && (
-            <div className={`dc-ml ${homeML < 0 ? 'dc-ml-fav' : 'dc-ml-dog'}`}>
+            <div className={`dc-ml ${pickIsHome && pickBetType === 'ml' ? 'dc-ml-pick' : ''}`}>
               {formatAmericanOdds(homeML)}
             </div>
           )}
@@ -310,7 +311,9 @@ function GameCard({ game, section, medal }) {
               <TrendingUp size={11} />
               <span className="dc-odds-label">ML</span>
               <span className="dc-odds-val">
-                {formatAmericanOdds(awayML)} / {formatAmericanOdds(homeML)}
+                <span className={pickIsAway && pickBetType === 'ml' ? 'dc-pick-highlight' : ''}>{formatAmericanOdds(awayML)}</span>
+                {' / '}
+                <span className={pickIsHome && pickBetType === 'ml' ? 'dc-pick-highlight' : ''}>{formatAmericanOdds(homeML)}</span>
               </span>
             </div>
           )}
@@ -319,7 +322,9 @@ function GameCard({ game, section, medal }) {
               <TrendingUp size={11} />
               <span className="dc-odds-label">SPREAD</span>
               <span className="dc-odds-val">
-                {spreadLine > 0 ? '-' : ''}{Math.abs(spreadLine)} / +{Math.abs(spreadLine)}
+                <span className={pickIsAway && pickBetType === 'spread' ? 'dc-pick-highlight' : ''}>{awaySpreadLine != null ? (awaySpreadLine > 0 ? '+' : '') + awaySpreadLine : `-${Math.abs(spreadLine)}`}</span>
+                {' / '}
+                <span className={pickIsHome && pickBetType === 'spread' ? 'dc-pick-highlight' : ''}>{spreadLine > 0 ? '+' : ''}{spreadLine}</span>
               </span>
             </div>
           )}
@@ -327,34 +332,18 @@ function GameCard({ game, section, medal }) {
             <div className="dc-odds-pill">
               <TrendingUp size={11} />
               <span className="dc-odds-label">O/U</span>
-              <span className="dc-odds-val">O {ouLine}</span>
+              <span className="dc-odds-val">
+                <span className={pickValue.includes('over') && pickBetType === 'total' ? 'dc-pick-highlight' : ''}>O</span>
+                {' '}
+                {ouLine}
+              </span>
             </div>
           )}
         </div>
       )}
 
-      {/* Good Parlay Value indicator */}
-      {hasGoodValue && (
-        <div className="dc-parlay-value">
-          <TrendingUp size={13} />
-          Good Parlay Value
-        </div>
-      )}
-
-      {/* Add to Parlay button */}
-      <button className="dc-parlay-btn" onClick={(e) => e.stopPropagation()}>
-        <span className="dc-parlay-icon">$</span>
-        Add to Parlay
-      </button>
-
-      {/* Footer */}
+      {/* Footer - just Details link */}
       <div className="dc-footer">
-        {confidence != null && (
-          <span className="dc-popularity">
-            <Star size={12} />
-            Popularity: {Math.round(confidence)}
-          </span>
-        )}
         <span className="dc-details-link">
           Details <ChevronRight size={14} />
         </span>
