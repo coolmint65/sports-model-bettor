@@ -368,6 +368,19 @@ function KeyInjuries({ injuries, homeTeamLabel, awayTeamLabel }) {
   );
 }
 
+/**
+ * Strip {{team:...}} and {{tooltip:...}} markers from reasoning text,
+ * returning clean human-readable text.
+ */
+function cleanReasoningText(raw) {
+  if (!raw) return '';
+  return raw
+    .replace(/\s*\(Odds:\s*[^)]*\)/g, '')
+    .replace(/\{\{team:[^}]+\}\}\s*/g, '')
+    .replace(/\s*\{\{tooltip:[^}]*\}\}/g, '')
+    .trim();
+}
+
 /* ──────────────────── AI Match Analysis ──────────────────── */
 function AIAnalysis({ game, homeAbbr, awayAbbr, homeTeamLabel, awayTeamLabel }) {
   const predictions = game.predictions || game.bets || [];
@@ -381,16 +394,28 @@ function AIAnalysis({ game, homeAbbr, awayAbbr, homeTeamLabel, awayTeamLabel }) 
   const confColor = getConfidenceColor(confidence);
   const isQualified = confidence >= 70 && edge > 3;
 
-  const reasoning = topPick.reasoning || topPick.reason || topPick.analysis || '';
-  const reasons = reasoning
-    .replace(/\s*\(Odds:\s*[^)]*\)/g, '')
+  const rawReasoning = topPick.reasoning || topPick.reason || topPick.analysis || '';
+  const cleaned = cleanReasoningText(rawReasoning);
+  const reasons = cleaned
     .split(/(?:\d+\.\s+|\n|;\s*)/)
     .map((s) => s.trim())
     .filter((s) => s.length > 5);
 
+  // If splitting by numbered lines didn't work well, try sentence splitting
+  if (reasons.length <= 1 && cleaned.length > 20) {
+    const bySentence = cleaned
+      .split(/\.\s+/)
+      .map((s) => s.trim().replace(/\.$/, ''))
+      .filter((s) => s.length > 5);
+    if (bySentence.length > reasons.length) {
+      reasons.length = 0;
+      reasons.push(...bySentence);
+    }
+  }
+
   // Categorize reasons into positive/negative/neutral
-  const negativeKeywords = ['losing', 'loss', 'struggle', 'injury', 'missing', 'without', 'concern', 'decline'];
-  const positiveKeywords = ['strong', 'winning', 'advantage', 'record', 'home-ice', 'dominant', 'superior'];
+  const negativeKeywords = ['losing', 'loss', 'struggle', 'injury', 'missing', 'without', 'concern', 'decline', 'losing streak'];
+  const positiveKeywords = ['strong', 'winning', 'advantage', 'record', 'home-ice', 'dominant', 'superior', 'hot streak', 'edge', 'dominates'];
   const categorized = reasons.slice(0, 6).map((r) => {
     const lower = r.toLowerCase();
     if (negativeKeywords.some((k) => lower.includes(k))) return { text: r, type: 'negative' };
@@ -597,12 +622,28 @@ function RiskAndMarket({ game, homeAbbr, awayAbbr, homeTeamLabel, awayTeamLabel 
   );
 }
 
+/**
+ * Format a stat value — handles both decimal (0.222) and already-percentage (22.2) formats.
+ * For percentage stats, if value <= 1 it's a decimal (multiply by 100), otherwise display as-is.
+ */
+function fmtStat(val, isPct = false, decimals = 2) {
+  if (val == null) return '-';
+  if (typeof val !== 'number') return val;
+  if (isPct) {
+    const display = val <= 1 ? val * 100 : val;
+    return `${display.toFixed(1)}%`;
+  }
+  return val.toFixed(decimals);
+}
+
 /* ──────────────────── Season Stats & Standings + Betting Trends ──────────────────── */
 function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
   const home = game.home_team_form || {};
   const away = game.away_team_form || {};
   const homeLabel = home.team_name || 'Home';
   const awayLabel = away.team_name || 'Away';
+  const homeLogo = home.logo_url || teamLogo(game.home_team) || teamLogo(game.home_team_form);
+  const awayLogo = away.logo_url || teamLogo(game.away_team) || teamLogo(game.away_team_form);
   const homeRecord = `${home.wins || 0}-${home.losses || 0}`;
   const awayRecord = `${away.wins || 0}-${away.losses || 0}`;
   const homeWinPct = home.games_played ? `${Math.round((home.wins / home.games_played) * 100)}%` : '-';
@@ -627,10 +668,13 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
   const awayRank = away.division_rank || '-';
 
   const perfStats = [
-    { label: 'GF/G', homeVal: home.goals_for_per_game, awayVal: away.goals_for_per_game },
-    { label: 'GAA', homeVal: home.goals_against_per_game, awayVal: away.goals_against_per_game },
-    { label: 'PP%', homeVal: home.power_play_pct, awayVal: away.power_play_pct },
-    { label: 'PK%', homeVal: home.penalty_kill_pct, awayVal: away.penalty_kill_pct },
+    { label: 'GF/G', homeVal: fmtStat(home.goals_for_per_game), awayVal: fmtStat(away.goals_for_per_game) },
+    { label: 'GAA', homeVal: fmtStat(home.goals_against_per_game), awayVal: fmtStat(away.goals_against_per_game) },
+    { label: 'PP%', homeVal: fmtStat(home.power_play_pct, true), awayVal: fmtStat(away.power_play_pct, true) },
+    { label: 'PK%', homeVal: fmtStat(home.penalty_kill_pct, true), awayVal: fmtStat(away.penalty_kill_pct, true) },
+    { label: 'SF/G', homeVal: fmtStat(home.shots_for_per_game), awayVal: fmtStat(away.shots_for_per_game) },
+    { label: 'SA/G', homeVal: fmtStat(home.shots_against_per_game), awayVal: fmtStat(away.shots_against_per_game) },
+    { label: 'FO%', homeVal: fmtStat(home.faceoff_win_pct, true), awayVal: fmtStat(away.faceoff_win_pct, true) },
   ];
 
   // Compute ATS-like record from recent games
@@ -652,6 +696,7 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
         </div>
         <div className="gd-stats-teams">
           <div className="gd-stats-team">
+            {homeLogo && <img src={homeLogo} alt="" width={28} height={28} className="gd-stats-logo" onError={(e) => { e.target.style.display = 'none'; }} />}
             <div className="gd-stats-team-name">{homeLabel}</div>
             <div className="gd-stats-record">{homeRecord}</div>
             <div className="gd-stats-badges">
@@ -669,6 +714,7 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
             <div className="gd-stats-winpct">Win%: {homeWinPct}</div>
           </div>
           <div className="gd-stats-team">
+            {awayLogo && <img src={awayLogo} alt="" width={28} height={28} className="gd-stats-logo" onError={(e) => { e.target.style.display = 'none'; }} />}
             <div className="gd-stats-team-name">{awayLabel}</div>
             <div className="gd-stats-record">{awayRecord}</div>
             <div className="gd-stats-badges">
@@ -695,7 +741,7 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
               {perfStats.map((s) => (
                 <div key={s.label} className="gd-perf-row">
                   <span className="gd-perf-stat-label">{s.label}</span>
-                  <span className="gd-perf-stat-val">{s.homeVal != null ? (typeof s.homeVal === 'number' ? s.homeVal.toFixed(s.label.includes('%') ? 1 : 2) : s.homeVal) : '-'}</span>
+                  <span className="gd-perf-stat-val">{s.homeVal}</span>
                 </div>
               ))}
             </div>
@@ -704,7 +750,7 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
               {perfStats.map((s) => (
                 <div key={s.label} className="gd-perf-row">
                   <span className="gd-perf-stat-label">{s.label}</span>
-                  <span className="gd-perf-stat-val">{s.awayVal != null ? (typeof s.awayVal === 'number' ? s.awayVal.toFixed(s.label.includes('%') ? 1 : 2) : s.awayVal) : '-'}</span>
+                  <span className="gd-perf-stat-val">{s.awayVal}</span>
                 </div>
               ))}
             </div>
@@ -799,6 +845,30 @@ function RecentFormAndH2H({ game, homeAbbr, awayAbbr }) {
   const homeId = game.home_team_form?.team_id ?? game.home_team?.id;
   const team1IsHome = h2h?.team1_id === homeId;
 
+  // Find H2H matchups by filtering each team's recent games for the opponent
+  const h2hFromHome = homeForm.filter((g) => {
+    const opp = (g.opponent_abbrev || g.opponent_name || '').toUpperCase();
+    return opp === awayAbbr.toUpperCase();
+  });
+  const h2hFromAway = awayForm.filter((g) => {
+    const opp = (g.opponent_abbrev || g.opponent_name || '').toUpperCase();
+    return opp === homeAbbr.toUpperCase();
+  });
+
+  // Merge and deduplicate H2H games by date, preferring home team's perspective
+  const h2hGamesMap = new Map();
+  for (const g of h2hFromHome) {
+    const key = g.game_date || g.date;
+    if (key) h2hGamesMap.set(key, { ...g, perspective: 'home' });
+  }
+  for (const g of h2hFromAway) {
+    const key = g.game_date || g.date;
+    if (key && !h2hGamesMap.has(key)) h2hGamesMap.set(key, { ...g, perspective: 'away' });
+  }
+  const h2hGames = [...h2hGamesMap.values()]
+    .sort((a, b) => new Date(b.game_date || b.date) - new Date(a.game_date || a.date))
+    .slice(0, 5);
+
   return (
     <div className="gd-two-col">
       {/* Recent Form & H2H */}
@@ -824,8 +894,9 @@ function RecentFormAndH2H({ game, homeAbbr, awayAbbr }) {
               ))}
             </div>
             <div className="gd-form-games">
-              {last5Home.slice(0, 3).map((g, i) => (
+              {last5Home.map((g, i) => (
                 <div key={i} className="gd-form-game-row">
+                  <span className="gd-form-game-date">{g.game_date ? format(new Date(g.game_date), 'MMM d') : ''}</span>
                   <span>vs {g.opponent_abbrev || g.opponent_name}</span>
                   <span className={g.result === 'W' ? 'gd-form-win' : 'gd-form-loss'}>
                     {g.result} {g.score_display}{g.overtime ? ' (OT)' : ''}
@@ -849,8 +920,9 @@ function RecentFormAndH2H({ game, homeAbbr, awayAbbr }) {
               ))}
             </div>
             <div className="gd-form-games">
-              {last5Away.slice(0, 3).map((g, i) => (
+              {last5Away.map((g, i) => (
                 <div key={i} className="gd-form-game-row">
+                  <span className="gd-form-game-date">{g.game_date ? format(new Date(g.game_date), 'MMM d') : ''}</span>
                   <span>vs {g.opponent_abbrev || g.opponent_name}</span>
                   <span className={g.result === 'W' ? 'gd-form-win' : 'gd-form-loss'}>
                     {g.result} {g.score_display}{g.overtime ? ' (OT)' : ''}
@@ -876,24 +948,18 @@ function RecentFormAndH2H({ game, homeAbbr, awayAbbr }) {
           </div>
         )}
 
-        {/* H2H */}
+        {/* H2H Summary */}
         {h2h && (
           <div className="gd-h2h-section">
             <div className="gd-h2h-title">
-              <strong>Head-to-Head (Last 5)</strong>
-              {h2h.games_played < 3 && (
+              <strong>Head-to-Head</strong>
+              {(h2h.games_played < 3 && h2hGames.length < 3) && (
                 <span className="gd-h2h-limited">
                   <AlertTriangle size={11} />
                   Limited Data
                 </span>
               )}
             </div>
-
-            {h2h.games_played < 3 && (
-              <div className="gd-h2h-warning">
-                Limited historical data - fewer than 3 validated matches found.
-              </div>
-            )}
 
             <div className="gd-h2h-scores">
               <div className="gd-h2h-side">
@@ -916,61 +982,150 @@ function RecentFormAndH2H({ game, homeAbbr, awayAbbr }) {
             )}
           </div>
         )}
+
+        {/* H2H Individual Game Details */}
+        {h2hGames.length > 0 && (
+          <div className="gd-h2h-games">
+            <div className="gd-h2h-games-title">
+              <Calendar size={13} />
+              <strong>Recent Matchups ({h2hGames.length})</strong>
+            </div>
+            {h2hGames.map((g, i) => {
+              const dateStr = g.game_date || g.date;
+              const dateDisplay = dateStr ? format(new Date(dateStr), 'MMM d, yyyy') : '';
+              const isHomePerspective = g.perspective === 'home';
+              const winnerLabel = g.result === 'W'
+                ? (isHomePerspective ? homeLabel : awayLabel)
+                : (isHomePerspective ? awayLabel : homeLabel);
+              return (
+                <div key={i} className="gd-h2h-game-row">
+                  <span className="gd-h2h-game-date">{dateDisplay}</span>
+                  <span className="gd-h2h-game-teams">
+                    {homeAbbr} vs {awayAbbr}
+                  </span>
+                  <span className="gd-h2h-game-score">
+                    {g.score_display}{g.overtime ? ' (OT)' : ''}
+                  </span>
+                  <span className={`gd-h2h-game-winner ${g.result === 'W' && isHomePerspective ? 'gd-form-win' : g.result === 'W' ? 'gd-form-loss' : isHomePerspective ? 'gd-form-loss' : 'gd-form-win'}`}>
+                    {winnerLabel} W
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
-      {/* Performance Analysis with Chart */}
+      {/* Performance Analysis — H2H Matchups */}
       <div className="gd-section-card">
         <div className="gd-section-header">
           <BarChart3 size={16} />
           <h3>Performance Analysis</h3>
         </div>
 
-        {/* Record boxes */}
-        <div className="gd-perf-boxes">
-          <div className="gd-perf-box">
-            <span className="gd-perf-box-label">{homeLabel}</span>
-            <span className="gd-perf-box-record" style={{ color: 'var(--accent-green)' }}>
-              {calcRecord(last5Home)}
-            </span>
-            <span className="gd-perf-box-sub">Last 5</span>
-          </div>
-          <div className="gd-perf-box">
-            <span className="gd-perf-box-label">{awayLabel}</span>
-            <span className="gd-perf-box-record" style={{ color: 'var(--accent-red)' }}>
-              {calcRecord(last5Away)}
-            </span>
-            <span className="gd-perf-box-sub">Last 5</span>
-          </div>
-        </div>
+        {h2hGames.length > 0 ? (
+          <>
+            {/* H2H Record boxes */}
+            <div className="gd-perf-boxes">
+              <div className="gd-perf-box">
+                <span className="gd-perf-box-label">{homeLabel}</span>
+                <span className="gd-perf-box-record" style={{ color: 'var(--accent-green)' }}>
+                  {h2hGames.filter((g) => (g.perspective === 'home' && g.result === 'W') || (g.perspective === 'away' && g.result !== 'W')).length}W
+                </span>
+                <span className="gd-perf-box-sub">vs {awayAbbr}</span>
+              </div>
+              <div className="gd-perf-box">
+                <span className="gd-perf-box-label">{awayLabel}</span>
+                <span className="gd-perf-box-record" style={{ color: 'var(--accent-red)' }}>
+                  {h2hGames.filter((g) => (g.perspective === 'away' && g.result === 'W') || (g.perspective === 'home' && g.result !== 'W')).length}W
+                </span>
+                <span className="gd-perf-box-sub">vs {homeAbbr}</span>
+              </div>
+            </div>
 
-        {/* Recent Scoring Chart */}
-        {(last5Home.length > 0 || last5Away.length > 0) && (
-          <div className="gd-chart-section">
-            <h4 className="gd-chart-title">
-              <TrendingUp size={13} />
-              Recent Scoring
-            </h4>
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart
-                data={[...Array(Math.max(last5Home.length, last5Away.length))].map((_, i) => ({
-                  name: `G${i + 1}`,
-                  [homeLabel]: last5Home[last5Home.length - 1 - i]?.goals_for ?? 0,
-                  [awayLabel]: last5Away[last5Away.length - 1 - i]?.goals_for ?? 0,
-                }))}
-                margin={{ top: 5, right: 5, left: -20, bottom: 5 }}
-              >
-                <XAxis dataKey="name" tick={{ fill: '#a0a0b8', fontSize: 11 }} />
-                <YAxis tick={{ fill: '#a0a0b8', fontSize: 11 }} />
-                <Tooltip
-                  contentStyle={{ background: '#1a1a2e', border: '1px solid #2a2a4a', borderRadius: 8 }}
-                  labelStyle={{ color: '#e8e8f0' }}
-                />
-                <Legend wrapperStyle={{ fontSize: 11, color: '#a0a0b8' }} />
-                <Bar dataKey={homeLabel} fill="#00ff88" radius={[3, 3, 0, 0]} />
-                <Bar dataKey={awayLabel} fill="#ff5252" radius={[3, 3, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+            {/* H2H Scoring Chart */}
+            <div className="gd-chart-section">
+              <h4 className="gd-chart-title">
+                <TrendingUp size={13} />
+                H2H Scoring
+              </h4>
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart
+                  data={[...h2hGames].reverse().map((g, i) => {
+                    const dateStr = g.game_date || g.date;
+                    const label = dateStr ? format(new Date(dateStr), 'M/d') : `G${i + 1}`;
+                    return {
+                      name: label,
+                      [homeLabel]: g.perspective === 'home' ? (g.goals_for ?? 0) : (g.goals_against ?? 0),
+                      [awayLabel]: g.perspective === 'away' ? (g.goals_for ?? 0) : (g.goals_against ?? 0),
+                    };
+                  })}
+                  margin={{ top: 5, right: 5, left: -20, bottom: 5 }}
+                >
+                  <XAxis dataKey="name" tick={{ fill: '#a0a0b8', fontSize: 11 }} />
+                  <YAxis tick={{ fill: '#a0a0b8', fontSize: 11 }} />
+                  <Tooltip
+                    contentStyle={{ background: '#1a1a2e', border: '1px solid #2a2a4a', borderRadius: 8 }}
+                    labelStyle={{ color: '#e8e8f0' }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 11, color: '#a0a0b8' }} />
+                  <Bar dataKey={homeLabel} fill="#00ff88" radius={[3, 3, 0, 0]} />
+                  <Bar dataKey={awayLabel} fill="#ff5252" radius={[3, 3, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </>
+        ) : (
+          <>
+            {/* Fallback: show independent recent games if no H2H data */}
+            <div className="gd-perf-boxes">
+              <div className="gd-perf-box">
+                <span className="gd-perf-box-label">{homeLabel}</span>
+                <span className="gd-perf-box-record" style={{ color: 'var(--accent-green)' }}>
+                  {calcRecord(last5Home)}
+                </span>
+                <span className="gd-perf-box-sub">Last 5</span>
+              </div>
+              <div className="gd-perf-box">
+                <span className="gd-perf-box-label">{awayLabel}</span>
+                <span className="gd-perf-box-record" style={{ color: 'var(--accent-red)' }}>
+                  {calcRecord(last5Away)}
+                </span>
+                <span className="gd-perf-box-sub">Last 5</span>
+              </div>
+            </div>
+
+            <div className="gd-chart-section">
+              <h4 className="gd-chart-title">
+                <TrendingUp size={13} />
+                Recent Scoring
+              </h4>
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart
+                  data={[...Array(Math.max(last5Home.length, last5Away.length))].map((_, i) => ({
+                    name: `G${i + 1}`,
+                    [homeLabel]: last5Home[last5Home.length - 1 - i]?.goals_for ?? 0,
+                    [awayLabel]: last5Away[last5Away.length - 1 - i]?.goals_for ?? 0,
+                  }))}
+                  margin={{ top: 5, right: 5, left: -20, bottom: 5 }}
+                >
+                  <XAxis dataKey="name" tick={{ fill: '#a0a0b8', fontSize: 11 }} />
+                  <YAxis tick={{ fill: '#a0a0b8', fontSize: 11 }} />
+                  <Tooltip
+                    contentStyle={{ background: '#1a1a2e', border: '1px solid #2a2a4a', borderRadius: 8 }}
+                    labelStyle={{ color: '#e8e8f0' }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 11, color: '#a0a0b8' }} />
+                  <Bar dataKey={homeLabel} fill="#00ff88" radius={[3, 3, 0, 0]} />
+                  <Bar dataKey={awayLabel} fill="#ff5252" radius={[3, 3, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+
+            <div className="gd-h2h-warning" style={{ marginTop: '0.75rem' }}>
+              No head-to-head matchups found in recent games. Showing independent form.
+            </div>
+          </>
         )}
       </div>
     </div>
