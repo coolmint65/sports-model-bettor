@@ -466,7 +466,7 @@ function AIAnalysis({ game, homeAbbr, awayAbbr, homeTeamLabel, awayTeamLabel }) 
     <div className="gd-section-card gd-analysis-card">
       <div className="gd-section-header">
         <Target size={16} />
-        <h3>AI Match Analysis</h3>
+        <h3>Match Analysis</h3>
         {isQualified && (
           <span className="gd-qualified-badge">
             <CheckSquare size={12} />
@@ -906,12 +906,6 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
                       {homeRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) > ouLine).length}-{homeRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) <= ouLine).length}
                     </span>
                   </div>
-                  <div className="gd-trends-row">
-                    <span className="gd-trends-label">Under {ouLine}</span>
-                    <span className="gd-trends-val">
-                      {homeRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) < ouLine).length}-{homeRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) >= ouLine).length}
-                    </span>
-                  </div>
                 </div>
               )}
             </div>
@@ -965,12 +959,6 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
                     <span className="gd-trends-label">Over {ouLine}</span>
                     <span className="gd-trends-val">
                       {awayRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) > ouLine).length}-{awayRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) <= ouLine).length}
-                    </span>
-                  </div>
-                  <div className="gd-trends-row">
-                    <span className="gd-trends-label">Under {ouLine}</span>
-                    <span className="gd-trends-val">
-                      {awayRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) < ouLine).length}-{awayRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) >= ouLine).length}
                     </span>
                   </div>
                 </div>
@@ -1177,7 +1165,7 @@ function RecentFormAndH2H({ game, homeAbbr, awayAbbr }) {
             </div>
 
             {h2h.last_meeting && (
-              <div className="gd-h2h-last">Last meeting: {h2h.last_meeting}</div>
+              <div className="gd-h2h-last">Last meeting: {format(new Date(h2h.last_meeting), 'yyyy-MM-dd')}</div>
             )}
           </div>
         )}

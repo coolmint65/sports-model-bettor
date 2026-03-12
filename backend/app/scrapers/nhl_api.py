@@ -191,8 +191,8 @@ class NHLScraper(BaseScraper):
                 "goals_against": entry.get("goalAgainst", 0),
                 "goals_for_per_game": entry.get("goalsForPctg", None),
                 "goals_against_per_game": entry.get("goalsAgainstPctg", None),
-                "power_play_pct": round(float(entry["powerPlayPctg"]) * 100, 2) if entry.get("powerPlayPctg") else None,
-                "penalty_kill_pct": round(float(entry["penaltyKillPctg"]) * 100, 2) if entry.get("penaltyKillPctg") else None,
+                "power_play_pct": round(float(entry["powerPlayPctg"]) * 100, 2) if entry.get("powerPlayPctg") is not None else None,
+                "penalty_kill_pct": round(float(entry["penaltyKillPctg"]) * 100, 2) if entry.get("penaltyKillPctg") is not None else None,
                 "regulation_wins": entry.get("regulationWins", 0),
                 "regulation_plus_ot_wins": entry.get(
                     "regulationPlusOtWins", 0
@@ -214,7 +214,7 @@ class NHLScraper(BaseScraper):
                 "wins_in_shootout": entry.get("winsInShootout", 0),
                 "shots_for_per_game": _safe_float(entry.get("shotsForPerGame")),
                 "shots_against_per_game": _safe_float(entry.get("shotsAgainstPerGame")),
-                "faceoff_win_pct": round(float(entry["faceoffWinPctg"]) * 100, 2) if entry.get("faceoffWinPctg") else _safe_float(entry.get("faceoffWinPct")),
+                "faceoff_win_pct": round(float(entry["faceoffWinPctg"]) * 100, 2) if entry.get("faceoffWinPctg") is not None else _safe_float(entry.get("faceoffWinPct")),
             }
         except Exception as exc:
             logger.warning("Failed to parse standing entry: %s", exc)
@@ -272,9 +272,9 @@ class NHLScraper(BaseScraper):
                     continue
 
                 # NHL API returns PP%/PK% as decimals (0.214) or percentages (21.4)
-                pp = team.get("powerPlayPct") or team.get("powerPlayPctg")
-                pk = team.get("penaltyKillPct") or team.get("penaltyKillPctg")
-                fo = team.get("faceoffWinPct") or team.get("faceoffWinPctg")
+                pp = team.get("powerPlayPct") if team.get("powerPlayPct") is not None else team.get("powerPlayPctg")
+                pk = team.get("penaltyKillPct") if team.get("penaltyKillPct") is not None else team.get("penaltyKillPctg")
+                fo = team.get("faceoffWinPct") if team.get("faceoffWinPct") is not None else team.get("faceoffWinPctg")
 
                 # Normalize: if value <= 1.0, it's a decimal — convert to percentage
                 def to_pct(v):
@@ -562,11 +562,11 @@ class NHLScraper(BaseScraper):
                 goals_against=ga,
                 goals_for_per_game=round(gf / gp, 2) if gp > 0 else None,
                 goals_against_per_game=round(ga / gp, 2) if gp > 0 else None,
-                power_play_pct=entry.get("power_play_pct") or team_summary.get("power_play_pct"),
-                penalty_kill_pct=entry.get("penalty_kill_pct") or team_summary.get("penalty_kill_pct"),
-                shots_for_per_game=entry.get("shots_for_per_game") or team_summary.get("shots_for_per_game"),
-                shots_against_per_game=entry.get("shots_against_per_game") or team_summary.get("shots_against_per_game"),
-                faceoff_win_pct=entry.get("faceoff_win_pct") or team_summary.get("faceoff_win_pct"),
+                power_play_pct=entry.get("power_play_pct") if entry.get("power_play_pct") is not None else team_summary.get("power_play_pct"),
+                penalty_kill_pct=entry.get("penalty_kill_pct") if entry.get("penalty_kill_pct") is not None else team_summary.get("penalty_kill_pct"),
+                shots_for_per_game=entry.get("shots_for_per_game") if entry.get("shots_for_per_game") is not None else team_summary.get("shots_for_per_game"),
+                shots_against_per_game=entry.get("shots_against_per_game") if entry.get("shots_against_per_game") is not None else team_summary.get("shots_against_per_game"),
+                faceoff_win_pct=entry.get("faceoff_win_pct") if entry.get("faceoff_win_pct") is not None else team_summary.get("faceoff_win_pct"),
                 home_record=f"{home_w}-{home_l}-{home_otl}",
                 away_record=f"{away_w}-{away_l}-{away_otl}",
                 record_last_10=f"{l10_w}-{l10_l}-{l10_otl}",

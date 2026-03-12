@@ -275,6 +275,36 @@ async def _get_team_form(team: Team, session: AsyncSession) -> TeamForm:
         form.shots_against_per_game = stats.shots_against_per_game
         form.faceoff_win_pct = stats.faceoff_win_pct
 
+    # Fallback: compute shots per game from Game records if still missing
+    if form.shots_for_per_game is None or form.shots_against_per_game is None:
+        shot_result = await session.execute(
+            select(Game)
+            .where(
+                or_(Game.home_team_id == team.id, Game.away_team_id == team.id),
+                func.lower(Game.status).in_(GAME_FINAL_STATUSES),
+                Game.home_shots.isnot(None),
+                Game.away_shots.isnot(None),
+            )
+            .order_by(Game.date.desc())
+            .limit(30)
+        )
+        recent_games = shot_result.scalars().all()
+        if recent_games:
+            shots_for_total = 0
+            shots_against_total = 0
+            for g in recent_games:
+                if g.home_team_id == team.id:
+                    shots_for_total += g.home_shots
+                    shots_against_total += g.away_shots
+                else:
+                    shots_for_total += g.away_shots
+                    shots_against_total += g.home_shots
+            n = len(recent_games)
+            if form.shots_for_per_game is None:
+                form.shots_for_per_game = round(shots_for_total / n, 1)
+            if form.shots_against_per_game is None:
+                form.shots_against_per_game = round(shots_against_total / n, 1)
+
     return form
 
 
