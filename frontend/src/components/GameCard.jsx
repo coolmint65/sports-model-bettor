@@ -7,6 +7,7 @@ import {
   Radio,
   Calendar,
   Minus,
+  Target,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import {
@@ -306,6 +307,22 @@ function GameCard({ game, section, medal }) {
           )}
         </div>
       </div>
+
+      {/* Pick summary bar */}
+      {topPick && pickBetType && (
+        <div className="dc-pick-bar">
+          <Target size={13} />
+          <span className="dc-pick-bar-text">
+            <strong>
+              {pickIsHome ? homeAbbr : pickIsAway ? awayAbbr : ''}{' '}
+              {pickBetType === 'ml' ? 'ML' : pickBetType === 'spread' ? 'Spread' : pickBetType === 'total' ? (pickIsOver ? 'Over' : 'Under') + ' ' + (ouLine || '') : pickBetType.toUpperCase()}
+            </strong>
+          </span>
+          {confidence != null && (
+            <span className="dc-pick-bar-conf">{Math.round(confidence)}%</span>
+          )}
+        </div>
+      )}
 
       {/* Odds summary pills - flat horizontal row */}
       {odds && (

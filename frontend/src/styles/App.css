@@ -4750,6 +4750,30 @@ a:hover {
   white-space: nowrap;
 }
 
+/* Pick summary bar */
+.dc-pick-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--accent-green);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 255, 136, 0.06);
+  color: var(--accent-green);
+  font-size: 0.78rem;
+}
+
+.dc-pick-bar-text {
+  flex: 1;
+  color: var(--accent-green);
+}
+
+.dc-pick-bar-conf {
+  color: var(--accent-green);
+  font-weight: 700;
+  font-family: var(--font-mono);
+}
+
 .dc-odds-pill-active {
   border-color: var(--accent-green);
   background: rgba(0, 255, 136, 0.08);
