@@ -322,7 +322,7 @@ function GameCard({ game, section, medal }) {
           )}
           {spreadLine != null && (
             <div className={`dc-odds-pill ${pickBetType === 'spread' ? 'dc-odds-pill-active' : ''}`}>
-              <span className="dc-odds-label">SPREAD</span>
+              <span className="dc-odds-label">PL</span>
               <span className="dc-odds-val">
                 <span className={pickIsAway && pickBetType === 'spread' ? 'dc-pick-highlight' : ''}>{awaySpreadLine != null ? (awaySpreadLine > 0 ? '+' : '') + awaySpreadLine : `-${Math.abs(spreadLine)}`}</span>
                 <span className="dc-odds-sep">/</span>
@@ -333,11 +333,8 @@ function GameCard({ game, section, medal }) {
           {ouLine != null && (
             <div className={`dc-odds-pill ${pickBetType === 'total' ? 'dc-odds-pill-active' : ''}`}>
               <span className="dc-odds-label">O/U</span>
-              <span className="dc-odds-val">
-                <span className={pickIsOver ? 'dc-pick-highlight' : ''}>O</span>
-                <span className="dc-odds-sep">/</span>
-                <span className={pickIsUnder ? 'dc-pick-highlight' : ''}>U</span>
-                {' '}{ouLine}
+              <span className={`dc-odds-val ${pickBetType === 'total' ? 'dc-pick-highlight' : ''}`}>
+                {ouLine}
               </span>
             </div>
           )}

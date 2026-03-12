@@ -51,6 +51,7 @@ class GameTopPick(BaseModel):
     prediction_value: Optional[str] = None
     confidence: Optional[float] = None
     edge: Optional[float] = None
+    composite_score: Optional[float] = None
     is_fallback: bool = False
     outcome: Optional[str] = None  # "win", "loss", or None (pending/in-progress)
     reasoning: Optional[str] = None

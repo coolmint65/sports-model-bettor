@@ -234,7 +234,6 @@ function OddsCards({ game, homeAbbr, awayAbbr, pickBetType, pickIsHome, pickIsAw
           <div className="gd-odds-card-header">
             <Target size={14} />
             <span>Moneyline</span>
-            {pickBetType === 'ml' && <span className="gd-odds-pick-tag">AI PICK</span>}
           </div>
           <div className="gd-odds-card-body">
             <div className={`gd-odds-side ${pickIsHome && pickBetType === 'ml' ? 'gd-odds-side-picked' : ''}`}>
@@ -256,7 +255,6 @@ function OddsCards({ game, homeAbbr, awayAbbr, pickBetType, pickIsHome, pickIsAw
           <div className="gd-odds-card-header">
             <TrendingUp size={14} />
             <span>Spread</span>
-            {pickBetType === 'spread' && <span className="gd-odds-pick-tag">AI PICK</span>}
           </div>
           {locked ? (
             <div className="gd-odds-locked-body"><Lock size={16} /></div>
@@ -288,7 +286,6 @@ function OddsCards({ game, homeAbbr, awayAbbr, pickBetType, pickIsHome, pickIsAw
           <div className="gd-odds-card-header">
             <Zap size={14} />
             <span>Total (O/U)</span>
-            {pickBetType === 'total' && <span className="gd-odds-pick-tag">AI PICK</span>}
           </div>
           {locked ? (
             <div className="gd-odds-locked-body"><Lock size={16} /></div>
@@ -433,21 +430,34 @@ function AIAnalysis({ game, homeAbbr, awayAbbr, homeTeamLabel, awayTeamLabel }) 
   const pickIsHomeTeam = pickLower.includes('home') || pickValue.includes(homeAbbr);
   const pickIsAwayTeam = pickLower.includes('away') || pickValue.includes(awayAbbr);
 
+  const odds = game.odds || {};
   let pickTeam, pickSide;
   if (pickBetType === 'total') {
-    // For totals, show "Over 5.5" / "Under 5.5" instead of raw "over_5.5"
     const isOver = pickLower.includes('over');
     const line = pickValue.replace(/^(over|under)[_\s]?/i, '');
     pickTeam = `${isOver ? 'Over' : 'Under'} ${line}`;
-    pickSide = '';
+    pickSide = '(Total)';
+  } else if (pickBetType === 'spread') {
+    // Spread pick - show team name + spread line
+    if (pickIsHomeTeam) {
+      const line = odds.home_spread_line;
+      pickTeam = `${homeTeamLabel} ${line != null ? (line > 0 ? '+' : '') + line : ''}`.trim();
+      pickSide = '(Spread)';
+    } else if (pickIsAwayTeam) {
+      const line = odds.away_spread_line;
+      pickTeam = `${awayTeamLabel} ${line != null ? (line > 0 ? '+' : '') + line : ''}`.trim();
+      pickSide = '(Spread)';
+    } else {
+      pickTeam = pickValue.replace(/_/g, ' ');
+      pickSide = '(Spread)';
+    }
   } else if (pickIsHomeTeam) {
     pickTeam = homeTeamLabel;
-    pickSide = '(Home)';
+    pickSide = '(Moneyline)';
   } else if (pickIsAwayTeam) {
     pickTeam = awayTeamLabel;
-    pickSide = '(Away)';
+    pickSide = '(Moneyline)';
   } else {
-    // For spread picks like "NSH_-1.5", clean it up
     pickTeam = pickValue.replace(/_/g, ' ');
     pickSide = '';
   }

@@ -152,8 +152,9 @@ function Dashboard() {
       const confB = b.top_pick?.confidence != null ? confidencePct(b.top_pick.confidence) : 0;
       const edgeA = a.top_pick?.edge || 0;
       const edgeB = b.top_pick?.edge || 0;
-      const scoreA = 0.6 * confA + 0.4 * (Math.min(edgeA, 0.25) / 0.25) * 100;
-      const scoreB = 0.6 * confB + 0.4 * (Math.min(edgeB, 0.25) / 0.25) * 100;
+      // Primary sort: confidence (quality tier). Secondary: edge as tiebreaker.
+      const scoreA = 0.85 * confA + 0.15 * (Math.min(edgeA, 0.25) / 0.25) * 100;
+      const scoreB = 0.85 * confB + 0.15 * (Math.min(edgeB, 0.25) / 0.25) * 100;
       return scoreB - scoreA;
     });
   }, [games]);
@@ -164,9 +165,9 @@ function Dashboard() {
     const scored = prematchGames
       .filter((g) => g.top_pick?.confidence != null)
       .map((g) => {
-        const conf = g.top_pick.confidence;
+        const conf = confidencePct(g.top_pick.confidence);
         const edge = Math.min(g.top_pick.edge || 0, 0.25) / 0.25;
-        const score = 0.45 * conf + 0.35 * edge + 0.20 * 0.5;
+        const score = 0.85 * conf + 0.15 * edge * 100;
         return { gameId: g.id || g.game_id, score };
       })
       .sort((a, b) => b.score - a.score);

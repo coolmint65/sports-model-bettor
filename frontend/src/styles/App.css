@@ -4737,19 +4737,17 @@ a:hover {
 }
 
 .dc-odds-pill {
-  flex: 1 1 0;
-  min-width: 80px;
+  flex: 1 1 auto;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  padding: 8px 6px;
+  gap: 4px;
+  padding: 6px 8px;
   background: var(--bg-tertiary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-sm);
-  font-size: 0.78rem;
+  font-size: 0.75rem;
   white-space: nowrap;
-  overflow: hidden;
 }
 
 .dc-odds-pill-active {
