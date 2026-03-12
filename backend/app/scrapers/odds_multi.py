@@ -133,10 +133,12 @@ def _map_team(name: str) -> str:
     for full_name, code in _COMMON_TEAM_MAP.items():
         if full_name.split()[-1].lower() == mascot.lower():
             return code
-    # Log unmapped name once per unique name for debugging
+    # Log unmapped name once per unique name at debug level.
+    # Non-NHL teams from sportsbook APIs (NCAAB, etc.) are expected
+    # noise and don't warrant warning-level logs.
     if stripped not in _unmapped_logged:
         _unmapped_logged.add(stripped)
-        logger.warning("UNMAPPED TEAM NAME: %r — add to _COMMON_TEAM_MAP", stripped)
+        logger.debug("UNMAPPED TEAM NAME: %r — add to _COMMON_TEAM_MAP", stripped)
     return ""
 
 
@@ -473,11 +475,18 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
                         away = team_short2
 
                     if not home or not away:
-                        logger.warning(
+                        logger.debug(
                             "DraftKings: could not extract teams from event %s "
                             "(name=%r, short1=%r, short2=%r)",
                             eid, name, team_short1, team_short2,
                         )
+                        continue
+
+                    # Skip non-NHL events early — if neither team maps to
+                    # an NHL abbreviation, this is likely NCAAB or another
+                    # sport that leaked into the response.
+                    if not _map_team(home) or not _map_team(away):
+                        continue
 
                     start_time = ev.get("startDate", "")
                     event_map[eid] = {
@@ -813,6 +822,10 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
                 parts = name.split(" v ")
                 home = parts[0].strip()
                 away = parts[1].strip()
+
+            # Skip non-NHL events early (e.g. NCAAB leaking through)
+            if not home or not away or not _map_team(home) or not _map_team(away):
+                continue
 
             event_info[eid] = {"home": home, "away": away, "start": open_date}
 

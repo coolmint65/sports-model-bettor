@@ -9,7 +9,7 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -1513,6 +1513,23 @@ class NHLScraper(BaseScraper):
             Number of games synced.
         """
         logger.info("Syncing historical season: %s", season)
+
+        # Check if we already have substantial data for this season.
+        # A full NHL season has ~1312 regular-season games.  If we
+        # already have 200+, the season is sufficiently populated and
+        # we can skip the expensive per-team API calls entirely.
+        existing_count_result = await db.execute(
+            select(func.count(Game.id)).where(
+                Game.season == season,
+            )
+        )
+        existing_count = existing_count_result.scalar() or 0
+        if existing_count >= 200:
+            logger.info(
+                "Historical season %s already has %d games — skipping sync",
+                season, existing_count,
+            )
+            return 0
 
         # Get all teams from DB
         result = await db.execute(
