@@ -7,6 +7,7 @@ import {
   Radio,
   Calendar,
   Minus,
+  Target,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import {
@@ -240,6 +241,13 @@ function GameCard({ game, section, medal }) {
   const pickIsHome = pickValue === 'home' || pickValue.includes(homeAbbr.toLowerCase());
   const pickIsAway = pickValue === 'away' || pickValue.includes(awayAbbr.toLowerCase());
 
+  // Build pick label for display
+  const pickTeamAbbr = pickIsHome ? homeAbbr : pickIsAway ? awayAbbr : null;
+  const pickTypeLabel = pickBetType === 'ml' ? 'ML'
+    : pickBetType === 'spread' ? 'Spread'
+    : pickBetType === 'total' ? 'Total'
+    : pickBetType.toUpperCase();
+
   return (
     <div className="dc-card" onClick={handleClick} role="button" tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && handleClick()}>
       {/* Rank badge */}
@@ -303,39 +311,46 @@ function GameCard({ game, section, medal }) {
         </div>
       </div>
 
-      {/* Odds summary pills */}
+      {/* AI Pick callout */}
+      {pickTeamAbbr && (
+        <div className="dc-pick-callout">
+          <Target size={13} />
+          <span className="dc-pick-text">AI Pick: <strong>{pickTeamAbbr} {pickTypeLabel}</strong></span>
+          {confidence != null && (
+            <span className="dc-pick-conf">{Math.round(confidence)}%</span>
+          )}
+        </div>
+      )}
+
+      {/* Odds summary pills - flat horizontal row */}
       {odds && (
         <div className="dc-odds-row">
           {awayML != null && homeML != null && (
-            <div className="dc-odds-pill">
-              <TrendingUp size={11} />
+            <div className={`dc-odds-pill ${pickBetType === 'ml' ? 'dc-odds-pill-active' : ''}`}>
               <span className="dc-odds-label">ML</span>
               <span className="dc-odds-val">
                 <span className={pickIsAway && pickBetType === 'ml' ? 'dc-pick-highlight' : ''}>{formatAmericanOdds(awayML)}</span>
-                {' / '}
+                <span className="dc-odds-sep">/</span>
                 <span className={pickIsHome && pickBetType === 'ml' ? 'dc-pick-highlight' : ''}>{formatAmericanOdds(homeML)}</span>
               </span>
             </div>
           )}
           {spreadLine != null && (
-            <div className="dc-odds-pill">
-              <TrendingUp size={11} />
+            <div className={`dc-odds-pill ${pickBetType === 'spread' ? 'dc-odds-pill-active' : ''}`}>
               <span className="dc-odds-label">SPREAD</span>
               <span className="dc-odds-val">
                 <span className={pickIsAway && pickBetType === 'spread' ? 'dc-pick-highlight' : ''}>{awaySpreadLine != null ? (awaySpreadLine > 0 ? '+' : '') + awaySpreadLine : `-${Math.abs(spreadLine)}`}</span>
-                {' / '}
+                <span className="dc-odds-sep">/</span>
                 <span className={pickIsHome && pickBetType === 'spread' ? 'dc-pick-highlight' : ''}>{spreadLine > 0 ? '+' : ''}{spreadLine}</span>
               </span>
             </div>
           )}
           {ouLine != null && (
-            <div className="dc-odds-pill">
-              <TrendingUp size={11} />
+            <div className={`dc-odds-pill ${pickBetType === 'total' ? 'dc-odds-pill-active' : ''}`}>
               <span className="dc-odds-label">O/U</span>
               <span className="dc-odds-val">
                 <span className={pickValue.includes('over') && pickBetType === 'total' ? 'dc-pick-highlight' : ''}>O</span>
-                {' '}
-                {ouLine}
+                {' '}{ouLine}
               </span>
             </div>
           )}

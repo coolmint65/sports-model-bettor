@@ -202,6 +202,9 @@ class NHLScraper(BaseScraper):
                 "wins_in_regulation": entry.get("winsInRegulation", 0),
                 "wins_in_ot": entry.get("winsInOt", 0),
                 "wins_in_shootout": entry.get("winsInShootout", 0),
+                "shots_for_per_game": entry.get("shotsForPerGame", None),
+                "shots_against_per_game": entry.get("shotsAgainstPerGame", None),
+                "faceoff_win_pct": entry.get("faceoffWinPct", None) or entry.get("faceoffWinPctg", None),
             }
         except Exception as exc:
             logger.warning("Failed to parse standing entry: %s", exc)
@@ -486,6 +489,9 @@ class NHLScraper(BaseScraper):
                 goals_against_per_game=round(ga / gp, 2) if gp > 0 else None,
                 power_play_pct=entry.get("power_play_pct"),
                 penalty_kill_pct=entry.get("penalty_kill_pct"),
+                shots_for_per_game=entry.get("shots_for_per_game"),
+                shots_against_per_game=entry.get("shots_against_per_game"),
+                faceoff_win_pct=entry.get("faceoff_win_pct"),
                 home_record=f"{home_w}-{home_l}-{home_otl}",
                 away_record=f"{away_w}-{away_l}-{away_otl}",
                 record_last_10=f"{l10_w}-{l10_l}-{l10_otl}",

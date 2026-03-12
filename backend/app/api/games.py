@@ -668,8 +668,8 @@ async def get_game_details(
     home_goalies = await _get_team_goalies(game.home_team_id, session)
     away_goalies = await _get_team_goalies(game.away_team_id, session)
     predictions = await _get_game_predictions(game.id, session, game=game)
-    home_recent = await _get_recent_games(game.home_team_id, session, limit=20)
-    away_recent = await _get_recent_games(game.away_team_id, session, limit=20)
+    home_recent = await _get_recent_games(game.home_team_id, session, limit=50)
+    away_recent = await _get_recent_games(game.away_team_id, session, limit=50)
 
     # Build period scores from individual columns
     parsed_period_scores = None

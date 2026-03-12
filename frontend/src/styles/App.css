@@ -4695,10 +4695,45 @@ a:hover {
   color: var(--text-muted);
 }
 
+/* AI Pick callout */
+.dc-pick-callout {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  background: rgba(0, 255, 136, 0.06);
+  border: 1px solid rgba(0, 255, 136, 0.2);
+  border-radius: var(--radius-sm);
+  margin-bottom: 4px;
+}
+
+.dc-pick-callout svg {
+  color: var(--accent-green);
+  flex-shrink: 0;
+}
+
+.dc-pick-text {
+  font-size: 0.84rem;
+  color: var(--text-secondary);
+}
+
+.dc-pick-text strong {
+  color: var(--accent-green);
+}
+
+.dc-pick-conf {
+  margin-left: auto;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--accent-green);
+  font-family: var(--font-mono);
+}
+
 /* Odds summary pills */
 .dc-odds-row {
   display: flex;
-  gap: 6px;
+  flex-wrap: nowrap;
+  gap: 8px;
 }
 
 .dc-odds-pill {
@@ -4706,30 +4741,37 @@ a:hover {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  padding: 6px 8px;
+  gap: 5px;
+  padding: 9px 10px;
   background: var(--bg-tertiary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-sm);
-  font-size: 0.68rem;
+  font-size: 0.82rem;
 }
 
-.dc-odds-pill svg {
-  color: var(--text-dim);
-  flex-shrink: 0;
+.dc-odds-pill-active {
+  border-color: rgba(0, 255, 136, 0.3);
+  background: rgba(0, 255, 136, 0.04);
 }
 
 .dc-odds-label {
   color: var(--text-muted);
-  font-weight: 600;
+  font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.3px;
+  font-size: 0.72rem;
 }
 
 .dc-odds-val {
-  color: var(--text-secondary);
+  color: var(--text-primary);
   font-family: var(--font-mono);
   font-weight: 600;
+  font-size: 0.84rem;
+}
+
+.dc-odds-sep {
+  color: var(--text-dim);
+  margin: 0 1px;
 }
 
 /* Pick highlight in odds pills */
@@ -4820,8 +4862,7 @@ a:hover {
   position: relative;
 }
 
-.gd-badge-home .gd-badge-box,
-.gd-team-home .gd-badge-box {
+.gd-badge-picked {
   border-color: var(--accent-green);
 }
 
@@ -5403,15 +5444,23 @@ a:hover {
 }
 
 /* ─── Market Interest ──────────────────────────────────── */
+.gd-section-desc {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+
 .gd-market-content {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
 .gd-market-pcts {
   display: flex;
-  justify-content: space-around;
+  align-items: center;
+  gap: 12px;
   padding: 12px 0;
 }
 
@@ -5420,6 +5469,7 @@ a:hover {
   flex-direction: column;
   align-items: center;
   gap: 4px;
+  flex: 0 0 auto;
 }
 
 .gd-market-abbr {
@@ -5429,35 +5479,53 @@ a:hover {
 }
 
 .gd-market-pct {
-  font-size: 2rem;
+  font-size: 1.6rem;
   font-weight: 800;
   color: var(--text-primary);
   font-family: var(--font-mono);
 }
 
-.gd-market-callout {
+.gd-market-ml {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+}
+
+.gd-market-bar-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+}
+
+.gd-market-bar {
+  width: 100%;
+  height: 8px;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.gd-market-bar-home {
+  height: 100%;
+  background: var(--accent-green);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.gd-market-explainer {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  padding: 14px 18px;
-  background: var(--accent-blue-bg);
-  border: 1px solid rgba(79, 195, 247, 0.15);
-  border-radius: var(--radius-md);
-  font-size: 0.85rem;
-  color: var(--text-primary);
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-sm);
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
 }
 
-.gd-market-callout strong {
-  display: block;
-}
-
-.gd-market-callout-sub {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  margin-top: 4px;
-}
-
-.gd-market-callout svg {
+.gd-market-explainer svg {
   color: var(--accent-blue);
   flex-shrink: 0;
   margin-top: 2px;
@@ -5577,7 +5645,7 @@ a:hover {
 .gd-trends-content {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
 .gd-trends-teams {
@@ -5589,42 +5657,41 @@ a:hover {
 .gd-trends-team {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-}
-
-.gd-trends-team-label {
-  font-size: 0.82rem;
-  color: var(--text-muted);
-  font-weight: 600;
-}
-
-.gd-trends-ats {
-  display: flex;
-  align-items: center;
   gap: 8px;
 }
 
-.gd-trends-label {
-  font-size: 0.72rem;
+.gd-trends-team-label {
+  font-size: 0.85rem;
+  color: var(--text-primary);
   font-weight: 700;
-  text-transform: uppercase;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.gd-trends-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.gd-trends-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+}
+
+.gd-trends-label {
+  font-size: 0.78rem;
+  font-weight: 600;
   color: var(--text-muted);
 }
 
 .gd-trends-val {
   font-family: var(--font-mono);
   font-weight: 700;
-  font-size: 0.95rem;
+  font-size: 0.85rem;
   color: var(--text-primary);
-  background: var(--bg-tertiary);
-  padding: 2px 10px;
-  border-radius: 4px;
-  border: 1px solid var(--border-primary);
-}
-
-.gd-trends-detail {
-  font-size: 0.78rem;
-  color: var(--text-muted);
 }
 
 /* ─── Venue & Conditions ──────────────────────────────── */

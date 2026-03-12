@@ -97,7 +97,7 @@ function formatPeriodLabel(game) {
 }
 
 /* ──────────────────── Header Section ──────────────────── */
-function GameHeader({ game, awayAbbr, homeAbbr, awayTeamLabel, homeTeamLabel, confidence, isLive, venue }) {
+function GameHeader({ game, awayAbbr, homeAbbr, awayTeamLabel, homeTeamLabel, confidence, isLive, venue, pickIsHome, pickIsAway }) {
   const confLabel = confidence != null ? getConfidenceLabel(confidence) : null;
 
   return (
@@ -105,7 +105,7 @@ function GameHeader({ game, awayAbbr, homeAbbr, awayTeamLabel, homeTeamLabel, co
       <div className="gd-header-main">
         {/* Home team badge */}
         <div className="gd-team-badge gd-team-home">
-          <div className="gd-badge-box gd-badge-home">
+          <div className={`gd-badge-box ${pickIsHome ? 'gd-badge-picked' : ''}`}>
             {teamLogo(game.home_team || game.home_team_form) ? (
               <img
                 src={teamLogo(game.home_team || game.home_team_form) || game.home_team_form?.logo_url}
@@ -165,7 +165,7 @@ function GameHeader({ game, awayAbbr, homeAbbr, awayTeamLabel, homeTeamLabel, co
 
         {/* Away team badge */}
         <div className="gd-team-badge gd-team-away">
-          <div className="gd-badge-box">
+          <div className={`gd-badge-box ${pickIsAway ? 'gd-badge-picked' : ''}`}>
             {teamLogo(game.away_team || game.away_team_form) ? (
               <img
                 src={teamLogo(game.away_team || game.away_team_form) || game.away_team_form?.logo_url}
@@ -590,32 +590,46 @@ function RiskAndMarket({ game, homeAbbr, awayAbbr, homeTeamLabel, awayTeamLabel 
         </div>
       </div>
 
-      {/* Market Interest Index */}
+      {/* Implied Probability */}
       <div className="gd-section-card">
         <div className="gd-section-header">
-          <TrendingUp size={16} />
-          <h3>Market Interest Index</h3>
+          <DollarSign size={16} />
+          <h3>Implied Probability</h3>
         </div>
+        <p className="gd-section-desc">
+          The odds imply how likely the market thinks each team is to win. These percentages are derived from the moneyline.
+        </p>
         <div className="gd-market-content">
           <div className="gd-market-pcts">
             <div className="gd-market-side">
               <span className="gd-market-abbr">{homeAbbr}</span>
               <span className="gd-market-pct">{homePct}%</span>
+              <span className="gd-market-ml">{formatAmericanOdds(homeML)}</span>
+            </div>
+            <div className="gd-market-bar-wrap">
+              <div className="gd-market-bar">
+                <div className="gd-market-bar-home" style={{ width: `${homePct}%` }} />
+              </div>
             </div>
             <div className="gd-market-side">
               <span className="gd-market-abbr">{awayAbbr}</span>
               <span className="gd-market-pct">{awayPct}%</span>
+              <span className="gd-market-ml">{formatAmericanOdds(awayML)}</span>
             </div>
           </div>
-          {Math.abs(homePct - awayPct) > 15 && (
-            <div className="gd-market-callout">
-              <Info size={13} />
-              <div>
-                <strong>Clear underdog value on {underdogTeam}</strong>
-                <div className="gd-market-callout-sub">Derived from league importance, team popularity, and event timing.</div>
-              </div>
-            </div>
-          )}
+          <div className="gd-market-explainer">
+            <Info size={13} />
+            <span>
+              {homePct > awayPct
+                ? `${homeTeamLabel} is the market favorite (${homePct}% implied win probability).`
+                : awayPct > homePct
+                  ? `${awayTeamLabel} is the market favorite (${awayPct}% implied win probability).`
+                  : 'Market sees this as a toss-up.'}
+              {Math.abs(homePct - awayPct) > 15
+                ? ` There may be value on ${underdogTeam} as the underdog.`
+                : ''}
+            </span>
+          </div>
         </div>
       </div>
     </div>
@@ -768,19 +782,52 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
           <div className="gd-trends-teams">
             <div className="gd-trends-team">
               <div className="gd-trends-team-label">{homeLabel}</div>
-              <div className="gd-trends-ats">
-                <span className="gd-trends-label">ATS</span>
-                <span className="gd-trends-val">{computeATS(homeRecent) || 'No data'}</span>
-              </div>
-              <div className="gd-trends-detail">
-                Overall record {home.wins || 0}-{home.losses || 0}-{home.ot_losses || 0}
+              <div className="gd-trends-rows">
+                <div className="gd-trends-row">
+                  <span className="gd-trends-label">Overall</span>
+                  <span className="gd-trends-val">{home.wins || 0}-{home.losses || 0}-{home.ot_losses || 0}</span>
+                </div>
+                <div className="gd-trends-row">
+                  <span className="gd-trends-label">Home</span>
+                  <span className="gd-trends-val">{home.home_record || '-'}</span>
+                </div>
+                <div className="gd-trends-row">
+                  <span className="gd-trends-label">Last 10</span>
+                  <span className="gd-trends-val">{home.record_last_10 || computeATS(homeRecent.slice(0, 10)) || '-'}</span>
+                </div>
+                <div className="gd-trends-row">
+                  <span className="gd-trends-label">Last 5</span>
+                  <span className="gd-trends-val">{computeATS(homeRecent.slice(0, 5)) || '-'}</span>
+                </div>
+                <div className="gd-trends-row">
+                  <span className="gd-trends-label">Streak</span>
+                  <span className="gd-trends-val">{getStreak(homeRecent)}</span>
+                </div>
               </div>
             </div>
             <div className="gd-trends-team">
               <div className="gd-trends-team-label">{awayLabel}</div>
-              <div className="gd-trends-ats">
-                <span className="gd-trends-label">ATS</span>
-                <span className="gd-trends-val">{computeATS(awayRecent) || 'No data'}</span>
+              <div className="gd-trends-rows">
+                <div className="gd-trends-row">
+                  <span className="gd-trends-label">Overall</span>
+                  <span className="gd-trends-val">{away.wins || 0}-{away.losses || 0}-{away.ot_losses || 0}</span>
+                </div>
+                <div className="gd-trends-row">
+                  <span className="gd-trends-label">Away</span>
+                  <span className="gd-trends-val">{away.away_record || '-'}</span>
+                </div>
+                <div className="gd-trends-row">
+                  <span className="gd-trends-label">Last 10</span>
+                  <span className="gd-trends-val">{away.record_last_10 || computeATS(awayRecent.slice(0, 10)) || '-'}</span>
+                </div>
+                <div className="gd-trends-row">
+                  <span className="gd-trends-label">Last 5</span>
+                  <span className="gd-trends-val">{computeATS(awayRecent.slice(0, 5)) || '-'}</span>
+                </div>
+                <div className="gd-trends-row">
+                  <span className="gd-trends-label">Streak</span>
+                  <span className="gd-trends-val">{getStreak(awayRecent)}</span>
+                </div>
               </div>
             </div>
           </div>
@@ -1313,6 +1360,11 @@ function GameDetail() {
   const topPick = predictions.find((p) => p.recommended) || predictions[0];
   const confidence = topPick ? confidencePct(topPick.confidence) : null;
 
+  // Determine which team the AI picked
+  const pickValue = (topPick?.prediction_value || '').toLowerCase();
+  const pickIsHome = pickValue === 'home' || pickValue.includes(homeAbbr.toLowerCase());
+  const pickIsAway = pickValue === 'away' || pickValue.includes(awayAbbr.toLowerCase());
+
   const TABS = [
     { id: 'overview', label: 'Overview', icon: BarChart3 },
     { id: 'predictions', label: 'Predictions', icon: Target },
@@ -1335,6 +1387,8 @@ function GameDetail() {
         confidence={confidence}
         isLive={isLive}
         venue={venue}
+        pickIsHome={pickIsHome}
+        pickIsAway={pickIsAway}
       />
 
       {/* Odds Cards */}
