@@ -4751,8 +4751,9 @@ a:hover {
 }
 
 .dc-odds-pill-active {
-  border-color: rgba(0, 255, 136, 0.3);
-  background: rgba(0, 255, 136, 0.04);
+  border-color: var(--accent-green);
+  background: rgba(0, 255, 136, 0.08);
+  box-shadow: 0 0 6px rgba(0, 255, 136, 0.15);
 }
 
 .dc-odds-label {

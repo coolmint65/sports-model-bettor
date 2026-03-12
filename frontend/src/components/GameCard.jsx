@@ -333,8 +333,12 @@ function GameCard({ game, section, medal }) {
           {ouLine != null && (
             <div className={`dc-odds-pill ${pickBetType === 'total' ? 'dc-odds-pill-active' : ''}`}>
               <span className="dc-odds-label">O/U</span>
-              <span className={`dc-odds-val ${pickBetType === 'total' ? 'dc-pick-highlight' : ''}`}>
-                {ouLine}
+              <span className="dc-odds-val">
+                {pickBetType === 'total' ? (
+                  <span className="dc-pick-highlight">{pickIsOver ? 'O' : 'U'} {ouLine}</span>
+                ) : (
+                  ouLine
+                )}
               </span>
             </div>
           )}
