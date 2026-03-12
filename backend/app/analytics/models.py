@@ -1905,6 +1905,25 @@ class BettingModel:
         edge = conf - implied
         scores["market_edge"] = min(1.0, max(0.0, (edge + 0.1) / 0.2))
 
+        # Line movement (sharp money signal)
+        lm = features.get("line_movement", {})
+        sharp = lm.get("sharp_signal", "neutral")
+        lm_score = 0.5  # neutral default
+        if sharp == "sharp_home":
+            lm_score = 0.85 if is_home_pick else 0.15
+        elif sharp == "sharp_away":
+            lm_score = 0.15 if is_home_pick else 0.85
+        else:
+            # Use raw moneyline movement magnitude for a subtler signal
+            home_ml_move = lm.get("home_ml_move", 0.0) or 0.0
+            if abs(home_ml_move) >= 5:
+                # Negative move = home becoming more favored
+                if home_ml_move < 0:
+                    lm_score = 0.65 if is_home_pick else 0.35
+                else:
+                    lm_score = 0.35 if is_home_pick else 0.65
+        scores["line_movement"] = lm_score
+
         # Weighted sum
         weights = {
             "form": _mc.composite_weight_form,
@@ -1917,6 +1936,7 @@ class BettingModel:
             "h2h": _mc.composite_weight_h2h,
             "matchup": _mc.composite_weight_matchup,
             "market_edge": _mc.composite_weight_market_edge,
+            "line_movement": _mc.composite_weight_line_movement,
         }
 
         composite = sum(scores.get(k, 0.5) * w for k, w in weights.items())

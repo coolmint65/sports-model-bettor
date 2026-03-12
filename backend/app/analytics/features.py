@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models.game import Game, GameGoalieStats, GamePlayerStats, HeadToHead
 from app.models.injury import InjuryReport
+from app.models.odds_history import OddsSnapshot
 from app.models.player import GoalieStats, Player, PlayerStats
 from app.models.team import Team, TeamStats
 
@@ -1392,6 +1393,131 @@ class FeatureEngine:
         }
 
     # ------------------------------------------------------------------ #
+    #  Line movement (opening vs current odds)                           #
+    # ------------------------------------------------------------------ #
+
+    async def get_line_movement(
+        self,
+        db: AsyncSession,
+        game_id: int,
+        game: Game,
+    ) -> Dict[str, Any]:
+        """
+        Compute line movement features by comparing opening and current odds snapshots.
+
+        Sharp money moving a line is one of the strongest signals in sports
+        betting. A significant move toward one side suggests informed bettors
+        have taken a position.
+
+        Returns dict with movement deltas and a directional signal.
+        """
+        defaults = {
+            "home_ml_open": None,
+            "away_ml_open": None,
+            "home_ml_current": None,
+            "away_ml_current": None,
+            "home_ml_move": 0.0,
+            "away_ml_move": 0.0,
+            "total_open": None,
+            "total_current": None,
+            "total_move": 0.0,
+            "spread_open": None,
+            "spread_current": None,
+            "spread_move": 0.0,
+            "sharp_signal": "neutral",
+            "snapshots_count": 0,
+        }
+
+        try:
+            # Get earliest (opening) snapshot
+            opening_stmt = (
+                select(OddsSnapshot)
+                .where(OddsSnapshot.game_id == game_id)
+                .order_by(OddsSnapshot.captured_at.asc())
+                .limit(1)
+            )
+            opening_result = await db.execute(opening_stmt)
+            opening = opening_result.scalar_one_or_none()
+
+            # Get latest (current) snapshot
+            current_stmt = (
+                select(OddsSnapshot)
+                .where(OddsSnapshot.game_id == game_id)
+                .order_by(OddsSnapshot.captured_at.desc())
+                .limit(1)
+            )
+            current_result = await db.execute(current_stmt)
+            current = current_result.scalar_one_or_none()
+
+            # Count total snapshots for this game
+            count_stmt = (
+                select(func.count(OddsSnapshot.id))
+                .where(OddsSnapshot.game_id == game_id)
+            )
+            count_result = await db.execute(count_stmt)
+            snap_count = count_result.scalar() or 0
+
+            if not opening or not current or snap_count < 2:
+                # Use game-level odds as fallback if only one snapshot
+                if opening:
+                    defaults["home_ml_open"] = opening.home_moneyline
+                    defaults["away_ml_open"] = opening.away_moneyline
+                    defaults["total_open"] = opening.over_under_line
+                    defaults["spread_open"] = opening.home_spread_line
+                defaults["snapshots_count"] = snap_count
+                return defaults
+
+            result = {
+                "home_ml_open": opening.home_moneyline,
+                "away_ml_open": opening.away_moneyline,
+                "home_ml_current": current.home_moneyline,
+                "away_ml_current": current.away_moneyline,
+                "total_open": opening.over_under_line,
+                "total_current": current.over_under_line,
+                "spread_open": opening.home_spread_line,
+                "spread_current": current.home_spread_line,
+                "snapshots_count": snap_count,
+            }
+
+            # Compute movement deltas
+            home_ml_move = 0.0
+            if opening.home_moneyline and current.home_moneyline:
+                home_ml_move = current.home_moneyline - opening.home_moneyline
+            result["home_ml_move"] = home_ml_move
+
+            away_ml_move = 0.0
+            if opening.away_moneyline and current.away_moneyline:
+                away_ml_move = current.away_moneyline - opening.away_moneyline
+            result["away_ml_move"] = away_ml_move
+
+            total_move = 0.0
+            if opening.over_under_line and current.over_under_line:
+                total_move = current.over_under_line - opening.over_under_line
+            result["total_move"] = total_move
+
+            spread_move = 0.0
+            if opening.home_spread_line and current.home_spread_line:
+                spread_move = current.home_spread_line - opening.home_spread_line
+            result["spread_move"] = spread_move
+
+            # Determine sharp signal based on moneyline movement
+            # In American odds: line moving more negative = more favored
+            # Significant threshold: 15+ points of ML movement
+            signal = "neutral"
+            if abs(home_ml_move) >= 15:
+                if home_ml_move < 0:
+                    signal = "sharp_home"  # Home becoming more favored
+                else:
+                    signal = "sharp_away"  # Home becoming less favored
+            result["sharp_signal"] = signal
+
+            return result
+
+        except Exception as exc:
+            logger.warning("Failed to compute line movement for game %s: %s", game_id, exc)
+            return defaults
+
+    # ------------------------------------------------------------------ #
     #  Starter confirmation confidence                                   #
     # ------------------------------------------------------------------ #
 
@@ -1562,6 +1688,9 @@ class FeatureEngine:
             db, home_id, away_id
         )
 
+        # Line movement features (opening vs current odds)
+        line_movement = await self.get_line_movement(db, game.id, game)
+
         # Divisional matchup detection (affects total scoring tendencies)
         is_divisional = (
             self._is_same_division(home_team, away_team)
@@ -1672,6 +1801,8 @@ class FeatureEngine:
             # Schedule spot / situational awareness
             "is_divisional": is_divisional,
             "is_cross_conference": is_cross_conference,
+            # Line movement (opening vs current odds)
+            "line_movement": line_movement,
         }
 
         return features

@@ -160,16 +160,17 @@ class ModelConfig(BaseModel):
     starter_fatigue_threshold: int = 3        # consecutive starts before fatigue concern
 
     # Composite edge score component weights (should sum to ~1.0)
-    composite_weight_form: float = 0.15
-    composite_weight_goalie: float = 0.15
-    composite_weight_possession: float = 0.12
-    composite_weight_close_possession: float = 0.08
-    composite_weight_special_teams: float = 0.10
-    composite_weight_schedule: float = 0.08
-    composite_weight_injuries: float = 0.10
+    composite_weight_form: float = 0.14
+    composite_weight_goalie: float = 0.14
+    composite_weight_possession: float = 0.11
+    composite_weight_close_possession: float = 0.07
+    composite_weight_special_teams: float = 0.09
+    composite_weight_schedule: float = 0.07
+    composite_weight_injuries: float = 0.09
     composite_weight_h2h: float = 0.07
     composite_weight_matchup: float = 0.05
-    composite_weight_market_edge: float = 0.10
+    composite_weight_market_edge: float = 0.09
+    composite_weight_line_movement: float = 0.08
 
     # Faceoff contribution to defensive factor
     faceoff_defense_weight: float = 0.10
