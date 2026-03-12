@@ -871,7 +871,9 @@ class BettingModel:
         odds_data = features.get("odds", {})
         all_spread_lines = odds_data.get("all_spread_lines") or []
         for alt in all_spread_lines:
-            eval_spread_lines.add(alt.get("line", 1.5))
+            line_val = alt.get("line", 1.5)
+            if line_val < 2.5:
+                eval_spread_lines.add(line_val)
 
         # Calculate spread probabilities for each line
         spreads = {}
@@ -1578,20 +1580,23 @@ class BettingModel:
             primary_away_spread_imp = None
             if spread_line is not None:
                 primary_spread_line = abs(float(spread_line))
-                _php = float(home_spread_price) if home_spread_price else -110
-                _pap = float(away_spread_price) if away_spread_price else -110
-                primary_home_spread_imp = american_odds_to_implied_prob(_php)
-                primary_away_spread_imp = american_odds_to_implied_prob(_pap)
-                spread_price_map[primary_spread_line] = {
-                    "home_price": _php,
-                    "away_price": _pap,
-                    "home_spread": float(spread_line),
-                }
+                if primary_spread_line < 2.5:
+                    _php = float(home_spread_price) if home_spread_price else -110
+                    _pap = float(away_spread_price) if away_spread_price else -110
+                    primary_home_spread_imp = american_odds_to_implied_prob(_php)
+                    primary_away_spread_imp = american_odds_to_implied_prob(_pap)
+                    spread_price_map[primary_spread_line] = {
+                        "home_price": _php,
+                        "away_price": _pap,
+                        "home_spread": float(spread_line),
+                    }
 
             for alt in all_spread_lines_data:
                 lv = alt.get("line", 1.5)
                 if lv < 1.5:
                     continue  # NHL puck lines below ±1.5 don't exist
+                if lv >= 2.5:
+                    continue  # Lines ±2.5+ have extreme juice (-300 etc.)
                 alt_hp = alt.get("home_price", -110)
                 alt_ap = alt.get("away_price", -110)
 
