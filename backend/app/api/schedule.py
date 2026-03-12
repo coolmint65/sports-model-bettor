@@ -445,7 +445,14 @@ async def _compute_top_picks(
                 odds_display=_pick_odds_display(pred, game_by_id.get(pred.game_id)),
             )
 
-    # --- Tier 3: confidence-only fallback when odds data is missing ---
+    # --- Tier 3: fallback for games with no Tier 1 pick ---
+    # Uses composite scoring (same as Tier 1 and game detail page) to
+    # pick the best available prediction even when edge is below the
+    # strict Tier 1 threshold.  The heavy-juice filter is intentionally
+    # omitted here because composite_pick_score already penalizes bad
+    # juice via its juice component — applying a hard cutoff would filter
+    # reasonable moderate favorites (e.g. -169) that the game detail page
+    # correctly ranks as the top pick.
     still_missing = set(gid for gid in game_ids if gid not in top_picks)
     if still_missing:
         no_odds_result = await session.execute(
@@ -468,17 +475,21 @@ async def _compute_top_picks(
                 if existing is None:
                     _seen_t3[key] = p
         no_odds_preds = list(_seen_t3.values())
-        for pred in sorted(
-            no_odds_preds,
-            key=lambda p: p.confidence or 0,
-            reverse=True,
-        ):
+
+        def _tier3_sort_key(p):
+            score = composite_pick_score(
+                p.confidence, p.edge, p.odds_implied_prob
+            )
+            if (
+                p.bet_type == "spread"
+                and p.prediction_value
+                and "+" in p.prediction_value
+            ):
+                score -= 0.10
+            return score
+
+        for pred in sorted(no_odds_preds, key=_tier3_sort_key, reverse=True):
             if pred.game_id not in top_picks:
-                # Exclude heavy-juice bets — if we have odds and they
-                # exceed the ceiling, skip entirely rather than show a
-                # bet with terrible risk/reward.
-                if is_heavy_juice(pred.odds_implied_prob, max_implied):
-                    continue
                 # Enforce min_confidence even for fallback picks —
                 # without this, low-conviction predictions that failed
                 # Tier 1 sneak back onto the dashboard.
