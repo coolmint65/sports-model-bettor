@@ -7,7 +7,6 @@ import {
   Radio,
   Calendar,
   Minus,
-  Target,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import {
@@ -129,8 +128,9 @@ function formatGameTime(game) {
 
 function getConfidenceBadge(confidence) {
   if (confidence == null) return null;
-  if (confidence >= 70) return { label: 'GOOD BET', className: 'badge-good', icon: TrendingUp };
-  if (confidence >= 55) return { label: 'BORDERLINE', className: 'badge-borderline', icon: Minus };
+  if (confidence >= 75) return { label: 'STRONG BET', className: 'badge-good', icon: TrendingUp };
+  if (confidence >= 63) return { label: 'GOOD BET', className: 'badge-good', icon: TrendingUp };
+  if (confidence >= 55) return { label: 'FAIR', className: 'badge-borderline', icon: Minus };
   return null;
 }
 
@@ -241,12 +241,9 @@ function GameCard({ game, section, medal }) {
   const pickIsHome = pickValue === 'home' || pickValue.includes(homeAbbr.toLowerCase());
   const pickIsAway = pickValue === 'away' || pickValue.includes(awayAbbr.toLowerCase());
 
-  // Build pick label for display
-  const pickTeamAbbr = pickIsHome ? homeAbbr : pickIsAway ? awayAbbr : null;
-  const pickTypeLabel = pickBetType === 'ml' ? 'ML'
-    : pickBetType === 'spread' ? 'Spread'
-    : pickBetType === 'total' ? 'Total'
-    : pickBetType.toUpperCase();
+  // Detect over/under pick
+  const pickIsOver = pickBetType === 'total' && pickValue.includes('over');
+  const pickIsUnder = pickBetType === 'total' && pickValue.includes('under');
 
   return (
     <div className="dc-card" onClick={handleClick} role="button" tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && handleClick()}>
@@ -311,17 +308,6 @@ function GameCard({ game, section, medal }) {
         </div>
       </div>
 
-      {/* AI Pick callout */}
-      {pickTeamAbbr && (
-        <div className="dc-pick-callout">
-          <Target size={13} />
-          <span className="dc-pick-text">AI Pick: <strong>{pickTeamAbbr} {pickTypeLabel}</strong></span>
-          {confidence != null && (
-            <span className="dc-pick-conf">{Math.round(confidence)}%</span>
-          )}
-        </div>
-      )}
-
       {/* Odds summary pills - flat horizontal row */}
       {odds && (
         <div className="dc-odds-row">
@@ -349,7 +335,9 @@ function GameCard({ game, section, medal }) {
             <div className={`dc-odds-pill ${pickBetType === 'total' ? 'dc-odds-pill-active' : ''}`}>
               <span className="dc-odds-label">O/U</span>
               <span className="dc-odds-val">
-                <span className={pickValue.includes('over') && pickBetType === 'total' ? 'dc-pick-highlight' : ''}>O</span>
+                <span className={pickIsOver ? 'dc-pick-highlight' : ''}>O</span>
+                <span className="dc-odds-sep">/</span>
+                <span className={pickIsUnder ? 'dc-pick-highlight' : ''}>U</span>
                 {' '}{ouLine}
               </span>
             </div>

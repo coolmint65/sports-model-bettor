@@ -228,6 +228,47 @@ class NHLScraper(BaseScraper):
         data = await self.fetch_json(path)
         return data
 
+    async def fetch_team_summary_stats(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Fetch aggregate team stats (PP%, PK%, shots, faceoff%) from the
+        NHL stats REST API for all teams in the current season.
+
+        Returns:
+            Dict keyed by team abbreviation with stat values.
+        """
+        url = (
+            f"https://api.nhle.com/stats/rest/en/team/summary"
+            f"?cayenneExp=seasonId={self.default_season}"
+            f" and gameTypeId=2"
+            f"&sort=points&limit=-1"
+        )
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession() as client:
+                async with client.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status != 200:
+                        logger.warning("NHL stats API returned %d", resp.status)
+                        return {}
+                    data = await resp.json()
+
+            results = {}
+            for team in data.get("data", []):
+                abbrev = team.get("teamTriCode") or team.get("teamAbbrev")
+                if not abbrev:
+                    continue
+                results[abbrev] = {
+                    "power_play_pct": team.get("powerPlayPct"),
+                    "penalty_kill_pct": team.get("penaltyKillPct"),
+                    "shots_for_per_game": team.get("shotsForPerGame"),
+                    "shots_against_per_game": team.get("shotsAgainstPerGame"),
+                    "faceoff_win_pct": team.get("faceoffWinPct"),
+                }
+            logger.info("Fetched summary stats for %d teams", len(results))
+            return results
+        except Exception as exc:
+            logger.warning("Failed to fetch team summary stats: %s", exc)
+            return {}
+
     # ------------------------------------------------------------------
     # D) Fetch roster
     # ------------------------------------------------------------------
@@ -428,6 +469,10 @@ class NHLScraper(BaseScraper):
         logger.info("Syncing teams from standings...")
         standings = await self.fetch_standings()
 
+        # Fetch detailed team summary stats (PP%, PK%, shots, faceoff%)
+        # from the NHL stats REST API to supplement standings data
+        summary_stats = await self.fetch_team_summary_stats()
+
         for entry in standings:
             abbrev = entry.get("team_abbrev")
             if not abbrev:
@@ -477,6 +522,9 @@ class NHLScraper(BaseScraper):
             gf = entry.get("goals_for", 0)
             ga = entry.get("goals_against", 0)
 
+            # Merge summary stats from the stats REST API
+            team_summary = summary_stats.get(abbrev, {})
+
             stats_data = dict(
                 games_played=gp,
                 wins=entry.get("wins", 0),
@@ -487,11 +535,11 @@ class NHLScraper(BaseScraper):
                 goals_against=ga,
                 goals_for_per_game=round(gf / gp, 2) if gp > 0 else None,
                 goals_against_per_game=round(ga / gp, 2) if gp > 0 else None,
-                power_play_pct=entry.get("power_play_pct"),
-                penalty_kill_pct=entry.get("penalty_kill_pct"),
-                shots_for_per_game=entry.get("shots_for_per_game"),
-                shots_against_per_game=entry.get("shots_against_per_game"),
-                faceoff_win_pct=entry.get("faceoff_win_pct"),
+                power_play_pct=entry.get("power_play_pct") or team_summary.get("power_play_pct"),
+                penalty_kill_pct=entry.get("penalty_kill_pct") or team_summary.get("penalty_kill_pct"),
+                shots_for_per_game=entry.get("shots_for_per_game") or team_summary.get("shots_for_per_game"),
+                shots_against_per_game=entry.get("shots_against_per_game") or team_summary.get("shots_against_per_game"),
+                faceoff_win_pct=entry.get("faceoff_win_pct") or team_summary.get("faceoff_win_pct"),
                 home_record=f"{home_w}-{home_l}-{home_otl}",
                 away_record=f"{away_w}-{away_l}-{away_otl}",
                 record_last_10=f"{l10_w}-{l10_l}-{l10_otl}",

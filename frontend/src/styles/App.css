@@ -4732,21 +4732,24 @@ a:hover {
 /* Odds summary pills */
 .dc-odds-row {
   display: flex;
-  flex-wrap: nowrap;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .dc-odds-pill {
-  flex: 1;
+  flex: 1 1 0;
+  min-width: 80px;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 5px;
-  padding: 9px 10px;
+  padding: 8px 6px;
   background: var(--bg-tertiary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-sm);
-  font-size: 0.82rem;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  overflow: hidden;
 }
 
 .dc-odds-pill-active {
@@ -5011,6 +5014,31 @@ a:hover {
   font-size: 0.78rem;
   font-weight: 600;
   color: var(--text-dim);
+}
+
+.gd-odds-card-picked {
+  border-color: rgba(0, 255, 136, 0.35);
+  background: rgba(0, 255, 136, 0.03);
+}
+
+.gd-odds-side-picked .gd-odds-big {
+  color: var(--accent-green);
+}
+
+.gd-odds-side-picked .gd-odds-team {
+  color: var(--accent-green);
+}
+
+.gd-odds-pick-tag {
+  margin-left: auto;
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: var(--accent-green);
+  background: rgba(0, 255, 136, 0.1);
+  border: 1px solid rgba(0, 255, 136, 0.25);
+  padding: 2px 6px;
+  border-radius: 3px;
+  letter-spacing: 0.5px;
 }
 
 .gd-odds-locked {
@@ -5443,6 +5471,46 @@ a:hover {
   color: var(--accent-gold);
 }
 
+.gd-risk-factors {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-primary);
+}
+
+.gd-risk-factor-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+}
+
+.gd-risk-factor-label {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.gd-risk-factor-val {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.gd-risk-context {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-sm);
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
 /* ─── Market Interest ──────────────────────────────────── */
 .gd-section-desc {
   font-size: 0.78rem;
@@ -5692,6 +5760,21 @@ a:hover {
   font-weight: 700;
   font-size: 0.85rem;
   color: var(--text-primary);
+}
+
+.gd-trends-scoring {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-primary);
+}
+
+.gd-trends-scoring-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
 }
 
 /* ─── Venue & Conditions ──────────────────────────────── */

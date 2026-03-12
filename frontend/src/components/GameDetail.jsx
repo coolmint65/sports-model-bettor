@@ -218,7 +218,7 @@ function GameHeader({ game, awayAbbr, homeAbbr, awayTeamLabel, homeTeamLabel, co
 }
 
 /* ──────────────────── Odds Cards ──────────────────── */
-function OddsCards({ game, homeAbbr, awayAbbr }) {
+function OddsCards({ game, homeAbbr, awayAbbr, pickBetType, pickIsHome, pickIsAway, pickIsOver, pickIsUnder }) {
   const odds = game.odds;
   if (!odds) return null;
 
@@ -230,18 +230,19 @@ function OddsCards({ game, homeAbbr, awayAbbr }) {
     <div className="gd-odds-row">
       {/* Moneyline */}
       {(odds.home_moneyline != null || odds.away_moneyline != null) && (
-        <div className="gd-odds-card">
+        <div className={`gd-odds-card ${pickBetType === 'ml' ? 'gd-odds-card-picked' : ''}`}>
           <div className="gd-odds-card-header">
             <Target size={14} />
             <span>Moneyline</span>
+            {pickBetType === 'ml' && <span className="gd-odds-pick-tag">AI PICK</span>}
           </div>
           <div className="gd-odds-card-body">
-            <div className="gd-odds-side">
+            <div className={`gd-odds-side ${pickIsHome && pickBetType === 'ml' ? 'gd-odds-side-picked' : ''}`}>
               <span className="gd-odds-team">{homeAbbr}</span>
               <span className="gd-odds-big">{formatAmericanOdds(odds.home_moneyline)}</span>
             </div>
             <span className="gd-odds-vs">VS</span>
-            <div className="gd-odds-side">
+            <div className={`gd-odds-side ${pickIsAway && pickBetType === 'ml' ? 'gd-odds-side-picked' : ''}`}>
               <span className="gd-odds-team">{awayAbbr}</span>
               <span className="gd-odds-big">{formatAmericanOdds(odds.away_moneyline)}</span>
             </div>
@@ -251,16 +252,17 @@ function OddsCards({ game, homeAbbr, awayAbbr }) {
 
       {/* Spread */}
       {odds.home_spread_line != null && (
-        <div className={`gd-odds-card ${locked ? 'gd-odds-locked' : ''}`}>
+        <div className={`gd-odds-card ${locked ? 'gd-odds-locked' : ''} ${pickBetType === 'spread' ? 'gd-odds-card-picked' : ''}`}>
           <div className="gd-odds-card-header">
             <TrendingUp size={14} />
             <span>Spread</span>
+            {pickBetType === 'spread' && <span className="gd-odds-pick-tag">AI PICK</span>}
           </div>
           {locked ? (
             <div className="gd-odds-locked-body"><Lock size={16} /></div>
           ) : (
             <div className="gd-odds-card-body">
-              <div className="gd-odds-side">
+              <div className={`gd-odds-side ${pickIsHome && pickBetType === 'spread' ? 'gd-odds-side-picked' : ''}`}>
                 <span className="gd-odds-team">{homeAbbr}</span>
                 <span className="gd-odds-big">
                   {odds.home_spread_line > 0 ? '+' : ''}{odds.home_spread_line}
@@ -268,7 +270,7 @@ function OddsCards({ game, homeAbbr, awayAbbr }) {
                 <span className="gd-odds-price">({formatAmericanOdds(odds.home_spread_price)})</span>
               </div>
               <span className="gd-odds-vs">VS</span>
-              <div className="gd-odds-side">
+              <div className={`gd-odds-side ${pickIsAway && pickBetType === 'spread' ? 'gd-odds-side-picked' : ''}`}>
                 <span className="gd-odds-team">{awayAbbr}</span>
                 <span className="gd-odds-big">
                   {odds.away_spread_line != null ? ((odds.away_spread_line > 0 ? '+' : '') + odds.away_spread_line) : ''}
@@ -282,22 +284,23 @@ function OddsCards({ game, homeAbbr, awayAbbr }) {
 
       {/* Total O/U */}
       {odds.over_under_line != null && (
-        <div className={`gd-odds-card ${locked ? 'gd-odds-locked' : ''}`}>
+        <div className={`gd-odds-card ${locked ? 'gd-odds-locked' : ''} ${pickBetType === 'total' ? 'gd-odds-card-picked' : ''}`}>
           <div className="gd-odds-card-header">
             <Zap size={14} />
             <span>Total (O/U)</span>
+            {pickBetType === 'total' && <span className="gd-odds-pick-tag">AI PICK</span>}
           </div>
           {locked ? (
             <div className="gd-odds-locked-body"><Lock size={16} /></div>
           ) : (
             <div className="gd-odds-card-body">
-              <div className="gd-odds-side">
+              <div className={`gd-odds-side ${pickIsOver ? 'gd-odds-side-picked' : ''}`}>
                 <span className="gd-odds-team">Over</span>
                 <span className="gd-odds-big">{odds.over_under_line}</span>
                 <span className="gd-odds-price">({formatAmericanOdds(odds.over_price)})</span>
               </div>
               <span className="gd-odds-vs">/</span>
-              <div className="gd-odds-side">
+              <div className={`gd-odds-side ${pickIsUnder ? 'gd-odds-side-picked' : ''}`}>
                 <span className="gd-odds-team">Under</span>
                 <span className="gd-odds-big">{odds.over_under_line}</span>
                 <span className="gd-odds-price">({formatAmericanOdds(odds.under_price)})</span>
@@ -423,14 +426,31 @@ function AIAnalysis({ game, homeAbbr, awayAbbr, homeTeamLabel, awayTeamLabel }) 
     return { text: r, type: 'neutral' };
   });
 
-  // Build pick team name
+  // Build pick team name and human-readable pick label
   const pickValue = topPick.prediction_value || '';
-  const pickTeam = pickValue.toLowerCase().includes('home') || pickValue.includes(homeAbbr)
-    ? homeTeamLabel
-    : pickValue.toLowerCase().includes('away') || pickValue.includes(awayAbbr)
-      ? awayTeamLabel
-      : pickValue;
-  const pickSide = pickValue.toLowerCase().includes('home') || pickValue.includes(homeAbbr) ? '(Home)' : '(Away)';
+  const pickLower = pickValue.toLowerCase();
+  const pickBetType = (topPick.bet_type || '').toLowerCase();
+  const pickIsHomeTeam = pickLower.includes('home') || pickValue.includes(homeAbbr);
+  const pickIsAwayTeam = pickLower.includes('away') || pickValue.includes(awayAbbr);
+
+  let pickTeam, pickSide;
+  if (pickBetType === 'total') {
+    // For totals, show "Over 5.5" / "Under 5.5" instead of raw "over_5.5"
+    const isOver = pickLower.includes('over');
+    const line = pickValue.replace(/^(over|under)[_\s]?/i, '');
+    pickTeam = `${isOver ? 'Over' : 'Under'} ${line}`;
+    pickSide = '';
+  } else if (pickIsHomeTeam) {
+    pickTeam = homeTeamLabel;
+    pickSide = '(Home)';
+  } else if (pickIsAwayTeam) {
+    pickTeam = awayTeamLabel;
+    pickSide = '(Away)';
+  } else {
+    // For spread picks like "NSH_-1.5", clean it up
+    pickTeam = pickValue.replace(/_/g, ' ');
+    pickSide = '';
+  }
 
   return (
     <div className="gd-section-card gd-analysis-card">
@@ -584,8 +604,51 @@ function RiskAndMarket({ game, homeAbbr, awayAbbr, homeTeamLabel, awayTeamLabel 
           <div className="gd-risk-note">
             <AlertTriangle size={13} />
             {risk.score <= 30 ? 'Strong edge detected — favorable risk/reward.' :
-              risk.score <= 60 ? 'Very close spread - coin flip territory' :
+              risk.score <= 60 ? 'Very close spread - coin flip territory.' :
                 'High variance — proceed with caution.'}
+          </div>
+
+          {/* Risk factors breakdown */}
+          <div className="gd-risk-factors">
+            <div className="gd-risk-factor-row">
+              <span className="gd-risk-factor-label">Model Confidence</span>
+              <span className="gd-risk-factor-val" style={{ color: confidence >= 65 ? 'var(--accent-green)' : confidence >= 55 ? 'var(--accent-gold)' : 'var(--accent-red)' }}>
+                {Math.round(confidence)}%
+              </span>
+            </div>
+            <div className="gd-risk-factor-row">
+              <span className="gd-risk-factor-label">Edge vs Market</span>
+              <span className="gd-risk-factor-val" style={{ color: confidencePct(topPick.edge || 0) > 5 ? 'var(--accent-green)' : confidencePct(topPick.edge || 0) > 2 ? 'var(--accent-gold)' : 'var(--text-muted)' }}>
+                {confidencePct(topPick.edge || 0).toFixed(1)}%
+              </span>
+            </div>
+            <div className="gd-risk-factor-row">
+              <span className="gd-risk-factor-label">Line Value</span>
+              <span className="gd-risk-factor-val">
+                {(() => {
+                  const e = confidencePct(topPick.edge || 0);
+                  if (e > 8) return 'Excellent';
+                  if (e > 5) return 'Good';
+                  if (e > 2) return 'Fair';
+                  return 'Thin';
+                })()}
+              </span>
+            </div>
+            <div className="gd-risk-factor-row">
+              <span className="gd-risk-factor-label">Suggested Stake</span>
+              <span className="gd-risk-factor-val">
+                {confidence >= 80 ? '3-5 units (Heavy)' : confidence >= 65 ? '2-3 units (Medium)' : confidence >= 50 ? '1 unit (Light)' : 'Pass'}
+              </span>
+            </div>
+          </div>
+
+          {/* Risk context note */}
+          <div className="gd-risk-context">
+            {confidence >= 70 && confidencePct(topPick.edge || 0) > 5
+              ? 'High-confidence pick with significant edge over the market. This is a strong play.'
+              : confidence >= 60
+                ? 'Moderate confidence. The model sees value but the margin is slim — consider sizing down.'
+                : 'Lower-confidence play. Treat as a speculative pick and limit exposure.'}
           </div>
         </div>
       </div>
@@ -804,6 +867,36 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
                   <span className="gd-trends-val">{getStreak(homeRecent)}</span>
                 </div>
               </div>
+              {/* Scoring trends */}
+              {homeRecent.length > 0 && (
+                <div className="gd-trends-scoring">
+                  <div className="gd-trends-scoring-title">Scoring (Last {Math.min(homeRecent.length, 10)})</div>
+                  <div className="gd-trends-row">
+                    <span className="gd-trends-label">Avg GF</span>
+                    <span className="gd-trends-val">
+                      {(homeRecent.slice(0, 10).reduce((s, g) => s + (g.goals_for || 0), 0) / Math.min(homeRecent.length, 10)).toFixed(1)}
+                    </span>
+                  </div>
+                  <div className="gd-trends-row">
+                    <span className="gd-trends-label">Avg GA</span>
+                    <span className="gd-trends-val">
+                      {(homeRecent.slice(0, 10).reduce((s, g) => s + (g.goals_against || 0), 0) / Math.min(homeRecent.length, 10)).toFixed(1)}
+                    </span>
+                  </div>
+                  <div className="gd-trends-row">
+                    <span className="gd-trends-label">Avg Total</span>
+                    <span className="gd-trends-val">
+                      {(homeRecent.slice(0, 10).reduce((s, g) => s + (g.goals_for || 0) + (g.goals_against || 0), 0) / Math.min(homeRecent.length, 10)).toFixed(1)}
+                    </span>
+                  </div>
+                  <div className="gd-trends-row">
+                    <span className="gd-trends-label">Over 5.5</span>
+                    <span className="gd-trends-val">
+                      {homeRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) > 5.5).length}-{homeRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) <= 5.5).length}
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
             <div className="gd-trends-team">
               <div className="gd-trends-team-label">{awayLabel}</div>
@@ -829,6 +922,36 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
                   <span className="gd-trends-val">{getStreak(awayRecent)}</span>
                 </div>
               </div>
+              {/* Scoring trends */}
+              {awayRecent.length > 0 && (
+                <div className="gd-trends-scoring">
+                  <div className="gd-trends-scoring-title">Scoring (Last {Math.min(awayRecent.length, 10)})</div>
+                  <div className="gd-trends-row">
+                    <span className="gd-trends-label">Avg GF</span>
+                    <span className="gd-trends-val">
+                      {(awayRecent.slice(0, 10).reduce((s, g) => s + (g.goals_for || 0), 0) / Math.min(awayRecent.length, 10)).toFixed(1)}
+                    </span>
+                  </div>
+                  <div className="gd-trends-row">
+                    <span className="gd-trends-label">Avg GA</span>
+                    <span className="gd-trends-val">
+                      {(awayRecent.slice(0, 10).reduce((s, g) => s + (g.goals_against || 0), 0) / Math.min(awayRecent.length, 10)).toFixed(1)}
+                    </span>
+                  </div>
+                  <div className="gd-trends-row">
+                    <span className="gd-trends-label">Avg Total</span>
+                    <span className="gd-trends-val">
+                      {(awayRecent.slice(0, 10).reduce((s, g) => s + (g.goals_for || 0) + (g.goals_against || 0), 0) / Math.min(awayRecent.length, 10)).toFixed(1)}
+                    </span>
+                  </div>
+                  <div className="gd-trends-row">
+                    <span className="gd-trends-label">Over 5.5</span>
+                    <span className="gd-trends-val">
+                      {awayRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) > 5.5).length}-{awayRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) <= 5.5).length}
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -914,7 +1037,7 @@ function RecentFormAndH2H({ game, homeAbbr, awayAbbr }) {
   }
   const h2hGames = [...h2hGamesMap.values()]
     .sort((a, b) => new Date(b.game_date || b.date) - new Date(a.game_date || a.date))
-    .slice(0, 5);
+    .slice(0, 10);
 
   return (
     <div className="gd-two-col">
@@ -1362,8 +1485,11 @@ function GameDetail() {
 
   // Determine which team the AI picked
   const pickValue = (topPick?.prediction_value || '').toLowerCase();
+  const detailPickBetType = (topPick?.bet_type || '').toLowerCase();
   const pickIsHome = pickValue === 'home' || pickValue.includes(homeAbbr.toLowerCase());
   const pickIsAway = pickValue === 'away' || pickValue.includes(awayAbbr.toLowerCase());
+  const pickIsOver = detailPickBetType === 'total' && pickValue.includes('over');
+  const pickIsUnder = detailPickBetType === 'total' && pickValue.includes('under');
 
   const TABS = [
     { id: 'overview', label: 'Overview', icon: BarChart3 },
@@ -1392,7 +1518,7 @@ function GameDetail() {
       />
 
       {/* Odds Cards */}
-      <OddsCards game={game} homeAbbr={homeAbbr} awayAbbr={awayAbbr} />
+      <OddsCards game={game} homeAbbr={homeAbbr} awayAbbr={awayAbbr} pickBetType={detailPickBetType} pickIsHome={pickIsHome} pickIsAway={pickIsAway} pickIsOver={pickIsOver} pickIsUnder={pickIsUnder} />
 
       {/* Tab Navigation */}
       <div className="game-detail-tabs">
