@@ -447,12 +447,15 @@ async def _compute_top_picks(
 
     # --- Tier 3: fallback for games with no Tier 1 pick ---
     # Uses composite scoring (same as Tier 1 and game detail page) to
-    # pick the best available prediction even when edge is below the
-    # strict Tier 1 threshold.  The heavy-juice filter is intentionally
-    # omitted here because composite_pick_score already penalizes bad
-    # juice via its juice component — applying a hard cutoff would filter
-    # reasonable moderate favorites (e.g. -169) that the game detail page
-    # correctly ranks as the top pick.
+    # pick the best available prediction even when edge or confidence is
+    # below the strict Tier 1 thresholds.
+    #
+    # Neither the heavy-juice filter nor the min_confidence filter is
+    # applied here.  composite_pick_score already penalises bad juice
+    # (via its juice component) and low confidence (35 % weight), so
+    # hard cutoffs on top of that would filter legitimate high-edge
+    # value picks — e.g. a +154 ML with 14 % edge but 54 % confidence
+    # getting blocked in favour of a heavy-juice spread.
     still_missing = set(gid for gid in game_ids if gid not in top_picks)
     if still_missing:
         no_odds_result = await session.execute(
@@ -490,11 +493,6 @@ async def _compute_top_picks(
 
         for pred in sorted(no_odds_preds, key=_tier3_sort_key, reverse=True):
             if pred.game_id not in top_picks:
-                # Enforce min_confidence even for fallback picks —
-                # without this, low-conviction predictions that failed
-                # Tier 1 sneak back onto the dashboard.
-                if (pred.confidence or 0) < settings.min_confidence:
-                    continue
                 top_picks[pred.game_id] = GameTopPick(
                     prediction_id=pred.id,
                     bet_type=pred.bet_type,
