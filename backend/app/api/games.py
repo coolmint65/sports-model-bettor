@@ -970,7 +970,7 @@ async def get_game_injuries(
             .where(
                 and_(
                     InjuryReport.team_id == team_id,
-                    InjuryReport.is_active.is_(True),
+                    InjuryReport.active.is_(True),
                 )
             )
         )

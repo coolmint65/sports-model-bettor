@@ -215,7 +215,7 @@ class InjuryScraper(BaseScraper):
                     select(InjuryReport).where(
                         and_(
                             InjuryReport.player_id == player.id,
-                            InjuryReport.is_active.is_(True),
+                            InjuryReport.active.is_(True),
                         )
                     )
                 )
@@ -232,7 +232,7 @@ class InjuryScraper(BaseScraper):
                         existing.status = status
                         existing.injury_type = injury_type
                         if detail:
-                            existing.detail = detail
+                            existing.description = detail
                         existing.source = source
                         logger.info(
                             "Updated injury: %s (%s) -> %s: %s",
@@ -245,10 +245,10 @@ class InjuryScraper(BaseScraper):
                         team_id=team.id,
                         status=status,
                         injury_type=injury_type,
-                        detail=detail,
-                        reported_at=now,
+                        description=detail,
+                        reported_date=now.date(),
                         source=source,
-                        is_active=True,
+                        active=True,
                     )
                     db.add(report)
                     logger.info(
@@ -265,7 +265,7 @@ class InjuryScraper(BaseScraper):
                     select(InjuryReport).where(
                         and_(
                             InjuryReport.team_id == team.id,
-                            InjuryReport.is_active.is_(True),
+                            InjuryReport.active.is_(True),
                             ~InjuryReport.player_id.in_(found_player_ids) if found_player_ids else True,
                         )
                     )
@@ -275,7 +275,7 @@ class InjuryScraper(BaseScraper):
                     # Only deactivate if we got a successful roster fetch
                     # (non-empty injuries list means we parsed the roster)
                     if injuries or found_player_ids:
-                        report.is_active = False
+                        report.active = False
                         logger.info(
                             "Resolved injury: player_id=%d (team %s)",
                             report.player_id, team.abbreviation,
