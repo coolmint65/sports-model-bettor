@@ -2411,60 +2411,59 @@ def _merge_odds_events(
                     best_home_spread = -consensus
                     best_away_spread = consensus
 
-            # Best price: the prices are always tied to their team's
-            # side of the spread (home_spread_price = price for whatever
-            # spread the home team has), so max() is correct here —
-            # BUT we first filter out prices with the wrong sign for
-            # large spreads (≥2.0).  In NHL, the team giving up goals
-            # (negative spread) always has positive odds, and the team
-            # getting goals (positive spread) always has negative odds.
-            # A wrong-sign price means the source swapped home/away.
-            consensus_home_books = [s for s in home_spreads if abs(s[0]) == consensus]
-            consensus_away_books = [s for s in away_spreads if abs(s[0]) == consensus]
-
-            if consensus >= 2.0 and home_is_fav is not None:
+            # Best price: only use entries whose spread sign matches
+            # the moneyline-derived direction.  Sources that report the
+            # home spread with the wrong sign have swapped home/away,
+            # so their prices belong to the opposite side and would
+            # contaminate the average.
+            if home_is_fav is not None:
                 if home_is_fav:
-                    # Home at -2.5+: price should be positive (hard to cover)
-                    valid = [s for s in consensus_home_books if s[1] > 0]
-                    rejected = [s for s in consensus_home_books if s[1] <= 0]
-                    for r in rejected:
-                        logger.warning(
-                            "REJECTED %s@%s [%s]: home spread price %+.0f wrong sign for fav -%.1f line",
-                            ev_list[0].away_abbr, ev_list[0].home_abbr, r[2], r[1], consensus,
-                        )
-                    if valid:
-                        consensus_home_books = valid
-                    # Away at +2.5+: price should be negative (easy to cover)
-                    valid = [s for s in consensus_away_books if s[1] < 0]
-                    rejected = [s for s in consensus_away_books if s[1] >= 0]
-                    for r in rejected:
-                        logger.warning(
-                            "REJECTED %s@%s [%s]: away spread price %+.0f wrong sign for dog +%.1f line",
-                            ev_list[0].away_abbr, ev_list[0].home_abbr, r[2], r[1], consensus,
-                        )
-                    if valid:
-                        consensus_away_books = valid
+                    # Home is favorite → home spread should be negative
+                    consensus_home_books = [
+                        s for s in home_spreads
+                        if abs(s[0]) == consensus and s[0] < 0
+                    ]
+                    consensus_away_books = [
+                        s for s in away_spreads
+                        if abs(s[0]) == consensus and s[0] > 0
+                    ]
                 else:
-                    # Home at +2.5+: price should be negative
-                    valid = [s for s in consensus_home_books if s[1] < 0]
-                    rejected = [s for s in consensus_home_books if s[1] >= 0]
-                    for r in rejected:
+                    # Home is underdog → home spread should be positive
+                    consensus_home_books = [
+                        s for s in home_spreads
+                        if abs(s[0]) == consensus and s[0] > 0
+                    ]
+                    consensus_away_books = [
+                        s for s in away_spreads
+                        if abs(s[0]) == consensus and s[0] < 0
+                    ]
+                # Log rejected entries
+                all_home = [s for s in home_spreads if abs(s[0]) == consensus]
+                all_away = [s for s in away_spreads if abs(s[0]) == consensus]
+                for r in all_home:
+                    if r not in consensus_home_books:
                         logger.warning(
-                            "REJECTED %s@%s [%s]: home spread price %+.0f wrong sign for dog +%.1f line",
-                            ev_list[0].away_abbr, ev_list[0].home_abbr, r[2], r[1], consensus,
+                            "REJECTED %s@%s [%s]: home spread %+.1f @ %+.0f — "
+                            "wrong sign direction (home_is_fav=%s)",
+                            ev_list[0].away_abbr, ev_list[0].home_abbr,
+                            r[2], r[0], r[1], home_is_fav,
                         )
-                    if valid:
-                        consensus_home_books = valid
-                    # Away at -2.5+: price should be positive
-                    valid = [s for s in consensus_away_books if s[1] > 0]
-                    rejected = [s for s in consensus_away_books if s[1] <= 0]
-                    for r in rejected:
+                for r in all_away:
+                    if r not in consensus_away_books:
                         logger.warning(
-                            "REJECTED %s@%s [%s]: away spread price %+.0f wrong sign for fav -%.1f line",
-                            ev_list[0].away_abbr, ev_list[0].home_abbr, r[2], r[1], consensus,
+                            "REJECTED %s@%s [%s]: away spread %+.1f @ %+.0f — "
+                            "wrong sign direction (home_is_fav=%s)",
+                            ev_list[0].away_abbr, ev_list[0].home_abbr,
+                            r[2], r[0], r[1], home_is_fav,
                         )
-                    if valid:
-                        consensus_away_books = valid
+                # Fall back to all entries if filtering removed everything
+                if not consensus_home_books:
+                    consensus_home_books = all_home
+                if not consensus_away_books:
+                    consensus_away_books = all_away
+            else:
+                consensus_home_books = [s for s in home_spreads if abs(s[0]) == consensus]
+                consensus_away_books = [s for s in away_spreads if abs(s[0]) == consensus]
 
             # Defense-in-depth: filter out any remaining extreme spread
             # prices that slipped through source validation (e.g. moneyline
