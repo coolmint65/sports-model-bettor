@@ -194,6 +194,7 @@ class GameDetailResponse(BaseModel):
     away_recent_games: List[RecentGameResult] = []
 
     head_to_head: Optional[HeadToHeadRecord] = None
+    h2h_games: List[RecentGameResult] = []
 
     home_period_scoring: PeriodScoring
     away_period_scoring: PeriodScoring
@@ -406,6 +407,54 @@ async def _get_head_to_head(
         team2_goals=t2_goals,
         last_meeting=games[0].date,
     )
+
+
+async def _get_h2h_games(
+    team1_id: int, team2_id: int, session: AsyncSession, limit: int = 10
+) -> List[RecentGameResult]:
+    """Return individual H2H game records between two teams."""
+    lo, hi = sorted([team1_id, team2_id])
+    result = await session.execute(
+        select(Game)
+        .options(selectinload(Game.home_team), selectinload(Game.away_team))
+        .where(
+            or_(
+                and_(Game.home_team_id == lo, Game.away_team_id == hi),
+                and_(Game.home_team_id == hi, Game.away_team_id == lo),
+            ),
+            func.lower(Game.status).in_(GAME_FINAL_STATUSES),
+            Game.home_score.isnot(None),
+            Game.away_score.isnot(None),
+        )
+        .order_by(Game.date.desc())
+        .limit(limit)
+    )
+    games = result.scalars().all()
+
+    records = []
+    for game in games:
+        # Always from team1 (home team) perspective
+        is_t1_home = game.home_team_id == team1_id
+        gf = game.home_score if is_t1_home else game.away_score
+        ga = game.away_score if is_t1_home else game.home_score
+        opponent = game.away_team if is_t1_home else game.home_team
+        won = gf > ga
+        ot = bool(game.went_to_overtime)
+        res = "W" if won else ("OTL" if ot else "L")
+
+        records.append(RecentGameResult(
+            game_date=game.date,
+            opponent_abbrev=opponent.abbreviation if opponent else "???",
+            opponent_name=opponent.name if opponent else "Unknown",
+            home_away="home" if is_t1_home else "away",
+            goals_for=gf or 0,
+            goals_against=ga or 0,
+            result=res,
+            overtime=ot,
+            score_display=f"{gf}-{ga}" if gf is not None else None,
+        ))
+
+    return records
 
 
 async def _get_team_goalies(
@@ -663,6 +712,7 @@ async def get_game_details(
     home_form = await _get_team_form(game.home_team, session)
     away_form = await _get_team_form(game.away_team, session)
     h2h = await _get_head_to_head(game.home_team_id, game.away_team_id, session)
+    h2h_game_records = await _get_h2h_games(game.home_team_id, game.away_team_id, session)
     home_period = await _compute_period_scoring(game.home_team_id, session)
     away_period = await _compute_period_scoring(game.away_team_id, session)
     home_goalies = await _get_team_goalies(game.home_team_id, session)
@@ -747,6 +797,7 @@ async def get_game_details(
         home_recent_games=home_recent,
         away_recent_games=away_recent,
         head_to_head=h2h,
+        h2h_games=h2h_game_records,
         home_period_scoring=home_period,
         away_period_scoring=away_period,
         home_goalies=home_goalies,

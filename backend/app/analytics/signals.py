@@ -86,7 +86,7 @@ class SignalGenerator:
         home_games = home_f5.get("games_found", 0)
         away_games = away_f5.get("games_found", 0)
 
-        # Hot streak
+        # Hot streak (4-1 or 5-0)
         if home_wr >= 0.80 and home_games >= 5:
             w = int(home_wr * home_games)
             l = home_games - w
@@ -106,14 +106,82 @@ class SignalGenerator:
                 icon="fire",
             ))
 
-        # Struggling
+        # Strong recent form (3-2 or better)
+        if 0.60 <= home_wr < 0.80 and home_games >= 5:
+            w = int(home_wr * home_games)
+            l = home_games - w
+            signals.append(_signal(
+                "form",
+                f"{home_name} solid recent form ({w}-{l} L5)",
+                "positive", home_abbr, 0.45,
+                icon="chart",
+            ))
+        if 0.60 <= away_wr < 0.80 and away_games >= 5:
+            w = int(away_wr * away_games)
+            l = away_games - w
+            signals.append(_signal(
+                "form",
+                f"{away_name} solid recent form ({w}-{l} L5)",
+                "positive", away_abbr, 0.45,
+                icon="chart",
+            ))
+
+        # Struggling (0-1 wins)
         if home_wr <= 0.20 and home_games >= 5:
             signals.append(_signal(
-                "form", f"{home_name} struggling", "negative", home_abbr, 0.65,
+                "form", f"{home_name} struggling in recent games", "negative", home_abbr, 0.65,
             ))
         if away_wr <= 0.20 and away_games >= 5:
             signals.append(_signal(
-                "form", f"{away_name} struggling", "negative", away_abbr, 0.65,
+                "form", f"{away_name} struggling in recent games", "negative", away_abbr, 0.65,
+            ))
+
+        # Cold stretch (1-4 or worse)
+        if 0.20 < home_wr <= 0.40 and home_games >= 5:
+            w = int(home_wr * home_games)
+            l = home_games - w
+            signals.append(_signal(
+                "form",
+                f"{home_name} in cold stretch ({w}-{l} L5)",
+                "negative", home_abbr, 0.45,
+            ))
+        if 0.20 < away_wr <= 0.40 and away_games >= 5:
+            w = int(away_wr * away_games)
+            l = away_games - w
+            signals.append(_signal(
+                "form",
+                f"{away_name} in cold stretch ({w}-{l} L5)",
+                "negative", away_abbr, 0.45,
+            ))
+
+        # Form comparison when there's a notable difference
+        if home_games >= 3 and away_games >= 3:
+            diff = home_wr - away_wr
+            if abs(diff) >= 0.20:
+                better = home_name if diff > 0 else away_name
+                better_abbr = home_abbr if diff > 0 else away_abbr
+                signals.append(_signal(
+                    "form",
+                    f"{better} has stronger recent form",
+                    "positive", better_abbr, 0.35,
+                ))
+
+        # L10 form context
+        home_f10 = features.get("home_form_10", {})
+        away_f10 = features.get("away_form_10", {})
+        h10_wr = home_f10.get("win_rate", 0.5)
+        a10_wr = away_f10.get("win_rate", 0.5)
+        h10_games = home_f10.get("games_found", 0)
+        a10_games = away_f10.get("games_found", 0)
+        if h10_games >= 8 and a10_games >= 8 and abs(h10_wr - a10_wr) >= 0.25:
+            better = home_name if h10_wr > a10_wr else away_name
+            better_abbr = home_abbr if h10_wr > a10_wr else away_abbr
+            h10_w = int(h10_wr * h10_games) if h10_wr > a10_wr else int(a10_wr * a10_games)
+            h10_l = (h10_games if h10_wr > a10_wr else a10_games) - h10_w
+            signals.append(_signal(
+                "form",
+                f"{better} stronger over last 10 games ({h10_w}-{h10_l})",
+                "positive", better_abbr, 0.40,
             ))
 
         return signals
@@ -476,20 +544,44 @@ class SignalGenerator:
     ) -> List[Dict[str, Any]]:
         signals = []
         h2h = features.get("h2h", {})
+        h2h_games = h2h.get("games_found", 0)
 
-        if h2h.get("games_found", 0) >= 5:
+        if h2h_games >= 3:
             wr = h2h.get("team1_win_rate", 0.5)
-            if wr >= 0.70:
+            if wr >= 0.65:
                 signals.append(_signal(
                     "matchup",
-                    f"{home_abbr} dominates H2H ({wr:.0%} win rate)",
-                    "positive", home_abbr, 0.40,
+                    f"{home_abbr} dominates H2H ({wr:.0%} win rate in {h2h_games} meetings)",
+                    "positive", home_abbr, 0.45,
                 ))
-            elif wr <= 0.30:
+            elif wr <= 0.35:
                 signals.append(_signal(
                     "matchup",
-                    f"{away_abbr} dominates H2H ({1-wr:.0%} win rate)",
-                    "positive", away_abbr, 0.40,
+                    f"{away_abbr} dominates H2H ({1-wr:.0%} win rate in {h2h_games} meetings)",
+                    "positive", away_abbr, 0.45,
+                ))
+            elif h2h_games >= 5:
+                # Evenly matched — still useful context
+                signals.append(_signal(
+                    "matchup",
+                    f"Even H2H record ({h2h_games} meetings) | competitive matchup",
+                    "neutral", "", 0.25,
+                ))
+
+        # H2H scoring context
+        h2h_avg_total = h2h.get("avg_total_goals")
+        if h2h_avg_total and h2h_games >= 3:
+            if h2h_avg_total >= 6.5:
+                signals.append(_signal(
+                    "matchup",
+                    f"H2H games average {h2h_avg_total:.1f} goals | high-scoring matchup",
+                    "neutral", "", 0.35,
+                ))
+            elif h2h_avg_total <= 4.5:
+                signals.append(_signal(
+                    "matchup",
+                    f"H2H games average {h2h_avg_total:.1f} goals | low-scoring matchup",
+                    "neutral", "", 0.35,
                 ))
 
         # PDO regression
@@ -525,8 +617,61 @@ class SignalGenerator:
         home_abbr: str,
         away_abbr: str,
     ) -> List[Dict[str, Any]]:
-        # xG and model-edge bullets removed — too model-internal for end users.
-        return []
+        signals = []
+
+        # Edge vs market odds
+        for pred in predictions:
+            bt = pred.get("bet_type", "")
+            edge = pred.get("edge", 0) or 0
+            if bt == "ml" and abs(edge) >= 0.03:
+                team = pred.get("prediction", "")
+                signals.append(_signal(
+                    "market",
+                    f"Model sees {edge*100:.1f}% edge vs market odds",
+                    "positive" if edge > 0 else "neutral", team,
+                    min(0.70, 0.35 + abs(edge) * 3),
+                    icon="chart",
+                    tooltip="Edge is the difference between the model's win probability and the sportsbook's implied probability. Positive edge means the model thinks the bet is undervalued.",
+                ))
+                break
+
+        # Line movement signal
+        lm = features.get("line_movement", {})
+        sharp = lm.get("sharp_signal", "neutral")
+        if sharp != "neutral":
+            direction = "home" if sharp == "sharp_home" else "away"
+            abbr = home_abbr if sharp == "sharp_home" else away_abbr
+            signals.append(_signal(
+                "market",
+                f"Sharp money moving toward {direction} side",
+                "positive", abbr, 0.55,
+                icon="chart",
+                tooltip="Sharp money refers to bets from professional/informed bettors. Significant line movement suggests informed money is being placed.",
+            ))
+
+        # Season record context
+        home_season = features.get("home_season", {})
+        away_season = features.get("away_season", {})
+        home_gf = home_season.get("goals_for_pg", 0)
+        away_gf = away_season.get("goals_for_pg", 0)
+        home_ga = home_season.get("goals_against_pg", 0)
+        away_ga = away_season.get("goals_against_pg", 0)
+
+        if home_gf > 0 and away_gf > 0:
+            home_diff = home_gf - home_ga
+            away_diff = away_gf - away_ga
+            if abs(home_diff - away_diff) >= 0.4:
+                better_name = features.get("home_team_name", home_abbr) if home_diff > away_diff else features.get("away_team_name", away_abbr)
+                better_abbr = home_abbr if home_diff > away_diff else away_abbr
+                better_diff = max(home_diff, away_diff)
+                signals.append(_signal(
+                    "season",
+                    f"{better_name} has better goal differential ({better_diff:+.2f}/game)",
+                    "positive", better_abbr, 0.40,
+                    icon="chart",
+                ))
+
+        return signals
 
     # ------------------------------------------------------------------ #
     #  Composite edge signals                                             #

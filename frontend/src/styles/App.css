@@ -5633,7 +5633,15 @@ a:hover {
 .gd-stats-team {
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 6px;
+  text-align: center;
+}
+
+.gd-stats-logo {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
 }
 
 .gd-stats-team-name {

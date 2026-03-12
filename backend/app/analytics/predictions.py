@@ -506,7 +506,7 @@ class PredictionManager:
                         text = f"{text} {{{{tooltip:{sig['tooltip']}}}}}"
                     relevant.append(text)
             if relevant:
-                pred["reasoning"] = "; ".join(relevant[:5])
+                pred["reasoning"] = "; ".join(relevant[:8])
 
         return {
             "game_id": game.id,

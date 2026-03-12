@@ -21,6 +21,16 @@ from app.scrapers.base import APIResponseError, BaseScraper
 logger = logging.getLogger(__name__)
 
 
+def _safe_float(val) -> Optional[float]:
+    """Convert a value to float, returning None on failure."""
+    if val is None:
+        return None
+    try:
+        return round(float(val), 2)
+    except (ValueError, TypeError):
+        return None
+
+
 class NHLScraper(BaseScraper):
     """
     Scraper for the NHL Stats API.
@@ -181,8 +191,8 @@ class NHLScraper(BaseScraper):
                 "goals_against": entry.get("goalAgainst", 0),
                 "goals_for_per_game": entry.get("goalsForPctg", None),
                 "goals_against_per_game": entry.get("goalsAgainstPctg", None),
-                "power_play_pct": entry.get("powerPlayPctg", None),
-                "penalty_kill_pct": entry.get("penaltyKillPctg", None),
+                "power_play_pct": round(float(entry["powerPlayPctg"]) * 100, 2) if entry.get("powerPlayPctg") else None,
+                "penalty_kill_pct": round(float(entry["penaltyKillPctg"]) * 100, 2) if entry.get("penaltyKillPctg") else None,
                 "regulation_wins": entry.get("regulationWins", 0),
                 "regulation_plus_ot_wins": entry.get(
                     "regulationPlusOtWins", 0
@@ -202,9 +212,9 @@ class NHLScraper(BaseScraper):
                 "wins_in_regulation": entry.get("winsInRegulation", 0),
                 "wins_in_ot": entry.get("winsInOt", 0),
                 "wins_in_shootout": entry.get("winsInShootout", 0),
-                "shots_for_per_game": entry.get("shotsForPerGame", None),
-                "shots_against_per_game": entry.get("shotsAgainstPerGame", None),
-                "faceoff_win_pct": entry.get("faceoffWinPct", None) or entry.get("faceoffWinPctg", None),
+                "shots_for_per_game": _safe_float(entry.get("shotsForPerGame")),
+                "shots_against_per_game": _safe_float(entry.get("shotsAgainstPerGame")),
+                "faceoff_win_pct": round(float(entry["faceoffWinPctg"]) * 100, 2) if entry.get("faceoffWinPctg") else _safe_float(entry.get("faceoffWinPct")),
             }
         except Exception as exc:
             logger.warning("Failed to parse standing entry: %s", exc)
@@ -239,7 +249,7 @@ class NHLScraper(BaseScraper):
         url = (
             f"https://api.nhle.com/stats/rest/en/team/summary"
             f"?cayenneExp=seasonId={self.default_season}"
-            f" and gameTypeId=2"
+            f"%20and%20gameTypeId=2"
             f"&sort=points&limit=-1"
         )
         try:
@@ -247,23 +257,40 @@ class NHLScraper(BaseScraper):
             async with aiohttp.ClientSession() as client:
                 async with client.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                     if resp.status != 200:
-                        logger.warning("NHL stats API returned %d", resp.status)
+                        logger.warning("NHL stats API returned %d for summary stats", resp.status)
                         return {}
                     data = await resp.json()
 
             results = {}
             for team in data.get("data", []):
-                abbrev = team.get("teamTriCode") or team.get("teamAbbrev")
-                if not abbrev:
+                abbrev = (
+                    team.get("teamTriCode")
+                    or team.get("teamAbbrev", {}).get("default")
+                    or team.get("teamAbbrev")
+                )
+                if not abbrev or not isinstance(abbrev, str):
                     continue
+
+                # NHL API returns PP%/PK% as decimals (0.214) or percentages (21.4)
+                pp = team.get("powerPlayPct") or team.get("powerPlayPctg")
+                pk = team.get("penaltyKillPct") or team.get("penaltyKillPctg")
+                fo = team.get("faceoffWinPct") or team.get("faceoffWinPctg")
+
+                # Normalize: if value <= 1.0, it's a decimal — convert to percentage
+                def to_pct(v):
+                    if v is None:
+                        return None
+                    v = float(v)
+                    return round(v * 100, 2) if v <= 1.0 else round(v, 2)
+
                 results[abbrev] = {
-                    "power_play_pct": team.get("powerPlayPct"),
-                    "penalty_kill_pct": team.get("penaltyKillPct"),
-                    "shots_for_per_game": team.get("shotsForPerGame"),
-                    "shots_against_per_game": team.get("shotsAgainstPerGame"),
-                    "faceoff_win_pct": team.get("faceoffWinPct"),
+                    "power_play_pct": to_pct(pp),
+                    "penalty_kill_pct": to_pct(pk),
+                    "shots_for_per_game": _safe_float(team.get("shotsForPerGame")),
+                    "shots_against_per_game": _safe_float(team.get("shotsAgainstPerGame")),
+                    "faceoff_win_pct": to_pct(fo),
                 }
-            logger.info("Fetched summary stats for %d teams", len(results))
+            logger.info("Fetched summary stats for %d teams from NHL stats API", len(results))
             return results
         except Exception as exc:
             logger.warning("Failed to fetch team summary stats: %s", exc)

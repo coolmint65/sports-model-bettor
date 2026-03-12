@@ -735,6 +735,7 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
   const awayRecord = `${away.wins || 0}-${away.losses || 0}`;
   const homeWinPct = home.games_played ? `${Math.round((home.wins / home.games_played) * 100)}%` : '-';
   const awayWinPct = away.games_played ? `${Math.round((away.wins / away.games_played) * 100)}%` : '-';
+  const ouLine = game.odds?.over_under_line || 5.5;
 
   // Streak from recent games
   const homeRecent = game.home_recent_games || [];
@@ -755,13 +756,13 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
   const awayRank = away.division_rank || '-';
 
   const perfStats = [
-    { label: 'GF/G', homeVal: fmtStat(home.goals_for_per_game), awayVal: fmtStat(away.goals_for_per_game) },
-    { label: 'GAA', homeVal: fmtStat(home.goals_against_per_game), awayVal: fmtStat(away.goals_against_per_game) },
-    { label: 'PP%', homeVal: fmtStat(home.power_play_pct, true), awayVal: fmtStat(away.power_play_pct, true) },
-    { label: 'PK%', homeVal: fmtStat(home.penalty_kill_pct, true), awayVal: fmtStat(away.penalty_kill_pct, true) },
-    { label: 'SF/G', homeVal: fmtStat(home.shots_for_per_game), awayVal: fmtStat(away.shots_for_per_game) },
-    { label: 'SA/G', homeVal: fmtStat(home.shots_against_per_game), awayVal: fmtStat(away.shots_against_per_game) },
-    { label: 'FO%', homeVal: fmtStat(home.faceoff_win_pct, true), awayVal: fmtStat(away.faceoff_win_pct, true) },
+    { label: 'Goals For/Game', homeVal: fmtStat(home.goals_for_per_game), awayVal: fmtStat(away.goals_for_per_game) },
+    { label: 'Goals Against/Game', homeVal: fmtStat(home.goals_against_per_game), awayVal: fmtStat(away.goals_against_per_game) },
+    { label: 'Power Play %', homeVal: fmtStat(home.power_play_pct, true), awayVal: fmtStat(away.power_play_pct, true) },
+    { label: 'Penalty Kill %', homeVal: fmtStat(home.penalty_kill_pct, true), awayVal: fmtStat(away.penalty_kill_pct, true) },
+    { label: 'Shots For/Game', homeVal: fmtStat(home.shots_for_per_game), awayVal: fmtStat(away.shots_for_per_game) },
+    { label: 'Shots Against/Game', homeVal: fmtStat(home.shots_against_per_game), awayVal: fmtStat(away.shots_against_per_game) },
+    { label: 'Faceoff Win %', homeVal: fmtStat(home.faceoff_win_pct, true), awayVal: fmtStat(away.faceoff_win_pct, true) },
   ];
 
   // Compute ATS-like record from recent games
@@ -783,7 +784,7 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
         </div>
         <div className="gd-stats-teams">
           <div className="gd-stats-team">
-            {homeLogo && <img src={homeLogo} alt="" width={28} height={28} className="gd-stats-logo" onError={(e) => { e.target.style.display = 'none'; }} />}
+            {homeLogo && <img src={homeLogo} alt="" width={48} height={48} className="gd-stats-logo" onError={(e) => { e.target.style.display = 'none'; }} />}
             <div className="gd-stats-team-name">{homeLabel}</div>
             <div className="gd-stats-record">{homeRecord}</div>
             <div className="gd-stats-badges">
@@ -801,7 +802,7 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
             <div className="gd-stats-winpct">Win%: {homeWinPct}</div>
           </div>
           <div className="gd-stats-team">
-            {awayLogo && <img src={awayLogo} alt="" width={28} height={28} className="gd-stats-logo" onError={(e) => { e.target.style.display = 'none'; }} />}
+            {awayLogo && <img src={awayLogo} alt="" width={48} height={48} className="gd-stats-logo" onError={(e) => { e.target.style.display = 'none'; }} />}
             <div className="gd-stats-team-name">{awayLabel}</div>
             <div className="gd-stats-record">{awayRecord}</div>
             <div className="gd-stats-badges">
@@ -882,13 +883,13 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
                 <div className="gd-trends-scoring">
                   <div className="gd-trends-scoring-title">Scoring (Last {Math.min(homeRecent.length, 10)})</div>
                   <div className="gd-trends-row">
-                    <span className="gd-trends-label">Avg GF</span>
+                    <span className="gd-trends-label">Avg Goals For</span>
                     <span className="gd-trends-val">
                       {(homeRecent.slice(0, 10).reduce((s, g) => s + (g.goals_for || 0), 0) / Math.min(homeRecent.length, 10)).toFixed(1)}
                     </span>
                   </div>
                   <div className="gd-trends-row">
-                    <span className="gd-trends-label">Avg GA</span>
+                    <span className="gd-trends-label">Avg Goals Against</span>
                     <span className="gd-trends-val">
                       {(homeRecent.slice(0, 10).reduce((s, g) => s + (g.goals_against || 0), 0) / Math.min(homeRecent.length, 10)).toFixed(1)}
                     </span>
@@ -900,9 +901,15 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
                     </span>
                   </div>
                   <div className="gd-trends-row">
-                    <span className="gd-trends-label">Over 5.5</span>
+                    <span className="gd-trends-label">Over {ouLine}</span>
                     <span className="gd-trends-val">
-                      {homeRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) > 5.5).length}-{homeRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) <= 5.5).length}
+                      {homeRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) > ouLine).length}-{homeRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) <= ouLine).length}
+                    </span>
+                  </div>
+                  <div className="gd-trends-row">
+                    <span className="gd-trends-label">Under {ouLine}</span>
+                    <span className="gd-trends-val">
+                      {homeRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) < ouLine).length}-{homeRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) >= ouLine).length}
                     </span>
                   </div>
                 </div>
@@ -937,13 +944,13 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
                 <div className="gd-trends-scoring">
                   <div className="gd-trends-scoring-title">Scoring (Last {Math.min(awayRecent.length, 10)})</div>
                   <div className="gd-trends-row">
-                    <span className="gd-trends-label">Avg GF</span>
+                    <span className="gd-trends-label">Avg Goals For</span>
                     <span className="gd-trends-val">
                       {(awayRecent.slice(0, 10).reduce((s, g) => s + (g.goals_for || 0), 0) / Math.min(awayRecent.length, 10)).toFixed(1)}
                     </span>
                   </div>
                   <div className="gd-trends-row">
-                    <span className="gd-trends-label">Avg GA</span>
+                    <span className="gd-trends-label">Avg Goals Against</span>
                     <span className="gd-trends-val">
                       {(awayRecent.slice(0, 10).reduce((s, g) => s + (g.goals_against || 0), 0) / Math.min(awayRecent.length, 10)).toFixed(1)}
                     </span>
@@ -955,9 +962,15 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
                     </span>
                   </div>
                   <div className="gd-trends-row">
-                    <span className="gd-trends-label">Over 5.5</span>
+                    <span className="gd-trends-label">Over {ouLine}</span>
                     <span className="gd-trends-val">
-                      {awayRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) > 5.5).length}-{awayRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) <= 5.5).length}
+                      {awayRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) > ouLine).length}-{awayRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) <= ouLine).length}
+                    </span>
+                  </div>
+                  <div className="gd-trends-row">
+                    <span className="gd-trends-label">Under {ouLine}</span>
+                    <span className="gd-trends-val">
+                      {awayRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) < ouLine).length}-{awayRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) >= ouLine).length}
                     </span>
                   </div>
                 </div>
@@ -1025,29 +1038,35 @@ function RecentFormAndH2H({ game, homeAbbr, awayAbbr }) {
   const homeId = game.home_team_form?.team_id ?? game.home_team?.id;
   const team1IsHome = h2h?.team1_id === homeId;
 
-  // Find H2H matchups by filtering each team's recent games for the opponent
-  const h2hFromHome = homeForm.filter((g) => {
-    const opp = (g.opponent_abbrev || g.opponent_name || '').toUpperCase();
-    return opp === awayAbbr.toUpperCase();
-  });
-  const h2hFromAway = awayForm.filter((g) => {
-    const opp = (g.opponent_abbrev || g.opponent_name || '').toUpperCase();
-    return opp === homeAbbr.toUpperCase();
-  });
-
-  // Merge and deduplicate H2H games by date, preferring home team's perspective
-  const h2hGamesMap = new Map();
-  for (const g of h2hFromHome) {
-    const key = g.game_date || g.date;
-    if (key) h2hGamesMap.set(key, { ...g, perspective: 'home' });
+  // Use backend-provided H2H games (all matchups between these teams)
+  // Falls back to filtering recent games if backend data not available
+  const backendH2H = (game.h2h_games || []).map((g) => ({ ...g, perspective: 'home' }));
+  let h2hGames;
+  if (backendH2H.length > 0) {
+    h2hGames = backendH2H;
+  } else {
+    // Fallback: filter recent games for opponent matchups
+    const h2hFromHome = homeForm.filter((g) => {
+      const opp = (g.opponent_abbrev || g.opponent_name || '').toUpperCase();
+      return opp === awayAbbr.toUpperCase();
+    });
+    const h2hFromAway = awayForm.filter((g) => {
+      const opp = (g.opponent_abbrev || g.opponent_name || '').toUpperCase();
+      return opp === homeAbbr.toUpperCase();
+    });
+    const h2hGamesMap = new Map();
+    for (const g of h2hFromHome) {
+      const key = g.game_date || g.date;
+      if (key) h2hGamesMap.set(key, { ...g, perspective: 'home' });
+    }
+    for (const g of h2hFromAway) {
+      const key = g.game_date || g.date;
+      if (key && !h2hGamesMap.has(key)) h2hGamesMap.set(key, { ...g, perspective: 'away' });
+    }
+    h2hGames = [...h2hGamesMap.values()]
+      .sort((a, b) => new Date(b.game_date || b.date) - new Date(a.game_date || a.date))
+      .slice(0, 10);
   }
-  for (const g of h2hFromAway) {
-    const key = g.game_date || g.date;
-    if (key && !h2hGamesMap.has(key)) h2hGamesMap.set(key, { ...g, perspective: 'away' });
-  }
-  const h2hGames = [...h2hGamesMap.values()]
-    .sort((a, b) => new Date(b.game_date || b.date) - new Date(a.game_date || a.date))
-    .slice(0, 10);
 
   return (
     <div className="gd-two-col">
