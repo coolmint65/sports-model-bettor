@@ -203,6 +203,7 @@ class GameDetailResponse(BaseModel):
     away_goalies: List[GoalieInfo] = []
 
     predictions: List[GamePredictionBrief] = []
+    top_pick: Optional[Dict[str, Any]] = None
 
 
 class PredictionResponse(BaseModel):
@@ -693,18 +694,10 @@ async def _get_game_predictions(
             )
         )
 
-    # Sort: recommended first (by composite score), then fallback, then rest.
-    # Apply the same spread-underdog penalty (-0.10) used by the dashboard's
-    # _compute_top_picks so both pages agree on which pick is "top".
+    # Sort: recommended first (by composite score), then fallback, then rest
     def sort_key(b: GamePredictionBrief):
         tier = 0 if b.recommended else (1 if b.is_fallback else 2)
         score = composite_pick_score(b.confidence, b.edge, implied_map.get(b.id))
-        if (
-            b.bet_type == "spread"
-            and b.prediction_value
-            and "+" in b.prediction_value
-        ):
-            score -= 0.10
         return (tier, -score)
 
     briefs.sort(key=sort_key)
@@ -756,6 +749,14 @@ async def get_game_details(
     home_goalies = await _get_team_goalies(game.home_team_id, session)
     away_goalies = await _get_team_goalies(game.away_team_id, session)
     predictions = await _get_game_predictions(game.id, session, game=game)
+
+    # Compute the same top_pick the dashboard uses so the game detail
+    # page always agrees with the schedule card on which bet to show.
+    from app.api.schedule import _compute_top_picks
+    top_picks_map = await _compute_top_picks([game], session)
+    top_pick_obj = top_picks_map.get(game.id)
+    top_pick_dict = top_pick_obj.model_dump() if top_pick_obj else None
+
     home_recent = await _get_recent_games(game.home_team_id, session, limit=50)
     away_recent = await _get_recent_games(game.away_team_id, session, limit=50)
 
@@ -841,6 +842,7 @@ async def get_game_details(
         home_goalies=home_goalies,
         away_goalies=away_goalies,
         predictions=predictions,
+        top_pick=top_pick_dict,
     )
 
 

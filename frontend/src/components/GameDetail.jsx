@@ -384,7 +384,19 @@ function cleanReasoningText(raw) {
 /* ──────────────────── AI Match Analysis ──────────────────── */
 function AIAnalysis({ game, homeAbbr, awayAbbr, homeTeamLabel, awayTeamLabel }) {
   const predictions = game.predictions || game.bets || [];
-  const topPick = predictions.find((p) => p.recommended) || predictions[0];
+  // Use the same top_pick the dashboard computed so both pages always
+  // agree on which bet to display.  Fall back to the old heuristic
+  // only when the backend didn't provide top_pick.
+  const topPick = game.top_pick
+    ? {
+        bet_type: game.top_pick.bet_type,
+        prediction_value: game.top_pick.prediction_value,
+        confidence: game.top_pick.confidence,
+        edge: game.top_pick.edge,
+        reasoning: game.top_pick.reasoning,
+        recommended: !game.top_pick.is_fallback,
+      }
+    : predictions.find((p) => p.recommended) || predictions[0];
   if (!topPick) return null;
 
   const confidence = confidencePct(topPick.confidence);
@@ -1495,9 +1507,9 @@ function GameDetail() {
   const homeAbbr = homeForm.abbreviation || teamAbbrev(game.home_team, 'HME');
   const venue = game.venue || game.arena || '';
 
-  // Confidence from top pick
+  // Confidence from top pick — use the same top_pick the dashboard uses
   const predictions = game.predictions || game.bets || [];
-  const topPick = predictions.find((p) => p.recommended) || predictions[0];
+  const topPick = game.top_pick || predictions.find((p) => p.recommended) || predictions[0];
   const confidence = topPick ? confidencePct(topPick.confidence) : null;
 
   // Determine which team the AI picked
