@@ -693,10 +693,18 @@ async def _get_game_predictions(
             )
         )
 
-    # Sort: recommended first (by composite score), then fallback, then rest
+    # Sort: recommended first (by composite score), then fallback, then rest.
+    # Apply the same spread-underdog penalty (-0.10) used by the dashboard's
+    # _compute_top_picks so both pages agree on which pick is "top".
     def sort_key(b: GamePredictionBrief):
         tier = 0 if b.recommended else (1 if b.is_fallback else 2)
         score = composite_pick_score(b.confidence, b.edge, implied_map.get(b.id))
+        if (
+            b.bet_type == "spread"
+            and b.prediction_value
+            and "+" in b.prediction_value
+        ):
+            score -= 0.10
         return (tier, -score)
 
     briefs.sort(key=sort_key)

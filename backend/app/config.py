@@ -331,13 +331,13 @@ class Settings(BaseModel):
     # Best-bet juice limits (American odds).
     # Lines steeper than these are excluded from "best bets" because
     # the juice makes them poor value even if the model is confident.
-    # Favorites: no steeper than -180 (risk $180 to win $100)
+    # Favorites: no steeper than -170 (risk $170 to win $100)
     # Underdogs: no floor needed (all plus-money is fine)
-    best_bet_max_favorite: float = -160.0
+    best_bet_max_favorite: float = -170.0
     # Overall implied-probability ceiling for best-bet candidates.
-    # Synced with best_bet_max_favorite: -160 → 160/260 ≈ 0.6154.
+    # Synced with best_bet_max_favorite: -170 → 170/270 ≈ 0.6296.
     # Applied at the DB level where we only have implied prob.
-    best_bet_max_implied: float = 0.6154
+    best_bet_max_implied: float = 0.6296
 
     # Scheduling
     scrape_interval_minutes: int = 30

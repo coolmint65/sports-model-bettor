@@ -741,8 +741,23 @@ class FeatureEngine:
         recent_result = await db.execute(recent_stmt)
         recent_players = {row[0] for row in recent_result.all()}
 
-        # Missing regulars = regulars not in recent games
-        missing_pids = set(regulars.keys()) - recent_players
+        # Missing regulars = regulars not in recent games AND confirmed
+        # injured.  Without the injury cross-check, healthy scratches,
+        # trades, AHL assignments, and rest days inflate the count.
+        absent_pids = set(regulars.keys()) - recent_players
+
+        # Query active injury reports for this team
+        inj_stmt = select(InjuryReport.player_id).where(
+            and_(
+                InjuryReport.team_id == team_id,
+                InjuryReport.active == True,
+            )
+        )
+        inj_result = await db.execute(inj_stmt)
+        injured_pids = {row[0] for row in inj_result.all()}
+
+        # Only count absent players who have an active injury report
+        missing_pids = absent_pids & injured_pids
 
         missing_ppg = 0.0
         missing_gpg = 0.0
