@@ -326,7 +326,20 @@ async def sync_props_now() -> Dict[str, Any]:
         diag["props_synced"] = 0
         return diag
 
-    # Step 5: Match events to games and persist
+    # Step 5: Populate caches so sync_player_props doesn't re-fetch
+    import time as _time_mod
+    import app.scrapers.player_props as _pp_mod
+    import app.scrapers.odds_multi as _om_mod
+
+    # Seed the bulk odds cache (used by sync_player_props for event metadata)
+    _om_mod._odds_api_cache["data"] = raw
+    _om_mod._odds_api_cache["timestamp"] = _time_mod.monotonic()
+
+    # Seed the props cache (used by fetch_all_player_props)
+    _pp_mod._props_cache = props_by_event
+    _pp_mod._props_cache_ts = _time_mod.monotonic()
+
+    # Step 6: Match events to games and persist
     try:
         async with get_write_session_context() as session:
             from app.services.odds import sync_player_props

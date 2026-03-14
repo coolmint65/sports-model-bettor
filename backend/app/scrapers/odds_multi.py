@@ -1552,53 +1552,64 @@ async def _fetch_odds_api_raw(
 
     url = "https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds"
 
+    # Try market sets in order: full (with period markets) then core-only.
+    # Period markets (h2h_h1, spreads_h1, totals_h1) require the
+    # "Additional Markets" add-on.  If the plan doesn't include it the
+    # API returns 422, so we fall back to core markets.
+    _MARKET_SETS = [
+        "h2h,spreads,totals,h2h_h1,spreads_h1,totals_h1",
+        "h2h,spreads,totals",
+    ]
+
     # Request combined us+us2 regions to get ALL US sportsbooks in one
     # API call.  This includes FanDuel, DraftKings, BetMGM, Caesars,
     # PointsBet, Hard Rock, Bet365, etc.  Fall back to individual
     # regions if the combined request doesn't work.
-    for region in ("us,us2", "us", "us2"):
-        params = {
-            "apiKey": api_key,
-            "regions": region,
-            "markets": "h2h,spreads,totals,h2h_h1,spreads_h1,totals_h1",
-            "oddsFormat": "american",
-        }
+    for markets in _MARKET_SETS:
+        for region in ("us,us2", "us", "us2"):
+            params = {
+                "apiKey": api_key,
+                "regions": region,
+                "markets": markets,
+                "oddsFormat": "american",
+            }
 
-        data = await _make_request(client, url, params=params)
-        if data is None:
-            logger.warning(
-                "Odds API: '%s' region request failed (network error or HTTP error). "
-                "Check that api.the-odds-api.com is reachable.",
-                region,
-            )
-            continue
-        if isinstance(data, dict) and data.get("message"):
-            # API returns {"message": "..."} for auth errors
-            logger.warning("Odds API error: %s", data.get("message"))
-            return None
-        if isinstance(data, list) and len(data) > 0:
-            # Check that at least one event has bookmaker data
-            has_bookmakers = any(
-                len(ev.get("bookmakers", [])) > 0 for ev in data
-            )
-            if has_bookmakers:
-                total_books = set()
-                for ev in data:
-                    for bm in ev.get("bookmakers", []):
-                        total_books.add(bm.get("key", "unknown"))
-                logger.info(
-                    "Odds API: got %d events from '%s' region(s) with %d bookmakers: %s",
-                    len(data), region, len(total_books),
-                    ", ".join(sorted(total_books)),
+            data = await _make_request(client, url, params=params)
+            if data is None:
+                logger.warning(
+                    "Odds API: markets=%r region='%s' failed "
+                    "(network error or HTTP error).",
+                    markets, region,
                 )
-                _odds_api_cache["data"] = data
-                _odds_api_cache["timestamp"] = now
-                return data
-            else:
-                logger.info(
-                    "Odds API: '%s' region returned %d events but no bookmakers, trying next",
-                    region, len(data),
+                continue
+            if isinstance(data, dict) and data.get("message"):
+                # API returns {"message": "..."} for auth errors
+                logger.warning("Odds API error: %s", data.get("message"))
+                return None
+            if isinstance(data, list) and len(data) > 0:
+                # Check that at least one event has bookmaker data
+                has_bookmakers = any(
+                    len(ev.get("bookmakers", [])) > 0 for ev in data
                 )
+                if has_bookmakers:
+                    total_books = set()
+                    for ev in data:
+                        for bm in ev.get("bookmakers", []):
+                            total_books.add(bm.get("key", "unknown"))
+                    logger.info(
+                        "Odds API: got %d events from '%s' region(s), "
+                        "markets=%r, %d bookmakers: %s",
+                        len(data), region, markets, len(total_books),
+                        ", ".join(sorted(total_books)),
+                    )
+                    _odds_api_cache["data"] = data
+                    _odds_api_cache["timestamp"] = now
+                    return data
+                else:
+                    logger.info(
+                        "Odds API: '%s' region returned %d events but no bookmakers, trying next",
+                        region, len(data),
+                    )
 
     logger.warning("Odds API: all region attempts failed — no data returned")
     return None
