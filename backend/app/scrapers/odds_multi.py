@@ -1553,9 +1553,8 @@ async def _fetch_odds_api_raw(
     url = "https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds"
 
     # Try market sets in order: full (with period markets) then core-only.
-    # Period markets (h2h_h1, spreads_h1, totals_h1) require the
-    # "Additional Markets" add-on.  If the plan doesn't include it the
-    # API returns 422, so we fall back to core markets.
+    # All Odds API plans include all markets, but some combinations may
+    # fail with certain region/market combos, so we fall back gracefully.
     _MARKET_SETS = [
         "h2h,spreads,totals,h2h_h1,spreads_h1,totals_h1",
         "h2h,spreads,totals",
