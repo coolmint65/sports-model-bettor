@@ -202,6 +202,10 @@ def _build_schedule_game(
     top_pick: Optional[GameTopPick] = None,
     top_prop: Optional[GameTopPick] = None,
 ) -> ScheduleGame:
+    # When no market pick exists but a prop does, promote the prop
+    # to top_pick so the dashboard still shows a recommendation.
+    effective_pick = top_pick if top_pick is not None else top_prop
+
     return ScheduleGame(
         id=game.id,
         external_id=game.external_id,
@@ -223,7 +227,7 @@ def _build_schedule_game(
         in_intermission=game.in_intermission,
         home_shots=game.home_shots,
         away_shots=game.away_shots,
-        top_pick=top_pick,
+        top_pick=effective_pick,
         top_prop=top_prop,
         odds=_build_game_odds(game),
         pregame_odds=_build_pregame_odds(game),

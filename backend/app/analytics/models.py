@@ -1991,14 +1991,6 @@ class BettingModel:
                 for s_prob, s_odds, s_abbr, s_sign in side_checks:
                     if s_prob <= 0 or s_odds == 0:
                         continue
-                    # Skip sides with juice steeper than the configured limit.
-                    # e.g., BOS +1.5 at -238 is terrible value even with edge.
-                    if s_odds < settings.best_bet_max_favorite:
-                        logger.debug(
-                            "Spread %s %s: juice %d steeper than %d limit — skipping",
-                            s_abbr, s_sign, s_odds, settings.best_bet_max_favorite,
-                        )
-                        continue
                     s_implied = american_odds_to_implied_prob(s_odds)
                     s_edge = s_prob - s_implied
 
@@ -2058,66 +2050,40 @@ class BettingModel:
                 fav_edge = fav_cover_prob - fav_implied
                 dog_edge = dog_cover_prob - dog_implied
 
-                # Apply juice filter to both sides before choosing
-                fav_juice_ok = (
-                    fav_price is None
-                    or float(fav_price) >= settings.best_bet_max_favorite
-                    or float(fav_price) > 0
-                )
-                dog_juice_ok = (
-                    dog_price is None
-                    or float(dog_price) >= settings.best_bet_max_favorite
-                    or float(dog_price) > 0
-                )
-
-                if fav_edge >= dog_edge and fav_juice_ok:
+                if fav_edge >= dog_edge:
                     sb_abbr = fav_abbr
                     sb_sign = "-1.5"
                     sb_prob = fav_cover_prob
                     sb_price = fav_price
-                elif dog_juice_ok:
+                else:
                     sb_abbr = dog_abbr
                     sb_sign = "+1.5"
                     sb_prob = dog_cover_prob
                     sb_price = dog_price
-                elif fav_juice_ok:
-                    sb_abbr = fav_abbr
-                    sb_sign = "-1.5"
-                    sb_prob = fav_cover_prob
-                    sb_price = fav_price
-                else:
-                    # Both sides exceed juice limit — skip spread entirely
-                    sb_abbr = None
-                    sb_sign = None
-                    sb_prob = 0
-                    sb_price = None
 
-                if sb_abbr is None:
-                    logger.debug("Spread: both sides exceed juice limit — no spread prediction")
-                else:
-                    spread_odds_display = None
-                    spread_implied = None
-                    if sb_price is not None and spread_line is not None:
-                        spread_odds_display = float(sb_price)
-                        spread_implied = american_odds_to_implied_prob(spread_odds_display)
-                    elif spread_line is not None:
-                        spread_odds_display = -110.0
-                        spread_implied = 0.524
+                spread_odds_display = None
+                spread_implied = None
+                if sb_price is not None and spread_line is not None:
+                    spread_odds_display = float(sb_price)
+                    spread_implied = american_odds_to_implied_prob(spread_odds_display)
+                elif spread_line is not None:
+                    spread_odds_display = -110.0
+                    spread_implied = 0.524
 
-                    predictions.append({
-                        "bet_type": "spread",
-                        "prediction": f"{sb_abbr}_{sb_sign}",
-                        "confidence": self.calibrate_probability(sb_prob),
-                        "probability": round(sb_prob, 4),
-                        "implied_probability": round(spread_implied, 4) if spread_implied else None,
-                        "odds": spread_odds_display,
-                        "reasoning": self._build_clean_reasons(
-                            features, sb_abbr,
-                            away_abbr if sb_abbr == home_abbr else home_abbr,
-                            "spread", spread,
-                        ),
-                        "details": spread,
-                    })
+                predictions.append({
+                    "bet_type": "spread",
+                    "prediction": f"{sb_abbr}_{sb_sign}",
+                    "confidence": self.calibrate_probability(sb_prob),
+                    "probability": round(sb_prob, 4),
+                    "implied_probability": round(spread_implied, 4) if spread_implied else None,
+                    "odds": spread_odds_display,
+                    "reasoning": self._build_clean_reasons(
+                        features, sb_abbr,
+                        away_abbr if sb_abbr == home_abbr else home_abbr,
+                        "spread", spread,
+                    ),
+                    "details": spread,
+                })
         except Exception as e:
             logger.error("Spread prediction failed: %s", e)
 
