@@ -1,6 +1,82 @@
-import { Target, TrendingUp, Star, CheckCircle, XCircle, AlertCircle, AlertTriangle } from 'lucide-react';
+import { Target, TrendingUp, Star, CheckCircle, XCircle, AlertCircle, AlertTriangle, Info } from 'lucide-react';
+import { useState } from 'react';
 import { confidencePct, formatBetType, formatPredictionValue, teamAbbrev } from '../utils/teams';
 import { getConfidenceColor } from '../utils/formatting';
+
+/**
+ * Parse reasoning text, stripping {{team:...}} and {{tooltip:...}} markers.
+ * Returns an array of { text, team, tooltip } objects.
+ */
+function parseReasoning(reasoning) {
+  if (!reasoning) return [];
+
+  let cleaned = reasoning.replace(/\s*\(Odds:\s*[^)]*\)/g, '').trim();
+  if (!cleaned) return [];
+
+  const teamMarkers = [];
+  const tooltips = [];
+  const TM_PH = '\x00TM';
+  const TT_PH = '\x00TT';
+  cleaned = cleaned.replace(/\{\{team:([^}]+)\}\}\s*/g, (_match, abbr) => {
+    teamMarkers.push(abbr.trim().toUpperCase());
+    return TM_PH + (teamMarkers.length - 1) + ' ';
+  });
+  cleaned = cleaned.replace(/\s*\{\{tooltip:([\s\S]*?)\}\}/g, (_match, tip) => {
+    tooltips.push(tip.trim());
+    return TT_PH + (tooltips.length - 1);
+  });
+
+  let lines = cleaned
+    .split(/(?:\d+\.\s+|\n|;\s*)/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+
+  if (lines.length <= 1) {
+    lines = cleaned
+      .split(/\.\s+/)
+      .map((s) => s.trim().replace(/\.$/, ''))
+      .filter((s) => s.length > 5);
+  }
+
+  const tmRe = new RegExp(TM_PH + '(\\d+)\\s*', 'g');
+  const ttRe = new RegExp(TT_PH + '(\\d+)', 'g');
+  return lines.slice(0, 7).map((line) => {
+    let tooltip = null;
+    let team = null;
+    let text = line.replace(tmRe, (_m, idx) => {
+      team = teamMarkers[parseInt(idx, 10)] || null;
+      return '';
+    });
+    text = text.replace(ttRe, (_m, idx) => {
+      tooltip = tooltips[parseInt(idx, 10)] || null;
+      return '';
+    }).trim();
+    return { text, tooltip, team };
+  });
+}
+
+function ReasoningLine({ item }) {
+  const [showTooltip, setShowTooltip] = useState(false);
+
+  return (
+    <li className="reasoning-bullet">
+      {item.team && <span className="reasoning-team-tag">{item.team}</span>}
+      <span>{item.text}</span>
+      {item.tooltip && (
+        <span
+          className="reasoning-tooltip-trigger"
+          onMouseEnter={() => setShowTooltip(true)}
+          onMouseLeave={() => setShowTooltip(false)}
+        >
+          <Info size={12} />
+          {showTooltip && (
+            <span className="reasoning-tooltip-popup">{item.tooltip}</span>
+          )}
+        </span>
+      )}
+    </li>
+  );
+}
 
 function getConfidenceLabel(confidence) {
   if (confidence >= 75) return 'Very High';
@@ -32,8 +108,9 @@ function PredictionCard({ prediction, showGame = false, compact = false, isFallb
   // Use provided abbreviations, or derive from prediction's team objects
   const hAbbr = homeAbbr || teamAbbrev(prediction.home_team, null);
   const aAbbr = awayAbbr || teamAbbrev(prediction.away_team, null);
-  const pick = formatPredictionValue(prediction.prediction_value || prediction.pick || prediction.selection, hAbbr, aAbbr);
-  const reasoning = prediction.reasoning || prediction.reason || prediction.analysis || '';
+  const pick = formatPredictionValue(prediction.prediction_value || prediction.pick || prediction.selection, hAbbr, aAbbr, prediction.bet_type || prediction.type);
+  const rawReasoning = prediction.reasoning || prediction.reason || prediction.analysis || '';
+  const reasoningItems = parseReasoning(rawReasoning);
 
   const cardClasses = [
     'prediction-card',
@@ -112,9 +189,13 @@ function PredictionCard({ prediction, showGame = false, compact = false, isFallb
         )}
       </div>
 
-      {reasoning && !compact && (
+      {reasoningItems.length > 0 && !compact && (
         <div className="prediction-reasoning">
-          <p>{reasoning}</p>
+          <ul className="reasoning-list">
+            {reasoningItems.map((item, i) => (
+              <ReasoningLine key={i} item={item} />
+            ))}
+          </ul>
         </div>
       )}
     </div>

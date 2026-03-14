@@ -1,6 +1,6 @@
 /* ============================================================
-   Sports Betting Model - Dark Theme CSS
-   Professional sports analytics platform styling
+   MintPicks V2 - Dark Theme CSS
+   Sports analytics platform styling
    ============================================================ */
 
 /* ─── CSS Variables / Design Tokens ─────────────────────────── */
@@ -99,12 +99,18 @@ a:hover {
   flex-direction: column;
 }
 
+.app-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
 .main-content {
   flex: 1;
-  max-width: 1400px;
+  max-width: 1200px;
   width: 100%;
-  margin: 0 auto;
   padding: 24px 28px 60px;
+  min-width: 0;
 }
 
 /* ─── Navbar ────────────────────────────────────────────────── */
@@ -147,49 +153,26 @@ a:hover {
 }
 
 .brand-icon {
-  color: var(--accent-gold);
+  color: var(--accent-green);
   flex-shrink: 0;
 }
 
 .brand-text {
-  background: linear-gradient(135deg, var(--accent-gold), var(--accent-orange));
+  background: linear-gradient(135deg, var(--accent-green), #4fc3f7);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
 
-.navbar-links {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.nav-link {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 16px;
-  border-radius: var(--radius-md);
-  color: var(--text-secondary);
-  font-size: 0.9rem;
-  font-weight: 500;
-  text-decoration: none;
-  transition: all var(--transition-fast);
-}
-
-.nav-link:hover {
-  color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.05);
-}
-
-.nav-link-active {
-  color: var(--accent-blue);
-  background: var(--accent-blue-bg);
-}
-
-.nav-link-active:hover {
-  color: var(--accent-blue);
-  background: var(--accent-blue-bg);
+.brand-version {
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: var(--accent-green);
+  background: rgba(0, 255, 136, 0.12);
+  padding: 1px 6px;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+  align-self: center;
 }
 
 .navbar-actions {
@@ -226,33 +209,6 @@ a:hover {
   line-height: 1;
 }
 
-.sync-message {
-  font-size: 0.82rem;
-  font-weight: 500;
-  padding: 4px 10px;
-  border-radius: var(--radius-sm);
-  animation: fadeIn 0.3s ease;
-}
-
-.sync-success {
-  color: var(--accent-green);
-  background: var(--accent-green-bg);
-}
-
-.sync-error {
-  color: var(--accent-red);
-  background: var(--accent-red-bg);
-}
-
-.sync-progress {
-  color: var(--text-secondary);
-  background: rgba(255, 255, 255, 0.06);
-  max-width: 260px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* ─── Buttons ───────────────────────────────────────────────── */
 .btn {
   display: inline-flex;
@@ -279,22 +235,6 @@ a:hover {
 .btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-}
-
-.btn-sync {
-  border-color: var(--accent-blue-dim);
-  color: var(--accent-blue);
-  background: var(--accent-blue-bg);
-}
-
-.btn-sync:hover:not(:disabled) {
-  background: rgba(79, 195, 247, 0.15);
-}
-
-.btn-sync.syncing {
-  border-color: var(--accent-gold-dim);
-  color: var(--accent-gold);
-  background: var(--accent-gold-bg);
 }
 
 .btn-regen {
@@ -440,6 +380,17 @@ a:hover {
 
 .dashboard-header {
   margin-bottom: 32px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.dashboard-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .dashboard-title-section {
@@ -523,527 +474,15 @@ a:hover {
   color: var(--accent-red, #ff5252) !important;
 }
 
-/* ─── Best Bets Section ─────────────────────────────────────── */
-.best-bets-section {
-  animation: slideUp 0.5s ease;
-}
-
-.gold-icon {
-  color: var(--accent-gold) !important;
-}
-
-.best-bets-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
-  gap: 16px;
-}
-
-.best-bet-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border-primary);
-  border-radius: var(--radius-lg);
-  padding: 20px;
-  padding-top: 28px;
-  display: flex;
-  align-items: flex-start;
-  gap: 16px;
-  cursor: pointer;
-  transition: all var(--transition-base);
-  position: relative;
-}
-
-.best-bet-card:hover {
-  border-color: var(--border-secondary);
-  background: var(--bg-card-hover);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-md);
-}
-
-.best-bet-featured {
-  border-color: var(--accent-gold-dim);
-  background: linear-gradient(135deg, rgba(255, 215, 0, 0.04), rgba(255, 152, 0, 0.02));
-  box-shadow: var(--shadow-glow-gold);
-}
-
-.best-bet-featured:hover {
-  border-color: var(--accent-gold);
-  box-shadow: 0 0 30px rgba(255, 215, 0, 0.2);
-}
-
-.best-bet-badge {
-  position: absolute;
-  top: 6px;
-  right: 12px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  background: linear-gradient(135deg, var(--accent-gold), var(--accent-orange));
-  color: #000;
-  font-size: 0.65rem;
-  font-weight: 700;
-  padding: 2px 8px;
-  border-radius: 4px;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
-  z-index: 1;
-}
-
-.best-bet-live-badge {
-  position: absolute;
-  top: 6px;
-  left: 12px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  background: var(--accent-red, #ff5252);
-  color: #fff;
-  font-size: 0.6rem;
-  font-weight: 700;
-  padding: 2px 8px;
-  border-radius: 4px;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
-  z-index: 1;
-  animation: pulse-live 2s ease-in-out infinite;
-}
-
-@keyframes pulse-live {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.7; }
-}
-
-.best-bet-rank {
-  flex-shrink: 0;
-}
-
-.rank-number {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  background: var(--bg-tertiary);
-  border: 2px solid var(--border-secondary);
-  font-weight: 700;
-  font-size: 0.9rem;
-  color: var(--text-secondary);
-}
-
-.best-bet-featured .rank-number {
-  background: var(--accent-gold-bg);
-  border-color: var(--accent-gold-dim);
-  color: var(--accent-gold);
-}
-
-.best-bet-content {
-  flex: 1;
-  min-width: 0;
-}
-
-.best-bet-matchup {
-  margin-bottom: 6px;
-}
-
-.best-bet-teams {
-  font-size: 0.85rem;
-  color: var(--text-secondary);
-  font-weight: 500;
-}
-
-.best-bet-pick {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 4px;
-  color: var(--text-muted);
-  font-size: 0.8rem;
-}
-
-.pick-type {
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-  font-weight: 600;
-}
-
-.best-bet-selection {
-  font-size: 1.05rem;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: 12px;
-}
-
-.best-bet-metrics {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-.metric {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.metric-label {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  min-width: 70px;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-  font-weight: 600;
-}
-
-.metric-value {
-  font-size: 0.9rem;
-  font-weight: 600;
-  font-family: var(--font-mono);
-}
-
-.edge-value {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--accent-green);
-}
-
-.odds-value {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  color: #ffd700;
-  font-family: var(--font-mono);
-}
-
-.confidence-bar-container {
-  flex: 1;
-  height: 6px;
-  background: var(--bg-tertiary);
-  border-radius: 3px;
-  overflow: hidden;
-  max-width: 120px;
-}
-
-.confidence-bar {
-  height: 100%;
-  border-radius: 3px;
-  transition: width 0.6s ease;
-}
-
-.best-bet-reasoning {
-  font-size: 0.8rem;
-  color: var(--text-muted);
-  line-height: 1.5;
-  margin-top: 4px;
-}
-
-.best-bet-arrow {
-  flex-shrink: 0;
-  color: var(--text-dim);
-  align-self: center;
-  transition: transform var(--transition-fast);
-}
-
-.best-bet-card:hover .best-bet-arrow {
-  transform: translateX(4px);
-  color: var(--text-secondary);
-}
-
-/* ─── Phase Badges & Track Button ─────────────────────────── */
-
-.best-bet-badges {
-  position: absolute;
-  top: 6px;
-  left: 12px;
-  right: 12px;
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  z-index: 1;
-}
-
-.best-bet-badge,
-.best-bet-live-badge {
-  position: static;
-}
-
-.best-bet-phase-badge {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 0.55rem;
-  font-weight: 700;
-  padding: 2px 6px;
-  border-radius: 4px;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
-}
-
-.best-bet-phase-badge.phase-prematch {
-  background: rgba(79, 195, 247, 0.15);
-  color: #4fc3f7;
-  border: 1px solid rgba(79, 195, 247, 0.3);
-}
-
-.best-bet-phase-badge.phase-live {
-  background: rgba(255, 82, 82, 0.15);
-  color: #ff5252;
-  border: 1px solid rgba(255, 82, 82, 0.3);
-}
-
-.best-bet-actions {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-  align-self: center;
-}
-
-.btn-track {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 12px;
-  border: 1px solid var(--accent-green, #00ff88);
-  background: rgba(0, 255, 136, 0.08);
-  color: var(--accent-green, #00ff88);
-  border-radius: var(--radius-sm, 6px);
-  font-size: 0.75rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  white-space: nowrap;
-}
-
-.btn-track:hover:not(:disabled) {
-  background: rgba(0, 255, 136, 0.18);
-  box-shadow: 0 0 10px rgba(0, 255, 136, 0.15);
-}
-
-.btn-track.btn-tracked {
-  border-color: var(--text-muted, #666);
-  background: transparent;
-  color: var(--text-muted, #666);
-  cursor: default;
-}
-
-.units-value {
-  color: var(--accent-green, #00ff88);
-  font-family: var(--font-mono);
-}
-
-/* ─── History actions ─────────────────────────────────────── */
-
-.history-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-
-.history-actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.btn-settle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 14px;
-  border: 1px solid var(--accent-green, #00ff88);
-  background: rgba(0, 255, 136, 0.08);
-  color: var(--accent-green, #00ff88);
-  border-radius: var(--radius-sm, 6px);
-  font-size: 0.8rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.btn-settle:hover:not(:disabled) {
-  background: rgba(0, 255, 136, 0.18);
-}
-
-.btn-clear {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 14px;
-  border: 1px solid var(--accent-red, #ff5252);
-  background: rgba(255, 82, 82, 0.08);
-  color: var(--accent-red, #ff5252);
-  border-radius: var(--radius-sm, 6px);
-  font-size: 0.8rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.btn-clear:hover:not(:disabled) {
-  background: rgba(255, 82, 82, 0.18);
-}
-
-.btn-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  padding: 4px;
-  border-radius: 4px;
-  transition: all 0.15s ease;
-}
-
-.btn-delete {
-  color: var(--text-dim, #555);
-}
-
-.btn-delete:hover {
-  color: var(--accent-red, #ff5252);
-  background: rgba(255, 82, 82, 0.1);
-}
-
-/* ─── Phase tag in history table ──────────────────────────── */
-
-.phase-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 0.65rem;
-  font-weight: 600;
-  padding: 1px 6px;
-  border-radius: 3px;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-}
-
-.phase-tag.phase-prematch {
-  background: rgba(79, 195, 247, 0.12);
-  color: #4fc3f7;
-}
-
-.phase-tag.phase-live {
-  background: rgba(255, 82, 82, 0.12);
-  color: #ff5252;
-}
-
-.col-units {
-  font-family: var(--font-mono);
-  font-weight: 600;
-  color: var(--accent-green, #00ff88);
-  font-size: 0.85rem;
-}
-
-.col-phase {
-  min-width: 50px;
-}
-
-.col-status {
-  min-width: 65px;
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 0.75rem;
-  font-weight: 500;
-}
-
-.col-status.status-locked {
-  color: #888;
-}
-
-.col-status.status-open {
-  color: #4fc3f7;
-}
-
-.col-action {
-  min-width: 30px;
-  text-align: center;
-}
-
-.col-action .btn-icon:disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
-}
-
-/* ─── Best Bets Tabs ───────────────────────────────────────── */
-.best-bets-tabs {
-  display: flex;
-  gap: 4px;
-  margin-bottom: 16px;
-  background: var(--bg-tertiary);
-  border-radius: var(--radius-md);
-  padding: 4px;
-  border: 1px solid var(--border-primary);
-}
-
-.best-bets-tab {
-  flex: 1;
-  padding: 8px 16px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 0.82rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all var(--transition-fast);
-  font-family: var(--font-sans);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-}
-
-.best-bets-tab:hover {
-  color: var(--text-secondary);
-  background: rgba(255, 255, 255, 0.04);
-}
-
-.best-bets-tab.tab-active {
-  background: var(--bg-card);
-  color: var(--accent-gold);
-  box-shadow: var(--shadow-sm);
-}
-
-.tab-count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 6px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.08);
-  font-size: 0.7rem;
-  font-weight: 700;
-  font-family: var(--font-mono);
-}
-
-.tab-active .tab-count {
-  background: var(--accent-gold-bg);
-  color: var(--accent-gold);
-}
-
-.empty-state.small {
-  padding: 32px 20px;
-}
-
-.empty-state.small p {
-  font-size: 0.88rem;
-}
-
-/* ─── Games Grid ────────────────────────────────────────────── */
+/* ─── Games Grid (masonry-style columns) ───────────────────── */
 .games-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 14px;
-  align-items: start;
+  columns: 3 300px;
+  column-gap: 14px;
+}
+
+.games-grid > * {
+  break-inside: avoid;
+  margin-bottom: 14px;
 }
 
 /* ─── Game Card ─────────────────────────────────────────────── */
@@ -1380,6 +819,34 @@ a:hover {
 
 .game-odds-row.odds-live .odds-price {
   color: rgba(255, 215, 0, 0.45);
+}
+
+/* Locked markets (e.g. spread/total in OT) */
+.odds-market-locked .odds-market-label {
+  color: var(--text-dim, #444) !important;
+  opacity: 0.5;
+}
+
+.odds-locked-values {
+  align-items: center;
+  justify-content: center;
+}
+
+.odds-lock-icon {
+  color: var(--text-dim, #555);
+  opacity: 0.4;
+}
+
+/* Detail page locked odds cards */
+.odds-card-locked {
+  opacity: 0.45;
+}
+
+.odds-locked-overlay {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
 }
 
 .game-card-footer {
@@ -1962,6 +1429,44 @@ a:hover {
   font-weight: 500;
 }
 
+/* ─── Overview: H2H Section ────────────────────────────────── */
+.overview-h2h-section {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-primary);
+}
+
+/* ─── Overview: Form Section ───────────────────────────────── */
+.overview-form-section {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-primary);
+}
+
+.overview-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.overview-form-team {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.overview-form-team-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.overview-form-record {
+  font-size: 0.78rem;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}
+
 /* ─── Predictions Tab ───────────────────────────────────────── */
 /* ─── Prediction Sections ──────────────────────────────────── */
 .predictions-section {
@@ -1987,6 +1492,9 @@ a:hover {
 .predictions-section-title-other {
   color: var(--text-muted);
   font-weight: 600;
+}
+.predictions-section-title-props {
+  color: var(--accent-purple, #b388ff);
 }
 .predictions-section-desc {
   font-size: 0.75rem;
@@ -2189,6 +1697,70 @@ a:hover {
   line-height: 1.6;
 }
 
+.reasoning-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.reasoning-bullet {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.reasoning-bullet::before {
+  content: '•';
+  color: var(--text-dim);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.reasoning-team-tag {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--accent-blue);
+  background: rgba(79, 195, 247, 0.1);
+  padding: 1px 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  text-transform: uppercase;
+}
+
+.reasoning-tooltip-trigger {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-dim);
+  cursor: help;
+  margin-left: 2px;
+  flex-shrink: 0;
+}
+
+.reasoning-tooltip-popup {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-card);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  width: 260px;
+  z-index: 100;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+
 .outcome-win {
   color: var(--accent-green);
 }
@@ -2322,7 +1894,6 @@ a:hover {
   justify-content: center;
   font-size: 0.65rem;
   font-weight: 700;
-  letter-spacing: 0.3px;
 }
 
 .result-win {
@@ -2797,6 +2368,7 @@ a:hover {
   gap: 4px;
   font-weight: 600;
   font-size: 0.82rem;
+  flex-wrap: wrap;
 }
 
 .col-result.result-win {
@@ -2807,8 +2379,21 @@ a:hover {
   color: var(--accent-red);
 }
 
+.col-result.result-push {
+  color: var(--accent-gold, #ffd700);
+}
+
 .col-result.result-pending {
   color: var(--text-dim);
+}
+
+.settled-at-label {
+  display: block;
+  width: 100%;
+  font-size: 0.68rem;
+  font-weight: 400;
+  color: var(--text-dim);
+  opacity: 0.7;
 }
 
 .col-profit {
@@ -2851,10 +2436,6 @@ a:hover {
     padding: 20px 20px 48px;
   }
 
-  .best-bets-grid {
-    grid-template-columns: 1fr;
-  }
-
   .games-grid {
     grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   }
@@ -2890,16 +2471,8 @@ a:hover {
     display: none;
   }
 
-  .navbar-links {
-    gap: 0;
-  }
-
-  .nav-link span {
+  .brand-version {
     display: none;
-  }
-
-  .nav-link {
-    padding: 8px 12px;
   }
 
   .btn-sync span {
@@ -2993,37 +2566,11 @@ a:hover {
     display: none;
   }
 
-  .best-bets-tabs {
-    gap: 2px;
-    padding: 3px;
-  }
-
-  .best-bets-tab {
-    padding: 6px 8px;
-    font-size: 0.75rem;
-  }
-
-  .tab-count {
-    display: none;
-  }
 }
 
 @media (max-width: 480px) {
   .history-stats-grid {
     grid-template-columns: 1fr;
-  }
-
-  .best-bet-card {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .best-bet-rank {
-    display: none;
-  }
-
-  .best-bet-arrow {
-    display: none;
   }
 
   .game-card-body {
@@ -3061,7 +2608,6 @@ a:hover {
   }
 
   .navbar,
-  .btn-sync,
   .btn-back,
   .game-card-arrow {
     display: none;
@@ -3070,9 +2616,850 @@ a:hover {
   .game-card,
   .prediction-card,
   .history-stat-card,
-  .best-bet-card {
+  .pick-card {
     border-color: #ccc;
     break-inside: avoid;
+  }
+
+  .sports-sidebar {
+    display: none;
+  }
+
+  .sport-page-tabs {
+    flex-wrap: wrap;
+  }
+}
+
+/* ============================================================
+   MintPicks V2 - New Components
+   ============================================================ */
+
+/* ─── Sports Sidebar ───────────────────────────────────────── */
+.sports-sidebar {
+  width: 200px;
+  min-width: 200px;
+  background: var(--bg-navbar);
+  border-right: 1px solid var(--border-primary);
+  padding: 20px 0;
+  position: sticky;
+  top: 64px;
+  height: calc(100vh - 64px);
+  overflow-y: auto;
+}
+
+.sidebar-header {
+  padding: 0 16px 12px;
+  border-bottom: 1px solid var(--border-primary);
+  margin-bottom: 8px;
+}
+
+.sidebar-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 8px;
+}
+
+.sidebar-sport-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-decoration: none;
+  transition: all var(--transition-fast);
+  position: relative;
+}
+
+.sidebar-sport-link:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+}
+
+.sidebar-sport-active {
+  background: var(--accent-green-bg);
+  color: var(--accent-green);
+  font-weight: 600;
+}
+
+.sidebar-sport-active:hover {
+  background: var(--accent-green-bg);
+  color: var(--accent-green);
+}
+
+.sidebar-sport-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.sidebar-sport-disabled:hover {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.sidebar-sport-icon {
+  font-size: 1.2rem;
+  width: 24px;
+  text-align: center;
+}
+
+.sidebar-sport-label {
+  flex: 1;
+}
+
+.sidebar-coming-soon {
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.05);
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+/* ─── Sport Page Tabs ──────────────────────────────────────── */
+.sport-page {
+  animation: fadeIn 0.4s ease;
+}
+
+.sport-page-tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+  padding: 4px;
+  border: 1px solid var(--border-primary);
+  margin-bottom: 24px;
+}
+
+.sport-tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: 1;
+  padding: 10px 16px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  font-family: var(--font-sans);
+}
+
+.sport-tab:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.sport-tab-active {
+  background: var(--bg-card);
+  color: var(--accent-green);
+  box-shadow: var(--shadow-sm);
+}
+
+.sport-tab-active:hover {
+  background: var(--bg-card);
+  color: var(--accent-green);
+}
+
+.sport-page-content {
+  /* content area */
+}
+
+.coming-soon-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 80px 24px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.coming-soon-section svg {
+  opacity: 0.3;
+}
+
+.coming-soon-section h2 {
+  font-size: 1.3rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.coming-soon-section p {
+  font-size: 0.9rem;
+}
+
+/* ─── Pick Cards (Buddy's Analysis Style) ──────────────────── */
+.pick-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  transition: all var(--transition-base);
+  animation: fadeIn 0.3s ease;
+}
+
+.pick-card:hover {
+  border-color: var(--border-secondary);
+  box-shadow: var(--shadow-md);
+}
+
+.pick-card.tier-high {
+  border-color: rgba(0, 255, 136, 0.3);
+  box-shadow: 0 0 12px rgba(0, 255, 136, 0.06);
+}
+
+.pick-card.tier-high:hover {
+  border-color: rgba(0, 255, 136, 0.5);
+  box-shadow: 0 0 20px rgba(0, 255, 136, 0.1);
+}
+
+.pick-card.tier-medium {
+  border-color: rgba(79, 195, 247, 0.25);
+}
+
+.pick-card.tier-low {
+  border-color: rgba(255, 215, 0, 0.2);
+}
+
+/* Confidence tier banner */
+.pick-card-tier {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 0;
+  background: rgba(0, 255, 136, 0.06);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--accent-green);
+  border-bottom: 1px solid rgba(0, 255, 136, 0.12);
+}
+
+.tier-medium .pick-card-tier {
+  background: rgba(79, 195, 247, 0.06);
+  color: var(--accent-blue);
+  border-color: rgba(79, 195, 247, 0.12);
+}
+
+.tier-low .pick-card-tier {
+  background: rgba(255, 215, 0, 0.06);
+  color: var(--accent-gold);
+  border-color: rgba(255, 215, 0, 0.12);
+}
+
+.tier-spec .pick-card-tier {
+  background: rgba(255, 82, 82, 0.06);
+  color: var(--accent-red);
+  border-color: rgba(255, 82, 82, 0.12);
+}
+
+/* Card body */
+.pick-card-body {
+  padding: 16px 20px;
+  cursor: pointer;
+}
+
+/* Matchup header */
+.pick-card-matchup {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.pick-card-teams {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pick-card-team-names {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pick-matchup-text {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.pick-game-time {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.pick-card-confidence {
+  font-size: 1.6rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+
+/* Selection / Pick */
+.pick-card-selection {
+  margin-bottom: 12px;
+}
+
+.pick-card-badges {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+
+.pick-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.pick-badge-type {
+  background: rgba(79, 195, 247, 0.12);
+  color: var(--accent-blue);
+  border: 1px solid rgba(79, 195, 247, 0.25);
+}
+
+/* Medal badges for top 3 picks */
+.pick-badge-medal {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 8px;
+  border-radius: 20px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.pick-badge-medal.medal-gold {
+  background: rgba(255, 215, 0, 0.15);
+  color: #ffd700;
+  border: 1px solid rgba(255, 215, 0, 0.35);
+}
+
+.pick-badge-medal.medal-silver {
+  background: rgba(192, 192, 192, 0.12);
+  color: #c0c0c0;
+  border: 1px solid rgba(192, 192, 192, 0.3);
+}
+
+.pick-badge-medal.medal-bronze {
+  background: rgba(205, 127, 50, 0.12);
+  color: #cd7f32;
+  border: 1px solid rgba(205, 127, 50, 0.3);
+}
+
+.pick-badge-medal .medal-icon {
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
+.pick-badge-odds {
+  background: rgba(255, 215, 0, 0.08);
+  color: var(--accent-gold);
+  border: 1px solid rgba(255, 215, 0, 0.2);
+  font-family: var(--font-mono);
+}
+
+.pick-card-value {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.pick-card-odds {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--accent-gold, #d4a843);
+  font-family: var(--font-mono);
+  margin-top: 2px;
+}
+
+/* Analysis section — always visible on card */
+.pick-card-analysis {
+  padding: 12px 0 0;
+  border-top: 1px solid var(--border-primary);
+  margin-top: 12px;
+}
+
+.pick-analysis-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.pick-analysis-header svg {
+  color: var(--accent-green);
+}
+
+.pick-analysis-list {
+  list-style: none;
+  counter-reset: analysis;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0;
+  margin: 0;
+}
+
+.pick-analysis-list li {
+  counter-increment: analysis;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.pick-analysis-list li::before {
+  content: counter(analysis);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--bg-tertiary);
+  color: var(--accent-green);
+  font-size: 0.75rem;
+  font-weight: 700;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+/* Inline team logo next to analysis bullets */
+.pick-analysis-team-logo {
+  flex-shrink: 0;
+  border-radius: 2px;
+  margin-top: 2px;
+}
+
+/* Tooltip info icon next to analysis bullets */
+.pick-analysis-tooltip {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 5px;
+  color: var(--text-muted);
+  cursor: help;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.pick-analysis-tooltip:hover {
+  color: var(--accent-primary, #60a5fa);
+}
+
+.pick-analysis-tooltip svg {
+  opacity: 0.7;
+}
+
+.pick-analysis-tooltip:hover svg {
+  opacity: 1;
+}
+
+/* No pick fallback */
+.pick-card-no-pick {
+  padding: 8px 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+/* Odds bar at bottom */
+.pick-card-odds-bar {
+  display: flex;
+  gap: 0;
+  border-top: 1px solid var(--border-primary);
+  background: rgba(0, 0, 0, 0.15);
+  padding: 8px 20px;
+  font-size: 0.78rem;
+}
+
+.pick-odds-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+
+.pick-odds-label {
+  color: var(--text-dim);
+  font-weight: 700;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  min-width: 24px;
+}
+
+.pick-odds-values {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.pick-odds-sep {
+  color: var(--text-dim);
+  margin: 0 4px;
+}
+
+/* ─── Responsive: Sidebar ──────────────────────────────────── */
+@media (max-width: 900px) {
+  .sports-sidebar {
+    display: none;
+  }
+}
+
+@media (max-width: 600px) {
+  .sport-page-tabs {
+    flex-wrap: wrap;
+  }
+
+  .sport-tab {
+    font-size: 0.78rem;
+    padding: 8px 12px;
+  }
+
+  .pick-card-matchup {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .pick-card-confidence {
+    font-size: 1.3rem;
+  }
+
+  .pick-card-odds-bar {
+    flex-direction: column;
+    gap: 6px;
+  }
+}
+
+/* ─── Player Props ─────────────────────────────────────────── */
+
+.player-props {
+  animation: fadeIn 0.4s ease;
+}
+
+.props-header {
+  margin-bottom: 20px;
+}
+
+.props-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.props-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.props-count {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+}
+
+/* Market filter pills */
+.props-market-filters {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.props-filter-pill {
+  padding: 6px 14px;
+  border-radius: 20px;
+  border: 1px solid var(--border-primary);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-base);
+}
+
+.props-filter-pill:hover {
+  border-color: var(--border-secondary);
+  color: var(--text-primary);
+}
+
+.props-filter-active {
+  background: rgba(0, 255, 136, 0.08);
+  border-color: var(--accent-green);
+  color: var(--accent-green);
+}
+
+/* Game cards */
+.props-games-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.props-game-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  transition: border-color var(--transition-base);
+}
+
+.props-game-card:hover {
+  border-color: var(--border-secondary);
+}
+
+.props-game-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 14px 18px;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 0.95rem;
+}
+
+.props-game-header:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.props-game-matchup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.props-team-abbr {
+  font-size: 0.95rem;
+  letter-spacing: 0.5px;
+}
+
+.props-at {
+  color: var(--text-muted);
+  font-weight: 400;
+  font-size: 0.8rem;
+}
+
+.props-game-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-muted);
+}
+
+.props-game-count {
+  font-size: 0.78rem;
+}
+
+/* Game body (expanded) */
+.props-game-body {
+  padding: 0 18px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: fadeIn 0.2s ease;
+}
+
+/* Market sections */
+.props-market-section {
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.props-market-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.props-market-count {
+  margin-left: auto;
+  font-size: 0.72rem;
+  opacity: 0.6;
+  font-weight: 400;
+}
+
+/* ATG (yes/no) grid */
+.props-atg-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 1px;
+  background: var(--border-primary);
+}
+
+.props-atg-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  background: var(--bg-card);
+  font-size: 0.82rem;
+}
+
+.props-player-name {
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.props-odds-value {
+  font-weight: 600;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', monospace);
+  font-size: 0.82rem;
+}
+
+/* Over/under table */
+.props-ou-table {
+  font-size: 0.82rem;
+}
+
+.props-ou-header-row {
+  display: grid;
+  grid-template-columns: 1fr 60px 70px 70px;
+  gap: 4px;
+  padding: 8px 14px;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.props-ou-row {
+  display: grid;
+  grid-template-columns: 1fr 60px 70px 70px;
+  gap: 4px;
+  padding: 7px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  transition: background var(--transition-base);
+}
+
+.props-ou-row:last-child {
+  border-bottom: none;
+}
+
+.props-ou-row:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.props-ou-col-player {
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.props-ou-col-line {
+  text-align: center;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.props-ou-col-odds {
+  text-align: center;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', monospace);
+  font-weight: 500;
+}
+
+.props-over {
+  color: var(--accent-green);
+}
+
+.props-under {
+  color: var(--accent-red);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .props-market-filters {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 4px;
+  }
+
+  .props-filter-pill {
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .props-atg-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .props-ou-header-row,
+  .props-ou-row {
+    grid-template-columns: 1fr 50px 60px 60px;
+    font-size: 0.76rem;
+  }
+
+  .props-game-header {
+    padding: 12px 14px;
+  }
+
+  .props-game-body {
+    padding: 0 14px 14px;
   }
 }
 
@@ -3902,4 +4289,1856 @@ a:hover {
   .gd-inj-grid { grid-template-columns: 1fr; }
   .gd-inj-row { grid-template-columns: 70px 1fr auto; }
   .gd-inj-pos { display: none; }
+}
+
+/* ============================================================
+   MintPicks V2 - Sports Sidebar & Sport Page
+   ============================================================ */
+
+/* ─── Sports Sidebar ───────────────────────────────────────── */
+.sports-sidebar {
+  width: 200px;
+  min-width: 200px;
+  background: var(--bg-navbar);
+  border-right: 1px solid var(--border-primary);
+  padding: 20px 0;
+  position: sticky;
+  top: 64px;
+  height: calc(100vh - 64px);
+  overflow-y: auto;
+}
+
+.sidebar-header {
+  padding: 0 16px 12px;
+  border-bottom: 1px solid var(--border-primary);
+  margin-bottom: 8px;
+}
+
+.sidebar-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 8px;
+}
+
+.sidebar-sport-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-decoration: none;
+  transition: all var(--transition-fast);
+  position: relative;
+}
+
+.sidebar-sport-link:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+}
+
+.sidebar-sport-active {
+  background: var(--accent-green-bg);
+  color: var(--accent-green);
+  font-weight: 600;
+}
+
+.sidebar-sport-active:hover {
+  background: var(--accent-green-bg);
+  color: var(--accent-green);
+}
+
+.sidebar-sport-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.sidebar-sport-disabled:hover {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.sidebar-sport-icon {
+  font-size: 1.2rem;
+  width: 24px;
+  text-align: center;
+}
+
+.sidebar-sport-label {
+  flex: 1;
+}
+
+.sidebar-coming-soon {
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.05);
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+/* ─── Sport Page Tabs ──────────────────────────────────────── */
+.sport-page {
+  animation: fadeIn 0.4s ease;
+}
+
+.sport-page-tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+  padding: 4px;
+  border: 1px solid var(--border-primary);
+  margin-bottom: 24px;
+}
+
+.sport-tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: 1;
+  padding: 10px 16px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  font-family: var(--font-sans);
+}
+
+.sport-tab:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.sport-tab-active {
+  background: var(--bg-card);
+  color: var(--accent-green);
+  box-shadow: var(--shadow-sm);
+}
+
+.sport-tab-active:hover {
+  background: var(--bg-card);
+  color: var(--accent-green);
+}
+
+.sport-page-content {
+  /* content area */
+}
+
+.coming-soon-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 80px 24px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.coming-soon-section svg {
+  opacity: 0.3;
+}
+
+.coming-soon-section h2 {
+  font-size: 1.3rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.coming-soon-section p {
+  font-size: 0.9rem;
+}
+
+/* ─── Responsive: Sidebar ──────────────────────────────────── */
+@media (max-width: 900px) {
+  .sports-sidebar {
+    display: none;
+  }
+}
+
+@media (max-width: 600px) {
+  .sport-page-tabs {
+    flex-wrap: wrap;
+  }
+
+  .sport-tab {
+    font-size: 0.78rem;
+    padding: 8px 12px;
+  }
+}
+
+/* ============================================================
+   DASHBOARD CARDS (dc-*)
+   New card design for upcoming games
+   ============================================================ */
+
+.dc-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+@media (max-width: 1100px) {
+  .dc-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 700px) {
+  .dc-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.dc-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
+  cursor: pointer;
+  transition: all var(--transition-base);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  animation: fadeIn 0.3s ease;
+}
+
+.dc-card:hover {
+  border-color: var(--border-secondary);
+  background: var(--bg-card-hover);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Rank badge */
+.dc-rank {
+  position: absolute;
+  top: -8px;
+  left: -8px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  font-weight: 800;
+  z-index: 2;
+}
+
+.rank-gold {
+  background: linear-gradient(135deg, #ffd700, #ff8c00);
+  color: #000;
+  box-shadow: 0 0 10px rgba(255, 215, 0, 0.4);
+}
+
+.rank-silver {
+  background: linear-gradient(135deg, #c0c0c0, #808080);
+  color: #000;
+  box-shadow: 0 0 10px rgba(192, 192, 192, 0.3);
+}
+
+.rank-bronze {
+  background: linear-gradient(135deg, #cd7f32, #8b4513);
+  color: #fff;
+  box-shadow: 0 0 10px rgba(205, 127, 50, 0.3);
+}
+
+/* Tags */
+.dc-tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.dc-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.dc-tag-sport {
+  color: var(--accent-green);
+  background: var(--accent-green-bg);
+  border: 1px solid rgba(0, 255, 136, 0.2);
+}
+
+.dc-tag-league {
+  color: var(--text-secondary);
+  background: rgba(160, 160, 184, 0.1);
+  border: 1px solid rgba(160, 160, 184, 0.2);
+}
+
+.dc-tag-confidence {
+  margin-left: auto;
+}
+
+.dc-tag-confidence.badge-good {
+  color: var(--accent-green);
+  background: var(--accent-green-bg);
+  border: 1px solid rgba(0, 255, 136, 0.25);
+}
+
+.dc-tag-confidence.badge-borderline {
+  color: var(--accent-orange, #ff9800);
+  background: rgba(255, 152, 0, 0.08);
+  border: 1px solid rgba(255, 152, 0, 0.25);
+}
+
+.dc-tag-confidence.badge-low {
+  color: var(--accent-red);
+  background: var(--accent-red-bg);
+  border: 1px solid rgba(255, 82, 82, 0.25);
+}
+
+/* Date/Time */
+.dc-datetime {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.dc-datetime svg {
+  flex-shrink: 0;
+}
+
+/* Team Matchup */
+.dc-matchup {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 0;
+}
+
+.dc-team {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+  min-width: 0;
+}
+
+.dc-team .team-logo {
+  width: 48px;
+  height: 48px;
+}
+
+.dc-team-name {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 120px;
+}
+
+.dc-ml {
+  font-size: 1.3rem;
+  font-weight: 800;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+.dc-ml-pick {
+  color: var(--accent-green);
+}
+
+.dc-vs-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  min-width: 70px;
+}
+
+.dc-vs {
+  font-size: 1rem;
+  font-weight: 800;
+  color: var(--text-dim);
+  letter-spacing: 1px;
+}
+
+.dc-status {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
+
+/* AI Pick callout */
+.dc-pick-callout {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  background: rgba(0, 255, 136, 0.06);
+  border: 1px solid rgba(0, 255, 136, 0.2);
+  border-radius: var(--radius-sm);
+  margin-bottom: 4px;
+}
+
+.dc-pick-callout svg {
+  color: var(--accent-green);
+  flex-shrink: 0;
+}
+
+.dc-pick-text {
+  font-size: 0.84rem;
+  color: var(--text-secondary);
+}
+
+.dc-pick-text strong {
+  color: var(--accent-green);
+}
+
+.dc-pick-conf {
+  margin-left: auto;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--accent-green);
+  font-family: var(--font-mono);
+}
+
+/* Odds summary pills */
+.dc-odds-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.dc-odds-pill {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 6px 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+/* Pick summary bar */
+.dc-pick-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--accent-green);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 255, 136, 0.06);
+  color: var(--accent-green);
+  font-size: 0.78rem;
+}
+
+.dc-pick-bar-text {
+  flex: 1;
+  color: var(--accent-green);
+}
+
+.dc-pick-bar-conf {
+  color: var(--accent-green);
+  font-weight: 700;
+  font-family: var(--font-mono);
+}
+
+.dc-odds-pill-active {
+  border-color: var(--accent-green);
+  background: rgba(0, 255, 136, 0.08);
+  box-shadow: 0 0 6px rgba(0, 255, 136, 0.15);
+}
+
+.dc-odds-label {
+  color: var(--text-muted);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  font-size: 0.72rem;
+}
+
+.dc-odds-val {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 0.84rem;
+}
+
+.dc-odds-sep {
+  color: var(--text-dim);
+  margin: 0 1px;
+}
+
+/* Pick highlight in odds pills */
+.dc-pick-highlight {
+  color: var(--accent-green);
+  font-weight: 700;
+}
+
+/* Footer */
+.dc-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-primary);
+}
+
+.dc-details-link {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+/* Section subtitle */
+.section-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.upcoming-title {
+  font-size: 1.4rem;
+  font-weight: 700;
+}
+
+.section-subtitle {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  font-weight: 400;
+  margin: 0;
+}
+
+
+/* ============================================================
+   GAME DETAIL V2 (gd-*)
+   Complete redesign of the game detail page
+   ============================================================ */
+
+/* ─── Header ──────────────────────────────────────────── */
+.gd-header {
+  background: var(--bg-card);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  padding: 28px 32px;
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 32px;
+}
+
+.gd-header-main {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex: 1;
+}
+
+.gd-team-badge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.gd-badge-box {
+  width: 80px;
+  height: 80px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-tertiary);
+  border: 2px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  position: relative;
+}
+
+.gd-badge-picked {
+  border-color: var(--accent-green);
+}
+
+.gd-badge-logo {
+  border-radius: 4px;
+  object-fit: contain;
+}
+
+.gd-badge-abbr {
+  font-size: 1.2rem;
+  font-weight: 800;
+  color: var(--text-primary);
+  letter-spacing: 1px;
+}
+
+.gd-team-info {
+  text-align: center;
+}
+
+.gd-team-fullname {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.gd-team-label {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.gd-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.gd-vs {
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: var(--text-dim);
+  letter-spacing: 2px;
+}
+
+.gd-live-center,
+.gd-final-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.gd-header-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: flex-end;
+  flex-shrink: 0;
+}
+
+.gd-header-tags {
+  display: flex;
+  gap: 6px;
+}
+
+.gd-meta-items {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-end;
+}
+
+.gd-meta-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+/* ─── Odds Row ──────────────────────────────────────────── */
+.gd-odds-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.gd-odds-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
+}
+
+.gd-odds-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  font-weight: 600;
+  margin-bottom: 14px;
+}
+
+.gd-odds-card-header svg {
+  color: var(--text-muted);
+}
+
+.gd-odds-card-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.gd-odds-side {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+}
+
+.gd-odds-team {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.gd-odds-big {
+  font-size: 1.6rem;
+  font-weight: 800;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.gd-odds-price {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+}
+
+.gd-odds-vs {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.gd-odds-card-picked {
+  border-color: rgba(0, 255, 136, 0.35);
+  background: rgba(0, 255, 136, 0.03);
+}
+
+.gd-odds-side-picked .gd-odds-big {
+  color: var(--accent-green);
+}
+
+.gd-odds-side-picked .gd-odds-team {
+  color: var(--accent-green);
+}
+
+.gd-odds-pick-tag {
+  margin-left: auto;
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: var(--accent-green);
+  background: rgba(0, 255, 136, 0.1);
+  border: 1px solid rgba(0, 255, 136, 0.25);
+  padding: 2px 6px;
+  border-radius: 3px;
+  letter-spacing: 0.5px;
+}
+
+.gd-odds-locked {
+  opacity: 0.45;
+}
+
+.gd-odds-locked-body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 60px;
+  color: var(--text-dim);
+}
+
+/* ─── Content Area ──────────────────────────────────────── */
+.gd-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ─── Section Card ──────────────────────────────────────── */
+.gd-section-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  padding: 22px 24px;
+}
+
+.gd-section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  font-size: 1rem;
+}
+
+.gd-section-header svg {
+  color: var(--text-muted);
+}
+
+.gd-section-header h3 {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+/* ─── Two Column Layout ──────────────────────────────── */
+.gd-two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 800px) {
+  .gd-two-col {
+    grid-template-columns: 1fr;
+  }
+  .gd-header {
+    flex-direction: column;
+  }
+  .gd-header-meta {
+    align-items: center;
+  }
+  .gd-odds-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ─── Key Injuries ──────────────────────────────────────── */
+.gd-injury-team {
+  margin-bottom: 16px;
+}
+
+.gd-injury-team:last-child {
+  margin-bottom: 0;
+}
+
+.gd-injury-team-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 0.9rem;
+}
+
+.gd-injury-team-header svg {
+  color: var(--accent-green);
+}
+
+.gd-injury-count {
+  font-size: 0.7rem;
+  font-weight: 600;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.gd-injury-player {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0 6px 24px;
+  font-size: 0.85rem;
+}
+
+.gd-injury-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+
+.gd-injury-name svg {
+  color: var(--text-dim);
+}
+
+.gd-injury-pos {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.gd-injury-detail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.gd-injury-type {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.gd-injury-status {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 4px;
+}
+
+.gd-injury-out {
+  color: var(--accent-red);
+  background: var(--accent-red-bg);
+  border: 1px solid rgba(255, 82, 82, 0.2);
+}
+
+.gd-injury-dtd {
+  color: var(--accent-gold);
+  background: var(--accent-gold-bg);
+  border: 1px solid rgba(255, 215, 0, 0.2);
+}
+
+.gd-injury-q {
+  color: var(--accent-orange, #ff9800);
+  background: rgba(255, 152, 0, 0.08);
+  border: 1px solid rgba(255, 152, 0, 0.2);
+}
+
+.gd-injury-prob {
+  color: var(--accent-blue);
+  background: var(--accent-blue-bg);
+  border: 1px solid rgba(79, 195, 247, 0.2);
+}
+
+/* ─── AI Match Analysis ──────────────────────────────── */
+.gd-analysis-card .gd-section-header svg {
+  color: var(--accent-green);
+}
+
+.gd-qualified-badge {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--accent-green);
+  background: var(--accent-green-bg);
+  border: 1px solid rgba(0, 255, 136, 0.25);
+  padding: 3px 10px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.gd-analysis-narrative {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  padding: 16px 20px;
+  margin-bottom: 16px;
+}
+
+.gd-analysis-main {
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.gd-analysis-sub {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+/* Callouts */
+.gd-callout {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 14px 18px;
+  border-radius: var(--radius-md);
+  margin-bottom: 16px;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+.gd-callout svg {
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+
+.gd-callout strong {
+  color: inherit;
+}
+
+.gd-callout-insight {
+  background: rgba(0, 255, 136, 0.04);
+  border: 1px solid rgba(0, 255, 136, 0.15);
+  color: var(--accent-green);
+}
+
+.gd-callout-insight svg {
+  color: var(--accent-green);
+}
+
+.gd-callout-warning {
+  background: rgba(255, 215, 0, 0.04);
+  border: 1px solid rgba(255, 215, 0, 0.15);
+  color: var(--accent-gold);
+}
+
+.gd-callout-warning svg {
+  color: var(--accent-gold);
+}
+
+/* Analysis Factors */
+.gd-factors-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 10px 0;
+}
+
+.gd-factors-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.gd-factor {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.gd-factor svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.gd-factor-positive {
+  background: var(--accent-green-bg);
+  color: var(--accent-green);
+  border: 1px solid rgba(0, 255, 136, 0.12);
+}
+
+.gd-factor-negative {
+  background: rgba(255, 152, 0, 0.06);
+  color: var(--accent-orange, #ff9800);
+  border: 1px solid rgba(255, 152, 0, 0.12);
+}
+
+.gd-factor-neutral {
+  background: rgba(255, 215, 0, 0.04);
+  color: var(--accent-gold);
+  border: 1px solid rgba(255, 215, 0, 0.1);
+}
+
+/* Confidence row */
+.gd-confidence-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-primary);
+}
+
+.gd-confidence-big {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.gd-confidence-pct {
+  font-size: 2rem;
+  font-weight: 800;
+  font-family: var(--font-mono);
+}
+
+.gd-confidence-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.gd-risk-badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 4px 14px;
+  border-radius: 20px;
+  border: 1px solid;
+}
+
+/* Suggested Action */
+.gd-suggested-action {
+  background: rgba(0, 255, 136, 0.04);
+  border: 1px solid rgba(0, 255, 136, 0.15);
+  border-radius: var(--radius-md);
+  padding: 16px 20px;
+}
+
+.gd-suggested-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--accent-green);
+  margin-bottom: 12px;
+}
+
+.gd-suggested-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+
+.gd-suggested-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 12px;
+  background: rgba(0, 255, 136, 0.04);
+  border: 1px solid rgba(0, 255, 136, 0.1);
+  border-radius: var(--radius-sm);
+  text-align: center;
+}
+
+.gd-suggested-label {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.gd-suggested-item strong {
+  font-size: 0.95rem;
+  color: var(--text-primary);
+}
+
+.gd-suggested-sub {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+/* ─── Risk Assessment ──────────────────────────────────── */
+.gd-risk-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.gd-risk-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.gd-risk-bar {
+  height: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.gd-risk-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.6s ease;
+}
+
+.gd-risk-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.gd-risk-note svg {
+  color: var(--accent-gold);
+}
+
+.gd-risk-factors {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-primary);
+}
+
+.gd-risk-factor-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+}
+
+.gd-risk-factor-label {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.gd-risk-factor-val {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.gd-risk-context {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-sm);
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+/* ─── Market Interest ──────────────────────────────────── */
+.gd-section-desc {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+
+.gd-market-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.gd-market-pcts {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+}
+
+.gd-market-side {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.gd-market-abbr {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.gd-market-pct {
+  font-size: 1.6rem;
+  font-weight: 800;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.gd-market-ml {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+}
+
+.gd-market-bar-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+}
+
+.gd-market-bar {
+  width: 100%;
+  height: 8px;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.gd-market-bar-home {
+  height: 100%;
+  background: var(--accent-green);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.gd-market-explainer {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-sm);
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.gd-market-explainer svg {
+  color: var(--accent-blue);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+/* ─── Season Stats & Standings ────────────────────────── */
+.gd-stats-teams {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.gd-stats-team {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+
+.gd-stats-logo {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+}
+
+.gd-stats-team-name {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.gd-stats-record {
+  font-size: 1.8rem;
+  font-weight: 800;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.gd-stats-badges {
+  display: flex;
+  gap: 6px;
+}
+
+.gd-streak-badge,
+.gd-rank-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.gd-streak-badge {
+  color: var(--accent-orange, #ff9800);
+  background: rgba(255, 152, 0, 0.08);
+  border: 1px solid rgba(255, 152, 0, 0.2);
+}
+
+.gd-rank-badge {
+  color: var(--text-secondary);
+  background: rgba(160, 160, 184, 0.1);
+  border: 1px solid rgba(160, 160, 184, 0.2);
+}
+
+.gd-stats-winpct {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.gd-perf-section {
+  border-top: 1px solid var(--border-primary);
+  padding-top: 14px;
+}
+
+.gd-perf-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0 0 10px 0;
+}
+
+.gd-perf-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.gd-perf-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.gd-perf-team-label {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.gd-perf-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.82rem;
+}
+
+.gd-perf-stat-label {
+  color: var(--accent-green);
+  font-weight: 600;
+}
+
+.gd-perf-stat-val {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+/* ─── Betting Trends ──────────────────────────────────── */
+.gd-trends-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.gd-trends-teams {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.gd-trends-team {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gd-trends-team-label {
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  font-weight: 700;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.gd-trends-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.gd-trends-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+}
+
+.gd-trends-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.gd-trends-val {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+}
+
+.gd-trends-scoring {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-primary);
+}
+
+.gd-trends-scoring-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+
+/* ─── Venue & Conditions ──────────────────────────────── */
+.gd-venue-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.gd-venue-grid {
+  display: flex;
+  justify-content: center;
+  gap: 48px;
+  padding: 16px 0;
+}
+
+.gd-venue-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.gd-venue-item svg {
+  color: var(--text-muted);
+}
+
+.gd-venue-label {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.gd-venue-item strong {
+  font-size: 0.95rem;
+  color: var(--text-primary);
+}
+
+.gd-venue-sub {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.gd-venue-note {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  padding-top: 10px;
+  border-top: 1px solid var(--border-primary);
+}
+
+/* ─── Recent Form & H2H ──────────────────────────────── */
+.gd-form-teams {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.gd-form-team {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.gd-form-team-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.88rem;
+}
+
+.gd-form-team-header svg {
+  color: var(--accent-orange, #ff9800);
+}
+
+.gd-form-record-badge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--accent-green);
+  background: var(--accent-green-bg);
+  border: 1px solid rgba(0, 255, 136, 0.2);
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-left: auto;
+}
+
+.gd-form-dots {
+  display: flex;
+  gap: 4px;
+}
+
+.gd-form-dot {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.gd-form-games {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.gd-form-game-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.gd-form-win {
+  color: var(--accent-green);
+  font-weight: 600;
+}
+
+.gd-form-loss {
+  color: var(--accent-red);
+  font-weight: 600;
+}
+
+.gd-form-takeaway {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  padding: 12px 16px;
+  margin-bottom: 16px;
+}
+
+.gd-form-takeaway p {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+/* H2H Section */
+.gd-h2h-section {
+  border-top: 1px solid var(--border-primary);
+  padding-top: 16px;
+}
+
+.gd-h2h-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 0.9rem;
+}
+
+.gd-h2h-limited {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--accent-gold);
+  background: var(--accent-gold-bg);
+  border: 1px solid rgba(255, 215, 0, 0.2);
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-left: auto;
+}
+
+.gd-h2h-warning {
+  font-size: 0.78rem;
+  color: var(--accent-red);
+  background: var(--accent-red-bg);
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  margin-bottom: 12px;
+}
+
+.gd-h2h-scores {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  margin-bottom: 8px;
+}
+
+.gd-h2h-side {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.gd-h2h-big {
+  font-size: 2rem;
+  font-weight: 800;
+  font-family: var(--font-mono);
+}
+
+.gd-h2h-side span:last-child {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.gd-h2h-vs {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.gd-h2h-last {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* H2H Individual Game Details */
+.gd-h2h-games {
+  margin-top: 12px;
+  border-top: 1px solid var(--border-primary);
+  padding-top: 12px;
+}
+
+.gd-h2h-games-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+}
+
+.gd-h2h-game-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-sm);
+  margin-bottom: 6px;
+  font-size: 0.8rem;
+}
+
+.gd-h2h-game-date {
+  color: var(--text-muted);
+  min-width: 80px;
+  font-size: 0.75rem;
+}
+
+.gd-h2h-game-teams {
+  color: var(--text-secondary);
+  flex: 1;
+}
+
+.gd-h2h-game-score {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.gd-h2h-game-winner {
+  font-weight: 600;
+  font-size: 0.75rem;
+  min-width: 50px;
+  text-align: right;
+}
+
+/* Recent Form game date */
+.gd-form-game-date {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  min-width: 42px;
+}
+
+/* Performance Analysis */
+.gd-perf-boxes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.gd-perf-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 14px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+}
+
+.gd-perf-box-label {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.gd-perf-box-record {
+  font-size: 1.6rem;
+  font-weight: 800;
+  font-family: var(--font-mono);
+}
+
+.gd-perf-box-sub {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
+
+/* Chart Section */
+.gd-chart-section {
+  margin-top: 12px;
+}
+
+.gd-chart-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 10px 0;
+}
+
+.gd-chart-title svg {
+  color: var(--text-muted);
+}
+
+/* Recharts overrides */
+.recharts-cartesian-axis-tick-value {
+  fill: var(--text-muted) !important;
+}
+
+.recharts-legend-item-text {
+  color: var(--text-muted) !important;
 }

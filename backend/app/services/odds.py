@@ -95,8 +95,11 @@ def fresh_implied_prob(pred: Prediction, game: Optional[Game]) -> Optional[float
                             price_key = "over_price" if is_over else "under_price"
                             live_odds = tl.get(price_key)
                             break
-            except (ValueError, TypeError, KeyError):
-                pass
+            except (ValueError, TypeError, KeyError) as exc:
+                logger.warning(
+                    "Failed to parse all_total_lines for game %s: %s",
+                    game.id, exc,
+                )
         # Fall back to the primary O/U prices
         if live_odds is None:
             if is_over:
@@ -122,10 +125,19 @@ def fresh_implied_prob(pred: Prediction, game: Optional[Game]) -> Optional[float
 # Centralized odds sync
 # ---------------------------------------------------------------------------
 
-async def sync_odds(session: AsyncSession, force: bool = False) -> List[Dict[str, Any]]:
+async def sync_odds(
+    session: AsyncSession,
+    force: bool = False,
+    skip_alternates: bool = False,
+) -> List[Dict[str, Any]]:
     """Sync odds from all sportsbook sources.
 
     Throttled to avoid API rate limits. Use force=True to bypass throttle.
+
+    When ``skip_alternates`` is True, the per-event alternate line API calls
+    are skipped in favour of cached data.  This is the "fast path" used by
+    the live scheduler to dramatically reduce Odds API credit consumption.
+
     Returns list of matched game dicts.
     """
     global _last_sync_at
@@ -144,16 +156,42 @@ async def sync_odds(session: AsyncSession, force: bool = False) -> List[Dict[str
             from app.scrapers.odds_multi import MultiSourceOddsScraper
 
             async with MultiSourceOddsScraper() as scraper:
-                matched = await scraper.sync_odds(session)
+                matched = await scraper.sync_odds(
+                    session, skip_alternates=skip_alternates,
+                )
                 await session.flush()
                 session.expire_all()
                 _last_sync_at = now
-                logger.info("Odds sync: matched %d games", len(matched) if matched else 0)
+                logger.info(
+                    "Odds sync: matched %d games (skip_alt=%s)",
+                    len(matched) if matched else 0, skip_alternates,
+                )
                 return matched or []
         except Exception as exc:
             _last_sync_at = now  # Still throttle on failure
             logger.error("Odds sync failed: %s", exc, exc_info=True)
             return []
+
+
+async def sync_player_props(session: AsyncSession) -> int:
+    """Sync player prop odds from The Odds API.
+
+    Fetches ATG, SOG, Points, Assists, and Saves props for today's
+    games and upserts them into the PlayerPropOdds table.
+
+    Uses a 30-minute cache so repeated calls within the window are free.
+    Returns the number of prop lines synced.
+    """
+    try:
+        from app.scrapers.player_props import sync_player_props as _sync
+
+        count = await _sync(session)
+        await session.flush()
+        session.expire_all()
+        return count
+    except Exception as exc:
+        logger.error("Player props sync failed: %s", exc, exc_info=True)
+        return 0
 
 
 async def sync_odds_and_regenerate(

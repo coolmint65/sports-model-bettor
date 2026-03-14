@@ -51,8 +51,8 @@ def composite_pick_score(
     Higher score = better pick.
 
     Weights:
-      - confidence (45%): how likely the bet is to win
-      - edge       (35%): value over the market line
+      - edge       (45%): value over the market line — primary driver
+      - confidence (35%): how likely the bet is to win
       - juice      (20%): payout quality (lower implied prob = less juice)
 
     Each component is normalized to 0-1 before weighting so no single
@@ -62,4 +62,4 @@ def composite_pick_score(
     c = confidence or 0.0
     e = min(edge or 0.0, 0.25) / 0.25  # normalize 0-25% → 0-1
     j = 1.0 - (implied_prob or 0.5)     # lower implied = better juice
-    return 0.45 * c + 0.35 * e + 0.20 * j
+    return 0.35 * c + 0.45 * e + 0.20 * j

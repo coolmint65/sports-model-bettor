@@ -29,14 +29,6 @@ from app.models.team import Team, TeamStats
 # ---------------------------------------------------------------------------
 
 
-class HealthResponse(BaseModel):
-    status: str
-    app_name: str
-    version: str
-    sport: str
-    timestamp: str
-
-
 class TeamResponse(BaseModel):
     id: int
     external_id: str
@@ -191,18 +183,6 @@ predictions_router = APIRouter(prefix="/api/predictions", tags=["predictions"])
 # ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
-
-
-@health_router.get("/health", response_model=HealthResponse)
-async def health_check() -> HealthResponse:
-    """Return application health status."""
-    return HealthResponse(
-        status="healthy",
-        app_name=settings.app_name,
-        version=settings.app_version,
-        sport=settings.default_sport,
-        timestamp=datetime.now(timezone.utc).isoformat(),
-    )
 
 
 @health_router.get("/health/scheduler")

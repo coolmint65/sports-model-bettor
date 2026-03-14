@@ -1,15 +1,14 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
-import { Calendar, TrendingUp, Radio } from 'lucide-react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { Calendar, Radio, RefreshCw } from 'lucide-react';
 import { format } from 'date-fns';
-import BestBets from './BestBets';
 import GameCard from './GameCard';
-import { fetchTodaySchedule, fetchLiveGames } from '../utils/api';
+import { fetchTodaySchedule, fetchLiveGames, regeneratePredictions, trackBet } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import { useWebSocketEvent } from '../hooks/useWebSocket';
-import { isLiveStatus } from '../utils/teams';
+import { isLiveStatus, confidencePct } from '../utils/teams';
 
-const LIVE_POLL_INTERVAL = 5_000; // 5 seconds when live
-const IDLE_POLL_INTERVAL = 60_000; // 1 minute when no live games
+const LIVE_POLL_INTERVAL = 5_000;
+const IDLE_POLL_INTERVAL = 60_000;
 
 function Dashboard() {
   const {
@@ -20,6 +19,9 @@ function Dashboard() {
   } = useApi(fetchTodaySchedule);
 
   const [liveGames, setLiveGames] = useState([]);
+  const [regenerating, setRegenerating] = useState(false);
+  const [regenMessage, setRegenMessage] = useState('');
+  const regeneratingRef = useRef(false);
 
   const pollLive = useCallback(async () => {
     try {
@@ -27,11 +29,10 @@ function Dashboard() {
       const games = res?.data?.games || res?.data || [];
       setLiveGames(games);
     } catch {
-      // Silently fail — live section just won't show
+      // Silently fail
     }
   }, []);
 
-  // Instantly refetch when WebSocket pushes odds or predictions updates
   useWebSocketEvent('odds_update', useCallback(() => {
     silentRefetch();
     pollLive();
@@ -42,13 +43,47 @@ function Dashboard() {
   }, [silentRefetch]));
 
   const today = format(new Date(), 'EEEE, MMMM d, yyyy');
-  const games = scheduleData?.games || scheduleData || [];
+  const rawGames = scheduleData?.games || scheduleData || [];
+
+  const prematchPickCache = useRef(new Map());
+  const games = useMemo(() => {
+    const currentGameIds = new Set(
+      rawGames.map((g) => g.id || g.game_id).filter(Boolean)
+    );
+    for (const key of prematchPickCache.current.keys()) {
+      const gid = parseInt(key.split(':')[0], 10);
+      if (!currentGameIds.has(gid)) {
+        prematchPickCache.current.delete(key);
+      }
+    }
+
+    return rawGames.map((g) => {
+      const gid = g.id || g.game_id;
+      if (!gid) return g;
+
+      if (g.top_pick) {
+        prematchPickCache.current.set(`${gid}:pick`, g.top_pick);
+      }
+      if (g.top_prop) {
+        prematchPickCache.current.set(`${gid}:prop`, g.top_prop);
+      }
+
+      const cachedPick = prematchPickCache.current.get(`${gid}:pick`);
+      const cachedProp = prematchPickCache.current.get(`${gid}:prop`);
+
+      if (!g.top_pick && cachedPick) {
+        return { ...g, top_pick: cachedPick, top_prop: g.top_prop || cachedProp };
+      }
+      if (!g.top_prop && cachedProp) {
+        return { ...g, top_prop: cachedProp };
+      }
+      return g;
+    });
+  }, [rawGames]);
 
   const todayHasLive = games.some((g) => isLiveStatus(g.status));
   const hasAnyLive = liveGames.length > 0 || todayHasLive;
 
-  // Always poll — faster when live, slower when idle.
-  // This replaces the manual sync-only model.
   const intervalRef = useRef(null);
   useEffect(() => {
     pollLive();
@@ -67,17 +102,12 @@ function Dashboard() {
     };
   }, [hasAnyLive, silentRefetch, pollLive]);
 
-  // Also refresh immediately on manual sync
   useEffect(() => {
     const onSynced = () => silentRefetch();
     window.addEventListener('data-synced', onSynced);
     return () => window.removeEventListener('data-synced', onSynced);
   }, [silentRefetch]);
 
-  // Build a lookup of live game data (from /schedule/live which has
-  // the freshest odds via live odds sync).  Prefer this data over
-  // /schedule/today for live games so odds timestamps stay current.
-  // Preserve top_pick from schedule data if live data doesn't have one.
   const liveGameMap = new Map();
   const scheduleMap = new Map();
   for (const g of games) {
@@ -91,6 +121,9 @@ function Dashboard() {
       if (!g.top_pick && scheduleGame?.top_pick) {
         g.top_pick = scheduleGame.top_pick;
       }
+      if (!g.top_prop && scheduleGame?.top_prop) {
+        g.top_prop = scheduleGame.top_prop;
+      }
       liveGameMap.set(gid, g);
     }
   }
@@ -100,8 +133,6 @@ function Dashboard() {
     (g) => !todayGameIds.has(g.id) && !todayGameIds.has(g.game_id)
   );
 
-  // For live games in today's schedule, prefer the /schedule/live data
-  // which carries freshly-synced odds.
   const allLive = [
     ...games
       .filter((g) => isLiveStatus(g.status))
@@ -109,38 +140,119 @@ function Dashboard() {
     ...extraLiveGames,
   ];
 
-  // Sort games by bet quality: GOOD BET first, then BORDERLINE, then rest
-  const sortedGames = [...games].sort((a, b) => {
-    const qualityScore = (g) => {
-      const tp = g.top_pick;
-      if (!tp) return 0;
-      if (tp.is_fallback) return 1;
-      return 2;
-    };
-    const qs = qualityScore(b) - qualityScore(a);
-    if (qs !== 0) return qs;
-    return (b.top_pick?.confidence || 0) - (a.top_pick?.confidence || 0);
-  });
+  // Prematch games only (not live, not final) — sorted by bet quality
+  const prematchGames = useMemo(() => {
+    const prematch = games.filter((g) => {
+      const status = (g.status || '').toLowerCase();
+      return !isLiveStatus(status) && status !== 'final' && status !== 'completed' && status !== 'off';
+    });
+
+    return prematch.sort((a, b) => {
+      const confA = a.top_pick?.confidence != null ? confidencePct(a.top_pick.confidence) : 0;
+      const confB = b.top_pick?.confidence != null ? confidencePct(b.top_pick.confidence) : 0;
+      const edgeA = a.top_pick?.edge || 0;
+      const edgeB = b.top_pick?.edge || 0;
+      // Primary sort: confidence (quality tier). Secondary: edge as tiebreaker.
+      const scoreA = 0.85 * confA + 0.15 * (Math.min(edgeA, 0.25) / 0.25) * 100;
+      const scoreB = 0.85 * confB + 0.15 * (Math.min(edgeB, 0.25) / 0.25) * 100;
+      return scoreB - scoreA;
+    });
+  }, [games]);
+
+  // Compute medal rankings
+  const medalMap = useMemo(() => {
+    const map = new Map();
+    const scored = prematchGames
+      .filter((g) => g.top_pick?.confidence != null)
+      .map((g) => {
+        const conf = confidencePct(g.top_pick.confidence);
+        const edge = Math.min(g.top_pick.edge || 0, 0.25) / 0.25;
+        const score = 0.85 * conf + 0.15 * edge * 100;
+        return { gameId: g.id || g.game_id, score };
+      })
+      .sort((a, b) => b.score - a.score);
+    const medals = ['gold', 'silver', 'bronze'];
+    scored.forEach((item, i) => {
+      if (i < 3) map.set(item.gameId, medals[i]);
+    });
+    return map;
+  }, [prematchGames]);
+
+  // Auto-track all top picks (prematch only) to the bet tracker.
+  const autoTrackedRef = useRef(new Set());
+  useEffect(() => {
+    const picks = prematchGames
+      .map((g) => g.top_pick)
+      .filter((p) => p && p.prediction_id && !autoTrackedRef.current.has(p.prediction_id));
+    if (!picks.length) return;
+
+    for (const pick of picks) {
+      autoTrackedRef.current.add(pick.prediction_id);
+    }
+
+    (async () => {
+      for (const pick of picks) {
+        try {
+          await trackBet(pick.prediction_id);
+        } catch (err) {
+          if (err?.response?.status !== 409) {
+            console.error(`Failed to auto-track prediction ${pick.prediction_id}:`, err);
+          }
+        }
+      }
+    })();
+  }, [prematchGames]);
+
+  const handleRegenerate = useCallback(async () => {
+    if (regeneratingRef.current) return;
+    regeneratingRef.current = true;
+    setRegenerating(true);
+    setRegenMessage('Syncing schedule & odds...');
+    try {
+      const resp = await regeneratePredictions();
+      const count = resp.data?.predictions_generated ?? 0;
+      const msg = count > 0
+        ? `Regenerated ${count} predictions`
+        : 'No predictions generated (check data sync)';
+      setRegenMessage(msg);
+      await silentRefetch();
+      window.dispatchEvent(new Event('data-synced'));
+      setTimeout(() => setRegenMessage(''), 6000);
+    } catch (err) {
+      const detail = err?.response?.data?.detail || err?.message || '';
+      setRegenMessage(`Regeneration failed${detail ? `: ${detail}` : ''}`);
+      setTimeout(() => setRegenMessage(''), 6000);
+    } finally {
+      regeneratingRef.current = false;
+      setRegenerating(false);
+    }
+  }, [silentRefetch]);
 
   return (
     <div className="dashboard">
       <div className="dashboard-header">
         <div className="dashboard-title-section">
-          <h1 className="dashboard-title">
-            <TrendingUp size={28} />
-            Today's Action
-          </h1>
+          <h1 className="dashboard-title">Today's Action</h1>
           <p className="dashboard-date">
             <Calendar size={16} />
             {today}
           </p>
         </div>
+        <div className="dashboard-actions">
+          <button
+            className="btn btn-regen"
+            onClick={handleRegenerate}
+            disabled={regenerating}
+            title="Sync schedule, fetch latest odds, and regenerate all predictions"
+          >
+            <RefreshCw size={14} className={regenerating ? 'spin' : ''} />
+            {regenerating ? (regenMessage || 'Regenerating...') : 'Regenerate'}
+          </button>
+          {regenMessage && !regenerating && (
+            <span className="regen-message">{regenMessage}</span>
+          )}
+        </div>
       </div>
-
-      {/* Best Bets Section */}
-      <section className="section">
-        <BestBets />
-      </section>
 
       {/* Live Games Section */}
       {allLive.length > 0 && (
@@ -156,7 +268,7 @@ function Dashboard() {
           </div>
           <div className="games-grid">
             {allLive.map((game) => (
-              <GameCard key={game.game_id || game.id} game={game} />
+              <GameCard key={game.game_id || game.id} game={game} section="live" />
             ))}
           </div>
         </section>
@@ -165,12 +277,14 @@ function Dashboard() {
       {/* Upcoming Games */}
       <section className="section">
         <div className="section-header">
-          <div>
-            <h2 className="section-title" style={{ marginBottom: 4 }}>Upcoming Games</h2>
-            <p className="section-subtitle">Search and explore matchups. Games sorted by bet quality — GOOD bets shown first.</p>
+          <div className="section-title-group">
+            <h2 className="section-title upcoming-title">Upcoming Games</h2>
+            <p className="section-subtitle">
+              Search and explore matchups. Games sorted by bet quality &mdash; GOOD bets shown first.
+            </p>
           </div>
           <span className="game-count">
-            {games.length} {games.length === 1 ? 'Game' : 'Games'}
+            {prematchGames.length} {prematchGames.length === 1 ? 'Game' : 'Games'}
           </span>
         </div>
 
@@ -187,17 +301,17 @@ function Dashboard() {
           </div>
         )}
 
-        {!scheduleLoading && !scheduleError && games.length === 0 && (
+        {!scheduleLoading && !scheduleError && prematchGames.length === 0 && (
           <div className="empty-state">
             <Calendar size={48} />
-            <p>No games scheduled for today</p>
+            <p>No upcoming games scheduled for today</p>
           </div>
         )}
 
-        {!scheduleLoading && !scheduleError && games.length > 0 && (
-          <div className="games-grid">
-            {sortedGames.map((game, idx) => (
-              <GameCard key={game.game_id || game.id} game={game} rank={idx + 1} />
+        {!scheduleLoading && !scheduleError && prematchGames.length > 0 && (
+          <div className="dc-grid">
+            {prematchGames.map((game) => (
+              <GameCard key={game.game_id || game.id} game={game} section="schedule" medal={medalMap.get(game.id || game.game_id)} />
             ))}
           </div>
         )}

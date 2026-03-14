@@ -1,40 +1,83 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Clock, ChevronRight, TrendingUp, Target, Radio,
-  CheckCircle, XCircle, MinusCircle, Calendar, AlertTriangle,
-  Users, Zap, Activity,
+  Clock,
+  ChevronRight,
+  TrendingUp,
+  Radio,
+  Calendar,
+  Minus,
+  Target,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import {
-  teamName, teamAbbrev, teamLogo, confidencePct,
-  parseAsUTC, isLiveStatus,
+  teamName,
+  teamAbbrev,
+  teamLogo,
+  confidencePct,
+  parseAsUTC,
+  isLiveStatus,
 } from '../utils/teams';
 import { formatAmericanOdds } from '../utils/formatting';
 
-/* ── Utility functions ── */
-
 function getStatusDisplay(game) {
-  const s = (game.status || game.game_state || '').toLowerCase();
-  if (s === 'final' || s === 'completed' || s === 'off')
+  const status = game.status || game.game_state || '';
+  const statusLower = status.toLowerCase();
+
+  if (statusLower === 'final' || statusLower === 'completed' || statusLower === 'off') {
     return { label: 'Final', className: 'status-final', showScore: true, isLive: false };
-  if (s === 'live' || s === 'in_progress' || s === 'active')
+  }
+  if (statusLower === 'live' || statusLower === 'in_progress' || statusLower === 'active') {
     return { label: 'LIVE', className: 'status-live', showScore: true, isLive: true };
+  }
   return { label: null, className: 'status-scheduled', showScore: false, isLive: false };
 }
 
 function formatPeriod(game) {
-  const { period, period_type, clock, in_intermission } = game;
+  const period = game.period;
+  const periodType = game.period_type;
+  const clock = game.clock;
+  const inIntermission = game.in_intermission;
+
   if (!period) return { label: null, clock: null, intermission: false };
-  let p;
-  if (period_type === 'OT') p = 'OT';
-  else if (period_type === 'SO') p = 'SO';
-  else if (period === 1) p = '1st';
-  else if (period === 2) p = '2nd';
-  else if (period === 3) p = '3rd';
-  else p = `${period}th`;
-  if (in_intermission) return { label: `End ${p}`, clock: null, intermission: true };
-  return { label: p, clock: clock || null, intermission: false };
+
+  let periodLabel;
+  if (periodType === 'OT') periodLabel = 'OT';
+  else if (periodType === 'SO') periodLabel = 'SO';
+  else if (period === 1) periodLabel = '1st';
+  else if (period === 2) periodLabel = '2nd';
+  else if (period === 3) periodLabel = '3rd';
+  else periodLabel = `${period}th`;
+
+  if (inIntermission) {
+    return { label: `End ${periodLabel}`, clock: null, intermission: true };
+  }
+  return { label: periodLabel, clock: clock || null, intermission: false };
+}
+
+function LiveClock({ serverClock, running }) {
+  const [seconds, setSeconds] = useState(() => parseClock(serverClock));
+  const prevServer = useRef(serverClock);
+
+  useEffect(() => {
+    if (serverClock !== prevServer.current) {
+      prevServer.current = serverClock;
+      setSeconds(parseClock(serverClock));
+    }
+  }, [serverClock]);
+
+  useEffect(() => {
+    if (!running || seconds <= 0) return;
+    const id = setInterval(() => {
+      setSeconds((s) => Math.max(0, s - 1));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [running, seconds > 0]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  const display = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  return <span className="live-clock">{display}</span>;
 }
 
 function parseClock(str) {
@@ -44,53 +87,60 @@ function parseClock(str) {
   return (parseInt(parts[0], 10) || 0) * 60 + (parseInt(parts[1], 10) || 0);
 }
 
-function LiveClock({ serverClock, running }) {
-  const [seconds, setSeconds] = useState(() => parseClock(serverClock));
-  const prevServer = useRef(serverClock);
-  useEffect(() => {
-    if (serverClock !== prevServer.current) {
-      prevServer.current = serverClock;
-      setSeconds(parseClock(serverClock));
-    }
-  }, [serverClock]);
-  useEffect(() => {
-    if (!running || seconds <= 0) return;
-    const id = setInterval(() => setSeconds((s) => Math.max(0, s - 1)), 1000);
-    return () => clearInterval(id);
-  }, [running, seconds > 0]); // eslint-disable-line react-hooks/exhaustive-deps
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  return <span className="gc-live-clock">{String(mins).padStart(2, '0')}:{String(secs).padStart(2, '0')}</span>;
-}
-
-function TeamLogo({ team, size = 52 }) {
+function TeamLogo({ team, size = 36 }) {
   const logo = teamLogo(team);
   if (!logo) return null;
   return (
     <img
-      className="gc-team-logo"
-      src={logo} alt="" width={size} height={size}
+      className="team-logo"
+      src={logo}
+      alt=""
+      width={size}
+      height={size}
       loading="lazy"
       onError={(e) => { e.target.style.display = 'none'; }}
     />
   );
 }
 
-function formatGameDateTime(game) {
+function formatGameDate(game) {
   try {
     const dateStr = game.start_time || game.datetime;
-    if (!dateStr) return { date: 'TBD', time: '' };
-    const dt = parseAsUTC(dateStr);
-    if (!dt || isNaN(dt.getTime())) return { date: 'TBD', time: '' };
-    return { date: format(dt, 'EEE, MMM d'), time: format(dt, 'h:mm a') };
+    if (!dateStr) return null;
+    const date = parseAsUTC(dateStr);
+    if (!date || isNaN(date.getTime())) return null;
+    return format(date, 'EEE, MMM d');
   } catch {
-    return { date: 'TBD', time: '' };
+    return null;
   }
 }
 
-/* ── Main GameCard ── */
+function formatGameTime(game) {
+  try {
+    const dateStr = game.start_time || game.datetime;
+    if (!dateStr) return 'TBD';
+    const date = parseAsUTC(dateStr);
+    if (!date || isNaN(date.getTime())) return 'TBD';
+    return format(date, 'h:mm a');
+  } catch {
+    return game.time || 'TBD';
+  }
+}
 
-function GameCard({ game, rank }) {
+function getConfidenceBadge(confidence) {
+  if (confidence == null) return null;
+  if (confidence >= 70) return { label: 'GOOD BET', className: 'badge-good', icon: TrendingUp };
+  if (confidence >= 55) return { label: 'BORDERLINE', className: 'badge-borderline', icon: Minus };
+  return null;
+}
+
+const MEDAL_STYLES = {
+  gold: { className: 'rank-gold', label: '#1' },
+  silver: { className: 'rank-silver', label: '#2' },
+  bronze: { className: 'rank-bronze', label: '#3' },
+};
+
+function GameCard({ game, section, medal }) {
   const navigate = useNavigate();
   const gameId = game.game_id || game.id;
   const statusInfo = getStatusDisplay(game);
@@ -99,165 +149,220 @@ function GameCard({ game, rank }) {
   const homeName = teamName(game.home_team, 'Home');
   const awayAbbr = teamAbbrev(game.away_team, 'AWY');
   const homeAbbr = teamAbbrev(game.home_team, 'HME');
-  const awayScore = game.away_score ?? null;
-  const homeScore = game.home_score ?? null;
+  const awayScore = game.away_score ?? game.score?.away ?? null;
+  const homeScore = game.home_score ?? game.score?.home ?? null;
   const topPick = game.top_pick || null;
-  const rawConf = topPick?.confidence || null;
+  const rawConf = topPick?.confidence || game.top_confidence || game.confidence || game.prediction_confidence || null;
   const confidence = rawConf != null ? confidencePct(rawConf) : null;
   const odds = game.odds || null;
-  const startTime = game.start_time || game.datetime;
-  const periodInfo = statusInfo.isLive ? formatPeriod(game) : { label: null, clock: null, intermission: false };
-  const { date: dateDisplay, time: timeDisplay } = formatGameDateTime(game);
+  const periodInfo = statusInfo.isLive ? formatPeriod(game) : { label: null, clock: null };
 
-  const isFallback = topPick?.is_fallback;
-  const hasQualifiedPick = topPick && !isFallback;
-  const betQuality = hasQualifiedPick ? 'good' : (topPick ? 'borderline' : null);
+  const handleClick = () => {
+    if (gameId) navigate(`/games/${gameId}`);
+  };
 
-  const handleClick = () => { if (gameId) navigate(`/games/${gameId}`); };
+  // For live games, keep compact card style
+  if (statusInfo.isLive) {
+    return (
+      <div
+        className={`game-card ${statusInfo.className}`}
+        onClick={handleClick}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => e.key === 'Enter' && handleClick()}
+      >
+        <div className="game-status-badge status-live">
+          <span className="live-dot"></span>
+          LIVE
+        </div>
+
+        <div className="game-card-body has-badge">
+          <div className="game-team">
+            <TeamLogo team={game.away_team} size={36} />
+            <div className="team-abbrev">{awayAbbr}</div>
+            <div className="team-name">{awayName}</div>
+            {awayScore !== null && (
+              <div className={`team-score ${awayScore > homeScore ? 'score-winning' : ''}`}>
+                {awayScore}
+              </div>
+            )}
+          </div>
+
+          <div className="game-divider">
+            <div className="live-divider">
+              <span className={`vs-label live-label ${periodInfo.intermission ? 'intermission-label' : ''}`}>
+                {periodInfo.label || 'LIVE'}
+              </span>
+              {periodInfo.intermission ? (
+                <span className="live-intermission">Intermission</span>
+              ) : (
+                <LiveClock serverClock={periodInfo.clock} running={game.clock_running !== false} />
+              )}
+              {(game.home_shots != null || game.away_shots != null) && (
+                <span className="live-shots">SOG: {game.away_shots ?? 0}-{game.home_shots ?? 0}</span>
+              )}
+            </div>
+          </div>
+
+          <div className="game-team">
+            <TeamLogo team={game.home_team} size={36} />
+            <div className="team-abbrev">{homeAbbr}</div>
+            <div className="team-name">{homeName}</div>
+            {homeScore !== null && (
+              <div className={`team-score ${homeScore > awayScore ? 'score-winning' : ''}`}>
+                {homeScore}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="game-card-arrow">
+          <ChevronRight size={18} />
+        </div>
+      </div>
+    );
+  }
+
+  // New dashboard card design for scheduled/prematch games
+  const badge = getConfidenceBadge(confidence);
+  const medalStyle = medal ? MEDAL_STYLES[medal] : null;
+  const gameDate = formatGameDate(game);
+  const gameTime = formatGameTime(game);
+
+  const awayML = odds?.away_moneyline;
+  const homeML = odds?.home_moneyline;
+  const spreadLine = odds?.home_spread_line;
+  const awaySpreadLine = odds?.away_spread_line;
+  const ouLine = odds?.over_under_line;
+
+  // Determine which side the pick is on
+  const pickValue = (topPick?.prediction_value || '').toLowerCase();
+  const pickBetType = (topPick?.bet_type || '').toLowerCase();
+  const pickIsHome = pickValue === 'home' || pickValue.includes(homeAbbr.toLowerCase());
+  const pickIsAway = pickValue === 'away' || pickValue.includes(awayAbbr.toLowerCase());
+
+  // Detect over/under pick
+  const pickIsOver = pickBetType === 'total' && pickValue.includes('over');
+  const pickIsUnder = pickBetType === 'total' && pickValue.includes('under');
 
   return (
-    <div
-      className={`gc-card ${statusInfo.className}`}
-      onClick={handleClick} role="button" tabIndex={0}
-      onKeyDown={(e) => e.key === 'Enter' && handleClick()}
-    >
-      {/* Ranking badge */}
-      {rank != null && rank <= 3 && (
-        <div className={`gc-rank gc-rank-${rank}`}>#{rank}</div>
+    <div className="dc-card" onClick={handleClick} role="button" tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && handleClick()}>
+      {/* Rank badge */}
+      {medalStyle && (
+        <div className={`dc-rank ${medalStyle.className}`}>{medalStyle.label}</div>
       )}
 
-      {/* Outcome overlay for final games */}
-      {topPick?.outcome && (
-        <div className={`gc-outcome gc-outcome-${topPick.outcome}`}>
-          {topPick.outcome === 'win' && <CheckCircle size={22} />}
-          {topPick.outcome === 'loss' && <XCircle size={22} />}
-          {topPick.outcome === 'push' && <MinusCircle size={22} />}
-        </div>
-      )}
-
-      {/* Badges */}
-      <div className="gc-badges">
-        <span className="gc-badge gc-badge-sport">Hockey</span>
-        <span className="gc-badge gc-badge-league"><Users size={11} /> NHL</span>
-        {betQuality === 'good' && (
-          <span className="gc-badge gc-badge-good"><TrendingUp size={11} /> GOOD BET</span>
-        )}
-        {betQuality === 'borderline' && (
-          <span className="gc-badge gc-badge-borderline"><AlertTriangle size={11} /> BORDERLINE</span>
+      {/* Top tags row */}
+      <div className="dc-tags">
+        <span className="dc-tag dc-tag-sport">Hockey</span>
+        <span className="dc-tag dc-tag-league">NHL</span>
+        {badge && (
+          <span className={`dc-tag dc-tag-confidence ${badge.className}`}>
+            <badge.icon size={12} />
+            {badge.label}
+          </span>
         )}
       </div>
 
-      {/* Date / Time / Live */}
-      <div className="gc-datetime">
-        {statusInfo.isLive ? (
-          <>
-            <Radio size={12} className="gc-pulse" />
-            <span className="gc-live-label">LIVE</span>
-            {periodInfo.label && <span className="gc-period-badge">{periodInfo.label}</span>}
-            {periodInfo.clock && !periodInfo.intermission && (
-              <LiveClock serverClock={periodInfo.clock} running={game.clock_running !== false} />
-            )}
-            {periodInfo.intermission && <span className="gc-intermission-label">Intermission</span>}
-          </>
-        ) : statusInfo.label === 'Final' ? (
-          <span className="gc-final-label">Final{game.went_to_overtime ? ' (OT)' : ''}</span>
-        ) : (
+      {/* Date/Time row */}
+      <div className="dc-datetime">
+        {gameDate && (
           <>
             <Calendar size={12} />
-            <span>{dateDisplay}</span>
+            <span>{gameDate}</span>
+          </>
+        )}
+        {gameTime && (
+          <>
             <Clock size={12} />
-            <span>{timeDisplay}</span>
+            <span>{gameTime}</span>
           </>
         )}
       </div>
 
-      {/* Team Matchup */}
-      <div className="gc-matchup">
-        <div className="gc-team">
-          <TeamLogo team={game.away_team} size={52} />
-          <span className="gc-team-name">{awayName}</span>
-          {statusInfo.showScore && awayScore != null ? (
-            <span className={`gc-score ${awayScore > homeScore ? 'gc-winning' : ''}`}>{awayScore}</span>
-          ) : odds?.away_moneyline != null ? (
-            <span className={`gc-ml ${odds.away_moneyline > 0 ? 'gc-ml-plus' : 'gc-ml-minus'}`}>
-              {formatAmericanOdds(odds.away_moneyline)}
-            </span>
-          ) : null}
+      {/* Team matchup */}
+      <div className="dc-matchup">
+        <div className="dc-team">
+          <TeamLogo team={game.away_team} size={48} />
+          <div className="dc-team-name">{awayName}</div>
+          {awayML != null && (
+            <div className={`dc-ml ${pickIsAway && pickBetType === 'ml' ? 'dc-ml-pick' : ''}`}>
+              {formatAmericanOdds(awayML)}
+            </div>
+          )}
         </div>
 
-        <div className="gc-center">
-          <span className="gc-vs">VS</span>
-          {statusInfo.isLive ? (
-            (game.away_shots != null || game.home_shots != null) && (
-              <span className="gc-shots">SOG {game.away_shots ?? 0}-{game.home_shots ?? 0}</span>
-            )
-          ) : !statusInfo.showScore ? (
-            <span className="gc-status-text">Scheduled</span>
-          ) : null}
+        <div className="dc-vs-section">
+          <span className="dc-vs">VS</span>
+          <span className="dc-status">Scheduled</span>
         </div>
 
-        <div className="gc-team">
-          <TeamLogo team={game.home_team} size={52} />
-          <span className="gc-team-name">{homeName}</span>
-          {statusInfo.showScore && homeScore != null ? (
-            <span className={`gc-score ${homeScore > awayScore ? 'gc-winning' : ''}`}>{homeScore}</span>
-          ) : odds?.home_moneyline != null ? (
-            <span className={`gc-ml ${odds.home_moneyline > 0 ? 'gc-ml-plus' : 'gc-ml-minus'}`}>
-              {formatAmericanOdds(odds.home_moneyline)}
-            </span>
-          ) : null}
+        <div className="dc-team">
+          <TeamLogo team={game.home_team} size={48} />
+          <div className="dc-team-name">{homeName}</div>
+          {homeML != null && (
+            <div className={`dc-ml ${pickIsHome && pickBetType === 'ml' ? 'dc-ml-pick' : ''}`}>
+              {formatAmericanOdds(homeML)}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Compact Odds Pills */}
-      {odds && (odds.home_moneyline != null || odds.home_spread_line != null || odds.over_under_line != null) && (
-        <div className="gc-odds-pills">
-          {(odds.home_moneyline != null || odds.away_moneyline != null) && (
-            <div className="gc-pill">
-              <Target size={11} />
-              <span className="gc-pill-label">ML</span>
-              <span className="gc-pill-val">
-                {formatAmericanOdds(odds.away_moneyline) || '—'} / {formatAmericanOdds(odds.home_moneyline) || '—'}
-              </span>
-            </div>
-          )}
-          {odds.home_spread_line != null && (
-            <div className="gc-pill">
-              <Activity size={11} />
-              <span className="gc-pill-label">SPREAD</span>
-              <span className="gc-pill-val">
-                {odds.away_spread_line > 0 ? '+' : ''}{odds.away_spread_line} / {odds.home_spread_line > 0 ? '+' : ''}{odds.home_spread_line}
-              </span>
-            </div>
-          )}
-          {odds.over_under_line != null && (
-            <div className="gc-pill">
-              <Zap size={11} />
-              <span className="gc-pill-label">O/U</span>
-              <span className="gc-pill-val">O {odds.over_under_line}</span>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Value indicator */}
-      {hasQualifiedPick && (
-        <div className="gc-value">
-          <TrendingUp size={14} />
-          Good Parlay Value
-        </div>
-      )}
-
-      {/* Footer */}
-      <div className="gc-footer">
-        <div className="gc-footer-left">
+      {/* Pick summary bar */}
+      {topPick && pickBetType && (
+        <div className="dc-pick-bar">
+          <Target size={13} />
+          <span className="dc-pick-bar-text">
+            <strong>
+              {pickIsHome ? homeAbbr : pickIsAway ? awayAbbr : ''}{' '}
+              {pickBetType === 'ml' ? 'ML' : pickBetType === 'spread' ? 'Spread' : pickBetType === 'total' ? (pickIsOver ? 'Over' : 'Under') + ' ' + (ouLine || '') : pickBetType.toUpperCase()}
+            </strong>
+          </span>
           {confidence != null && (
-            <span className="gc-confidence">
-              <Target size={12} /> Confidence: {Math.round(confidence)}
-            </span>
+            <span className="dc-pick-bar-conf">{Math.round(confidence)}%</span>
           )}
         </div>
-        <span className="gc-details">
+      )}
+
+      {/* Odds summary pills - flat horizontal row */}
+      {odds && (
+        <div className="dc-odds-row">
+          {awayML != null && homeML != null && (
+            <div className={`dc-odds-pill ${pickBetType === 'ml' ? 'dc-odds-pill-active' : ''}`}>
+              <span className="dc-odds-label">ML</span>
+              <span className="dc-odds-val">
+                <span className={pickIsAway && pickBetType === 'ml' ? 'dc-pick-highlight' : ''}>{formatAmericanOdds(awayML)}</span>
+                <span className="dc-odds-sep">/</span>
+                <span className={pickIsHome && pickBetType === 'ml' ? 'dc-pick-highlight' : ''}>{formatAmericanOdds(homeML)}</span>
+              </span>
+            </div>
+          )}
+          {spreadLine != null && (
+            <div className={`dc-odds-pill ${pickBetType === 'spread' ? 'dc-odds-pill-active' : ''}`}>
+              <span className="dc-odds-label">PL</span>
+              <span className="dc-odds-val">
+                <span className={pickIsAway && pickBetType === 'spread' ? 'dc-pick-highlight' : ''}>{awaySpreadLine != null ? (awaySpreadLine > 0 ? '+' : '') + awaySpreadLine : `-${Math.abs(spreadLine)}`}</span>
+                <span className="dc-odds-sep">/</span>
+                <span className={pickIsHome && pickBetType === 'spread' ? 'dc-pick-highlight' : ''}>{spreadLine > 0 ? '+' : ''}{spreadLine}</span>
+              </span>
+            </div>
+          )}
+          {ouLine != null && (
+            <div className={`dc-odds-pill ${pickBetType === 'total' ? 'dc-odds-pill-active' : ''}`}>
+              <span className="dc-odds-label">
+                <span className={pickIsOver ? 'dc-pick-highlight' : ''}>O</span>
+                /
+                <span className={pickIsUnder ? 'dc-pick-highlight' : ''}>U</span>
+              </span>
+              <span className="dc-odds-val">{ouLine}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Footer - just Details link */}
+      <div className="dc-footer">
+        <span className="dc-details-link">
           Details <ChevronRight size={14} />
         </span>
       </div>

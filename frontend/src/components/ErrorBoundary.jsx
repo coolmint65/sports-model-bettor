@@ -12,6 +12,22 @@ class ErrorBoundary extends React.Component {
 
   componentDidCatch(error, info) {
     console.error('React Error Boundary caught:', error, info);
+    // Report to backend for server-side logging
+    try {
+      const payload = JSON.stringify({
+        error: error?.message || String(error),
+        stack: error?.stack?.slice(0, 2000),
+        componentStack: info?.componentStack?.slice(0, 2000),
+        url: window.location.href,
+        timestamp: new Date().toISOString(),
+      });
+      navigator.sendBeacon(
+        '/api/client-error',
+        new Blob([payload], { type: 'application/json' }),
+      );
+    } catch {
+      // Reporting failed — don't mask the original error
+    }
   }
 
   handleReset = () => {

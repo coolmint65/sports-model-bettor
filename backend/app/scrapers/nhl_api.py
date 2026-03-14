@@ -9,7 +9,7 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -19,6 +19,16 @@ from app.models.team import Team, TeamStats
 from app.scrapers.base import APIResponseError, BaseScraper
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_float(val) -> Optional[float]:
+    """Convert a value to float, returning None on failure."""
+    if val is None:
+        return None
+    try:
+        return round(float(val), 2)
+    except (ValueError, TypeError):
+        return None
 
 
 class NHLScraper(BaseScraper):
@@ -181,8 +191,8 @@ class NHLScraper(BaseScraper):
                 "goals_against": entry.get("goalAgainst", 0),
                 "goals_for_per_game": entry.get("goalsForPctg", None),
                 "goals_against_per_game": entry.get("goalsAgainstPctg", None),
-                "power_play_pct": entry.get("powerPlayPctg", None),
-                "penalty_kill_pct": entry.get("penaltyKillPctg", None),
+                "power_play_pct": round(float(entry["powerPlayPctg"]) * 100, 2) if entry.get("powerPlayPctg") is not None else None,
+                "penalty_kill_pct": round(float(entry["penaltyKillPctg"]) * 100, 2) if entry.get("penaltyKillPctg") is not None else None,
                 "regulation_wins": entry.get("regulationWins", 0),
                 "regulation_plus_ot_wins": entry.get(
                     "regulationPlusOtWins", 0
@@ -202,6 +212,9 @@ class NHLScraper(BaseScraper):
                 "wins_in_regulation": entry.get("winsInRegulation", 0),
                 "wins_in_ot": entry.get("winsInOt", 0),
                 "wins_in_shootout": entry.get("winsInShootout", 0),
+                "shots_for_per_game": _safe_float(entry.get("shotsForPerGame")),
+                "shots_against_per_game": _safe_float(entry.get("shotsAgainstPerGame")),
+                "faceoff_win_pct": round(float(entry["faceoffWinPctg"]) * 100, 2) if entry.get("faceoffWinPctg") is not None else _safe_float(entry.get("faceoffWinPct")),
             }
         except Exception as exc:
             logger.warning("Failed to parse standing entry: %s", exc)
@@ -224,6 +237,64 @@ class NHLScraper(BaseScraper):
         path = f"/club-stats/{team_abbrev}/now"
         data = await self.fetch_json(path)
         return data
+
+    async def fetch_team_summary_stats(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Fetch aggregate team stats (PP%, PK%, shots, faceoff%) from the
+        NHL stats REST API for all teams in the current season.
+
+        Returns:
+            Dict keyed by team abbreviation with stat values.
+        """
+        url = (
+            f"https://api.nhle.com/stats/rest/en/team/summary"
+            f"?cayenneExp=seasonId={self.default_season}"
+            f"%20and%20gameTypeId=2"
+            f"&sort=points&limit=-1"
+        )
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession() as client:
+                async with client.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status != 200:
+                        logger.warning("NHL stats API returned %d for summary stats", resp.status)
+                        return {}
+                    data = await resp.json()
+
+            results = {}
+            for team in data.get("data", []):
+                abbrev = (
+                    team.get("teamTriCode")
+                    or team.get("teamAbbrev", {}).get("default")
+                    or team.get("teamAbbrev")
+                )
+                if not abbrev or not isinstance(abbrev, str):
+                    continue
+
+                # NHL API returns PP%/PK% as decimals (0.214) or percentages (21.4)
+                pp = team.get("powerPlayPct") if team.get("powerPlayPct") is not None else team.get("powerPlayPctg")
+                pk = team.get("penaltyKillPct") if team.get("penaltyKillPct") is not None else team.get("penaltyKillPctg")
+                fo = team.get("faceoffWinPct") if team.get("faceoffWinPct") is not None else team.get("faceoffWinPctg")
+
+                # Normalize: if value <= 1.0, it's a decimal — convert to percentage
+                def to_pct(v):
+                    if v is None:
+                        return None
+                    v = float(v)
+                    return round(v * 100, 2) if v <= 1.0 else round(v, 2)
+
+                results[abbrev] = {
+                    "power_play_pct": to_pct(pp),
+                    "penalty_kill_pct": to_pct(pk),
+                    "shots_for_per_game": _safe_float(team.get("shotsForPerGame")),
+                    "shots_against_per_game": _safe_float(team.get("shotsAgainstPerGame")),
+                    "faceoff_win_pct": to_pct(fo),
+                }
+            logger.info("Fetched summary stats for %d teams from NHL stats API", len(results))
+            return results
+        except Exception as exc:
+            logger.warning("Failed to fetch team summary stats: %s", exc)
+            return {}
 
     # ------------------------------------------------------------------
     # D) Fetch roster
@@ -425,6 +496,10 @@ class NHLScraper(BaseScraper):
         logger.info("Syncing teams from standings...")
         standings = await self.fetch_standings()
 
+        # Fetch detailed team summary stats (PP%, PK%, shots, faceoff%)
+        # from the NHL stats REST API to supplement standings data
+        summary_stats = await self.fetch_team_summary_stats()
+
         for entry in standings:
             abbrev = entry.get("team_abbrev")
             if not abbrev:
@@ -474,6 +549,9 @@ class NHLScraper(BaseScraper):
             gf = entry.get("goals_for", 0)
             ga = entry.get("goals_against", 0)
 
+            # Merge summary stats from the stats REST API
+            team_summary = summary_stats.get(abbrev, {})
+
             stats_data = dict(
                 games_played=gp,
                 wins=entry.get("wins", 0),
@@ -484,8 +562,11 @@ class NHLScraper(BaseScraper):
                 goals_against=ga,
                 goals_for_per_game=round(gf / gp, 2) if gp > 0 else None,
                 goals_against_per_game=round(ga / gp, 2) if gp > 0 else None,
-                power_play_pct=entry.get("power_play_pct"),
-                penalty_kill_pct=entry.get("penalty_kill_pct"),
+                power_play_pct=entry.get("power_play_pct") if entry.get("power_play_pct") is not None else team_summary.get("power_play_pct"),
+                penalty_kill_pct=entry.get("penalty_kill_pct") if entry.get("penalty_kill_pct") is not None else team_summary.get("penalty_kill_pct"),
+                shots_for_per_game=entry.get("shots_for_per_game") if entry.get("shots_for_per_game") is not None else team_summary.get("shots_for_per_game"),
+                shots_against_per_game=entry.get("shots_against_per_game") if entry.get("shots_against_per_game") is not None else team_summary.get("shots_against_per_game"),
+                faceoff_win_pct=entry.get("faceoff_win_pct") if entry.get("faceoff_win_pct") is not None else team_summary.get("faceoff_win_pct"),
                 home_record=f"{home_w}-{home_l}-{home_otl}",
                 away_record=f"{away_w}-{away_l}-{away_otl}",
                 record_last_10=f"{l10_w}-{l10_l}-{l10_otl}",
@@ -504,6 +585,28 @@ class NHLScraper(BaseScraper):
                     setattr(stats, key, val)
 
         await db.flush()
+
+        # Mark teams not in the current standings as inactive (e.g. ARI
+        # after relocation to UTA).  This prevents sync_rosters from
+        # hitting 404s for defunct teams.
+        active_abbrevs = {
+            e.get("team_abbrev") for e in standings if e.get("team_abbrev")
+        }
+        if active_abbrevs:
+            all_teams_result = await db.execute(
+                select(Team).where(Team.sport == "nhl")
+            )
+            for t in all_teams_result.scalars():
+                if t.abbreviation not in active_abbrevs and t.active:
+                    t.active = False
+                    logger.info(
+                        "Deactivated team not in standings: %s (%s)",
+                        t.name, t.abbreviation,
+                    )
+                elif t.abbreviation in active_abbrevs and not t.active:
+                    t.active = True
+            await db.flush()
+
         logger.info("Teams sync complete: %d teams processed", len(standings))
 
     # ------------------------------------------------------------------
@@ -727,7 +830,7 @@ class NHLScraper(BaseScraper):
             db: Async SQLAlchemy session.
             game_id: The NHL API game ID (external id).
         """
-        logger.info("Syncing game results for game_id=%d", game_id)
+        logger.debug("Syncing game results for game_id=%d", game_id)
 
         # Fetch boxscore
         try:
@@ -772,42 +875,62 @@ class NHLScraper(BaseScraper):
         linescore = boxscore.get("linescore", {})
         by_period = linescore.get("byPeriod", [])
 
-        # Reset period score columns
-        game.home_score_p1 = None
-        game.away_score_p1 = None
-        game.home_score_p2 = None
-        game.away_score_p2 = None
-        game.home_score_p3 = None
-        game.away_score_p3 = None
-        game.home_score_ot = None
-        game.away_score_ot = None
-
         ot_home_total = 0
         ot_away_total = 0
         went_to_ot = False
 
-        for idx, period in enumerate(by_period):
-            home_p = period.get("home", 0)
-            away_p = period.get("away", 0)
+        # Only reset period columns when the API actually provides
+        # period data.  Without this guard, games whose boxscore
+        # lacks a byPeriod breakdown get their scores reset to NULL
+        # on every sync, causing the backfill query (which checks
+        # home_score_p1 IS NULL) to re-select them indefinitely.
+        if by_period:
+            game.home_score_p1 = None
+            game.away_score_p1 = None
+            game.home_score_p2 = None
+            game.away_score_p2 = None
+            game.home_score_p3 = None
+            game.away_score_p3 = None
+            game.home_score_ot = None
+            game.away_score_ot = None
 
-            if idx == 0:
-                game.home_score_p1 = home_p
-                game.away_score_p1 = away_p
-            elif idx == 1:
-                game.home_score_p2 = home_p
-                game.away_score_p2 = away_p
-            elif idx == 2:
-                game.home_score_p3 = home_p
-                game.away_score_p3 = away_p
-            else:
-                # All OT / SO periods get summed into the OT column
+        for period in by_period:
+            # Each byPeriod entry has periodDescriptor with number/periodType
+            pd = period.get("periodDescriptor", {})
+            period_num = pd.get("number")
+            period_type = (pd.get("periodType") or "").upper()
+
+            # Scores may be plain ints or objects with a "goals" sub-key
+            raw_home = period.get("home", 0)
+            raw_away = period.get("away", 0)
+            home_p = raw_home.get("goals", 0) if isinstance(raw_home, dict) else (raw_home or 0)
+            away_p = raw_away.get("goals", 0) if isinstance(raw_away, dict) else (raw_away or 0)
+
+            if period_type in ("OT", "SO") or (period_num is not None and period_num > 3):
                 ot_home_total += home_p
                 ot_away_total += away_p
                 went_to_ot = True
+            elif period_num == 1:
+                game.home_score_p1 = home_p
+                game.away_score_p1 = away_p
+            elif period_num == 2:
+                game.home_score_p2 = home_p
+                game.away_score_p2 = away_p
+            elif period_num == 3:
+                game.home_score_p3 = home_p
+                game.away_score_p3 = away_p
 
         if went_to_ot:
             game.home_score_ot = ot_home_total
             game.away_score_ot = ot_away_total
+
+        # Also check gameOutcome.lastPeriodType as a fallback for OT detection
+        if not went_to_ot:
+            last_period_type = (
+                self.safe_get(boxscore, "gameOutcome", "lastPeriodType") or ""
+            ).upper()
+            if last_period_type in ("OT", "SO"):
+                went_to_ot = True
 
         game.went_to_overtime = went_to_ot
 
@@ -857,7 +980,7 @@ class NHLScraper(BaseScraper):
         await self._update_head_to_head(db, game)
 
         await db.flush()
-        logger.info(
+        logger.debug(
             "Game results synced: %d (home %d - away %d, OT=%s)",
             game_id,
             home_score,
@@ -1195,7 +1318,9 @@ class NHLScraper(BaseScraper):
         Player records.
         """
         logger.info("Syncing rosters for all teams...")
-        result = await db.execute(select(Team).where(Team.sport == "nhl"))
+        result = await db.execute(
+            select(Team).where(Team.sport == "nhl", Team.active == True)  # noqa: E712
+        )
         teams = result.scalars().all()
 
         for team in teams:
@@ -1322,36 +1447,45 @@ class NHLScraper(BaseScraper):
             db: Async SQLAlchemy session.
             days_back: Number of past days to scan.
         """
-        from sqlalchemy import or_
-
         cutoff = date.today() - timedelta(days=days_back)
         result = await db.execute(
             select(Game).where(
                 Game.sport == "nhl",
                 Game.date >= cutoff,
                 Game.status == "final",
-                or_(
-                    Game.home_score_p1.is_(None),
-                    Game.went_to_overtime.is_(None),
-                ),
+                # went_to_overtime is always set (True/False) after a
+                # successful sync, so it reliably gates re-processing.
+                # Previously used OR(home_score_p1 IS NULL, ...) but
+                # home_score_p1 can stay NULL if the API lacks period
+                # data, causing infinite re-sync loops.
+                Game.went_to_overtime.is_(None),
             )
         )
         games = result.scalars().all()
 
+        if not games:
+            logger.info("Period scores backfill: all games up to date")
+            return
+
         logger.info(
-            "Syncing results for %d recent games without boxscore data",
+            "Backfilling boxscore data for %d games (past %d days)",
             len(games),
+            days_back,
         )
 
+        synced = 0
         for game in games:
             try:
                 await self.sync_game_results(db, int(game.external_id))
+                synced += 1
             except Exception as exc:
                 logger.error(
                     "Failed to sync results for game %s: %s",
                     game.external_id,
                     exc,
                 )
+
+        logger.info("Period scores backfill complete: %d/%d games synced", synced, len(games))
 
         await db.flush()
 
@@ -1379,6 +1513,23 @@ class NHLScraper(BaseScraper):
             Number of games synced.
         """
         logger.info("Syncing historical season: %s", season)
+
+        # Check if we already have substantial data for this season.
+        # A full NHL season has ~1312 regular-season games.  If we
+        # already have 200+, the season is sufficiently populated and
+        # we can skip the expensive per-team API calls entirely.
+        existing_count_result = await db.execute(
+            select(func.count(Game.id)).where(
+                Game.season == season,
+            )
+        )
+        existing_count = existing_count_result.scalar() or 0
+        if existing_count >= 200:
+            logger.info(
+                "Historical season %s already has %d games — skipping sync",
+                season, existing_count,
+            )
+            return 0
 
         # Get all teams from DB
         result = await db.execute(

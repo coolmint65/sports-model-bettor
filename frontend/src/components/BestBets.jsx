@@ -3,18 +3,46 @@ import { useNavigate } from 'react-router-dom';
 import { Trophy, TrendingUp, Target, Star, ChevronRight, Radio, Plus, Check, Layers, RefreshCw } from 'lucide-react';
 import { fetchBestBets, trackBet, fetchTrackedBets, regeneratePredictions } from '../utils/api';
 import { useApi } from '../hooks/useApi';
-import { useWebSocketEvent } from '../hooks/useWebSocket';
-import { teamName, teamAbbrev, confidencePct, formatBetType, formatPredictionValue, isLiveStatus } from '../utils/teams';
-import { formatAmericanOdds, formatOddsFromProb, getConfidenceColor } from '../utils/formatting';
+import { teamName, teamAbbrev, confidencePct, formatBetType, formatPredictionValue } from '../utils/teams';
 
 const BEST_BETS_POLL_INTERVAL = 60_000; // 60 seconds
+
+function formatAmericanOdds(odds) {
+  if (odds == null) return null;
+  const v = Math.round(odds);
+  return v > 0 ? `+${v}` : `${v}`;
+}
+
+function formatOddsFromProb(impliedProb) {
+  if (!impliedProb || impliedProb <= 0 || impliedProb >= 1) return null;
+  if (impliedProb > 0.5) {
+    const odds = Math.round(-(impliedProb / (1 - impliedProb)) * 100);
+    return odds.toString();
+  } else {
+    const odds = Math.round(((1 - impliedProb) / impliedProb) * 100);
+    return `+${odds}`;
+  }
+}
+
+function getConfidenceColor(confidence) {
+  if (confidence >= 75) return '#00ff88';
+  if (confidence >= 60) return '#4fc3f7';
+  if (confidence >= 45) return '#ffd700';
+  return '#ff5252';
+}
+
+function isLiveGame(status) {
+  if (!status) return false;
+  const s = status.toLowerCase();
+  return s === 'in_progress' || s === 'live' || s === 'in progress';
+}
 
 function BestBetCard({ bet, rank, isFeatured, onTrack, tracked }) {
   const navigate = useNavigate();
   const confidence = confidencePct(bet.confidence);
   const edge = confidencePct(bet.edge);
   const confColor = getConfidenceColor(confidence);
-  const live = isLiveStatus(bet.game_status);
+  const live = isLiveGame(bet.game_status);
   const phase = bet.phase || 'prematch';
   const units = bet.units || 1;
 
@@ -24,8 +52,6 @@ function BestBetCard({ bet, rank, isFeatured, onTrack, tracked }) {
 
   const awayName = teamName(bet.away_team, 'Away');
   const homeName = teamName(bet.home_team, 'Home');
-  const homeAbbr = teamAbbrev(bet.home_team);
-  const awayAbbr = teamAbbrev(bet.away_team);
 
   const handleClick = () => {
     if (bet.game_id) {
@@ -85,7 +111,7 @@ function BestBetCard({ bet, rank, isFeatured, onTrack, tracked }) {
         </div>
 
         <div className="best-bet-selection">
-          {bet.line_display || formatPredictionValue(bet.prediction_value || bet.pick || bet.selection, homeAbbr, awayAbbr)}
+          {formatPredictionValue(bet.prediction_value || bet.pick || bet.selection)}
         </div>
 
         <div className="best-bet-metrics">
@@ -105,7 +131,6 @@ function BestBetCard({ bet, rank, isFeatured, onTrack, tracked }) {
             </span>
           </div>
 
-          {bet.edge != null && (
           <div className="metric">
             <span className="metric-label">Edge</span>
             <span className="metric-value edge-value">
@@ -114,14 +139,15 @@ function BestBetCard({ bet, rank, isFeatured, onTrack, tracked }) {
               {edge.toFixed(1)}%
             </span>
           </div>
-          )}
 
-          <div className="metric">
-            <span className="metric-label">Odds</span>
-            <span className="metric-value odds-value">
-              {oddsDisplay || '—'}
-            </span>
-          </div>
+          {oddsDisplay && (
+            <div className="metric">
+              <span className="metric-label">Odds</span>
+              <span className="metric-value odds-value">
+                {oddsDisplay}
+              </span>
+            </div>
+          )}
 
           <div className="metric">
             <span className="metric-label">Units</span>
@@ -174,39 +200,26 @@ function BestBets() {
   const [regenMessage, setRegenMessage] = useState('');
 
   // Load already-tracked bets so the Track button is disabled
-  const refreshTrackedState = useCallback(async () => {
-    try {
-      const resp = await fetchTrackedBets();
-      const bets = resp.data?.bets || resp.data || [];
-      const ids = new Set(
-        bets.map((b) => b.prediction_id).filter(Boolean)
-      );
-      const keys = new Set(
-        bets.map((b) => `${b.game_id}:${b.bet_type}:${b.prediction_value}`)
-      );
-      setTrackedIds(ids);
-      setTrackedKeys(keys);
-    } catch {
-      // non-critical
-    }
+  useEffect(() => {
+    (async () => {
+      try {
+        const resp = await fetchTrackedBets();
+        const bets = resp.data?.bets || resp.data || [];
+        const ids = new Set(
+          bets.map((b) => b.prediction_id).filter(Boolean)
+        );
+        const keys = new Set(
+          bets.map((b) => `${b.game_id}:${b.bet_type}:${b.prediction_value}`)
+        );
+        setTrackedIds(ids);
+        setTrackedKeys(keys);
+      } catch {
+        // non-critical
+      }
+    })();
   }, []);
 
-  useEffect(() => {
-    refreshTrackedState();
-  }, [refreshTrackedState]);
-
-  // Refetch when predictions are regenerated (separate from odds updates)
-  useWebSocketEvent('predictions_update', useCallback(() => {
-    silentRefetch();
-    refreshTrackedState();
-  }, [silentRefetch, refreshTrackedState]));
-
-  // Also refetch on odds updates in case line movements affect display
-  useWebSocketEvent('odds_update', useCallback(() => {
-    silentRefetch();
-  }, [silentRefetch]));
-
-  // Fallback: poll best bets every 60 seconds
+  // Auto-poll best bets every 60 seconds for seamless updates
   useEffect(() => {
     const interval = setInterval(() => {
       silentRefetch();
@@ -214,15 +227,12 @@ function BestBets() {
     return () => clearInterval(interval);
   }, [silentRefetch]);
 
-  // Also refresh on manual data sync — refresh both bets and tracked state
+  // Also refresh on manual data sync
   useEffect(() => {
-    const onSynced = () => {
-      silentRefetch();
-      refreshTrackedState();
-    };
+    const onSynced = () => silentRefetch();
     window.addEventListener('data-synced', onSynced);
     return () => window.removeEventListener('data-synced', onSynced);
-  }, [silentRefetch, refreshTrackedState]);
+  }, [silentRefetch]);
 
   const isBetTracked = useCallback((bet) => {
     const predId = bet.prediction_id || bet.id;
@@ -276,19 +286,10 @@ function BestBets() {
     }
   }, [regenerating, silentRefetch]);
 
-  let allBets = data?.best_bets || data?.bets || (Array.isArray(data) ? data : []);
+  const allBets = data?.best_bets || data?.bets || (Array.isArray(data) ? data : []);
   const mlBets = data?.ml_bets || [];
   const spreadBets = data?.spread_bets || [];
   const totalBets = data?.total_bets || [];
-
-  // If the overall best_bets is empty but categorized tabs have data,
-  // synthesize a top picks view from the categorized bets so the
-  // "Top Picks" tab is never empty when picks exist.
-  if (allBets.length === 0 && (mlBets.length > 0 || spreadBets.length > 0 || totalBets.length > 0)) {
-    allBets = [...mlBets, ...spreadBets, ...totalBets]
-      .sort((a, b) => (b.confidence || 0) - (a.confidence || 0))
-      .slice(0, 3);
-  }
 
   const currentBets = {
     all: allBets,

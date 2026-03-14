@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.constants import GAME_FINAL_STATUSES
-from app.database import get_session, get_session_context
+from app.database import get_session, get_session_context, get_write_session_context
 from app.models.game import Game, GameGoalieStats, GamePlayerStats, HeadToHead
 from app.models.player import GoalieStats, Player, PlayerStats
 from app.models.prediction import Prediction
@@ -91,12 +91,13 @@ _sync_state = {
 async def _run_full_sync():
     """Execute the full sync pipeline in the background.
 
-    Each step uses its OWN database session so that writes are committed
-    between steps.  This is critical for SQLite: a single long-lived
-    session holds the write lock for its entire duration, blocking the
-    scheduler's odds sync (which runs in a separate session).  By
-    committing after each step we release the lock so the scheduler can
-    interleave its fast odds updates.
+    Every write step uses ``get_write_session_context()`` — the same
+    global asyncio lock that the scheduler's odds/prediction/settlement
+    tasks use.  This guarantees that SQLite never sees two concurrent
+    writers, completely eliminating "database is locked" errors.
+
+    Each step gets its OWN session so the lock is released between steps,
+    letting the scheduler interleave its fast odds updates in the gaps.
     """
     global _sync_state
     _sync_state = {"running": True, "step": "Starting sync...", "error": None}
@@ -106,14 +107,61 @@ async def _run_full_sync():
 
         scraper = NHLScraper()
         try:
-            # 1. Core sync: teams, rosters, schedule, game results
-            _sync_state["step"] = "Syncing teams, rosters, schedule..."
+            # 1. Core sync: teams, rosters, schedule, game results.
+            # Each sub-step uses get_write_session_context() to serialize
+            # with the scheduler.  The lock is released between steps so
+            # the scheduler can interleave its fast odds updates.
+            _sync_state["step"] = "Syncing teams..."
             try:
-                async with get_session_context() as session:
-                    await scraper.sync_all(session)
-                    await session.flush()
+                async with get_write_session_context() as session:
+                    await scraper.sync_teams(session)
             except Exception as exc:
-                logger.warning("Core NHL sync failed (non-critical): %s", exc)
+                logger.warning("Team sync failed (non-critical): %s", exc)
+
+            _sync_state["step"] = "Syncing rosters..."
+            try:
+                async with get_write_session_context() as session:
+                    await scraper.sync_rosters(session)
+            except Exception as exc:
+                logger.warning("Roster sync failed (non-critical): %s", exc)
+
+            _sync_state["step"] = "Syncing schedule..."
+            try:
+                from datetime import date as date_type
+                async with get_write_session_context() as session:
+                    today_str = date_type.today().isoformat()
+                    games = await scraper.sync_schedule(session, today_str)
+            except Exception as exc:
+                logger.warning("Schedule sync failed (non-critical): %s", exc)
+                games = []
+
+            _sync_state["step"] = "Syncing game results..."
+            try:
+                async with get_write_session_context() as session:
+                    completed = [g for g in games if g.status == "final"]
+                    for game in completed:
+                        try:
+                            await scraper.sync_game_results(
+                                session, int(game.external_id)
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "Game result sync failed for %s: %s",
+                                game.external_id, exc,
+                            )
+            except Exception as exc:
+                logger.warning("Game results sync failed (non-critical): %s", exc)
+
+            # 1b. Backfill period scores for completed games missing boxscore data.
+            # This populates home_score_p1/p2/p3 needed for period props.
+            # Only fetches games where home_score_p1 is NULL, so it's a no-op
+            # once the backfill is complete.
+            _sync_state["step"] = "Backfilling period scores..."
+            try:
+                async with get_write_session_context() as session:
+                    await scraper.sync_recent_results(session, days_back=90)
+            except Exception as exc:
+                logger.warning("Period scores backfill failed (non-critical): %s", exc)
 
             # 2. Historical H2H — each season in its own session
             _sync_state["step"] = "Syncing historical H2H data..."
@@ -129,7 +177,7 @@ async def _run_full_sync():
                     start_year = current_start - i
                     season_str = f"{start_year}{start_year + 1}"
                     _sync_state["step"] = f"Syncing H2H season {season_str}..."
-                    async with get_session_context() as session:
+                    async with get_write_session_context() as session:
                         h2h_games += await scraper.sync_historical_season(
                             session, season_str
                         )
@@ -141,7 +189,7 @@ async def _run_full_sync():
             try:
                 from app.services.odds import sync_odds as svc_sync_odds
 
-                async with get_session_context() as session:
+                async with get_write_session_context() as session:
                     matched = await svc_sync_odds(session, force=True)
                     logger.info("Multi-source odds sync matched %d games", len(matched))
             except Exception as exc:
@@ -173,7 +221,7 @@ async def _run_full_sync():
 
                 today = date_type.today()
 
-                async with get_session_context() as session:
+                async with get_write_session_context() as session:
                     async with session.begin_nested():
                         non_final_game_ids = select(Game.id).where(
                             Game.date == today,
@@ -336,9 +384,10 @@ async def sync_teams(
             message="Teams synced successfully.",
         )
     except Exception as exc:
+        logger.error("Team sync failed: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=502,
-            detail=f"Team sync failed: {exc}",
+            detail="Team sync failed",
         )
     finally:
         await scraper.close()
@@ -361,9 +410,10 @@ async def sync_schedule(
             message="Schedule synced successfully.",
         )
     except Exception as exc:
+        logger.error("Schedule sync failed: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=502,
-            detail=f"Schedule sync failed: {exc}",
+            detail="Schedule sync failed",
         )
     finally:
         await scraper.close()
@@ -386,9 +436,45 @@ async def sync_results(
             message="Game results synced successfully.",
         )
     except Exception as exc:
+        logger.error("Results sync failed: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=502,
-            detail=f"Results sync failed: {exc}",
+            detail="Results sync failed",
+        )
+    finally:
+        await scraper.close()
+
+
+@router.post(
+    "/sync/period-scores",
+    response_model=SyncResult,
+    summary="Backfill period scores",
+)
+async def sync_period_scores(
+    days_back: int = 90,
+    session: AsyncSession = Depends(get_session),
+):
+    """Backfill period scores for all final games missing boxscore data.
+
+    This fetches the NHL boxscore for each game that has a null
+    home_score_p1, populating period-by-period scores needed for
+    period props (totals, winners, first goal).
+
+    Args:
+        days_back: How far back to scan (default 90 days).
+    """
+    scraper = _get_scraper()
+    try:
+        await scraper.sync_recent_results(session, days_back=days_back)
+        return SyncResult(
+            success=True,
+            message=f"Period scores backfilled for games in last {days_back} days.",
+        )
+    except Exception as exc:
+        logger.error("Period scores backfill failed: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=502,
+            detail="Period scores backfill failed",
         )
     finally:
         await scraper.close()
@@ -423,9 +509,10 @@ async def sync_odds(
                     f"Updated moneyline, spread, and totals odds.",
         )
     except Exception as exc:
+        logger.error("Multi-source odds sync failed: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=502,
-            detail=f"Multi-source odds sync failed: {exc}",
+            detail="Multi-source odds sync failed",
         )
 
 
@@ -470,9 +557,10 @@ async def sync_historical(
             total_games += count
             synced_seasons.append(season_str)
     except Exception as exc:
+        logger.error("Historical sync failed: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=502,
-            detail=f"Historical sync failed: {exc}",
+            detail="Historical sync failed",
         )
     finally:
         await scraper.close()

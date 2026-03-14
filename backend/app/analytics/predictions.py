@@ -13,10 +13,10 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.analytics.features import FeatureEngine
 from app.analytics.models import BettingModel
+from app.analytics.signals import SignalGenerator
 from app.config import settings
 from app.constants import GAME_PREDICTABLE_STATUSES, MARKET_BET_TYPES, composite_pick_score
 from app.models.game import Game
@@ -37,7 +37,21 @@ class PredictionManager:
 
     def __init__(self) -> None:
         self.feature_engine = FeatureEngine()
-        self.model = BettingModel()
+        self.ml_model = self._load_ml_model()
+        self.model = BettingModel(ml_model=self.ml_model)
+
+    @staticmethod
+    def _load_ml_model():
+        """Attempt to load a trained ML model from disk."""
+        try:
+            from app.analytics.ml_model import MLModel
+            model = MLModel()
+            if model.load(settings.model.ml_model_path):
+                logger.info("ML model loaded for prediction blending")
+                return model
+        except Exception as e:
+            logger.debug("ML model not available: %s", e)
+        return None
 
     # ------------------------------------------------------------------ #
     #  Generate predictions for a date's games                            #
@@ -149,6 +163,10 @@ class PredictionManager:
             game_info = game_data.get("game_info", {})
             for pred in game_data.get("predictions", []):
                 confidence = pred.get("confidence", 0)
+                # Raw (uncalibrated) probability — use this for edge
+                # calculation so calibration shrinkage doesn't suppress
+                # genuine model edges.
+                raw_prob = pred.get("probability", confidence)
                 # Use real odds-based implied probability if available
                 implied_prob = pred.get("implied_probability")
                 odds = pred.get("odds")
@@ -158,7 +176,7 @@ class PredictionManager:
                 # Without real odds there is no market to compare against,
                 # so edge is meaningless and should not be persisted.
                 if has_real_odds:
-                    edge = confidence - implied_prob
+                    edge = raw_prob - implied_prob
                     # Cap edge at 25% — anything higher signals a model/data issue
                     edge = min(edge, 0.25)
                 else:
@@ -248,39 +266,12 @@ class PredictionManager:
             dict with: total_predictions, total_graded, wins, losses,
             pushes, hit_rate, roi, by_bet_type breakdown.
         """
-        # Find ungraded predictions for completed games
-        ungraded_stmt = (
-            select(Prediction)
-            .join(Game, Prediction.game_id == Game.id)
-            .outerjoin(BetResult, BetResult.prediction_id == Prediction.id)
-            .where(
-                and_(
-                    Game.status == "final",
-                    BetResult.id.is_(None),
-                )
-            )
-        )
-        result = await db.execute(ungraded_stmt)
-        ungraded = result.scalars().all()
+        # Grade any unsettled predictions via the settlement service
+        from app.services.settlement import settle_completed_games
+        settlement = await settle_completed_games(db)
+        graded_count = settlement["predictions_graded"]
 
-        graded_count = 0
-        for prediction in ungraded:
-            try:
-                graded = await self._grade_prediction(db, prediction)
-                if graded:
-                    graded_count += 1
-            except Exception as e:
-                logger.error(
-                    "Failed to grade prediction %d: %s", prediction.id, e
-                )
-
-        if graded_count > 0:
-            try:
-                await db.flush()
-            except Exception as e:
-                logger.error("Failed to flush graded results: %s", e)
-
-        # Compute aggregate statistics across ALL graded predictions
+        # Compute aggregate statistics across prematch graded predictions
         stats_stmt = (
             select(
                 func.count(BetResult.id).label("total"),
@@ -289,6 +280,8 @@ class PredictionManager:
                 ).label("wins"),
                 func.sum(BetResult.profit_loss).label("total_profit"),
             )
+            .join(Prediction, BetResult.prediction_id == Prediction.id)
+            .where(Prediction.phase == "prematch")
         )
         stats_result = await db.execute(stats_stmt)
         row = stats_result.one_or_none()
@@ -301,7 +294,7 @@ class PredictionManager:
         hit_rate = round(wins / total, 4) if total > 0 else 0.0
         roi = round(total_profit / total, 4) if total > 0 else 0.0
 
-        # Breakdown by bet type
+        # Breakdown by bet type (prematch only)
         by_type_stmt = (
             select(
                 Prediction.bet_type,
@@ -312,6 +305,7 @@ class PredictionManager:
                 func.sum(BetResult.profit_loss).label("profit"),
             )
             .join(Prediction, BetResult.prediction_id == Prediction.id)
+            .where(Prediction.phase == "prematch")
             .group_by(Prediction.bet_type)
         )
         by_type_result = await db.execute(by_type_stmt)
@@ -331,18 +325,64 @@ class PredictionManager:
                 "roi": round(bt_profit / bt_total, 4) if bt_total > 0 else 0.0,
             }
 
-        # CLV aggregate: average CLV across all graded predictions with CLV data
+        # CLV aggregate: average CLV across prematch graded predictions with CLV data
         clv_stmt = (
             select(
                 func.count(BetResult.id).label("clv_count"),
                 func.avg(BetResult.clv).label("avg_clv"),
             )
-            .where(BetResult.clv.isnot(None))
+            .join(Prediction, BetResult.prediction_id == Prediction.id)
+            .where(
+                and_(
+                    BetResult.clv.isnot(None),
+                    Prediction.phase == "prematch",
+                )
+            )
         )
         clv_result = await db.execute(clv_stmt)
         clv_row = clv_result.one_or_none()
         clv_count = clv_row.clv_count if clv_row and clv_row.clv_count else 0
         avg_clv = round(clv_row.avg_clv, 4) if clv_row and clv_row.avg_clv else None
+
+        # Confidence-tier breakdown: how does ROI vary by model confidence?
+        # Tiers: 50-60%, 60-70%, 70%+
+        confidence_tiers = {}
+        tier_boundaries = [
+            ("50-60%", 0.50, 0.60),
+            ("60-70%", 0.60, 0.70),
+            ("70%+", 0.70, 1.01),
+        ]
+        for label, low, high in tier_boundaries:
+            tier_stmt = (
+                select(
+                    func.count(BetResult.id).label("total"),
+                    func.sum(
+                        func.cast(BetResult.was_correct, type_=func.literal(1).type)
+                    ).label("wins"),
+                    func.sum(BetResult.profit_loss).label("profit"),
+                )
+                .join(Prediction, BetResult.prediction_id == Prediction.id)
+                .where(
+                    and_(
+                        Prediction.confidence >= low,
+                        Prediction.confidence < high,
+                        Prediction.phase == "prematch",
+                    )
+                )
+            )
+            tier_result = await db.execute(tier_stmt)
+            tier_row = tier_result.one_or_none()
+            t_total = tier_row.total if tier_row and tier_row.total else 0
+            t_wins = tier_row.wins if tier_row and tier_row.wins else 0
+            t_profit = tier_row.profit if tier_row and tier_row.profit else 0.0
+            confidence_tiers[label] = {
+                "total": t_total,
+                "wins": t_wins,
+                "losses": t_total - t_wins,
+                "hit_rate": round(t_wins / t_total, 4) if t_total > 0 else 0.0,
+                "profit": round(t_profit, 2),
+                "roi": round(t_profit / t_total, 4) if t_total > 0 else 0.0,
+            }
 
         return {
             "total_predictions": total,
@@ -353,6 +393,7 @@ class PredictionManager:
             "total_profit": round(total_profit, 2),
             "roi": roi,
             "by_bet_type": by_bet_type,
+            "by_confidence_tier": confidence_tiers,
             "clv": {
                 "predictions_with_clv": clv_count,
                 "avg_clv": avg_clv,
@@ -421,12 +462,63 @@ class PredictionManager:
         # Find top pick
         top_pick = predictions[0] if predictions else {}
 
+        # Generate analysis signals
+        signal_gen = SignalGenerator()
+        signals = signal_gen.generate(features, predictions)
+
+        # Enrich each prediction's reasoning with relevant signals.
+        # Signals provide clean, Buddy-style bullets; the old reasoning
+        # from _build_clean_reasons is kept as fallback only.
+        home_abbr_lower = features.get("home_team_abbr", "").lower()
+        away_abbr_lower = features.get("away_team_abbr", "").lower()
+
+        for pred in predictions:
+            pick_val = (pred.get("prediction") or "").lower()
+            bt = pred.get("bet_type", "")
+            # Determine opponent for this pick
+            if pick_val == home_abbr_lower:
+                opp_val = away_abbr_lower
+            elif pick_val == away_abbr_lower:
+                opp_val = home_abbr_lower
+            else:
+                opp_val = ""
+
+            # Collect signals relevant to this prediction
+            relevant = []
+            for sig in signals:
+                sig_team = (sig.get("team") or "").lower()
+                impact = sig.get("impact", "")
+                include = False
+                if bt in ("ml", "spread"):
+                    # Include: positive signals for picked team,
+                    # negative signals about opponent, and game-level signals
+                    if sig_team == pick_val and impact in ("positive", "neutral"):
+                        include = True
+                    elif sig_team == opp_val and impact == "negative":
+                        include = True
+                    elif sig_team == "":
+                        include = True
+                else:
+                    include = True
+                if include:
+                    text = sig["text"]
+                    # Embed team marker so the frontend can show a team logo
+                    if sig.get("team"):
+                        text = f"{{{{team:{sig['team']}}}}} {text}"
+                    # Embed tooltip marker so the frontend can show an info icon
+                    if sig.get("tooltip"):
+                        text = f"{text} {{{{tooltip:{sig['tooltip']}}}}}"
+                    relevant.append(text)
+            if relevant:
+                pred["reasoning"] = "; ".join(relevant[:8])
+
         return {
             "game_id": game.id,
             "status": game.status,
             "game_info": game_info,
             "predictions": predictions,
             "top_pick": top_pick,
+            "signals": signals,
             "features_summary": {
                 "home_form_5_wr": features["home_form_5"]["win_rate"],
                 "away_form_5_wr": features["away_form_5"]["win_rate"],
@@ -435,18 +527,35 @@ class PredictionManager:
                 "h2h_games": features["h2h"]["games_found"],
                 "home_goalie": features["home_goalie"]["goalie_name"],
                 "away_goalie": features["away_goalie"]["goalie_name"],
-                # New feature summaries
+                # Injury summaries
                 "home_injured_count": features.get("home_injuries", {}).get("injured_count", 0),
                 "away_injured_count": features.get("away_injuries", {}).get("injured_count", 0),
                 "home_injury_xg_reduction": features.get("home_injuries", {}).get("xg_reduction", 0),
                 "away_injury_xg_reduction": features.get("away_injuries", {}).get("xg_reduction", 0),
+                # Schedule
                 "home_b2b": features.get("home_schedule", {}).get("is_back_to_back", False),
                 "away_b2b": features.get("away_schedule", {}).get("is_back_to_back", False),
                 "home_days_rest": features.get("home_schedule", {}).get("days_rest", 0),
                 "away_days_rest": features.get("away_schedule", {}).get("days_rest", 0),
+                # Matchups
                 "home_matchup_boost": features.get("home_player_matchup", {}).get("matchup_boost", 0),
                 "away_matchup_boost": features.get("away_player_matchup", {}).get("matchup_boost", 0),
                 "matchup_avg_total": features.get("team_matchup", {}).get("avg_total_goals"),
+                # 5v5 possession (MoneyPuck)
+                "home_ev_cf_pct": features.get("home_ev_possession", {}).get("ev_cf_pct"),
+                "away_ev_cf_pct": features.get("away_ev_possession", {}).get("ev_cf_pct"),
+                # Close-game possession
+                "home_close_cf_pct": features.get("home_close_possession", {}).get("close_cf_pct"),
+                "away_close_cf_pct": features.get("away_close_possession", {}).get("close_cf_pct"),
+                # Goalie tiers
+                "home_goalie_tier": features.get("home_goalie", {}).get("tier"),
+                "away_goalie_tier": features.get("away_goalie", {}).get("tier"),
+                # Starter confidence
+                "home_starter_confidence": features.get("home_starter_status", {}).get("starter_confidence"),
+                "away_starter_confidence": features.get("away_starter_status", {}).get("starter_confidence"),
+                # Composite edge
+                "composite_edge_score": top_pick.get("composite_edge", {}).get("composite_score"),
+                "composite_edge_grade": top_pick.get("composite_edge", {}).get("composite_grade"),
             },
         }
 
@@ -472,12 +581,7 @@ class PredictionManager:
         if not game_id or not bet_type or not prediction_value:
             return None
 
-        # Build reasoning text with odds info
         reasoning = bet.get("reasoning", "")
-        odds = bet.get("odds")
-        if odds is not None and reasoning:
-            odds_str = f"+{int(odds)}" if odds > 0 else str(int(odds))
-            reasoning = f"{reasoning} (Odds: {odds_str})"
 
         # Check for existing prediction within the same phase.
         # Prematch and live predictions coexist as separate rows so
@@ -518,6 +622,23 @@ class PredictionManager:
             )
             return existing
 
+        # ---- Prematch lock: never add NEW prematch predictions to a game
+        # that already has prematch predictions.  The original prematch set
+        # is generated once and locked; later model runs (scheduler regen,
+        # restarts, odds changes) must not sneak in extra bet types.
+        if phase == "prematch":
+            lock_stmt = select(func.count(Prediction.id)).where(
+                Prediction.game_id == game_id,
+                Prediction.phase == "prematch",
+            )
+            lock_result = await db.execute(lock_stmt)
+            if (lock_result.scalar() or 0) > 0:
+                logger.debug(
+                    "Prematch locked — skipping new prediction: game=%d, type=%s, value=%s",
+                    game_id, bet_type, prediction_value,
+                )
+                return None
+
         confidence = bet.get("confidence", 0.0)
         edge = bet.get("edge")
         implied_prob = bet.get("implied_probability")
@@ -546,222 +667,6 @@ class PredictionManager:
             game_id, bet_type, prediction_value, confidence, edge,
         )
         return prediction
-
-    # ------------------------------------------------------------------ #
-    #  Private: grade a single prediction                                 #
-    # ------------------------------------------------------------------ #
-
-    async def _grade_prediction(
-        self,
-        db: AsyncSession,
-        prediction: Prediction,
-    ) -> Optional[BetResult]:
-        """
-        Grade a prediction against actual game results.
-
-        Determines if the prediction was correct, calculates profit/loss
-        using a flat-bet model (+1 for win, -1 for loss), and persists
-        a BetResult record.
-
-        Returns:
-            BetResult instance if graded, None if grading was not possible.
-        """
-        # Fetch the game with team relationships for spread grading
-        game_stmt = (
-            select(Game)
-            .options(selectinload(Game.home_team), selectinload(Game.away_team))
-            .where(Game.id == prediction.game_id)
-        )
-        game_result = await db.execute(game_stmt)
-        game = game_result.scalars().first()
-
-        if not game or game.status != "final":
-            return None
-
-        if game.home_score is None or game.away_score is None:
-            return None
-
-        actual_outcome = self._determine_actual_outcome(game, prediction)
-        if actual_outcome is None:
-            return None
-
-        was_correct = self._check_prediction_correct(
-            prediction.bet_type,
-            prediction.prediction_value,
-            actual_outcome,
-            game,
-        )
-
-        # Flat-bet P/L: +1.0 for win, -1.0 for loss
-        profit_loss = 1.0 if was_correct else -1.0
-
-        # Compute Closing Line Value (CLV)
-        closing_implied = self._get_closing_implied_prob(game, prediction)
-        clv = None
-        if closing_implied is not None and prediction.odds_implied_prob is not None:
-            # Positive CLV = line moved against you (you got a better price)
-            clv = round(closing_implied - prediction.odds_implied_prob, 4)
-
-        bet_result = BetResult(
-            prediction_id=prediction.id,
-            actual_outcome=actual_outcome,
-            was_correct=was_correct,
-            profit_loss=profit_loss,
-            settled_at=datetime.now(timezone.utc),
-            closing_implied_prob=closing_implied,
-            clv=clv,
-        )
-        db.add(bet_result)
-
-        logger.info(
-            "Graded prediction %d: %s (correct=%s, P/L=%.1f)",
-            prediction.id, actual_outcome, was_correct, profit_loss,
-        )
-        return bet_result
-
-    # ------------------------------------------------------------------ #
-    #  Private: determine actual game outcome for grading                  #
-    # ------------------------------------------------------------------ #
-
-    @staticmethod
-    def _determine_actual_outcome(
-        game: Game,
-        prediction: Prediction,
-    ) -> Optional[str]:
-        """
-        Determine the actual outcome string for a prediction's bet type.
-
-        Returns a string that can be compared against the prediction value.
-        """
-        home_score = game.home_score
-        away_score = game.away_score
-        total = home_score + away_score
-        margin = home_score - away_score
-        bet_type = prediction.bet_type
-
-        if bet_type == "ml":
-            return "home" if home_score > away_score else "away"
-
-        elif bet_type == "total":
-            # e.g., prediction_value = "over_5.5" or "under_5.5"
-            return f"total_{total}"
-
-        elif bet_type == "spread":
-            return f"margin_{margin}"
-
-        return None
-
-    @staticmethod
-    def _check_prediction_correct(
-        bet_type: str,
-        prediction_value: str,
-        actual_outcome: str,
-        game: Game,
-    ) -> bool:
-        """
-        Check whether a prediction was correct given the actual outcome.
-
-        Handles the comparison logic for each bet type.
-        """
-        if bet_type == "ml":
-            return prediction_value == actual_outcome
-
-        elif bet_type == "total":
-            # prediction_value e.g. "over_5.5", actual_outcome e.g. "total_6"
-            try:
-                actual_total = int(actual_outcome.split("_")[1])
-                if "over" in prediction_value:
-                    line = float(prediction_value.split("_")[1])
-                    return actual_total > line
-                elif "under" in prediction_value:
-                    line = float(prediction_value.split("_")[1])
-                    return actual_total < line
-            except (ValueError, IndexError):
-                pass
-            return False
-
-        elif bet_type == "spread":
-            # prediction_value e.g. "EDM_-1.5" or "SJS_+1.5"
-            # actual_outcome e.g. "margin_2" (home_score - away_score)
-            try:
-                actual_margin = int(actual_outcome.split("_")[1])
-                # Determine if this prediction is for the home or away team
-                # by matching the team abbreviation prefix
-                pred_parts = prediction_value.split("_", 1)
-                team_abbr = pred_parts[0] if len(pred_parts) > 1 else ""
-                spread_str = pred_parts[1] if len(pred_parts) > 1 else prediction_value
-
-                # Check if the predicted team is the home team
-                home_team_obj = getattr(game, "home_team", None)
-                home_abbr = getattr(home_team_obj, "abbreviation", "") if home_team_obj else ""
-                is_home_team = (team_abbr == home_abbr) or ("home" in prediction_value.lower())
-
-                spread_val = float(spread_str)
-                if is_home_team:
-                    # Home team spread: covers if margin > |spread| (for -1.5)
-                    # or margin > -|spread| (for +1.5)
-                    return actual_margin > -spread_val if spread_val > 0 else actual_margin > abs(spread_val)
-                else:
-                    # Away team spread: covers if -margin > |spread| (for -1.5)
-                    # or -margin > -|spread| (for +1.5)
-                    away_margin = -actual_margin
-                    return away_margin > -spread_val if spread_val > 0 else away_margin > abs(spread_val)
-            except (ValueError, IndexError):
-                pass
-            return False
-
-        return False
-
-    # ------------------------------------------------------------------ #
-    #  Private: CLV computation                                           #
-    # ------------------------------------------------------------------ #
-
-    @staticmethod
-    def _get_closing_implied_prob(game: Game, prediction: Prediction) -> float | None:
-        """
-        Get the closing implied probability for a prediction's side.
-
-        Uses the closing odds snapshot on the Game record (captured when
-        the game went final) to determine what the market's closing line
-        was for the side the prediction picked.
-
-        Returns None if closing odds aren't available.
-        """
-        from app.analytics.models import american_odds_to_implied_prob
-
-        bt = prediction.bet_type
-        pv = prediction.prediction_value
-
-        if bt == "ml":
-            home_team_obj = getattr(game, "home_team", None)
-            home_abbr = getattr(home_team_obj, "abbreviation", "") if home_team_obj else ""
-            if pv == "home" or pv == home_abbr:
-                odds = game.closing_home_moneyline
-            else:
-                odds = game.closing_away_moneyline
-            if odds is not None:
-                return round(american_odds_to_implied_prob(odds), 4)
-
-        elif bt == "total":
-            if "over" in pv:
-                odds = game.closing_over_price
-            elif "under" in pv:
-                odds = game.closing_under_price
-            else:
-                return None
-            if odds is not None:
-                return round(american_odds_to_implied_prob(odds), 4)
-
-        elif bt == "spread":
-            home_team_obj = getattr(game, "home_team", None)
-            home_abbr = getattr(home_team_obj, "abbreviation", "") if home_team_obj else ""
-            pred_team = pv.split("_", 1)[0] if "_" in pv else ""
-            is_home = pred_team == home_abbr
-            odds = game.closing_home_spread_price if is_home else game.closing_away_spread_price
-            if odds is not None:
-                return round(american_odds_to_implied_prob(float(odds)), 4)
-
-        return None
 
     # ------------------------------------------------------------------ #
     #  Private: utility methods                                           #

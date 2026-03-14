@@ -1,19 +1,21 @@
 """
-Odds scraper for NHL games — The Odds API (primary) + sportsbook scrapers (fallback).
+Odds scraper for NHL games — primary/fallback architecture.
 
-PRIMARY: The Odds API (paid 20k tier) fetches odds from ALL major US
-sportsbooks (Hard Rock, FanDuel, DraftKings, BetMGM, Caesars, PointsBet,
-etc.) in a single API call.  Hard Rock data is extracted separately for
-its clean round-number pricing.
+PRIMARY: The Odds API (Hard Rock Bet via us2 region + generic US
+bookmakers: FanDuel, BetMGM, Caesars, DraftKings, PointsBet, etc.)
+provides clean, validated pricing. Requires ODDS_API_KEY env var.
 
-FALLBACK: If The Odds API fails or returns no data, we fall back to
-direct sportsbook scrapers (DraftKings, FanDuel, Kambi, Bovada).
+FALLBACK: Direct sportsbook scrapers (DraftKings, FanDuel, Kambi,
+Bovada) are only activated when The Odds API returns no data — e.g.
+API key expired, rate-limited, or service outage.
 
-The ODDS_API_KEY environment variable is required for the primary source.
+This avoids unnecessary scraper load and API credit waste during
+normal operation while keeping resilience for edge cases.
 """
 
 import asyncio
 import logging
+import time as _time_mod
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -26,7 +28,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.constants import SCRAPER_HEADERS
 from app.models.game import Game
-from app.models.odds_history import OddsSnapshot
 from app.models.team import Team
 
 logger = logging.getLogger(__name__)
@@ -132,10 +133,12 @@ def _map_team(name: str) -> str:
     for full_name, code in _COMMON_TEAM_MAP.items():
         if full_name.split()[-1].lower() == mascot.lower():
             return code
-    # Log unmapped name once per unique name for debugging
+    # Log unmapped name once per unique name at debug level.
+    # Non-NHL teams from sportsbook APIs (NCAAB, etc.) are expected
+    # noise and don't warrant warning-level logs.
     if stripped not in _unmapped_logged:
         _unmapped_logged.add(stripped)
-        logger.warning("UNMAPPED TEAM NAME: %r — add to _COMMON_TEAM_MAP", stripped)
+        logger.debug("UNMAPPED TEAM NAME: %r — add to _COMMON_TEAM_MAP", stripped)
     return ""
 
 
@@ -160,15 +163,24 @@ def _normalize_spread_line(val: float) -> float:
 
     NHL sportsbooks always use .5 lines (±1.5, ±2.5, etc.) but some
     scraped sources return whole numbers (±1, ±2).  Snap to .5.
+    Also enforces a minimum of ±1.5 since puck lines below that
+    (e.g. ±0.5) don't exist in standard NHL betting.
     """
     if val == 0:
         return val
     if val % 1 == 0.5 or val % 1 == -0.5:
+        sign = -1 if val < 0 else 1
+        # Enforce minimum ±1.5
+        if abs(val) < 1.5:
+            return sign * 1.5
         return val
     sign = -1 if val < 0 else 1
     result = sign * (round(abs(val) * 2) / 2)
     if result % 1 == 0:
         result += sign * 0.5
+    # Enforce minimum ±1.5
+    if abs(result) < 1.5:
+        result = sign * 1.5
     return result
 
 
@@ -463,11 +475,18 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
                         away = team_short2
 
                     if not home or not away:
-                        logger.warning(
+                        logger.debug(
                             "DraftKings: could not extract teams from event %s "
                             "(name=%r, short1=%r, short2=%r)",
                             eid, name, team_short1, team_short2,
                         )
+                        continue
+
+                    # Skip non-NHL events early — if neither team maps to
+                    # an NHL abbreviation, this is likely NCAAB or another
+                    # sport that leaked into the response.
+                    if not _map_team(home) or not _map_team(away):
+                        continue
 
                     start_time = ev.get("startDate", "")
                     event_map[eid] = {
@@ -803,6 +822,10 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
                 parts = name.split(" v ")
                 home = parts[0].strip()
                 away = parts[1].strip()
+
+            # Skip non-NHL events early (e.g. NCAAB leaking through)
+            if not home or not away or not _map_team(home) or not _map_team(away):
+                continue
 
             event_info[eid] = {"home": home, "away": away, "start": open_date}
 
@@ -1488,6 +1511,16 @@ async def _fetch_bovada(client: httpx.AsyncClient) -> List[OddsEvent]:
 _odds_api_cache: Dict[str, Any] = {"data": None, "timestamp": 0.0}
 _ODDS_API_CACHE_TTL = 10.0  # seconds
 
+# ---------------------------------------------------------------------------
+# Alternate-line cache — fetched once pregame, reused across fast sync cycles.
+# Keyed by Odds API event_id → (alt_totals, alt_spreads).
+# Refreshed on a slow cadence (default 30 min) to avoid per-event API calls
+# on every sync cycle.
+# ---------------------------------------------------------------------------
+_alt_line_cache: Dict[str, Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]] = {}
+_alt_line_cache_ts: float = 0.0  # monotonic timestamp of last full refresh
+_ALT_LINE_CACHE_TTL: float = 1800.0  # 30 minutes
+
 
 async def _fetch_odds_api_raw(
     client: httpx.AsyncClient,
@@ -1573,11 +1606,11 @@ async def _fetch_odds_api_raw(
 
 async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
     """
-    Fetch NHL odds from The Odds API (v4) — PRIMARY source.
+    Fetch NHL odds from The Odds API (v4).
 
     Requires ODDS_API_KEY environment variable. Returns empty list if
-    no key is configured. With the paid 20k tier, this is the primary
-    odds source providing all major US sportsbooks.
+    no key is configured. This is a paid/rate-limited source — we use
+    it as a fallback/supplementary source.
 
     Uses a combined us+us2 region request shared with ``_fetch_hardrock``
     to avoid doubling API quota usage.
@@ -1910,7 +1943,10 @@ async def _fetch_hardrock_alt_lines(
     return alt_totals, alt_spreads
 
 
-async def _fetch_hardrock(client: httpx.AsyncClient) -> List[OddsEvent]:
+async def _fetch_hardrock(
+    client: httpx.AsyncClient,
+    skip_alternates: bool = False,
+) -> List[OddsEvent]:
     """
     Fetch NHL odds specifically from Hard Rock Bet via The Odds API (us2 region).
 
@@ -1923,6 +1959,10 @@ async def _fetch_hardrock(client: httpx.AsyncClient) -> List[OddsEvent]:
     ``_fetch_odds_api_raw``).  Alternate spreads and totals are fetched
     per-event from ``/events/{eventId}/odds`` with the
     ``alternate_spreads,alternate_totals`` markets.
+
+    When ``skip_alternates`` is True, per-event alternate line API calls are
+    skipped and cached data is used instead.  This dramatically reduces API
+    credit usage during fast sync cycles.
 
     Requires ODDS_API_KEY.  Returns empty list if no key is configured or
     Hard Rock data is not present in the response.
@@ -2069,29 +2109,55 @@ async def _fetch_hardrock(client: httpx.AsyncClient) -> List[OddsEvent]:
             "p1_under": round(hr_p1_under) if hr_p1_under else 0,
         })
 
-    # Second pass: fetch alt lines concurrently for all events
-    alt_results = await asyncio.gather(
-        *(
-            _fetch_hardrock_alt_lines(
-                client, pd["event_id"], pd["home_team"], pd["away_team"]
-            )
-            for pd in primary_data
-            if pd["event_id"]
-        ),
-        return_exceptions=True,
+    # Second pass: fetch alt lines — either fresh (full sync) or from cache
+    # (fast sync).  The alt-line cache avoids per-event API calls that burn
+    # through Odds API credits on every 60-second sync cycle.
+    global _alt_line_cache, _alt_line_cache_ts
+
+    now_mono = _time_mod.monotonic()
+    cache_fresh = (
+        _alt_line_cache
+        and (now_mono - _alt_line_cache_ts) < _ALT_LINE_CACHE_TTL
     )
 
-    # Map event_id → alt data
-    alt_map: Dict[str, Tuple[List, List]] = {}
-    alt_idx = 0
-    for pd in primary_data:
-        if pd["event_id"]:
-            result = alt_results[alt_idx]
-            alt_idx += 1
-            if isinstance(result, tuple):
-                alt_map[pd["event_id"]] = result
-            else:
-                logger.warning("Hard Rock alt-line fetch failed for %s: %s", pd["event_id"], result)
+    if skip_alternates and cache_fresh:
+        # Use cached alt lines — zero API calls
+        alt_map = _alt_line_cache
+        logger.debug(
+            "Hard Rock: using cached alt lines for %d events (age %.0fs)",
+            len(alt_map), now_mono - _alt_line_cache_ts,
+        )
+    else:
+        # Full fetch: one API call per event
+        alt_results = await asyncio.gather(
+            *(
+                _fetch_hardrock_alt_lines(
+                    client, pd["event_id"], pd["home_team"], pd["away_team"]
+                )
+                for pd in primary_data
+                if pd["event_id"]
+            ),
+            return_exceptions=True,
+        )
+
+        alt_map: Dict[str, Tuple[List, List]] = {}
+        alt_idx = 0
+        for pd in primary_data:
+            if pd["event_id"]:
+                result = alt_results[alt_idx]
+                alt_idx += 1
+                if isinstance(result, tuple):
+                    alt_map[pd["event_id"]] = result
+                else:
+                    logger.warning("Hard Rock alt-line fetch failed for %s: %s", pd["event_id"], result)
+
+        # Update the cache
+        _alt_line_cache = dict(alt_map)
+        _alt_line_cache_ts = now_mono
+        logger.info(
+            "Hard Rock: refreshed alt-line cache for %d events",
+            len(alt_map),
+        )
 
     # Build OddsEvent objects with alt lines
     for pd in primary_data:
@@ -2205,6 +2271,35 @@ def _mean_odds(odds_list: List[float]) -> float:
     return round(_implied_to_american(avg_prob))
 
 
+def _normalize_moneyline_pair(
+    home_ml: float, away_ml: float
+) -> Tuple[float, float]:
+    """Ensure a moneyline pair has one favorite (negative) and one underdog (positive).
+
+    When averaging implied probabilities independently per side, both can land
+    below 0.5 (both positive odds) if sources disagree on the favorite.  Fix
+    this by re-normalising the pair so probabilities sum to a realistic
+    overround (~1.03-1.05) while preserving the ratio between the two sides.
+    The higher-probability side is then guaranteed to exceed 0.5 and receive
+    negative American odds.
+    """
+    home_prob = _american_to_implied(home_ml)
+    away_prob = _american_to_implied(away_ml)
+    raw_sum = home_prob + away_prob
+
+    # If the pair already has one negative side, no adjustment needed.
+    if home_ml < 0 or away_ml < 0:
+        return home_ml, away_ml
+
+    # Both positive — re-normalise to a ~4% overround (typical sportsbook vig).
+    target_sum = 1.04
+    scale = target_sum / raw_sum
+    home_prob *= scale
+    away_prob *= scale
+
+    return round(_implied_to_american(home_prob)), round(_implied_to_american(away_prob))
+
+
 def _merge_odds_events(
     all_events: List[List[OddsEvent]],
 ) -> List[Dict[str, Any]]:
@@ -2245,6 +2340,15 @@ def _merge_odds_events(
         best_home_ml = _mean_odds(home_mls) if home_mls else None
         best_away_ml = _mean_odds(away_mls) if away_mls else None
 
+        # Guard against both sides showing positive odds.  This happens
+        # when sources disagree on the favorite and independent averaging
+        # pushes both implied probs below 0.5.  Re-normalise so the
+        # stronger side always gets negative odds.
+        if best_home_ml and best_away_ml:
+            best_home_ml, best_away_ml = _normalize_moneyline_pair(
+                best_home_ml, best_away_ml
+            )
+
         # Consensus spread: most common absolute value across sources.
         # Use moneyline data to determine the correct sign so that
         # conflicting source signs never flip the puck line.
@@ -2284,6 +2388,9 @@ def _merge_odds_events(
                 consensus = spread_vals.most_common(1)[0][0]
             else:
                 consensus = 1.5  # NHL standard puck line
+            # Enforce minimum ±1.5 — puck lines below that don't exist
+            if consensus < 1.5:
+                consensus = 1.5
 
             # Enforce correct sign based on moneyline-derived favorite.
             # This prevents conflicting source signs from flipping the
@@ -2304,60 +2411,59 @@ def _merge_odds_events(
                     best_home_spread = -consensus
                     best_away_spread = consensus
 
-            # Best price: the prices are always tied to their team's
-            # side of the spread (home_spread_price = price for whatever
-            # spread the home team has), so max() is correct here —
-            # BUT we first filter out prices with the wrong sign for
-            # large spreads (≥2.0).  In NHL, the team giving up goals
-            # (negative spread) always has positive odds, and the team
-            # getting goals (positive spread) always has negative odds.
-            # A wrong-sign price means the source swapped home/away.
-            consensus_home_books = [s for s in home_spreads if abs(s[0]) == consensus]
-            consensus_away_books = [s for s in away_spreads if abs(s[0]) == consensus]
-
-            if consensus >= 2.0 and home_is_fav is not None:
+            # Best price: only use entries whose spread sign matches
+            # the moneyline-derived direction.  Sources that report the
+            # home spread with the wrong sign have swapped home/away,
+            # so their prices belong to the opposite side and would
+            # contaminate the average.
+            if home_is_fav is not None:
                 if home_is_fav:
-                    # Home at -2.5+: price should be positive (hard to cover)
-                    valid = [s for s in consensus_home_books if s[1] > 0]
-                    rejected = [s for s in consensus_home_books if s[1] <= 0]
-                    for r in rejected:
-                        logger.warning(
-                            "REJECTED %s@%s [%s]: home spread price %+.0f wrong sign for fav -%.1f line",
-                            ev_list[0].away_abbr, ev_list[0].home_abbr, r[2], r[1], consensus,
-                        )
-                    if valid:
-                        consensus_home_books = valid
-                    # Away at +2.5+: price should be negative (easy to cover)
-                    valid = [s for s in consensus_away_books if s[1] < 0]
-                    rejected = [s for s in consensus_away_books if s[1] >= 0]
-                    for r in rejected:
-                        logger.warning(
-                            "REJECTED %s@%s [%s]: away spread price %+.0f wrong sign for dog +%.1f line",
-                            ev_list[0].away_abbr, ev_list[0].home_abbr, r[2], r[1], consensus,
-                        )
-                    if valid:
-                        consensus_away_books = valid
+                    # Home is favorite → home spread should be negative
+                    consensus_home_books = [
+                        s for s in home_spreads
+                        if abs(s[0]) == consensus and s[0] < 0
+                    ]
+                    consensus_away_books = [
+                        s for s in away_spreads
+                        if abs(s[0]) == consensus and s[0] > 0
+                    ]
                 else:
-                    # Home at +2.5+: price should be negative
-                    valid = [s for s in consensus_home_books if s[1] < 0]
-                    rejected = [s for s in consensus_home_books if s[1] >= 0]
-                    for r in rejected:
+                    # Home is underdog → home spread should be positive
+                    consensus_home_books = [
+                        s for s in home_spreads
+                        if abs(s[0]) == consensus and s[0] > 0
+                    ]
+                    consensus_away_books = [
+                        s for s in away_spreads
+                        if abs(s[0]) == consensus and s[0] < 0
+                    ]
+                # Log rejected entries
+                all_home = [s for s in home_spreads if abs(s[0]) == consensus]
+                all_away = [s for s in away_spreads if abs(s[0]) == consensus]
+                for r in all_home:
+                    if r not in consensus_home_books:
                         logger.warning(
-                            "REJECTED %s@%s [%s]: home spread price %+.0f wrong sign for dog +%.1f line",
-                            ev_list[0].away_abbr, ev_list[0].home_abbr, r[2], r[1], consensus,
+                            "REJECTED %s@%s [%s]: home spread %+.1f @ %+.0f — "
+                            "wrong sign direction (home_is_fav=%s)",
+                            ev_list[0].away_abbr, ev_list[0].home_abbr,
+                            r[2], r[0], r[1], home_is_fav,
                         )
-                    if valid:
-                        consensus_home_books = valid
-                    # Away at -2.5+: price should be positive
-                    valid = [s for s in consensus_away_books if s[1] > 0]
-                    rejected = [s for s in consensus_away_books if s[1] <= 0]
-                    for r in rejected:
+                for r in all_away:
+                    if r not in consensus_away_books:
                         logger.warning(
-                            "REJECTED %s@%s [%s]: away spread price %+.0f wrong sign for fav -%.1f line",
-                            ev_list[0].away_abbr, ev_list[0].home_abbr, r[2], r[1], consensus,
+                            "REJECTED %s@%s [%s]: away spread %+.1f @ %+.0f — "
+                            "wrong sign direction (home_is_fav=%s)",
+                            ev_list[0].away_abbr, ev_list[0].home_abbr,
+                            r[2], r[0], r[1], home_is_fav,
                         )
-                    if valid:
-                        consensus_away_books = valid
+                # Fall back to all entries if filtering removed everything
+                if not consensus_home_books:
+                    consensus_home_books = all_home
+                if not consensus_away_books:
+                    consensus_away_books = all_away
+            else:
+                consensus_home_books = [s for s in home_spreads if abs(s[0]) == consensus]
+                consensus_away_books = [s for s in away_spreads if abs(s[0]) == consensus]
 
             # Defense-in-depth: filter out any remaining extreme spread
             # prices that slipped through source validation (e.g. moneyline
@@ -2648,6 +2754,7 @@ def _merge_odds_events(
             }
             for abs_lv, prices in all_spreads_map.items()
             if prices["home_price"] > -999 and prices["away_price"] > -999
+            and abs_lv >= 1.5  # NHL puck lines below ±1.5 don't exist
         ], key=lambda x: x["line"])
 
         all_spread_lines = validate_alt_spreads_monotonicity(
@@ -2702,6 +2809,18 @@ def _merge_odds_events(
             },
             "all_total_lines": all_total_lines,
             "all_spread_lines": all_spread_lines,
+            # 1st period odds: best price across all sources
+            "p1_odds": {
+                "home_ml": _best_price([getattr(e, "p1_home_ml", None) for e in ev_list]),
+                "away_ml": _best_price([getattr(e, "p1_away_ml", None) for e in ev_list]),
+                "draw_price": _best_price([getattr(e, "p1_draw_price", None) for e in ev_list]),
+                "spread_line": getattr(first, "p1_spread_line", None) if hasattr(first, "p1_spread_line") else None,
+                "home_spread_price": _best_price([getattr(e, "p1_home_spread_price", None) for e in ev_list]),
+                "away_spread_price": _best_price([getattr(e, "p1_away_spread_price", None) for e in ev_list]),
+                "total_line": getattr(first, "p1_total_line", None) if hasattr(first, "p1_total_line") else None,
+                "over_price": _best_price([getattr(e, "p1_over_price", None) for e in ev_list]),
+                "under_price": _best_price([getattr(e, "p1_under_price", None) for e in ev_list]),
+            },
             "all_sources": [e.to_dict() for e in ev_list],
         })
 
@@ -2750,76 +2869,59 @@ class MultiSourceOddsScraper:
         await self.close()
         return False
 
-    async def fetch_best_odds(self) -> List[Dict[str, Any]]:
+    async def fetch_best_odds(
+        self,
+        skip_alternates: bool = False,
+    ) -> List[Dict[str, Any]]:
         """
-        Fetch odds with The Odds API as PRIMARY source, scrapers as FALLBACK.
+        Fetch odds using a primary/fallback strategy.
 
-        Pipeline:
-        1. Try The Odds API first (Hard Rock + all US bookmakers via a single
-           cached request).  With a paid subscription (20k requests/month),
-           this gives us FanDuel, DraftKings, BetMGM, Caesars, PointsBet,
-           Hard Rock, and more in one call.
-        2. Only if The Odds API fails or returns no data, fall back to the
-           direct sportsbook scrapers (DraftKings, FanDuel, Kambi, Bovada).
+        PRIMARY: The Odds API (Hard Rock + generic bookmakers). This is the
+        authoritative source with clean, validated pricing across all major
+        US sportsbooks.
 
-        The merge validates spread prices against moneyline data to reject
-        any source that returns swapped home/away spread prices.
+        FALLBACK: Direct scrapers (DraftKings, FanDuel, Kambi, Bovada) are
+        only invoked if the Odds API returns no data — e.g. API key expired,
+        rate-limited, or service outage.
+
+        When ``skip_alternates`` is True, per-event alternate line API calls
+        are skipped in favour of cached data, dramatically reducing API
+        credit usage for fast sync cycles.
         """
         client = self._get_client()
 
-        # ── PRIMARY: The Odds API (includes ALL US sportsbooks) ──
-        primary_events: List[List[OddsEvent]] = []
-        primary_names: List[str] = []
-        primary_ok = False
+        # ── Phase 1: Odds API (primary) ─────────────────────────────
+        primary_results = await asyncio.gather(
+            _fetch_hardrock(client, skip_alternates=skip_alternates),
+            _fetch_odds_api(client),
+            return_exceptions=True,
+        )
 
-        try:
-            hr_result, api_result = await asyncio.gather(
-                _fetch_hardrock(client),
-                _fetch_odds_api(client),
-                return_exceptions=True,
+        all_events: List[List[OddsEvent]] = []
+        primary_names = ["Hard Rock", "Odds API"]
+
+        for i, result in enumerate(primary_results):
+            if isinstance(result, Exception):
+                logger.warning("%s fetch failed: %s", primary_names[i], result)
+                all_events.append([])
+            else:
+                all_events.append(result)
+
+        primary_event_count = sum(len(evts) for evts in all_events)
+
+        if primary_event_count > 0:
+            logger.info(
+                "Odds API primary: %d events from %d/%d sources",
+                primary_event_count,
+                sum(1 for evts in all_events if evts),
+                len(primary_names),
             )
+            self._log_events(all_events, primary_names)
+            return _merge_odds_events(all_events)
 
-            for name, result in [("Hard Rock", hr_result), ("Odds API", api_result)]:
-                if isinstance(result, Exception):
-                    logger.warning("%s fetch failed: %s", name, result)
-                    primary_events.append([])
-                else:
-                    primary_events.append(result)
-                primary_names.append(name)
-
-            primary_total = sum(len(evts) for evts in primary_events)
-            primary_sources = sum(1 for evts in primary_events if evts)
-
-            if primary_total > 0:
-                primary_ok = True
-                for i, evts in enumerate(primary_events):
-                    for ev in (evts or []):
-                        ml_str = (
-                            f"ML {round(ev.home_ml)}/{round(ev.away_ml)}"
-                            if ev.has_moneyline() else "ML --"
-                        )
-                        ou_str = (
-                            f"O/U {ev.total_line:.1f} ({round(ev.over_price)}/{round(ev.under_price)})"
-                            if ev.has_total() else "O/U --"
-                        )
-                        logger.debug(
-                            "[%s] %s@%s: %s, %s, %d alt totals, %d alt spreads",
-                            primary_names[i], ev.away_abbr, ev.home_abbr,
-                            ml_str, ou_str, len(ev.alt_totals), len(ev.alt_spreads),
-                        )
-                logger.info(
-                    "Odds API PRIMARY: %d events from %d/%d sources",
-                    primary_total, primary_sources, len(primary_names),
-                )
-        except Exception as exc:
-            logger.error("Odds API primary pipeline failed: %s", exc)
-
-        if primary_ok:
-            return _merge_odds_events(primary_events)
-
-        # ── FALLBACK: Direct sportsbook scrapers ──
+        # ── Phase 2: Direct scrapers (fallback) ─────────────────────
         logger.warning(
-            "Odds API returned no data — falling back to sportsbook scrapers"
+            "Odds API returned no data — falling back to direct scrapers"
         )
 
         fallback_results = await asyncio.gather(
@@ -2830,54 +2932,73 @@ class MultiSourceOddsScraper:
             return_exceptions=True,
         )
 
-        fallback_events: List[List[OddsEvent]] = []
+        all_events = []
         fallback_names = ["DraftKings", "FanDuel", "Kambi", "Bovada"]
 
         for i, result in enumerate(fallback_results):
             if isinstance(result, Exception):
-                logger.warning("%s scraper failed: %s", fallback_names[i], result)
-                fallback_events.append([])
+                logger.warning("%s fetch failed: %s", fallback_names[i], result)
+                all_events.append([])
             else:
-                fallback_events.append(result)
-                if result:
-                    for ev in result:
-                        ml_str = (
-                            f"ML {round(ev.home_ml)}/{round(ev.away_ml)}"
-                            if ev.has_moneyline() else "ML --"
-                        )
-                        ou_str = (
-                            f"O/U {ev.total_line:.1f} ({round(ev.over_price)}/{round(ev.under_price)})"
-                            if ev.has_total() else "O/U --"
-                        )
-                        logger.debug(
-                            "[%s] %s@%s: %s, %s, %d alt totals, %d alt spreads",
-                            fallback_names[i], ev.away_abbr, ev.home_abbr,
-                            ml_str, ou_str, len(ev.alt_totals), len(ev.alt_spreads),
-                        )
+                all_events.append(result)
 
-        fallback_total = sum(len(evts) for evts in fallback_events)
-        fallback_sources = sum(1 for evts in fallback_events if evts)
-        logger.info(
-            "Scraper FALLBACK: %d events from %d/%d sources",
-            fallback_total, fallback_sources, len(fallback_names),
-        )
+        fallback_event_count = sum(len(evts) for evts in all_events)
+        fallback_sources = sum(1 for evts in all_events if evts)
 
-        if fallback_total == 0:
+        if fallback_event_count == 0:
             logger.warning("No odds data from any source (primary or fallback)!")
             return []
 
-        return _merge_odds_events(fallback_events)
+        logger.info(
+            "Scraper fallback: %d events from %d/%d sources",
+            fallback_event_count, fallback_sources, len(fallback_names),
+        )
+        self._log_events(all_events, fallback_names)
+        return _merge_odds_events(all_events)
 
-    async def sync_odds(self, db: AsyncSession) -> List[Dict[str, Any]]:
+    def _log_events(
+        self,
+        all_events: List[List["OddsEvent"]],
+        source_names: List[str],
+    ) -> None:
+        """Log per-event details at DEBUG level."""
+        for i, evts in enumerate(all_events):
+            if not evts:
+                continue
+            for ev in evts:
+                ml_str = (
+                    f"ML {round(ev.home_ml)}/{round(ev.away_ml)}"
+                    if ev.has_moneyline() else "ML --"
+                )
+                ou_str = (
+                    f"O/U {ev.total_line:.1f} ({round(ev.over_price)}/{round(ev.under_price)})"
+                    if ev.has_total() else "O/U --"
+                )
+                n_alts = len(ev.alt_totals)
+                n_aspr = len(ev.alt_spreads)
+                logger.debug(
+                    "[%s] %s@%s: %s, %s, %d alt totals, %d alt spreads",
+                    source_names[i], ev.away_abbr, ev.home_abbr,
+                    ml_str, ou_str, n_alts, n_aspr,
+                )
+
+    async def sync_odds(
+        self,
+        db: AsyncSession,
+        skip_alternates: bool = False,
+    ) -> List[Dict[str, Any]]:
         """
         Fetch odds from all sources and sync them to Game records in the DB.
 
         Matches odds to existing Game records by team abbreviations and date.
         Updates Game model odds fields with the best available lines.
 
+        When ``skip_alternates`` is True, per-event alternate line API calls
+        are skipped (cached data is used instead).
+
         Returns the list of matched odds dicts.
         """
-        odds_list = await self.fetch_best_odds()
+        odds_list = await self.fetch_best_odds(skip_alternates=skip_alternates)
 
         if not odds_list:
             logger.info("No odds to sync")
@@ -3112,31 +3233,28 @@ class MultiSourceOddsScraper:
             if asl:
                 game.all_spread_lines = asl
 
-            now = datetime.now(timezone.utc)
-            game.odds_updated_at = now
+            # Persist 1st period odds
+            p1 = odds.get("p1_odds", {})
+            if p1.get("home_ml") is not None:
+                game.period1_home_ml = p1["home_ml"]
+            if p1.get("away_ml") is not None:
+                game.period1_away_ml = p1["away_ml"]
+            if p1.get("draw_price") is not None:
+                game.period1_draw_price = p1["draw_price"]
+            if p1.get("spread_line") is not None:
+                game.period1_spread_line = p1["spread_line"]
+            if p1.get("home_spread_price") is not None:
+                game.period1_home_spread_price = p1["home_spread_price"]
+            if p1.get("away_spread_price") is not None:
+                game.period1_away_spread_price = p1["away_spread_price"]
+            if p1.get("total_line") is not None:
+                game.period1_total_line = p1["total_line"]
+            if p1.get("over_price") is not None:
+                game.period1_over_price = p1["over_price"]
+            if p1.get("under_price") is not None:
+                game.period1_under_price = p1["under_price"]
 
-            # Save odds snapshot for line movement tracking.
-            # Only snapshot when odds have actually changed from the
-            # previous values to avoid storing duplicate data points.
-            _changed = (
-                game.home_moneyline != (best.get("home_moneyline") if h_ml is None else game.home_moneyline)
-                or True  # Always snapshot on sync — dedup via captured_at
-            )
-            snapshot = OddsSnapshot(
-                game_id=game.id,
-                captured_at=now,
-                source=", ".join(odds.get("sources", ["odds_api"])),
-                home_moneyline=game.home_moneyline,
-                away_moneyline=game.away_moneyline,
-                over_under_line=game.over_under_line,
-                over_price=game.over_price,
-                under_price=game.under_price,
-                home_spread_line=game.home_spread_line,
-                away_spread_line=game.away_spread_line,
-                home_spread_price=game.home_spread_price,
-                away_spread_price=game.away_spread_price,
-            )
-            db.add(snapshot)
+            game.odds_updated_at = datetime.now(timezone.utc)
 
             matched.append({
                 "game_id": game.id,

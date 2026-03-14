@@ -150,6 +150,17 @@ class Game(TimestampMixin, Base):
         JSON, nullable=True, default=None
     )
 
+    # 1st period odds (from sportsbooks)
+    period1_home_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    period1_away_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    period1_draw_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    period1_spread_line: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    period1_home_spread_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    period1_away_spread_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    period1_total_line: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    period1_over_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    period1_under_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
     # Pregame odds snapshot — frozen when the game goes live so live
     # odds can overwrite the main fields without losing the opening lines.
     pregame_home_moneyline: Mapped[Optional[float]] = mapped_column(Float, nullable=True)

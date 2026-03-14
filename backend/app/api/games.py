@@ -194,6 +194,7 @@ class GameDetailResponse(BaseModel):
     away_recent_games: List[RecentGameResult] = []
 
     head_to_head: Optional[HeadToHeadRecord] = None
+    h2h_games: List[RecentGameResult] = []
 
     home_period_scoring: PeriodScoring
     away_period_scoring: PeriodScoring
@@ -202,6 +203,7 @@ class GameDetailResponse(BaseModel):
     away_goalies: List[GoalieInfo] = []
 
     predictions: List[GamePredictionBrief] = []
+    top_pick: Optional[Dict[str, Any]] = None
 
 
 class PredictionResponse(BaseModel):
@@ -273,6 +275,36 @@ async def _get_team_form(team: Team, session: AsyncSession) -> TeamForm:
         form.shots_for_per_game = stats.shots_for_per_game
         form.shots_against_per_game = stats.shots_against_per_game
         form.faceoff_win_pct = stats.faceoff_win_pct
+
+    # Fallback: compute shots per game from Game records if still missing
+    if form.shots_for_per_game is None or form.shots_against_per_game is None:
+        shot_result = await session.execute(
+            select(Game)
+            .where(
+                or_(Game.home_team_id == team.id, Game.away_team_id == team.id),
+                func.lower(Game.status).in_(GAME_FINAL_STATUSES),
+                Game.home_shots.isnot(None),
+                Game.away_shots.isnot(None),
+            )
+            .order_by(Game.date.desc())
+            .limit(30)
+        )
+        recent_games = shot_result.scalars().all()
+        if recent_games:
+            shots_for_total = 0
+            shots_against_total = 0
+            for g in recent_games:
+                if g.home_team_id == team.id:
+                    shots_for_total += g.home_shots
+                    shots_against_total += g.away_shots
+                else:
+                    shots_for_total += g.away_shots
+                    shots_against_total += g.home_shots
+            n = len(recent_games)
+            if form.shots_for_per_game is None:
+                form.shots_for_per_game = round(shots_for_total / n, 1)
+            if form.shots_against_per_game is None:
+                form.shots_against_per_game = round(shots_against_total / n, 1)
 
     return form
 
@@ -406,6 +438,54 @@ async def _get_head_to_head(
         team2_goals=t2_goals,
         last_meeting=games[0].date,
     )
+
+
+async def _get_h2h_games(
+    team1_id: int, team2_id: int, session: AsyncSession, limit: int = 10
+) -> List[RecentGameResult]:
+    """Return individual H2H game records between two teams."""
+    lo, hi = sorted([team1_id, team2_id])
+    result = await session.execute(
+        select(Game)
+        .options(selectinload(Game.home_team), selectinload(Game.away_team))
+        .where(
+            or_(
+                and_(Game.home_team_id == lo, Game.away_team_id == hi),
+                and_(Game.home_team_id == hi, Game.away_team_id == lo),
+            ),
+            func.lower(Game.status).in_(GAME_FINAL_STATUSES),
+            Game.home_score.isnot(None),
+            Game.away_score.isnot(None),
+        )
+        .order_by(Game.date.desc())
+        .limit(limit)
+    )
+    games = result.scalars().all()
+
+    records = []
+    for game in games:
+        # Always from team1 (home team) perspective
+        is_t1_home = game.home_team_id == team1_id
+        gf = game.home_score if is_t1_home else game.away_score
+        ga = game.away_score if is_t1_home else game.home_score
+        opponent = game.away_team if is_t1_home else game.home_team
+        won = gf > ga
+        ot = bool(game.went_to_overtime)
+        res = "W" if won else ("OTL" if ot else "L")
+
+        records.append(RecentGameResult(
+            game_date=game.date,
+            opponent_abbrev=opponent.abbreviation if opponent else "???",
+            opponent_name=opponent.name if opponent else "Unknown",
+            home_away="home" if is_t1_home else "away",
+            goals_for=gf or 0,
+            goals_against=ga or 0,
+            result=res,
+            overtime=ot,
+            score_display=f"{gf}-{ga}" if gf is not None else None,
+        ))
+
+    return records
 
 
 async def _get_team_goalies(
@@ -663,13 +743,22 @@ async def get_game_details(
     home_form = await _get_team_form(game.home_team, session)
     away_form = await _get_team_form(game.away_team, session)
     h2h = await _get_head_to_head(game.home_team_id, game.away_team_id, session)
+    h2h_game_records = await _get_h2h_games(game.home_team_id, game.away_team_id, session)
     home_period = await _compute_period_scoring(game.home_team_id, session)
     away_period = await _compute_period_scoring(game.away_team_id, session)
     home_goalies = await _get_team_goalies(game.home_team_id, session)
     away_goalies = await _get_team_goalies(game.away_team_id, session)
     predictions = await _get_game_predictions(game.id, session, game=game)
-    home_recent = await _get_recent_games(game.home_team_id, session, limit=20)
-    away_recent = await _get_recent_games(game.away_team_id, session, limit=20)
+
+    # Compute the same top_pick the dashboard uses so the game detail
+    # page always agrees with the schedule card on which bet to show.
+    from app.api.schedule import _compute_top_picks
+    top_picks_map = await _compute_top_picks([game], session)
+    top_pick_obj = top_picks_map.get(game.id)
+    top_pick_dict = top_pick_obj.model_dump() if top_pick_obj else None
+
+    home_recent = await _get_recent_games(game.home_team_id, session, limit=50)
+    away_recent = await _get_recent_games(game.away_team_id, session, limit=50)
 
     # Build period scores from individual columns
     parsed_period_scores = None
@@ -747,11 +836,13 @@ async def get_game_details(
         home_recent_games=home_recent,
         away_recent_games=away_recent,
         head_to_head=h2h,
+        h2h_games=h2h_game_records,
         home_period_scoring=home_period,
         away_period_scoring=away_period,
         home_goalies=home_goalies,
         away_goalies=away_goalies,
         predictions=predictions,
+        top_pick=top_pick_dict,
     )
 
 
@@ -798,9 +889,10 @@ async def get_game_features(
     except (ImportError, AttributeError):
         pass
     except Exception as exc:
+        logger.error("Error computing features: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Error computing features: {exc}",
+            detail="Error computing features",
         )
 
     # Fallback: construct a basic feature dict from available data
@@ -969,7 +1061,7 @@ async def get_game_injuries(
             .where(
                 and_(
                     InjuryReport.team_id == team_id,
-                    InjuryReport.is_active.is_(True),
+                    InjuryReport.active.is_(True),
                 )
             )
         )
