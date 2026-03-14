@@ -2272,6 +2272,393 @@ class FeatureEngine:
         }
 
     # ------------------------------------------------------------------ #
+    #  Feature #6: PP opportunity rate vs opponent                        #
+    # ------------------------------------------------------------------ #
+
+    async def get_pp_opportunity_rate(
+        self,
+        db: AsyncSession,
+        team_id: int,
+        opponent_id: int,
+        last_n: int = 15,
+    ) -> Dict[str, Any]:
+        """Estimate power-play opportunities each team creates/allows.
+
+        An undisciplined team facing an elite PP is far worse than the
+        current model captures (which only uses PP% and PK%).  This
+        estimates *how many* PP chances opponents get from penalty
+        minutes, then multiplies by the opponent's PP conversion rate.
+
+        Returns:
+            dict with pp_opportunities_for, pp_opportunities_against,
+            opponent_pp_pct, expected_pp_goals_against,
+            opponent_pk_pct, expected_pp_goals_for, games_found.
+        """
+        # Get this team's penalty discipline (PIM) and opponent's PP%
+        team_disc = await self.get_penalty_discipline(db, team_id, last_n)
+        opp_disc = await self.get_penalty_discipline(db, opponent_id, last_n)
+        team_special = await self.get_special_teams_matchup(db, team_id)
+        opp_special = await self.get_special_teams_matchup(db, opponent_id)
+
+        # Estimate PP opportunities from PIM: ~1 PP per 4 PIM (2min minors)
+        team_pim = team_disc.get("avg_pim_per_game", 6.0)
+        opp_pim = opp_disc.get("avg_pim_per_game", 6.0)
+        pp_opp_for = opp_pim / 4.0   # opponent's penalties = our PP chances
+        pp_opp_against = team_pim / 4.0  # our penalties = their PP chances
+
+        opp_pp_pct = opp_special.get("pp_pct", 20.0) / 100.0
+        team_pp_pct = team_special.get("pp_pct", 20.0) / 100.0
+        opp_pk_pct = opp_special.get("pk_pct", 80.0) / 100.0
+
+        # Expected PP goals: opportunities × conversion rate
+        expected_pp_goals_against = pp_opp_against * opp_pp_pct
+        expected_pp_goals_for = pp_opp_for * team_pp_pct * (1.0 - opp_pk_pct + opp_pp_pct)
+        # Simplified: just opportunities × their PP%
+        expected_pp_goals_for = pp_opp_for * team_pp_pct
+        expected_pp_goals_against = pp_opp_against * opp_pp_pct
+
+        # Net PP impact: positive = we gain more from PP than we give up
+        net_pp_impact = expected_pp_goals_for - expected_pp_goals_against
+
+        return {
+            "pp_opportunities_for": round(pp_opp_for, 2),
+            "pp_opportunities_against": round(pp_opp_against, 2),
+            "expected_pp_goals_for": round(expected_pp_goals_for, 3),
+            "expected_pp_goals_against": round(expected_pp_goals_against, 3),
+            "net_pp_impact": round(net_pp_impact, 3),
+            "opponent_pp_pct": round(opp_pp_pct * 100, 1),
+            "opponent_pk_pct": round(opp_pk_pct * 100, 1),
+            "team_pp_pct": round(team_pp_pct * 100, 1),
+            "games_found": min(
+                team_disc.get("games_found", 0),
+                opp_disc.get("games_found", 0),
+            ),
+        }
+
+    # ------------------------------------------------------------------ #
+    #  Feature #7: Shooting quality against (HDSV% proxy)                 #
+    # ------------------------------------------------------------------ #
+
+    async def get_shooting_quality_against(
+        self,
+        db: AsyncSession,
+        team_id: int,
+        last_n: int = 15,
+    ) -> Dict[str, Any]:
+        """Estimate shot quality a team faces using goalie performance.
+
+        Two goalies can have the same SV% but face very different shot
+        quality.  A goalie with a high save% against a high-shooting%
+        team is genuinely better than one padding stats on perimeter
+        shots.  We approximate HDSV% by comparing the opposing team's
+        shooting% against this team vs their overall shooting%.
+
+        Returns:
+            dict with avg_opp_shooting_pct, league_avg_shooting_pct,
+            shot_quality_index (>1 = faces harder shots), games_found.
+        """
+        games = await self._get_recent_games(db, team_id, last_n)
+        if not games:
+            return {
+                "avg_opp_shooting_pct": 8.0,
+                "shot_quality_index": 1.0,
+                "goals_saved_above_expected": 0.0,
+                "games_found": 0,
+            }
+
+        # For each game, compute how the opposing team shot against us
+        total_opp_shots = 0
+        total_opp_goals = 0
+        # Also compute expected goals against based on league avg SV%
+        games_counted = 0
+        league_avg_sv = _mc.league_avg_save_pct  # ~0.905
+
+        for game in games:
+            if game.home_score is None or game.away_score is None:
+                continue
+            is_home = game.home_team_id == team_id
+            opp_goals = game.away_score if is_home else game.home_score
+            opp_shots = (game.away_shots if is_home else game.home_shots) or 0
+
+            if opp_shots == 0:
+                continue
+
+            total_opp_shots += opp_shots
+            total_opp_goals += opp_goals
+            games_counted += 1
+
+        if games_counted == 0 or total_opp_shots == 0:
+            return {
+                "avg_opp_shooting_pct": 8.0,
+                "shot_quality_index": 1.0,
+                "goals_saved_above_expected": 0.0,
+                "games_found": 0,
+            }
+
+        avg_opp_sh_pct = total_opp_goals / total_opp_shots * 100.0
+        league_avg_sh_pct = (1.0 - league_avg_sv) * 100.0  # ~9.5%
+
+        # Shot quality index: >1 means facing harder shots than average
+        shot_quality_index = avg_opp_sh_pct / league_avg_sh_pct if league_avg_sh_pct > 0 else 1.0
+
+        # Goals saved above expected: negative = letting in more than expected
+        expected_goals = total_opp_shots * (1.0 - league_avg_sv)
+        gsae = expected_goals - total_opp_goals  # positive = saved more than expected
+
+        return {
+            "avg_opp_shooting_pct": round(avg_opp_sh_pct, 2),
+            "shot_quality_index": round(shot_quality_index, 3),
+            "goals_saved_above_expected": round(gsae, 2),
+            "games_found": games_counted,
+        }
+
+    # ------------------------------------------------------------------ #
+    #  Feature #9: Line combination tracking (forward line stability)     #
+    # ------------------------------------------------------------------ #
+
+    async def get_line_combination_stability(
+        self,
+        db: AsyncSession,
+        team_id: int,
+        last_n: int = 10,
+    ) -> Dict[str, Any]:
+        """Track forward line stability based on co-appearance patterns.
+
+        When top-line combos get broken up (injury, trade, coaching
+        decision), the impact is bigger than individual player PPG
+        suggests.  Chemistry matters.  We measure this by tracking
+        how consistently the top-6 forwards appear together.
+
+        Returns:
+            dict with top6_stability (0-1), top6_players, games_found.
+        """
+        games = await self._get_recent_games(db, team_id, last_n)
+        if not games:
+            return {"top6_stability": 0.5, "top6_players": 0, "games_found": 0}
+
+        game_ids = [g.id for g in games]
+        n_games = len(game_ids)
+
+        # Get all forward appearances (C, LW, RW) for this team in recent games
+        stmt = (
+            select(
+                GamePlayerStats.player_id,
+                func.count(GamePlayerStats.game_id).label("appearances"),
+                func.sum(GamePlayerStats.goals + GamePlayerStats.assists).label("total_points"),
+            )
+            .join(Player, GamePlayerStats.player_id == Player.id)
+            .where(
+                and_(
+                    GamePlayerStats.game_id.in_(game_ids),
+                    Player.team_id == team_id,
+                    Player.position.in_(["C", "LW", "RW", "F"]),
+                )
+            )
+            .group_by(GamePlayerStats.player_id)
+            .order_by(desc("total_points"))
+        )
+        result = await db.execute(stmt)
+        rows = result.all()
+
+        if not rows:
+            return {"top6_stability": 0.5, "top6_players": 0, "games_found": 0}
+
+        # Take top 6 by production
+        top6 = rows[:6]
+        top6_count = len(top6)
+
+        # Stability = avg appearance rate of top-6 forwards
+        # If all 6 play every game → 1.0. If they miss games → lower.
+        if n_games > 0 and top6_count > 0:
+            stability = sum(r.appearances / n_games for r in top6) / top6_count
+        else:
+            stability = 0.5
+
+        return {
+            "top6_stability": round(min(1.0, stability), 3),
+            "top6_players": top6_count,
+            "games_found": n_games,
+        }
+
+    # ------------------------------------------------------------------ #
+    #  Feature #11: Recency-weighted H2H                                  #
+    # ------------------------------------------------------------------ #
+
+    async def get_recency_weighted_h2h(
+        self,
+        db: AsyncSession,
+        team1_id: int,
+        team2_id: int,
+        last_n: int = 20,
+        decay: float = 0.85,
+    ) -> Dict[str, Any]:
+        """Recency-weighted head-to-head stats with exponential decay.
+
+        Current H2H treats a game from October the same as last week.
+        Exponential decay (like we do for form) better captures evolving
+        matchup dynamics — roster changes, coaching adjustments, etc.
+
+        Returns:
+            dict with team1_win_rate_weighted, team2_win_rate_weighted,
+            avg_total_goals_weighted, recency_shift, games_found.
+        """
+        stmt = (
+            select(Game)
+            .where(
+                and_(
+                    Game.status == "final",
+                    or_(
+                        and_(
+                            Game.home_team_id == team1_id,
+                            Game.away_team_id == team2_id,
+                        ),
+                        and_(
+                            Game.home_team_id == team2_id,
+                            Game.away_team_id == team1_id,
+                        ),
+                    ),
+                )
+            )
+            .order_by(desc(Game.date))
+            .limit(last_n)
+        )
+        result = await db.execute(stmt)
+        games = result.scalars().all()
+
+        empty = {
+            "team1_win_rate_weighted": 0.5,
+            "team2_win_rate_weighted": 0.5,
+            "avg_total_goals_weighted": 5.5,
+            "recency_shift": 0.0,
+            "games_found": 0,
+        }
+
+        if not games:
+            return empty
+
+        t1_wins_weighted = 0.0
+        total_goals_weighted = 0.0
+        weight_sum = 0.0
+        # Also compute unweighted for comparison
+        t1_wins_raw = 0
+        games_counted = 0
+
+        for idx, game in enumerate(games):
+            if game.home_score is None or game.away_score is None:
+                continue
+            games_counted += 1
+
+            w = decay ** idx  # most recent = 1.0, next = 0.85, etc.
+            weight_sum += w
+
+            if game.home_team_id == team1_id:
+                t1_goals = game.home_score
+                t2_goals = game.away_score
+            else:
+                t1_goals = game.away_score
+                t2_goals = game.home_score
+
+            total_goals_weighted += (t1_goals + t2_goals) * w
+
+            if t1_goals > t2_goals:
+                t1_wins_weighted += w
+                t1_wins_raw += 1
+
+        if games_counted == 0 or weight_sum == 0:
+            return empty
+
+        weighted_wr = t1_wins_weighted / weight_sum
+        raw_wr = t1_wins_raw / games_counted
+        recency_shift = weighted_wr - raw_wr  # positive = team1 trending up
+
+        return {
+            "team1_win_rate_weighted": round(weighted_wr, 4),
+            "team2_win_rate_weighted": round(1.0 - weighted_wr, 4),
+            "avg_total_goals_weighted": round(total_goals_weighted / weight_sum, 3),
+            "recency_shift": round(recency_shift, 4),
+            "games_found": games_counted,
+        }
+
+    # ------------------------------------------------------------------ #
+    #  Feature #13: Consensus line aggregation                            #
+    # ------------------------------------------------------------------ #
+
+    async def get_consensus_line(
+        self,
+        db: AsyncSession,
+        game_id: int,
+    ) -> Dict[str, Any]:
+        """Build consensus odds by averaging across all sportsbook sources.
+
+        Comparing our model against the consensus (average across books)
+        rather than a single book's line gives a truer edge measurement.
+        A single book may be an outlier; the market average is the real
+        "true line" to beat.
+
+        Returns:
+            dict with consensus_home_ml, consensus_away_ml,
+            consensus_total, consensus_home_implied, consensus_away_implied,
+            sources_count.
+        """
+        # Query recent odds snapshots from different sources for this game
+        stmt = (
+            select(OddsSnapshot)
+            .where(OddsSnapshot.game_id == game_id)
+            .order_by(desc(OddsSnapshot.captured_at))
+        )
+        result = await db.execute(stmt)
+        snapshots = result.scalars().all()
+
+        empty = {
+            "consensus_home_ml": None,
+            "consensus_away_ml": None,
+            "consensus_total": None,
+            "consensus_home_implied": None,
+            "consensus_away_implied": None,
+            "sources_count": 0,
+        }
+
+        if not snapshots:
+            return empty
+
+        # Group by source, take the most recent snapshot from each
+        by_source: Dict[str, Any] = {}
+        for snap in snapshots:
+            src = snap.source or "unknown"
+            if src not in by_source:
+                by_source[src] = snap
+
+        if len(by_source) < 2:
+            return empty
+
+        # Average moneylines and totals across sources
+        home_mls = [s.home_moneyline for s in by_source.values() if s.home_moneyline]
+        away_mls = [s.away_moneyline for s in by_source.values() if s.away_moneyline]
+        totals = [s.over_under_line for s in by_source.values() if s.over_under_line]
+
+        consensus_home_ml = sum(home_mls) / len(home_mls) if home_mls else None
+        consensus_away_ml = sum(away_mls) / len(away_mls) if away_mls else None
+        consensus_total = sum(totals) / len(totals) if totals else None
+
+        # Convert consensus ML to implied probability
+        from app.analytics.models import american_odds_to_implied_prob
+        consensus_home_implied = (
+            american_odds_to_implied_prob(consensus_home_ml) if consensus_home_ml else None
+        )
+        consensus_away_implied = (
+            american_odds_to_implied_prob(consensus_away_ml) if consensus_away_ml else None
+        )
+
+        return {
+            "consensus_home_ml": round(consensus_home_ml) if consensus_home_ml else None,
+            "consensus_away_ml": round(consensus_away_ml) if consensus_away_ml else None,
+            "consensus_total": round(consensus_total, 1) if consensus_total else None,
+            "consensus_home_implied": round(consensus_home_implied, 4) if consensus_home_implied else None,
+            "consensus_away_implied": round(consensus_away_implied, 4) if consensus_away_implied else None,
+            "sources_count": len(by_source),
+        }
+
+    # ------------------------------------------------------------------ #
     #  Build comprehensive feature set for a game                         #
     # ------------------------------------------------------------------ #
 
@@ -2428,6 +2815,24 @@ class FeatureEngine:
         home_close_record = await self.get_close_game_record(db, home_id)
         away_close_record = await self.get_close_game_record(db, away_id)
 
+        # Feature #6: PP opportunity rate vs opponent
+        home_pp_opp = await self.get_pp_opportunity_rate(db, home_id, away_id)
+        away_pp_opp = await self.get_pp_opportunity_rate(db, away_id, home_id)
+
+        # Feature #7: Shooting quality against (HDSV% proxy)
+        home_shot_quality = await self.get_shooting_quality_against(db, home_id)
+        away_shot_quality = await self.get_shooting_quality_against(db, away_id)
+
+        # Feature #9: Line combination stability
+        home_line_stability = await self.get_line_combination_stability(db, home_id)
+        away_line_stability = await self.get_line_combination_stability(db, away_id)
+
+        # Feature #11: Recency-weighted H2H
+        h2h_weighted = await self.get_recency_weighted_h2h(db, home_id, away_id)
+
+        # Feature #13: Consensus line aggregation
+        consensus_line = await self.get_consensus_line(db, game.id)
+
         # Line movement features (opening vs current odds)
         line_movement = await self.get_line_movement(db, game.id, game)
 
@@ -2564,6 +2969,19 @@ class FeatureEngine:
             "is_cross_conference": is_cross_conference,
             # Line movement (opening vs current odds)
             "line_movement": line_movement,
+            # Feature #6: PP opportunity rate vs opponent
+            "home_pp_opportunity": home_pp_opp,
+            "away_pp_opportunity": away_pp_opp,
+            # Feature #7: Shooting quality against (HDSV% proxy)
+            "home_shot_quality": home_shot_quality,
+            "away_shot_quality": away_shot_quality,
+            # Feature #9: Line combination stability
+            "home_line_stability": home_line_stability,
+            "away_line_stability": away_line_stability,
+            # Feature #11: Recency-weighted H2H
+            "h2h_weighted": h2h_weighted,
+            # Feature #13: Consensus line aggregation
+            "consensus_line": consensus_line,
         }
 
         return features

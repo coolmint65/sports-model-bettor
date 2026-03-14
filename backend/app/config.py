@@ -214,6 +214,30 @@ class ModelConfig(BaseModel):
     scoring_first_factor: float = 0.10         # xG adjustment for scoring-first tendency
     scoring_first_min_games: int = 10          # min games with P1 data before factor applies
 
+    # Feature #6: PP opportunity rate vs opponent
+    pp_opportunity_factor: float = 0.08        # xG adjustment for PP opportunity differential
+    pp_opportunity_min_games: int = 5          # min games before applying
+
+    # Feature #7: Shooting quality against (HDSV% proxy)
+    shot_quality_against_factor: float = 0.06  # xG adjustment for shot quality differential
+    shot_quality_min_games: int = 8            # min games before applying
+
+    # Feature #9: Line combination stability
+    line_stability_factor: float = 0.06        # xG adjustment for line instability
+    line_stability_threshold: float = 0.75     # below this = unstable lines
+
+    # Feature #11: Recency-weighted H2H
+    h2h_recency_decay: float = 0.85            # exponential decay per game
+    h2h_recency_factor: float = 0.06           # additional xG adjustment from recency shift
+
+    # Feature #12: Win probability calibration
+    calibration_enabled: bool = True            # whether to apply calibration curve
+    calibration_min_predictions: int = 50       # min predictions before calibrating
+
+    # Feature #13: Consensus line aggregation
+    consensus_edge_weight: float = 0.60         # weight consensus vs single-book edge (0-1)
+    consensus_min_sources: int = 2              # min sportsbook sources for consensus
+
     # Signal convergence: when multiple strong signals agree, amplify xG gap
     convergence_threshold: int = 3             # number of aligned strong signals to trigger
     convergence_amplifier: float = 0.08        # additional xG adjustment when signals converge

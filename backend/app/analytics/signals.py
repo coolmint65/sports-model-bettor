@@ -65,6 +65,11 @@ class SignalGenerator:
         signals.extend(self._overtime_signals(features, home_abbr, away_abbr, home_name, away_name))
         signals.extend(self._offensive_depth_signals(features, home_abbr, away_abbr, home_name, away_name))
         signals.extend(self._player_matchup_signals(features, home_abbr, away_abbr, home_name, away_name))
+        signals.extend(self._pp_opportunity_signals(features, home_abbr, away_abbr))
+        signals.extend(self._shot_quality_signals(features, home_abbr, away_abbr))
+        signals.extend(self._line_stability_signals(features, home_abbr, away_abbr, home_name, away_name))
+        signals.extend(self._h2h_recency_signals(features, home_abbr, away_abbr, home_name, away_name))
+        signals.extend(self._consensus_signals(features, home_abbr, away_abbr))
 
         # Filter noise and sort by strength
         signals = [s for s in signals if s.get("strength", 0) >= 0.2]
@@ -1391,6 +1396,211 @@ class SignalGenerator:
                     "negative", abbr,
                     min(0.50, 0.30 + abs(boost)),
                     icon="warning",
+                ))
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    #  Feature #6: PP opportunity rate vs opponent                        #
+    # ------------------------------------------------------------------ #
+
+    def _pp_opportunity_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+    ) -> List[Dict[str, Any]]:
+        signals = []
+        home_pp = features.get("home_pp_opportunity", {})
+        away_pp = features.get("away_pp_opportunity", {})
+
+        if home_pp.get("games_found", 0) >= 5:
+            home_net = home_pp.get("net_pp_impact", 0.0)
+            if home_net > 0.15:
+                signals.append(_signal(
+                    "special_teams",
+                    f"{home_abbr} PP opportunity edge: undisciplined opponent "
+                    f"gives {home_pp.get('pp_opportunities_for', 0):.1f} PP/game "
+                    f"vs {home_pp.get('team_pp_pct', 20):.0f}% PP conversion",
+                    "positive", home_abbr,
+                    min(0.7, 0.3 + home_net),
+                    icon="zap",
+                ))
+            elif home_net < -0.15:
+                signals.append(_signal(
+                    "special_teams",
+                    f"{home_abbr} faces PP disadvantage: draws {home_pp.get('pp_opportunities_against', 0):.1f} "
+                    f"penalties/game vs opponent's {home_pp.get('opponent_pp_pct', 20):.0f}% PP",
+                    "negative", home_abbr,
+                    min(0.7, 0.3 + abs(home_net)),
+                    icon="alert-triangle",
+                ))
+
+        if away_pp.get("games_found", 0) >= 5:
+            away_net = away_pp.get("net_pp_impact", 0.0)
+            if away_net > 0.15:
+                signals.append(_signal(
+                    "special_teams",
+                    f"{away_abbr} PP opportunity edge: undisciplined opponent "
+                    f"gives {away_pp.get('pp_opportunities_for', 0):.1f} PP/game "
+                    f"vs {away_pp.get('team_pp_pct', 20):.0f}% PP conversion",
+                    "positive", away_abbr,
+                    min(0.7, 0.3 + away_net),
+                    icon="zap",
+                ))
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    #  Feature #7: Shooting quality against                               #
+    # ------------------------------------------------------------------ #
+
+    def _shot_quality_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+    ) -> List[Dict[str, Any]]:
+        signals = []
+        home_sq = features.get("home_shot_quality", {})
+        away_sq = features.get("away_shot_quality", {})
+
+        for sq, abbr in [(home_sq, home_abbr), (away_sq, away_abbr)]:
+            if sq.get("games_found", 0) < 8:
+                continue
+            gsae_pg = sq.get("goals_saved_above_expected", 0.0) / max(sq["games_found"], 1)
+            sqi = sq.get("shot_quality_index", 1.0)
+            if gsae_pg > 0.15 and sqi > 1.05:
+                signals.append(_signal(
+                    "goalie",
+                    f"{abbr} defense stops quality shots: {gsae_pg:+.2f} GSAE/game "
+                    f"despite facing {sqi:.0%} shot quality index",
+                    "positive", abbr,
+                    min(0.7, 0.3 + gsae_pg),
+                    icon="shield",
+                    tooltip="Goals Saved Above Expected per game, adjusted for shot difficulty",
+                ))
+            elif gsae_pg < -0.15:
+                signals.append(_signal(
+                    "goalie",
+                    f"{abbr} defense leaking goals: {gsae_pg:+.2f} GSAE/game "
+                    f"(allowing more than expected)",
+                    "negative", abbr,
+                    min(0.7, 0.3 + abs(gsae_pg)),
+                    icon="alert-circle",
+                ))
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    #  Feature #9: Line stability signals                                 #
+    # ------------------------------------------------------------------ #
+
+    def _line_stability_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+        home_name: str,
+        away_name: str,
+    ) -> List[Dict[str, Any]]:
+        signals = []
+
+        for ls, abbr, name in [
+            (features.get("home_line_stability", {}), home_abbr, home_name),
+            (features.get("away_line_stability", {}), away_abbr, away_name),
+        ]:
+            if ls.get("games_found", 0) < 5:
+                continue
+            stability = ls.get("top6_stability", 1.0)
+            if stability < 0.65:
+                signals.append(_signal(
+                    "lineup",
+                    f"{name} forward lines disrupted: top-6 stability at {stability:.0%} "
+                    f"(chemistry concerns)",
+                    "negative", abbr,
+                    min(0.6, 0.3 + (0.75 - stability)),
+                    icon="users",
+                ))
+            elif stability > 0.92:
+                signals.append(_signal(
+                    "lineup",
+                    f"{name} forward lines locked in: top-6 stability at {stability:.0%}",
+                    "positive", abbr,
+                    0.25,
+                    icon="users",
+                ))
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    #  Feature #11: Recency-weighted H2H                                  #
+    # ------------------------------------------------------------------ #
+
+    def _h2h_recency_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+        home_name: str,
+        away_name: str,
+    ) -> List[Dict[str, Any]]:
+        signals = []
+        h2h_w = features.get("h2h_weighted", {})
+        if h2h_w.get("games_found", 0) < 3:
+            return signals
+
+        shift = h2h_w.get("recency_shift", 0.0)
+        # A shift of 0.15+ means recent games are very different from the full H2H
+        if abs(shift) >= 0.10:
+            trending_team = home_name if shift > 0 else away_name
+            trending_abbr = home_abbr if shift > 0 else away_abbr
+            signals.append(_signal(
+                "matchup",
+                f"H2H trend shift: {trending_team} dominating recent meetings "
+                f"(recency-weighted WR {shift:+.0%} vs raw H2H)",
+                "positive", trending_abbr,
+                min(0.6, 0.3 + abs(shift)),
+                icon="trending-up",
+                tooltip="Recent head-to-head results diverge from historical average",
+            ))
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    #  Feature #13: Consensus line signals                                #
+    # ------------------------------------------------------------------ #
+
+    def _consensus_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+    ) -> List[Dict[str, Any]]:
+        signals = []
+        consensus = features.get("consensus_line", {})
+        odds = features.get("odds", {})
+
+        if consensus.get("sources_count", 0) < 2:
+            return signals
+
+        # Check if the single-book line differs significantly from consensus
+        single_home_ml = odds.get("home_moneyline")
+        consensus_home_ml = consensus.get("consensus_home_ml")
+
+        if single_home_ml and consensus_home_ml:
+            diff = abs(single_home_ml - consensus_home_ml)
+            if diff >= 15:
+                outlier_side = "higher" if single_home_ml > consensus_home_ml else "lower"
+                signals.append(_signal(
+                    "market",
+                    f"Line outlier: {home_abbr} ML {single_home_ml:+.0f} vs consensus "
+                    f"{consensus_home_ml:+.0f} ({consensus.get('sources_count', 0)} books) — "
+                    f"possible value if book is {outlier_side}",
+                    "neutral", home_abbr,
+                    min(0.5, 0.25 + diff / 100),
+                    icon="bar-chart",
+                    tooltip=f"Consensus across {consensus.get('sources_count', 0)} sportsbooks",
                 ))
 
         return signals

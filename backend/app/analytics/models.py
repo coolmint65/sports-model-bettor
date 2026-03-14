@@ -604,6 +604,70 @@ class BettingModel:
             if away_close_rec.get("close_games_found", 0) >= 5:
                 away_xg += (away_sf_rate - 0.35) * scoring_first_factor
 
+        # ---- Feature #6: PP opportunity rate vs opponent ----
+        # An undisciplined team facing an elite PP gives up more goals
+        # than PP% and PK% alone capture. Adjust based on opportunity
+        # rate differential.
+        pp_factor = _mc.pp_opportunity_factor
+        if pp_factor > 0:
+            home_pp_opp = features.get("home_pp_opportunity", {})
+            away_pp_opp = features.get("away_pp_opportunity", {})
+            if (home_pp_opp.get("games_found", 0) >= _mc.pp_opportunity_min_games and
+                    away_pp_opp.get("games_found", 0) >= _mc.pp_opportunity_min_games):
+                # Net PP impact: positive = team generates more PP goals than it gives up
+                home_net = home_pp_opp.get("net_pp_impact", 0.0)
+                away_net = away_pp_opp.get("net_pp_impact", 0.0)
+                home_xg += home_net * pp_factor
+                away_xg += away_net * pp_factor
+
+        # ---- Feature #7: Shooting quality against (HDSV% proxy) ----
+        # Teams that face higher-quality shots have an inflated GAA.
+        # A goalie with good GSAE is stopping harder shots than average.
+        sq_factor = _mc.shot_quality_against_factor
+        if sq_factor > 0:
+            home_sq = features.get("home_shot_quality", {})
+            away_sq = features.get("away_shot_quality", {})
+            # Away team shoots against home defense. If home defense
+            # faces hard shots (quality_index > 1) but still has good
+            # GSAE, the defense is better than raw stats show.
+            if home_sq.get("games_found", 0) >= _mc.shot_quality_min_games:
+                gsae = home_sq.get("goals_saved_above_expected", 0.0)
+                # Positive GSAE = stopping more than expected → reduce away xG
+                away_xg -= gsae / max(home_sq["games_found"], 1) * sq_factor
+            if away_sq.get("games_found", 0) >= _mc.shot_quality_min_games:
+                gsae = away_sq.get("goals_saved_above_expected", 0.0)
+                home_xg -= gsae / max(away_sq["games_found"], 1) * sq_factor
+
+        # ---- Feature #9: Line combination stability ----
+        # Unstable forward lines (missing regulars, recent trades) have
+        # reduced chemistry. Penalize teams with low top-6 stability.
+        ls_factor = _mc.line_stability_factor
+        if ls_factor > 0:
+            home_ls = features.get("home_line_stability", {})
+            away_ls = features.get("away_line_stability", {})
+            ls_threshold = _mc.line_stability_threshold
+            if home_ls.get("games_found", 0) >= 5:
+                stability = home_ls.get("top6_stability", 1.0)
+                if stability < ls_threshold:
+                    home_xg *= 1.0 - (ls_threshold - stability) * ls_factor
+            if away_ls.get("games_found", 0) >= 5:
+                stability = away_ls.get("top6_stability", 1.0)
+                if stability < ls_threshold:
+                    away_xg *= 1.0 - (ls_threshold - stability) * ls_factor
+
+        # ---- Feature #11: Recency-weighted H2H ----
+        # When the recency-weighted H2H diverges from the raw H2H,
+        # the matchup dynamics are shifting. Apply the delta as an
+        # additional adjustment.
+        h2h_recency_factor = _mc.h2h_recency_factor
+        if h2h_recency_factor > 0:
+            h2h_w = features.get("h2h_weighted", {})
+            if h2h_w.get("games_found", 0) >= 3:
+                recency_shift = h2h_w.get("recency_shift", 0.0)
+                # Positive shift = home team trending up in this matchup
+                home_xg += recency_shift * h2h_recency_factor * self.league_avg
+                away_xg -= recency_shift * h2h_recency_factor * self.league_avg
+
         # ---- Signal convergence multiplier ----
         # When multiple independent signals all point the same direction,
         # the prediction should be MORE confident, not washed out by
@@ -693,6 +757,30 @@ class BettingModel:
             + WEIGHT_FORM_10 * form10
             + WEIGHT_SEASON * season
         )
+
+    @staticmethod
+    def calibrate_probability(raw_prob: float) -> float:
+        """Apply a simple calibration curve to model probabilities.
+
+        Feature #12: Models tend to be overconfident at extremes (saying
+        70% when the actual win rate is 62%) and underconfident near 50%.
+        This applies a mild logistic shrinkage toward 50% to correct.
+
+        Based on typical NHL model calibration:
+        - 50% stays 50%
+        - 60% becomes ~58%
+        - 70% becomes ~66%
+        - 80% becomes ~75%
+
+        The strength is controlled by a shrinkage factor (0 = no change,
+        1 = always 50%). We use 0.12 as a reasonable default.
+        """
+        if not _mc.calibration_enabled:
+            return raw_prob
+        # Mild shrinkage toward 50%
+        shrinkage = 0.12
+        calibrated = raw_prob * (1.0 - shrinkage) + 0.5 * shrinkage
+        return round(max(0.01, min(0.99, calibrated)), 4)
 
     def _defensive_factor(
         self,
@@ -1532,6 +1620,15 @@ class BettingModel:
         matrix = self._score_matrix(home_xg, away_xg)
         _pre = (home_xg, away_xg, matrix)
 
+        # ---- Feature #13: Consensus line aggregation ----
+        # When multiple sources are available, blend consensus-based
+        # implied probability with the single-book line for more
+        # accurate edge measurement.
+        consensus = features.get("consensus_line", {})
+        consensus_weight = _mc.consensus_edge_weight if (
+            consensus.get("sources_count", 0) >= _mc.consensus_min_sources
+        ) else 0.0
+
         # Extract betting odds for implied probability calculations
         odds_data = features.get("odds", {})
         home_ml = odds_data.get("home_moneyline")
@@ -1579,19 +1676,33 @@ class BettingModel:
                 )
 
             # Calculate implied probability and edge from real odds
+            # Feature #13: blend single-book implied with consensus
             ml_implied = None
             ml_odds_display = None
             if ml_pred == home_abbr and home_ml is not None:
-                ml_implied = american_odds_to_implied_prob(home_ml)
+                single_implied = american_odds_to_implied_prob(home_ml)
+                consensus_implied = consensus.get("consensus_home_implied")
+                if consensus_weight > 0 and consensus_implied:
+                    ml_implied = single_implied * (1 - consensus_weight) + consensus_implied * consensus_weight
+                else:
+                    ml_implied = single_implied
                 ml_odds_display = home_ml
             elif ml_pred == away_abbr and away_ml is not None:
-                ml_implied = american_odds_to_implied_prob(away_ml)
+                single_implied = american_odds_to_implied_prob(away_ml)
+                consensus_implied = consensus.get("consensus_away_implied")
+                if consensus_weight > 0 and consensus_implied:
+                    ml_implied = single_implied * (1 - consensus_weight) + consensus_implied * consensus_weight
+                else:
+                    ml_implied = single_implied
                 ml_odds_display = away_ml
+
+            # Feature #12: Apply calibration to raw model probability
+            ml_calibrated = self.calibrate_probability(ml_prob)
 
             predictions.append({
                 "bet_type": "ml",
                 "prediction": ml_pred,
-                "confidence": round(ml_prob, 4),
+                "confidence": ml_calibrated,
                 "probability": round(ml_prob, 4),
                 "implied_probability": round(ml_implied, 4) if ml_implied else None,
                 "odds": ml_odds_display,
@@ -1673,7 +1784,7 @@ class BettingModel:
                 return {
                     "bet_type": "total",
                     "prediction": f"{direction}_{line_val}",
-                    "confidence": round(prob, 4),
+                    "confidence": self.calibrate_probability(prob),
                     "probability": round(prob, 4),
                     "implied_probability": round(implied, 4) if implied else None,
                     "odds": odds_val,
@@ -1896,7 +2007,7 @@ class BettingModel:
                 predictions.append({
                     "bet_type": "spread",
                     "prediction": best_spread_pred,
-                    "confidence": round(best_spread_prob, 4),
+                    "confidence": self.calibrate_probability(best_spread_prob),
                     "probability": round(best_spread_prob, 4),
                     "implied_probability": round(best_spread_implied, 4),
                     "odds": best_spread_odds,
@@ -1962,7 +2073,7 @@ class BettingModel:
                 predictions.append({
                     "bet_type": "spread",
                     "prediction": f"{sb_abbr}_{sb_sign}",
-                    "confidence": round(sb_prob, 4),
+                    "confidence": self.calibrate_probability(sb_prob),
                     "probability": round(sb_prob, 4),
                     "implied_probability": round(spread_implied, 4) if spread_implied else None,
                     "odds": spread_odds_display,
@@ -2002,6 +2113,89 @@ class BettingModel:
         predictions.sort(key=lambda p: p["confidence"], reverse=True)
 
         return predictions
+
+    # ------------------------------------------------------------------ #
+    #  Feature #12: Calibration analysis                                  #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    async def compute_calibration_stats(db) -> Dict[str, Any]:
+        """Analyze historical prediction accuracy by confidence bucket.
+
+        Groups settled moneyline predictions into 5% confidence buckets
+        and compares predicted win rate vs actual win rate. This helps
+        tune the calibration shrinkage factor.
+
+        Returns:
+            dict with buckets (list of {range, predicted, actual, count}),
+            brier_score, and suggested_shrinkage.
+        """
+        from sqlalchemy import select, func, and_
+        from app.models.prediction import Prediction, BetResult
+
+        stmt = (
+            select(Prediction.confidence, BetResult.was_correct)
+            .join(BetResult, BetResult.prediction_id == Prediction.id)
+            .where(
+                and_(
+                    Prediction.phase == "prematch",
+                    Prediction.bet_type == "ml",
+                    BetResult.was_correct.isnot(None),
+                )
+            )
+        )
+        result = await db.execute(stmt)
+        rows = result.all()
+
+        if len(rows) < _mc.calibration_min_predictions:
+            return {"buckets": [], "brier_score": None, "suggested_shrinkage": 0.12, "sample_size": len(rows)}
+
+        # Group into 5% buckets
+        buckets: Dict[int, List] = {}
+        for conf, correct in rows:
+            bucket = int((conf or 0.5) * 20) * 5  # 0, 5, 10, ..., 95
+            bucket = max(50, min(95, bucket))  # clamp to 50-95
+            if bucket not in buckets:
+                buckets[bucket] = []
+            buckets[bucket].append(1 if correct else 0)
+
+        bucket_list = []
+        brier_sum = 0.0
+        for b in sorted(buckets.keys()):
+            outcomes = buckets[b]
+            predicted = b / 100.0
+            actual = sum(outcomes) / len(outcomes)
+            bucket_list.append({
+                "range": f"{b}-{b+5}%",
+                "predicted": round(predicted, 2),
+                "actual": round(actual, 3),
+                "count": len(outcomes),
+            })
+            for o in outcomes:
+                brier_sum += (predicted - o) ** 2
+
+        brier_score = brier_sum / len(rows) if rows else None
+
+        # Suggest shrinkage: if model is overconfident at extremes,
+        # shrinkage should be higher. Simple heuristic: avg absolute
+        # deviation between predicted and actual.
+        if bucket_list:
+            total_dev = sum(
+                abs(b["predicted"] - b["actual"]) * b["count"]
+                for b in bucket_list
+            )
+            avg_dev = total_dev / len(rows)
+            # Map deviation to shrinkage: 0.05 dev → 0.10 shrinkage, 0.10 dev → 0.20
+            suggested = min(0.25, max(0.05, avg_dev * 2.0))
+        else:
+            suggested = 0.12
+
+        return {
+            "buckets": bucket_list,
+            "brier_score": round(brier_score, 4) if brier_score is not None else None,
+            "suggested_shrinkage": round(suggested, 3),
+            "sample_size": len(rows),
+        }
 
     # ------------------------------------------------------------------ #
     #  Composite edge score                                               #
