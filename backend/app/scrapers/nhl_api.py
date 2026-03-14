@@ -243,9 +243,15 @@ class NHLScraper(BaseScraper):
         Fetch aggregate team stats (PP%, PK%, shots, faceoff%) from the
         NHL stats REST API for all teams in the current season.
 
+        Uses httpx (not aiohttp) — consistent with the rest of the codebase.
+        This endpoint is on a different host (api.nhle.com) than the main
+        NHL API (api-web.nhle.com), so we create a standalone client.
+
         Returns:
             Dict keyed by team abbreviation with stat values.
         """
+        import httpx as _httpx
+
         url = (
             f"https://api.nhle.com/stats/rest/en/team/summary"
             f"?cayenneExp=seasonId={self.default_season}"
@@ -253,13 +259,19 @@ class NHLScraper(BaseScraper):
             f"&sort=points&limit=-1"
         )
         try:
-            import aiohttp
-            async with aiohttp.ClientSession() as client:
-                async with client.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                    if resp.status != 200:
-                        logger.warning("NHL stats API returned %d for summary stats", resp.status)
-                        return {}
-                    data = await resp.json()
+            async with _httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+                resp = await client.get(url)
+                if resp.status_code != 200:
+                    logger.warning("NHL stats API returned %d for summary stats", resp.status_code)
+                    return {}
+                data = resp.json()
+
+            def _to_pct(v):
+                """Normalize decimal (0.214) or percentage (21.4) to percentage."""
+                if v is None:
+                    return None
+                v = float(v)
+                return round(v * 100, 2) if v <= 1.0 else round(v, 2)
 
             results = {}
             for team in data.get("data", []):
@@ -276,19 +288,12 @@ class NHLScraper(BaseScraper):
                 pk = team.get("penaltyKillPct") if team.get("penaltyKillPct") is not None else team.get("penaltyKillPctg")
                 fo = team.get("faceoffWinPct") if team.get("faceoffWinPct") is not None else team.get("faceoffWinPctg")
 
-                # Normalize: if value <= 1.0, it's a decimal — convert to percentage
-                def to_pct(v):
-                    if v is None:
-                        return None
-                    v = float(v)
-                    return round(v * 100, 2) if v <= 1.0 else round(v, 2)
-
                 results[abbrev] = {
-                    "power_play_pct": to_pct(pp),
-                    "penalty_kill_pct": to_pct(pk),
+                    "power_play_pct": _to_pct(pp),
+                    "penalty_kill_pct": _to_pct(pk),
                     "shots_for_per_game": _safe_float(team.get("shotsForPerGame")),
                     "shots_against_per_game": _safe_float(team.get("shotsAgainstPerGame")),
-                    "faceoff_win_pct": to_pct(fo),
+                    "faceoff_win_pct": _to_pct(fo),
                 }
             logger.info("Fetched summary stats for %d teams from NHL stats API", len(results))
             return results

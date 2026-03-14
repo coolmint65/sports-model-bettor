@@ -455,6 +455,7 @@ async def _get_h2h_games(
                 and_(Game.home_team_id == hi, Game.away_team_id == lo),
             ),
             func.lower(Game.status).in_(GAME_FINAL_STATUSES),
+            Game.game_type.in_(("2", "regular")),
             Game.home_score.isnot(None),
             Game.away_score.isnot(None),
         )
@@ -745,6 +746,22 @@ async def get_game_details(
     away_form = await _get_team_form(game.away_team, session)
     h2h = await _get_head_to_head(game.home_team_id, game.away_team_id, session)
     h2h_game_records = await _get_h2h_games(game.home_team_id, game.away_team_id, session)
+    if h2h is None:
+        # Count total completed regular-season games in DB to help diagnose
+        from sqlalchemy import func as sqla_func
+        total_games_result = await session.execute(
+            select(sqla_func.count(Game.id)).where(
+                sqla_func.lower(Game.status).in_(GAME_FINAL_STATUSES),
+                Game.game_type.in_(("2", "regular")),
+            )
+        )
+        total_games = total_games_result.scalar() or 0
+        logger.warning(
+            "No H2H data for teams %d vs %d. "
+            "Total completed regular-season games in DB: %d. "
+            "Run /api/data/sync to populate historical data.",
+            game.home_team_id, game.away_team_id, total_games,
+        )
     home_period = await _compute_period_scoring(game.home_team_id, session)
     away_period = await _compute_period_scoring(game.away_team_id, session)
     home_goalies = await _get_team_goalies(game.home_team_id, session)

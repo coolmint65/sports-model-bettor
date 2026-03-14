@@ -2111,29 +2111,29 @@ class BettingModel:
                     sb_prob = dog_cover_prob
                     sb_price = dog_price
 
-                spread_odds_display = None
-                spread_implied = None
-                if sb_price is not None and spread_line is not None:
+                # Only generate a spread prediction if we have real
+                # sportsbook prices.  Without them we can't compute a
+                # reliable implied probability or verify the juice level,
+                # and defaulting to -110 (the old behaviour) lets
+                # heavy-juice spreads (-230 etc.) slip past the filter.
+                if sb_price is not None:
                     spread_odds_display = float(sb_price)
                     spread_implied = american_odds_to_implied_prob(spread_odds_display)
-                elif spread_line is not None:
-                    spread_odds_display = -110.0
-                    spread_implied = 0.524
 
-                predictions.append({
-                    "bet_type": "spread",
-                    "prediction": f"{sb_abbr}_{sb_sign}",
-                    "confidence": self.calibrate_probability(sb_prob),
-                    "probability": round(sb_prob, 4),
-                    "implied_probability": round(spread_implied, 4) if spread_implied else None,
-                    "odds": spread_odds_display,
-                    "reasoning": self._build_clean_reasons(
-                        features, sb_abbr,
-                        away_abbr if sb_abbr == home_abbr else home_abbr,
-                        "spread", spread,
-                    ),
-                    "details": spread,
-                })
+                    predictions.append({
+                        "bet_type": "spread",
+                        "prediction": f"{sb_abbr}_{sb_sign}",
+                        "confidence": self.calibrate_probability(sb_prob),
+                        "probability": round(sb_prob, 4),
+                        "implied_probability": round(spread_implied, 4),
+                        "odds": spread_odds_display,
+                        "reasoning": self._build_clean_reasons(
+                            features, sb_abbr,
+                            away_abbr if sb_abbr == home_abbr else home_abbr,
+                            "spread", spread,
+                        ),
+                        "details": spread,
+                    })
         except Exception as e:
             logger.error("Spread prediction failed: %s", e)
 
