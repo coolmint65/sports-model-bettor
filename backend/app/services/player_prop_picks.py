@@ -1,0 +1,430 @@
+"""
+Player prop prediction engine.
+
+Analyzes player performance data against sportsbook prop lines
+to identify value bets. Compares recent per-game rates (goals,
+shots, points, assists, saves) to the prop line and implied
+probability to calculate edge.
+
+Supported markets:
+  - player_goal_scorer_anytime (ATG): Poisson P(goals >= 1)
+  - player_shots_on_goal (SOG): compare avg shots vs line
+  - player_points: compare avg points vs line
+  - player_assists: compare avg assists vs line
+  - player_total_saves: compare avg saves vs line
+"""
+
+import logging
+import math
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
+
+from sqlalchemy import desc, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.game import Game, GameGoalieStats, GamePlayerStats
+from app.models.player import Player
+from app.models.player_prop import PlayerPropOdds
+
+logger = logging.getLogger(__name__)
+
+# Number of recent games to use for per-game rate calculation
+RECENT_GAMES_WINDOW = 15
+# Minimum games required to generate a prediction
+MIN_GAMES = 5
+# Minimum edge to consider a pick worth recommending
+MIN_PICK_EDGE = 0.03
+
+
+def _american_to_implied(american: Optional[float]) -> Optional[float]:
+    """Convert American odds to implied probability."""
+    if american is None:
+        return None
+    if american >= 100:
+        return 100 / (american + 100)
+    else:
+        return abs(american) / (abs(american) + 100)
+
+
+def _poisson_at_least_one(avg_rate: float) -> float:
+    """P(X >= 1) for Poisson distribution = 1 - P(X = 0) = 1 - e^(-lambda)."""
+    if avg_rate <= 0:
+        return 0.0
+    return 1.0 - math.exp(-avg_rate)
+
+
+def _poisson_over(avg_rate: float, line: float) -> float:
+    """P(X > line) for Poisson distribution.
+
+    For a line of 2.5, this is P(X >= 3).
+    For a line of 0.5, this is P(X >= 1).
+    """
+    if avg_rate <= 0:
+        return 0.0
+    threshold = int(line) + 1 if line == int(line) + 0.5 else int(line + 1)
+    # P(X >= threshold) = 1 - sum(P(X=k) for k in 0..threshold-1)
+    cumulative = 0.0
+    for k in range(threshold):
+        cumulative += (avg_rate ** k) * math.exp(-avg_rate) / math.factorial(k)
+    return 1.0 - cumulative
+
+
+@dataclass
+class PropPick:
+    """A single player prop recommendation."""
+
+    player_name: str
+    player_id: Optional[int]
+    market: str
+    pick_side: str  # "over", "under", or "yes"
+    line: Optional[float]
+    odds: Optional[float]  # American odds for the picked side
+    model_prob: float  # Our estimated probability
+    implied_prob: float  # Sportsbook implied probability
+    edge: float  # model_prob - implied_prob
+    confidence: float  # How confident we are (0-1)
+    avg_rate: float  # Player's recent per-game rate
+    games_sampled: int  # How many games used
+    reasoning: str
+
+
+async def _get_skater_game_stats(
+    session: AsyncSession,
+    player_id: int,
+    team_id: int,
+) -> List[GamePlayerStats]:
+    """Get recent game stats for a skater, ordered by most recent."""
+    result = await session.execute(
+        select(GamePlayerStats)
+        .join(Game, Game.id == GamePlayerStats.game_id)
+        .where(
+            GamePlayerStats.player_id == player_id,
+            Game.home_team_id.in_([team_id])
+            | Game.away_team_id.in_([team_id]),
+        )
+        .order_by(desc(Game.date))
+        .limit(RECENT_GAMES_WINDOW)
+    )
+    return list(result.scalars().all())
+
+
+async def _get_goalie_game_stats(
+    session: AsyncSession,
+    player_id: int,
+) -> List[GameGoalieStats]:
+    """Get recent game stats for a goalie, ordered by most recent."""
+    result = await session.execute(
+        select(GameGoalieStats)
+        .join(Game, Game.id == GameGoalieStats.game_id)
+        .where(GameGoalieStats.player_id == player_id)
+        .order_by(desc(Game.date))
+        .limit(RECENT_GAMES_WINDOW)
+    )
+    return list(result.scalars().all())
+
+
+def _analyze_atg(
+    player_name: str,
+    player_id: Optional[int],
+    prop: PlayerPropOdds,
+    game_stats: List[GamePlayerStats],
+) -> Optional[PropPick]:
+    """Analyze anytime goal scorer prop.
+
+    Uses Poisson model: P(goals >= 1) = 1 - e^(-avg_goals_per_game).
+    """
+    if not game_stats or len(game_stats) < MIN_GAMES:
+        return None
+
+    total_goals = sum(g.goals for g in game_stats)
+    games = len(game_stats)
+    avg_goals = total_goals / games
+
+    model_prob = _poisson_at_least_one(avg_goals)
+    implied = _american_to_implied(prop.over_price)
+    if implied is None or implied <= 0:
+        return None
+
+    edge = model_prob - implied
+
+    # Weight recent games more heavily for confidence
+    recent_5 = game_stats[:5]
+    recent_goals = sum(g.goals for g in recent_5)
+    recent_rate = recent_goals / len(recent_5) if recent_5 else 0
+    form_factor = 1.0 + 0.2 * (recent_rate - avg_goals) / max(avg_goals, 0.1)
+    confidence = min(max(model_prob * form_factor, 0.0), 1.0)
+
+    # Only recommend if positive edge
+    if edge < MIN_PICK_EDGE:
+        return None
+
+    goals_in_last = sum(1 for g in game_stats if g.goals >= 1)
+    hit_rate = goals_in_last / games
+
+    return PropPick(
+        player_name=player_name,
+        player_id=player_id,
+        market="player_goal_scorer_anytime",
+        pick_side="yes",
+        line=None,
+        odds=prop.over_price,
+        model_prob=model_prob,
+        implied_prob=implied,
+        edge=edge,
+        confidence=confidence,
+        avg_rate=avg_goals,
+        games_sampled=games,
+        reasoning=(
+            f"{avg_goals:.2f} goals/game over {games} games "
+            f"({hit_rate:.0%} scored in). "
+            f"Model: {model_prob:.1%} vs line {implied:.1%}"
+        ),
+    )
+
+
+def _analyze_over_under(
+    player_name: str,
+    player_id: Optional[int],
+    prop: PlayerPropOdds,
+    game_stats: list,
+    market: str,
+    stat_extractor,
+) -> Optional[PropPick]:
+    """Analyze an over/under prop (SOG, Points, Assists, Saves).
+
+    Uses Poisson model to estimate P(over) and P(under), then picks
+    the side with more edge vs the sportsbook line.
+    """
+    if not game_stats or len(game_stats) < MIN_GAMES:
+        return None
+    if prop.line is None:
+        return None
+
+    values = [stat_extractor(g) for g in game_stats]
+    games = len(values)
+    avg_rate = sum(values) / games
+
+    # Poisson probability of going over the line
+    p_over = _poisson_over(avg_rate, prop.line)
+    p_under = 1.0 - p_over
+
+    implied_over = _american_to_implied(prop.over_price)
+    implied_under = _american_to_implied(prop.under_price)
+
+    # Compare both sides and pick the one with more edge
+    best_side = None
+    best_edge = -1.0
+    best_model_prob = 0.0
+    best_implied = 0.0
+    best_odds = None
+
+    if implied_over and implied_over > 0:
+        over_edge = p_over - implied_over
+        if over_edge > best_edge:
+            best_side = "over"
+            best_edge = over_edge
+            best_model_prob = p_over
+            best_implied = implied_over
+            best_odds = prop.over_price
+
+    if implied_under and implied_under > 0:
+        under_edge = p_under - implied_under
+        if under_edge > best_edge:
+            best_side = "under"
+            best_edge = under_edge
+            best_model_prob = p_under
+            best_implied = implied_under
+            best_odds = prop.under_price
+
+    if best_side is None or best_edge < MIN_PICK_EDGE:
+        return None
+
+    # Recent form factor
+    recent_5 = values[:5]
+    recent_avg = sum(recent_5) / len(recent_5) if recent_5 else 0
+    form_factor = 1.0 + 0.15 * (recent_avg - avg_rate) / max(avg_rate, 0.1)
+    confidence = min(max(best_model_prob * form_factor, 0.0), 1.0)
+
+    # Count how many times they went over the line
+    over_count = sum(1 for v in values if v > prop.line)
+    hit_pct = over_count / games
+
+    stat_label = {
+        "player_shots_on_goal": "SOG",
+        "player_points": "points",
+        "player_assists": "assists",
+        "player_total_saves": "saves",
+    }.get(market, "stat")
+
+    return PropPick(
+        player_name=player_name,
+        player_id=player_id,
+        market=market,
+        pick_side=best_side,
+        line=prop.line,
+        odds=best_odds,
+        model_prob=best_model_prob,
+        implied_prob=best_implied,
+        edge=best_edge,
+        confidence=confidence,
+        avg_rate=avg_rate,
+        games_sampled=games,
+        reasoning=(
+            f"{avg_rate:.1f} {stat_label}/game over {games} games "
+            f"(over {prop.line} in {hit_pct:.0%}). "
+            f"Model: {best_model_prob:.1%} vs line {best_implied:.1%}"
+        ),
+    )
+
+
+async def generate_prop_picks(
+    session: AsyncSession,
+    game_id: int,
+) -> List[PropPick]:
+    """Generate player prop picks for a specific game.
+
+    Reads the PlayerPropOdds for the game, matches players to their
+    historical game stats, and runs the analysis.
+
+    Returns a list of PropPick objects sorted by edge (best first).
+    """
+    # Get all prop odds for this game
+    props_result = await session.execute(
+        select(PlayerPropOdds).where(PlayerPropOdds.game_id == game_id)
+    )
+    all_props = props_result.scalars().all()
+    if not all_props:
+        return []
+
+    # Get the game for team info
+    game_result = await session.execute(
+        select(Game).where(Game.id == game_id)
+    )
+    game = game_result.scalar_one_or_none()
+    if not game:
+        return []
+
+    # Build player name → Player lookup for both teams
+    team_ids = [
+        tid for tid in [game.home_team_id, game.away_team_id] if tid
+    ]
+    if not team_ids:
+        return []
+
+    players_result = await session.execute(
+        select(Player).where(
+            Player.team_id.in_(team_ids),
+            Player.active == True,
+        )
+    )
+    all_players = players_result.scalars().all()
+
+    # Build lookup by lowercase name and last name
+    player_by_name: Dict[str, Player] = {}
+    for p in all_players:
+        player_by_name[p.name.lower()] = p
+        parts = p.name.split()
+        if len(parts) >= 2:
+            player_by_name[parts[-1].lower()] = p
+
+    # Cache game stats per player to avoid duplicate queries
+    skater_stats_cache: Dict[int, List[GamePlayerStats]] = {}
+    goalie_stats_cache: Dict[int, List[GameGoalieStats]] = {}
+
+    picks: List[PropPick] = []
+
+    for prop in all_props:
+        # Match prop player to our Player record
+        player = player_by_name.get(prop.player_name.lower())
+        if player is None:
+            # Try last name
+            parts = prop.player_name.split()
+            if len(parts) >= 2:
+                player = player_by_name.get(parts[-1].lower())
+        if player is None:
+            continue
+
+        market = prop.market
+
+        if market == "player_goal_scorer_anytime":
+            # ATG — skater stat
+            if player.id not in skater_stats_cache:
+                skater_stats_cache[player.id] = await _get_skater_game_stats(
+                    session, player.id, player.team_id or 0
+                )
+            stats = skater_stats_cache[player.id]
+            pick = _analyze_atg(prop.player_name, player.id, prop, stats)
+            if pick:
+                picks.append(pick)
+
+        elif market == "player_shots_on_goal":
+            if player.id not in skater_stats_cache:
+                skater_stats_cache[player.id] = await _get_skater_game_stats(
+                    session, player.id, player.team_id or 0
+                )
+            stats = skater_stats_cache[player.id]
+            pick = _analyze_over_under(
+                prop.player_name, player.id, prop, stats, market,
+                lambda g: g.shots,
+            )
+            if pick:
+                picks.append(pick)
+
+        elif market == "player_points":
+            if player.id not in skater_stats_cache:
+                skater_stats_cache[player.id] = await _get_skater_game_stats(
+                    session, player.id, player.team_id or 0
+                )
+            stats = skater_stats_cache[player.id]
+            pick = _analyze_over_under(
+                prop.player_name, player.id, prop, stats, market,
+                lambda g: g.points,
+            )
+            if pick:
+                picks.append(pick)
+
+        elif market == "player_assists":
+            if player.id not in skater_stats_cache:
+                skater_stats_cache[player.id] = await _get_skater_game_stats(
+                    session, player.id, player.team_id or 0
+                )
+            stats = skater_stats_cache[player.id]
+            pick = _analyze_over_under(
+                prop.player_name, player.id, prop, stats, market,
+                lambda g: g.assists,
+            )
+            if pick:
+                picks.append(pick)
+
+        elif market == "player_total_saves":
+            if player.id not in goalie_stats_cache:
+                goalie_stats_cache[player.id] = await _get_goalie_game_stats(
+                    session, player.id,
+                )
+            stats = goalie_stats_cache[player.id]
+            pick = _analyze_over_under(
+                prop.player_name, player.id, prop, stats, market,
+                lambda g: g.saves,
+            )
+            if pick:
+                picks.append(pick)
+
+    # Sort by edge descending
+    picks.sort(key=lambda p: p.edge, reverse=True)
+    return picks
+
+
+async def generate_all_prop_picks(
+    session: AsyncSession,
+    game_ids: List[int],
+) -> Dict[int, List[PropPick]]:
+    """Generate player prop picks for multiple games.
+
+    Returns {game_id: [PropPick, ...]} with picks sorted by edge.
+    """
+    result: Dict[int, List[PropPick]] = {}
+    for gid in game_ids:
+        picks = await generate_prop_picks(session, gid)
+        if picks:
+            result[gid] = picks
+    return result

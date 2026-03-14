@@ -1,8 +1,9 @@
 """
-API endpoints for player prop odds.
+API endpoints for player prop odds and picks.
 
 Provides endpoints to fetch player props grouped by game for today's
-NHL schedule, and per-game prop details.
+NHL schedule, per-game prop details, and AI-generated player prop
+predictions (ATG, SOG, Points, Assists, Saves).
 """
 
 from datetime import date
@@ -354,3 +355,119 @@ async def sync_props_now() -> Dict[str, Any]:
         diag["props_synced"] = 0
 
     return diag
+
+
+@router.get("/picks/today")
+async def get_todays_prop_picks(
+    session: AsyncSession = Depends(get_session),
+) -> Dict[str, Any]:
+    """Get AI-generated player prop picks for today's games.
+
+    Analyzes player performance data against sportsbook prop lines
+    to identify value bets. Returns picks sorted by edge within
+    each game.
+    """
+    from app.constants import GAME_FINAL_STATUSES
+    from app.services.player_prop_picks import generate_all_prop_picks
+
+    today = date.today()
+
+    games_result = await session.execute(
+        select(Game)
+        .options(selectinload(Game.home_team), selectinload(Game.away_team))
+        .where(
+            Game.date == today,
+            ~func.lower(Game.status).in_(GAME_FINAL_STATUSES),
+        )
+        .order_by(Game.start_time)
+    )
+    games = games_result.scalars().all()
+
+    if not games:
+        return {"games": [], "total_picks": 0}
+
+    game_ids = [g.id for g in games]
+    picks_by_game = await generate_all_prop_picks(session, game_ids)
+
+    game_list = []
+    total_picks = 0
+    for game in games:
+        game_picks = picks_by_game.get(game.id, [])
+        total_picks += len(game_picks)
+        game_list.append({
+            "game_id": game.id,
+            "home_team": game.home_team.abbreviation if game.home_team else "",
+            "away_team": game.away_team.abbreviation if game.away_team else "",
+            "home_team_name": game.home_team.name if game.home_team else "",
+            "away_team_name": game.away_team.name if game.away_team else "",
+            "start_time": game.start_time.isoformat() if game.start_time else None,
+            "picks": [
+                {
+                    "player_name": p.player_name,
+                    "player_id": p.player_id,
+                    "market": p.market,
+                    "pick_side": p.pick_side,
+                    "line": p.line,
+                    "odds": p.odds,
+                    "model_prob": round(p.model_prob, 4),
+                    "implied_prob": round(p.implied_prob, 4),
+                    "edge": round(p.edge, 4),
+                    "confidence": round(p.confidence, 4),
+                    "avg_rate": round(p.avg_rate, 2),
+                    "games_sampled": p.games_sampled,
+                    "reasoning": p.reasoning,
+                }
+                for p in game_picks
+            ],
+            "pick_count": len(game_picks),
+        })
+
+    return {
+        "games": game_list,
+        "total_picks": total_picks,
+    }
+
+
+@router.get("/picks/game/{game_id}")
+async def get_game_prop_picks(
+    game_id: int,
+    session: AsyncSession = Depends(get_session),
+) -> Dict[str, Any]:
+    """Get AI-generated player prop picks for a specific game."""
+    from app.services.player_prop_picks import generate_prop_picks
+
+    game_result = await session.execute(
+        select(Game)
+        .options(selectinload(Game.home_team), selectinload(Game.away_team))
+        .where(Game.id == game_id)
+    )
+    game = game_result.scalar_one_or_none()
+    if not game:
+        return {"error": "Game not found", "picks": []}
+
+    picks = await generate_prop_picks(session, game_id)
+
+    return {
+        "game_id": game_id,
+        "home_team": game.home_team.abbreviation if game.home_team else "",
+        "away_team": game.away_team.abbreviation if game.away_team else "",
+        "picks": [
+            {
+                "player_name": p.player_name,
+                "player_id": p.player_id,
+                "market": p.market,
+                "pick_side": p.pick_side,
+                "line": p.line,
+                "odds": p.odds,
+                "model_prob": round(p.model_prob, 4),
+                "implied_prob": round(p.implied_prob, 4),
+                "edge": round(p.edge, 4),
+                "confidence": round(p.confidence, 4),
+                "avg_rate": round(p.avg_rate, 2),
+                "games_sampled": p.games_sampled,
+                "reasoning": p.reasoning,
+            }
+            for p in picks
+        ],
+        "total_picks": len(picks),
+    }

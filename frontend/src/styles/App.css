@@ -3430,6 +3430,127 @@ a:hover {
   color: var(--accent-red);
 }
 
+/* Props tabs */
+.props-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 1rem;
+  background: var(--surface-secondary, #1a1f36);
+  border-radius: 8px;
+  padding: 4px;
+}
+
+.props-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 16px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.props-tab:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.props-tab-active {
+  background: var(--surface-accent, #252b48);
+  color: var(--accent-green, #00ff88);
+}
+
+/* Prop picks */
+.props-picks-game {
+  margin-bottom: 1.25rem;
+}
+
+.props-picks-game-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: var(--surface-secondary, #1a1f36);
+  border-radius: 8px 8px 0 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.props-picks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 0 0 8px 8px;
+  overflow: hidden;
+}
+
+.prop-pick-card {
+  padding: 12px 16px;
+  background: var(--surface-primary, #141829);
+  border-left: 3px solid var(--accent-green, #00ff88);
+}
+
+.prop-pick-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.prop-pick-player {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.prop-pick-name {
+  color: var(--text-primary);
+}
+
+.prop-pick-edge {
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+
+.prop-pick-details {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 4px;
+  font-size: 0.82rem;
+}
+
+.prop-pick-label {
+  font-weight: 600;
+}
+
+.prop-pick-odds {
+  color: var(--text-secondary);
+  font-family: var(--font-mono, monospace);
+}
+
+.prop-pick-conf {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.prop-pick-reasoning {
+  color: var(--text-tertiary, #7a82a6);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
   .props-market-filters {
