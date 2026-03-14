@@ -222,8 +222,9 @@ async def _sync_odds_and_broadcast(skip_alternates: bool = True):
 async def _sync_player_props():
     """Fetch and persist player prop odds for today's games.
 
-    Runs on the same 30-minute cadence as alt-line refresh.
-    Uses per-event Odds API calls (5 credits per game).
+    Runs every 30 minutes whenever there are games scheduled today,
+    regardless of how far away game time is. Uses per-event Odds API
+    calls (5 credits per game).
     """
     try:
         async with get_write_session_context() as session:
@@ -383,6 +384,7 @@ async def _scheduler_loop():
     PRED_REGEN_INTERVAL = 300  # 5 minutes between prediction regenerations
     FULL_SYNC_INTERVAL = 1800  # 30 minutes for full data refresh
     ALT_REFRESH_INTERVAL = 1800  # 30 min — refresh alternate lines
+    PROPS_SYNC_INTERVAL = 1800   # 30 min — sync player props
 
     _scheduler_running = True
     logger.info("Live odds scheduler started (credit-optimised)")
@@ -400,6 +402,7 @@ async def _scheduler_loop():
     last_full_sync = loop.time()
     last_pred_regen = loop.time()
     last_alt_refresh = 0.0  # force alt refresh on first sync
+    last_props_sync = 0.0   # force props sync on first cycle with games
     _iteration = 0
 
     # Brief pause to let the full sync populate today's schedule
@@ -469,6 +472,7 @@ async def _scheduler_loop():
 
             # Decide whether to sync odds at all
             should_sync = live_count > 0 or games_within_window
+            has_games_today = live_count > 0 or upcoming_count > 0
 
             # On idle/off-day, skip odds sync entirely to save credits.
             # The full data sync (every 30min) still runs and will pick
@@ -488,11 +492,16 @@ async def _scheduler_loop():
                     last_alt_refresh = now
                     logger.info("Alt-line cache refreshed")
 
-                    # Sync player props on the same cadence as alt lines
-                    # (every 30 min).  Props use per-event API calls so
-                    # we bundle them with the alt refresh to stay within
-                    # the credit budget.
+            # Sync player props whenever there are games today (not just
+            # within the 2h pregame window). Props are valuable for
+            # pre-game analysis and should be available well before
+            # game time.  Still throttled to every 30 min to stay
+            # within the credit budget.
+            if has_games_today:
+                now = loop.time()
+                if now - last_props_sync >= PROPS_SYNC_INTERVAL:
                     await _sync_player_props()
+                    last_props_sync = now
 
             # Heartbeat log every 10 iterations (or every iteration
             # when games are live) for observability.
