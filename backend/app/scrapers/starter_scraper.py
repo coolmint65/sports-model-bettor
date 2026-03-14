@@ -227,6 +227,122 @@ async def _fetch_dailyfaceoff_starters(
         return []
 
 
+# ------------------------------------------------------------------ #
+#  RotoWire scraper (secondary — lightweight HTML, no JS required)     #
+# ------------------------------------------------------------------ #
+
+# RotoWire uses short team names; map to NHL abbreviations
+_ROTOWIRE_TEAM_MAP = {
+    "ANA": "ANA", "ARI": "ARI", "BOS": "BOS", "BUF": "BUF",
+    "CGY": "CGY", "CAR": "CAR", "CHI": "CHI", "COL": "COL",
+    "CBJ": "CBJ", "DAL": "DAL", "DET": "DET", "EDM": "EDM",
+    "FLA": "FLA", "LAK": "LAK", "LA": "LAK", "MIN": "MIN",
+    "MTL": "MTL", "MON": "MTL", "NSH": "NSH", "NJD": "NJD",
+    "NJ": "NJD", "NYI": "NYI", "NYR": "NYR", "OTT": "OTT",
+    "PHI": "PHI", "PIT": "PIT", "SJS": "SJS", "SJ": "SJS",
+    "SEA": "SEA", "STL": "STL", "TBL": "TBL", "TB": "TBL",
+    "TOR": "TOR", "UTA": "UTA", "VAN": "VAN", "VGK": "VGK",
+    "VEG": "VGK", "WSH": "WSH", "WAS": "WSH", "WPG": "WPG",
+    "WIN": "WPG",
+}
+
+
+def _parse_rotowire_html(html: str) -> List[Dict[str, str]]:
+    """Parse RotoWire goalie matchups page.
+
+    RotoWire's goalie page has a simple HTML structure with matchup rows
+    containing team abbreviations, goalie names, and status indicators.
+    """
+    results = []
+
+    # RotoWire has matchup containers with teams and goalie names
+    # Pattern: look for team abbreviations and goalie names near each other
+    # Try to find matchup blocks first
+    matchup_pattern = re.compile(
+        r'class="[^"]*(?:lineup__matchup|goalie-matchup|matchup)[^"]*"',
+        re.IGNORECASE,
+    )
+
+    # Extract goalie names from player links
+    goalie_pattern = re.compile(
+        r'<a[^>]*href="[^"]*hockey/player[^"]*"[^>]*>([^<]+)</a>',
+        re.IGNORECASE,
+    )
+    goalies = goalie_pattern.findall(html)
+
+    # Extract team abbreviations from lineup context
+    team_pattern = re.compile(
+        r'class="[^"]*lineup__abbr[^"]*"[^>]*>([A-Z]{2,3})<',
+        re.IGNORECASE,
+    )
+    teams = team_pattern.findall(html)
+
+    # Also try a broader team pattern
+    if not teams:
+        team_pattern2 = re.compile(
+            r'<(?:span|div|a)[^>]*>\s*([A-Z]{2,3})\s*</(?:span|div|a)>',
+        )
+        # Filter to only known NHL abbreviations
+        raw_teams = team_pattern2.findall(html)
+        teams = [t for t in raw_teams if t.upper() in _ROTOWIRE_TEAM_MAP]
+
+    # Status indicators
+    status_pattern = re.compile(
+        r'(?:Confirmed|Expected|Likely|Projected|Unconfirmed)',
+        re.IGNORECASE,
+    )
+    statuses = status_pattern.findall(html)
+
+    # Pair teams and goalies: every 2 teams + 2 goalies = 1 matchup
+    for i in range(0, min(len(teams), len(goalies)) - 1, 2):
+        game = {
+            "away_team": _ROTOWIRE_TEAM_MAP.get(teams[i].upper(), teams[i].upper()),
+            "home_team": _ROTOWIRE_TEAM_MAP.get(teams[i + 1].upper(), teams[i + 1].upper()),
+            "away_goalie": goalies[i].strip(),
+            "home_goalie": goalies[i + 1].strip(),
+        }
+        si = i
+        if si < len(statuses):
+            game["away_status"] = statuses[si].lower()
+        if si + 1 < len(statuses):
+            game["home_status"] = statuses[si + 1].lower()
+        results.append(game)
+
+    return results
+
+
+async def _fetch_rotowire_starters(
+    client: httpx.AsyncClient,
+    target_date: date,
+) -> List[Dict[str, str]]:
+    """Scrape RotoWire.com for today's starting goalies.
+
+    RotoWire serves lightweight HTML (no JS rendering needed) and is
+    a reliable backup when DailyFaceoff blocks or requires JS.
+    """
+    url = "https://www.rotowire.com/hockey/goalie-matchups.php"
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    try:
+        resp = await client.get(url, headers=headers)
+        if resp.status_code != 200:
+            logger.debug("RotoWire returned %d", resp.status_code)
+            return []
+        games = _parse_rotowire_html(resp.text)
+        logger.info("RotoWire: parsed %d goalie matchups", len(games))
+        return games
+    except Exception as exc:
+        logger.debug("RotoWire scrape failed: %s", exc)
+        return []
+
+
 def _match_team_abbrev(raw_name: str, db_teams: Dict[str, int]) -> Optional[str]:
     """Try to match a scraped team name/abbrev to our DB abbreviation."""
     raw = raw_name.strip().upper()
@@ -474,7 +590,49 @@ async def sync_confirmed_starters(db: AsyncSession) -> List[Dict[str, Any]]:
                         covered_game_ids.add(game.id)
                         break
 
-        # Source 2: NHL API — fill in any games DailyFaceoff missed
+        # Source 2: RotoWire — lightweight HTML, no JS needed.
+        # Fills in any games DailyFaceoff missed (DFO often returns 0
+        # due to JS rendering requirements).
+        uncovered_rw = [g for g in games if g.id not in covered_game_ids]
+        if uncovered_rw:
+            rw_games = await _fetch_rotowire_starters(client, today)
+            for rw_game in rw_games:
+                away_abbrev = rw_game.get("away_team", "").upper()
+                home_abbrev = rw_game.get("home_team", "").upper()
+
+                # Normalize through alias map
+                if away_abbrev not in team_by_abbrev:
+                    away_abbrev = _match_team_abbrev(away_abbrev, team_by_abbrev) or ""
+                if home_abbrev not in team_by_abbrev:
+                    home_abbrev = _match_team_abbrev(home_abbrev, team_by_abbrev) or ""
+
+                if not away_abbrev or not home_abbrev:
+                    continue
+
+                away_team_id = team_by_abbrev.get(away_abbrev)
+                home_team_id = team_by_abbrev.get(home_abbrev)
+
+                for game in uncovered_rw:
+                    if game.home_team_id == home_team_id and game.away_team_id == away_team_id:
+                        for side, goalie_key, status_key, tid, abbrev in [
+                            ("away", "away_goalie", "away_status", away_team_id, away_abbrev),
+                            ("home", "home_goalie", "home_status", home_team_id, home_abbrev),
+                        ]:
+                            goalie_name = rw_game.get(goalie_key, "")
+                            status = rw_game.get(status_key, "")
+                            if goalie_name:
+                                starters.append({
+                                    "game_id": game.id,
+                                    "team_id": tid,
+                                    "team_abbrev": abbrev,
+                                    "goalie_name": goalie_name,
+                                    "goalie_external_id": "",
+                                    "confirmed": "confirm" in status,
+                                })
+                        covered_game_ids.add(game.id)
+                        break
+
+        # Source 3: NHL API — fill in any games still uncovered
         uncovered = [g for g in games if g.id not in covered_game_ids]
         if uncovered:
             for game in uncovered:

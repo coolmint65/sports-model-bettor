@@ -988,23 +988,10 @@ async def regenerate_predictions():
     today = date.today()
     steps: list[str] = []
 
-    # Step 1: Sync today's schedule (slow HTTP call — own session).
-    schedule_synced = 0
-    try:
-        async with get_write_session_context() as write_session:
-            from app.scrapers.nhl_api import NHLScraper
-
-            scraper = NHLScraper()
-            try:
-                synced_games = await scraper.sync_schedule(write_session, str(today))
-                schedule_synced = len(synced_games) if synced_games else 0
-                logger.info("Regenerate: schedule sync updated %s games", schedule_synced)
-            finally:
-                await scraper.close()
-        steps.append(f"schedule synced ({schedule_synced} games)")
-    except Exception as exc:
-        logger.warning("Regenerate: schedule sync failed: %s", exc)
-        steps.append(f"schedule sync failed: {exc}")
+    # Skip schedule sync here — it runs every 30 min via the background
+    # scheduler and every time via _run_full_sync.  Removing this shaves
+    # 5-15 seconds off regeneration, helping stay within the 120s timeout.
+    steps.append("schedule sync skipped (runs via scheduler)")
 
     # Step 2: Delete ALL predictions for today's games (not just prematch,
     # not just market types — nuke everything so the prematch lock is
@@ -1070,26 +1057,10 @@ async def regenerate_predictions():
     except Exception as exc:
         logger.warning("Regenerate: odds backfill failed: %s", exc)
 
-    # Step 6: Sync player props (Odds API per-event).
-    try:
-        # Clear props cache to force fresh fetch
-        try:
-            import app.scrapers.player_props as _pp_mod
-            _pp_mod._props_cache = {}
-            _pp_mod._props_cache_ts = 0.0
-        except ImportError:
-            pass
-
-        async with get_write_session_context() as session:
-            from app.services.odds import sync_player_props
-            props_count = await sync_player_props(session)
-            if props_count:
-                steps.append(f"synced {props_count} player props")
-            else:
-                steps.append("player props: 0 lines (check API key / credits)")
-    except Exception as exc:
-        logger.warning("Regenerate: player props sync failed: %s", exc)
-        steps.append(f"player props sync failed: {exc}")
+    # Player props sync skipped from regeneration — it runs every 30 min
+    # via the background scheduler and is the slowest step (per-event API
+    # calls).  Removing it prevents the 120s frontend timeout.
+    steps.append("player props: uses cached data (syncs via scheduler)")
 
     # Safety: if we deleted predictions but generated 0, log a warning.
     if deleted > 0 and count == 0:

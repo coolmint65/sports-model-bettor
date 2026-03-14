@@ -331,16 +331,23 @@ def _analyze_atg(
 
     model_prob = _poisson_at_least_one(adjusted_goals)
 
-    # Use vig-free implied probability for fair edge calculation.
-    # ATG props have yes/no pricing — over_price is "yes" and
-    # under_price is "no".
-    implied_raw = _american_to_implied(prop.over_price)
-    if implied_raw is None or implied_raw <= 0:
+    # Raw implied probability is what you bet against (includes vig).
+    # Edge = model_prob - raw_implied.  This is the TRUE edge — how much
+    # our model beats the actual line you'd bet.
+    implied = _american_to_implied(prop.over_price)
+    if implied is None or implied <= 0:
         return None
-    true_over, _ = _remove_vig(prop.over_price, prop.under_price)
-    implied = true_over if true_over is not None else implied_raw
 
     edge = model_prob - implied
+
+    # Use vig-free probability ONLY for juice filtering.
+    # A prop at -210 raw (67.7%) might be 64% vig-free.  We filter on
+    # vig-free so the juice check reflects the TRUE probability, not
+    # the inflated sportsbook number.
+    true_over, _ = _remove_vig(prop.over_price, prop.under_price)
+    juice_check = true_over if true_over is not None else implied
+    if juice_check > MAX_PROP_IMPLIED:
+        return None
 
     # Weight recent games more heavily for confidence
     recent_5 = game_stats[:5]
@@ -349,10 +356,8 @@ def _analyze_atg(
     form_factor = 1.0 + 0.2 * (recent_rate - avg_goals) / max(avg_goals, 0.1)
     confidence = min(max(model_prob * form_factor, 0.0), 1.0)
 
-    # Only recommend if sufficient edge, confidence, and reasonable juice
+    # Only recommend if sufficient edge and confidence
     if edge < MIN_PICK_EDGE or confidence < MIN_PICK_CONFIDENCE:
-        return None
-    if implied > MAX_PROP_IMPLIED:
         return None
 
     goals_in_last = sum(1 for g in game_stats if g.goals >= 1)
@@ -433,12 +438,10 @@ def _analyze_over_under(
         p_over = _poisson_over(adjusted_rate, prop.line)
     p_under = 1.0 - p_over
 
-    # Remove vig to get true implied probabilities for fair edge comparison.
-    # Raw implied probs include ~4-8% overround; without removing vig,
-    # every prop appears to have 2-4pp more edge than it really does.
-    true_over, true_under = _remove_vig(prop.over_price, prop.under_price)
-    implied_over = true_over or _american_to_implied(prop.over_price)
-    implied_under = true_under or _american_to_implied(prop.under_price)
+    # Use RAW implied probabilities for edge calculation — this is the
+    # actual line you bet against, including vig.  Edge = model - raw.
+    implied_over = _american_to_implied(prop.over_price)
+    implied_under = _american_to_implied(prop.under_price)
 
     # Compare both sides and pick the one with more edge
     best_side = None
@@ -468,9 +471,16 @@ def _analyze_over_under(
     if best_side is None or best_edge < MIN_PICK_EDGE:
         return None
 
-    # Filter heavily juiced props — even with edge, -200+ props
-    # offer poor risk/reward and the model edge is less reliable.
-    if best_implied is not None and best_implied > MAX_PROP_IMPLIED:
+    # Use vig-free probability for juice filtering only.
+    # This checks the TRUE probability (not inflated by vig)
+    # against our max threshold.
+    true_over, true_under = _remove_vig(prop.over_price, prop.under_price)
+    juice_implied = (
+        true_over if best_side == "over" and true_over is not None
+        else true_under if best_side == "under" and true_under is not None
+        else best_implied
+    )
+    if juice_implied > MAX_PROP_IMPLIED:
         return None
 
     # Recent form factor

@@ -7,6 +7,7 @@ GET endpoints are read-only.
 """
 
 import logging
+import time as _time
 from datetime import date, datetime, timezone
 from typing import List, Optional
 
@@ -727,10 +728,26 @@ async def _games_for_date(
     return schedule_games
 
 
+_last_schedule_sync: float = 0.0
+_SCHEDULE_SYNC_THROTTLE = 30  # seconds — prevent rapid-fire syncs
+
+
 async def _try_sync_schedule(
     session: AsyncSession, target_date: Optional[date] = None
 ) -> int:
-    """Sync schedule from NHL API. Raises HTTPException on failure."""
+    """Sync schedule from NHL API. Throttled to once per 30s.
+
+    Multiple endpoints (``/live``, ``/today``) call this inline on every
+    request.  Without throttling, 2 WebSocket clients cause rapid-fire
+    schedule syncs (8+ in 5 seconds) which hammers the NHL API and
+    slows down response times.
+    """
+    global _last_schedule_sync
+    now = _time.monotonic()
+    if now - _last_schedule_sync < _SCHEDULE_SYNC_THROTTLE:
+        return 0
+    _last_schedule_sync = now
+
     try:
         from app.scrapers.nhl_api import NHLScraper
 

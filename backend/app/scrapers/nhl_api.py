@@ -259,6 +259,7 @@ class NHLScraper(BaseScraper):
             f"&sort=points&limit=-1"
         )
         try:
+            logger.info("Fetching team summary stats from %s", url)
             async with _httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
                 resp = await client.get(url)
                 if resp.status_code != 200:
@@ -556,6 +557,9 @@ class NHLScraper(BaseScraper):
 
             # Merge summary stats from the stats REST API
             team_summary = summary_stats.get(abbrev, {})
+            if not team_summary:
+                logger.debug("No summary stats found for %s (available: %s)",
+                             abbrev, list(summary_stats.keys())[:5])
 
             stats_data = dict(
                 games_played=gp,
@@ -586,8 +590,16 @@ class NHLScraper(BaseScraper):
                 )
                 db.add(stats)
             else:
+                # Only overwrite a field when the new value is not None.
+                # This prevents the NHL sync from clobbering values that
+                # the ESPN scraper (or a previous successful NHL stats
+                # API call) already populated.  Fields like PP%, PK%,
+                # and faceoff% are often missing from the standings API;
+                # blanking them every 30-min cycle is the root cause of
+                # those stats showing as "-" in the UI.
                 for key, val in stats_data.items():
-                    setattr(stats, key, val)
+                    if val is not None:
+                        setattr(stats, key, val)
 
         await db.flush()
 
@@ -1520,16 +1532,19 @@ class NHLScraper(BaseScraper):
         logger.info("Syncing historical season: %s", season)
 
         # Check if we already have substantial data for this season.
-        # A full NHL season has ~1312 regular-season games.  If we
-        # already have 200+, the season is sufficiently populated and
-        # we can skip the expensive per-team API calls entirely.
+        # A full NHL season has ~1312 regular-season games.  We fetch
+        # from 16 teams (~75% coverage) so expect ~1000 unique games.
+        # Only skip if we have 1000+ regular-season games — the old
+        # threshold of 200 was far too low and caused H2H queries to
+        # return empty for most team pairs.
         existing_count_result = await db.execute(
             select(func.count(Game.id)).where(
                 Game.season == season,
+                Game.game_type.in_(("2", "regular")),
             )
         )
         existing_count = existing_count_result.scalar() or 0
-        if existing_count >= 200:
+        if existing_count >= 1000:
             logger.info(
                 "Historical season %s already has %d games — skipping sync",
                 season, existing_count,

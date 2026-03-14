@@ -3514,6 +3514,14 @@ a:hover {
   font-size: 0.9rem;
 }
 
+.prop-pick-rank {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 700;
+  min-width: 18px;
+  opacity: 0.6;
+}
+
 .prop-pick-name {
   color: var(--text-primary);
 }

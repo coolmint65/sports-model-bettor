@@ -45,7 +45,7 @@ const MARKET_ORDER = [
   'player_total_saves',
 ];
 
-function PropPickCard({ pick }) {
+function PropPickCard({ pick, rank }) {
   const config = MARKET_CONFIG[pick.market] || {};
   const Icon = config.icon || Target;
   const edgePct = (pick.edge * 100).toFixed(1);
@@ -59,6 +59,7 @@ function PropPickCard({ pick }) {
     <div className="prop-pick-card">
       <div className="prop-pick-header">
         <div className="prop-pick-player">
+          <span className="prop-pick-rank">#{rank}</span>
           <Icon size={14} style={{ color: config.color }} />
           <span className="prop-pick-name">{pick.player_name}</span>
         </div>
@@ -189,7 +190,7 @@ function PlayerProps() {
             </div>
             <div className="props-picks-list">
               {game.picks.map((pick, idx) => (
-                <PropPickCard key={`${pick.player_name}-${pick.market}-${idx}`} pick={pick} />
+                <PropPickCard key={`${pick.player_name}-${pick.market}-${idx}`} pick={pick} rank={idx + 1} />
               ))}
             </div>
           </div>
