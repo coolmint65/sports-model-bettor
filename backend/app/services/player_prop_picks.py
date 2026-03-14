@@ -73,6 +73,25 @@ def _poisson_over(avg_rate: float, line: float) -> float:
     return 1.0 - cumulative
 
 
+def _normal_over(values: list, line: float) -> float:
+    """P(X > line) using normal distribution.
+
+    Better than Poisson for high-count stats like goalie saves where
+    the distribution is approximately normal.  Uses the actual sample
+    standard deviation rather than assuming variance == mean (Poisson).
+    """
+    n = len(values)
+    if n < 2:
+        return 0.5
+    mean = sum(values) / n
+    variance = sum((v - mean) ** 2 for v in values) / (n - 1)
+    std = math.sqrt(variance) if variance > 0 else 1.0
+    # P(X > line) using the complementary error function
+    # erfc(x) = 1 - erf(x), and P(X > line) = 0.5 * erfc((line - mean) / (std * sqrt(2)))
+    z = (line - mean) / (std * math.sqrt(2))
+    return 0.5 * math.erfc(z)
+
+
 @dataclass
 class PropPick:
     """A single player prop recommendation."""
@@ -103,6 +122,7 @@ async def _get_skater_game_stats(
         .join(Game, Game.id == GamePlayerStats.game_id)
         .where(
             GamePlayerStats.player_id == player_id,
+            Game.status == "final",
             Game.home_team_id.in_([team_id])
             | Game.away_team_id.in_([team_id]),
         )
@@ -116,11 +136,22 @@ async def _get_goalie_game_stats(
     session: AsyncSession,
     player_id: int,
 ) -> List[GameGoalieStats]:
-    """Get recent game stats for a goalie, ordered by most recent."""
+    """Get recent game stats for a goalie, ordered by most recent.
+
+    Filters to completed games and meaningful appearances (>= 30 min TOI)
+    to exclude relief appearances that would skew save averages.
+    """
     result = await session.execute(
         select(GameGoalieStats)
         .join(Game, Game.id == GameGoalieStats.game_id)
-        .where(GameGoalieStats.player_id == player_id)
+        .where(
+            GameGoalieStats.player_id == player_id,
+            Game.status == "final",
+            # Only include starts / full appearances (>= 30 min TOI).
+            # Relief goalies with 5-10 min and a handful of saves
+            # would badly skew the per-game average downward.
+            (GameGoalieStats.toi >= 30.0) | (GameGoalieStats.toi.is_(None)),
+        )
         .order_by(desc(Game.date))
         .limit(RECENT_GAMES_WINDOW)
     )
@@ -196,8 +227,9 @@ def _analyze_over_under(
 ) -> Optional[PropPick]:
     """Analyze an over/under prop (SOG, Points, Assists, Saves).
 
-    Uses Poisson model to estimate P(over) and P(under), then picks
-    the side with more edge vs the sportsbook line.
+    Uses Poisson model for low-count stats (goals, assists, shots, points)
+    and normal distribution for high-count stats (saves) where Poisson
+    dramatically overstates edge.
     """
     if not game_stats or len(game_stats) < MIN_GAMES:
         return None
@@ -208,8 +240,13 @@ def _analyze_over_under(
     games = len(values)
     avg_rate = sum(values) / games
 
-    # Poisson probability of going over the line
-    p_over = _poisson_over(avg_rate, prop.line)
+    # Use normal distribution for high-count stats (saves avg 25-35/game).
+    # Poisson assumes variance == mean, but saves have much higher variance
+    # due to opponent shot volume, leading to wildly inflated edges.
+    if market == "player_total_saves":
+        p_over = _normal_over(values, prop.line)
+    else:
+        p_over = _poisson_over(avg_rate, prop.line)
     p_under = 1.0 - p_over
 
     implied_over = _american_to_implied(prop.over_price)
