@@ -366,18 +366,25 @@ async def get_todays_prop_picks(
     Analyzes player performance data against sportsbook prop lines
     to identify value bets. Returns picks sorted by edge within
     each game.
+
+    Only returns picks for pregame/scheduled games — once a game
+    goes live or final, its props are removed from the list.
     """
     from app.constants import GAME_FINAL_STATUSES
     from app.services.player_prop_picks import generate_all_prop_picks
 
     today = date.today()
 
+    # Exclude both final AND live games — player props are only
+    # actionable before puck drop.
     games_result = await session.execute(
         select(Game)
         .options(selectinload(Game.home_team), selectinload(Game.away_team))
         .where(
             Game.date == today,
-            ~func.lower(Game.status).in_(GAME_FINAL_STATUSES),
+            ~func.lower(Game.status).in_(
+                GAME_FINAL_STATUSES + ("in_progress", "live")
+            ),
         )
         .order_by(Game.start_time)
     )
