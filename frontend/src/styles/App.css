@@ -4971,6 +4971,10 @@ a:hover {
   font-size: 0.7rem;
 }
 
+.dc-pick-chip-edge-neg {
+  color: var(--accent-red);
+}
+
 .dc-pick-chip-conf {
   font-family: var(--font-mono);
   font-weight: 700;

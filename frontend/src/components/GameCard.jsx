@@ -392,7 +392,7 @@ function GameCard({ game, section, medal }) {
                     <span className="dc-pick-chip-odds">{formatAmericanOdds(pick.odds_display)}</span>
                   )}
                   {edgePct != null && (
-                    <span className="dc-pick-chip-edge">Edge {edgePct}</span>
+                    <span className={`dc-pick-chip-edge${edgeVal < 0 ? ' dc-pick-chip-edge-neg' : ''}`}>Edge {edgePct}</span>
                   )}
                   {conf != null && (
                     <span className="dc-pick-chip-conf">{Math.round(conf)}%</span>
