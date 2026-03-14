@@ -23,8 +23,10 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.game import Game, GameGoalieStats, GamePlayerStats
+from app.models.matchup import PlayerMatchupStats
 from app.models.player import Player
 from app.models.player_prop import PlayerPropOdds
+from app.models.team import Team
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +34,16 @@ logger = logging.getLogger(__name__)
 RECENT_GAMES_WINDOW = 15
 # Minimum games required to generate a prediction
 MIN_GAMES = 5
+# Minimum games vs opponent to apply matchup adjustment
+MIN_MATCHUP_GAMES = 3
 # Minimum edge to consider a pick worth recommending
 MIN_PICK_EDGE = 0.05
 # Minimum confidence to include a pick
 MIN_PICK_CONFIDENCE = 0.55
 # Maximum picks to return per game (top N by edge)
 MAX_PICKS_PER_GAME = 5
+# Max matchup adjustment to prevent extreme swings from small samples
+MAX_MATCHUP_ADJUSTMENT = 0.25
 
 
 def _american_to_implied(american: Optional[float]) -> Optional[float]:
@@ -93,6 +99,19 @@ def _normal_over(values: list, line: float) -> float:
 
 
 @dataclass
+class MatchupContext:
+    """Opponent-specific performance context for a player."""
+
+    opponent_team_id: int
+    opponent_abbrev: Optional[str]
+    vs_opponent_rate: Optional[float]  # per-game rate vs this opponent
+    vs_opponent_games: int  # games played vs this opponent
+    overall_rate: float  # overall per-game rate
+    adjustment: float  # multiplier applied to model prob (e.g., 1.10 = +10%)
+    reasoning: str  # human-readable matchup note
+
+
+@dataclass
 class PropPick:
     """A single player prop recommendation."""
 
@@ -109,6 +128,7 @@ class PropPick:
     avg_rate: float  # Player's recent per-game rate
     games_sampled: int  # How many games used
     reasoning: str
+    matchup: Optional[MatchupContext] = None  # opponent-specific context
 
 
 async def _get_skater_game_stats(
@@ -158,15 +178,115 @@ async def _get_goalie_game_stats(
     return list(result.scalars().all())
 
 
+async def _get_skater_vs_opponent_stats(
+    session: AsyncSession,
+    player_id: int,
+    team_id: int,
+    opponent_team_id: int,
+) -> List[GamePlayerStats]:
+    """Get a skater's game stats filtered to games against a specific opponent."""
+    result = await session.execute(
+        select(GamePlayerStats)
+        .join(Game, Game.id == GamePlayerStats.game_id)
+        .where(
+            GamePlayerStats.player_id == player_id,
+            Game.status == "final",
+            Game.home_team_id.in_([team_id])
+            | Game.away_team_id.in_([team_id]),
+            Game.home_team_id.in_([opponent_team_id])
+            | Game.away_team_id.in_([opponent_team_id]),
+        )
+        .order_by(desc(Game.date))
+        .limit(RECENT_GAMES_WINDOW)
+    )
+    return list(result.scalars().all())
+
+
+async def _get_goalie_vs_opponent_stats(
+    session: AsyncSession,
+    player_id: int,
+    opponent_team_id: int,
+) -> List[GameGoalieStats]:
+    """Get a goalie's game stats filtered to games against a specific opponent."""
+    result = await session.execute(
+        select(GameGoalieStats)
+        .join(Game, Game.id == GameGoalieStats.game_id)
+        .where(
+            GameGoalieStats.player_id == player_id,
+            Game.status == "final",
+            (GameGoalieStats.toi >= 30.0) | (GameGoalieStats.toi.is_(None)),
+            Game.home_team_id.in_([opponent_team_id])
+            | Game.away_team_id.in_([opponent_team_id]),
+        )
+        .order_by(desc(Game.date))
+        .limit(RECENT_GAMES_WINDOW)
+    )
+    return list(result.scalars().all())
+
+
+def _compute_matchup_adjustment(
+    overall_rate: float,
+    vs_opponent_stats: list,
+    stat_extractor,
+    opponent_team_id: int,
+    opponent_abbrev: Optional[str],
+) -> Optional[MatchupContext]:
+    """Compute a matchup adjustment from opponent-specific game stats.
+
+    Compares the player's per-game rate against this specific opponent
+    to their overall rate. The adjustment is scaled by sample size —
+    more games vs the opponent means we trust the signal more.
+
+    Returns None if insufficient opponent data.
+    """
+    if len(vs_opponent_stats) < MIN_MATCHUP_GAMES:
+        return None
+
+    vs_values = [stat_extractor(g) for g in vs_opponent_stats]
+    vs_rate = sum(vs_values) / len(vs_values)
+    vs_games = len(vs_values)
+
+    if overall_rate <= 0:
+        return None
+
+    # Raw deviation: how much does the player over/under-perform vs this team?
+    raw_deviation = (vs_rate - overall_rate) / overall_rate
+
+    # Scale by sample size confidence: ramps from 0.3 at 3 games to 1.0 at 10+
+    sample_weight = min(vs_games / 10.0, 1.0)
+    adjustment = raw_deviation * sample_weight
+
+    # Cap to prevent extreme swings
+    adjustment = max(-MAX_MATCHUP_ADJUSTMENT, min(MAX_MATCHUP_ADJUSTMENT, adjustment))
+
+    opp_label = opponent_abbrev or f"team {opponent_team_id}"
+    direction = "+" if raw_deviation >= 0 else ""
+
+    return MatchupContext(
+        opponent_team_id=opponent_team_id,
+        opponent_abbrev=opponent_abbrev,
+        vs_opponent_rate=round(vs_rate, 2),
+        vs_opponent_games=vs_games,
+        overall_rate=round(overall_rate, 2),
+        adjustment=round(adjustment, 4),
+        reasoning=(
+            f"vs {opp_label}: {vs_rate:.2f}/game over {vs_games} games "
+            f"({direction}{raw_deviation:.0%} vs overall {overall_rate:.2f})"
+        ),
+    )
+
+
 def _analyze_atg(
     player_name: str,
     player_id: Optional[int],
     prop: PlayerPropOdds,
     game_stats: List[GamePlayerStats],
+    matchup: Optional[MatchupContext] = None,
 ) -> Optional[PropPick]:
     """Analyze anytime goal scorer prop.
 
     Uses Poisson model: P(goals >= 1) = 1 - e^(-avg_goals_per_game).
+    Adjusts the goal rate based on opponent-specific matchup data when available.
     """
     if not game_stats or len(game_stats) < MIN_GAMES:
         return None
@@ -175,7 +295,13 @@ def _analyze_atg(
     games = len(game_stats)
     avg_goals = total_goals / games
 
-    model_prob = _poisson_at_least_one(avg_goals)
+    # Apply matchup adjustment to the goal rate
+    adjusted_goals = avg_goals
+    if matchup and matchup.adjustment != 0:
+        adjusted_goals = avg_goals * (1.0 + matchup.adjustment)
+        adjusted_goals = max(adjusted_goals, 0.0)
+
+    model_prob = _poisson_at_least_one(adjusted_goals)
     implied = _american_to_implied(prop.over_price)
     if implied is None or implied <= 0:
         return None
@@ -196,6 +322,14 @@ def _analyze_atg(
     goals_in_last = sum(1 for g in game_stats if g.goals >= 1)
     hit_rate = goals_in_last / games
 
+    reasoning = (
+        f"{avg_goals:.2f} goals/game over {games} games "
+        f"({hit_rate:.0%} scored in). "
+        f"Model: {model_prob:.1%} vs line {implied:.1%}"
+    )
+    if matchup and matchup.adjustment != 0:
+        reasoning += f" | Matchup: {matchup.reasoning}"
+
     return PropPick(
         player_name=player_name,
         player_id=player_id,
@@ -209,11 +343,8 @@ def _analyze_atg(
         confidence=confidence,
         avg_rate=avg_goals,
         games_sampled=games,
-        reasoning=(
-            f"{avg_goals:.2f} goals/game over {games} games "
-            f"({hit_rate:.0%} scored in). "
-            f"Model: {model_prob:.1%} vs line {implied:.1%}"
-        ),
+        reasoning=reasoning,
+        matchup=matchup,
     )
 
 
@@ -224,12 +355,16 @@ def _analyze_over_under(
     game_stats: list,
     market: str,
     stat_extractor,
+    matchup: Optional[MatchupContext] = None,
 ) -> Optional[PropPick]:
     """Analyze an over/under prop (SOG, Points, Assists, Saves).
 
     Uses Poisson model for low-count stats (goals, assists, shots, points)
     and normal distribution for high-count stats (saves) where Poisson
     dramatically overstates edge.
+
+    When matchup data is available, adjusts the player's rate based on
+    their historical performance against the specific opponent.
     """
     if not game_stats or len(game_stats) < MIN_GAMES:
         return None
@@ -240,13 +375,26 @@ def _analyze_over_under(
     games = len(values)
     avg_rate = sum(values) / games
 
+    # Apply matchup adjustment to the rate
+    adjusted_rate = avg_rate
+    if matchup and matchup.adjustment != 0:
+        adjusted_rate = avg_rate * (1.0 + matchup.adjustment)
+        adjusted_rate = max(adjusted_rate, 0.0)
+
     # Use normal distribution for high-count stats (saves avg 25-35/game).
     # Poisson assumes variance == mean, but saves have much higher variance
     # due to opponent shot volume, leading to wildly inflated edges.
     if market == "player_total_saves":
-        p_over = _normal_over(values, prop.line)
+        # For saves with matchup adjustment, shift the values to reflect
+        # the adjusted mean while preserving variance
+        if matchup and matchup.adjustment != 0:
+            shift = adjusted_rate - avg_rate
+            adjusted_values = [v + shift for v in values]
+            p_over = _normal_over(adjusted_values, prop.line)
+        else:
+            p_over = _normal_over(values, prop.line)
     else:
-        p_over = _poisson_over(avg_rate, prop.line)
+        p_over = _poisson_over(adjusted_rate, prop.line)
     p_under = 1.0 - p_over
 
     implied_over = _american_to_implied(prop.over_price)
@@ -300,6 +448,14 @@ def _analyze_over_under(
         "player_total_saves": "saves",
     }.get(market, "stat")
 
+    reasoning = (
+        f"{avg_rate:.1f} {stat_label}/game over {games} games "
+        f"(over {prop.line} in {hit_pct:.0%}). "
+        f"Model: {best_model_prob:.1%} vs line {best_implied:.1%}"
+    )
+    if matchup and matchup.adjustment != 0:
+        reasoning += f" | Matchup: {matchup.reasoning}"
+
     return PropPick(
         player_name=player_name,
         player_id=player_id,
@@ -313,11 +469,77 @@ def _analyze_over_under(
         confidence=confidence,
         avg_rate=avg_rate,
         games_sampled=games,
-        reasoning=(
-            f"{avg_rate:.1f} {stat_label}/game over {games} games "
-            f"(over {prop.line} in {hit_pct:.0%}). "
-            f"Model: {best_model_prob:.1%} vs line {best_implied:.1%}"
-        ),
+        reasoning=reasoning,
+        matchup=matchup,
+    )
+
+
+async def _get_opponent_abbrev(
+    session: AsyncSession,
+    team_id: int,
+    team_abbrev_cache: Dict[int, str],
+) -> Optional[str]:
+    """Look up a team's abbreviation, with caching."""
+    if team_id in team_abbrev_cache:
+        return team_abbrev_cache[team_id]
+    result = await session.execute(
+        select(Team.abbreviation).where(Team.id == team_id)
+    )
+    row = result.scalar_one_or_none()
+    if row:
+        team_abbrev_cache[team_id] = row
+    return row
+
+
+async def _build_skater_matchup(
+    session: AsyncSession,
+    player_id: int,
+    team_id: int,
+    opponent_team_id: int,
+    opponent_abbrev: Optional[str],
+    overall_stats: List[GamePlayerStats],
+    market: str,
+    stat_extractor,
+) -> Optional[MatchupContext]:
+    """Build matchup context for a skater prop by querying games vs opponent."""
+    vs_stats = await _get_skater_vs_opponent_stats(
+        session, player_id, team_id, opponent_team_id,
+    )
+    if len(vs_stats) < MIN_MATCHUP_GAMES:
+        return None
+
+    overall_rate = (
+        sum(stat_extractor(g) for g in overall_stats) / len(overall_stats)
+        if overall_stats else 0
+    )
+    return _compute_matchup_adjustment(
+        overall_rate, vs_stats, stat_extractor,
+        opponent_team_id, opponent_abbrev,
+    )
+
+
+async def _build_goalie_matchup(
+    session: AsyncSession,
+    player_id: int,
+    opponent_team_id: int,
+    opponent_abbrev: Optional[str],
+    overall_stats: List[GameGoalieStats],
+    stat_extractor,
+) -> Optional[MatchupContext]:
+    """Build matchup context for a goalie prop by querying games vs opponent."""
+    vs_stats = await _get_goalie_vs_opponent_stats(
+        session, player_id, opponent_team_id,
+    )
+    if len(vs_stats) < MIN_MATCHUP_GAMES:
+        return None
+
+    overall_rate = (
+        sum(stat_extractor(g) for g in overall_stats) / len(overall_stats)
+        if overall_stats else 0
+    )
+    return _compute_matchup_adjustment(
+        overall_rate, vs_stats, stat_extractor,
+        opponent_team_id, opponent_abbrev,
     )
 
 
@@ -328,7 +550,8 @@ async def generate_prop_picks(
     """Generate player prop picks for a specific game.
 
     Reads the PlayerPropOdds for the game, matches players to their
-    historical game stats, and runs the analysis.
+    historical game stats, computes opponent-specific matchup adjustments,
+    and runs the analysis.
 
     Returns a list of PropPick objects sorted by edge (best first).
     """
@@ -374,6 +597,9 @@ async def generate_prop_picks(
     # Cache game stats per player to avoid duplicate queries
     skater_stats_cache: Dict[int, List[GamePlayerStats]] = {}
     goalie_stats_cache: Dict[int, List[GameGoalieStats]] = {}
+    # Cache matchup contexts per (player_id, market) to avoid re-querying
+    matchup_cache: Dict[tuple, Optional[MatchupContext]] = {}
+    team_abbrev_cache: Dict[int, str] = {}
 
     picks: List[PropPick] = []
 
@@ -388,28 +614,65 @@ async def generate_prop_picks(
         if player is None:
             continue
 
+        # Determine the opponent team for this player
+        player_team_id = player.team_id or 0
+        if player_team_id == game.home_team_id:
+            opponent_team_id = game.away_team_id
+        elif player_team_id == game.away_team_id:
+            opponent_team_id = game.home_team_id
+        else:
+            opponent_team_id = None
+
+        opponent_abbrev = None
+        if opponent_team_id:
+            opponent_abbrev = await _get_opponent_abbrev(
+                session, opponent_team_id, team_abbrev_cache,
+            )
+
         market = prop.market
 
         if market == "player_goal_scorer_anytime":
             # ATG — skater stat
             if player.id not in skater_stats_cache:
                 skater_stats_cache[player.id] = await _get_skater_game_stats(
-                    session, player.id, player.team_id or 0
+                    session, player.id, player_team_id,
                 )
             stats = skater_stats_cache[player.id]
-            pick = _analyze_atg(prop.player_name, player.id, prop, stats)
+
+            matchup = None
+            cache_key = (player.id, "goals")
+            if cache_key not in matchup_cache and opponent_team_id and stats:
+                matchup_cache[cache_key] = await _build_skater_matchup(
+                    session, player.id, player_team_id, opponent_team_id,
+                    opponent_abbrev, stats, market, lambda g: g.goals,
+                )
+            matchup = matchup_cache.get(cache_key)
+
+            pick = _analyze_atg(
+                prop.player_name, player.id, prop, stats, matchup,
+            )
             if pick:
                 picks.append(pick)
 
         elif market == "player_shots_on_goal":
             if player.id not in skater_stats_cache:
                 skater_stats_cache[player.id] = await _get_skater_game_stats(
-                    session, player.id, player.team_id or 0
+                    session, player.id, player_team_id,
                 )
             stats = skater_stats_cache[player.id]
+
+            matchup = None
+            cache_key = (player.id, "shots")
+            if cache_key not in matchup_cache and opponent_team_id and stats:
+                matchup_cache[cache_key] = await _build_skater_matchup(
+                    session, player.id, player_team_id, opponent_team_id,
+                    opponent_abbrev, stats, market, lambda g: g.shots,
+                )
+            matchup = matchup_cache.get(cache_key)
+
             pick = _analyze_over_under(
                 prop.player_name, player.id, prop, stats, market,
-                lambda g: g.shots,
+                lambda g: g.shots, matchup,
             )
             if pick:
                 picks.append(pick)
@@ -417,12 +680,22 @@ async def generate_prop_picks(
         elif market == "player_points":
             if player.id not in skater_stats_cache:
                 skater_stats_cache[player.id] = await _get_skater_game_stats(
-                    session, player.id, player.team_id or 0
+                    session, player.id, player_team_id,
                 )
             stats = skater_stats_cache[player.id]
+
+            matchup = None
+            cache_key = (player.id, "points")
+            if cache_key not in matchup_cache and opponent_team_id and stats:
+                matchup_cache[cache_key] = await _build_skater_matchup(
+                    session, player.id, player_team_id, opponent_team_id,
+                    opponent_abbrev, stats, market, lambda g: g.points,
+                )
+            matchup = matchup_cache.get(cache_key)
+
             pick = _analyze_over_under(
                 prop.player_name, player.id, prop, stats, market,
-                lambda g: g.points,
+                lambda g: g.points, matchup,
             )
             if pick:
                 picks.append(pick)
@@ -430,12 +703,22 @@ async def generate_prop_picks(
         elif market == "player_assists":
             if player.id not in skater_stats_cache:
                 skater_stats_cache[player.id] = await _get_skater_game_stats(
-                    session, player.id, player.team_id or 0
+                    session, player.id, player_team_id,
                 )
             stats = skater_stats_cache[player.id]
+
+            matchup = None
+            cache_key = (player.id, "assists")
+            if cache_key not in matchup_cache and opponent_team_id and stats:
+                matchup_cache[cache_key] = await _build_skater_matchup(
+                    session, player.id, player_team_id, opponent_team_id,
+                    opponent_abbrev, stats, market, lambda g: g.assists,
+                )
+            matchup = matchup_cache.get(cache_key)
+
             pick = _analyze_over_under(
                 prop.player_name, player.id, prop, stats, market,
-                lambda g: g.assists,
+                lambda g: g.assists, matchup,
             )
             if pick:
                 picks.append(pick)
@@ -446,9 +729,19 @@ async def generate_prop_picks(
                     session, player.id,
                 )
             stats = goalie_stats_cache[player.id]
+
+            matchup = None
+            cache_key = (player.id, "saves")
+            if cache_key not in matchup_cache and opponent_team_id and stats:
+                matchup_cache[cache_key] = await _build_goalie_matchup(
+                    session, player.id, opponent_team_id,
+                    opponent_abbrev, stats, lambda g: g.saves,
+                )
+            matchup = matchup_cache.get(cache_key)
+
             pick = _analyze_over_under(
                 prop.player_name, player.id, prop, stats, market,
-                lambda g: g.saves,
+                lambda g: g.saves, matchup,
             )
             if pick:
                 picks.append(pick)
