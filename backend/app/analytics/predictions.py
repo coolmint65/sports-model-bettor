@@ -622,23 +622,6 @@ class PredictionManager:
             )
             return existing
 
-        # ---- Prematch lock: never add NEW prematch predictions to a game
-        # that already has prematch predictions.  The original prematch set
-        # is generated once and locked; later model runs (scheduler regen,
-        # restarts, odds changes) must not sneak in extra bet types.
-        if phase == "prematch":
-            lock_stmt = select(func.count(Prediction.id)).where(
-                Prediction.game_id == game_id,
-                Prediction.phase == "prematch",
-            )
-            lock_result = await db.execute(lock_stmt)
-            if (lock_result.scalar() or 0) > 0:
-                logger.debug(
-                    "Prematch locked — skipping new prediction: game=%d, type=%s, value=%s",
-                    game_id, bet_type, prediction_value,
-                )
-                return None
-
         confidence = bet.get("confidence", 0.0)
         edge = bet.get("edge")
         implied_prob = bet.get("implied_probability")

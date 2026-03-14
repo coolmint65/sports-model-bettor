@@ -33,7 +33,11 @@ RECENT_GAMES_WINDOW = 15
 # Minimum games required to generate a prediction
 MIN_GAMES = 5
 # Minimum edge to consider a pick worth recommending
-MIN_PICK_EDGE = 0.03
+MIN_PICK_EDGE = 0.05
+# Minimum confidence to include a pick
+MIN_PICK_CONFIDENCE = 0.55
+# Maximum picks to return per game (top N by edge)
+MAX_PICKS_PER_GAME = 5
 
 
 def _american_to_implied(american: Optional[float]) -> Optional[float]:
@@ -154,8 +158,8 @@ def _analyze_atg(
     form_factor = 1.0 + 0.2 * (recent_rate - avg_goals) / max(avg_goals, 0.1)
     confidence = min(max(model_prob * form_factor, 0.0), 1.0)
 
-    # Only recommend if positive edge
-    if edge < MIN_PICK_EDGE:
+    # Only recommend if sufficient edge and confidence
+    if edge < MIN_PICK_EDGE or confidence < MIN_PICK_CONFIDENCE:
         return None
 
     goals_in_last = sum(1 for g in game_stats if g.goals >= 1)
@@ -244,6 +248,9 @@ def _analyze_over_under(
     recent_avg = sum(recent_5) / len(recent_5) if recent_5 else 0
     form_factor = 1.0 + 0.15 * (recent_avg - avg_rate) / max(avg_rate, 0.1)
     confidence = min(max(best_model_prob * form_factor, 0.0), 1.0)
+
+    if confidence < MIN_PICK_CONFIDENCE:
+        return None
 
     # Count how many times they went over the line
     over_count = sum(1 for v in values if v > prop.line)
@@ -409,9 +416,9 @@ async def generate_prop_picks(
             if pick:
                 picks.append(pick)
 
-    # Sort by edge descending
+    # Sort by edge descending and cap to best picks per game
     picks.sort(key=lambda p: p.edge, reverse=True)
-    return picks
+    return picks[:MAX_PICKS_PER_GAME]
 
 
 async def generate_all_prop_picks(
