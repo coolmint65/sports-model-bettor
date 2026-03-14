@@ -503,12 +503,16 @@ async def _compute_top_picks(
                 score -= 0.10
             return score
 
+        # Tier 3 uses a more lenient juice ceiling than Tier 1.
+        # -250 → 250/350 ≈ 0.714.  This blocks truly extreme chalk
+        # but lets reasonable -150 to -220 favorites through so the
+        # dashboard shows a real market pick instead of defaulting
+        # to a period total for every game.
+        _TIER3_MAX_IMPLIED = 0.714
         for pred in sorted(no_odds_preds, key=_tier3_sort_key, reverse=True):
             if pred.game_id not in top_picks:
-                # Enforce heavy-juice filter even in Tier 3 — a heavy-juice
-                # spread as the sole top pick is worse than no pick at all.
                 cur_impl = fresh_map.get(pred.id) or pred.odds_implied_prob
-                if is_heavy_juice(cur_impl, max_implied):
+                if is_heavy_juice(cur_impl, _TIER3_MAX_IMPLIED):
                     continue
                 top_picks[pred.game_id] = GameTopPick(
                     prediction_id=pred.id,
