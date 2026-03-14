@@ -216,6 +216,10 @@ async def _migrate_add_columns() -> None:
         ("game", "regulation_home_price", "FLOAT"),
         ("game", "regulation_away_price", "FLOAT"),
         ("game", "regulation_draw_price", "FLOAT"),
+        # Correct column names matching the ORM model
+        ("game", "reg_home_price", "FLOAT"),
+        ("game", "reg_away_price", "FLOAT"),
+        ("game", "reg_draw_price", "FLOAT"),
         ("game", "home_team_total_line", "FLOAT"),
         ("game", "home_team_over_price", "FLOAT"),
         ("game", "home_team_under_price", "FLOAT"),
