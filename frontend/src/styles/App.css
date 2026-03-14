@@ -4928,6 +4928,52 @@ a:hover {
 }
 
 /* Footer */
+/* Starting Goalies */
+.dc-goalies {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-primary);
+}
+
+.dc-goalie-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.72rem;
+}
+
+.dc-goalie-label {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.dc-goalie-name {
+  color: var(--text-secondary);
+  font-weight: 500;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dc-goalie-status-row {
+  margin-top: 1px;
+}
+
+.dc-goalie-status {
+  font-size: 0.62rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.dc-goalie-status.dc-confirmed {
+  color: var(--accent-green, #4ade80);
+  font-style: normal;
+  font-weight: 600;
+}
+
 .dc-footer {
   display: flex;
   align-items: center;

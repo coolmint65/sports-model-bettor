@@ -375,7 +375,8 @@ async def _get_head_to_head(
             func.lower(Game.status).in_(GAME_FINAL_STATUSES),
             Game.home_score.isnot(None),
             Game.away_score.isnot(None),
-            Game.game_type == "regular",
+            # NHL API stores game_type as "2" for regular season
+            Game.game_type.in_(("2", "regular")),
         )
         .order_by(Game.date.desc())
     )

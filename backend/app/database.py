@@ -262,6 +262,17 @@ async def _migrate_add_columns() -> None:
         # BetResult CLV tracking
         ("bet_result", "closing_implied_prob", "FLOAT"),
         ("bet_result", "clv", "FLOAT"),
+        # TeamStats — special teams and faceoff columns
+        ("team_stats", "power_play_pct", "FLOAT"),
+        ("team_stats", "penalty_kill_pct", "FLOAT"),
+        ("team_stats", "faceoff_win_pct", "FLOAT"),
+        ("team_stats", "shots_for_per_game", "FLOAT"),
+        ("team_stats", "shots_against_per_game", "FLOAT"),
+        ("team_stats", "record_last_5", "VARCHAR(20)"),
+        ("team_stats", "record_last_10", "VARCHAR(20)"),
+        ("team_stats", "record_last_20", "VARCHAR(20)"),
+        ("team_stats", "home_record", "VARCHAR(20)"),
+        ("team_stats", "away_record", "VARCHAR(20)"),
     ]
 
     async with engine.begin() as conn:

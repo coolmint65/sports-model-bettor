@@ -72,6 +72,12 @@ class GameOdds(BaseModel):
     odds_updated_at: Optional[str] = None
 
 
+class GoalieStarter(BaseModel):
+    """Confirmed or projected starting goalie for a team."""
+    name: Optional[str] = None
+    confirmed: bool = False
+
+
 class ScheduleGame(BaseModel):
     id: int
     external_id: str
@@ -101,6 +107,9 @@ class ScheduleGame(BaseModel):
     # Sportsbook odds
     odds: Optional[GameOdds] = None
     pregame_odds: Optional[GameOdds] = None
+    # Starting goalies
+    home_starter: Optional[GoalieStarter] = None
+    away_starter: Optional[GoalieStarter] = None
 
     model_config = {"from_attributes": True}
 
@@ -201,6 +210,8 @@ def _build_schedule_game(
     away_brief: TeamBrief,
     top_pick: Optional[GameTopPick] = None,
     top_prop: Optional[GameTopPick] = None,
+    home_starter: Optional[GoalieStarter] = None,
+    away_starter: Optional[GoalieStarter] = None,
 ) -> ScheduleGame:
     # When no market pick exists but a prop does, promote the prop
     # to top_pick so the dashboard still shows a recommendation.
@@ -231,6 +242,8 @@ def _build_schedule_game(
         top_prop=top_prop,
         odds=_build_game_odds(game),
         pregame_odds=_build_pregame_odds(game),
+        home_starter=home_starter,
+        away_starter=away_starter,
     )
 
 
@@ -639,6 +652,42 @@ async def _compute_top_props(
     return top_props
 
 
+async def _fetch_starters_for_games(
+    games: List[Game], session: AsyncSession,
+) -> dict[int, dict[str, GoalieStarter]]:
+    """Batch-fetch starting goalies for upcoming games.
+
+    Returns {game_id: {"home": GoalieStarter, "away": GoalieStarter}}.
+    Only fetches for games that haven't started yet.
+    """
+    upcoming = [
+        g for g in games
+        if g.status and g.status.lower() in ("scheduled", "preview", "pre-game", "fut", "pre")
+    ]
+    if not upcoming:
+        return {}
+
+    starters_map: dict[int, dict[str, GoalieStarter]] = {}
+    try:
+        from app.scrapers.starter_scraper import sync_confirmed_starters
+        raw_starters = await sync_confirmed_starters(session)
+        for s in raw_starters:
+            gid = s["game_id"]
+            if gid not in starters_map:
+                starters_map[gid] = {}
+            side = "home" if s["team_id"] == next(
+                (g.home_team_id for g in upcoming if g.id == gid), None
+            ) else "away"
+            starters_map[gid][side] = GoalieStarter(
+                name=s["goalie_name"],
+                confirmed=s["confirmed"],
+            )
+    except Exception as exc:
+        logger.debug("Could not fetch starters: %s", exc)
+
+    return starters_map
+
+
 async def _games_for_date(
     target_date: date, session: AsyncSession
 ) -> List[ScheduleGame]:
@@ -658,15 +707,21 @@ async def _games_for_date(
     all_team_ids = list({g.home_team_id for g in games} | {g.away_team_id for g in games})
     stats_map = await _batch_load_team_stats(all_team_ids, session)
 
+    # Fetch starting goalies for upcoming games
+    starters_map = await _fetch_starters_for_games(games, session)
+
     schedule_games: List[ScheduleGame] = []
     for game in games:
         home_brief = _build_team_brief(game.home_team, stats_map.get(game.home_team_id))
         away_brief = _build_team_brief(game.away_team, stats_map.get(game.away_team_id))
+        game_starters = starters_map.get(game.id, {})
         schedule_games.append(
             _build_schedule_game(
                 game, home_brief, away_brief,
                 top_picks.get(game.id),
                 top_props.get(game.id),
+                home_starter=game_starters.get("home"),
+                away_starter=game_starters.get("away"),
             )
         )
     return schedule_games

@@ -766,19 +766,20 @@ class BettingModel:
         70% when the actual win rate is 62%) and underconfident near 50%.
         This applies a mild logistic shrinkage toward 50% to correct.
 
-        Based on typical NHL model calibration:
+        Calibration mapping (shrinkage=0.05):
         - 50% stays 50%
-        - 60% becomes ~58%
-        - 70% becomes ~66%
-        - 80% becomes ~75%
+        - 60% becomes ~59.5%
+        - 70% becomes ~69%
+        - 80% becomes ~78.5%
 
         The strength is controlled by a shrinkage factor (0 = no change,
-        1 = always 50%). We use 0.12 as a reasonable default.
+        1 = always 50%).
         """
         if not _mc.calibration_enabled:
             return raw_prob
-        # Mild shrinkage toward 50%
-        shrinkage = 0.12
+        # Light shrinkage toward 50% — enough to curb extreme overconfidence
+        # without compressing all predictions into the 60-65% borderline range.
+        shrinkage = 0.05
         calibrated = raw_prob * (1.0 - shrinkage) + 0.5 * shrinkage
         return round(max(0.01, min(0.99, calibrated)), 4)
 

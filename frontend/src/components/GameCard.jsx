@@ -362,6 +362,30 @@ function GameCard({ game, section, medal }) {
         </div>
       )}
 
+      {/* Starting Goalies */}
+      {(game.home_starter || game.away_starter) && (
+        <div className="dc-goalies">
+          <div className="dc-goalie-row">
+            <span className="dc-goalie-name">
+              {game.away_starter?.name || '—'}
+            </span>
+            <span className="dc-goalie-label">Goalies</span>
+            <span className="dc-goalie-name">
+              {game.home_starter?.name || '—'}
+            </span>
+          </div>
+          <div className="dc-goalie-row dc-goalie-status-row">
+            <span className={`dc-goalie-status ${game.away_starter?.confirmed ? 'dc-confirmed' : ''}`}>
+              {game.away_starter?.confirmed ? 'Confirmed' : game.away_starter ? 'Projected' : ''}
+            </span>
+            <span />
+            <span className={`dc-goalie-status ${game.home_starter?.confirmed ? 'dc-confirmed' : ''}`}>
+              {game.home_starter?.confirmed ? 'Confirmed' : game.home_starter ? 'Projected' : ''}
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Footer - just Details link */}
       <div className="dc-footer">
         <span className="dc-details-link">
