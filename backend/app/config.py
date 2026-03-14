@@ -154,6 +154,21 @@ class ModelConfig(BaseModel):
     goalie_mismatch_factor: float = 0.08      # additional xG adjustment for tier mismatch
     goalie_vs_team_min_games: int = 3         # min games vs opponent for significance
     goalie_vs_team_factor: float = 0.12       # xG adjustment for goalie vs team matchup
+    goalie_venue_min_games: int = 5           # min home/away games for venue split significance
+    goalie_venue_factor: float = 0.08         # xG adjustment for venue-specific goalie performance
+    goalie_heavy_workload_threshold: float = 35.0  # avg shots/game to flag heavy workload
+    goalie_workload_per_shot: float = 0.003   # xG penalty per excess shot above league avg
+    goalie_workload_factor: float = 0.10      # overall weight for workload fatigue adjustment
+
+    # Pace / tempo
+    pace_fast_threshold: float = 64.0         # total shots/game to be "fast"
+    pace_slow_threshold: float = 56.0         # total shots/game to be "slow"
+    pace_interaction_factor: float = 0.08     # xG adjustment for pace matchup
+    pace_min_games: int = 10                  # min games before pace factor applies
+
+    # Score-close stats
+    score_close_factor: float = 0.06          # xG blend weight for score-close performance
+    score_close_min_games: int = 8            # min close games before applying
 
     # Starter confirmation confidence
     starter_confidence_high: float = 0.90     # confirmed / obvious pattern

@@ -54,6 +54,11 @@ class SignalGenerator:
         signals.extend(self._divisional_signals(features))
         signals.extend(self._goalie_form_signals(features, home_abbr, away_abbr))
         signals.extend(self._goalie_vs_team_signals(features, home_abbr, away_abbr))
+        signals.extend(self._goalie_venue_signals(features, home_abbr, away_abbr))
+        signals.extend(self._goalie_workload_signals(features, home_abbr, away_abbr))
+        signals.extend(self._pace_signals(features, home_abbr, away_abbr, home_name, away_name))
+        signals.extend(self._score_close_signals(features, home_abbr, away_abbr, home_name, away_name))
+        signals.extend(self._starter_confirmed_signals(features, home_abbr, away_abbr))
         signals.extend(self._scoring_mismatch_signals(features, home_abbr, away_abbr, home_name, away_name))
         signals.extend(self._shot_volume_signals(features, home_abbr, away_abbr))
         signals.extend(self._first_period_signals(features, home_abbr, away_abbr, home_name, away_name))
@@ -899,6 +904,220 @@ class SignalGenerator:
                     "positive", own_abbr,
                     min(0.70, 0.40 + sv_diff * 10.0),
                     icon="shield",
+                ))
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    #  Confirmed starter signals                                          #
+    # ------------------------------------------------------------------ #
+
+    def _starter_confirmed_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+    ) -> List[Dict[str, Any]]:
+        signals = []
+
+        for abbr, key in [(home_abbr, "home_goalie"), (away_abbr, "away_goalie")]:
+            goalie = features.get(key, {})
+            if goalie.get("starter_confirmed", False):
+                name = goalie.get("goalie_name", "Unknown")
+                signals.append(_signal(
+                    "goalie",
+                    f"{name} ({abbr} Goalie) confirmed as starter",
+                    "neutral", abbr, 0.30,
+                    icon="shield",
+                ))
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    #  Goalie venue performance signals                                   #
+    # ------------------------------------------------------------------ #
+
+    def _goalie_venue_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+    ) -> List[Dict[str, Any]]:
+        signals = []
+
+        for goalie_key, venue_key, abbr, venue_label in [
+            ("home_goalie", "home_goalie_venue", home_abbr, "at home"),
+            ("away_goalie", "away_goalie_venue", away_abbr, "on the road"),
+        ]:
+            venue = features.get(venue_key, {})
+            goalie = features.get(goalie_key, {})
+            if not venue.get("significant", False):
+                continue
+
+            name = goalie.get("goalie_name", "Goalie")
+            venue_sv = venue.get("venue_save_pct", 0.900)
+            season_sv = goalie.get("season_save_pct", 0.900)
+            record = venue.get("venue_record", "0-0")
+            sv_diff = venue_sv - season_sv
+
+            if sv_diff >= 0.012:
+                signals.append(_signal(
+                    "goalie",
+                    f"{name} ({abbr} Goalie) excels {venue_label}: .{int(venue_sv*1000)} SV% ({record})",
+                    "positive", abbr,
+                    min(0.60, 0.35 + sv_diff * 10.0),
+                    icon="shield",
+                ))
+            elif sv_diff <= -0.012:
+                opp = away_abbr if abbr == home_abbr else home_abbr
+                signals.append(_signal(
+                    "goalie",
+                    f"{name} ({abbr} Goalie) weaker {venue_label}: .{int(venue_sv*1000)} SV% ({record})",
+                    "positive", opp,
+                    min(0.55, 0.35 + abs(sv_diff) * 10.0),
+                    icon="warning",
+                ))
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    #  Goalie workload signals                                            #
+    # ------------------------------------------------------------------ #
+
+    def _goalie_workload_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+    ) -> List[Dict[str, Any]]:
+        signals = []
+
+        for goalie_key, wl_key, abbr in [
+            ("home_goalie", "home_goalie_workload", home_abbr),
+            ("away_goalie", "away_goalie_workload", away_abbr),
+        ]:
+            wl = features.get(wl_key, {})
+            goalie = features.get(goalie_key, {})
+            if not wl.get("heavy_workload", False):
+                continue
+
+            name = goalie.get("goalie_name", "Goalie")
+            avg_shots = wl.get("avg_shots_per_start", 30.0)
+            shots_3g = wl.get("recent_shots_3g", 0)
+            opp = away_abbr if abbr == home_abbr else home_abbr
+            signals.append(_signal(
+                "goalie",
+                f"{name} ({abbr} Goalie) heavy workload: {shots_3g} shots faced in last 3 starts ({avg_shots:.0f}/game avg)",
+                "positive", opp,
+                min(0.55, 0.35 + (avg_shots - 30) / 30.0),
+                icon="warning",
+            ))
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    #  Pace / tempo matchup signals                                       #
+    # ------------------------------------------------------------------ #
+
+    def _pace_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+        home_name: str,
+        away_name: str,
+    ) -> List[Dict[str, Any]]:
+        signals = []
+        home_pace = features.get("home_pace", {})
+        away_pace = features.get("away_pace", {})
+
+        if (home_pace.get("games_found", 0) < _mc.pace_min_games or
+                away_pace.get("games_found", 0) < _mc.pace_min_games):
+            return signals
+
+        home_cat = home_pace.get("pace_category", "average")
+        away_cat = away_pace.get("pace_category", "average")
+        home_p = home_pace.get("pace", 60.0)
+        away_p = away_pace.get("pace", 60.0)
+
+        # Two fast teams = over lean
+        if home_cat == "fast" and away_cat == "fast":
+            signals.append(_signal(
+                "pace",
+                f"High-tempo matchup: both teams play fast ({home_p:.0f} + {away_p:.0f} shots/game)",
+                "neutral", "",
+                0.55,
+                icon="fire",
+                tooltip="Both teams generate and allow high shot volume. When two fast-paced teams meet, total goals tend to exceed individual averages.",
+            ))
+        # Two slow teams = under lean
+        elif home_cat == "slow" and away_cat == "slow":
+            signals.append(_signal(
+                "pace",
+                f"Low-tempo matchup: both teams play slow ({home_p:.0f} + {away_p:.0f} shots/game)",
+                "neutral", "",
+                0.50,
+                icon="chart",
+                tooltip="Both teams suppress shot volume. When two defensive-minded teams meet, total goals tend to come in under individual averages.",
+            ))
+        # One fast, one slow = pace mismatch
+        elif (home_cat == "fast" and away_cat == "slow") or (home_cat == "slow" and away_cat == "fast"):
+            fast_team = home_name if home_cat == "fast" else away_name
+            fast_abbr = home_abbr if home_cat == "fast" else away_abbr
+            signals.append(_signal(
+                "pace",
+                f"Pace mismatch: {fast_team} plays fast vs slower opponent",
+                "positive", fast_abbr,
+                0.35,
+                icon="chart",
+            ))
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    #  Score-close performance signals                                    #
+    # ------------------------------------------------------------------ #
+
+    def _score_close_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+        home_name: str,
+        away_name: str,
+    ) -> List[Dict[str, Any]]:
+        signals = []
+
+        home_sc = features.get("home_score_close", {})
+        away_sc = features.get("away_score_close", {})
+
+        for abbr, name, sc in [
+            (home_abbr, home_name, home_sc),
+            (away_abbr, away_name, away_sc),
+        ]:
+            if sc.get("close_games_found", 0) < _mc.score_close_min_games:
+                continue
+
+            close_gf = sc.get("close_gf_pg", 3.0)
+            close_ga = sc.get("close_ga_pg", 3.0)
+            close_diff = close_gf - close_ga
+
+            if close_diff >= 0.5:
+                signals.append(_signal(
+                    "matchup",
+                    f"{name} outscores opponents in close games ({close_gf:.1f}-{close_ga:.1f} GF/GA)",
+                    "positive", abbr,
+                    min(0.55, 0.35 + close_diff / 3.0),
+                    icon="chart",
+                    tooltip="Score-close games (decided by 1 goal or OT) filter out blowout noise. Teams that outperform in tight games demonstrate true competitive quality.",
+                ))
+            elif close_diff <= -0.5:
+                signals.append(_signal(
+                    "matchup",
+                    f"{name} outscored in close games ({close_gf:.1f}-{close_ga:.1f} GF/GA)",
+                    "negative", abbr,
+                    min(0.50, 0.30 + abs(close_diff) / 3.0),
+                    icon="warning",
                 ))
 
         return signals

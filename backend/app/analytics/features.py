@@ -1670,6 +1670,15 @@ class FeatureEngine:
         gs = goalie.get("games_started_season", 0)
         fatigue_threshold = _mc.starter_fatigue_threshold
 
+        # If starter is confirmed via NHL API, confidence is high
+        if goalie.get("starter_confirmed", False):
+            return {
+                "projected_starter": goalie.get("goalie_name", "Unknown"),
+                "starter_confidence": 0.98,
+                "confidence_level": "high",
+                "confidence_reasons": ["Confirmed via NHL API"],
+            }
+
         # Back-to-back reduces confidence
         if is_b2b:
             confidence = min(confidence, _mc.starter_confidence_medium)
@@ -1833,6 +1842,436 @@ class FeatureEngine:
         }
 
     # ------------------------------------------------------------------ #
+    #  Confirmed starting goalie (NHL API)                                #
+    # ------------------------------------------------------------------ #
+
+    async def get_confirmed_starter(
+        self,
+        db: AsyncSession,
+        game_id: int,
+        team_id: int,
+        goalie_features: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Check if the starting goalie has been officially confirmed.
+
+        Queries the NHL API game landing page for confirmed starter info.
+        If a confirmed starter differs from the projected starter (from
+        recent game history), updates goalie features with the actual
+        starter's stats.
+
+        Returns the goalie_features dict, potentially updated with the
+        confirmed starter's data, plus confirmation metadata.
+        """
+        try:
+            from app.scrapers.starter_scraper import get_confirmed_starter_for_team
+            confirmed = await get_confirmed_starter_for_team(db, game_id, team_id)
+        except Exception as exc:
+            logger.debug("Starter confirmation unavailable: %s", exc)
+            confirmed = None
+
+        if not confirmed:
+            return goalie_features
+
+        confirmed_name = confirmed.get("goalie_name", "")
+        projected_name = goalie_features.get("goalie_name", "")
+        is_confirmed = confirmed.get("confirmed", False)
+
+        # If the confirmed starter is different from our projected starter,
+        # we need to re-fetch goalie features for the actual starter
+        if confirmed_name and confirmed_name != projected_name and is_confirmed:
+            # Find the confirmed goalie in our DB
+            ext_id = confirmed.get("goalie_external_id", "")
+            if ext_id:
+                stmt = select(Player).where(Player.external_id == str(ext_id))
+                result = await db.execute(stmt)
+                player = result.scalars().first()
+                if player:
+                    logger.info(
+                        "Starter switch detected: %s → %s (team_id=%d)",
+                        projected_name, confirmed_name, team_id,
+                    )
+                    # Re-fetch goalie features for the actual starter
+                    new_features = await self._get_goalie_features_for_player(
+                        db, player.id, player.name
+                    )
+                    new_features["starter_confirmed"] = True
+                    new_features["starter_source"] = "nhl_api"
+                    return new_features
+
+        # Same goalie confirmed — just mark as confirmed
+        result = {**goalie_features}
+        if is_confirmed:
+            result["starter_confirmed"] = True
+            result["starter_source"] = "nhl_api"
+        else:
+            result["starter_confirmed"] = False
+            result["starter_source"] = "projected"
+        return result
+
+    async def _get_goalie_features_for_player(
+        self,
+        db: AsyncSession,
+        goalie_id: int,
+        goalie_name: str,
+    ) -> Dict[str, Any]:
+        """Get goalie features for a specific player ID (used when starter is confirmed)."""
+        season_stmt = (
+            select(GoalieStats)
+            .where(GoalieStats.player_id == goalie_id)
+            .order_by(desc(GoalieStats.season))
+            .limit(1)
+        )
+        season_result = await db.execute(season_stmt)
+        season_stats = season_result.scalars().first()
+
+        season_save_pct = season_stats.save_pct if season_stats and season_stats.save_pct else 0.900
+        season_gaa = season_stats.gaa if season_stats and season_stats.gaa else 3.00
+        games_started = season_stats.games_started if season_stats else 0
+
+        recent_games_stmt = (
+            select(GameGoalieStats)
+            .join(Game, GameGoalieStats.game_id == Game.id)
+            .where(
+                and_(
+                    GameGoalieStats.player_id == goalie_id,
+                    GameGoalieStats.decision.isnot(None),
+                    Game.status == "final",
+                )
+            )
+            .order_by(desc(Game.date))
+            .limit(10)
+        )
+        recent_result = await db.execute(recent_games_stmt)
+        recent_games = recent_result.scalars().all()
+
+        last5_save_pct, last5_gaa = self._calc_goalie_recent(recent_games[:5])
+        last10_save_pct, last10_gaa = self._calc_goalie_recent(recent_games[:10])
+
+        return {
+            "goalie_name": goalie_name,
+            "goalie_id": goalie_id,
+            "season_save_pct": round(season_save_pct, 4),
+            "season_gaa": round(season_gaa, 3),
+            "last5_save_pct": round(last5_save_pct, 4),
+            "last5_gaa": round(last5_gaa, 3),
+            "last10_save_pct": round(last10_save_pct, 4),
+            "last10_gaa": round(last10_gaa, 3),
+            "games_started_season": games_started,
+            "consecutive_starts": len(recent_games),
+        }
+
+    # ------------------------------------------------------------------ #
+    #  Goalie venue splits (home vs away performance)                     #
+    # ------------------------------------------------------------------ #
+
+    async def get_goalie_venue_splits(
+        self,
+        db: AsyncSession,
+        goalie_id: Optional[int],
+        team_id: int,
+        is_home: bool,
+    ) -> Dict[str, Any]:
+        """Calculate a goalie's performance split by venue (home vs away).
+
+        Some goalies perform significantly differently at home vs on
+        the road. This captures that split.
+
+        Returns:
+            dict with venue_save_pct, venue_gaa, venue_record, venue_games,
+            significant (bool).
+        """
+        empty = self._empty_venue_splits()
+        if goalie_id is None:
+            return empty
+
+        # Find games where this goalie played at home or away
+        if is_home:
+            venue_filter = Game.home_team_id == team_id
+        else:
+            venue_filter = Game.away_team_id == team_id
+
+        stmt = (
+            select(GameGoalieStats)
+            .join(Game, GameGoalieStats.game_id == Game.id)
+            .where(
+                and_(
+                    GameGoalieStats.player_id == goalie_id,
+                    GameGoalieStats.decision.isnot(None),
+                    Game.status == "final",
+                    venue_filter,
+                )
+            )
+            .order_by(desc(Game.date))
+            .limit(15)
+        )
+        result = await db.execute(stmt)
+        games = result.scalars().all()
+
+        if not games:
+            return empty
+
+        total_saves = 0
+        total_shots = 0
+        total_ga = 0
+        wins = 0
+
+        for ggs in games:
+            total_saves += ggs.saves or 0
+            total_shots += ggs.shots_against or 0
+            total_ga += ggs.goals_against or 0
+            if ggs.decision == "W":
+                wins += 1
+
+        count = len(games)
+        sv_pct = total_saves / total_shots if total_shots > 0 else 0.900
+        gaa = total_ga / count if count > 0 else 3.00
+
+        return {
+            "venue_save_pct": round(sv_pct, 4),
+            "venue_gaa": round(gaa, 3),
+            "venue_record": f"{wins}-{count - wins}",
+            "venue_games": count,
+            "significant": count >= _mc.goalie_venue_min_games,
+        }
+
+    @staticmethod
+    def _empty_venue_splits() -> Dict[str, Any]:
+        return {
+            "venue_save_pct": 0.900,
+            "venue_gaa": 3.00,
+            "venue_record": "0-0",
+            "venue_games": 0,
+            "significant": False,
+        }
+
+    # ------------------------------------------------------------------ #
+    #  Goalie workload / fatigue (shots-based)                            #
+    # ------------------------------------------------------------------ #
+
+    async def get_goalie_workload(
+        self,
+        db: AsyncSession,
+        goalie_id: Optional[int],
+    ) -> Dict[str, Any]:
+        """Calculate recent workload for a goalie based on shots faced.
+
+        Goes beyond simple consecutive starts — measures actual shot
+        volume faced in recent games to detect true fatigue.
+
+        Returns:
+            dict with recent_shots_faced (last 3 games), avg_shots_per_start,
+            heavy_workload (bool), workload_factor (0-1 multiplier).
+        """
+        empty = {
+            "recent_shots_3g": 0,
+            "avg_shots_per_start": 30.0,
+            "heavy_workload": False,
+            "workload_factor": 1.0,
+        }
+        if goalie_id is None:
+            return empty
+
+        stmt = (
+            select(GameGoalieStats)
+            .join(Game, GameGoalieStats.game_id == Game.id)
+            .where(
+                and_(
+                    GameGoalieStats.player_id == goalie_id,
+                    GameGoalieStats.decision.isnot(None),
+                    Game.status == "final",
+                )
+            )
+            .order_by(desc(Game.date))
+            .limit(5)
+        )
+        result = await db.execute(stmt)
+        games = result.scalars().all()
+
+        if not games:
+            return empty
+
+        # Last 3 games for recent workload
+        recent_3 = games[:3]
+        shots_3g = sum(g.shots_against or 0 for g in recent_3)
+        avg_shots = shots_3g / len(recent_3) if recent_3 else 30.0
+
+        # All 5 for overall average
+        total_shots = sum(g.shots_against or 0 for g in games)
+        avg_shots_5g = total_shots / len(games)
+
+        # Heavy workload: averaging 35+ shots per game over last 3
+        heavy = avg_shots >= _mc.goalie_heavy_workload_threshold
+
+        # Workload factor: 1.0 = normal, >1.0 = heavy (opponent xG boost)
+        # Each shot above league avg (30) in last 3 games adds a small penalty
+        excess_shots = max(0, avg_shots - 30.0)
+        factor = 1.0 + excess_shots * _mc.goalie_workload_per_shot
+
+        return {
+            "recent_shots_3g": shots_3g,
+            "avg_shots_per_start": round(avg_shots_5g, 1),
+            "heavy_workload": heavy,
+            "workload_factor": round(min(factor, 1.15), 4),
+        }
+
+    # ------------------------------------------------------------------ #
+    #  Pace / tempo metrics                                               #
+    # ------------------------------------------------------------------ #
+
+    async def get_pace_metrics(
+        self,
+        db: AsyncSession,
+        team_id: int,
+        last_n: int = 15,
+    ) -> Dict[str, Any]:
+        """Calculate pace/tempo metrics for a team.
+
+        Pace = total shots + opponent shots per game. High-pace teams
+        generate (and allow) more shot attempts, leading to more
+        scoring opportunities. When two high-pace teams meet, the
+        total goals tend to exceed what individual team averages suggest.
+
+        Returns:
+            dict with pace (shots/game), shot_generation, shots_allowed,
+            pace_category (fast/average/slow), games_found.
+        """
+        games = await self._get_recent_games(db, team_id, last_n)
+
+        if not games:
+            return self._empty_pace_metrics()
+
+        total_shots_for = 0
+        total_shots_against = 0
+        total_goals_for = 0
+        total_goals_against = 0
+        games_counted = 0
+
+        for game in games:
+            is_home = game.home_team_id == team_id
+            sf = (game.home_shots if is_home else game.away_shots) or 0
+            sa = (game.away_shots if is_home else game.home_shots) or 0
+            gf = (game.home_score if is_home else game.away_score) or 0
+            ga = (game.away_score if is_home else game.home_score) or 0
+
+            if sf == 0 and sa == 0:
+                continue
+
+            total_shots_for += sf
+            total_shots_against += sa
+            total_goals_for += gf
+            total_goals_against += ga
+            games_counted += 1
+
+        if games_counted == 0:
+            return self._empty_pace_metrics()
+
+        avg_sf = total_shots_for / games_counted
+        avg_sa = total_shots_against / games_counted
+        pace = avg_sf + avg_sa  # total shots per game
+        avg_total_goals = (total_goals_for + total_goals_against) / games_counted
+
+        # Classify pace
+        if pace >= _mc.pace_fast_threshold:
+            category = "fast"
+        elif pace <= _mc.pace_slow_threshold:
+            category = "slow"
+        else:
+            category = "average"
+
+        return {
+            "pace": round(pace, 1),
+            "shot_generation": round(avg_sf, 1),
+            "shots_allowed": round(avg_sa, 1),
+            "avg_total_goals": round(avg_total_goals, 2),
+            "pace_category": category,
+            "games_found": games_counted,
+        }
+
+    @staticmethod
+    def _empty_pace_metrics() -> Dict[str, Any]:
+        return {
+            "pace": 60.0,
+            "shot_generation": 30.0,
+            "shots_allowed": 30.0,
+            "avg_total_goals": 6.0,
+            "pace_category": "average",
+            "games_found": 0,
+        }
+
+    # ------------------------------------------------------------------ #
+    #  Score-close possession (within 1 goal, regulation only)            #
+    # ------------------------------------------------------------------ #
+
+    async def get_score_close_stats(
+        self,
+        db: AsyncSession,
+        team_id: int,
+        last_n: int = 20,
+    ) -> Dict[str, Any]:
+        """Calculate offensive/defensive metrics from score-close games.
+
+        "Score-close" means games decided by 1 goal or that went to OT.
+        These games better reflect true team quality because blowouts
+        skew stats (teams protecting leads play differently).
+
+        Returns:
+            dict with close_gf_pg, close_ga_pg, close_shot_share,
+            close_games_found.
+        """
+        games = await self._get_recent_games(db, team_id, last_n)
+
+        if not games:
+            return self._empty_score_close_stats()
+
+        total_gf = 0
+        total_ga = 0
+        total_sf = 0
+        total_sa = 0
+        close_games = 0
+
+        for game in games:
+            if game.home_score is None or game.away_score is None:
+                continue
+
+            is_home = game.home_team_id == team_id
+            gf = game.home_score if is_home else game.away_score
+            ga = game.away_score if is_home else game.home_score
+            sf = (game.home_shots if is_home else game.away_shots) or 0
+            sa = (game.away_shots if is_home else game.home_shots) or 0
+
+            # Score-close: decided by 1 goal or went to OT
+            margin = abs(gf - ga)
+            went_ot = game.went_to_overtime or False
+            if margin <= 1 or went_ot:
+                total_gf += gf
+                total_ga += ga
+                total_sf += sf
+                total_sa += sa
+                close_games += 1
+
+        if close_games == 0:
+            return self._empty_score_close_stats()
+
+        shot_total = total_sf + total_sa
+        shot_share = (total_sf / shot_total * 100.0) if shot_total > 0 else 50.0
+
+        return {
+            "close_gf_pg": round(total_gf / close_games, 3),
+            "close_ga_pg": round(total_ga / close_games, 3),
+            "close_shot_share": round(shot_share, 2),
+            "close_games_found": close_games,
+        }
+
+    @staticmethod
+    def _empty_score_close_stats() -> Dict[str, Any]:
+        return {
+            "close_gf_pg": 3.0,
+            "close_ga_pg": 3.0,
+            "close_shot_share": 50.0,
+            "close_games_found": 0,
+        }
+
+    # ------------------------------------------------------------------ #
     #  Build comprehensive feature set for a game                         #
     # ------------------------------------------------------------------ #
 
@@ -1924,6 +2363,30 @@ class FeatureEngine:
         home_goalie = self.classify_goalie_tier(home_goalie)
         away_goalie = self.classify_goalie_tier(away_goalie)
 
+        # Feature #1: Confirmed starter integration (NHL API)
+        home_goalie = await self.get_confirmed_starter(
+            db, game.id, home_id, home_goalie
+        )
+        away_goalie = await self.get_confirmed_starter(
+            db, game.id, away_id, away_goalie
+        )
+
+        # Feature #3: Goalie venue splits (home vs away)
+        home_goalie_venue = await self.get_goalie_venue_splits(
+            db, home_goalie.get("goalie_id"), home_id, is_home=True
+        )
+        away_goalie_venue = await self.get_goalie_venue_splits(
+            db, away_goalie.get("goalie_id"), away_id, is_home=False
+        )
+
+        # Feature #5: Goalie workload / shot-based fatigue
+        home_goalie_workload = await self.get_goalie_workload(
+            db, home_goalie.get("goalie_id")
+        )
+        away_goalie_workload = await self.get_goalie_workload(
+            db, away_goalie.get("goalie_id")
+        )
+
         # Goalie vs. specific opponent history
         home_goalie_vs_team = await self.get_goalie_vs_team(
             db, home_goalie.get("goalie_id"), home_id, away_id
@@ -1948,6 +2411,14 @@ class FeatureEngine:
         team_matchup = await matchup_engine.get_team_matchup_features(
             db, home_id, away_id
         )
+
+        # Feature #4: Pace / tempo metrics
+        home_pace = await self.get_pace_metrics(db, home_id)
+        away_pace = await self.get_pace_metrics(db, away_id)
+
+        # Feature #2: Score-close stats
+        home_score_close = await self.get_score_close_stats(db, home_id)
+        away_score_close = await self.get_score_close_stats(db, away_id)
 
         # Penalty discipline
         home_discipline = await self.get_penalty_discipline(db, home_id)
@@ -2065,6 +2536,18 @@ class FeatureEngine:
             # Goalie vs. specific opponent history
             "home_goalie_vs_team": home_goalie_vs_team,
             "away_goalie_vs_team": away_goalie_vs_team,
+            # Goalie venue splits (home/away performance)
+            "home_goalie_venue": home_goalie_venue,
+            "away_goalie_venue": away_goalie_venue,
+            # Goalie workload (shot-based fatigue)
+            "home_goalie_workload": home_goalie_workload,
+            "away_goalie_workload": away_goalie_workload,
+            # Pace / tempo
+            "home_pace": home_pace,
+            "away_pace": away_pace,
+            # Score-close stats
+            "home_score_close": home_score_close,
+            "away_score_close": away_score_close,
             # Player matchups (how key players perform vs this opponent)
             "home_player_matchup": home_player_matchup,
             "away_player_matchup": away_player_matchup,

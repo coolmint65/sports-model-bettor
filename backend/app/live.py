@@ -219,6 +219,27 @@ async def _sync_odds_and_broadcast(skip_alternates: bool = True):
         logger.error("Background odds sync failed: %s", exc, exc_info=True)
 
 
+async def _sync_confirmed_starters():
+    """Fetch confirmed starting goalies from the NHL API.
+
+    Runs every 15 minutes when there are games today. The NHL typically
+    confirms starters 1-3 hours before puck drop, so frequent checks
+    during the pregame window catch these confirmations early.
+    """
+    try:
+        async with get_session_context() as session:
+            from app.scrapers.starter_scraper import sync_confirmed_starters
+            starters = await sync_confirmed_starters(session)
+            confirmed = [s for s in starters if s["confirmed"]]
+            if confirmed:
+                logger.info(
+                    "Confirmed starters: %s",
+                    ", ".join(f"{s['goalie_name']} ({s['team_abbrev']})" for s in confirmed),
+                )
+    except Exception as exc:
+        logger.error("Starter sync failed: %s", exc, exc_info=True)
+
+
 async def _sync_player_props():
     """Fetch and persist player prop odds for today's games.
 
@@ -385,6 +406,7 @@ async def _scheduler_loop():
     FULL_SYNC_INTERVAL = 1800  # 30 minutes for full data refresh
     ALT_REFRESH_INTERVAL = 1800  # 30 min — refresh alternate lines
     PROPS_SYNC_INTERVAL = 1800   # 30 min — sync player props
+    STARTER_SYNC_INTERVAL = 900  # 15 min — check confirmed starters
 
     _scheduler_running = True
     logger.info("Live odds scheduler started (credit-optimised)")
@@ -403,6 +425,7 @@ async def _scheduler_loop():
     last_pred_regen = loop.time()
     last_alt_refresh = 0.0  # force alt refresh on first sync
     last_props_sync = 0.0   # force props sync on first cycle with games
+    last_starter_sync = 0.0  # force starter sync on first cycle with games
     _iteration = 0
 
     # Brief pause to let the full sync populate today's schedule
@@ -502,6 +525,9 @@ async def _scheduler_loop():
                 if now - last_props_sync >= PROPS_SYNC_INTERVAL:
                     await _sync_player_props()
                     last_props_sync = now
+                if now - last_starter_sync >= STARTER_SYNC_INTERVAL:
+                    await _sync_confirmed_starters()
+                    last_starter_sync = now
 
             # Heartbeat log every 10 iterations (or every iteration
             # when games are live) for observability.

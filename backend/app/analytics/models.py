@@ -499,6 +499,68 @@ class BettingModel:
                 sv_diff = vs_sv - season_sv
                 home_xg *= 1.0 - sv_diff * goalie_vs_factor * 10.0
 
+        # ---- Goalie venue splits adjustment ----
+        # A goalie performing notably differently at home vs away shifts xG.
+        venue_factor = _mc.goalie_venue_factor
+        if venue_factor > 0:
+            home_venue = features.get("home_goalie_venue", {})
+            away_venue = features.get("away_goalie_venue", {})
+
+            if home_venue.get("significant", False):
+                venue_sv = home_venue["venue_save_pct"]
+                season_sv = features.get("home_goalie", {}).get("season_save_pct", 0.900)
+                sv_diff = venue_sv - season_sv
+                away_xg *= 1.0 - sv_diff * venue_factor * 10.0
+
+            if away_venue.get("significant", False):
+                venue_sv = away_venue["venue_save_pct"]
+                season_sv = features.get("away_goalie", {}).get("season_save_pct", 0.900)
+                sv_diff = venue_sv - season_sv
+                home_xg *= 1.0 - sv_diff * venue_factor * 10.0
+
+        # ---- Goalie workload fatigue adjustment ----
+        # A goalie who has faced heavy shot volume recently is more
+        # fatigued than consecutive starts alone captures.
+        wl_factor = _mc.goalie_workload_factor
+        if wl_factor > 0:
+            home_wl = features.get("home_goalie_workload", {})
+            away_wl = features.get("away_goalie_workload", {})
+
+            if home_wl.get("heavy_workload", False):
+                away_xg *= home_wl.get("workload_factor", 1.0)
+            if away_wl.get("heavy_workload", False):
+                home_xg *= away_wl.get("workload_factor", 1.0)
+
+        # ---- Pace / tempo matchup adjustment ----
+        # Two fast teams create more total goals than individual averages
+        # suggest. Two slow teams create fewer. Model the interaction.
+        pace_factor = _mc.pace_interaction_factor
+        if pace_factor > 0:
+            home_pace = features.get("home_pace", {})
+            away_pace = features.get("away_pace", {})
+            if (home_pace.get("games_found", 0) >= _mc.pace_min_games and
+                    away_pace.get("games_found", 0) >= _mc.pace_min_games):
+                combined_pace = home_pace.get("pace", 60.0) + away_pace.get("pace", 60.0)
+                league_avg_pace = 120.0  # 60 shots/game per team (2 teams)
+                pace_deviation = (combined_pace - league_avg_pace) / league_avg_pace
+                pace_adj = pace_deviation * pace_factor
+                home_xg *= 1.0 + pace_adj
+                away_xg *= 1.0 + pace_adj
+
+        # ---- Score-close performance adjustment ----
+        # Teams that perform well in tight games are more likely to
+        # sustain that output than teams padding stats in blowouts.
+        sc_factor = _mc.score_close_factor
+        if sc_factor > 0:
+            home_sc = features.get("home_score_close", {})
+            away_sc = features.get("away_score_close", {})
+            if home_sc.get("close_games_found", 0) >= _mc.score_close_min_games:
+                close_off = home_sc.get("close_gf_pg", home_xg)
+                home_xg = home_xg * (1.0 - sc_factor) + close_off * sc_factor
+            if away_sc.get("close_games_found", 0) >= _mc.score_close_min_games:
+                close_off = away_sc.get("close_gf_pg", away_xg)
+                away_xg = away_xg * (1.0 - sc_factor) + close_off * sc_factor
+
         # ---- Penalty discipline adjustment ----
         # Undisciplined teams give opponents more power-play chances,
         # effectively boosting the opponent's expected goals.
