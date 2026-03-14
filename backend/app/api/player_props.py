@@ -211,9 +211,18 @@ async def sync_props_now() -> Dict[str, Any]:
     except Exception as exc:
         diag["steps"].append(f"WARN: Could not clear cache: {exc}")
 
-    # Step 3: Fetch bulk odds to discover events
+    # Step 3: Direct connectivity test to The Odds API
+    # This bypasses _fetch_odds_api_raw to capture the exact error.
+    test_url = "https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds"
+    test_params = {
+        "apiKey": api_key,
+        "regions": "us",
+        "markets": "h2h",
+        "oddsFormat": "american",
+    }
     async with httpx.AsyncClient(
         follow_redirects=True,
+        timeout=20.0,
         limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
     ) as client:
         # Also clear the bulk odds cache so we get fresh data
@@ -224,19 +233,49 @@ async def sync_props_now() -> Dict[str, Any]:
         except Exception:
             pass
 
-        raw = await _fetch_odds_api_raw(client)
+        try:
+            resp = await client.get(test_url, params=test_params, timeout=20.0)
+            diag["steps"].append(
+                f"OK: Odds API responded HTTP {resp.status_code} "
+                f"(remaining: {resp.headers.get('x-requests-remaining', '?')}, "
+                f"used: {resp.headers.get('x-requests-used', '?')})"
+            )
+            if resp.status_code != 200:
+                try:
+                    body = resp.text[:500]
+                except Exception:
+                    body = "(could not read body)"
+                diag["steps"].append(f"FAIL: API returned HTTP {resp.status_code}: {body}")
+                diag["status"] = "error"
+                diag["props_synced"] = 0
+                return diag
+            # If we get here, the API is reachable — use this data
+            raw = resp.json()
+        except httpx.ConnectError as exc:
+            diag["steps"].append(
+                f"FAIL: Cannot connect to api.the-odds-api.com: {exc}. "
+                "This is a network/firewall issue on your machine, not an API key problem."
+            )
+            diag["status"] = "error"
+            diag["props_synced"] = 0
+            return diag
+        except httpx.TimeoutException as exc:
+            diag["steps"].append(
+                f"FAIL: Connection timed out after 20s: {exc}. "
+                "Check firewall, VPN, or proxy settings."
+            )
+            diag["status"] = "error"
+            diag["props_synced"] = 0
+            return diag
+        except Exception as exc:
+            diag["steps"].append(
+                f"FAIL: Unexpected error calling Odds API: {type(exc).__name__}: {exc}"
+            )
+            diag["status"] = "error"
+            diag["props_synced"] = 0
+            return diag
 
-    if raw is None:
-        diag["steps"].append(
-            "FAIL: _fetch_odds_api_raw returned None — API call failed. "
-            "Check API key validity and credit balance at "
-            "https://the-odds-api.com/account/"
-        )
-        diag["status"] = "error"
-        diag["props_synced"] = 0
-        return diag
-
-    if not raw:
+    if not raw or not isinstance(raw, list):
         diag["steps"].append("FAIL: Bulk API returned empty list — no NHL events found")
         diag["status"] = "error"
         diag["props_synced"] = 0
