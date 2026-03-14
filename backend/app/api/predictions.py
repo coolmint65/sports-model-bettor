@@ -1070,6 +1070,27 @@ async def regenerate_predictions():
     except Exception as exc:
         logger.warning("Regenerate: odds backfill failed: %s", exc)
 
+    # Step 6: Sync player props (Odds API per-event).
+    try:
+        # Clear props cache to force fresh fetch
+        try:
+            import app.scrapers.player_props as _pp_mod
+            _pp_mod._props_cache = {}
+            _pp_mod._props_cache_ts = 0.0
+        except ImportError:
+            pass
+
+        async with get_write_session_context() as session:
+            from app.services.odds import sync_player_props
+            props_count = await sync_player_props(session)
+            if props_count:
+                steps.append(f"synced {props_count} player props")
+            else:
+                steps.append("player props: 0 lines (check API key / credits)")
+    except Exception as exc:
+        logger.warning("Regenerate: player props sync failed: %s", exc)
+        steps.append(f"player props sync failed: {exc}")
+
     # Safety: if we deleted predictions but generated 0, log a warning.
     if deleted > 0 and count == 0:
         logger.warning(

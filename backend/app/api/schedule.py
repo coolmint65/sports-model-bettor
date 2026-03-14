@@ -454,12 +454,9 @@ async def _compute_top_picks(
     # pick the best available prediction even when edge or confidence is
     # below the strict Tier 1 thresholds.
     #
-    # Neither the heavy-juice filter nor the min_confidence filter is
-    # applied here.  composite_pick_score already penalises bad juice
-    # (via its juice component) and low confidence (35 % weight), so
-    # hard cutoffs on top of that would filter legitimate high-edge
-    # value picks — e.g. a +154 ML with 14 % edge but 54 % confidence
-    # getting blocked in favour of a heavy-juice spread.
+    # Heavy-juice picks are still filtered here — showing a -238 spread
+    # as the top pick is misleading even when it's the only prediction
+    # for a game.  Better to show no pick than a heavy-juice one.
     still_missing = set(gid for gid in game_ids if gid not in top_picks)
     if still_missing:
         no_odds_result = await session.execute(
@@ -483,6 +480,17 @@ async def _compute_top_picks(
                     _seen_t3[key] = p
         no_odds_preds = list(_seen_t3.values())
 
+        # Populate fresh_map for Tier 3 predictions (they come from a
+        # separate query and aren't covered by the initial fresh_map pass).
+        for p in no_odds_preds:
+            if p.id not in fresh_map:
+                if prefer_live:
+                    game_obj = game_by_id.get(p.game_id)
+                    fresh = fresh_implied_prob(p, game_obj)
+                    fresh_map[p.id] = fresh if fresh is not None else p.odds_implied_prob
+                else:
+                    fresh_map[p.id] = p.odds_implied_prob
+
         def _tier3_sort_key(p):
             score = composite_pick_score(
                 p.confidence, p.edge, p.odds_implied_prob
@@ -497,6 +505,11 @@ async def _compute_top_picks(
 
         for pred in sorted(no_odds_preds, key=_tier3_sort_key, reverse=True):
             if pred.game_id not in top_picks:
+                # Enforce heavy-juice filter even in Tier 3 — a heavy-juice
+                # spread as the sole top pick is worse than no pick at all.
+                cur_impl = fresh_map.get(pred.id) or pred.odds_implied_prob
+                if is_heavy_juice(cur_impl, max_implied):
+                    continue
                 top_picks[pred.game_id] = GameTopPick(
                     prediction_id=pred.id,
                     bet_type=pred.bet_type,

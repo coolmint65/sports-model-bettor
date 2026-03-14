@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.constants import GAME_FINAL_STATUSES
-from app.database import get_session
+from app.database import get_session, get_write_session_context
 from app.models.game import Game
 from app.models.player_prop import PlayerPropOdds
 from app.models.team import Team
@@ -167,3 +167,36 @@ async def get_game_props(
         "markets": by_market,
         "total_props": len(all_props),
     }
+
+
+@router.post("/sync")
+async def sync_props_now() -> Dict[str, Any]:
+    """Manually trigger a player props sync from The Odds API.
+
+    Bypasses the 30-minute cache to force a fresh fetch. Useful when
+    props aren't appearing or need an immediate refresh.
+    """
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    # Clear the props cache so we get fresh data
+    try:
+        from app.scrapers.player_props import _props_cache, _props_cache_ts
+        import app.scrapers.player_props as _pp_mod
+
+        _pp_mod._props_cache = {}
+        _pp_mod._props_cache_ts = 0.0
+    except ImportError:
+        pass
+
+    try:
+        async with get_write_session_context() as session:
+            from app.services.odds import sync_player_props
+
+            count = await sync_player_props(session)
+            logger.info("Manual props sync: %d lines synced", count)
+            return {"status": "ok", "props_synced": count}
+    except Exception as exc:
+        logger.error("Manual props sync failed: %s", exc, exc_info=True)
+        return {"status": "error", "error": str(exc), "props_synced": 0}

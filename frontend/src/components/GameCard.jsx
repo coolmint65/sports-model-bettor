@@ -17,6 +17,7 @@ import {
   confidencePct,
   parseAsUTC,
   isLiveStatus,
+  formatBetType,
 } from '../utils/teams';
 import { formatAmericanOdds } from '../utils/formatting';
 
@@ -315,7 +316,7 @@ function GameCard({ game, section, medal }) {
           <span className="dc-pick-bar-text">
             <strong>
               {pickIsHome ? homeAbbr : pickIsAway ? awayAbbr : ''}{' '}
-              {pickBetType === 'ml' ? 'ML' : pickBetType === 'spread' ? 'Spread' : pickBetType === 'total' ? (pickIsOver ? 'Over' : 'Under') + ' ' + (ouLine || '') : pickBetType.toUpperCase()}
+              {pickBetType === 'ml' ? 'ML' : pickBetType === 'spread' ? 'Spread' : pickBetType === 'total' ? (pickIsOver ? 'Over' : 'Under') + ' ' + (ouLine || '') : formatBetType(pickBetType)}
             </strong>
           </span>
           {confidence != null && (
