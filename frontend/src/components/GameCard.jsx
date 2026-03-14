@@ -237,7 +237,17 @@ function GameCard({ game, section, medal }) {
   const awaySpreadLine = odds?.away_spread_line;
   const ouLine = odds?.over_under_line;
 
-  // Determine which side the pick is on
+  // Per-market picks (best ML, best Spread, best O/U)
+  const topPicks = game.top_picks || [];
+  const pickByMarket = {};
+  for (const p of topPicks) {
+    pickByMarket[p.bet_type] = p;
+  }
+  const mlPick = pickByMarket['ml'] || null;
+  const spreadPick = pickByMarket['spread'] || null;
+  const totalPick = pickByMarket['total'] || null;
+
+  // Determine which side the single top_pick is on (for odds pill highlighting)
   const pickValue = (topPick?.prediction_value || '').toLowerCase();
   const pickBetType = (topPick?.bet_type || '').toLowerCase();
   const pickIsHome = pickValue === 'home' || pickValue.includes(homeAbbr.toLowerCase());
@@ -246,6 +256,27 @@ function GameCard({ game, section, medal }) {
   // Detect over/under pick
   const pickIsOver = pickBetType === 'total' && pickValue.includes('over');
   const pickIsUnder = pickBetType === 'total' && pickValue.includes('under');
+
+  // Helper to format a per-market pick label
+  const formatMarketPick = (pick) => {
+    if (!pick) return null;
+    const val = (pick.prediction_value || '').toLowerCase();
+    const bt = (pick.bet_type || '').toLowerCase();
+    const isHome = val === 'home' || val.includes(homeAbbr.toLowerCase());
+    const isAway = val === 'away' || val.includes(awayAbbr.toLowerCase());
+    const team = isHome ? homeAbbr : isAway ? awayAbbr : '';
+
+    if (bt === 'ml') return `${team} ML`;
+    if (bt === 'spread') {
+      const line = isHome ? spreadLine : awaySpreadLine;
+      return `${team} ${line != null ? (line > 0 ? '+' : '') + line : 'PL'}`;
+    }
+    if (bt === 'total') {
+      const isOver = val.includes('over');
+      return `${isOver ? 'Over' : 'Under'} ${ouLine || ''}`;
+    }
+    return formatBetType(bt);
+  };
 
   return (
     <div className="dc-card" onClick={handleClick} role="button" tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && handleClick()}>
@@ -310,8 +341,58 @@ function GameCard({ game, section, medal }) {
         </div>
       </div>
 
-      {/* Pick summary bar */}
-      {topPick && pickBetType && (
+      {/* Per-market pick bars (best ML, best Spread, best O/U) */}
+      {topPicks.length > 0 ? (
+        <div className="dc-picks-multi">
+          {(() => {
+            const picks = [mlPick, spreadPick, totalPick].filter(Boolean);
+            // Find the best pick (highest composite_score or edge)
+            const bestPick = picks.reduce((best, p) => {
+              const score = (s) => (s?.composite_score ?? 0) || ((s?.edge ?? 0) * 100 + (s?.confidence ?? 0));
+              return score(p) > score(best) ? p : best;
+            }, picks[0]);
+
+            return picks.map((pick) => {
+              const conf = pick.confidence != null ? confidencePct(pick.confidence) : null;
+              const label = formatMarketPick(pick);
+              const edgePct = pick.edge != null ? (pick.edge * 100).toFixed(1) : null;
+              const isBest = pick === bestPick && picks.length > 1;
+              // Quality tier per pick
+              let tier = '';
+              let tierLabel = '';
+              if (isBest) {
+                tier = 'dc-pick-chip-best';
+                tierLabel = 'BEST';
+              } else if (conf != null && conf >= 70) {
+                tier = 'dc-pick-chip-good';
+                tierLabel = 'GOOD';
+              } else if (conf != null && conf >= 55) {
+                tier = 'dc-pick-chip-borderline';
+                tierLabel = 'LEAN';
+              } else {
+                tier = 'dc-pick-chip-borderline';
+                tierLabel = 'LEAN';
+              }
+              return (
+                <div key={pick.bet_type} className={`dc-pick-chip ${tier}`}>
+                  <Target size={11} />
+                  <span className="dc-pick-chip-label">{label}</span>
+                  {pick.odds_display != null && (
+                    <span className="dc-pick-chip-odds">{formatAmericanOdds(pick.odds_display)}</span>
+                  )}
+                  {edgePct != null && (
+                    <span className="dc-pick-chip-edge">+{edgePct}%</span>
+                  )}
+                  {conf != null && (
+                    <span className="dc-pick-chip-conf">{Math.round(conf)}%</span>
+                  )}
+                  <span className="dc-pick-chip-badge">{tierLabel}</span>
+                </div>
+              );
+            });
+          })()}
+        </div>
+      ) : topPick && pickBetType ? (
         <div className="dc-pick-bar">
           <Target size={13} />
           <span className="dc-pick-bar-text">
@@ -324,7 +405,7 @@ function GameCard({ game, section, medal }) {
             <span className="dc-pick-bar-conf">{Math.round(confidence)}%</span>
           )}
         </div>
-      )}
+      ) : null}
 
       {/* Odds summary pills - flat horizontal row */}
       {odds && (
@@ -362,8 +443,8 @@ function GameCard({ game, section, medal }) {
         </div>
       )}
 
-      {/* Starting Goalies */}
-      {(game.home_starter || game.away_starter) && (
+      {/* Starting Goalies — only show when at least one name is available */}
+      {(game.home_starter?.name || game.away_starter?.name) && (
         <div className="dc-goalies">
           <div className="dc-goalie-row">
             <span className="dc-goalie-name">

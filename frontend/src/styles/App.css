@@ -4903,6 +4903,105 @@ a:hover {
   font-family: var(--font-mono);
 }
 
+/* Multi-pick display (best ML, best Spread, best O/U) */
+.dc-picks-multi {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dc-pick-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--border-subtle, #2a2a3e);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.02);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.dc-pick-chip-best {
+  border-color: #ffd700;
+  background: rgba(255, 215, 0, 0.06);
+  box-shadow: 0 0 8px rgba(255, 215, 0, 0.12);
+}
+
+.dc-pick-chip-good {
+  border-color: var(--accent-green);
+  background: rgba(0, 255, 136, 0.04);
+}
+
+.dc-pick-chip-borderline {
+  border-color: var(--accent-orange, #ff9800);
+  background: rgba(255, 152, 0, 0.04);
+}
+
+.dc-pick-chip-label {
+  font-weight: 700;
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.dc-pick-chip-best .dc-pick-chip-label {
+  color: #ffd700;
+}
+
+.dc-pick-chip-good .dc-pick-chip-label {
+  color: var(--accent-green);
+}
+
+.dc-pick-chip-borderline .dc-pick-chip-label {
+  color: var(--accent-orange, #ff9800);
+}
+
+.dc-pick-chip-odds {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 0.73rem;
+}
+
+.dc-pick-chip-edge {
+  color: var(--accent-green);
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 0.7rem;
+}
+
+.dc-pick-chip-conf {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.dc-pick-chip-badge {
+  font-size: 0.58rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.dc-pick-chip-best .dc-pick-chip-badge {
+  color: #ffd700;
+  background: rgba(255, 215, 0, 0.12);
+}
+
+.dc-pick-chip-good .dc-pick-chip-badge {
+  color: var(--accent-green);
+  background: rgba(0, 255, 136, 0.1);
+}
+
+.dc-pick-chip-borderline .dc-pick-chip-badge {
+  color: var(--accent-orange, #ff9800);
+  background: rgba(255, 152, 0, 0.1);
+}
+
 .dc-odds-pill-active {
   border-color: var(--accent-green);
   background: rgba(0, 255, 136, 0.08);

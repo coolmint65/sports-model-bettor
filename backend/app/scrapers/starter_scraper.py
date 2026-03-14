@@ -428,11 +428,9 @@ def _extract_nhl_goalie(data: dict, side: str) -> Optional[Dict[str, Any]]:
         lambda: data.get("matchup", {}).get("goalieComparison", {}).get(side, {}),
         # Path 2: matchup.goalieComparison.homeTeam.starter
         lambda: data.get("matchup", {}).get("goalieComparison", {}).get(side, {}).get("starter", {}),
-        # Path 3: top-level team block
-        lambda: data.get(side, {}),
-        # Path 4: top-level startingGoalie
+        # Path 3: top-level startingGoalie nested under team
         lambda: data.get(side, {}).get("startingGoalie", {}),
-        # Path 5: summary section
+        # Path 4: summary section
         lambda: data.get("summary", {}).get("goalieComparison", {}).get(side, {}),
     ]
 
@@ -500,7 +498,7 @@ def _parse_goalie_block(block: dict) -> Optional[Dict[str, Any]]:
     # Player ID
     player_id = block.get("playerId") or block.get("id") or block.get("player_id")
 
-    if not name and not player_id:
+    if not name:
         return None
 
     # Confirmed status
@@ -638,6 +636,8 @@ async def sync_confirmed_starters(db: AsyncSession) -> List[Dict[str, Any]]:
             for game in uncovered:
                 try:
                     game_starters = await _fetch_nhl_api_starters(client, db, game)
+                    # Only keep starters that have an actual goalie name
+                    game_starters = [s for s in game_starters if s.get("goalie_name")]
                     starters.extend(game_starters)
                     if game_starters:
                         covered_game_ids.add(game.id)

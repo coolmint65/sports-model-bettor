@@ -101,8 +101,10 @@ class ScheduleGame(BaseModel):
     in_intermission: Optional[bool] = None
     home_shots: Optional[int] = None
     away_shots: Optional[int] = None
-    # Top prediction for this game
+    # Top prediction for this game (single best across all markets)
     top_pick: Optional[GameTopPick] = None
+    # Best pick per market type (ML, Spread, O/U) — up to 3
+    top_picks: Optional[List[GameTopPick]] = None
     # Top prop prediction for this game
     top_prop: Optional[GameTopPick] = None
     # Sportsbook odds
@@ -213,6 +215,7 @@ def _build_schedule_game(
     top_prop: Optional[GameTopPick] = None,
     home_starter: Optional[GoalieStarter] = None,
     away_starter: Optional[GoalieStarter] = None,
+    top_picks: Optional[List[GameTopPick]] = None,
 ) -> ScheduleGame:
     # When no market pick exists but a prop does, promote the prop
     # to top_pick so the dashboard still shows a recommendation.
@@ -240,6 +243,7 @@ def _build_schedule_game(
         home_shots=game.home_shots,
         away_shots=game.away_shots,
         top_pick=effective_pick,
+        top_picks=top_picks,
         top_prop=top_prop,
         odds=_build_game_odds(game),
         pregame_odds=_build_pregame_odds(game),
@@ -548,6 +552,106 @@ async def _compute_top_picks(
     return top_picks
 
 
+async def _compute_top_picks_by_market(
+    games: List[Game], session: AsyncSession, *, prefer_live: bool = False,
+) -> dict[int, List[GameTopPick]]:
+    """Compute the best prediction per market type (ML, Spread, O/U) for each game.
+
+    Returns a dict of game_id → list of up to 3 GameTopPick objects,
+    one for each market type that has a qualifying prediction.
+    """
+    max_implied = settings.best_bet_max_implied
+    game_ids = [g.id for g in games]
+    game_by_id = {g.id: g for g in games}
+
+    if not game_ids:
+        return {}
+
+    phase_filter = ("prematch", "live") if prefer_live else ("prematch",)
+
+    all_preds_result = await session.execute(
+        select(Prediction).where(
+            Prediction.game_id.in_(game_ids),
+            Prediction.bet_type.in_(MARKET_BET_TYPES),
+            Prediction.phase.in_(phase_filter),
+        )
+    )
+    all_preds = all_preds_result.scalars().all()
+
+    # Dedup: prefer live over prematch when both exist
+    if prefer_live:
+        _seen: dict[tuple, Prediction] = {}
+        for p in all_preds:
+            key = (p.game_id, p.bet_type, p.prediction_value)
+            existing = _seen.get(key)
+            if existing is None or (existing.phase == "prematch" and p.phase == "live"):
+                _seen[key] = p
+        all_preds = list(_seen.values())
+
+    # Group by (game_id, bet_type) and pick the best per market
+    from collections import defaultdict
+    by_game_market: dict[int, dict[str, list]] = defaultdict(lambda: defaultdict(list))
+    for p in all_preds:
+        by_game_market[p.game_id][p.bet_type].append(p)
+
+    _LENIENT_MAX_IMPLIED = 0.714  # same as Tier 3
+
+    result: dict[int, List[GameTopPick]] = {}
+    for game_id, markets in by_game_market.items():
+        game_obj = game_by_id.get(game_id)
+        picks_for_game = []
+        for bet_type in ("ml", "total", "spread"):
+            preds = markets.get(bet_type, [])
+            if not preds:
+                continue
+
+            # Sort by composite score
+            def _sort_key(p):
+                return composite_pick_score(
+                    p.confidence, p.edge, p.odds_implied_prob
+                )
+
+            preds.sort(key=_sort_key, reverse=True)
+            best = preds[0]
+
+            # Apply juice filter — use lenient ceiling so we still
+            # show a pick for most markets
+            impl = best.odds_implied_prob
+            if not prefer_live:
+                fresh = impl
+            else:
+                fresh = fresh_implied_prob(best, game_obj)
+                if fresh is None:
+                    fresh = impl
+            if is_heavy_juice(fresh, _LENIENT_MAX_IMPLIED):
+                continue
+
+            # Require minimum edge for the pick to be shown
+            if (best.edge or 0) < 0.01:
+                continue
+
+            picks_for_game.append(GameTopPick(
+                prediction_id=best.id,
+                bet_type=best.bet_type,
+                prediction_value=best.prediction_value,
+                confidence=best.confidence,
+                edge=best.edge,
+                is_fallback=best.odds_implied_prob is None,
+                reasoning=best.reasoning,
+                odds_display=_pick_odds_display(best, game_obj),
+            ))
+
+        # Grade outcomes for final games
+        if game_obj and game_obj.status and game_obj.status.lower() in GAME_FINAL_STATUSES:
+            for pick in picks_for_game:
+                pick.outcome = _grade_top_pick(pick, game_obj)
+
+        if picks_for_game:
+            result[game_id] = picks_for_game
+
+    return result
+
+
 def _prop_signal_strength(confidence: float, baseline: float) -> float:
     """Compute how far a prop's confidence deviates from the league norm.
 
@@ -702,6 +806,7 @@ async def _games_for_date(
 
     # Pre-fetch best prediction per game using composite score
     top_picks = await _compute_top_picks(games, session)
+    top_picks_by_market = await _compute_top_picks_by_market(games, session)
     top_props = await _compute_top_props(games, session)
 
     # Batch-load team stats
@@ -723,6 +828,7 @@ async def _games_for_date(
                 top_props.get(game.id),
                 home_starter=game_starters.get("home"),
                 away_starter=game_starters.get("away"),
+                top_picks=top_picks_by_market.get(game.id),
             )
         )
     return schedule_games
@@ -816,6 +922,7 @@ async def get_live_games():
         # Compute top picks for live games — prefer live-phase
         # predictions so the "Live Now" section shows updated recommendations.
         top_picks = await _compute_top_picks(games, session, prefer_live=True)
+        top_picks_by_market = await _compute_top_picks_by_market(games, session, prefer_live=True)
         top_props = await _compute_top_props(games, session)
 
         # Batch-load team stats
@@ -830,6 +937,7 @@ async def get_live_games():
                 game, home_brief, away_brief,
                 top_picks.get(game.id),
                 top_props.get(game.id),
+                top_picks=top_picks_by_market.get(game.id),
             ))
 
     today = date.today()
