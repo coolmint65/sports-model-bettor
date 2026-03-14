@@ -594,8 +594,6 @@ async def _compute_top_picks_by_market(
     for p in all_preds:
         by_game_market[p.game_id][p.bet_type].append(p)
 
-    _LENIENT_MAX_IMPLIED = 0.714  # same as Tier 3
-
     result: dict[int, List[GameTopPick]] = {}
     for game_id, markets in by_game_market.items():
         game_obj = game_by_id.get(game_id)
@@ -613,22 +611,6 @@ async def _compute_top_picks_by_market(
 
             preds.sort(key=_sort_key, reverse=True)
             best = preds[0]
-
-            # Apply juice filter — use lenient ceiling so we still
-            # show a pick for most markets
-            impl = best.odds_implied_prob
-            if not prefer_live:
-                fresh = impl
-            else:
-                fresh = fresh_implied_prob(best, game_obj)
-                if fresh is None:
-                    fresh = impl
-            if is_heavy_juice(fresh, _LENIENT_MAX_IMPLIED):
-                continue
-
-            # Require minimum edge for the pick to be shown
-            if (best.edge or 0) < 0.01:
-                continue
 
             picks_for_game.append(GameTopPick(
                 prediction_id=best.id,
