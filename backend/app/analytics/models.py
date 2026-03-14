@@ -477,6 +477,28 @@ class BettingModel:
                 sv_trend = away_l5_sv - away_season_sv
                 home_xg *= 1.0 - sv_trend * goalie_trend_factor * 10.0
 
+        # ---- Goalie vs. specific opponent adjustment ----
+        # A goalie who historically performs poorly against this opponent
+        # (low SV%, high GAA) should have opponent xG adjusted upward.
+        goalie_vs_factor = _mc.goalie_vs_team_factor
+        if goalie_vs_factor > 0:
+            home_gvt = features.get("home_goalie_vs_team", {})
+            away_gvt = features.get("away_goalie_vs_team", {})
+
+            # Home goalie vs away team → affects away_xg
+            if home_gvt.get("significant", False):
+                vs_sv = home_gvt["vs_save_pct"]
+                season_sv = features.get("home_goalie", {}).get("season_save_pct", 0.900)
+                sv_diff = vs_sv - season_sv  # negative = worse vs this team
+                away_xg *= 1.0 - sv_diff * goalie_vs_factor * 10.0
+
+            # Away goalie vs home team → affects home_xg
+            if away_gvt.get("significant", False):
+                vs_sv = away_gvt["vs_save_pct"]
+                season_sv = features.get("away_goalie", {}).get("season_save_pct", 0.900)
+                sv_diff = vs_sv - season_sv
+                home_xg *= 1.0 - sv_diff * goalie_vs_factor * 10.0
+
         # ---- Penalty discipline adjustment ----
         # Undisciplined teams give opponents more power-play chances,
         # effectively boosting the opponent's expected goals.

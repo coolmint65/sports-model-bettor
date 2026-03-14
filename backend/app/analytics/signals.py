@@ -53,6 +53,7 @@ class SignalGenerator:
         signals.extend(self._splits_signals(features, home_abbr, away_abbr, home_name, away_name))
         signals.extend(self._divisional_signals(features))
         signals.extend(self._goalie_form_signals(features, home_abbr, away_abbr))
+        signals.extend(self._goalie_vs_team_signals(features, home_abbr, away_abbr))
         signals.extend(self._scoring_mismatch_signals(features, home_abbr, away_abbr, home_name, away_name))
         signals.extend(self._shot_volume_signals(features, home_abbr, away_abbr))
         signals.extend(self._first_period_signals(features, home_abbr, away_abbr, home_name, away_name))
@@ -843,6 +844,61 @@ class SignalGenerator:
                     "negative", abbr,
                     min(0.60, 0.35 + abs(diff) * 10.0),
                     icon="warning",
+                ))
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    #  Goalie vs. specific opponent signals                               #
+    # ------------------------------------------------------------------ #
+
+    def _goalie_vs_team_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+    ) -> List[Dict[str, Any]]:
+        signals = []
+
+        for goalie_key, gvt_key, opp_abbr, own_abbr in [
+            ("home_goalie", "home_goalie_vs_team", away_abbr, home_abbr),
+            ("away_goalie", "away_goalie_vs_team", home_abbr, away_abbr),
+        ]:
+            gvt = features.get(gvt_key, {})
+            goalie = features.get(goalie_key, {})
+            if not gvt.get("significant", False):
+                continue
+
+            name = goalie.get("goalie_name", "Goalie")
+            vs_sv = gvt.get("vs_save_pct", 0.900)
+            season_sv = goalie.get("season_save_pct", 0.900)
+            record = gvt.get("vs_record", "0-0-0")
+            games = gvt.get("vs_games", 0)
+            sv_diff = vs_sv - season_sv
+
+            # Goalie struggles against this opponent (SV% notably below season avg)
+            if sv_diff <= -0.015:
+                signals.append(_signal(
+                    "goalie",
+                    (
+                        f"{name} ({own_abbr} Goalie) struggles vs {opp_abbr}: "
+                        f".{int(vs_sv*1000)} SV% in {games} GP ({record})"
+                    ),
+                    "positive", opp_abbr,
+                    min(0.70, 0.40 + abs(sv_diff) * 10.0),
+                    icon="shield",
+                ))
+            # Goalie dominates this opponent
+            elif sv_diff >= 0.015:
+                signals.append(_signal(
+                    "goalie",
+                    (
+                        f"{name} ({own_abbr} Goalie) dominates vs {opp_abbr}: "
+                        f".{int(vs_sv*1000)} SV% in {games} GP ({record})"
+                    ),
+                    "positive", own_abbr,
+                    min(0.70, 0.40 + sv_diff * 10.0),
+                    icon="shield",
                 ))
 
         return signals

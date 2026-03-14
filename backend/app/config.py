@@ -152,6 +152,8 @@ class ModelConfig(BaseModel):
     goalie_tier_starter_sv: float = 0.905     # starter: >= .905 SV%
     goalie_tier_starter_min_gs: int = 20      # min games started to be "starter"
     goalie_mismatch_factor: float = 0.08      # additional xG adjustment for tier mismatch
+    goalie_vs_team_min_games: int = 3         # min games vs opponent for significance
+    goalie_vs_team_factor: float = 0.12       # xG adjustment for goalie vs team matchup
 
     # Starter confirmation confidence
     starter_confidence_high: float = 0.90     # confirmed / obvious pattern

@@ -437,6 +437,118 @@ class FeatureEngine:
         }
 
     # ------------------------------------------------------------------ #
+    #  Goalie vs. specific opponent                                       #
+    # ------------------------------------------------------------------ #
+
+    async def get_goalie_vs_team(
+        self,
+        db: AsyncSession,
+        goalie_id: Optional[int],
+        goalie_team_id: int,
+        opponent_team_id: int,
+    ) -> Dict[str, Any]:
+        """
+        Calculate a goalie's historical performance against a specific opponent.
+
+        Joins GameGoalieStats → Game to find games where this goalie played
+        (had a decision) and the opponent was the other team. Returns save%,
+        GAA, record, and the number of games found.
+
+        Returns:
+            dict with keys: vs_save_pct, vs_gaa, vs_record (W-L-OTL),
+            vs_games, vs_goals_against_avg, significant (bool).
+        """
+        empty = self._empty_goalie_vs_team()
+        if goalie_id is None:
+            return empty
+
+        # Find games where this goalie got a decision against the opponent
+        stmt = (
+            select(GameGoalieStats, Game)
+            .join(Game, GameGoalieStats.game_id == Game.id)
+            .where(
+                and_(
+                    GameGoalieStats.player_id == goalie_id,
+                    GameGoalieStats.decision.isnot(None),
+                    Game.status == "final",
+                    or_(
+                        and_(
+                            Game.home_team_id == goalie_team_id,
+                            Game.away_team_id == opponent_team_id,
+                        ),
+                        and_(
+                            Game.home_team_id == opponent_team_id,
+                            Game.away_team_id == goalie_team_id,
+                        ),
+                    ),
+                )
+            )
+            .order_by(desc(Game.date))
+            .limit(10)
+        )
+        result = await db.execute(stmt)
+        rows = result.all()
+
+        if not rows:
+            return empty
+
+        total_saves = 0
+        total_shots = 0
+        total_goals_against = 0
+        wins = 0
+        losses = 0
+        ot_losses = 0
+
+        for ggs, game in rows:
+            total_saves += ggs.saves or 0
+            total_shots += ggs.shots_against or 0
+            total_goals_against += ggs.goals_against or 0
+            if ggs.decision == "W":
+                wins += 1
+            elif ggs.decision == "L":
+                losses += 1
+            elif ggs.decision == "OTL":
+                ot_losses += 1
+
+        games_count = len(rows)
+        vs_save_pct = total_saves / total_shots if total_shots > 0 else 0.900
+        vs_gaa = total_goals_against / games_count if games_count > 0 else 3.00
+
+        result_dict = {
+            "vs_save_pct": round(vs_save_pct, 4),
+            "vs_gaa": round(vs_gaa, 3),
+            "vs_record": f"{wins}-{losses}-{ot_losses}",
+            "vs_wins": wins,
+            "vs_losses": losses,
+            "vs_ot_losses": ot_losses,
+            "vs_games": games_count,
+            "significant": games_count >= _mc.goalie_vs_team_min_games,
+        }
+
+        logger.info(
+            "Goalie vs team: goalie_id=%d vs team_id=%d | %d GP | "
+            "SV%% %.3f GAA %.2f | %s",
+            goalie_id, opponent_team_id, games_count,
+            vs_save_pct, vs_gaa, result_dict["vs_record"],
+        )
+
+        return result_dict
+
+    @staticmethod
+    def _empty_goalie_vs_team() -> Dict[str, Any]:
+        """Return default goalie vs team features when no data is available."""
+        return {
+            "vs_save_pct": 0.900,
+            "vs_gaa": 3.00,
+            "vs_record": "0-0-0",
+            "vs_wins": 0,
+            "vs_losses": 0,
+            "vs_ot_losses": 0,
+            "vs_games": 0,
+            "significant": False,
+        }
+
+    # ------------------------------------------------------------------ #
     #  Period-level statistics                                            #
     # ------------------------------------------------------------------ #
 
@@ -1812,6 +1924,14 @@ class FeatureEngine:
         home_goalie = self.classify_goalie_tier(home_goalie)
         away_goalie = self.classify_goalie_tier(away_goalie)
 
+        # Goalie vs. specific opponent history
+        home_goalie_vs_team = await self.get_goalie_vs_team(
+            db, home_goalie.get("goalie_id"), home_id, away_id
+        )
+        away_goalie_vs_team = await self.get_goalie_vs_team(
+            db, away_goalie.get("goalie_id"), away_id, home_id
+        )
+
         # Starter confirmation confidence
         home_starter_status = self.assess_starter_confidence(home_goalie, home_schedule)
         away_starter_status = self.assess_starter_confidence(away_goalie, away_schedule)
@@ -1942,6 +2062,9 @@ class FeatureEngine:
             # Starter confidence
             "home_starter_status": home_starter_status,
             "away_starter_status": away_starter_status,
+            # Goalie vs. specific opponent history
+            "home_goalie_vs_team": home_goalie_vs_team,
+            "away_goalie_vs_team": away_goalie_vs_team,
             # Player matchups (how key players perform vs this opponent)
             "home_player_matchup": home_player_matchup,
             "away_player_matchup": away_player_matchup,
