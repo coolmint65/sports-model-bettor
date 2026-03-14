@@ -150,6 +150,11 @@ class Game(TimestampMixin, Base):
         JSON, nullable=True, default=None
     )
 
+    # Regulation winner (3-way moneyline) odds
+    reg_home_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    reg_away_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    reg_draw_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
     # 1st period odds (from sportsbooks)
     period1_home_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     period1_away_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)

@@ -2890,9 +2890,9 @@ class FeatureEngine:
                 "first_goal_away_price": getattr(game, "first_goal_away_price", None),
                 "ot_yes_price": getattr(game, "overtime_yes_price", None),
                 "ot_no_price": getattr(game, "overtime_no_price", None),
-                "reg_home_price": getattr(game, "regulation_home_price", None),
-                "reg_away_price": getattr(game, "regulation_away_price", None),
-                "reg_draw_price": getattr(game, "regulation_draw_price", None),
+                "reg_home_price": getattr(game, "reg_home_price", None),
+                "reg_away_price": getattr(game, "reg_away_price", None),
+                "reg_draw_price": getattr(game, "reg_draw_price", None),
             },
             # Home team features
             "home_form_5": home_form_5,

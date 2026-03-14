@@ -197,6 +197,12 @@ class OddsEvent:
         "home_spread", "away_spread", "home_spread_price", "away_spread_price",
         "total_line", "over_price", "under_price",
         "alt_totals", "alt_spreads",
+        # 1st period odds
+        "p1_home_ml", "p1_away_ml", "p1_draw_price",
+        "p1_spread_line", "p1_home_spread_price", "p1_away_spread_price",
+        "p1_total_line", "p1_over_price", "p1_under_price",
+        # Regulation winner (3-way moneyline)
+        "reg_home_price", "reg_away_price", "reg_draw_price",
     )
 
     def __init__(
@@ -236,6 +242,20 @@ class OddsEvent:
         self.alt_totals = alt_totals or []
         # alt_spreads: list of {"line": float, "home_price": float, "away_price": float}
         self.alt_spreads = alt_spreads or []
+        # 1st period odds (set after construction if available)
+        self.p1_home_ml: float = 0.0
+        self.p1_away_ml: float = 0.0
+        self.p1_draw_price: float = 0.0
+        self.p1_spread_line: float = 0.0
+        self.p1_home_spread_price: float = 0.0
+        self.p1_away_spread_price: float = 0.0
+        self.p1_total_line: float = 0.0
+        self.p1_over_price: float = 0.0
+        self.p1_under_price: float = 0.0
+        # Regulation winner (3-way moneyline)
+        self.reg_home_price: float = 0.0
+        self.reg_away_price: float = 0.0
+        self.reg_draw_price: float = 0.0
 
     def has_moneyline(self) -> bool:
         return self.home_ml != 0 and self.away_ml != 0
@@ -265,6 +285,9 @@ class OddsEvent:
             "under_price": self.under_price,
             "alt_totals": self.alt_totals,
             "alt_spreads": self.alt_spreads,
+            "reg_home_price": self.reg_home_price,
+            "reg_away_price": self.reg_away_price,
+            "reg_draw_price": self.reg_draw_price,
         }
 
 
@@ -1556,7 +1579,8 @@ async def _fetch_odds_api_raw(
     # All Odds API plans include all markets, but some combinations may
     # fail with certain region/market combos, so we fall back gracefully.
     _MARKET_SETS = [
-        "h2h,spreads,totals,h2h_h1,spreads_h1,totals_h1",
+        "h2h,spreads,totals,h2h_h1,spreads_h1,totals_h1,h2h_3",
+        "h2h,spreads,totals,h2h_3",
         "h2h,spreads,totals",
     ]
 
@@ -1651,6 +1675,11 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
         all_away_spread: List[Tuple[float, float]] = []
         all_total: List[Tuple[float, float, float]] = []  # (line, over_price, under_price)
 
+        # Regulation winner (3-way moneyline: h2h_3)
+        all_reg_home: List[float] = []
+        all_reg_away: List[float] = []
+        all_reg_draw: List[float] = []
+
         # 1st period markets (h2h_h1, spreads_h1, totals_h1)
         all_p1_home_ml: List[float] = []
         all_p1_away_ml: List[float] = []
@@ -1676,6 +1705,17 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
                             all_home_ml.append(float(price))
                         elif name == away_team:
                             all_away_ml.append(float(price))
+
+                elif mkey == "h2h_3":
+                    for oc in outcomes:
+                        name = oc.get("name", "")
+                        price = float(oc.get("price", 0))
+                        if name == home_team:
+                            all_reg_home.append(price)
+                        elif name == away_team:
+                            all_reg_away.append(price)
+                        elif name.lower() in ("draw", "tie"):
+                            all_reg_draw.append(price)
 
                 elif mkey == "spreads":
                     for oc in outcomes:
@@ -1835,6 +1875,14 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
             event.p1_total_line = p1_tl_consensus
             event.p1_over_price = round(max(t[1] for t in p1_tl_books))
             event.p1_under_price = round(max(t[2] for t in p1_tl_books))
+
+        # Attach regulation winner (3-way) odds — best price across books
+        if all_reg_home:
+            event.reg_home_price = round(max(all_reg_home))
+        if all_reg_away:
+            event.reg_away_price = round(max(all_reg_away))
+        if all_reg_draw:
+            event.reg_draw_price = round(max(all_reg_draw))
 
         if event.home_abbr and event.away_abbr:
             events.append(_validate_event(event))
@@ -2831,6 +2879,12 @@ def _merge_odds_events(
                 "over_price": _best_price([getattr(e, "p1_over_price", None) for e in ev_list]),
                 "under_price": _best_price([getattr(e, "p1_under_price", None) for e in ev_list]),
             },
+            # Regulation winner (3-way) odds: best price across all sources
+            "reg_odds": {
+                "home_price": _best_price([getattr(e, "reg_home_price", None) for e in ev_list]),
+                "away_price": _best_price([getattr(e, "reg_away_price", None) for e in ev_list]),
+                "draw_price": _best_price([getattr(e, "reg_draw_price", None) for e in ev_list]),
+            },
             "all_sources": [e.to_dict() for e in ev_list],
         })
 
@@ -3263,6 +3317,15 @@ class MultiSourceOddsScraper:
                 game.period1_over_price = p1["over_price"]
             if p1.get("under_price") is not None:
                 game.period1_under_price = p1["under_price"]
+
+            # Persist regulation winner (3-way) odds
+            reg = odds.get("reg_odds", {})
+            if reg.get("home_price") is not None:
+                game.reg_home_price = reg["home_price"]
+            if reg.get("away_price") is not None:
+                game.reg_away_price = reg["away_price"]
+            if reg.get("draw_price") is not None:
+                game.reg_draw_price = reg["draw_price"]
 
             game.odds_updated_at = datetime.now(timezone.utc)
 

@@ -1709,6 +1709,55 @@ class BettingModel:
                 "reasoning": ml_reason,
                 "details": ml,
             })
+
+            # ---- Regulation Winner ML: substitute when juice is too steep ----
+            # If the 2-way ML is a heavy favorite (steeper than -200), offer
+            # the regulation time winner instead — better payout since you
+            # absorb the OT/SO risk.  Only recommend if the model strongly
+            # believes the team wins in regulation (not just overall).
+            _REG_JUICE_THRESHOLD = -170.0
+            if (
+                ml_odds_display is not None
+                and ml_odds_display < _REG_JUICE_THRESHOLD  # e.g., -250
+            ):
+                # Compute raw regulation win probability from matrix
+                max_g = len(matrix)
+                if ml_pred == home_abbr:
+                    reg_win_prob = sum(
+                        matrix[i][j] for i in range(max_g) for j in range(max_g) if i > j
+                    )
+                    reg_price = odds_data.get("reg_home_price")
+                else:
+                    reg_win_prob = sum(
+                        matrix[i][j] for i in range(max_g) for j in range(max_g) if j > i
+                    )
+                    reg_price = odds_data.get("reg_away_price")
+
+                if reg_price is not None and reg_win_prob > 0:
+                    reg_implied = american_odds_to_implied_prob(reg_price)
+                    reg_calibrated = self.calibrate_probability(reg_win_prob)
+                    reg_edge = reg_calibrated - reg_implied if reg_implied else None
+
+                    if (
+                        reg_edge is not None
+                        and reg_edge >= settings.min_edge
+                        and reg_calibrated >= settings.min_confidence
+                    ):
+                        draw_pct = ml["draw_prob_regulation"]
+                        predictions.append({
+                            "bet_type": "ml",
+                            "prediction": f"{ml_pred} (REG)",
+                            "confidence": reg_calibrated,
+                            "probability": round(reg_win_prob, 4),
+                            "implied_probability": round(reg_implied, 4),
+                            "odds": reg_price,
+                            "reasoning": (
+                                f"2-way ML too steep ({ml_odds_display:+.0f}). "
+                                f"Regulation winner at {reg_price:+.0f} offers better value. "
+                                f"Model: {reg_win_prob:.1%} reg win, {draw_pct:.1%} OT risk."
+                            ),
+                        })
+
         except Exception as e:
             logger.error("Moneyline prediction failed: %s", e)
 
