@@ -171,32 +171,134 @@ async def get_game_props(
 
 @router.post("/sync")
 async def sync_props_now() -> Dict[str, Any]:
-    """Manually trigger a player props sync from The Odds API.
+    """Manually trigger a player props sync with full diagnostics.
 
-    Bypasses the 30-minute cache to force a fresh fetch. Useful when
-    props aren't appearing or need an immediate refresh.
+    Traces every step of the pipeline so we can see exactly where
+    it breaks: API key → bulk fetch → event discovery → per-event
+    props → game matching → DB upsert.
     """
     import logging
 
+    import httpx
+
+    from app.config import settings
+    from app.scrapers.odds_multi import _fetch_odds_api_raw, _map_team
+
     logger = logging.getLogger(__name__)
+    diag: Dict[str, Any] = {"steps": []}
 
-    # Clear the props cache so we get fresh data
+    # Step 1: Check API key
+    api_key = settings.odds_api_key
+    if not api_key:
+        diag["steps"].append("FAIL: ODDS_API_KEY is not set in settings")
+        diag["status"] = "error"
+        diag["props_synced"] = 0
+        diag["fix"] = (
+            "Ensure backend/.env contains ODDS_API_KEY=<your_key> "
+            "with no BOM, no quotes, no leading spaces. "
+            "Restart the backend after editing."
+        )
+        return diag
+    masked = f"{api_key[:6]}...{api_key[-4:]}"
+    diag["steps"].append(f"OK: API key loaded ({masked})")
+
+    # Step 2: Clear props cache
     try:
-        from app.scrapers.player_props import _props_cache, _props_cache_ts
         import app.scrapers.player_props as _pp_mod
-
         _pp_mod._props_cache = {}
         _pp_mod._props_cache_ts = 0.0
-    except ImportError:
-        pass
+        diag["steps"].append("OK: Props cache cleared")
+    except Exception as exc:
+        diag["steps"].append(f"WARN: Could not clear cache: {exc}")
 
+    # Step 3: Fetch bulk odds to discover events
+    async with httpx.AsyncClient(
+        follow_redirects=True,
+        limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
+    ) as client:
+        # Also clear the bulk odds cache so we get fresh data
+        try:
+            import app.scrapers.odds_multi as _om_mod
+            _om_mod._odds_api_cache["data"] = None
+            _om_mod._odds_api_cache["timestamp"] = 0.0
+        except Exception:
+            pass
+
+        raw = await _fetch_odds_api_raw(client)
+
+    if raw is None:
+        diag["steps"].append(
+            "FAIL: _fetch_odds_api_raw returned None — API call failed. "
+            "Check API key validity and credit balance at "
+            "https://the-odds-api.com/account/"
+        )
+        diag["status"] = "error"
+        diag["props_synced"] = 0
+        return diag
+
+    if not raw:
+        diag["steps"].append("FAIL: Bulk API returned empty list — no NHL events found")
+        diag["status"] = "error"
+        diag["props_synced"] = 0
+        return diag
+
+    event_ids = [ev.get("id") for ev in raw if ev.get("id")]
+    event_teams = {
+        ev.get("id"): f"{_map_team(ev.get('away_team',''))}@{_map_team(ev.get('home_team',''))}"
+        for ev in raw if ev.get("id")
+    }
+    diag["steps"].append(
+        f"OK: Bulk API returned {len(raw)} events: "
+        + ", ".join(event_teams.get(eid, eid) for eid in event_ids[:8])
+    )
+
+    # Step 4: Fetch props for each event
+    from app.scrapers.player_props import _fetch_event_props
+
+    props_by_event: Dict[str, List] = {}
+    async with httpx.AsyncClient(
+        follow_redirects=True,
+        limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+    ) as client:
+        for eid in event_ids:
+            try:
+                props = await _fetch_event_props(client, eid)
+                props_by_event[eid] = props
+            except Exception as exc:
+                diag["steps"].append(f"WARN: Props fetch failed for {event_teams.get(eid, eid)}: {exc}")
+
+    total_fetched = sum(len(v) for v in props_by_event.values())
+    per_event_summary = {
+        event_teams.get(eid, eid): len(props)
+        for eid, props in props_by_event.items()
+    }
+    diag["steps"].append(f"OK: Fetched {total_fetched} prop lines across {len(props_by_event)} events")
+    diag["props_per_event"] = per_event_summary
+
+    if total_fetched == 0:
+        diag["steps"].append(
+            "FAIL: No prop lines returned from any event. "
+            "Possible causes: (1) API credits exhausted — check "
+            "https://the-odds-api.com/account/, (2) props not yet "
+            "available for today's games (usually posted 2-4h before game time), "
+            "(3) per-event endpoint returning 401/403"
+        )
+        diag["status"] = "error"
+        diag["props_synced"] = 0
+        return diag
+
+    # Step 5: Match events to games and persist
     try:
         async with get_write_session_context() as session:
             from app.services.odds import sync_player_props
-
             count = await sync_player_props(session)
-            logger.info("Manual props sync: %d lines synced", count)
-            return {"status": "ok", "props_synced": count}
+            diag["steps"].append(f"OK: Persisted {count} prop lines to database")
+            diag["status"] = "ok"
+            diag["props_synced"] = count
     except Exception as exc:
-        logger.error("Manual props sync failed: %s", exc, exc_info=True)
-        return {"status": "error", "error": str(exc), "props_synced": 0}
+        logger.error("Props sync DB step failed: %s", exc, exc_info=True)
+        diag["steps"].append(f"FAIL: DB persist error: {exc}")
+        diag["status"] = "error"
+        diag["props_synced"] = 0
+
+    return diag
