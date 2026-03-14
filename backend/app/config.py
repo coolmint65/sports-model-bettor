@@ -105,7 +105,7 @@ class ModelConfig(BaseModel):
     goalie_recent_weight: float = 0.60
     h2h_goal_adj_weight: float = 0.05
     defensive_regression: float = 0.60
-    mean_regression: float = 0.25
+    mean_regression: float = 0.18
 
     # Defense factor: blend goals-against with shots-against for stability.
     # 0.0 = pure goals-against, 1.0 = pure shots-against.
@@ -183,9 +183,27 @@ class ModelConfig(BaseModel):
     goalie_fatigue_starts_threshold: int = 3   # consecutive starts before fatigue kicks in
     goalie_fatigue_per_start: float = 0.02     # xG penalty per start above threshold
 
+    # Goalie recent save% trend (L5 vs season — hot/cold streaks)
+    goalie_trend_factor: float = 0.15          # how much a goalie hot/cold streak adjusts xG
+
+    # Penalty discipline (high PIM team gives up more PP chances to opponent)
+    penalty_discipline_factor: float = 0.10    # xG adjustment for discipline differential
+
+    # Close-game record (win rate in 1-goal games — clutch factor)
+    close_game_record_factor: float = 0.12     # xG adjustment for close-game performance
+    close_game_record_min_games: int = 8       # min 1-goal games before factor applies
+
+    # Scoring-first tendency (teams that score first win ~67% in NHL)
+    scoring_first_factor: float = 0.10         # xG adjustment for scoring-first tendency
+    scoring_first_min_games: int = 10          # min games with P1 data before factor applies
+
+    # Signal convergence: when multiple strong signals agree, amplify xG gap
+    convergence_threshold: int = 3             # number of aligned strong signals to trigger
+    convergence_amplifier: float = 0.08        # additional xG adjustment when signals converge
+
     # xG bounds
-    xg_floor: float = 1.8
-    xg_ceiling: float = 3.8
+    xg_floor: float = 1.6
+    xg_ceiling: float = 4.0
 
     # Poisson parameters
     poisson_max_goals: int = 12

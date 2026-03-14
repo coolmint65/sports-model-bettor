@@ -1595,6 +1595,132 @@ class FeatureEngine:
         }
 
     # ------------------------------------------------------------------ #
+    #  Penalty discipline                                                 #
+    # ------------------------------------------------------------------ #
+
+    async def get_penalty_discipline(
+        self,
+        db: AsyncSession,
+        team_id: int,
+        last_n: int = 10,
+    ) -> Dict[str, Any]:
+        """
+        Calculate penalty discipline metrics from recent games.
+
+        Teams that take more penalties give their opponents more power-play
+        chances, effectively boosting the opponent's xG. Uses per-game
+        penalty minutes (PIM) from GamePlayerStats.
+
+        Returns:
+            dict with keys: avg_pim_per_game, avg_penalties_drawn,
+            discipline_rating (0-1, higher = more disciplined), games_found.
+        """
+        games = await self._get_recent_games(db, team_id, last_n)
+        if not games:
+            return {"avg_pim_per_game": 6.0, "discipline_rating": 0.5, "games_found": 0}
+
+        game_ids = [g.id for g in games]
+
+        # Total PIM taken by this team across recent games
+        stmt = (
+            select(
+                func.sum(GamePlayerStats.pim).label("total_pim"),
+                func.count(func.distinct(GamePlayerStats.game_id)).label("game_count"),
+            )
+            .join(Player, GamePlayerStats.player_id == Player.id)
+            .where(
+                and_(
+                    GamePlayerStats.game_id.in_(game_ids),
+                    Player.team_id == team_id,
+                )
+            )
+        )
+        result = await db.execute(stmt)
+        row = result.one_or_none()
+
+        if not row or not row.game_count:
+            return {"avg_pim_per_game": 6.0, "discipline_rating": 0.5, "games_found": 0}
+
+        total_pim = row.total_pim or 0
+        n_games = row.game_count
+        avg_pim = total_pim / n_games
+
+        # Discipline rating: league avg ~8 PIM/game. Scale so lower PIM = higher rating.
+        # 4 PIM → 1.0 (very disciplined), 12 PIM → 0.0 (undisciplined)
+        discipline_rating = max(0.0, min(1.0, (12.0 - avg_pim) / 8.0))
+
+        return {
+            "avg_pim_per_game": round(avg_pim, 2),
+            "discipline_rating": round(discipline_rating, 4),
+            "games_found": n_games,
+        }
+
+    # ------------------------------------------------------------------ #
+    #  Close-game record (1-goal games — clutch factor)                   #
+    # ------------------------------------------------------------------ #
+
+    async def get_close_game_record(
+        self,
+        db: AsyncSession,
+        team_id: int,
+        last_n: int = 20,
+    ) -> Dict[str, Any]:
+        """
+        Calculate win rate in close games (decided by 1 goal in regulation).
+
+        Teams that consistently win or lose tight games exhibit a clutch
+        factor that raw xG doesn't capture.
+
+        Returns:
+            dict with keys: close_game_win_rate, close_games_found,
+            scoring_first_rate.
+        """
+        games = await self._get_recent_games(db, team_id, last_n)
+        if not games:
+            return {
+                "close_game_win_rate": 0.5,
+                "close_games_found": 0,
+                "scoring_first_rate": 0.5,
+            }
+
+        close_wins = 0
+        close_games = 0
+        scored_first = 0
+        games_with_p1 = 0
+
+        for game in games:
+            is_home = game.home_team_id == team_id
+            gf = game.home_score if is_home else game.away_score
+            ga = game.away_score if is_home else game.home_score
+
+            if gf is None or ga is None:
+                continue
+
+            margin = abs(gf - ga)
+            # 1-goal games (regulation or OT) are "close"
+            if margin <= 1:
+                close_games += 1
+                if gf > ga:
+                    close_wins += 1
+
+            # Scoring first: did this team score in P1 while opponent didn't?
+            if game.home_score_p1 is not None:
+                p1_for = (game.home_score_p1 if is_home else game.away_score_p1) or 0
+                p1_against = (game.away_score_p1 if is_home else game.home_score_p1) or 0
+                games_with_p1 += 1
+                if p1_for > p1_against:
+                    scored_first += 1
+
+        close_wr = close_wins / close_games if close_games > 0 else 0.5
+        scoring_first_rate = scored_first / games_with_p1 if games_with_p1 > 0 else 0.5
+
+        return {
+            "close_game_win_rate": round(close_wr, 4),
+            "close_games_found": close_games,
+            "scoring_first_rate": round(scoring_first_rate, 4),
+        }
+
+    # ------------------------------------------------------------------ #
     #  Build comprehensive feature set for a game                         #
     # ------------------------------------------------------------------ #
 
@@ -1702,6 +1828,14 @@ class FeatureEngine:
         team_matchup = await matchup_engine.get_team_matchup_features(
             db, home_id, away_id
         )
+
+        # Penalty discipline
+        home_discipline = await self.get_penalty_discipline(db, home_id)
+        away_discipline = await self.get_penalty_discipline(db, away_id)
+
+        # Close-game record (clutch factor + scoring first)
+        home_close_record = await self.get_close_game_record(db, home_id)
+        away_close_record = await self.get_close_game_record(db, away_id)
 
         # Line movement features (opening vs current odds)
         line_movement = await self.get_line_movement(db, game.id, game)
@@ -1813,6 +1947,12 @@ class FeatureEngine:
             "away_player_matchup": away_player_matchup,
             # Team matchup profile (scoring tendencies between these teams)
             "team_matchup": team_matchup,
+            # Penalty discipline
+            "home_discipline": home_discipline,
+            "away_discipline": away_discipline,
+            # Close-game record (clutch + scoring first)
+            "home_close_record": home_close_record,
+            "away_close_record": away_close_record,
             # Schedule spot / situational awareness
             "is_divisional": is_divisional,
             "is_cross_conference": is_cross_conference,

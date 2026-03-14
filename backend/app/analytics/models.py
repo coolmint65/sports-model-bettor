@@ -457,6 +457,115 @@ class BettingModel:
             if away_pdo != 1.0:
                 away_xg -= (away_pdo - 1.0) * pdo_factor * self.league_avg
 
+        # ---- Goalie recent save% trend (hot/cold streaks) ----
+        # A goalie whose L5 save% is significantly above/below their season
+        # average is on a streak that should shift expected goals.
+        goalie_trend_factor = _mc.goalie_trend_factor
+        if goalie_trend_factor > 0:
+            # Home goalie trend affects away_xg (a hot home goalie suppresses away scoring)
+            home_g = features.get("home_goalie", {})
+            away_g = features.get("away_goalie", {})
+            home_l5_sv = home_g.get("last5_save_pct", 0.0)
+            home_season_sv = home_g.get("season_save_pct", 0.0)
+            if home_l5_sv > 0 and home_season_sv > 0:
+                sv_trend = home_l5_sv - home_season_sv  # positive = hot streak
+                away_xg *= 1.0 - sv_trend * goalie_trend_factor * 10.0  # scale: .010 sv% diff → 1.5% xG shift
+
+            away_l5_sv = away_g.get("last5_save_pct", 0.0)
+            away_season_sv = away_g.get("season_save_pct", 0.0)
+            if away_l5_sv > 0 and away_season_sv > 0:
+                sv_trend = away_l5_sv - away_season_sv
+                home_xg *= 1.0 - sv_trend * goalie_trend_factor * 10.0
+
+        # ---- Penalty discipline adjustment ----
+        # Undisciplined teams give opponents more power-play chances,
+        # effectively boosting the opponent's expected goals.
+        home_disc = features.get("home_discipline", {})
+        away_disc = features.get("away_discipline", {})
+        disc_factor = _mc.penalty_discipline_factor
+        if disc_factor > 0 and home_disc.get("games_found", 0) >= 5 and away_disc.get("games_found", 0) >= 5:
+            # Discipline rating: 0 = undisciplined (12+ PIM), 1 = disciplined (4 PIM)
+            # Undisciplined team boosts opponent's xG
+            home_disc_rating = home_disc.get("discipline_rating", 0.5)
+            away_disc_rating = away_disc.get("discipline_rating", 0.5)
+            # How much opponent benefits from our lack of discipline
+            away_xg += (0.5 - home_disc_rating) * disc_factor
+            home_xg += (0.5 - away_disc_rating) * disc_factor
+
+        # ---- Close-game record (clutch factor) ----
+        # Teams that consistently win/lose tight games have a clutch factor
+        # that raw xG misses — mental toughness, coaching, late-game execution.
+        home_close_rec = features.get("home_close_record", {})
+        away_close_rec = features.get("away_close_record", {})
+        close_factor = _mc.close_game_record_factor
+        if close_factor > 0:
+            min_close = _mc.close_game_record_min_games
+            if home_close_rec.get("close_games_found", 0) >= min_close:
+                close_dev = home_close_rec["close_game_win_rate"] - 0.5
+                home_xg += close_dev * close_factor
+            if away_close_rec.get("close_games_found", 0) >= min_close:
+                close_dev = away_close_rec["close_game_win_rate"] - 0.5
+                away_xg += close_dev * close_factor
+
+        # ---- Scoring-first tendency ----
+        # Teams that win the first period have a significant advantage.
+        # NHL teams that score first win ~67% of the time.
+        scoring_first_factor = _mc.scoring_first_factor
+        if scoring_first_factor > 0:
+            min_p1 = _mc.scoring_first_min_games
+            home_sf_rate = home_close_rec.get("scoring_first_rate", 0.5)
+            away_sf_rate = away_close_rec.get("scoring_first_rate", 0.5)
+            if home_close_rec.get("close_games_found", 0) >= 5:
+                home_xg += (home_sf_rate - 0.35) * scoring_first_factor  # 0.35 = league avg rate of leading after P1
+            if away_close_rec.get("close_games_found", 0) >= 5:
+                away_xg += (away_sf_rate - 0.35) * scoring_first_factor
+
+        # ---- Signal convergence multiplier ----
+        # When multiple independent signals all point the same direction,
+        # the prediction should be MORE confident, not washed out by
+        # regression. Count strong pro-home signals and amplify if they
+        # converge.
+        convergence_signals = 0
+        # Form advantage
+        home_wr = features.get("home_form_5", {}).get("win_rate", 0.5)
+        away_wr = features.get("away_form_5", {}).get("win_rate", 0.5)
+        if home_wr - away_wr > 0.20:
+            convergence_signals += 1
+        elif away_wr - home_wr > 0.20:
+            convergence_signals -= 1
+        # Goalie tier advantage
+        if abs(tier_diff) >= 1:
+            convergence_signals += 1 if tier_diff > 0 else -1
+        # Possession advantage
+        home_cf = features.get("home_ev_possession", {}).get("ev_cf_pct", 50.0)
+        away_cf = features.get("away_ev_possession", {}).get("ev_cf_pct", 50.0)
+        if home_cf - away_cf > 3.0:
+            convergence_signals += 1
+        elif away_cf - home_cf > 3.0:
+            convergence_signals -= 1
+        # Rest/schedule advantage
+        if home_schedule.get("is_back_to_back", False) and not away_schedule.get("is_back_to_back", False):
+            convergence_signals -= 1
+        elif away_schedule.get("is_back_to_back", False) and not home_schedule.get("is_back_to_back", False):
+            convergence_signals += 1
+        # Injury advantage
+        home_inj_impact = home_injuries.get("xg_reduction", 0.0)
+        away_inj_impact = away_injuries.get("xg_reduction", 0.0)
+        if away_inj_impact - home_inj_impact > 0.05:
+            convergence_signals += 1
+        elif home_inj_impact - away_inj_impact > 0.05:
+            convergence_signals -= 1
+
+        # Apply convergence amplifier when threshold is met
+        if abs(convergence_signals) >= _mc.convergence_threshold:
+            amp = _mc.convergence_amplifier
+            if convergence_signals > 0:
+                home_xg += amp
+                away_xg -= amp * 0.5
+            else:
+                away_xg += amp
+                home_xg -= amp * 0.5
+
         # ---- Regression toward league average ----
         # Hot-streak form weights and weak-opponent defensive factors can
         # compound to produce unrealistic xG values.  Regress toward
@@ -1929,6 +2038,29 @@ class BettingModel:
                     lm_score = 0.35 if is_home_pick else 0.65
         scores["line_movement"] = lm_score
 
+        # Penalty discipline advantage
+        my_disc = features.get(
+            "home_discipline" if is_home_pick else "away_discipline", {}
+        )
+        opp_disc = features.get(
+            "away_discipline" if is_home_pick else "home_discipline", {}
+        )
+        my_disc_rating = my_disc.get("discipline_rating", 0.5)
+        opp_disc_rating = opp_disc.get("discipline_rating", 0.5)
+        # More disciplined team has an advantage (opponent takes more penalties)
+        disc_edge = (1.0 - opp_disc_rating) - (1.0 - my_disc_rating)
+        scores["discipline"] = min(1.0, max(0.0, (disc_edge + 0.5) / 1.0))
+
+        # Close-game clutch factor
+        my_close = features.get(
+            "home_close_record" if is_home_pick else "away_close_record", {}
+        )
+        opp_close = features.get(
+            "away_close_record" if is_home_pick else "home_close_record", {}
+        )
+        my_close_wr = my_close.get("close_game_win_rate", 0.5)
+        scores["clutch"] = min(1.0, max(0.0, my_close_wr))
+
         # Weighted sum
         weights = {
             "form": _mc.composite_weight_form,
@@ -1942,6 +2074,8 @@ class BettingModel:
             "matchup": _mc.composite_weight_matchup,
             "market_edge": _mc.composite_weight_market_edge,
             "line_movement": _mc.composite_weight_line_movement,
+            "discipline": 0.05,
+            "clutch": 0.06,
         }
 
         composite = sum(scores.get(k, 0.5) * w for k, w in weights.items())

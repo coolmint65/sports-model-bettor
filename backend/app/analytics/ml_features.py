@@ -275,6 +275,18 @@ def flatten_features(features: Dict[str, Any]) -> Dict[str, float]:
     flat["home_player_matchup_boost"] = _safe_float(home_pm.get("matchup_boost", 0))
     flat["away_player_matchup_boost"] = _safe_float(away_pm.get("matchup_boost", 0))
 
+    # --- Penalty discipline ---
+    for prefix in ("home", "away"):
+        disc = features.get(f"{prefix}_discipline", {})
+        flat[f"{prefix}_discipline_avg_pim"] = _safe_float(disc.get("avg_pim_per_game"))
+        flat[f"{prefix}_discipline_rating"] = _safe_float(disc.get("discipline_rating"))
+
+    # --- Close-game record ---
+    for prefix in ("home", "away"):
+        cr = features.get(f"{prefix}_close_record", {})
+        flat[f"{prefix}_close_game_wr"] = _safe_float(cr.get("close_game_win_rate"))
+        flat[f"{prefix}_scoring_first_rate"] = _safe_float(cr.get("scoring_first_rate"))
+
     # --- Game context booleans ---
     flat["is_divisional"] = 1.0 if features.get("is_divisional") else 0.0
     flat["is_cross_conference"] = 1.0 if features.get("is_cross_conference") else 0.0
@@ -293,6 +305,11 @@ def flatten_features(features: Dict[str, Any]) -> Dict[str, float]:
     flat["diff_pp_pct"] = flat.get("home_special_pp_pct", 0) - flat.get("away_special_pp_pct", 0)
     flat["diff_pk_pct"] = flat.get("home_special_pk_pct", 0) - flat.get("away_special_pk_pct", 0)
     flat["diff_injury_impact"] = flat.get("home_injuries_xg_reduction", 0) - flat.get("away_injuries_xg_reduction", 0)
+
+    # Discipline and clutch differentials
+    flat["diff_discipline_rating"] = flat.get("home_discipline_rating", 0) - flat.get("away_discipline_rating", 0)
+    flat["diff_close_game_wr"] = flat.get("home_close_game_wr", 0) - flat.get("away_close_game_wr", 0)
+    flat["diff_scoring_first"] = flat.get("home_scoring_first_rate", 0) - flat.get("away_scoring_first_rate", 0)
 
     # Advanced metrics differentials
     flat["diff_corsi_pct"] = flat.get("home_advanced_cf_pct", 0) - flat.get("away_advanced_cf_pct", 0)
