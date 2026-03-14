@@ -352,11 +352,22 @@ function GameCard({ game, section, medal }) {
               return score(p) > score(best) ? p : best;
             }, picks[0]);
 
-            return picks.map((pick) => {
+            // Annotate picks with display values for sorting
+            const annotated = picks.map((pick) => {
               const conf = pick.confidence != null ? confidencePct(pick.confidence) : null;
-              const label = formatMarketPick(pick);
-              const edgePct = pick.edge != null ? (pick.edge * 100).toFixed(1) : null;
               const isBest = pick === bestPick && picks.length > 1;
+              return { pick, conf, isBest };
+            });
+            // Sort: BEST first, then by confidence descending
+            annotated.sort((a, b) => {
+              if (a.isBest !== b.isBest) return a.isBest ? -1 : 1;
+              return (b.conf ?? 0) - (a.conf ?? 0);
+            });
+
+            return annotated.map(({ pick, conf, isBest }) => {
+              const label = formatMarketPick(pick);
+              const edgeVal = pick.edge != null ? pick.edge * 100 : null;
+              const edgePct = edgeVal != null ? `${edgeVal >= 0 ? '+' : ''}${edgeVal.toFixed(1)}%` : null;
               // Quality tier per pick
               let tier = '';
               let tierLabel = '';
@@ -381,7 +392,7 @@ function GameCard({ game, section, medal }) {
                     <span className="dc-pick-chip-odds">{formatAmericanOdds(pick.odds_display)}</span>
                   )}
                   {edgePct != null && (
-                    <span className="dc-pick-chip-edge">+{edgePct}%</span>
+                    <span className="dc-pick-chip-edge">Edge {edgePct}</span>
                   )}
                   {conf != null && (
                     <span className="dc-pick-chip-conf">{Math.round(conf)}%</span>
