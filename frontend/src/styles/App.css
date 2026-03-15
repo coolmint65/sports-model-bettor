@@ -6082,28 +6082,65 @@ a:hover {
   color: var(--text-primary);
 }
 
-.gd-perf-stat-val.gd-stat-good {
-  color: var(--accent-green, #4ade80);
+.gd-perf-table {
+  width: 100%;
+  border-collapse: collapse;
 }
 
-.gd-perf-stat-val.gd-stat-bad {
-  color: #e57373;
+.gd-perf-th {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-weight: 600;
+  padding: 4px 6px 8px;
 }
 
-.gd-perf-col-avg {
-  min-width: 50px;
+.gd-perf-th-team {
+  width: 22%;
+}
+
+.gd-perf-th-stat {
   text-align: center;
 }
 
-.gd-perf-avg-label {
-  color: var(--text-muted) !important;
-  font-size: 0.7rem;
+.gd-perf-th-avg {
+  text-align: center;
+  font-size: 0.65rem;
+  width: 60px;
 }
 
-.gd-perf-avg-val {
-  color: var(--text-muted) !important;
-  font-weight: 400 !important;
+.gd-perf-td {
+  padding: 5px 6px;
+  font-size: 0.82rem;
+}
+
+.gd-perf-td-val {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  text-align: center;
+}
+
+.gd-perf-td-label {
+  text-align: center;
+  color: var(--accent-green);
+  font-weight: 600;
   font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.gd-perf-td-avg {
+  text-align: center;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 400;
+}
+
+.gd-perf-td-val.gd-stat-good {
+  color: var(--accent-green, #4ade80);
+}
+
+.gd-perf-td-val.gd-stat-bad {
+  color: #e57373;
 }
 
 /* ─── Betting Trends ──────────────────────────────────── */

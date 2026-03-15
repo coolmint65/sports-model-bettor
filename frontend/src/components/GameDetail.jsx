@@ -936,34 +936,26 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
 
         <div className="gd-perf-section">
           <h4 className="gd-perf-title">KEY PERFORMANCE STATS</h4>
-          <div className="gd-perf-grid gd-perf-grid-3col">
-            <div className="gd-perf-col">
-              <div className="gd-perf-team-label">{homeLabel}</div>
+          <table className="gd-perf-table">
+            <thead>
+              <tr>
+                <th className="gd-perf-th gd-perf-th-team">{homeLabel}</th>
+                <th className="gd-perf-th gd-perf-th-stat">Stat</th>
+                <th className="gd-perf-th gd-perf-th-avg">Lg Avg</th>
+                <th className="gd-perf-th gd-perf-th-team">{awayLabel}</th>
+              </tr>
+            </thead>
+            <tbody>
               {perfStats.map((s) => (
-                <div key={s.label} className="gd-perf-row">
-                  <span className="gd-perf-stat-label">{s.label}</span>
-                  <span className={`gd-perf-stat-val ${s.homeClass || ''}`}>{s.homeVal}</span>
-                </div>
+                <tr key={s.label}>
+                  <td className={`gd-perf-td gd-perf-td-val ${s.homeClass || ''}`}>{s.homeVal}</td>
+                  <td className="gd-perf-td gd-perf-td-label">{s.label}</td>
+                  <td className="gd-perf-td gd-perf-td-avg">{s.avg || '-'}</td>
+                  <td className={`gd-perf-td gd-perf-td-val ${s.awayClass || ''}`}>{s.awayVal}</td>
+                </tr>
               ))}
-            </div>
-            <div className="gd-perf-col gd-perf-col-avg">
-              <div className="gd-perf-team-label gd-perf-avg-label">Lg Avg</div>
-              {perfStats.map((s) => (
-                <div key={s.label} className="gd-perf-row">
-                  <span className="gd-perf-stat-val gd-perf-avg-val">{s.avg || '-'}</span>
-                </div>
-              ))}
-            </div>
-            <div className="gd-perf-col">
-              <div className="gd-perf-team-label">{awayLabel}</div>
-              {perfStats.map((s) => (
-                <div key={s.label} className="gd-perf-row">
-                  <span className="gd-perf-stat-label">{s.label}</span>
-                  <span className={`gd-perf-stat-val ${s.awayClass || ''}`}>{s.awayVal}</span>
-                </div>
-              ))}
-            </div>
-          </div>
+            </tbody>
+          </table>
         </div>
       </div>
 
