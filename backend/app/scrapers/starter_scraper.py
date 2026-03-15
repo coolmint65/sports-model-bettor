@@ -1,16 +1,17 @@
 """
 NHL confirmed starting goalie scraper.
 
-Two data sources, tried in order:
-1. DailyFaceoff.com /starting-goalies — most reliable, updated hours
-   before puck drop with Confirmed/Expected/Unconfirmed status.
-2. NHL API gamecenter landing page — official but often only populated
+Data sources, tried in order:
+1. DailyFaceoff.com — embeddable widget + main page scraping
+2. RotoWire.com — embeddable/static endpoint
+3. NHL API gamecenter landing page — official but often only populated
    very close to puck drop.
 
-Both sources are scraped per-day and merged.  DailyFaceoff is the
+All sources are scraped per-day and merged.  DailyFaceoff is the
 primary source; the NHL API fills in any gaps.
 """
 
+import json
 import logging
 import re
 from datetime import date
@@ -49,152 +50,78 @@ _TEAM_ALIAS = {
 #  DailyFaceoff scraper (primary)                                     #
 # ------------------------------------------------------------------ #
 
-class _GoaliePageParser(HTMLParser):
-    """Minimal HTML parser to extract goalie starters from DailyFaceoff.
+# The DailyFaceoff embeddable widget at publish.dailyfaceoff.com
+# renders lightweight HTML that doesn't require JS. The main site
+# at www.dailyfaceoff.com requires JS rendering and is unreliable.
 
-    DailyFaceoff renders goalie matchup cards with team names, goalie
-    names, and a status label (Confirmed / Expected / Unconfirmed).
-    We look for elements containing these patterns and collect them.
+_DFO_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
+def _parse_dfo_html(html: str) -> List[Dict[str, str]]:
+    """Parse DailyFaceoff HTML for goalie matchups.
+
+    Uses multiple strategies to extract data:
+    1. Look for player name links paired with team info
+    2. Status indicators (Confirmed/Expected/Unconfirmed)
     """
+    results: List[Dict[str, str]] = []
 
-    def __init__(self):
-        super().__init__()
-        self._games: List[Dict[str, Any]] = []
-        self._current_game: Dict[str, Any] = {}
-        self._capture_text = False
-        self._pending_tag = ""
-        self._text_buf = ""
-        self._in_matchup = False
-        self._depth = 0
-
-    def handle_starttag(self, tag, attrs):
-        attr_dict = dict(attrs)
-        cls = attr_dict.get("class", "")
-
-        # Detect game/matchup container
-        if "matchup" in cls.lower() or "starting-goalies" in cls.lower() or "goalie-card" in cls.lower():
-            self._in_matchup = True
-            self._depth += 1
-
-        # Detect goalie name links or spans
-        if tag == "a" and "player" in attr_dict.get("href", ""):
-            self._capture_text = True
-            self._pending_tag = "goalie_name"
-            self._text_buf = ""
-
-        # Detect status spans
-        if "status" in cls.lower() or "confirmed" in cls.lower() or "expected" in cls.lower() or "unconfirmed" in cls.lower():
-            self._capture_text = True
-            self._pending_tag = "status"
-            self._text_buf = ""
-
-        # Detect team name
-        if "team" in cls.lower() and ("name" in cls.lower() or "abbrev" in cls.lower()):
-            self._capture_text = True
-            self._pending_tag = "team"
-            self._text_buf = ""
-
-    def handle_data(self, data):
-        if self._capture_text:
-            self._text_buf += data
-
-    def handle_endtag(self, tag):
-        if self._capture_text and self._text_buf.strip():
-            text = self._text_buf.strip()
-            if self._pending_tag == "goalie_name":
-                if "away_goalie" not in self._current_game:
-                    self._current_game["away_goalie"] = text
-                elif "home_goalie" not in self._current_game:
-                    self._current_game["home_goalie"] = text
-            elif self._pending_tag == "status":
-                status = text.lower()
-                if "away_status" not in self._current_game:
-                    self._current_game["away_status"] = status
-                elif "home_status" not in self._current_game:
-                    self._current_game["home_status"] = status
-            elif self._pending_tag == "team":
-                if "away_team" not in self._current_game:
-                    self._current_game["away_team"] = text
-                elif "home_team" not in self._current_game:
-                    self._current_game["home_team"] = text
-            self._capture_text = False
-            self._pending_tag = ""
-            self._text_buf = ""
-
-        if self._in_matchup and tag == "div":
-            # If we have a complete game, save it
-            if "away_goalie" in self._current_game and "home_goalie" in self._current_game:
-                self._games.append(self._current_game)
-                self._current_game = {}
-                self._in_matchup = False
-
-    @property
-    def games(self):
-        # Flush any remaining game
-        if "away_goalie" in self._current_game and "home_goalie" in self._current_game:
-            self._games.append(self._current_game)
-            self._current_game = {}
-        return self._games
-
-
-def _parse_dailyfaceoff_html(html: str) -> List[Dict[str, str]]:
-    """Parse DailyFaceoff starting goalies page using regex fallback.
-
-    The HTML parser may miss elements on JS-heavy pages, so we also
-    use regex to extract goalie matchup data from the raw HTML.
-    """
-    results = []
-
-    # Try the HTML parser first
-    parser = _GoaliePageParser()
-    try:
-        parser.feed(html)
-        if parser.games:
-            return parser.games
-    except Exception:
-        pass
-
-    # Regex fallback: look for goalie names near team names
-    # DailyFaceoff typically has patterns like:
-    #   <a href="/players/...">Goalie Name</a>
-    #   with nearby team info and status text
-
-    # Find all player links (goalies)
+    # Strategy 1: Find player links (most reliable signal)
     player_links = re.findall(
-        r'<a[^>]*href="[^"]*player[^"]*"[^>]*>([^<]+)</a>',
+        r'<a[^>]*href="[^"]*(?:/players?/|player\.php)[^"]*"[^>]*>\s*([^<]{2,40})\s*</a>',
         html, re.IGNORECASE,
     )
 
-    # Find status indicators
-    statuses = re.findall(
-        r'(?:confirmed|expected|unconfirmed|likely|projected)',
-        html, re.IGNORECASE,
-    )
-
-    # Find team abbreviations (3-letter codes in specific contexts)
+    # Strategy 2: Find team abbreviations or names near goalie data
+    # Look for 2-3 letter uppercase codes in structured contexts
     team_abbrs = re.findall(
-        r'(?:class="[^"]*team[^"]*"[^>]*>)\s*([A-Z]{2,3})\s*<',
+        r'(?:class="[^"]*(?:team|abbr)[^"]*"[^>]*>|<(?:td|span|div)[^>]*>\s*)([A-Z]{2,3})(?:\s*<)',
+        html,
+    )
+    # Filter to known NHL abbreviations
+    nhl_abbrs = set(_TEAM_ALIAS.values()) | set(_ROTOWIRE_TEAM_MAP.keys())
+    team_abbrs = [t for t in team_abbrs if t in nhl_abbrs]
+
+    # Strategy 3: Find status text
+    statuses = re.findall(
+        r'(?:Confirmed|Expected|Unconfirmed|Likely|Projected)',
         html, re.IGNORECASE,
     )
 
-    # Pair them up: every 2 goalies = 1 game (away, then home)
-    for i in range(0, len(player_links) - 1, 2):
-        game = {
-            "away_goalie": player_links[i].strip(),
-            "home_goalie": player_links[i + 1].strip(),
-        }
-        # Pair with statuses if available
-        si = i  # status index aligns with goalie index
-        if si < len(statuses):
-            game["away_status"] = statuses[si].lower()
-        if si + 1 < len(statuses):
-            game["home_status"] = statuses[si + 1].lower()
-        # Pair with teams if available
-        if i < len(team_abbrs):
-            game["away_team"] = team_abbrs[i].strip()
-        if i + 1 < len(team_abbrs):
-            game["home_team"] = team_abbrs[i + 1].strip()
-        results.append(game)
+    # Also look for team full names
+    team_names = re.findall(
+        r'(?:class="[^"]*team[^"]*name[^"]*"[^>]*>)\s*([^<]{3,30})\s*<',
+        html, re.IGNORECASE,
+    )
+
+    # Pair goalies: every 2 player links = 1 matchup (away, home)
+    if len(player_links) >= 2:
+        for i in range(0, len(player_links) - 1, 2):
+            game: Dict[str, str] = {
+                "away_goalie": player_links[i].strip(),
+                "home_goalie": player_links[i + 1].strip(),
+            }
+            si = i
+            if si < len(statuses):
+                game["away_status"] = statuses[si].lower()
+            if si + 1 < len(statuses):
+                game["home_status"] = statuses[si + 1].lower()
+            if i < len(team_abbrs):
+                game["away_team"] = team_abbrs[i]
+            if i + 1 < len(team_abbrs):
+                game["home_team"] = team_abbrs[i + 1]
+            elif i < len(team_names):
+                game.setdefault("away_team", team_names[i].strip())
+            if i + 1 < len(team_names):
+                game.setdefault("home_team", team_names[i + 1].strip())
+            results.append(game)
 
     return results
 
@@ -203,32 +130,56 @@ async def _fetch_dailyfaceoff_starters(
     client: httpx.AsyncClient,
     target_date: date,
 ) -> List[Dict[str, str]]:
-    """Scrape DailyFaceoff.com for today's starting goalies."""
-    url = f"https://www.dailyfaceoff.com/starting-goalies/{target_date.isoformat()}"
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        ),
-        "Accept": "text/html,application/xhtml+xml",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
+    """Fetch starting goalies from DailyFaceoff.
 
-    try:
-        resp = await client.get(url, headers=headers)
-        if resp.status_code != 200:
-            logger.warning("DailyFaceoff returned %d", resp.status_code)
-            return []
-        games = _parse_dailyfaceoff_html(resp.text)
-        logger.info("DailyFaceoff: parsed %d goalie matchups", len(games))
-        return games
-    except Exception as exc:
-        logger.warning("DailyFaceoff scrape failed: %s", exc)
-        return []
+    Tries the embeddable widget first (lightweight, no JS needed),
+    then falls back to the main page.
+    """
+    urls = [
+        # Embeddable widget — lightweight HTML, most reliable
+        f"https://publish.dailyfaceoff.com/starting-goalies/{target_date.isoformat()}",
+        f"https://publish.dailyfaceoff.com/starting-goalies",
+        # Main site — often requires JS but sometimes has partial data
+        f"https://www.dailyfaceoff.com/starting-goalies/{target_date.isoformat()}",
+    ]
+
+    for url in urls:
+        try:
+            resp = await client.get(url, headers=_DFO_HEADERS)
+            if resp.status_code != 200:
+                logger.debug("DailyFaceoff %s returned %d", url, resp.status_code)
+                continue
+
+            html = resp.text
+            games = _parse_dfo_html(html)
+            if games:
+                logger.info(
+                    "DailyFaceoff: parsed %d goalie matchups from %s",
+                    len(games), url,
+                )
+                return games
+
+            # Log diagnostics for debugging
+            player_links = re.findall(r'href="([^"]*player[^"]*)"', html[:50000], re.I)
+            all_classes = re.findall(r'class="([^"]{3,60})"', html[:30000])
+            seen: set = set()
+            unique = [c for c in all_classes if c not in seen and not seen.add(c)]
+            logger.info(
+                "DailyFaceoff: 0 matchups from %s (%d bytes), "
+                "player_links=%d, sample classes=%s",
+                url, len(html), len(player_links), unique[:20],
+            )
+        except Exception as exc:
+            logger.debug("DailyFaceoff %s failed: %s", url, exc)
+            continue
+
+    logger.warning("DailyFaceoff: all URLs failed to produce matchups")
+    return []
 
 
 # ------------------------------------------------------------------ #
-#  RotoWire scraper (secondary — lightweight HTML, no JS required)     #
+#  RotoWire — JS SPA, cannot be scraped without a browser.             #
+#  Kept as a stub; may be re-enabled if a static endpoint is found.    #
 # ------------------------------------------------------------------ #
 
 # RotoWire uses short team names; map to NHL abbreviations
@@ -247,130 +198,18 @@ _ROTOWIRE_TEAM_MAP = {
 }
 
 
-def _parse_rotowire_html(html: str) -> List[Dict[str, str]]:
-    """Parse RotoWire goalie matchups page.
-
-    RotoWire's goalie page has a simple HTML structure with matchup rows
-    containing team abbreviations, goalie names, and status indicators.
-    """
-    results = []
-
-    # RotoWire has matchup containers with teams and goalie names
-    # Pattern: look for team abbreviations and goalie names near each other
-    # Try to find matchup blocks first
-    matchup_pattern = re.compile(
-        r'class="[^"]*(?:lineup__matchup|goalie-matchup|matchup)[^"]*"',
-        re.IGNORECASE,
-    )
-
-    # Extract goalie names from player links
-    goalie_pattern = re.compile(
-        r'<a[^>]*href="[^"]*hockey/player[^"]*"[^>]*>([^<]+)</a>',
-        re.IGNORECASE,
-    )
-    goalies = goalie_pattern.findall(html)
-
-    # Extract team abbreviations from lineup context
-    team_pattern = re.compile(
-        r'class="[^"]*lineup__abbr[^"]*"[^>]*>([A-Z]{2,3})<',
-        re.IGNORECASE,
-    )
-    teams = team_pattern.findall(html)
-
-    # Also try a broader team pattern
-    if not teams:
-        team_pattern2 = re.compile(
-            r'<(?:span|div|a)[^>]*>\s*([A-Z]{2,3})\s*</(?:span|div|a)>',
-        )
-        # Filter to only known NHL abbreviations
-        raw_teams = team_pattern2.findall(html)
-        teams = [t for t in raw_teams if t.upper() in _ROTOWIRE_TEAM_MAP]
-
-    # Status indicators
-    status_pattern = re.compile(
-        r'(?:Confirmed|Expected|Likely|Projected|Unconfirmed)',
-        re.IGNORECASE,
-    )
-    statuses = status_pattern.findall(html)
-
-    # Pair teams and goalies: every 2 teams + 2 goalies = 1 matchup
-    for i in range(0, min(len(teams), len(goalies)) - 1, 2):
-        game = {
-            "away_team": _ROTOWIRE_TEAM_MAP.get(teams[i].upper(), teams[i].upper()),
-            "home_team": _ROTOWIRE_TEAM_MAP.get(teams[i + 1].upper(), teams[i + 1].upper()),
-            "away_goalie": goalies[i].strip(),
-            "home_goalie": goalies[i + 1].strip(),
-        }
-        si = i
-        if si < len(statuses):
-            game["away_status"] = statuses[si].lower()
-        if si + 1 < len(statuses):
-            game["home_status"] = statuses[si + 1].lower()
-        results.append(game)
-
-    return results
-
-
 async def _fetch_rotowire_starters(
     client: httpx.AsyncClient,
     target_date: date,
 ) -> List[Dict[str, str]]:
-    """Scrape RotoWire.com for today's starting goalies.
+    """RotoWire is a JS SPA — skip it to avoid wasted requests.
 
-    RotoWire serves lightweight HTML (no JS rendering needed) and is
-    a reliable backup when DailyFaceoff blocks or requires JS.
+    The page at rotowire.com/hockey/starting-goalies.php returns a
+    306 KB JavaScript shell with no goalie data in the HTML. Parsing
+    it requires a headless browser which we don't have.
     """
-    url = "https://www.rotowire.com/hockey/starting-goalies.php"
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        ),
-        "Accept": "text/html,application/xhtml+xml",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
-
-    try:
-        resp = await client.get(url, headers=headers)
-        if resp.status_code != 200:
-            logger.warning("RotoWire returned %d", resp.status_code)
-            return []
-        html = resp.text
-        # Log a snippet of the HTML so we can debug parser mismatches
-        if len(html) < 500:
-            logger.warning("RotoWire: page too small (%d bytes), may need JS", len(html))
-        games = _parse_rotowire_html(html)
-        if not games:
-            # Find AJAX/fetch calls and all script src URLs
-            ajax_calls = re.findall(
-                r'(?:\$\.(?:ajax|get|post|getJSON)|fetch\s*\(|XMLHttpRequest|\.load\s*\()\s*[("\']([^"\')\s]{5,120})',
-                html, re.I,
-            )[:10]
-            # Find all script src files
-            script_srcs = re.findall(
-                r'<script[^>]*src=["\']([^"\']+)["\']',
-                html, re.I,
-            )
-            # Find anything near "grid" or "starters"
-            grid_context = []
-            for m in re.finditer(r'(?:grid|starters)', html, re.I):
-                start = max(0, m.start() - 80)
-                end = min(len(html), m.end() + 80)
-                grid_context.append(html[start:end].replace('\n', ' ').strip())
-            logger.warning(
-                "RotoWire AJAX: ajax_calls=%s, script_srcs=%s",
-                ajax_calls, script_srcs,
-            )
-            logger.warning(
-                "RotoWire grid context (first 5): %s",
-                grid_context[:5],
-            )
-        else:
-            logger.info("RotoWire: parsed %d goalie matchups", len(games))
-        return games
-    except Exception as exc:
-        logger.warning("RotoWire scrape failed: %s", exc)
-        return []
+    logger.debug("RotoWire: skipped (requires JS rendering)")
+    return []
 
 
 def _match_team_abbrev(raw_name: str, db_teams: Dict[str, int]) -> Optional[str]:
@@ -418,25 +257,16 @@ async def _fetch_nhl_api_starters(
     data = resp.json()
     results: List[Dict[str, Any]] = []
 
-    # Log top-level keys and matchup structure for debugging
+    # Log response structure for debugging
     matchup = data.get("matchup", {})
     gc = matchup.get("goalieComparison", {})
-    logger.info(
-        "NHL API %s: top keys=%s, matchup keys=%s, goalieComparison keys=%s",
+    logger.debug(
+        "NHL API %s: top keys=%s, matchup keys=%s, goalieComparison=%s",
         game_ext_id,
         sorted(data.keys())[:15],
         sorted(matchup.keys())[:10] if matchup else "NONE",
-        sorted(gc.keys())[:10] if gc else "NONE",
+        "present" if gc else "NONE",
     )
-    if gc:
-        for side_name in ("homeTeam", "awayTeam"):
-            side_gc = gc.get(side_name, {})
-            logger.info(
-                "NHL API %s goalieComparison.%s: keys=%s, sample=%.200s",
-                game_ext_id, side_name,
-                list(side_gc.keys()) if isinstance(side_gc, dict) else type(side_gc).__name__,
-                str(side_gc)[:200],
-            )
 
     for side, is_home in [("homeTeam", True), ("awayTeam", False)]:
         team_id = game.home_team_id if is_home else game.away_team_id
@@ -659,9 +489,8 @@ async def sync_confirmed_starters(db: AsyncSession) -> List[Dict[str, Any]]:
                         [(g.away_team_id, g.home_team_id) for g in games],
                     )
 
-        # Source 2: RotoWire — lightweight HTML, no JS needed.
-        # Fills in any games DailyFaceoff missed (DFO often returns 0
-        # due to JS rendering requirements).
+        # Source 2: RotoWire — currently disabled (JS SPA).
+        # Kept as a stub in case a static endpoint is found later.
         uncovered_rw = [g for g in games if g.id not in covered_game_ids]
         if uncovered_rw:
             rw_games = await _fetch_rotowire_starters(client, today)
