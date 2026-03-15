@@ -193,6 +193,12 @@ class Game(TimestampMixin, Base):
     closing_home_spread_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     closing_away_spread_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
+    # Starting goalies (populated by DFO / NHL API scraper)
+    home_starter_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    home_starter_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # Confirmed/Expected/Likely/Projected
+    away_starter_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    away_starter_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+
     # Relationships
     home_team: Mapped["Team"] = relationship(
         "Team",

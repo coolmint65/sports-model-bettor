@@ -1863,75 +1863,65 @@ class FeatureEngine:
         team_id: int,
         goalie_features: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Check if the starting goalie has been officially confirmed.
+        """Resolve the actual starting goalie for predictions.
 
-        Queries the NHL API game landing page for confirmed starter info.
-        If a confirmed starter differs from the projected starter (from
-        recent game history), updates goalie features with the actual
-        starter's stats.
+        Reads starter info persisted on the Game model (populated by the
+        schedule sync from DailyFaceoff / NHL API).  If the persisted
+        starter differs from the projected one (from recent game history),
+        swaps the goalie features to use the correct starter's stats.
 
-        Returns the goalie_features dict, potentially updated with the
-        confirmed starter's data, plus confirmation metadata.
+        Falls back to the live DFO scraper if the Game model has no
+        starter info yet.
         """
-        try:
-            from app.scrapers.starter_scraper import get_confirmed_starter_for_team
-            confirmed = await get_confirmed_starter_for_team(db, game_id, team_id)
-        except Exception as exc:
-            logger.debug("Starter confirmation unavailable: %s", exc)
-            confirmed = None
-
-        if not confirmed:
-            return goalie_features
-
-        confirmed_name = confirmed.get("goalie_name", "")
         projected_name = goalie_features.get("goalie_name", "")
-        is_confirmed = confirmed.get("confirmed", False)
-        status = confirmed.get("status", "").lower()
-        source = confirmed.get("starter_source", "dfo")
+
+        # --- Source 1: read from Game model (persisted by schedule sync) ---
+        game_result = await db.execute(select(Game).where(Game.id == game_id))
+        game = game_result.scalars().first()
+
+        confirmed_name = ""
+        status = ""
+        source = "projected"
+        is_confirmed = False
+
+        if game:
+            is_home = (team_id == game.home_team_id)
+            starter_name = game.home_starter_name if is_home else game.away_starter_name
+            starter_status = game.home_starter_status if is_home else game.away_starter_status
+
+            if starter_name:
+                confirmed_name = starter_name
+                status = (starter_status or "").lower()
+                is_confirmed = status == "confirmed"
+                source = "dfo"
+
+        # --- Source 2: live scraper fallback if Game model has no starter ---
+        if not confirmed_name:
+            try:
+                from app.scrapers.starter_scraper import get_confirmed_starter_for_team
+                confirmed = await get_confirmed_starter_for_team(db, game_id, team_id)
+            except Exception as exc:
+                logger.debug("Starter confirmation unavailable: %s", exc)
+                confirmed = None
+
+            if confirmed:
+                confirmed_name = confirmed.get("goalie_name", "")
+                is_confirmed = confirmed.get("confirmed", False)
+                status = confirmed.get("status", "").lower()
+                source = "dfo"
+
+        if not confirmed_name:
+            return goalie_features
 
         # DFO statuses like "confirmed", "expected", "likely" are all more
         # reliable than our "whoever started the last game" heuristic.
-        # Only skip if the status is explicitly "unconfirmed" or empty.
         is_actionable = is_confirmed or status in (
             "confirmed", "expected", "likely", "projected",
         )
 
         # If the starter differs from our projected one, swap goalie stats
         if confirmed_name and confirmed_name != projected_name and is_actionable:
-            # Try finding the goalie by external_id first, then by name
-            player = None
-            ext_id = confirmed.get("goalie_external_id", "")
-            if ext_id:
-                stmt = select(Player).where(Player.external_id == str(ext_id))
-                result = await db.execute(stmt)
-                player = result.scalars().first()
-
-            if not player:
-                # Fall back to name-based lookup on this team's goalies
-                stmt = select(Player).where(
-                    Player.team_id == team_id,
-                    Player.position == "G",
-                    func.lower(Player.name) == confirmed_name.lower(),
-                )
-                result = await db.execute(stmt)
-                player = result.scalars().first()
-
-            if not player:
-                # Try partial name match (DFO may use slightly different formatting)
-                stmt = select(Player).where(
-                    Player.team_id == team_id,
-                    Player.position == "G",
-                )
-                result = await db.execute(stmt)
-                team_goalies = result.scalars().all()
-                confirmed_lower = confirmed_name.lower()
-                for g in team_goalies:
-                    # Match on last name (handles "J. Dobes" vs "Jakub Dobes")
-                    g_last = g.name.split()[-1].lower() if g.name else ""
-                    c_last = confirmed_lower.split()[-1] if confirmed_lower else ""
-                    if g_last and c_last and g_last == c_last:
-                        player = g
-                        break
+            player = await self._find_goalie_by_name(db, team_id, confirmed_name)
 
             if player:
                 logger.info(
@@ -1954,14 +1944,45 @@ class FeatureEngine:
 
         # Same goalie or no actionable switch — mark confirmation status
         result = {**goalie_features}
-        if is_confirmed:
-            result["starter_confirmed"] = True
-            result["starter_source"] = source
-        else:
-            result["starter_confirmed"] = False
-            result["starter_source"] = source if confirmed_name else "projected"
+        result["starter_confirmed"] = is_confirmed
+        result["starter_source"] = source
         result["starter_status"] = status or ("confirmed" if is_confirmed else "projected")
         return result
+
+    async def _find_goalie_by_name(
+        self,
+        db: AsyncSession,
+        team_id: int,
+        name: str,
+    ) -> Optional["Player"]:
+        """Find a goalie on a team by name, with fuzzy last-name fallback."""
+        # Exact match
+        stmt = select(Player).where(
+            Player.team_id == team_id,
+            Player.position == "G",
+            func.lower(Player.name) == name.lower(),
+        )
+        result = await db.execute(stmt)
+        player = result.scalars().first()
+        if player:
+            return player
+
+        # Last-name fallback (handles "J. Dobes" vs "Jakub Dobes")
+        stmt = select(Player).where(
+            Player.team_id == team_id,
+            Player.position == "G",
+        )
+        result = await db.execute(stmt)
+        team_goalies = result.scalars().all()
+        name_lower = name.lower()
+        target_last = name_lower.split()[-1] if name_lower else ""
+        if not target_last:
+            return None
+        for g in team_goalies:
+            g_last = g.name.split()[-1].lower() if g.name else ""
+            if g_last == target_last:
+                return g
+        return None
 
     async def _get_goalie_features_for_player(
         self,

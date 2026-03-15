@@ -440,10 +440,14 @@ async def sync_confirmed_starters(db: AsyncSession) -> List[Dict[str, Any]]:
     """
     today = date.today()
 
-    # Get today's games that haven't started yet
+    # Get today's games (include pregame/live so starters can be resolved
+    # even after the schedule status changes from "scheduled" to "pregame")
     stmt = select(Game).where(
         Game.date == today,
-        func.lower(Game.status).in_(("scheduled", "preview", "pre-game", "fut", "pre")),
+        func.lower(Game.status).in_((
+            "scheduled", "preview", "pre-game", "pregame",
+            "fut", "pre", "in_progress", "live",
+        )),
     )
     result = await db.execute(stmt)
     games = result.scalars().all()

@@ -755,7 +755,9 @@ async def _fetch_starters_for_games(
     """
     upcoming = [
         g for g in games
-        if g.status and g.status.lower() in ("scheduled", "preview", "pre-game", "fut", "pre")
+        if g.status and g.status.lower() in (
+            "scheduled", "preview", "pre-game", "pregame", "fut", "pre",
+        )
     ]
     if not upcoming:
         return {}
@@ -808,6 +810,28 @@ async def _fetch_starters_for_games(
             logger.warning("Goalie DB fallback error: %s", exc, exc_info=True)
     else:
         logger.info("Goalie starters: no missing teams (all covered by scrapers or no upcoming games)")
+
+    # Persist resolved starters to Game model so the prediction engine
+    # can read them without re-scraping DFO.
+    for g in upcoming:
+        gs = starters_map.get(g.id, {})
+        changed = False
+        home_s = gs.get("home")
+        away_s = gs.get("away")
+        if home_s and home_s.name and g.home_starter_name != home_s.name:
+            g.home_starter_name = home_s.name
+            g.home_starter_status = home_s.status or ("Confirmed" if home_s.confirmed else "Expected")
+            changed = True
+        if away_s and away_s.name and g.away_starter_name != away_s.name:
+            g.away_starter_name = away_s.name
+            g.away_starter_status = away_s.status or ("Confirmed" if away_s.confirmed else "Expected")
+            changed = True
+        if changed:
+            session.add(g)
+    try:
+        await session.flush()
+    except Exception as exc:
+        logger.warning("Failed to persist starters to Game model: %s", exc)
 
     return starters_map
 

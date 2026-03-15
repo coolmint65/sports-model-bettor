@@ -279,6 +279,11 @@ async def _migrate_add_columns() -> None:
         ("player_prop_odds", "opening_under_price", "FLOAT"),
         # Division rank from standings
         ("team_stats", "division_rank", "INTEGER"),
+        # Starting goalies (from DFO / NHL API)
+        ("game", "home_starter_name", "VARCHAR(100)"),
+        ("game", "home_starter_status", "VARCHAR(20)"),
+        ("game", "away_starter_name", "VARCHAR(100)"),
+        ("game", "away_starter_status", "VARCHAR(20)"),
     ]
 
     async with engine.begin() as conn:
