@@ -159,41 +159,10 @@ async def _fetch_dailyfaceoff_starters(
                 )
                 return games
 
-            # Log diagnostics for debugging
-            player_hrefs = re.findall(r'href="([^"]*player[^"]*)"', html[:80000], re.I)
-            # Also log the actual <a> tags around player links to see structure
-            player_a_tags = re.findall(
-                r'(<a[^>]*player[^>]*>[^<]{0,60}</a>)',
-                html[:80000], re.I,
-            )
-            # Find team abbreviations near player links
-            team_near_players = re.findall(
-                r'([A-Z]{2,3})\s*(?:</[^>]*>\s*)*(?:<[^>]*>\s*)*<a[^>]*player',
-                html[:80000],
-            )
-            all_classes = re.findall(r'class="([^"]{3,60})"', html[:30000])
-            seen: set = set()
-            unique = [c for c in all_classes if c not in seen and not seen.add(c)]
             logger.info(
-                "DailyFaceoff: 0 matchups from %s (%d bytes), "
-                "player_links=%d, sample classes=%s",
-                url, len(html), len(player_hrefs), unique[:20],
+                "DailyFaceoff: 0 matchups from %s (%d bytes)",
+                url, len(html),
             )
-            if player_a_tags:
-                logger.info(
-                    "DailyFaceoff player <a> tags (first 6): %s",
-                    player_a_tags[:6],
-                )
-            if player_hrefs:
-                logger.info(
-                    "DailyFaceoff player hrefs (first 6): %s",
-                    player_hrefs[:6],
-                )
-            if team_near_players:
-                logger.info(
-                    "DailyFaceoff teams near players: %s",
-                    team_near_players[:12],
-                )
         except Exception as exc:
             logger.debug("DailyFaceoff %s failed: %s", url, exc)
             continue
@@ -282,25 +251,6 @@ async def _fetch_nhl_api_starters(
     data = resp.json()
     results: List[Dict[str, Any]] = []
 
-    # Log response structure for debugging
-    matchup = data.get("matchup", {})
-    gc = matchup.get("goalieComparison", {})
-    # Log at INFO for first game to diagnose structure
-    logger.info(
-        "NHL API %s: top keys=%s, matchup keys=%s, goalieComparison=%s",
-        game_ext_id,
-        sorted(data.keys())[:15],
-        sorted(matchup.keys())[:10] if matchup else "NONE",
-        "present" if gc else "NONE",
-    )
-    # Dump goalieComparison structure to understand the format
-    if gc:
-        import json as _json
-        logger.info(
-            "NHL API %s goalieComparison FULL: %.800s",
-            game_ext_id, _json.dumps(gc, default=str),
-        )
-
     for side, is_home in [("homeTeam", True), ("awayTeam", False)]:
         team_id = game.home_team_id if is_home else game.away_team_id
         goalie_info = _extract_nhl_goalie(data, side)
@@ -332,19 +282,34 @@ def _extract_nhl_goalie(data: dict, side: str) -> Optional[Dict[str, Any]]:
     """Try multiple paths to extract a goalie from the NHL API response.
 
     The NHL API has used different structures across seasons:
+    - matchup.goalieComparison.{side}.leaders[0] (2025-26 format)
     - matchup.goalieComparison.{side}.{name, playerId}
     - matchup.goalieComparison.{side}.starter.{name, playerId}
     - {side}.startingGoalie.{name, id}
     - summary.goalieComparison (some endpoints)
     """
+    def _gc_leaders_first():
+        """2025-26 format: goalieComparison.{side}.leaders is a list of goalies."""
+        leaders = (
+            data.get("matchup", {})
+            .get("goalieComparison", {})
+            .get(side, {})
+            .get("leaders", [])
+        )
+        if leaders and isinstance(leaders, list):
+            return leaders[0]
+        return {}
+
     paths_to_try = [
-        # Path 1: matchup.goalieComparison.homeTeam
+        # Path 1 (2025-26): matchup.goalieComparison.homeTeam.leaders[0]
+        _gc_leaders_first,
+        # Path 2: matchup.goalieComparison.homeTeam directly
         lambda: data.get("matchup", {}).get("goalieComparison", {}).get(side, {}),
-        # Path 2: matchup.goalieComparison.homeTeam.starter
+        # Path 3: matchup.goalieComparison.homeTeam.starter
         lambda: data.get("matchup", {}).get("goalieComparison", {}).get(side, {}).get("starter", {}),
-        # Path 3: top-level startingGoalie nested under team
+        # Path 4: top-level startingGoalie nested under team
         lambda: data.get(side, {}).get("startingGoalie", {}),
-        # Path 4: summary section
+        # Path 5: summary section
         lambda: data.get("summary", {}).get("goalieComparison", {}).get(side, {}),
     ]
 
@@ -385,29 +350,21 @@ def _parse_goalie_block(block: dict) -> Optional[Dict[str, Any]]:
     name = ""
     player_id = None
 
-    # Try name as dict (name.default) or string
-    name_obj = block.get("name") or block.get("firstName", {})
-    if isinstance(name_obj, dict):
-        name = name_obj.get("default", "")
-        if not name:
-            # Try firstName + lastName pattern
-            first = name_obj.get("default", "")
-            last_obj = block.get("lastName", {})
-            last = last_obj.get("default", "") if isinstance(last_obj, dict) else str(last_obj) if last_obj else ""
-            name = f"{first} {last}".strip()
-    elif isinstance(name_obj, str):
-        name = name_obj
+    # Prefer firstName + lastName (full names) over name (often abbreviated)
+    first_obj = block.get("firstName", "")
+    last_obj = block.get("lastName", "")
+    first = first_obj.get("default", "") if isinstance(first_obj, dict) else str(first_obj) if first_obj else ""
+    last = last_obj.get("default", "") if isinstance(last_obj, dict) else str(last_obj) if last_obj else ""
+    if first or last:
+        name = f"{first} {last}".strip()
 
-    # If name field didn't work, try firstName/lastName at top level
+    # Fall back to name field (may be abbreviated like "C. Hellebuyck")
     if not name:
-        first = block.get("firstName", "")
-        last = block.get("lastName", "")
-        if isinstance(first, dict):
-            first = first.get("default", "")
-        if isinstance(last, dict):
-            last = last.get("default", "")
-        if first or last:
-            name = f"{first} {last}".strip()
+        name_obj = block.get("name", "")
+        if isinstance(name_obj, dict):
+            name = name_obj.get("default", "")
+        elif isinstance(name_obj, str):
+            name = name_obj
 
     # Player ID
     player_id = block.get("playerId") or block.get("id") or block.get("player_id")
