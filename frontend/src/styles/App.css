@@ -5136,6 +5136,12 @@ a:hover {
   font-weight: 600;
 }
 
+.dc-goalie-status.dc-unconfirmed {
+  color: var(--accent-orange, #f59e0b);
+  font-style: italic;
+  font-weight: 500;
+}
+
 .dc-footer {
   display: flex;
   align-items: center;
