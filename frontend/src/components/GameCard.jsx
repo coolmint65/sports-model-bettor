@@ -467,11 +467,11 @@ function GameCard({ game, section, medal }) {
             </span>
           </div>
           <div className="dc-goalie-row dc-goalie-status-row">
-            <span className={`dc-goalie-status ${game.away_starter?.confirmed ? 'dc-confirmed' : game.away_starter ? 'dc-unconfirmed' : ''}`}>
+            <span className={`dc-goalie-status ${game.away_starter?.confirmed ? 'dc-confirmed' : game.away_starter?.status?.toLowerCase() === 'unconfirmed' ? 'dc-unconfirmed' : game.away_starter ? 'dc-likely' : ''}`}>
               {game.away_starter?.status || (game.away_starter?.confirmed ? 'Confirmed' : game.away_starter ? 'Expected' : '')}
             </span>
             <span />
-            <span className={`dc-goalie-status ${game.home_starter?.confirmed ? 'dc-confirmed' : game.home_starter ? 'dc-unconfirmed' : ''}`}>
+            <span className={`dc-goalie-status ${game.home_starter?.confirmed ? 'dc-confirmed' : game.home_starter?.status?.toLowerCase() === 'unconfirmed' ? 'dc-unconfirmed' : game.home_starter ? 'dc-likely' : ''}`}>
               {game.home_starter?.status || (game.home_starter?.confirmed ? 'Confirmed' : game.home_starter ? 'Expected' : '')}
             </span>
           </div>

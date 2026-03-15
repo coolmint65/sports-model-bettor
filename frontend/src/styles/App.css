@@ -5136,8 +5136,14 @@ a:hover {
   font-weight: 600;
 }
 
-.dc-goalie-status.dc-unconfirmed {
+.dc-goalie-status.dc-likely {
   color: var(--accent-orange, #f59e0b);
+  font-style: italic;
+  font-weight: 500;
+}
+
+.dc-goalie-status.dc-unconfirmed {
+  color: #e57373;
   font-style: italic;
   font-weight: 500;
 }
