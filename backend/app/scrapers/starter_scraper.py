@@ -293,17 +293,13 @@ async def _fetch_nhl_api_starters(
         sorted(matchup.keys())[:10] if matchup else "NONE",
         "present" if gc else "NONE",
     )
-    # Log the actual goalie data paths
-    for side_name in ("homeTeam", "awayTeam"):
-        side_gc = gc.get(side_name, {}) if gc else {}
-        top_goalie = data.get(side_name, {}).get("startingGoalie", {})
-        if side_gc or top_goalie:
-            logger.info(
-                "NHL API %s %s: goalieComp keys=%s, startingGoalie=%s",
-                game_ext_id, side_name,
-                list(side_gc.keys())[:8] if isinstance(side_gc, dict) else type(side_gc).__name__,
-                str(top_goalie)[:150] if top_goalie else "NONE",
-            )
+    # Dump goalieComparison structure to understand the format
+    if gc:
+        import json as _json
+        logger.info(
+            "NHL API %s goalieComparison FULL: %.800s",
+            game_ext_id, _json.dumps(gc, default=str),
+        )
 
     for side, is_home in [("homeTeam", True), ("awayTeam", False)]:
         team_id = game.home_team_id if is_home else game.away_team_id
