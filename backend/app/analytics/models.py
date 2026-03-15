@@ -205,6 +205,10 @@ class BettingModel:
             away_xg = away_xg * (1 - h2h_goal_adj) + h2h_away_goals * h2h_goal_adj
 
         # ---- Goalie quality adjustment (with starter confidence discount) ----
+        # Save pre-goalie xG to cap total goalie influence later.
+        pre_goalie_home_xg = home_xg
+        pre_goalie_away_xg = away_xg
+
         away_goalie = features.get("away_goalie", {})
         home_goalie = features.get("home_goalie", {})
         home_starter_conf = features.get("home_starter_status", {}).get("starter_confidence", 1.0)
@@ -391,57 +395,56 @@ class BettingModel:
             period_dev = away_period_total - self.league_avg
             away_xg += period_dev * _mc.period_scoring_factor
 
-        # ---- Advanced metrics adjustment (Corsi-proxy / shot quality) ----
-        # Teams that dominate possession (high Corsi%) tend to outperform
-        # raw scoring stats. Teams with high shooting% are due to regress
-        # while those with suppressed shooting% will bounce back.
+        # ---- Possession adjustment (unified, best-available metric) ----
+        # Three possession metrics exist (5v5 EV Corsi, close-game Corsi,
+        # all-situations Corsi) but they're highly correlated. Applying all
+        # three triple-counts the same signal. Use the single best available
+        # metric: 5v5 EV > close-game > all-situations proxy.
         home_advanced = features.get("home_advanced", {})
         away_advanced = features.get("away_advanced", {})
+        home_ev = features.get("home_ev_possession", {})
+        away_ev = features.get("away_ev_possession", {})
+        home_close = features.get("home_close_possession", {})
+        away_close = features.get("away_close_possession", {})
         adv_min_games = _mc.advanced_metrics_min_games
+        possession_factor = _mc.unified_possession_factor
 
+        # Home team: pick best available CF%
+        home_cf_used = None
+        if home_ev.get("games_found", 0) >= _mc.ev_corsi_min_games:
+            home_cf_used = home_ev.get("ev_cf_pct", 50.0)
+        elif home_close.get("close_games_found", 0) >= _mc.close_game_min_games:
+            home_cf_used = home_close.get("close_cf_pct", 50.0)
+        elif home_advanced.get("games_found", 0) >= adv_min_games:
+            home_cf_used = home_advanced.get("corsi_for_pct", 50.0)
+
+        if home_cf_used is not None:
+            cf_deviation = (home_cf_used - 50.0) / 100.0
+            home_xg *= 1.0 + cf_deviation * possession_factor
+
+        # Away team: pick best available CF%
+        away_cf_used = None
+        if away_ev.get("games_found", 0) >= _mc.ev_corsi_min_games:
+            away_cf_used = away_ev.get("ev_cf_pct", 50.0)
+        elif away_close.get("close_games_found", 0) >= _mc.close_game_min_games:
+            away_cf_used = away_close.get("close_cf_pct", 50.0)
+        elif away_advanced.get("games_found", 0) >= adv_min_games:
+            away_cf_used = away_advanced.get("corsi_for_pct", 50.0)
+
+        if away_cf_used is not None:
+            cf_deviation = (away_cf_used - 50.0) / 100.0
+            away_xg *= 1.0 + cf_deviation * possession_factor
+
+        # Shot quality (shooting%) adjustment — kept separate as it measures
+        # a distinct signal (finishing ability, not possession volume).
         if home_advanced.get("games_found", 0) >= adv_min_games:
-            # Corsi possession: CF% above 50 means team controls play
-            home_cf_pct = home_advanced.get("corsi_for_pct", 50.0)
-            cf_deviation = (home_cf_pct - 50.0) / 100.0  # e.g., 54% → +0.04
-            home_xg *= 1.0 + cf_deviation * _mc.corsi_possession_factor
-
-            # Shot quality: shooting% above league avg (~8%) suggests better chances
             home_sh_pct = home_advanced.get("shooting_pct", 8.0)
             sh_deviation = (home_sh_pct - 8.0) / 100.0
             home_xg *= 1.0 + sh_deviation * _mc.shot_quality_factor
-
         if away_advanced.get("games_found", 0) >= adv_min_games:
-            away_cf_pct = away_advanced.get("corsi_for_pct", 50.0)
-            cf_deviation = (away_cf_pct - 50.0) / 100.0
-            away_xg *= 1.0 + cf_deviation * _mc.corsi_possession_factor
-
             away_sh_pct = away_advanced.get("shooting_pct", 8.0)
             sh_deviation = (away_sh_pct - 8.0) / 100.0
             away_xg *= 1.0 + sh_deviation * _mc.shot_quality_factor
-
-        # ---- 5v5 Even-strength possession adjustment ----
-        # True 5v5 Corsi from MoneyPuck is more predictive than our
-        # all-situations Corsi proxy since it filters out PP/PK noise.
-        home_ev = features.get("home_ev_possession", {})
-        away_ev = features.get("away_ev_possession", {})
-        if home_ev.get("games_found", 0) >= _mc.ev_corsi_min_games:
-            ev_deviation = (home_ev.get("ev_cf_pct", 50.0) - 50.0) / 100.0
-            home_xg *= 1.0 + ev_deviation * _mc.ev_corsi_factor
-        if away_ev.get("games_found", 0) >= _mc.ev_corsi_min_games:
-            ev_deviation = (away_ev.get("ev_cf_pct", 50.0) - 50.0) / 100.0
-            away_xg *= 1.0 + ev_deviation * _mc.ev_corsi_factor
-
-        # ---- Close-game possession adjustment ----
-        # CF% in close games (1-goal margin / OT) filters out score effects
-        # from blowouts and is a better predictor of sustained quality.
-        home_close = features.get("home_close_possession", {})
-        away_close = features.get("away_close_possession", {})
-        if home_close.get("close_games_found", 0) >= _mc.close_game_min_games:
-            close_dev = (home_close.get("close_cf_pct", 50.0) - 50.0) / 100.0
-            home_xg *= 1.0 + close_dev * _mc.close_game_corsi_factor
-        if away_close.get("close_games_found", 0) >= _mc.close_game_min_games:
-            close_dev = (away_close.get("close_cf_pct", 50.0) - 50.0) / 100.0
-            away_xg *= 1.0 + close_dev * _mc.close_game_corsi_factor
 
         # ---- PDO regression (luck adjustment) ----
         # PDO = shooting% + save%. League average is ~1.000.
@@ -530,6 +533,17 @@ class BettingModel:
                 away_xg *= home_wl.get("workload_factor", 1.0)
             if away_wl.get("heavy_workload", False):
                 home_xg *= away_wl.get("workload_factor", 1.0)
+
+        # ---- Cap total goalie influence ----
+        # Six goalie factors can compound to dominate the entire prediction.
+        # Cap the total xG delta from all goalie adjustments to prevent this.
+        goalie_cap = _mc.goalie_max_xg_delta
+        home_goalie_delta = home_xg - pre_goalie_home_xg
+        away_goalie_delta = away_xg - pre_goalie_away_xg
+        if abs(home_goalie_delta) > goalie_cap:
+            home_xg = pre_goalie_home_xg + (goalie_cap if home_goalie_delta > 0 else -goalie_cap)
+        if abs(away_goalie_delta) > goalie_cap:
+            away_xg = pre_goalie_away_xg + (goalie_cap if away_goalie_delta > 0 else -goalie_cap)
 
         # ---- Pace / tempo matchup adjustment ----
         # Two fast teams create more total goals than individual averages
@@ -743,6 +757,46 @@ class BettingModel:
                 except Exception as e:
                     logger.warning("ML model prediction failed, using Poisson only: %s", e)
 
+        # ---- Market-informed xG prior ----
+        # Sportsbook lines encode sharp information from millions in handle.
+        # Convert ML odds → implied win probability → implied xG differential,
+        # then blend with model xG. This anchors predictions to market consensus
+        # and is the single biggest variance reducer.
+        if _mc.market_prior_enabled and _mc.market_prior_weight > 0:
+            odds_data = features.get("odds", {})
+            home_ml_odds = odds_data.get("home_moneyline")
+            away_ml_odds = odds_data.get("away_moneyline")
+            if home_ml_odds is not None and away_ml_odds is not None:
+                home_implied = american_odds_to_implied_prob(home_ml_odds)
+                away_implied = american_odds_to_implied_prob(away_ml_odds)
+                # Remove vig: normalize implied probabilities to sum to 1.0
+                total_implied = home_implied + away_implied
+                if total_implied > 0:
+                    home_implied /= total_implied
+                    away_implied /= total_implied
+                    # Convert win probability differential to xG differential.
+                    # A team with 60% implied probability has roughly +0.3 xG edge.
+                    # Use logit transform for a better mapping than linear:
+                    # logit(p) maps 0.5→0, 0.6→0.405, 0.7→0.847
+                    # Scale factor calibrated so 60% implied ≈ +0.30 xG edge.
+                    model_total = home_xg + away_xg
+                    if home_implied > 0.01 and home_implied < 0.99:
+                        logit_home = math.log(home_implied / (1.0 - home_implied))
+                        # Scale: logit(0.6)=0.405 → want ~0.30 xG diff → scale ≈ 0.74
+                        xg_diff_implied = logit_home * 0.74
+                        market_home_xg = model_total / 2.0 + xg_diff_implied / 2.0
+                        market_away_xg = model_total / 2.0 - xg_diff_implied / 2.0
+                        # Clamp market xG to reasonable range
+                        market_home_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, market_home_xg))
+                        market_away_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, market_away_xg))
+                        # Blend model xG with market xG
+                        mw = _mc.market_prior_weight
+                        home_xg = home_xg * (1.0 - mw) + market_home_xg * mw
+                        away_xg = away_xg * (1.0 - mw) + market_away_xg * mw
+                        # Re-apply floor/ceiling after blending
+                        home_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, home_xg))
+                        away_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, away_xg))
+
         return round(home_xg, 3), round(away_xg, 3)
 
     def _weighted_goals_for(
@@ -760,26 +814,26 @@ class BettingModel:
 
     @staticmethod
     def calibrate_probability(raw_prob: float) -> float:
-        """Apply a simple calibration curve to model probabilities.
+        """Apply calibration shrinkage to model probabilities.
 
-        Feature #12: Models tend to be overconfident at extremes (saying
-        70% when the actual win rate is 62%) and underconfident near 50%.
-        This applies a mild logistic shrinkage toward 50% to correct.
+        Feature #12: Poisson models are structurally overconfident because
+        hockey has massive randomness (puck bounces, posts, empty nets).
+        A model saying 70% typically wins ~63-65% of the time.
 
-        Calibration mapping (shrinkage=0.05):
+        Shrinkage pulls predictions toward 50% to match reality:
         - 50% stays 50%
-        - 60% becomes ~59.5%
-        - 70% becomes ~69%
-        - 80% becomes ~78.5%
+        - 55% becomes ~54.1%
+        - 60% becomes ~58.2%
+        - 65% becomes ~62.3%
+        - 70% becomes ~66.4%
+        - 75% becomes ~70.5%
 
-        The strength is controlled by a shrinkage factor (0 = no change,
-        1 = always 50%).
+        Controlled by calibration_shrinkage (0 = no change, 1 = always 50%).
+        Default 0.18 based on typical NHL Poisson overconfidence.
         """
         if not _mc.calibration_enabled:
             return raw_prob
-        # Light shrinkage toward 50% — enough to curb extreme overconfidence
-        # without compressing all predictions into the 60-65% borderline range.
-        shrinkage = 0.05
+        shrinkage = _mc.calibration_shrinkage
         calibrated = raw_prob * (1.0 - shrinkage) + 0.5 * shrinkage
         return round(max(0.01, min(0.99, calibrated)), 4)
 

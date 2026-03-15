@@ -177,8 +177,8 @@ class PredictionManager:
                 # so edge is meaningless and should not be persisted.
                 if has_real_odds:
                     edge = raw_prob - implied_prob
-                    # Cap edge at 25% — anything higher signals a model/data issue
-                    edge = min(edge, 0.25)
+                    # Cap edge at 15% — after calibration, anything higher signals a model/data issue
+                    edge = min(edge, 0.15)
                 else:
                     edge = None
 

@@ -56,10 +56,10 @@ def composite_pick_score(
       - juice      (20%): payout quality (lower implied prob = less juice)
 
     Each component is normalized to 0-1 before weighting so no single
-    factor dominates.  Edge is capped at 25% (the model hard-cap) for
-    normalization purposes.
+    factor dominates.  Edge is capped at 15% for normalization purposes
+    (calibrated edges rarely exceed this after proper shrinkage).
     """
     c = confidence or 0.0
-    e = min(edge or 0.0, 0.25) / 0.25  # normalize 0-25% → 0-1
+    e = min(edge or 0.0, 0.15) / 0.15  # normalize 0-15% → 0-1
     j = 1.0 - (implied_prob or 0.5)     # lower implied = better juice
     return 0.35 * c + 0.45 * e + 0.20 * j
