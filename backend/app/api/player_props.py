@@ -16,7 +16,8 @@ from sqlalchemy.orm import selectinload
 
 from app.constants import GAME_FINAL_STATUSES
 from app.database import get_session, get_write_session_context
-from app.models.game import Game
+from app.models.game import Game, GameGoalieStats, GamePlayerStats
+from app.models.player import Player
 from app.models.player_prop import PlayerPropOdds
 from app.models.team import Team
 
@@ -357,6 +358,102 @@ async def sync_props_now() -> Dict[str, Any]:
     return diag
 
 
+_PROP_STAT_FIELD = {
+    "player_shots_on_goal": "shots",
+    "player_points": "points",
+    "player_assists": "assists",
+    "player_goal_scorer_anytime": "goals",
+}
+
+
+async def _grade_prop_picks(
+    session: AsyncSession,
+    final_games: List[Game],
+    picks_by_game: Dict,
+) -> Dict[int, Dict[tuple, bool]]:
+    """Grade prop picks for final games against actual player stats.
+
+    Returns {game_id: {(player_name, market, pick_side): True/False/None}}.
+    True = hit, False = miss, None = can't grade.
+    """
+    if not final_games:
+        return {}
+
+    game_ids = [g.id for g in final_games if g.id in picks_by_game]
+    if not game_ids:
+        return {}
+
+    # Load skater stats for final games
+    stats_result = await session.execute(
+        select(GamePlayerStats)
+        .options(selectinload(GamePlayerStats.player))
+        .where(GamePlayerStats.game_id.in_(game_ids))
+    )
+    skater_stats = stats_result.scalars().all()
+
+    # Load goalie stats for final games
+    goalie_result = await session.execute(
+        select(GameGoalieStats)
+        .options(selectinload(GameGoalieStats.player))
+        .where(GameGoalieStats.game_id.in_(game_ids))
+    )
+    goalie_stats = goalie_result.scalars().all()
+
+    # Build lookup: (game_id, player_name_lower) → stats row
+    skater_by_game: Dict[tuple, GamePlayerStats] = {}
+    for s in skater_stats:
+        if s.player:
+            skater_by_game[(s.game_id, s.player.name.lower())] = s
+
+    goalie_by_game: Dict[tuple, GameGoalieStats] = {}
+    for g in goalie_stats:
+        if g.player:
+            goalie_by_game[(g.game_id, g.player.name.lower())] = g
+
+    result: Dict[int, Dict[tuple, bool]] = {}
+    for game_id in game_ids:
+        picks = picks_by_game.get(game_id, [])
+        outcomes: Dict[tuple, Optional[bool]] = {}
+        for p in picks:
+            key = (p.player_name, p.market, p.pick_side)
+            name_lower = p.player_name.lower()
+
+            if p.market == "player_total_saves":
+                gs = goalie_by_game.get((game_id, name_lower))
+                if gs is None:
+                    outcomes[key] = None
+                    continue
+                actual = gs.saves
+                if p.pick_side == "over":
+                    outcomes[key] = actual > p.line
+                else:
+                    outcomes[key] = actual < p.line
+            elif p.market == "player_goal_scorer_anytime":
+                ss = skater_by_game.get((game_id, name_lower))
+                if ss is None:
+                    outcomes[key] = None
+                    continue
+                outcomes[key] = ss.goals >= 1
+            else:
+                ss = skater_by_game.get((game_id, name_lower))
+                if ss is None:
+                    outcomes[key] = None
+                    continue
+                field = _PROP_STAT_FIELD.get(p.market)
+                if field is None:
+                    outcomes[key] = None
+                    continue
+                actual = getattr(ss, field, 0)
+                if p.pick_side == "over":
+                    outcomes[key] = actual > p.line
+                else:
+                    outcomes[key] = actual < p.line
+
+        result[game_id] = outcomes
+
+    return result
+
+
 @router.get("/picks/today")
 async def get_todays_prop_picks(
     session: AsyncSession = Depends(get_session),
@@ -365,27 +462,17 @@ async def get_todays_prop_picks(
 
     Analyzes player performance data against sportsbook prop lines
     to identify value bets. Returns picks sorted by edge within
-    each game.
-
-    Only returns picks for pregame/scheduled games — once a game
-    goes live or final, its props are removed from the list.
+    each game.  Props remain visible for live and final games,
+    with outcome grading (hit/miss) once stats are available.
     """
-    from app.constants import GAME_FINAL_STATUSES
     from app.services.player_prop_picks import generate_all_prop_picks
 
     today = date.today()
 
-    # Exclude both final AND live games — player props are only
-    # actionable before puck drop.
     games_result = await session.execute(
         select(Game)
         .options(selectinload(Game.home_team), selectinload(Game.away_team))
-        .where(
-            Game.date == today,
-            ~func.lower(Game.status).in_(
-                GAME_FINAL_STATUSES + ("in_progress", "live")
-            ),
-        )
+        .where(Game.date == today)
         .order_by(Game.start_time)
     )
     games = games_result.scalars().all()
@@ -396,11 +483,20 @@ async def get_todays_prop_picks(
     game_ids = [g.id for g in games]
     picks_by_game = await generate_all_prop_picks(session, game_ids)
 
+    # For final games, grade prop picks against actual player stats
+    final_statuses = {s.lower() for s in GAME_FINAL_STATUSES}
+    outcomes_by_game = await _grade_prop_picks(
+        session,
+        [g for g in games if (g.status or "").lower() in final_statuses],
+        picks_by_game,
+    )
+
     game_list = []
     total_picks = 0
     for game in games:
         game_picks = picks_by_game.get(game.id, [])
         total_picks += len(game_picks)
+        game_outcomes = outcomes_by_game.get(game.id, {})
         game_list.append({
             "game_id": game.id,
             "home_team": game.home_team.abbreviation if game.home_team else "",
@@ -408,6 +504,7 @@ async def get_todays_prop_picks(
             "home_team_name": game.home_team.name if game.home_team else "",
             "away_team_name": game.away_team.name if game.away_team else "",
             "start_time": game.start_time.isoformat() if game.start_time else None,
+            "status": game.status,
             "picks": [
                 {
                     "player_name": p.player_name,
@@ -423,6 +520,9 @@ async def get_todays_prop_picks(
                     "avg_rate": round(p.avg_rate, 2),
                     "games_sampled": p.games_sampled,
                     "reasoning": p.reasoning,
+                    "outcome": game_outcomes.get(
+                        (p.player_name, p.market, p.pick_side)
+                    ),
                 }
                 for p in game_picks
             ],

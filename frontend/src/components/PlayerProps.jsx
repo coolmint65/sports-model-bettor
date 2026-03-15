@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { Users, Target, Crosshair, Star, Shield, Award, Zap } from 'lucide-react';
+import { Users, Target, Crosshair, Star, Shield, Award, Zap, Check, X } from 'lucide-react';
 import { fetchTodayPropPicks } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import { formatAmericanOdds } from '../utils/formatting';
@@ -48,23 +48,33 @@ const MARKET_ORDER = [
 function PropPickCard({ pick, rank }) {
   const config = MARKET_CONFIG[pick.market] || {};
   const Icon = config.icon || Target;
-  const edgePct = (pick.edge * 100).toFixed(1);
+  const edgeVal = pick.edge * 100;
+  const edgePct = `${edgeVal >= 0 ? '+' : ''}${edgeVal.toFixed(1)}%`;
   const confPct = (pick.confidence * 100).toFixed(0);
+  const outcome = pick.outcome; // true = hit, false = miss, null/undefined = pending
 
   const pickLabel = pick.market === 'player_goal_scorer_anytime'
     ? 'Anytime Goal'
     : `${pick.pick_side === 'over' ? 'Over' : 'Under'} ${pick.line}`;
 
+  const outcomeClass = outcome === true ? 'prop-pick-hit' : outcome === false ? 'prop-pick-miss' : '';
+
   return (
-    <div className="prop-pick-card">
+    <div className={`prop-pick-card ${outcomeClass}`}>
       <div className="prop-pick-header">
         <div className="prop-pick-player">
-          <span className="prop-pick-rank">#{rank}</span>
+          {outcome === true ? (
+            <Check size={16} className="prop-outcome-icon prop-outcome-hit" />
+          ) : outcome === false ? (
+            <X size={16} className="prop-outcome-icon prop-outcome-miss" />
+          ) : (
+            <span className="prop-pick-rank">#{rank}</span>
+          )}
           <Icon size={14} style={{ color: config.color }} />
           <span className="prop-pick-name">{pick.player_name}</span>
         </div>
-        <div className="prop-pick-edge" style={{ color: '#00ff88' }}>
-          +{edgePct}% edge
+        <div className="prop-pick-edge" style={{ color: edgeVal >= 0 ? '#00ff88' : 'var(--accent-red, #ff5252)' }}>
+          Edge {edgePct}
         </div>
       </div>
       <div className="prop-pick-details">
@@ -186,6 +196,12 @@ function PlayerProps() {
               <span className="props-team-abbr">{game.away_team}</span>
               <span className="props-at">@</span>
               <span className="props-team-abbr">{game.home_team}</span>
+              {game.status && ['final', 'completed', 'official', 'off'].includes(game.status.toLowerCase()) && (
+                <span className="props-game-status props-game-final">Final</span>
+              )}
+              {game.status && ['in_progress', 'live', 'active'].includes(game.status.toLowerCase()) && (
+                <span className="props-game-status props-game-live">Live</span>
+              )}
               <span className="props-game-count">{game.pick_count} picks</span>
             </div>
             <div className="props-picks-list">
