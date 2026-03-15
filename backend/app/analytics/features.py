@@ -1670,24 +1670,16 @@ class FeatureEngine:
         gs = goalie.get("games_started_season", 0)
         fatigue_threshold = _mc.starter_fatigue_threshold
 
-        # If starter is confirmed via DFO or NHL API, confidence is high
+        # DFO is reliable regardless of confirmation label — always
+        # treat any DFO/NHL-API sourced starter as high confidence.
+        starter_source = goalie.get("starter_source", "")
         starter_status = goalie.get("starter_status", "")
-        if goalie.get("starter_confirmed", False) or starter_status == "confirmed":
-            source = goalie.get("starter_source", "external")
+        if starter_source in ("dfo", "nhl_api"):
             return {
                 "projected_starter": goalie.get("goalie_name", "Unknown"),
                 "starter_confidence": 0.98,
                 "confidence_level": "high",
-                "confidence_reasons": [f"Confirmed starter ({source})"],
-            }
-
-        # DFO "expected" / "likely" is strong signal, boost confidence
-        if starter_status in ("expected", "likely"):
-            return {
-                "projected_starter": goalie.get("goalie_name", "Unknown"),
-                "starter_confidence": 0.90,
-                "confidence_level": "high",
-                "confidence_reasons": [f"Expected starter ({starter_status} via DFO)"],
+                "confidence_reasons": [f"Starter via {starter_source} ({starter_status or 'projected'})"],
             }
 
         # Back-to-back reduces confidence
@@ -1929,15 +1921,10 @@ class FeatureEngine:
             )
             return goalie_features
 
-        # DFO statuses like "confirmed", "expected", "likely" are all more
-        # reliable than our "whoever started the last game" heuristic.
-        # Any DFO/NHL-API status is more reliable than the "whoever
-        # started the last game" heuristic — including "unconfirmed",
-        # which just means DFO hasn't locked it in yet but still
-        # represents their best projection.
-        is_actionable = is_confirmed or status in (
-            "confirmed", "expected", "likely", "projected", "unconfirmed",
-        )
+        # DFO is reliable regardless of their confirmation label —
+        # always trust their goalie projection over our "whoever
+        # started the last game" heuristic.
+        is_actionable = source in ("dfo", "nhl_api")
 
         logger.info(
             "get_confirmed_starter: confirmed=%r vs projected=%r, "
