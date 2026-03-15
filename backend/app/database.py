@@ -273,6 +273,9 @@ async def _migrate_add_columns() -> None:
         ("team_stats", "record_last_20", "VARCHAR(20)"),
         ("team_stats", "home_record", "VARCHAR(20)"),
         ("team_stats", "away_record", "VARCHAR(20)"),
+        # Player prop opening prices for line movement tracking
+        ("player_prop_odds", "opening_over_price", "FLOAT"),
+        ("player_prop_odds", "opening_under_price", "FLOAT"),
     ]
 
     async with engine.begin() as conn:
