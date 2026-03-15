@@ -1670,13 +1670,24 @@ class FeatureEngine:
         gs = goalie.get("games_started_season", 0)
         fatigue_threshold = _mc.starter_fatigue_threshold
 
-        # If starter is confirmed via NHL API, confidence is high
-        if goalie.get("starter_confirmed", False):
+        # If starter is confirmed via DFO or NHL API, confidence is high
+        starter_status = goalie.get("starter_status", "")
+        if goalie.get("starter_confirmed", False) or starter_status == "confirmed":
+            source = goalie.get("starter_source", "external")
             return {
                 "projected_starter": goalie.get("goalie_name", "Unknown"),
                 "starter_confidence": 0.98,
                 "confidence_level": "high",
-                "confidence_reasons": ["Confirmed via NHL API"],
+                "confidence_reasons": [f"Confirmed starter ({source})"],
+            }
+
+        # DFO "expected" / "likely" is strong signal, boost confidence
+        if starter_status in ("expected", "likely"):
+            return {
+                "projected_starter": goalie.get("goalie_name", "Unknown"),
+                "starter_confidence": 0.90,
+                "confidence_level": "high",
+                "confidence_reasons": [f"Expected starter ({starter_status} via DFO)"],
             }
 
         # Back-to-back reduces confidence
@@ -1875,37 +1886,81 @@ class FeatureEngine:
         confirmed_name = confirmed.get("goalie_name", "")
         projected_name = goalie_features.get("goalie_name", "")
         is_confirmed = confirmed.get("confirmed", False)
+        status = confirmed.get("status", "").lower()
+        source = confirmed.get("starter_source", "dfo")
 
-        # If the confirmed starter is different from our projected starter,
-        # we need to re-fetch goalie features for the actual starter
-        if confirmed_name and confirmed_name != projected_name and is_confirmed:
-            # Find the confirmed goalie in our DB
+        # DFO statuses like "confirmed", "expected", "likely" are all more
+        # reliable than our "whoever started the last game" heuristic.
+        # Only skip if the status is explicitly "unconfirmed" or empty.
+        is_actionable = is_confirmed or status in (
+            "confirmed", "expected", "likely", "projected",
+        )
+
+        # If the starter differs from our projected one, swap goalie stats
+        if confirmed_name and confirmed_name != projected_name and is_actionable:
+            # Try finding the goalie by external_id first, then by name
+            player = None
             ext_id = confirmed.get("goalie_external_id", "")
             if ext_id:
                 stmt = select(Player).where(Player.external_id == str(ext_id))
                 result = await db.execute(stmt)
                 player = result.scalars().first()
-                if player:
-                    logger.info(
-                        "Starter switch detected: %s → %s (team_id=%d)",
-                        projected_name, confirmed_name, team_id,
-                    )
-                    # Re-fetch goalie features for the actual starter
-                    new_features = await self._get_goalie_features_for_player(
-                        db, player.id, player.name
-                    )
-                    new_features["starter_confirmed"] = True
-                    new_features["starter_source"] = "nhl_api"
-                    return new_features
 
-        # Same goalie confirmed — just mark as confirmed
+            if not player:
+                # Fall back to name-based lookup on this team's goalies
+                stmt = select(Player).where(
+                    Player.team_id == team_id,
+                    Player.position == "G",
+                    func.lower(Player.name) == confirmed_name.lower(),
+                )
+                result = await db.execute(stmt)
+                player = result.scalars().first()
+
+            if not player:
+                # Try partial name match (DFO may use slightly different formatting)
+                stmt = select(Player).where(
+                    Player.team_id == team_id,
+                    Player.position == "G",
+                )
+                result = await db.execute(stmt)
+                team_goalies = result.scalars().all()
+                confirmed_lower = confirmed_name.lower()
+                for g in team_goalies:
+                    # Match on last name (handles "J. Dobes" vs "Jakub Dobes")
+                    g_last = g.name.split()[-1].lower() if g.name else ""
+                    c_last = confirmed_lower.split()[-1] if confirmed_lower else ""
+                    if g_last and c_last and g_last == c_last:
+                        player = g
+                        break
+
+            if player:
+                logger.info(
+                    "Starter switch: %s → %s (team_id=%d, status=%s, source=%s)",
+                    projected_name, confirmed_name, team_id, status, source,
+                )
+                new_features = await self._get_goalie_features_for_player(
+                    db, player.id, player.name
+                )
+                new_features["starter_confirmed"] = is_confirmed
+                new_features["starter_source"] = source
+                new_features["starter_status"] = status or ("confirmed" if is_confirmed else "projected")
+                return new_features
+            else:
+                logger.warning(
+                    "Starter %s (team_id=%d) from %s not found in DB, "
+                    "keeping projected starter %s",
+                    confirmed_name, team_id, source, projected_name,
+                )
+
+        # Same goalie or no actionable switch — mark confirmation status
         result = {**goalie_features}
         if is_confirmed:
             result["starter_confirmed"] = True
-            result["starter_source"] = "nhl_api"
+            result["starter_source"] = source
         else:
             result["starter_confirmed"] = False
-            result["starter_source"] = "projected"
+            result["starter_source"] = source if confirmed_name else "projected"
+        result["starter_status"] = status or ("confirmed" if is_confirmed else "projected")
         return result
 
     async def _get_goalie_features_for_player(
