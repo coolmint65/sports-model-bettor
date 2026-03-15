@@ -826,26 +826,6 @@ async def get_game_details(
     league_avgs = await _get_league_context(session, game.season, game.home_team_id, game.away_team_id)
     h2h = await _get_head_to_head(game.home_team_id, game.away_team_id, session)
     h2h_game_records = await _get_h2h_games(game.home_team_id, game.away_team_id, session)
-    if not h2h_game_records:
-        # Diagnostic: check what games exist between these teams
-        t1, t2 = game.home_team_id, game.away_team_id
-        h2h_any_result = await session.execute(
-            select(Game.id, Game.date, Game.status, Game.game_type, Game.home_score, Game.away_score)
-            .where(
-                or_(
-                    and_(Game.home_team_id == t1, Game.away_team_id == t2),
-                    and_(Game.home_team_id == t2, Game.away_team_id == t1),
-                ),
-            )
-            .order_by(Game.date.desc())
-            .limit(5)
-        )
-        h2h_any = h2h_any_result.all()
-        logger.warning(
-            "H2H empty for teams %d vs %d. All games between them (any status): %s",
-            t1, t2,
-            [(str(r.date), r.status, r.game_type, r.home_score, r.away_score) for r in h2h_any] if h2h_any else "NONE",
-        )
     home_period = await _compute_period_scoring(game.home_team_id, session)
     away_period = await _compute_period_scoring(game.away_team_id, session)
     home_goalies = await _get_team_goalies(game.home_team_id, session)
