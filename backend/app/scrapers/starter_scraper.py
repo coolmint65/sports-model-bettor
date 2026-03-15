@@ -341,38 +341,29 @@ async def _fetch_rotowire_starters(
             logger.warning("RotoWire: page too small (%d bytes), may need JS", len(html))
         games = _parse_rotowire_html(html)
         if not games:
-            # Check for embedded JSON data (common in SPAs)
-            json_patterns = re.findall(
-                r'(?:__NEXT_DATA__|__NUXT__|window\.__data|window\.App|"props"|"pageProps"|"initialState")',
-                html[:5000], re.I,
-            )
-            # Look for API endpoint URLs in the JS bundle
-            api_urls = re.findall(
-                r'["\']((https?://[^"\']*(?:api|graphql|starting.goalie)[^"\']{0,80}))["\']',
+            # Find AJAX/fetch calls and all script src URLs
+            ajax_calls = re.findall(
+                r'(?:\$\.(?:ajax|get|post|getJSON)|fetch\s*\(|XMLHttpRequest|\.load\s*\()\s*[("\']([^"\')\s]{5,120})',
+                html, re.I,
+            )[:10]
+            # Find all script src files
+            script_srcs = re.findall(
+                r'<script[^>]*src=["\']([^"\']+)["\']',
                 html, re.I,
             )
-            # Unique API URLs
-            seen_urls = set()
-            unique_api = []
-            for u in api_urls:
-                url_str = u[0] if isinstance(u, tuple) else u
-                if url_str not in seen_urls:
-                    seen_urls.add(url_str)
-                    unique_api.append(url_str)
-
-            # Check for inline JSON with goalie-like data
-            goalie_json = re.findall(
-                r'["\']([^"\']*(?:goalie|starter|Expected|Confirmed)[^"\']{0,60})["\']',
-                html[:100000], re.I,
-            )[:15]
-
+            # Find anything near "grid" or "starters"
+            grid_context = []
+            for m in re.finditer(r'(?:grid|starters)', html, re.I):
+                start = max(0, m.start() - 80)
+                end = min(len(html), m.end() + 80)
+                grid_context.append(html[start:end].replace('\n', ' ').strip())
             logger.warning(
-                "RotoWire SPA: %d bytes, json_markers=%s, api_urls=%s",
-                len(html), json_patterns, unique_api[:15],
+                "RotoWire AJAX: ajax_calls=%s, script_srcs=%s",
+                ajax_calls, script_srcs,
             )
             logger.warning(
-                "RotoWire SPA: goalie-related strings=%s",
-                goalie_json,
+                "RotoWire grid context (first 5): %s",
+                grid_context[:5],
             )
         else:
             logger.info("RotoWire: parsed %d goalie matchups", len(games))
