@@ -103,67 +103,7 @@ function GameHeader({ game, awayAbbr, homeAbbr, awayTeamLabel, homeTeamLabel, co
   return (
     <div className="gd-header">
       <div className="gd-header-main">
-        {/* Home team badge */}
-        <div className="gd-team-badge gd-team-home">
-          <div className={`gd-badge-box ${pickIsHome ? 'gd-badge-picked' : ''}`}>
-            {teamLogo(game.home_team || game.home_team_form) ? (
-              <img
-                src={teamLogo(game.home_team || game.home_team_form) || game.home_team_form?.logo_url}
-                alt={homeAbbr}
-                width={48}
-                height={48}
-                className="gd-badge-logo"
-                onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling && (e.target.nextSibling.style.display = 'block'); }}
-              />
-            ) : null}
-            <span className="gd-badge-abbr">{homeAbbr}</span>
-          </div>
-          <div className="gd-team-info">
-            <div className="gd-team-fullname">{homeTeamLabel}</div>
-            <div className="gd-team-label">Home</div>
-          </div>
-        </div>
-
-        {/* VS divider or score */}
-        <div className="gd-center">
-          {isLive ? (
-            <div className="gd-live-center">
-              <div className="detail-live-badge">
-                <Radio size={14} className="live-icon-pulse" />
-                LIVE
-              </div>
-              <div className="detail-live-score">
-                <span className={`detail-score ${game.home_score > game.away_score ? 'score-winning' : ''}`}>
-                  {game.home_score ?? 0}
-                </span>
-                <span className="detail-score-sep">-</span>
-                <span className={`detail-score ${game.away_score > game.home_score ? 'score-winning' : ''}`}>
-                  {game.away_score ?? 0}
-                </span>
-              </div>
-              <div className="detail-live-period">
-                {formatPeriodLabel(game)} {game.clock || '--:--'}
-              </div>
-            </div>
-          ) : game.status === 'final' ? (
-            <div className="gd-final-center">
-              <div className="detail-final-badge">Final{game.overtime ? ' (OT)' : ''}</div>
-              <div className="detail-live-score">
-                <span className={`detail-score ${game.home_score > game.away_score ? 'score-winning' : ''}`}>
-                  {game.home_score ?? 0}
-                </span>
-                <span className="detail-score-sep">-</span>
-                <span className={`detail-score ${game.away_score > game.home_score ? 'score-winning' : ''}`}>
-                  {game.away_score ?? 0}
-                </span>
-              </div>
-            </div>
-          ) : (
-            <span className="gd-vs">VS</span>
-          )}
-        </div>
-
-        {/* Away team badge */}
+        {/* Away team badge (left) */}
         <div className="gd-team-badge gd-team-away">
           <div className={`gd-badge-box ${pickIsAway ? 'gd-badge-picked' : ''}`}>
             {teamLogo(game.away_team || game.away_team_form) ? (
@@ -181,6 +121,66 @@ function GameHeader({ game, awayAbbr, homeAbbr, awayTeamLabel, homeTeamLabel, co
           <div className="gd-team-info">
             <div className="gd-team-fullname">{awayTeamLabel}</div>
             <div className="gd-team-label">Away</div>
+          </div>
+        </div>
+
+        {/* VS divider or score */}
+        <div className="gd-center">
+          {isLive ? (
+            <div className="gd-live-center">
+              <div className="detail-live-badge">
+                <Radio size={14} className="live-icon-pulse" />
+                LIVE
+              </div>
+              <div className="detail-live-score">
+                <span className={`detail-score ${game.away_score > game.home_score ? 'score-winning' : ''}`}>
+                  {game.away_score ?? 0}
+                </span>
+                <span className="detail-score-sep">-</span>
+                <span className={`detail-score ${game.home_score > game.away_score ? 'score-winning' : ''}`}>
+                  {game.home_score ?? 0}
+                </span>
+              </div>
+              <div className="detail-live-period">
+                {formatPeriodLabel(game)} {game.clock || '--:--'}
+              </div>
+            </div>
+          ) : game.status === 'final' ? (
+            <div className="gd-final-center">
+              <div className="detail-final-badge">Final{game.overtime ? ' (OT)' : ''}</div>
+              <div className="detail-live-score">
+                <span className={`detail-score ${game.away_score > game.home_score ? 'score-winning' : ''}`}>
+                  {game.away_score ?? 0}
+                </span>
+                <span className="detail-score-sep">-</span>
+                <span className={`detail-score ${game.home_score > game.away_score ? 'score-winning' : ''}`}>
+                  {game.home_score ?? 0}
+                </span>
+              </div>
+            </div>
+          ) : (
+            <span className="gd-vs">VS</span>
+          )}
+        </div>
+
+        {/* Home team badge (right) */}
+        <div className="gd-team-badge gd-team-home">
+          <div className={`gd-badge-box ${pickIsHome ? 'gd-badge-picked' : ''}`}>
+            {teamLogo(game.home_team || game.home_team_form) ? (
+              <img
+                src={teamLogo(game.home_team || game.home_team_form) || game.home_team_form?.logo_url}
+                alt={homeAbbr}
+                width={48}
+                height={48}
+                className="gd-badge-logo"
+                onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling && (e.target.nextSibling.style.display = 'block'); }}
+              />
+            ) : null}
+            <span className="gd-badge-abbr">{homeAbbr}</span>
+          </div>
+          <div className="gd-team-info">
+            <div className="gd-team-fullname">{homeTeamLabel}</div>
+            <div className="gd-team-label">Home</div>
           </div>
         </div>
       </div>
