@@ -515,11 +515,12 @@ async def _scheduler_loop():
                     last_alt_refresh = now
                     logger.info("Alt-line cache refreshed")
 
-            # Sync player props only when games are upcoming (not yet
-            # started).  Once games go live, prop picks are already
-            # frozen in PropPickSnapshot — refreshing props mid-game
-            # just burns Odds API credits for no benefit.
-            if has_games_today and live_count == 0:
+            # Sync player props when games are upcoming or on the first
+            # cycle (last_props_sync == 0).  Once games go live, prop picks
+            # are already frozen in PropPickSnapshot — refreshing mid-game
+            # just burns Odds API credits for no benefit.  But the initial
+            # sync must always run so picks can be generated.
+            if has_games_today and (live_count == 0 or last_props_sync == 0.0):
                 now = loop.time()
                 if now - last_props_sync >= PROPS_SYNC_INTERVAL:
                     await _sync_player_props()
