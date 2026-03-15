@@ -802,21 +802,40 @@ async def get_game_details(
     h2h = await _get_head_to_head(game.home_team_id, game.away_team_id, session)
     h2h_game_records = await _get_h2h_games(game.home_team_id, game.away_team_id, session)
     if h2h is None:
-        # Count total completed regular-season games in DB to help diagnose
+        # Diagnostic: check what games exist for these teams
         from sqlalchemy import func as sqla_func
-        total_games_result = await session.execute(
-            select(sqla_func.count(Game.id)).where(
-                sqla_func.lower(Game.status).in_(GAME_FINAL_STATUSES),
-                Game.game_type.in_(("2", "regular")),
+        t1, t2 = game.home_team_id, game.away_team_id
+
+        # Count games involving either team
+        for tid, label in [(t1, "home"), (t2, "away")]:
+            cnt_result = await session.execute(
+                select(sqla_func.count(Game.id)).where(
+                    or_(Game.home_team_id == tid, Game.away_team_id == tid),
+                    sqla_func.lower(Game.status).in_(GAME_FINAL_STATUSES),
+                )
             )
-        )
-        total_games = total_games_result.scalar() or 0
-        logger.warning(
-            "No H2H data for teams %d vs %d. "
-            "Total completed regular-season games in DB: %d. "
-            "Run /api/data/sync to populate historical data.",
-            game.home_team_id, game.away_team_id, total_games,
-        )
+            cnt = cnt_result.scalar() or 0
+
+            # Check for any games between these two teams regardless of filters
+            h2h_any_result = await session.execute(
+                select(Game.id, Game.date, Game.status, Game.game_type, Game.home_score, Game.away_score)
+                .where(
+                    or_(
+                        and_(Game.home_team_id == t1, Game.away_team_id == t2),
+                        and_(Game.home_team_id == t2, Game.away_team_id == t1),
+                    ),
+                )
+                .order_by(Game.date.desc())
+                .limit(5)
+            )
+            h2h_any = h2h_any_result.all()
+            if label == "home":
+                logger.warning(
+                    "H2H debug: team %d has %d completed games. "
+                    "Games between %d and %d (any status): %s",
+                    tid, cnt, t1, t2,
+                    [(r.date, r.status, r.game_type, r.home_score, r.away_score) for r in h2h_any] if h2h_any else "NONE",
+                )
     home_period = await _compute_period_scoring(game.home_team_id, session)
     away_period = await _compute_period_scoring(game.away_team_id, session)
     home_goalies = await _get_team_goalies(game.home_team_id, session)
