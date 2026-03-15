@@ -18,7 +18,7 @@ from html.parser import HTMLParser
 from typing import Any, Dict, List, Optional
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -531,7 +531,7 @@ async def sync_confirmed_starters(db: AsyncSession) -> List[Dict[str, Any]]:
     # Get today's games that haven't started yet
     stmt = select(Game).where(
         Game.date == today,
-        Game.status.in_(("scheduled", "preview", "pre-game", "FUT", "PRE")),
+        func.lower(Game.status).in_(("scheduled", "preview", "pre-game", "fut", "pre")),
     )
     result = await db.execute(stmt)
     games = result.scalars().all()
