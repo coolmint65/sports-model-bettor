@@ -3526,6 +3526,17 @@ a:hover {
   color: var(--text-primary);
 }
 
+.prop-pick-team {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  background: rgba(160, 160, 184, 0.12);
+  border: 1px solid rgba(160, 160, 184, 0.2);
+  padding: 1px 6px;
+  border-radius: 4px;
+  letter-spacing: 0.3px;
+}
+
 .prop-pick-edge {
   font-weight: 700;
   font-size: 0.85rem;

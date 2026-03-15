@@ -541,7 +541,7 @@ async def _grade_snapshots(
                 )
 
 
-def _snapshot_to_dict(snap, include_outcome: bool = False) -> dict:
+def _snapshot_to_dict(snap, include_outcome: bool = False, player_team_map: dict = None) -> dict:
     """Convert a PropPickSnapshot to API response dict."""
     d = {
         "player_name": snap.player_name,
@@ -557,6 +557,7 @@ def _snapshot_to_dict(snap, include_outcome: bool = False) -> dict:
         "avg_rate": snap.avg_rate,
         "games_sampled": snap.games_sampled,
         "reasoning": snap.reasoning,
+        "team_abbrev": (player_team_map or {}).get(snap.player_id) if snap.player_id else None,
     }
     if include_outcome:
         d["outcome"] = snap.outcome
@@ -608,6 +609,25 @@ async def get_todays_prop_picks(
     except Exception:
         logger.exception("Failed to grade prop pick snapshots")
 
+    # Build player_id → team_abbrev lookup for all players in today's picks
+    from app.models.player import Player
+    all_player_ids = {
+        s.player_id
+        for snaps in snapshots_by_game.values()
+        for s in snaps
+        if s.player_id
+    }
+    player_team_map: Dict[int, str] = {}
+    if all_player_ids:
+        player_result = await session.execute(
+            select(Player)
+            .options(selectinload(Player.team))
+            .where(Player.id.in_(all_player_ids))
+        )
+        for p in player_result.scalars():
+            if p.team:
+                player_team_map[p.id] = p.team.abbreviation
+
     game_list = []
     total_picks = 0
     for game in games:
@@ -622,7 +642,7 @@ async def get_todays_prop_picks(
             "start_time": game.start_time.isoformat() if game.start_time else None,
             "status": game.status,
             "picks": [
-                _snapshot_to_dict(s, include_outcome=True)
+                _snapshot_to_dict(s, include_outcome=True, player_team_map=player_team_map)
                 for s in game_snaps
             ],
             "pick_count": len(game_snaps),
