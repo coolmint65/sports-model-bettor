@@ -913,24 +913,6 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
         </div>
         <div className="gd-stats-teams">
           <div className="gd-stats-team">
-            {homeLogo && <img src={homeLogo} alt="" width={48} height={48} className="gd-stats-logo" onError={(e) => { e.target.style.display = 'none'; }} />}
-            <div className="gd-stats-team-name">{homeLabel}</div>
-            <div className="gd-stats-record">{homeRecord}</div>
-            <div className="gd-stats-badges">
-              <span className={`gd-streak-badge ${getStreak(homeRecent).startsWith('W') ? 'streak-win' : 'streak-loss'}`}>
-                {getStreak(homeRecent).startsWith('W') ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
-                {getStreak(homeRecent)}
-              </span>
-              {homeRank !== '-' && (
-                <span className="gd-rank-badge">
-                  <Award size={11} />
-                  #{homeRank}
-                </span>
-              )}
-            </div>
-            <div className="gd-stats-winpct">Win%: {homeWinPct}</div>
-          </div>
-          <div className="gd-stats-team">
             {awayLogo && <img src={awayLogo} alt="" width={48} height={48} className="gd-stats-logo" onError={(e) => { e.target.style.display = 'none'; }} />}
             <div className="gd-stats-team-name">{awayLabel}</div>
             <div className="gd-stats-record">{awayRecord}</div>
@@ -948,6 +930,24 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
             </div>
             <div className="gd-stats-winpct">Win%: {awayWinPct}</div>
           </div>
+          <div className="gd-stats-team">
+            {homeLogo && <img src={homeLogo} alt="" width={48} height={48} className="gd-stats-logo" onError={(e) => { e.target.style.display = 'none'; }} />}
+            <div className="gd-stats-team-name">{homeLabel}</div>
+            <div className="gd-stats-record">{homeRecord}</div>
+            <div className="gd-stats-badges">
+              <span className={`gd-streak-badge ${getStreak(homeRecent).startsWith('W') ? 'streak-win' : 'streak-loss'}`}>
+                {getStreak(homeRecent).startsWith('W') ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
+                {getStreak(homeRecent)}
+              </span>
+              {homeRank !== '-' && (
+                <span className="gd-rank-badge">
+                  <Award size={11} />
+                  #{homeRank}
+                </span>
+              )}
+            </div>
+            <div className="gd-stats-winpct">Win%: {homeWinPct}</div>
+          </div>
         </div>
 
         <div className="gd-perf-section">
@@ -955,24 +955,24 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
           <table className="gd-perf-table">
             <thead>
               <tr>
-                <th className="gd-perf-th gd-perf-th-team">{homeLabel}</th>
+                <th className="gd-perf-th gd-perf-th-team">{awayLabel}</th>
                 <th className="gd-perf-th gd-perf-th-stat">Stat</th>
                 <th className="gd-perf-th gd-perf-th-avg">Lg Avg</th>
-                <th className="gd-perf-th gd-perf-th-team">{awayLabel}</th>
+                <th className="gd-perf-th gd-perf-th-team">{homeLabel}</th>
               </tr>
             </thead>
             <tbody>
               {perfStats.map((s) => (
                 <tr key={s.label}>
-                  <td className={`gd-perf-td gd-perf-td-val ${s.homeClass || ''}`}>
-                    {s.homeVal}
-                    {s.homeRank && <span className="gd-perf-rank">{s.homeRank}</span>}
-                  </td>
-                  <td className="gd-perf-td gd-perf-td-label">{s.label}</td>
-                  <td className="gd-perf-td gd-perf-td-avg">{s.avg || '-'}</td>
                   <td className={`gd-perf-td gd-perf-td-val ${s.awayClass || ''}`}>
                     {s.awayVal}
                     {s.awayRank && <span className="gd-perf-rank">{s.awayRank}</span>}
+                  </td>
+                  <td className="gd-perf-td gd-perf-td-label">{s.label}</td>
+                  <td className="gd-perf-td gd-perf-td-avg">{s.avg || '-'}</td>
+                  <td className={`gd-perf-td gd-perf-td-val ${s.homeClass || ''}`}>
+                    {s.homeVal}
+                    {s.homeRank && <span className="gd-perf-rank">{s.homeRank}</span>}
                   </td>
                 </tr>
               ))}
@@ -989,61 +989,6 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
         </div>
         <div className="gd-trends-content">
           <div className="gd-trends-teams">
-            <div className="gd-trends-team">
-              <div className="gd-trends-team-label">{homeLabel}</div>
-              <div className="gd-trends-rows">
-                <div className="gd-trends-row">
-                  <span className="gd-trends-label">Overall</span>
-                  <span className="gd-trends-val">{home.wins || 0}-{home.losses || 0}-{home.ot_losses || 0}</span>
-                </div>
-                <div className="gd-trends-row">
-                  <span className="gd-trends-label">Home</span>
-                  <span className="gd-trends-val">{home.home_record || '-'}</span>
-                </div>
-                <div className="gd-trends-row">
-                  <span className="gd-trends-label">Last 10</span>
-                  <span className="gd-trends-val">{home.record_last_10 || computeATS(homeRecent.slice(0, 10)) || '-'}</span>
-                </div>
-                <div className="gd-trends-row">
-                  <span className="gd-trends-label">Last 5</span>
-                  <span className="gd-trends-val">{computeATS(homeRecent.slice(0, 5)) || '-'}</span>
-                </div>
-                <div className="gd-trends-row">
-                  <span className="gd-trends-label">Streak</span>
-                  <span className="gd-trends-val">{getStreak(homeRecent)}</span>
-                </div>
-              </div>
-              {/* Scoring trends */}
-              {homeRecent.length > 0 && (
-                <div className="gd-trends-scoring">
-                  <div className="gd-trends-scoring-title">Scoring (Last {Math.min(homeRecent.length, 10)})</div>
-                  <div className="gd-trends-row">
-                    <span className="gd-trends-label">Avg Goals For</span>
-                    <span className="gd-trends-val">
-                      {(homeRecent.slice(0, 10).reduce((s, g) => s + (g.goals_for || 0), 0) / Math.min(homeRecent.length, 10)).toFixed(1)}
-                    </span>
-                  </div>
-                  <div className="gd-trends-row">
-                    <span className="gd-trends-label">Avg Goals Against</span>
-                    <span className="gd-trends-val">
-                      {(homeRecent.slice(0, 10).reduce((s, g) => s + (g.goals_against || 0), 0) / Math.min(homeRecent.length, 10)).toFixed(1)}
-                    </span>
-                  </div>
-                  <div className="gd-trends-row">
-                    <span className="gd-trends-label">Avg Total</span>
-                    <span className="gd-trends-val">
-                      {(homeRecent.slice(0, 10).reduce((s, g) => s + (g.goals_for || 0) + (g.goals_against || 0), 0) / Math.min(homeRecent.length, 10)).toFixed(1)}
-                    </span>
-                  </div>
-                  <div className="gd-trends-row">
-                    <span className="gd-trends-label">Over {ouLine}</span>
-                    <span className="gd-trends-val">
-                      {homeRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) > ouLine).length}-{homeRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) <= ouLine).length}
-                    </span>
-                  </div>
-                </div>
-              )}
-            </div>
             <div className="gd-trends-team">
               <div className="gd-trends-team-label">{awayLabel}</div>
               <div className="gd-trends-rows">
@@ -1094,6 +1039,61 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
                     <span className="gd-trends-label">Over {ouLine}</span>
                     <span className="gd-trends-val">
                       {awayRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) > ouLine).length}-{awayRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) <= ouLine).length}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="gd-trends-team">
+              <div className="gd-trends-team-label">{homeLabel}</div>
+              <div className="gd-trends-rows">
+                <div className="gd-trends-row">
+                  <span className="gd-trends-label">Overall</span>
+                  <span className="gd-trends-val">{home.wins || 0}-{home.losses || 0}-{home.ot_losses || 0}</span>
+                </div>
+                <div className="gd-trends-row">
+                  <span className="gd-trends-label">Home</span>
+                  <span className="gd-trends-val">{home.home_record || '-'}</span>
+                </div>
+                <div className="gd-trends-row">
+                  <span className="gd-trends-label">Last 10</span>
+                  <span className="gd-trends-val">{home.record_last_10 || computeATS(homeRecent.slice(0, 10)) || '-'}</span>
+                </div>
+                <div className="gd-trends-row">
+                  <span className="gd-trends-label">Last 5</span>
+                  <span className="gd-trends-val">{computeATS(homeRecent.slice(0, 5)) || '-'}</span>
+                </div>
+                <div className="gd-trends-row">
+                  <span className="gd-trends-label">Streak</span>
+                  <span className="gd-trends-val">{getStreak(homeRecent)}</span>
+                </div>
+              </div>
+              {/* Scoring trends */}
+              {homeRecent.length > 0 && (
+                <div className="gd-trends-scoring">
+                  <div className="gd-trends-scoring-title">Scoring (Last {Math.min(homeRecent.length, 10)})</div>
+                  <div className="gd-trends-row">
+                    <span className="gd-trends-label">Avg Goals For</span>
+                    <span className="gd-trends-val">
+                      {(homeRecent.slice(0, 10).reduce((s, g) => s + (g.goals_for || 0), 0) / Math.min(homeRecent.length, 10)).toFixed(1)}
+                    </span>
+                  </div>
+                  <div className="gd-trends-row">
+                    <span className="gd-trends-label">Avg Goals Against</span>
+                    <span className="gd-trends-val">
+                      {(homeRecent.slice(0, 10).reduce((s, g) => s + (g.goals_against || 0), 0) / Math.min(homeRecent.length, 10)).toFixed(1)}
+                    </span>
+                  </div>
+                  <div className="gd-trends-row">
+                    <span className="gd-trends-label">Avg Total</span>
+                    <span className="gd-trends-val">
+                      {(homeRecent.slice(0, 10).reduce((s, g) => s + (g.goals_for || 0) + (g.goals_against || 0), 0) / Math.min(homeRecent.length, 10)).toFixed(1)}
+                    </span>
+                  </div>
+                  <div className="gd-trends-row">
+                    <span className="gd-trends-label">Over {ouLine}</span>
+                    <span className="gd-trends-val">
+                      {homeRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) > ouLine).length}-{homeRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) <= ouLine).length}
                     </span>
                   </div>
                 </div>
@@ -1165,12 +1165,12 @@ function GoalieMatchup({ game }) {
       </div>
       <div className="gd-goalie-matchup">
         <div className="gd-goalie-team">
-          <div className="gd-goalie-team-label">{homeLabel}</div>
-          {homeGoalies.map((g) => renderGoalie(g, homeStarter))}
-        </div>
-        <div className="gd-goalie-team">
           <div className="gd-goalie-team-label">{awayLabel}</div>
           {awayGoalies.map((g) => renderGoalie(g, awayStarter))}
+        </div>
+        <div className="gd-goalie-team">
+          <div className="gd-goalie-team-label">{homeLabel}</div>
+          {homeGoalies.map((g) => renderGoalie(g, homeStarter))}
         </div>
       </div>
     </div>
@@ -1287,32 +1287,6 @@ function RecentFormAndH2H({ game, homeAbbr, awayAbbr }) {
         <div className="gd-form-teams">
           <div className="gd-form-team">
             <div className="gd-form-team-header">
-              {homeTrend === 'down' ? <TrendingDown size={13} className="form-trend-down" /> : <TrendingUp size={13} className={homeTrend === 'hot' ? 'form-trend-hot' : homeTrend === 'up' ? 'form-trend-up' : 'form-trend-neutral'} />}
-              <strong>{homeLabel}</strong>
-              <span className="gd-form-record-badge">{calcRecord(last5Home)} Last 5</span>
-            </div>
-            <div className="gd-form-dots">
-              {[...last5Home].reverse().map((g, i) => (
-                <span key={i} className={`gd-form-dot ${g.result === 'W' ? 'result-win' : g.result === 'OTL' ? 'result-otl' : 'result-loss'}`}>
-                  {g.result === 'W' ? 'W' : 'L'}
-                </span>
-              ))}
-            </div>
-            <div className="gd-form-games">
-              {last5Home.map((g, i) => (
-                <div key={i} className="gd-form-game-row">
-                  <span className="gd-form-game-date">{g.game_date ? format(new Date(g.game_date), 'MMM d') : ''}</span>
-                  <span>vs {g.opponent_abbrev || g.opponent_name}</span>
-                  <span className={g.result === 'W' ? 'gd-form-win' : 'gd-form-loss'}>
-                    {g.result} {g.score_display}{g.overtime ? ' (OT)' : ''}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="gd-form-team">
-            <div className="gd-form-team-header">
               {awayTrend === 'down' ? <TrendingDown size={13} className="form-trend-down" /> : <TrendingUp size={13} className={awayTrend === 'hot' ? 'form-trend-hot' : awayTrend === 'up' ? 'form-trend-up' : 'form-trend-neutral'} />}
               <strong>{awayLabel}</strong>
               <span className="gd-form-record-badge">{calcRecord(last5Away)} Last 5</span>
@@ -1326,6 +1300,32 @@ function RecentFormAndH2H({ game, homeAbbr, awayAbbr }) {
             </div>
             <div className="gd-form-games">
               {last5Away.map((g, i) => (
+                <div key={i} className="gd-form-game-row">
+                  <span className="gd-form-game-date">{g.game_date ? format(new Date(g.game_date), 'MMM d') : ''}</span>
+                  <span>vs {g.opponent_abbrev || g.opponent_name}</span>
+                  <span className={g.result === 'W' ? 'gd-form-win' : 'gd-form-loss'}>
+                    {g.result} {g.score_display}{g.overtime ? ' (OT)' : ''}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="gd-form-team">
+            <div className="gd-form-team-header">
+              {homeTrend === 'down' ? <TrendingDown size={13} className="form-trend-down" /> : <TrendingUp size={13} className={homeTrend === 'hot' ? 'form-trend-hot' : homeTrend === 'up' ? 'form-trend-up' : 'form-trend-neutral'} />}
+              <strong>{homeLabel}</strong>
+              <span className="gd-form-record-badge">{calcRecord(last5Home)} Last 5</span>
+            </div>
+            <div className="gd-form-dots">
+              {[...last5Home].reverse().map((g, i) => (
+                <span key={i} className={`gd-form-dot ${g.result === 'W' ? 'result-win' : g.result === 'OTL' ? 'result-otl' : 'result-loss'}`}>
+                  {g.result === 'W' ? 'W' : 'L'}
+                </span>
+              ))}
+            </div>
+            <div className="gd-form-games">
+              {last5Home.map((g, i) => (
                 <div key={i} className="gd-form-game-row">
                   <span className="gd-form-game-date">{g.game_date ? format(new Date(g.game_date), 'MMM d') : ''}</span>
                   <span>vs {g.opponent_abbrev || g.opponent_name}</span>
@@ -1369,16 +1369,16 @@ function RecentFormAndH2H({ game, homeAbbr, awayAbbr }) {
             <div className="gd-h2h-scores">
               <div className="gd-h2h-side">
                 <span className="gd-h2h-big" style={{ color: 'var(--accent-blue)' }}>
-                  {team1IsHome ? h2h.team1_wins : h2h.team2_wins}
+                  {team1IsHome ? h2h.team2_wins : h2h.team1_wins}
                 </span>
-                <span>{homeLabel}</span>
+                <span>{awayLabel}</span>
               </div>
               <span className="gd-h2h-vs">vs</span>
               <div className="gd-h2h-side">
                 <span className="gd-h2h-big" style={{ color: 'var(--accent-blue)' }}>
-                  {team1IsHome ? h2h.team2_wins : h2h.team1_wins}
+                  {team1IsHome ? h2h.team1_wins : h2h.team2_wins}
                 </span>
-                <span>{awayLabel}</span>
+                <span>{homeLabel}</span>
               </div>
             </div>
 
@@ -1406,7 +1406,7 @@ function RecentFormAndH2H({ game, homeAbbr, awayAbbr }) {
                 <div key={i} className="gd-h2h-game-row">
                   <span className="gd-h2h-game-date">{dateDisplay}</span>
                   <span className="gd-h2h-game-teams">
-                    {homeAbbr} vs {awayAbbr}
+                    {awayAbbr} @ {homeAbbr}
                   </span>
                   <span className="gd-h2h-game-score">
                     {g.score_display}{g.overtime ? ' (OT)' : ''}
@@ -1433,18 +1433,18 @@ function RecentFormAndH2H({ game, homeAbbr, awayAbbr }) {
             {/* H2H Record boxes */}
             <div className="gd-perf-boxes">
               <div className="gd-perf-box">
-                <span className="gd-perf-box-label">{homeLabel}</span>
-                <span className="gd-perf-box-record" style={{ color: 'var(--accent-green)' }}>
-                  {h2hGames.filter((g) => (g.perspective === 'home' && g.result === 'W') || (g.perspective === 'away' && g.result !== 'W')).length}W
-                </span>
-                <span className="gd-perf-box-sub">vs {awayAbbr}</span>
-              </div>
-              <div className="gd-perf-box">
                 <span className="gd-perf-box-label">{awayLabel}</span>
                 <span className="gd-perf-box-record" style={{ color: 'var(--accent-red)' }}>
                   {h2hGames.filter((g) => (g.perspective === 'away' && g.result === 'W') || (g.perspective === 'home' && g.result !== 'W')).length}W
                 </span>
                 <span className="gd-perf-box-sub">vs {homeAbbr}</span>
+              </div>
+              <div className="gd-perf-box">
+                <span className="gd-perf-box-label">{homeLabel}</span>
+                <span className="gd-perf-box-record" style={{ color: 'var(--accent-green)' }}>
+                  {h2hGames.filter((g) => (g.perspective === 'home' && g.result === 'W') || (g.perspective === 'away' && g.result !== 'W')).length}W
+                </span>
+                <span className="gd-perf-box-sub">vs {awayAbbr}</span>
               </div>
             </div>
 
@@ -1474,8 +1474,8 @@ function RecentFormAndH2H({ game, homeAbbr, awayAbbr }) {
                     labelStyle={{ color: '#e8e8f0' }}
                   />
                   <Legend wrapperStyle={{ fontSize: 11, color: '#a0a0b8' }} />
-                  <Bar dataKey={homeLabel} fill="#00ff88" radius={[3, 3, 0, 0]} />
                   <Bar dataKey={awayLabel} fill="#ff5252" radius={[3, 3, 0, 0]} />
+                  <Bar dataKey={homeLabel} fill="#00ff88" radius={[3, 3, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -1485,16 +1485,16 @@ function RecentFormAndH2H({ game, homeAbbr, awayAbbr }) {
             {/* Fallback: show independent recent games if no H2H data */}
             <div className="gd-perf-boxes">
               <div className="gd-perf-box">
-                <span className="gd-perf-box-label">{homeLabel}</span>
-                <span className="gd-perf-box-record" style={{ color: 'var(--accent-green)' }}>
-                  {calcRecord(last5Home)}
+                <span className="gd-perf-box-label">{awayLabel}</span>
+                <span className="gd-perf-box-record" style={{ color: 'var(--accent-red)' }}>
+                  {calcRecord(last5Away)}
                 </span>
                 <span className="gd-perf-box-sub">Last 5</span>
               </div>
               <div className="gd-perf-box">
-                <span className="gd-perf-box-label">{awayLabel}</span>
-                <span className="gd-perf-box-record" style={{ color: 'var(--accent-red)' }}>
-                  {calcRecord(last5Away)}
+                <span className="gd-perf-box-label">{homeLabel}</span>
+                <span className="gd-perf-box-record" style={{ color: 'var(--accent-green)' }}>
+                  {calcRecord(last5Home)}
                 </span>
                 <span className="gd-perf-box-sub">Last 5</span>
               </div>
@@ -1521,8 +1521,8 @@ function RecentFormAndH2H({ game, homeAbbr, awayAbbr }) {
                     labelStyle={{ color: '#e8e8f0' }}
                   />
                   <Legend wrapperStyle={{ fontSize: 11, color: '#a0a0b8' }} />
-                  <Bar dataKey={homeLabel} fill="#00ff88" radius={[3, 3, 0, 0]} />
                   <Bar dataKey={awayLabel} fill="#ff5252" radius={[3, 3, 0, 0]} />
+                  <Bar dataKey={homeLabel} fill="#00ff88" radius={[3, 3, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
