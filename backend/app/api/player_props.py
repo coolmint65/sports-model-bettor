@@ -6,8 +6,11 @@ NHL schedule, per-game prop details, and AI-generated player prop
 predictions (ATG, SOG, Points, Assists, Saves).
 """
 
+import logging
 from datetime import date
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select, func
@@ -396,36 +399,47 @@ async def _get_or_create_snapshots(
     if not picks:
         return []
 
-    async with get_write_session_context() as write_session:
-        new_snapshots = []
-        for p in picks:
-            snap = PropPickSnapshot(
-                game_id=game_id,
-                player_id=p.player_id,
-                player_name=p.player_name,
-                market=p.market,
-                pick_side=p.pick_side,
-                line=p.line,
-                odds=p.odds,
-                model_prob=round(p.model_prob, 4),
-                implied_prob=round(p.implied_prob, 4),
-                edge=round(p.edge, 4),
-                confidence=round(p.confidence, 4),
-                avg_rate=round(p.avg_rate, 2),
-                games_sampled=p.games_sampled,
-                reasoning=p.reasoning,
-            )
-            write_session.add(snap)
-            new_snapshots.append(snap)
-        await write_session.flush()
+    try:
+        async with get_write_session_context() as write_session:
+            new_snapshots = []
+            for p in picks:
+                snap = PropPickSnapshot(
+                    game_id=game_id,
+                    player_id=p.player_id,
+                    player_name=p.player_name,
+                    market=p.market,
+                    pick_side=p.pick_side,
+                    line=p.line,
+                    odds=p.odds,
+                    model_prob=round(p.model_prob, 4),
+                    implied_prob=round(p.implied_prob, 4),
+                    edge=round(p.edge, 4),
+                    confidence=round(p.confidence, 4),
+                    avg_rate=round(p.avg_rate, 2),
+                    games_sampled=p.games_sampled,
+                    reasoning=p.reasoning,
+                )
+                write_session.add(snap)
+                new_snapshots.append(snap)
+            await write_session.flush()
+            # Eagerly load all attributes before the session closes
+            for snap in new_snapshots:
+                await write_session.refresh(snap)
 
-        # Re-read from the read session so the caller has attached objects
-        result = await session.execute(
+        return new_snapshots
+    except Exception:
+        # Race condition: another request may have inserted snapshots
+        # between our check and insert. Re-read from DB.
+        existing = await session.execute(
             select(PropPickSnapshot)
             .where(PropPickSnapshot.game_id == game_id)
             .order_by(PropPickSnapshot.edge.desc())
         )
-        return list(result.scalars().all())
+        snapshots = list(existing.scalars().all())
+        if snapshots:
+            return snapshots
+        # If still nothing, the error was real — re-raise
+        raise
 
 
 async def _grade_snapshots(
@@ -479,52 +493,52 @@ async def _grade_snapshots(
             goalie_by_game[(g.game_id, g.player.name.lower())] = g
 
     # Grade and persist
-    async with get_write_session_context() as write_session:
-        for gid in ungraded_ids:
-            for snap in snapshots_by_game[gid]:
-                if snap.outcome is not None:
-                    continue
+    from sqlalchemy import update as sa_update
 
-                name_lower = snap.player_name.lower()
-                outcome = None
+    updates = []  # list of (snap_id, outcome) to batch write
+    for gid in ungraded_ids:
+        for snap in snapshots_by_game[gid]:
+            if snap.outcome is not None:
+                continue
 
-                if snap.market == "player_total_saves":
-                    gs = goalie_by_game.get((gid, name_lower))
-                    if gs is not None:
+            name_lower = snap.player_name.lower()
+            outcome = None
+
+            if snap.market == "player_total_saves":
+                gs = goalie_by_game.get((gid, name_lower))
+                if gs is not None:
+                    if snap.pick_side == "over":
+                        outcome = gs.saves > snap.line
+                    else:
+                        outcome = gs.saves < snap.line
+            elif snap.market == "player_goal_scorer_anytime":
+                ss = skater_by_game.get((gid, name_lower))
+                if ss is not None:
+                    outcome = ss.goals >= 1
+            else:
+                ss = skater_by_game.get((gid, name_lower))
+                if ss is not None:
+                    field = _PROP_STAT_FIELD.get(snap.market)
+                    if field:
+                        actual = getattr(ss, field, 0)
                         if snap.pick_side == "over":
-                            outcome = gs.saves > snap.line
+                            outcome = actual > snap.line
                         else:
-                            outcome = gs.saves < snap.line
-                elif snap.market == "player_goal_scorer_anytime":
-                    ss = skater_by_game.get((gid, name_lower))
-                    if ss is not None:
-                        outcome = ss.goals >= 1
-                else:
-                    ss = skater_by_game.get((gid, name_lower))
-                    if ss is not None:
-                        field = _PROP_STAT_FIELD.get(snap.market)
-                        if field:
-                            actual = getattr(ss, field, 0)
-                            if snap.pick_side == "over":
-                                outcome = actual > snap.line
-                            else:
-                                outcome = actual < snap.line
+                            outcome = actual < snap.line
 
-                if outcome is not None:
-                    await write_session.execute(
-                        select(PropPickSnapshot)
-                        .where(PropPickSnapshot.id == snap.id)
-                    )
-                    # Update via direct SQL for efficiency
-                    from sqlalchemy import update
-                    await write_session.execute(
-                        update(PropPickSnapshot)
-                        .where(PropPickSnapshot.id == snap.id)
-                        .values(outcome=outcome)
-                    )
-                    snap.outcome = outcome
+            if outcome is not None:
+                updates.append((snap.id, outcome))
+                # Update the in-memory object so the response reflects grading
+                snap.outcome = outcome
 
-        await write_session.flush()
+    if updates:
+        async with get_write_session_context() as write_session:
+            for snap_id, outcome in updates:
+                await write_session.execute(
+                    sa_update(PropPickSnapshot)
+                    .where(PropPickSnapshot.id == snap_id)
+                    .values(outcome=outcome)
+                )
 
 
 def _snapshot_to_dict(snap, include_outcome: bool = False) -> dict:
@@ -577,14 +591,22 @@ async def get_todays_prop_picks(
     # Get or create frozen snapshots for each game
     snapshots_by_game: Dict[int, List[PropPickSnapshot]] = {}
     for game in games:
-        snapshots = await _get_or_create_snapshots(session, game.id)
-        if snapshots:
-            snapshots_by_game[game.id] = snapshots
+        try:
+            snapshots = await _get_or_create_snapshots(session, game.id)
+            if snapshots:
+                snapshots_by_game[game.id] = snapshots
+        except Exception:
+            logger.exception(
+                "Failed to get/create prop pick snapshots for game %d", game.id
+            )
 
     # Grade final games
     final_statuses = {s.lower() for s in GAME_FINAL_STATUSES}
     final_games = [g for g in games if (g.status or "").lower() in final_statuses]
-    await _grade_snapshots(session, final_games, snapshots_by_game)
+    try:
+        await _grade_snapshots(session, final_games, snapshots_by_game)
+    except Exception:
+        logger.exception("Failed to grade prop pick snapshots")
 
     game_list = []
     total_picks = 0
