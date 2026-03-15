@@ -1931,8 +1931,12 @@ class FeatureEngine:
 
         # DFO statuses like "confirmed", "expected", "likely" are all more
         # reliable than our "whoever started the last game" heuristic.
+        # Any DFO/NHL-API status is more reliable than the "whoever
+        # started the last game" heuristic — including "unconfirmed",
+        # which just means DFO hasn't locked it in yet but still
+        # represents their best projection.
         is_actionable = is_confirmed or status in (
-            "confirmed", "expected", "likely", "projected",
+            "confirmed", "expected", "likely", "projected", "unconfirmed",
         )
 
         logger.info(
