@@ -791,18 +791,23 @@ async def _fetch_starters_for_games(
             missing_team_ids.add(g.away_team_id)
 
     if missing_team_ids:
-        db_goalie_map = await _db_fallback_starters(session, missing_team_ids)
-        logger.info(
-            "Goalie DB fallback: filled %d/%d teams missing from scrapers",
-            len(db_goalie_map), len(missing_team_ids),
-        )
-        for g in upcoming:
-            if g.id not in starters_map:
-                starters_map[g.id] = {}
-            if "home" not in starters_map[g.id] and g.home_team_id in db_goalie_map:
-                starters_map[g.id]["home"] = db_goalie_map[g.home_team_id]
-            if "away" not in starters_map[g.id] and g.away_team_id in db_goalie_map:
-                starters_map[g.id]["away"] = db_goalie_map[g.away_team_id]
+        try:
+            db_goalie_map = await _db_fallback_starters(session, missing_team_ids)
+            logger.info(
+                "Goalie DB fallback: filled %d/%d teams missing from scrapers",
+                len(db_goalie_map), len(missing_team_ids),
+            )
+            for g in upcoming:
+                if g.id not in starters_map:
+                    starters_map[g.id] = {}
+                if "home" not in starters_map[g.id] and g.home_team_id in db_goalie_map:
+                    starters_map[g.id]["home"] = db_goalie_map[g.home_team_id]
+                if "away" not in starters_map[g.id] and g.away_team_id in db_goalie_map:
+                    starters_map[g.id]["away"] = db_goalie_map[g.away_team_id]
+        except Exception as exc:
+            logger.warning("Goalie DB fallback error: %s", exc, exc_info=True)
+    else:
+        logger.info("Goalie starters: no missing teams (all covered by scrapers or no upcoming games)")
 
     return starters_map
 

@@ -335,8 +335,21 @@ async def _fetch_rotowire_starters(
         if resp.status_code != 200:
             logger.warning("RotoWire returned %d", resp.status_code)
             return []
-        games = _parse_rotowire_html(resp.text)
-        logger.info("RotoWire: parsed %d goalie matchups", len(games))
+        html = resp.text
+        # Log a snippet of the HTML so we can debug parser mismatches
+        if len(html) < 500:
+            logger.warning("RotoWire: page too small (%d bytes), may need JS", len(html))
+        games = _parse_rotowire_html(html)
+        if not games:
+            # Dump sample HTML to help fix the parser
+            logger.warning(
+                "RotoWire: parsed 0 matchups from %d bytes. "
+                "Sample classes: %s",
+                len(html),
+                re.findall(r'class="([^"]*(?:goalie|lineup|matchup|starter)[^"]*)"', html[:20000], re.I)[:10],
+            )
+        else:
+            logger.info("RotoWire: parsed %d goalie matchups", len(games))
         return games
     except Exception as exc:
         logger.warning("RotoWire scrape failed: %s", exc)
