@@ -1001,10 +1001,24 @@ async def regenerate_predictions():
             )
             result = await session.execute(stmt)
             upcoming_games = result.scalars().all()
+            logger.info(
+                "Regenerate starter sync: found %d upcoming games (statuses: %s)",
+                len(upcoming_games),
+                [g.status for g in upcoming_games],
+            )
             if upcoming_games:
                 from app.api.schedule import _fetch_starters_for_games
-                await _fetch_starters_for_games(upcoming_games, session)
+                starters_map = await _fetch_starters_for_games(upcoming_games, session)
                 await session.flush()
+                # Log what was persisted
+                for g in upcoming_games:
+                    logger.info(
+                        "Regenerate: game %d starters after sync: "
+                        "home=%r (%r), away=%r (%r)",
+                        g.id,
+                        g.home_starter_name, g.home_starter_status,
+                        g.away_starter_name, g.away_starter_status,
+                    )
         steps.append("starters synced")
     except Exception as exc:
         logger.warning("Regenerate: starter sync failed: %s", exc)

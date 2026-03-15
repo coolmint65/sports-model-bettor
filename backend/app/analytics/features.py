@@ -1889,11 +1889,22 @@ class FeatureEngine:
             starter_name = game.home_starter_name if is_home else game.away_starter_name
             starter_status = game.home_starter_status if is_home else game.away_starter_status
 
+            logger.info(
+                "get_confirmed_starter: game_id=%d, team_id=%d, is_home=%s, "
+                "starter_name=%r, starter_status=%r, projected=%r",
+                game_id, team_id, is_home, starter_name, starter_status,
+                projected_name,
+            )
+
             if starter_name:
                 confirmed_name = starter_name
                 status = (starter_status or "").lower()
                 is_confirmed = status == "confirmed"
                 source = "dfo"
+        else:
+            logger.warning(
+                "get_confirmed_starter: game_id=%d not found in DB!", game_id,
+            )
 
         # --- Source 2: live scraper fallback if Game model has no starter ---
         if not confirmed_name:
@@ -1911,12 +1922,24 @@ class FeatureEngine:
                 source = "dfo"
 
         if not confirmed_name:
+            logger.info(
+                "get_confirmed_starter: no confirmed name for game_id=%d, "
+                "team_id=%d — keeping projected %r",
+                game_id, team_id, projected_name,
+            )
             return goalie_features
 
         # DFO statuses like "confirmed", "expected", "likely" are all more
         # reliable than our "whoever started the last game" heuristic.
         is_actionable = is_confirmed or status in (
             "confirmed", "expected", "likely", "projected",
+        )
+
+        logger.info(
+            "get_confirmed_starter: confirmed=%r vs projected=%r, "
+            "is_actionable=%s, status=%r, source=%r (game_id=%d, team_id=%d)",
+            confirmed_name, projected_name, is_actionable, status, source,
+            game_id, team_id,
         )
 
         # If the starter differs from our projected one, swap goalie stats
