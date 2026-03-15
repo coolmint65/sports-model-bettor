@@ -62,6 +62,7 @@ class TeamForm(BaseModel):
     shots_for_per_game: Optional[float] = None
     shots_against_per_game: Optional[float] = None
     faceoff_win_pct: Optional[float] = None
+    division_rank: Optional[int] = None
 
     model_config = {"from_attributes": True}
 
@@ -156,6 +157,28 @@ class OddsInfo(BaseModel):
     odds_updated_at: Optional[str] = None
 
 
+class GamePropsInfo(BaseModel):
+    """Game-level prop odds (BTTS, regulation winner, period markets)."""
+
+    # Both Teams to Score
+    btts_yes_price: Optional[float] = None
+    btts_no_price: Optional[float] = None
+    # Regulation winner (3-way)
+    reg_home_price: Optional[float] = None
+    reg_away_price: Optional[float] = None
+    reg_draw_price: Optional[float] = None
+    # 1st period
+    period1_home_ml: Optional[float] = None
+    period1_away_ml: Optional[float] = None
+    period1_draw_price: Optional[float] = None
+    period1_spread_line: Optional[float] = None
+    period1_home_spread_price: Optional[float] = None
+    period1_away_spread_price: Optional[float] = None
+    period1_total_line: Optional[float] = None
+    period1_over_price: Optional[float] = None
+    period1_under_price: Optional[float] = None
+
+
 class GameDetailResponse(BaseModel):
     """Full game details response with analytics context."""
 
@@ -186,6 +209,7 @@ class GameDetailResponse(BaseModel):
 
     odds: Optional[OddsInfo] = None
     pregame_odds: Optional[OddsInfo] = None
+    game_props: Optional[GamePropsInfo] = None
 
     home_team_form: TeamForm
     away_team_form: TeamForm
@@ -275,6 +299,7 @@ async def _get_team_form(team: Team, session: AsyncSession) -> TeamForm:
         form.shots_for_per_game = stats.shots_for_per_game
         form.shots_against_per_game = stats.shots_against_per_game
         form.faceoff_win_pct = stats.faceoff_win_pct
+        form.division_rank = stats.division_rank
 
     # Fallback: compute shots per game from Game records if still missing
     if form.shots_for_per_game is None or form.shots_against_per_game is None:
@@ -825,6 +850,32 @@ async def get_game_details(
             under_price=game.pregame_under_price,
         )
 
+    # Build game props info
+    game_props_info = None
+    has_any_game_prop = any([
+        game.btts_yes_price, game.btts_no_price,
+        game.reg_home_price, game.reg_away_price, game.reg_draw_price,
+        game.period1_home_ml, game.period1_away_ml,
+        game.period1_total_line,
+    ])
+    if has_any_game_prop:
+        game_props_info = GamePropsInfo(
+            btts_yes_price=game.btts_yes_price,
+            btts_no_price=game.btts_no_price,
+            reg_home_price=game.reg_home_price,
+            reg_away_price=game.reg_away_price,
+            reg_draw_price=game.reg_draw_price,
+            period1_home_ml=game.period1_home_ml,
+            period1_away_ml=game.period1_away_ml,
+            period1_draw_price=game.period1_draw_price,
+            period1_spread_line=game.period1_spread_line,
+            period1_home_spread_price=game.period1_home_spread_price,
+            period1_away_spread_price=game.period1_away_spread_price,
+            period1_total_line=game.period1_total_line,
+            period1_over_price=game.period1_over_price,
+            period1_under_price=game.period1_under_price,
+        )
+
     return GameDetailResponse(
         id=game.id,
         external_id=game.external_id,
@@ -849,6 +900,7 @@ async def get_game_details(
         away_shots=game.away_shots,
         odds=odds_info,
         pregame_odds=pregame_odds_info,
+        game_props=game_props_info,
         home_team_form=home_form,
         away_team_form=away_form,
         home_recent_games=home_recent,

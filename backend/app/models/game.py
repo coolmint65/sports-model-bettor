@@ -150,6 +150,10 @@ class Game(TimestampMixin, Base):
         JSON, nullable=True, default=None
     )
 
+    # Both Teams to Score (BTTS) odds
+    btts_yes_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    btts_no_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
     # Regulation winner (3-way moneyline) odds
     reg_home_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     reg_away_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)

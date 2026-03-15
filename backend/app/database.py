@@ -277,6 +277,8 @@ async def _migrate_add_columns() -> None:
         # Player prop opening prices for line movement tracking
         ("player_prop_odds", "opening_over_price", "FLOAT"),
         ("player_prop_odds", "opening_under_price", "FLOAT"),
+        # Division rank from standings
+        ("team_stats", "division_rank", "INTEGER"),
     ]
 
     async with engine.begin() as conn:

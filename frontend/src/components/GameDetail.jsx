@@ -310,6 +310,97 @@ function OddsCards({ game, homeAbbr, awayAbbr, pickBetType, pickIsHome, pickIsAw
   );
 }
 
+/* ──────────────────── Game Props ──────────────────── */
+function GamePropsSection({ game, homeAbbr, awayAbbr }) {
+  const gp = game.game_props;
+  if (!gp) return null;
+
+  const hasBTTS = gp.btts_yes_price != null || gp.btts_no_price != null;
+  const hasReg = gp.reg_home_price != null || gp.reg_away_price != null;
+  const hasP1 = gp.period1_home_ml != null || gp.period1_total_line != null;
+
+  if (!hasBTTS && !hasReg && !hasP1) return null;
+
+  const homeLabel = game.home_team_form?.team_name || homeAbbr;
+  const awayLabel = game.away_team_form?.team_name || awayAbbr;
+
+  return (
+    <div className="gd-section-card">
+      <div className="gd-section-header">
+        <Layers size={16} />
+        <h3>Game Props</h3>
+      </div>
+      <div className="gd-game-props-grid">
+        {hasBTTS && (
+          <div className="gd-game-prop-card">
+            <div className="gd-game-prop-title">Both Teams to Score</div>
+            <div className="gd-game-prop-odds">
+              <div className="gd-game-prop-side">
+                <span className="gd-game-prop-label">Yes</span>
+                <span className="gd-game-prop-price">{formatAmericanOdds(gp.btts_yes_price)}</span>
+              </div>
+              <div className="gd-game-prop-side">
+                <span className="gd-game-prop-label">No</span>
+                <span className="gd-game-prop-price">{formatAmericanOdds(gp.btts_no_price)}</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {hasReg && (
+          <div className="gd-game-prop-card">
+            <div className="gd-game-prop-title">Regulation Winner</div>
+            <div className="gd-game-prop-odds gd-game-prop-3way">
+              <div className="gd-game-prop-side">
+                <span className="gd-game-prop-label">{homeAbbr}</span>
+                <span className="gd-game-prop-price">{formatAmericanOdds(gp.reg_home_price)}</span>
+              </div>
+              <div className="gd-game-prop-side">
+                <span className="gd-game-prop-label">Draw</span>
+                <span className="gd-game-prop-price">{formatAmericanOdds(gp.reg_draw_price)}</span>
+              </div>
+              <div className="gd-game-prop-side">
+                <span className="gd-game-prop-label">{awayAbbr}</span>
+                <span className="gd-game-prop-price">{formatAmericanOdds(gp.reg_away_price)}</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {hasP1 && (
+          <div className="gd-game-prop-card">
+            <div className="gd-game-prop-title">1st Period</div>
+            <div className="gd-game-prop-subgrid">
+              {gp.period1_home_ml != null && (
+                <div className="gd-game-prop-row">
+                  <span className="gd-game-prop-market">ML</span>
+                  <span>{homeAbbr} {formatAmericanOdds(gp.period1_home_ml)}</span>
+                  <span>{awayAbbr} {formatAmericanOdds(gp.period1_away_ml)}</span>
+                  {gp.period1_draw_price != null && <span>Draw {formatAmericanOdds(gp.period1_draw_price)}</span>}
+                </div>
+              )}
+              {gp.period1_total_line != null && (
+                <div className="gd-game-prop-row">
+                  <span className="gd-game-prop-market">O/U {gp.period1_total_line}</span>
+                  <span>O {formatAmericanOdds(gp.period1_over_price)}</span>
+                  <span>U {formatAmericanOdds(gp.period1_under_price)}</span>
+                </div>
+              )}
+              {gp.period1_spread_line != null && (
+                <div className="gd-game-prop-row">
+                  <span className="gd-game-prop-market">PL</span>
+                  <span>{homeAbbr} {gp.period1_spread_line > 0 ? '+' : ''}{gp.period1_spread_line} ({formatAmericanOdds(gp.period1_home_spread_price)})</span>
+                  <span>{awayAbbr} ({formatAmericanOdds(gp.period1_away_spread_price)})</span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ──────────────────── Key Injuries ──────────────────── */
 function KeyInjuries({ injuries, homeTeamLabel, awayTeamLabel }) {
   if (!injuries) return null;
@@ -800,8 +891,8 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
             <div className="gd-stats-team-name">{homeLabel}</div>
             <div className="gd-stats-record">{homeRecord}</div>
             <div className="gd-stats-badges">
-              <span className="gd-streak-badge">
-                <TrendingDown size={11} />
+              <span className={`gd-streak-badge ${getStreak(homeRecent).startsWith('W') ? 'streak-win' : 'streak-loss'}`}>
+                {getStreak(homeRecent).startsWith('W') ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
                 {getStreak(homeRecent)}
               </span>
               {homeRank !== '-' && (
@@ -818,8 +909,8 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
             <div className="gd-stats-team-name">{awayLabel}</div>
             <div className="gd-stats-record">{awayRecord}</div>
             <div className="gd-stats-badges">
-              <span className="gd-streak-badge">
-                <TrendingDown size={11} />
+              <span className={`gd-streak-badge ${getStreak(awayRecent).startsWith('W') ? 'streak-win' : 'streak-loss'}`}>
+                {getStreak(awayRecent).startsWith('W') ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
                 {getStreak(awayRecent)}
               </span>
               {awayRank !== '-' && (
@@ -983,6 +1074,77 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
   );
 }
 
+/* ──────────────────── Goalie Matchup ──────────────────── */
+function GoalieMatchup({ game }) {
+  const homeGoalies = game.home_goalies || [];
+  const awayGoalies = game.away_goalies || [];
+  if (homeGoalies.length === 0 && awayGoalies.length === 0) return null;
+
+  const homeStarter = game.home_starter;
+  const awayStarter = game.away_starter;
+
+  const renderGoalie = (g, starter) => {
+    const isStarter = starter && starter.name && g.name && starter.name.toLowerCase() === g.name.toLowerCase();
+    return (
+      <div key={g.player_id} className={`gd-goalie-card ${isStarter ? 'gd-goalie-starter' : ''}`}>
+        <div className="gd-goalie-name-row">
+          <Shield size={14} />
+          <strong>{g.name}</strong>
+          {isStarter && (
+            <span className={`gd-goalie-badge ${starter.confirmed ? 'gd-goalie-confirmed' : ''}`}>
+              {starter.confirmed ? 'Starting' : 'Projected'}
+            </span>
+          )}
+        </div>
+        <div className="gd-goalie-stats-grid">
+          <div className="gd-goalie-stat">
+            <span className="gd-goalie-stat-val">{g.games_played || 0}</span>
+            <span className="gd-goalie-stat-label">GP</span>
+          </div>
+          <div className="gd-goalie-stat">
+            <span className="gd-goalie-stat-val">{g.wins || 0}-{g.losses || 0}-{g.ot_losses || 0}</span>
+            <span className="gd-goalie-stat-label">Record</span>
+          </div>
+          <div className="gd-goalie-stat">
+            <span className="gd-goalie-stat-val">{g.save_pct != null ? (g.save_pct <= 1 ? (g.save_pct * 100).toFixed(1) : g.save_pct.toFixed(1)) + '%' : '-'}</span>
+            <span className="gd-goalie-stat-label">SV%</span>
+          </div>
+          <div className="gd-goalie-stat">
+            <span className="gd-goalie-stat-val">{g.gaa != null ? g.gaa.toFixed(2) : '-'}</span>
+            <span className="gd-goalie-stat-label">GAA</span>
+          </div>
+          <div className="gd-goalie-stat">
+            <span className="gd-goalie-stat-val">{g.shutouts || 0}</span>
+            <span className="gd-goalie-stat-label">SO</span>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const homeLabel = game.home_team_form?.team_name || 'Home';
+  const awayLabel = game.away_team_form?.team_name || 'Away';
+
+  return (
+    <div className="gd-section-card">
+      <div className="gd-section-header">
+        <Shield size={16} />
+        <h3>Goalie Matchup</h3>
+      </div>
+      <div className="gd-goalie-matchup">
+        <div className="gd-goalie-team">
+          <div className="gd-goalie-team-label">{homeLabel}</div>
+          {homeGoalies.map((g) => renderGoalie(g, homeStarter))}
+        </div>
+        <div className="gd-goalie-team">
+          <div className="gd-goalie-team-label">{awayLabel}</div>
+          {awayGoalies.map((g) => renderGoalie(g, awayStarter))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ──────────────────── Venue & Conditions ──────────────────── */
 function VenueSection({ game }) {
   const venue = game.venue || game.arena || '';
@@ -1035,6 +1197,18 @@ function RecentFormAndH2H({ game, homeAbbr, awayAbbr }) {
     return `${w}-${l}`;
   };
 
+  // Determine trending direction from last 5 games
+  const getFormTrend = (games) => {
+    if (games.length < 2) return 'neutral';
+    const wins = games.filter((g) => g.result === 'W').length;
+    if (wins >= 4) return 'hot';
+    if (wins >= 3) return 'up';
+    if (wins <= 1) return 'down';
+    return 'neutral';
+  };
+  const homeTrend = getFormTrend(last5Home);
+  const awayTrend = getFormTrend(last5Away);
+
   const homeId = game.home_team_form?.team_id ?? game.home_team?.id;
   const team1IsHome = h2h?.team1_id === homeId;
 
@@ -1081,7 +1255,7 @@ function RecentFormAndH2H({ game, homeAbbr, awayAbbr }) {
         <div className="gd-form-teams">
           <div className="gd-form-team">
             <div className="gd-form-team-header">
-              <TrendingDown size={13} />
+              {homeTrend === 'down' ? <TrendingDown size={13} className="form-trend-down" /> : <TrendingUp size={13} className={homeTrend === 'hot' ? 'form-trend-hot' : homeTrend === 'up' ? 'form-trend-up' : 'form-trend-neutral'} />}
               <strong>{homeLabel}</strong>
               <span className="gd-form-record-badge">{calcRecord(last5Home)} Last 5</span>
             </div>
@@ -1107,7 +1281,7 @@ function RecentFormAndH2H({ game, homeAbbr, awayAbbr }) {
 
           <div className="gd-form-team">
             <div className="gd-form-team-header">
-              <TrendingDown size={13} />
+              {awayTrend === 'down' ? <TrendingDown size={13} className="form-trend-down" /> : <TrendingUp size={13} className={awayTrend === 'hot' ? 'form-trend-hot' : awayTrend === 'up' ? 'form-trend-up' : 'form-trend-neutral'} />}
               <strong>{awayLabel}</strong>
               <span className="gd-form-record-badge">{calcRecord(last5Away)} Last 5</span>
             </div>
@@ -1570,10 +1744,12 @@ function GameDetail() {
       <div className="gd-content">
         {activeTab === 'overview' ? (
           <>
+            <GamePropsSection game={game} homeAbbr={homeAbbr} awayAbbr={awayAbbr} />
             <KeyInjuries injuries={injuries} homeTeamLabel={homeTeamLabel} awayTeamLabel={awayTeamLabel} />
             <AIAnalysis game={game} homeAbbr={homeAbbr} awayAbbr={awayAbbr} homeTeamLabel={homeTeamLabel} awayTeamLabel={awayTeamLabel} />
             <RiskAndMarket game={game} homeAbbr={homeAbbr} awayAbbr={awayAbbr} homeTeamLabel={homeTeamLabel} awayTeamLabel={awayTeamLabel} />
             <StatsAndTrends game={game} homeAbbr={homeAbbr} awayAbbr={awayAbbr} />
+            <GoalieMatchup game={game} />
             <VenueSection game={game} />
             <RecentFormAndH2H game={game} homeAbbr={homeAbbr} awayAbbr={awayAbbr} />
           </>

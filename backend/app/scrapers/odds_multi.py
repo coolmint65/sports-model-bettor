@@ -203,6 +203,8 @@ class OddsEvent:
         "p1_total_line", "p1_over_price", "p1_under_price",
         # Regulation winner (3-way moneyline)
         "reg_home_price", "reg_away_price", "reg_draw_price",
+        # Both Teams to Score (BTTS)
+        "btts_yes_price", "btts_no_price",
     )
 
     def __init__(
@@ -256,6 +258,9 @@ class OddsEvent:
         self.reg_home_price: float = 0.0
         self.reg_away_price: float = 0.0
         self.reg_draw_price: float = 0.0
+        # Both Teams to Score (BTTS)
+        self.btts_yes_price: float = 0.0
+        self.btts_no_price: float = 0.0
 
     def has_moneyline(self) -> bool:
         return self.home_ml != 0 and self.away_ml != 0
@@ -288,6 +293,8 @@ class OddsEvent:
             "reg_home_price": self.reg_home_price,
             "reg_away_price": self.reg_away_price,
             "reg_draw_price": self.reg_draw_price,
+            "btts_yes_price": self.btts_yes_price,
+            "btts_no_price": self.btts_no_price,
         }
 
 
@@ -1583,12 +1590,13 @@ async def _fetch_odds_api_raw(
 
     url = "https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds"
 
-    # Try market sets in order: full (with period markets) then core-only.
-    # All Odds API plans include all markets, but some combinations may
-    # fail with certain region/market combos, so we fall back gracefully.
-    # NOTE: Each market × region counts as a credit.  Stick to core
-    # markets and a single region to conserve the monthly budget.
+    # Try market sets in order: full (with game props + period markets)
+    # then core-only.  Each market × region = 1 credit.
+    # Full set: h2h, spreads, totals, btts, h2h_h1, totals_h1, spreads_h1
+    #   = 7 credits per sync (covers ALL events in a single call).
+    # Fallback: core 3 markets only if the extended set fails.
     _MARKET_SETS = [
+        "h2h,spreads,totals,btts,h2h_h1,totals_h1,spreads_h1",
         "h2h,spreads,totals",
     ]
 
@@ -1694,6 +1702,10 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
         all_p1_away_spread: List[Tuple[float, float]] = []
         all_p1_total: List[Tuple[float, float, float]] = []
 
+        # Both Teams to Score (BTTS)
+        all_btts_yes: List[float] = []
+        all_btts_no: List[float] = []
+
         for bm in ev.get("bookmakers", []):
             bm_key = bm.get("key", "").lower().replace("-", "_")
             bm_title = bm.get("title", "").lower()
@@ -1782,6 +1794,16 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
                             p1_under = price
                     if p1_line > 0:
                         all_p1_total.append((p1_line, p1_over, p1_under))
+
+                # --- BTTS (Both Teams to Score) ---
+                elif mkey == "btts":
+                    for oc in outcomes:
+                        name = oc.get("name", "").lower()
+                        price = float(oc.get("price", 0))
+                        if name == "yes":
+                            all_btts_yes.append(price)
+                        elif name == "no":
+                            all_btts_no.append(price)
 
 
         # Best odds across books
@@ -1889,6 +1911,12 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
             event.reg_away_price = round(max(all_reg_away))
         if all_reg_draw:
             event.reg_draw_price = round(max(all_reg_draw))
+
+        # Attach BTTS odds — best price across books
+        if all_btts_yes:
+            event.btts_yes_price = round(max(all_btts_yes))
+        if all_btts_no:
+            event.btts_no_price = round(max(all_btts_no))
 
         if event.home_abbr and event.away_abbr:
             events.append(_validate_event(event))
@@ -2891,6 +2919,11 @@ def _merge_odds_events(
                 "away_price": _best_price([getattr(e, "reg_away_price", None) for e in ev_list]),
                 "draw_price": _best_price([getattr(e, "reg_draw_price", None) for e in ev_list]),
             },
+            # Both Teams to Score (BTTS) odds
+            "btts_odds": {
+                "yes_price": _best_price([getattr(e, "btts_yes_price", None) for e in ev_list]),
+                "no_price": _best_price([getattr(e, "btts_no_price", None) for e in ev_list]),
+            },
             "all_sources": [e.to_dict() for e in ev_list],
         })
 
@@ -3332,6 +3365,13 @@ class MultiSourceOddsScraper:
                 game.reg_away_price = reg["away_price"]
             if reg.get("draw_price") is not None:
                 game.reg_draw_price = reg["draw_price"]
+
+            # Persist BTTS odds
+            btts = odds.get("btts_odds", {})
+            if btts.get("yes_price") is not None:
+                game.btts_yes_price = btts["yes_price"]
+            if btts.get("no_price") is not None:
+                game.btts_no_price = btts["no_price"]
 
             game.odds_updated_at = datetime.now(timezone.utc)
 

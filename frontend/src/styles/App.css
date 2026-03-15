@@ -6460,3 +6460,293 @@ a:hover {
 .recharts-legend-item-text {
   color: var(--text-muted) !important;
 }
+
+/* ============================================================
+   Form Trend Indicators
+   ============================================================ */
+
+.form-trend-hot {
+  color: var(--accent-green);
+  filter: drop-shadow(0 0 3px rgba(0, 255, 136, 0.4));
+}
+
+.form-trend-up {
+  color: var(--accent-green);
+}
+
+.form-trend-neutral {
+  color: var(--accent-gold, #ffd700);
+}
+
+.form-trend-down {
+  color: var(--accent-red);
+}
+
+.gd-streak-badge.streak-win {
+  color: var(--accent-green);
+  background: var(--accent-green-bg);
+  border-color: rgba(0, 255, 136, 0.2);
+}
+
+.gd-streak-badge.streak-loss {
+  color: var(--accent-red);
+  background: var(--accent-red-bg);
+  border-color: rgba(255, 82, 82, 0.2);
+}
+
+/* ============================================================
+   Goalie Matchup Section
+   ============================================================ */
+
+.gd-goalie-matchup {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 700px) {
+  .gd-goalie-matchup {
+    grid-template-columns: 1fr;
+  }
+}
+
+.gd-goalie-team {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.gd-goalie-team-label {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.gd-goalie-card {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+}
+
+.gd-goalie-card.gd-goalie-starter {
+  border-color: var(--accent-green);
+  background: rgba(0, 255, 136, 0.04);
+  box-shadow: 0 0 8px rgba(0, 255, 136, 0.08);
+}
+
+.gd-goalie-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  color: var(--text-primary);
+  font-size: 0.88rem;
+}
+
+.gd-goalie-name-row svg {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.gd-goalie-badge {
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-left: auto;
+  color: var(--accent-gold, #ffd700);
+  background: rgba(255, 215, 0, 0.1);
+  border: 1px solid rgba(255, 215, 0, 0.2);
+}
+
+.gd-goalie-badge.gd-goalie-confirmed {
+  color: var(--accent-green);
+  background: var(--accent-green-bg);
+  border-color: rgba(0, 255, 136, 0.2);
+}
+
+.gd-goalie-stats-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.gd-goalie-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+  min-width: 45px;
+  padding: 6px 4px;
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 6px;
+}
+
+.gd-goalie-stat-val {
+  font-size: 0.82rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+.gd-goalie-stat-label {
+  font-size: 0.6rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+/* ============================================================
+   Spacing / Layout Fixes - Matchup Cards
+   ============================================================ */
+
+/* Ensure consistent card height by preventing form game rows from stretching */
+.gd-form-game-row {
+  min-height: 28px;
+  white-space: nowrap;
+}
+
+/* OT indicator in form games - keep compact */
+.gd-form-game-row span:last-child {
+  text-align: right;
+  min-width: 80px;
+}
+
+/* Dashboard card grid - ensure even spacing */
+.dc-card {
+  min-height: 0;
+}
+
+/* Fix OT "wavy" display - stabilize live card layout during period transitions */
+.game-card .live-divider {
+  min-width: 80px;
+  text-align: center;
+}
+
+.game-card .vs-label {
+  min-width: 36px;
+  display: inline-block;
+  text-align: center;
+}
+
+/* Stabilize live score display during OT */
+.detail-live-score {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.detail-score {
+  min-width: 36px;
+  text-align: center;
+}
+
+/* Fix H2H game rows to not overflow on narrow screens */
+.gd-h2h-game-row {
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.gd-h2h-game-score {
+  white-space: nowrap;
+}
+
+/* Form trend colors override the default orange arrow color */
+.gd-form-team-header .form-trend-hot,
+.gd-form-team-header .form-trend-up {
+  color: var(--accent-green);
+}
+
+.gd-form-team-header .form-trend-neutral {
+  color: var(--accent-gold, #ffd700);
+}
+
+.gd-form-team-header .form-trend-down {
+  color: var(--accent-red);
+}
+
+/* ============================================================
+   Game Props Section
+   ============================================================ */
+
+.gd-game-props-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.gd-game-prop-card {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+}
+
+.gd-game-prop-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
+.gd-game-prop-odds {
+  display: flex;
+  gap: 12px;
+  justify-content: space-around;
+}
+
+.gd-game-prop-3way {
+  gap: 8px;
+}
+
+.gd-game-prop-side {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.gd-game-prop-label {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.gd-game-prop-price {
+  font-size: 1rem;
+  font-weight: 800;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+.gd-game-prop-subgrid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gd-game-prop-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.gd-game-prop-market {
+  font-weight: 700;
+  color: var(--text-muted);
+  min-width: 55px;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+}

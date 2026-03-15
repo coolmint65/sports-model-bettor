@@ -155,6 +155,9 @@ class TeamStats(TimestampMixin, Base):
     record_last_10: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     record_last_20: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
 
+    # Division rank (from standings)
+    division_rank: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
     # Splits (stored as strings, e.g., "15-8-2")
     home_record: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     away_record: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
