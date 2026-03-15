@@ -341,30 +341,38 @@ async def _fetch_rotowire_starters(
             logger.warning("RotoWire: page too small (%d bytes), may need JS", len(html))
         games = _parse_rotowire_html(html)
         if not games:
-            # Broad diagnostics: find ALL unique class names in the first 30KB
-            all_classes = re.findall(r'class="([^"]{3,60})"', html[:30000])
-            # Deduplicate while preserving order
-            seen = set()
-            unique_classes = []
-            for c in all_classes:
-                if c not in seen:
-                    seen.add(c)
-                    unique_classes.append(c)
+            # Check for embedded JSON data (common in SPAs)
+            json_patterns = re.findall(
+                r'(?:__NEXT_DATA__|__NUXT__|window\.__data|window\.App|"props"|"pageProps"|"initialState")',
+                html[:5000], re.I,
+            )
+            # Look for API endpoint URLs in the JS bundle
+            api_urls = re.findall(
+                r'["\']((https?://[^"\']*(?:api|graphql|starting.goalie)[^"\']{0,80}))["\']',
+                html, re.I,
+            )
+            # Unique API URLs
+            seen_urls = set()
+            unique_api = []
+            for u in api_urls:
+                url_str = u[0] if isinstance(u, tuple) else u
+                if url_str not in seen_urls:
+                    seen_urls.add(url_str)
+                    unique_api.append(url_str)
 
-            # Also find player-link patterns
-            player_links = re.findall(r'href="([^"]*(?:player|goalie)[^"]*)"', html[:30000], re.I)[:5]
-            # Find any 2-3 letter uppercase strings that could be team abbrevs
-            team_candidates = re.findall(r'>([A-Z]{2,3})<', html[:30000])[:20]
+            # Check for inline JSON with goalie-like data
+            goalie_json = re.findall(
+                r'["\']([^"\']*(?:goalie|starter|Expected|Confirmed)[^"\']{0,60})["\']',
+                html[:100000], re.I,
+            )[:15]
 
             logger.warning(
-                "RotoWire: parsed 0 matchups from %d bytes. "
-                "Unique classes (first 40): %s",
-                len(html),
-                unique_classes[:40],
+                "RotoWire SPA: %d bytes, json_markers=%s, api_urls=%s",
+                len(html), json_patterns, unique_api[:15],
             )
             logger.warning(
-                "RotoWire diag: player links=%s, team candidates=%s",
-                player_links, team_candidates,
+                "RotoWire SPA: goalie-related strings=%s",
+                goalie_json,
             )
         else:
             logger.info("RotoWire: parsed %d goalie matchups", len(games))
