@@ -14,14 +14,14 @@ logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES, composite_pick_score, is_heavy_juice
 from app.database import get_session
-from app.models.game import Game, HeadToHead
+from app.models.game import Game, GameGoalieStats, HeadToHead
 from app.models.injury import InjuryReport
 from app.models.odds_history import OddsSnapshot
 from app.models.player import GoalieStats, Player
@@ -572,7 +572,7 @@ async def _get_h2h_games(
 async def _get_team_goalies(
     team_id: int, session: AsyncSession
 ) -> List[GoalieInfo]:
-    """Get goalies for a team with their latest season stats."""
+    """Get goalies for a team with season stats aggregated from game logs."""
     result = await session.execute(
         select(Player).where(
             Player.team_id == team_id,
@@ -584,29 +584,57 @@ async def _get_team_goalies(
 
     goalie_infos: List[GoalieInfo] = []
     for goalie in goalies:
-        stats_result = await session.execute(
-            select(GoalieStats)
-            .where(GoalieStats.player_id == goalie.id)
-            .order_by(GoalieStats.season.desc())
-            .limit(1)
+        # Aggregate season stats from per-game records (GameGoalieStats)
+        # since the GoalieStats table isn't populated.
+        agg_result = await session.execute(
+            select(
+                func.count(GameGoalieStats.id).label("gp"),
+                func.sum(case(
+                    (GameGoalieStats.decision == "W", 1), else_=0
+                )).label("wins"),
+                func.sum(case(
+                    (GameGoalieStats.decision == "L", 1), else_=0
+                )).label("losses"),
+                func.sum(case(
+                    (GameGoalieStats.decision == "OTL", 1), else_=0
+                )).label("ot_losses"),
+                func.sum(GameGoalieStats.saves).label("total_saves"),
+                func.sum(GameGoalieStats.shots_against).label("total_shots"),
+                func.sum(GameGoalieStats.goals_against).label("total_ga"),
+                func.sum(GameGoalieStats.toi).label("total_toi"),
+                func.sum(case(
+                    (and_(GameGoalieStats.decision == "W",
+                          GameGoalieStats.goals_against == 0), 1),
+                    else_=0,
+                )).label("shutouts"),
+            )
+            .join(Game, GameGoalieStats.game_id == Game.id)
+            .where(
+                GameGoalieStats.player_id == goalie.id,
+                func.lower(Game.status).in_(GAME_FINAL_STATUSES),
+            )
         )
-        gs: Optional[GoalieStats] = stats_result.scalar_one_or_none()
+        row = agg_result.one()
+
+        gp = row.gp or 0
+        total_saves = row.total_saves or 0
+        total_shots = row.total_shots or 0
+        total_ga = row.total_ga or 0
+        total_toi = row.total_toi or 0
 
         info = GoalieInfo(
             player_id=goalie.id,
             name=goalie.name,
             team_id=goalie.team_id,
+            games_played=gp,
+            games_started=gp,  # GameGoalieStats only has starters
+            wins=row.wins or 0,
+            losses=row.losses or 0,
+            ot_losses=row.ot_losses or 0,
+            save_pct=round(total_saves / total_shots, 3) if total_shots > 0 else None,
+            gaa=round((total_ga / total_toi) * 60, 2) if total_toi > 0 else None,
+            shutouts=row.shutouts or 0,
         )
-        if gs:
-            info.games_played = gs.games_played
-            info.games_started = gs.games_started
-            info.wins = gs.wins
-            info.losses = gs.losses
-            info.ot_losses = gs.ot_losses
-            info.save_pct = gs.save_pct
-            info.gaa = gs.gaa
-            info.shutouts = gs.shutouts
-
         goalie_infos.append(info)
 
     return goalie_infos
