@@ -507,7 +507,7 @@ async def sync_confirmed_starters(db: AsyncSession) -> List[Dict[str, Any]]:
                                     "team_abbrev": abbrev,
                                     "goalie_name": goalie_name,
                                     "goalie_external_id": "",
-                                    "confirmed": "confirm" in status,
+                                    "confirmed": status.lower() == "confirmed",
                                     "status": status.strip().title() if status else "Projected",
                                 })
                         covered_game_ids.add(game.id)
@@ -557,7 +557,7 @@ async def sync_confirmed_starters(db: AsyncSession) -> List[Dict[str, Any]]:
                                     "team_abbrev": abbrev,
                                     "goalie_name": goalie_name,
                                     "goalie_external_id": "",
-                                    "confirmed": "confirm" in status,
+                                    "confirmed": status.lower() == "confirmed",
                                     "status": status.strip().title() if status else "Projected",
                                 })
                         covered_game_ids.add(game.id)
