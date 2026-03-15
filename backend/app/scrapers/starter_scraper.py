@@ -341,12 +341,30 @@ async def _fetch_rotowire_starters(
             logger.warning("RotoWire: page too small (%d bytes), may need JS", len(html))
         games = _parse_rotowire_html(html)
         if not games:
-            # Dump sample HTML to help fix the parser
+            # Broad diagnostics: find ALL unique class names in the first 30KB
+            all_classes = re.findall(r'class="([^"]{3,60})"', html[:30000])
+            # Deduplicate while preserving order
+            seen = set()
+            unique_classes = []
+            for c in all_classes:
+                if c not in seen:
+                    seen.add(c)
+                    unique_classes.append(c)
+
+            # Also find player-link patterns
+            player_links = re.findall(r'href="([^"]*(?:player|goalie)[^"]*)"', html[:30000], re.I)[:5]
+            # Find any 2-3 letter uppercase strings that could be team abbrevs
+            team_candidates = re.findall(r'>([A-Z]{2,3})<', html[:30000])[:20]
+
             logger.warning(
                 "RotoWire: parsed 0 matchups from %d bytes. "
-                "Sample classes: %s",
+                "Unique classes (first 40): %s",
                 len(html),
-                re.findall(r'class="([^"]*(?:goalie|lineup|matchup|starter)[^"]*)"', html[:20000], re.I)[:10],
+                unique_classes[:40],
+            )
+            logger.warning(
+                "RotoWire diag: player links=%s, team candidates=%s",
+                player_links, team_candidates,
             )
         else:
             logger.info("RotoWire: parsed %d goalie matchups", len(games))
