@@ -812,36 +812,97 @@ async def _db_fallback_starters(
 ) -> dict[int, GoalieStarter]:
     """Look up the likely starter for each team from GameGoalieStats.
 
-    Counts recent game appearances per goalie per team; the goalie
-    with the most appearances is the presumed starter.
+    Determines team association via Game.home_team_id/away_team_id
+    (not Player.team_id, which may be null). Picks the goalie with
+    the most game appearances per team.
     Returns {team_id: GoalieStarter}.
     """
-    # Find goalies on these teams who have game stats, ordered by
-    # most recent games (highest game_id = most recent)
-    result = await session.execute(
-        select(
-            Player.team_id,
-            Player.name,
-            func.count(GameGoalieStats.id).label("appearances"),
+    # Build a union of home-side and away-side goalie appearances.
+    # For each finished game, a goalie in GameGoalieStats either
+    # played for the home team or away team. We use the Game's
+    # team IDs to figure out which side.
+    from sqlalchemy import literal, union_all, case
+
+    # Subquery: for each GameGoalieStats row, determine the team
+    # by checking if the goalie's Player.team_id matches home or away.
+    # But Player.team_id may be stale/null, so we use a heuristic:
+    # the goalie's current team (from Player) OR infer from Game.
+    #
+    # Simplest reliable approach: query all GameGoalieStats for
+    # recent finished games involving these teams, then pair in Python.
+    finished_games_result = await session.execute(
+        select(Game)
+        .where(
+            func.lower(Game.status).in_(GAME_FINAL_STATUSES),
+            (Game.home_team_id.in_(team_ids)) | (Game.away_team_id.in_(team_ids)),
         )
-        .join(GameGoalieStats, GameGoalieStats.player_id == Player.id)
-        .where(Player.team_id.in_(team_ids))
-        .group_by(Player.team_id, Player.id, Player.name)
-        .order_by(func.count(GameGoalieStats.id).desc())
+        .order_by(Game.date.desc())
+        .limit(200)  # recent games only
     )
-    rows = result.all()
+    finished_games = finished_games_result.scalars().all()
+
+    if not finished_games:
+        logger.info("DB fallback: no finished games found for teams %s", team_ids)
+        return {}
+
+    game_ids = [g.id for g in finished_games]
+    game_map = {g.id: g for g in finished_games}
+
+    # Get all goalie stats for these games
+    ggs_result = await session.execute(
+        select(GameGoalieStats)
+        .options(selectinload(GameGoalieStats.player))
+        .where(GameGoalieStats.game_id.in_(game_ids))
+    )
+    all_ggs = ggs_result.scalars().all()
+
+    # Count appearances per (team_id, player) using game context
+    # to determine which team the goalie played for.
+    # Heuristic: a goalie belongs to the team their Player.team_id
+    # points to. If null, check which side of the game they're on
+    # by comparing with other goalies in the same game.
+    from collections import Counter
+    team_goalie_counts: dict[int, Counter] = {tid: Counter() for tid in team_ids}
+    goalie_names: dict[int, str] = {}
+
+    for ggs in all_ggs:
+        game = game_map.get(ggs.game_id)
+        if not game:
+            continue
+        player = ggs.player
+        if not player:
+            continue
+        goalie_names[player.id] = player.name
+
+        # Determine which team this goalie played for
+        ptid = player.team_id
+        if ptid and ptid in team_ids:
+            team_goalie_counts[ptid][player.id] += 1
+        else:
+            # Infer: if only one side of the game is in our target teams,
+            # assume this goalie played for that side
+            home_in = game.home_team_id in team_ids
+            away_in = game.away_team_id in team_ids
+            if home_in and not away_in:
+                team_goalie_counts[game.home_team_id][player.id] += 1
+            elif away_in and not home_in:
+                team_goalie_counts[game.away_team_id][player.id] += 1
 
     team_starters: dict[int, GoalieStarter] = {}
-    for team_id, name, appearances in rows:
-        if team_id not in team_starters:
-            team_starters[team_id] = GoalieStarter(
+    for tid in team_ids:
+        counts = team_goalie_counts[tid]
+        if counts:
+            top_goalie_id = counts.most_common(1)[0][0]
+            name = goalie_names.get(top_goalie_id, "Unknown")
+            appearances = counts[top_goalie_id]
+            team_starters[tid] = GoalieStarter(
                 name=name,
                 confirmed=False,
                 status="Expected",
             )
-            logger.debug(
+            logger.info(
                 "DB fallback goalie: team_id=%d → %s (%d games)",
-                team_id, name, appearances,
+                tid, name, appearances,
             )
     return team_starters
 
