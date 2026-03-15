@@ -15,7 +15,6 @@ import json
 import logging
 import re
 from datetime import date
-from html.parser import HTMLParser
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -50,78 +49,122 @@ _TEAM_ALIAS = {
 #  DailyFaceoff scraper (primary)                                     #
 # ------------------------------------------------------------------ #
 
-# The DailyFaceoff embeddable widget at publish.dailyfaceoff.com
-# renders lightweight HTML that doesn't require JS. The main site
-# at www.dailyfaceoff.com requires JS rendering and is unreliable.
+# DailyFaceoff is a Next.js SSR site. The main page at
+# www.dailyfaceoff.com returns server-rendered HTML with goalie data
+# embedded directly. The publish.dailyfaceoff.com widget is defunct.
 
 _DFO_HEADERS = {
     "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) "
+        "Gecko/20100101 Firefox/148.0"
     ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+}
+
+# Map DFO team slugs (from /teams/SLUG/) to NHL abbreviations
+_DFO_SLUG_MAP = {
+    "anaheim-ducks": "ANA", "boston-bruins": "BOS", "buffalo-sabres": "BUF",
+    "calgary-flames": "CGY", "carolina-hurricanes": "CAR",
+    "chicago-blackhawks": "CHI", "colorado-avalanche": "COL",
+    "columbus-blue-jackets": "CBJ", "dallas-stars": "DAL",
+    "detroit-red-wings": "DET", "edmonton-oilers": "EDM",
+    "florida-panthers": "FLA", "los-angeles-kings": "LAK",
+    "minnesota-wild": "MIN", "montreal-canadiens": "MTL",
+    "nashville-predators": "NSH", "new-jersey-devils": "NJD",
+    "new-york-islanders": "NYI", "new-york-rangers": "NYR",
+    "ottawa-senators": "OTT", "philadelphia-flyers": "PHI",
+    "pittsburgh-penguins": "PIT", "san-jose-sharks": "SJS",
+    "seattle-kraken": "SEA", "st-louis-blues": "STL",
+    "tampa-bay-lightning": "TBL", "toronto-maple-leafs": "TOR",
+    "utah-mammoth": "UTA", "utah-hockey-club": "UTA",
+    "vancouver-canucks": "VAN", "vegas-golden-knights": "VGK",
+    "washington-capitals": "WSH", "winnipeg-jets": "WPG",
 }
 
 
 def _parse_dfo_html(html: str) -> List[Dict[str, str]]:
-    """Parse DailyFaceoff HTML for goalie matchups.
+    """Parse DailyFaceoff Next.js SSR HTML for goalie matchups.
 
-    Uses multiple strategies to extract data:
-    1. Look for player name links paired with team info
-    2. Status indicators (Confirmed/Expected/Unconfirmed)
+    Each game is an <article> block containing:
+    - Team matchup in a header span (text-3xl text-white)
+    - Two goalie names in spans (text-lg xl:text-2xl)
+    - Status indicators (Confirmed/Unconfirmed) in spans
+    - Team slugs in /teams/SLUG/ links
     """
     results: List[Dict[str, str]] = []
 
-    # Strategy 1: Find player links (most reliable signal)
-    player_links = re.findall(
-        r'<a[^>]*href="[^"]*(?:/players?/|player\.php)[^"]*"[^>]*>\s*([^<]{2,40})\s*</a>',
-        html, re.IGNORECASE,
-    )
+    # Split HTML into <article> blocks — each is one game matchup
+    articles = re.split(r'<article[^>]*>', html)
+    if len(articles) < 2:
+        return results
 
-    # Strategy 2: Find team abbreviations or names near goalie data
-    # Look for 2-3 letter uppercase codes in structured contexts
-    team_abbrs = re.findall(
-        r'(?:class="[^"]*(?:team|abbr)[^"]*"[^>]*>|<(?:td|span|div)[^>]*>\s*)([A-Z]{2,3})(?:\s*<)',
-        html,
-    )
-    # Filter to known NHL abbreviations
-    nhl_abbrs = set(_TEAM_ALIAS.values()) | set(_ROTOWIRE_TEAM_MAP.keys())
-    team_abbrs = [t for t in team_abbrs if t in nhl_abbrs]
+    for article_html in articles[1:]:  # skip content before first <article>
+        # Cut at </article> to avoid bleeding into next game
+        end = article_html.find("</article>")
+        if end > 0:
+            article_html = article_html[:end]
 
-    # Strategy 3: Find status text
-    statuses = re.findall(
-        r'(?:Confirmed|Expected|Unconfirmed|Likely|Projected)',
-        html, re.IGNORECASE,
-    )
+        # Extract goalie names from spans with text-lg xl:text-2xl
+        goalie_names = re.findall(
+            r'<span[^>]*class="[^"]*text-lg[^"]*text-2xl[^"]*"[^>]*>'
+            r'\s*([^<]{2,40})\s*</span>',
+            article_html,
+        )
+        if len(goalie_names) < 2:
+            continue
 
-    # Also look for team full names
-    team_names = re.findall(
-        r'(?:class="[^"]*team[^"]*name[^"]*"[^>]*>)\s*([^<]{3,30})\s*<',
-        html, re.IGNORECASE,
-    )
+        # Extract confirmation status (Confirmed/Unconfirmed/Expected)
+        # These appear as >Confirmed</span> or >Unconfirmed</span>
+        statuses = re.findall(
+            r'>(?:Confirmed|Unconfirmed|Expected|Likely|Projected)</span>',
+            article_html,
+        )
+        # Clean to just the status word
+        statuses = [
+            re.search(r'(Confirmed|Unconfirmed|Expected|Likely|Projected)', s).group(1).lower()
+            for s in statuses
+        ]
 
-    # Pair goalies: every 2 player links = 1 matchup (away, home)
-    if len(player_links) >= 2:
-        for i in range(0, len(player_links) - 1, 2):
-            game: Dict[str, str] = {
-                "away_goalie": player_links[i].strip(),
-                "home_goalie": player_links[i + 1].strip(),
-            }
-            si = i
-            if si < len(statuses):
-                game["away_status"] = statuses[si].lower()
-            if si + 1 < len(statuses):
-                game["home_status"] = statuses[si + 1].lower()
-            if i < len(team_abbrs):
-                game["away_team"] = team_abbrs[i]
-            if i + 1 < len(team_abbrs):
-                game["home_team"] = team_abbrs[i + 1]
-            elif i < len(team_names):
-                game.setdefault("away_team", team_names[i].strip())
-            if i + 1 < len(team_names):
-                game.setdefault("home_team", team_names[i + 1].strip())
-            results.append(game)
+        # Extract team slugs from /teams/SLUG/ links
+        team_slugs = re.findall(
+            r'/teams/([a-z0-9-]+)/(?:line-combinations|news|schedule)',
+            article_html,
+        )
+        # Deduplicate while preserving order
+        seen: set = set()
+        unique_slugs = []
+        for s in team_slugs:
+            if s not in seen:
+                seen.add(s)
+                unique_slugs.append(s)
+        team_slugs = unique_slugs
+
+        game: Dict[str, str] = {
+            "away_goalie": goalie_names[0].strip(),
+            "home_goalie": goalie_names[1].strip(),
+        }
+
+        if len(statuses) >= 1:
+            game["away_status"] = statuses[0]
+        if len(statuses) >= 2:
+            game["home_status"] = statuses[1]
+
+        if len(team_slugs) >= 1:
+            abbrev = _DFO_SLUG_MAP.get(team_slugs[0], "")
+            if abbrev:
+                game["away_team"] = abbrev
+        if len(team_slugs) >= 2:
+            abbrev = _DFO_SLUG_MAP.get(team_slugs[1], "")
+            if abbrev:
+                game["home_team"] = abbrev
+
+        results.append(game)
 
     return results
 
@@ -132,15 +175,14 @@ async def _fetch_dailyfaceoff_starters(
 ) -> List[Dict[str, str]]:
     """Fetch starting goalies from DailyFaceoff.
 
-    Tries the embeddable widget first (lightweight, no JS needed),
-    then falls back to the main page.
+    The main site is a Next.js SSR app that returns server-rendered
+    HTML with goalie data embedded. Date-specific URLs are tried first.
     """
     urls = [
-        # Embeddable widget — lightweight HTML, most reliable
-        f"https://publish.dailyfaceoff.com/starting-goalies/{target_date.isoformat()}",
-        f"https://publish.dailyfaceoff.com/starting-goalies",
-        # Main site — often requires JS but sometimes has partial data
+        # Date-specific page (SSR, no JS needed)
         f"https://www.dailyfaceoff.com/starting-goalies/{target_date.isoformat()}",
+        # Default page (today's games)
+        "https://www.dailyfaceoff.com/starting-goalies",
     ]
 
     for url in urls:
