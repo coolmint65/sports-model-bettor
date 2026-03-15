@@ -418,6 +418,26 @@ async def _fetch_nhl_api_starters(
     data = resp.json()
     results: List[Dict[str, Any]] = []
 
+    # Log top-level keys and matchup structure for debugging
+    matchup = data.get("matchup", {})
+    gc = matchup.get("goalieComparison", {})
+    logger.info(
+        "NHL API %s: top keys=%s, matchup keys=%s, goalieComparison keys=%s",
+        game_ext_id,
+        sorted(data.keys())[:15],
+        sorted(matchup.keys())[:10] if matchup else "NONE",
+        sorted(gc.keys())[:10] if gc else "NONE",
+    )
+    if gc:
+        for side_name in ("homeTeam", "awayTeam"):
+            side_gc = gc.get(side_name, {})
+            logger.info(
+                "NHL API %s goalieComparison.%s: keys=%s, sample=%.200s",
+                game_ext_id, side_name,
+                list(side_gc.keys()) if isinstance(side_gc, dict) else type(side_gc).__name__,
+                str(side_gc)[:200],
+            )
+
     for side, is_home in [("homeTeam", True), ("awayTeam", False)]:
         team_id = game.home_team_id if is_home else game.away_team_id
         goalie_info = _extract_nhl_goalie(data, side)
@@ -685,6 +705,11 @@ async def sync_confirmed_starters(db: AsyncSession) -> List[Dict[str, Any]]:
         # Source 3: NHL API — fill in any games still uncovered
         uncovered = [g for g in games if g.id not in covered_game_ids]
         if uncovered:
+            logger.info(
+                "NHL API: checking %d uncovered games: %s",
+                len(uncovered),
+                [g.external_id for g in uncovered],
+            )
             for game in uncovered:
                 try:
                     game_starters = await _fetch_nhl_api_starters(client, db, game)
@@ -693,8 +718,13 @@ async def sync_confirmed_starters(db: AsyncSession) -> List[Dict[str, Any]]:
                     starters.extend(game_starters)
                     if game_starters:
                         covered_game_ids.add(game.id)
+                        logger.info(
+                            "NHL API found starters for %s: %s",
+                            game.external_id,
+                            [(s["team_abbrev"], s["goalie_name"], s["status"]) for s in game_starters],
+                        )
                 except Exception as exc:
-                    logger.debug(
+                    logger.warning(
                         "NHL API starters failed for game %s: %s",
                         game.external_id, exc,
                     )
