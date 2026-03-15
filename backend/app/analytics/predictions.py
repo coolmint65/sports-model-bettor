@@ -602,6 +602,7 @@ class PredictionManager:
         if existing:
             # Update existing prediction with latest data
             existing.confidence = bet.get("confidence", existing.confidence)
+            existing.bet_confidence = bet.get("bet_confidence", existing.bet_confidence)
             existing.odds_implied_prob = bet.get("implied_probability", existing.odds_implied_prob)
             existing.edge = bet.get("edge", existing.edge)
             existing.reasoning = reasoning or existing.reasoning
@@ -623,6 +624,7 @@ class PredictionManager:
             return existing
 
         confidence = bet.get("confidence", 0.0)
+        bet_confidence = bet.get("bet_confidence")
         edge = bet.get("edge")
         implied_prob = bet.get("implied_probability")
         is_best = bet.get("is_best_bet", False)
@@ -632,6 +634,7 @@ class PredictionManager:
             bet_type=bet_type,
             prediction_value=prediction_value,
             confidence=confidence,
+            bet_confidence=bet_confidence,
             odds_implied_prob=implied_prob,
             edge=edge,
             recommended=(

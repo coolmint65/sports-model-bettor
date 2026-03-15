@@ -2209,12 +2209,14 @@ class BettingModel:
                     4,
                 )
 
-        # Compute composite edge score for each prediction
+        # Compute composite edge score and bet confidence for each prediction
         for pred in predictions:
-            pred["composite_edge"] = self.compute_composite_edge(features, pred)
+            composite = self.compute_composite_edge(features, pred)
+            pred["composite_edge"] = composite
+            pred["bet_confidence"] = composite.get("bet_confidence", 0.5)
 
-        # Sort by confidence descending
-        predictions.sort(key=lambda p: p["confidence"], reverse=True)
+        # Sort by bet confidence descending (how good of a bet is this?)
+        predictions.sort(key=lambda p: p.get("bet_confidence", 0), reverse=True)
 
         return predictions
 
@@ -2477,4 +2479,114 @@ class BettingModel:
             "composite_score": composite_score,
             "composite_grade": grade,
             "component_scores": {k: round(v, 3) for k, v in scores.items()},
+            "bet_confidence": self._compute_bet_confidence(
+                scores, weights, total_weight, features, prediction
+            ),
         }
+
+    def _compute_bet_confidence(
+        self,
+        component_scores: Dict[str, float],
+        weights: Dict[str, float],
+        total_weight: float,
+        features: Dict[str, Any],
+        prediction: Dict[str, Any],
+    ) -> float:
+        """Compute betting confidence (0.0-1.0): how sure are we this is a good bet?
+
+        Unlike win probability (capped by hockey randomness at ~60-65%), bet
+        confidence measures how strong and well-supported our EDGE is.  It
+        legitimately reaches 0.70-0.80 when multiple independent signals
+        align, data quality is high, and the market confirms our direction.
+
+        Components:
+        1. Signal strength — weighted composite of all 12+ factors (0-1)
+        2. Signal agreement — bonus when many signals point the same way
+        3. Data quality — penalty for missing starters, low sample sizes
+        4. Market confirmation — bonus when sharp money agrees
+        5. Edge magnitude — larger edges boost confidence
+
+        Returns a value between 0.0 and 0.95.
+        """
+        # --- 1. Base: weighted composite score (already 0-1 from component_scores) ---
+        base_score = (
+            sum(component_scores.get(k, 0.5) * w for k, w in weights.items())
+            / total_weight
+            if total_weight > 0
+            else 0.5
+        )
+
+        # --- 2. Signal agreement bonus ---
+        # Count how many independent signals favor this pick (score > 0.55)
+        # and how many oppose it (score < 0.45).
+        favorable = sum(1 for v in component_scores.values() if v > 0.55)
+        unfavorable = sum(1 for v in component_scores.values() if v < 0.45)
+        total_signals = len(component_scores)
+        # Agreement ratio: 1.0 when all signals agree, 0.0 when evenly split
+        if total_signals > 0:
+            agreement = (favorable - unfavorable) / total_signals
+        else:
+            agreement = 0.0
+        # Scale: +0.10 max bonus when all signals agree
+        agreement_bonus = max(0.0, agreement) * 0.10
+
+        # --- 3. Data quality factor (0.7 to 1.0) ---
+        # Penalize when critical data is uncertain or missing.
+        data_quality = 1.0
+
+        # Starter confidence: uncertain goalies are a big unknown
+        home_goalie = features.get("home_goalie", {})
+        away_goalie = features.get("away_goalie", {})
+        pred_team = prediction.get("prediction", "")
+        home_abbr = features.get("home_team_abbr", "")
+        is_home_pick = pred_team == home_abbr
+
+        my_goalie = home_goalie if is_home_pick else away_goalie
+        starter_conf = my_goalie.get("starter_confidence", _mc.starter_confidence_medium)
+        if starter_conf < _mc.starter_confidence_high:
+            data_quality -= 0.10  # unconfirmed starter
+        if starter_conf < _mc.starter_confidence_medium:
+            data_quality -= 0.10  # very uncertain starter
+
+        # Low sample size for advanced metrics
+        my_ev = features.get(
+            "home_ev_possession" if is_home_pick else "away_ev_possession", {}
+        )
+        if my_ev.get("games_found", 0) < _mc.ev_corsi_min_games:
+            data_quality -= 0.05
+
+        # H2H sample size
+        h2h = features.get("h2h", {})
+        if h2h.get("games_found", 0) < 3:
+            data_quality -= 0.05
+
+        data_quality = max(0.70, data_quality)
+
+        # --- 4. Market confirmation bonus ---
+        # When the model's pick aligns with sharp money movement, boost.
+        market_bonus = 0.0
+        lm = features.get("line_movement", {})
+        sharp = lm.get("sharp_signal", "neutral")
+        if is_home_pick and sharp == "sharp_home":
+            market_bonus = 0.08
+        elif not is_home_pick and sharp == "sharp_away":
+            market_bonus = 0.08
+
+        # Also: if our edge is positive AND implied prob agrees we're underpriced
+        edge = prediction.get("edge") or 0.0
+        if edge > 0.03:
+            market_bonus += 0.04  # meaningful edge over market
+
+        # --- 5. Edge magnitude bonus ---
+        # Larger edges (after calibration) are more convincing signals.
+        edge_bonus = min(0.08, max(0.0, edge) * 1.6)  # 5% edge → +0.08
+
+        # --- Combine ---
+        raw = base_score * data_quality + agreement_bonus + market_bonus + edge_bonus
+
+        # Scale to 0.30-0.90 range. A completely neutral game with no data
+        # issues scores ~0.50. A game with strong signal convergence, good
+        # data, market confirmation, and solid edge reaches 0.78-0.85.
+        bet_conf = max(0.30, min(0.90, raw))
+
+        return round(bet_conf, 3)

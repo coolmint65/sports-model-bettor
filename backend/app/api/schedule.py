@@ -52,6 +52,7 @@ class GameTopPick(BaseModel):
     bet_type: Optional[str] = None
     prediction_value: Optional[str] = None
     confidence: Optional[float] = None
+    bet_confidence: Optional[float] = None
     edge: Optional[float] = None
     composite_score: Optional[float] = None
     is_fallback: bool = False
@@ -463,6 +464,7 @@ async def _compute_top_picks(
                 bet_type=pred.bet_type,
                 prediction_value=pred.prediction_value,
                 confidence=pred.confidence,
+                bet_confidence=pred.bet_confidence,
                 edge=pred.edge,
                 is_fallback=False,
                 reasoning=pred.reasoning,
@@ -539,6 +541,7 @@ async def _compute_top_picks(
                     bet_type=pred.bet_type,
                     prediction_value=pred.prediction_value,
                     confidence=pred.confidence,
+                    bet_confidence=pred.bet_confidence,
                     edge=pred.edge,
                     is_fallback=pred.odds_implied_prob is None,
                     reasoning=pred.reasoning,
@@ -619,6 +622,7 @@ async def _compute_top_picks_by_market(
                 bet_type=best.bet_type,
                 prediction_value=best.prediction_value,
                 confidence=best.confidence,
+                bet_confidence=best.bet_confidence,
                 edge=best.edge,
                 is_fallback=best.odds_implied_prob is None,
                 reasoning=best.reasoning,
@@ -727,6 +731,7 @@ async def _compute_top_props(
             bet_type=best.bet_type,
             prediction_value=best.prediction_value,
             confidence=best.confidence,
+            bet_confidence=best.bet_confidence,
             edge=best.edge,
             is_fallback=False,
             reasoning=best.reasoning,

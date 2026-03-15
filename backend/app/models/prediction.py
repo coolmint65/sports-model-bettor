@@ -71,6 +71,9 @@ class Prediction(TimestampMixin, Base):
     confidence: Mapped[float] = mapped_column(
         Float, nullable=False
     )
+    bet_confidence: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True
+    )
     odds_implied_prob: Mapped[Optional[float]] = mapped_column(
         Float, nullable=True
     )

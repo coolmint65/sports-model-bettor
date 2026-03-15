@@ -154,6 +154,7 @@ class PredictionDetail(BaseModel):
     bet_type: Optional[str] = None
     prediction_value: Optional[str] = None
     confidence: Optional[float] = None
+    bet_confidence: Optional[float] = None
     edge: Optional[float] = None
     recommended: bool = False
     best_bet: bool = False

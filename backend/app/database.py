@@ -284,6 +284,8 @@ async def _migrate_add_columns() -> None:
         ("game", "home_starter_status", "VARCHAR(20)"),
         ("game", "away_starter_name", "VARCHAR(100)"),
         ("game", "away_starter_status", "VARCHAR(20)"),
+        # Bet confidence (signal-based, separate from win probability)
+        ("prediction", "bet_confidence", "FLOAT"),
     ]
 
     async with engine.begin() as conn:
