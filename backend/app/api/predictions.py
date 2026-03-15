@@ -988,10 +988,27 @@ async def regenerate_predictions():
     today = date.today()
     steps: list[str] = []
 
-    # Skip schedule sync here — it runs every 30 min via the background
-    # scheduler and every time via _run_full_sync.  Removing this shaves
-    # 5-15 seconds off regeneration, helping stay within the 120s timeout.
-    steps.append("schedule sync skipped (runs via scheduler)")
+    # Step 1: Sync starting goalies so predictions use the correct starters.
+    # Full schedule sync is skipped (runs via scheduler), but starters must
+    # be fresh so the model doesn't use the wrong goalie.
+    try:
+        async with get_write_session_context() as session:
+            stmt = select(Game).where(
+                Game.date == today,
+                func.lower(Game.status).in_((
+                    "scheduled", "preview", "pre-game", "pregame", "fut", "pre",
+                )),
+            )
+            result = await session.execute(stmt)
+            upcoming_games = result.scalars().all()
+            if upcoming_games:
+                from app.api.schedule import _fetch_starters_for_games
+                await _fetch_starters_for_games(upcoming_games, session)
+                await session.flush()
+        steps.append("starters synced")
+    except Exception as exc:
+        logger.warning("Regenerate: starter sync failed: %s", exc)
+        steps.append(f"starter sync failed: {exc}")
 
     # Step 2: Delete ALL predictions for today's games (not just prematch,
     # not just market types — nuke everything so the prematch lock is
