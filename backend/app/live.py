@@ -392,20 +392,20 @@ async def _scheduler_loop():
     - Live (~3h window): 3×60 = 180 syncs × 1 call = 180 credits
     - Pregame (~4h): 4×30 = 120 syncs × 1 call = 120 credits
     - Idle: negligible (~6/hr × remaining hours)
-    - Alt-line refresh: ~8 calls every 30min = ~16/hr
-    - Daily total: ~400-600 credits/game day vs ~8,000-12,000 before
+    - Alt-line refresh: ~8 calls every 60min = ~8/hr
+    - Daily budget target: ~200-400 credits/game day (20K plan = ~650/day)
     """
     global _scheduler_running
 
-    LIVE_INTERVAL = 60       # 60 seconds when games are live
-    PREGAME_INTERVAL = 120   # 120 seconds for pregame odds
-    IDLE_INTERVAL = 600      # 10 minutes when no games within 2h
-    OFF_DAY_INTERVAL = 1800  # 30 minutes on off days (schedule check only)
+    LIVE_INTERVAL = 120      # 120 seconds when games are live (was 60)
+    PREGAME_INTERVAL = 300   # 5 minutes for pregame odds (was 120)
+    IDLE_INTERVAL = 900      # 15 minutes when no games within 2h (was 600)
+    OFF_DAY_INTERVAL = 3600  # 60 minutes on off days (was 1800)
     PREGAME_WINDOW_HOURS = 2 # Start syncing 2h before first game
     PRED_REGEN_INTERVAL = 300  # 5 minutes between prediction regenerations
-    FULL_SYNC_INTERVAL = 1800  # 30 minutes for full data refresh
-    ALT_REFRESH_INTERVAL = 1800  # 30 min — refresh alternate lines
-    PROPS_SYNC_INTERVAL = 1800   # 30 min — sync player props
+    FULL_SYNC_INTERVAL = 3600  # 60 minutes for full data refresh (was 1800)
+    ALT_REFRESH_INTERVAL = 3600  # 60 min — refresh alternate lines (was 1800)
+    PROPS_SYNC_INTERVAL = 3600   # 60 min — sync player props (was 1800)
     STARTER_SYNC_INTERVAL = 900  # 15 min — check confirmed starters
 
     _scheduler_running = True
@@ -515,12 +515,11 @@ async def _scheduler_loop():
                     last_alt_refresh = now
                     logger.info("Alt-line cache refreshed")
 
-            # Sync player props whenever there are games today (not just
-            # within the 2h pregame window). Props are valuable for
-            # pre-game analysis and should be available well before
-            # game time.  Still throttled to every 30 min to stay
-            # within the credit budget.
-            if has_games_today:
+            # Sync player props only when games are upcoming (not yet
+            # started).  Once games go live, prop picks are already
+            # frozen in PropPickSnapshot — refreshing props mid-game
+            # just burns Odds API credits for no benefit.
+            if has_games_today and live_count == 0:
                 now = loop.time()
                 if now - last_props_sync >= PROPS_SYNC_INTERVAL:
                     await _sync_player_props()

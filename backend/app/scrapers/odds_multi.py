@@ -379,6 +379,14 @@ async def _make_request(
                 timeout=timeout,
             )
             if resp.status_code == 200:
+                # Log Odds API credit usage from response headers
+                used = resp.headers.get("x-requests-used")
+                remaining = resp.headers.get("x-requests-remaining")
+                if used or remaining:
+                    logger.info(
+                        "Odds API credits: used=%s remaining=%s (%s)",
+                        used or "?", remaining or "?", _log_url,
+                    )
                 return resp.json()
             # Retry on 429 with exponential backoff
             if resp.status_code == 429 and attempt < max_retries:
@@ -1542,7 +1550,7 @@ _ODDS_API_CACHE_TTL = 10.0  # seconds
 # ---------------------------------------------------------------------------
 _alt_line_cache: Dict[str, Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]] = {}
 _alt_line_cache_ts: float = 0.0  # monotonic timestamp of last full refresh
-_ALT_LINE_CACHE_TTL: float = 1800.0  # 30 minutes
+_ALT_LINE_CACHE_TTL: float = 3600.0  # 60 minutes (conserve Odds API credits)
 
 
 async def _fetch_odds_api_raw(
@@ -1578,18 +1586,16 @@ async def _fetch_odds_api_raw(
     # Try market sets in order: full (with period markets) then core-only.
     # All Odds API plans include all markets, but some combinations may
     # fail with certain region/market combos, so we fall back gracefully.
+    # NOTE: Each market × region counts as a credit.  Stick to core
+    # markets and a single region to conserve the monthly budget.
     _MARKET_SETS = [
-        "h2h,spreads,totals,h2h_h1,spreads_h1,totals_h1,h2h_3",
-        "h2h,spreads,totals,h2h_3",
         "h2h,spreads,totals",
     ]
 
-    # Request combined us+us2 regions to get ALL US sportsbooks in one
-    # API call.  This includes FanDuel, DraftKings, BetMGM, Caesars,
-    # PointsBet, Hard Rock, Bet365, etc.  Fall back to individual
-    # regions if the combined request doesn't work.
+    # Use a single region to halve credit usage.  "us" covers
+    # FanDuel, DraftKings, BetMGM, Caesars which is sufficient.
     for markets in _MARKET_SETS:
-        for region in ("us,us2", "us", "us2"):
+        for region in ("us",):
             params = {
                 "apiKey": api_key,
                 "regions": region,

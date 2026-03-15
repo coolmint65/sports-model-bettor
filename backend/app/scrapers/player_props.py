@@ -50,7 +50,7 @@ PROP_MARKETS_CSV = ",".join(PROP_MARKETS)
 
 _props_cache: Dict[str, List[Dict[str, Any]]] = {}  # event_id -> parsed props
 _props_cache_ts: float = 0.0
-_PROPS_CACHE_TTL: float = 1800.0  # 30 minutes
+_PROPS_CACHE_TTL: float = 3600.0  # 60 minutes (conserve Odds API credits)
 
 
 def props_cache_fresh() -> bool:
@@ -78,6 +78,14 @@ async def _make_request(
         try:
             resp = await client.get(url, params=params, timeout=timeout)
             if resp.status_code == 200:
+                # Log Odds API credit usage from response headers
+                used = resp.headers.get("x-requests-used")
+                remaining = resp.headers.get("x-requests-remaining")
+                if used or remaining:
+                    logger.info(
+                        "Props API credits: used=%s remaining=%s (%s)",
+                        used or "?", remaining or "?", _log_url,
+                    )
                 return resp.json()
             if resp.status_code == 429 and attempt < max_retries:
                 wait = 2 ** attempt
