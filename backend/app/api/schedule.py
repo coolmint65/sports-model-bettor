@@ -792,6 +792,10 @@ async def _fetch_starters_for_games(
 
     if missing_team_ids:
         db_goalie_map = await _db_fallback_starters(session, missing_team_ids)
+        logger.info(
+            "Goalie DB fallback: filled %d/%d teams missing from scrapers",
+            len(db_goalie_map), len(missing_team_ids),
+        )
         for g in upcoming:
             if g.id not in starters_map:
                 starters_map[g.id] = {}

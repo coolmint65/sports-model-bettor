@@ -320,7 +320,7 @@ async def _fetch_rotowire_starters(
     RotoWire serves lightweight HTML (no JS rendering needed) and is
     a reliable backup when DailyFaceoff blocks or requires JS.
     """
-    url = "https://www.rotowire.com/hockey/goalie-matchups.php"
+    url = "https://www.rotowire.com/hockey/starting-goalies.php"
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -554,15 +554,20 @@ async def sync_confirmed_starters(db: AsyncSession) -> List[Dict[str, Any]]:
         dfo_games = await _fetch_dailyfaceoff_starters(client, today)
         if dfo_games:
             for dfo_game in dfo_games:
+                raw_away = dfo_game.get("away_team", "")
+                raw_home = dfo_game.get("home_team", "")
                 # Try to match DFO game to our DB games
-                away_abbrev = _match_team_abbrev(
-                    dfo_game.get("away_team", ""), team_by_abbrev,
-                )
-                home_abbrev = _match_team_abbrev(
-                    dfo_game.get("home_team", ""), team_by_abbrev,
-                )
+                away_abbrev = _match_team_abbrev(raw_away, team_by_abbrev)
+                home_abbrev = _match_team_abbrev(raw_home, team_by_abbrev)
 
                 if not away_abbrev or not home_abbrev:
+                    logger.warning(
+                        "DFO match failed: away=%r→%s, home=%r→%s, "
+                        "goalies=%s vs %s",
+                        raw_away, away_abbrev, raw_home, home_abbrev,
+                        dfo_game.get("away_goalie", "?"),
+                        dfo_game.get("home_goalie", "?"),
+                    )
                     continue
 
                 away_team_id = team_by_abbrev.get(away_abbrev)
