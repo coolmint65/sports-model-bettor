@@ -858,14 +858,24 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
   const homeRank = home.division_rank || '-';
   const awayRank = away.division_rank || '-';
 
+  const lg = game.league_averages || {};
+
+  // Color-code stats vs league average: green = favorable, red = unfavorable
+  const statColor = (val, avg, higherIsBetter = true) => {
+    if (val == null || avg == null) return '';
+    const diff = val - avg;
+    if (higherIsBetter) return diff >= 0 ? 'gd-stat-good' : 'gd-stat-bad';
+    return diff <= 0 ? 'gd-stat-good' : 'gd-stat-bad';
+  };
+
   const perfStats = [
-    { label: 'Goals For/Game', homeVal: fmtStat(home.goals_for_per_game), awayVal: fmtStat(away.goals_for_per_game) },
-    { label: 'Goals Against/Game', homeVal: fmtStat(home.goals_against_per_game), awayVal: fmtStat(away.goals_against_per_game) },
-    { label: 'Power Play %', homeVal: fmtStat(home.power_play_pct, true), awayVal: fmtStat(away.power_play_pct, true) },
-    { label: 'Penalty Kill %', homeVal: fmtStat(home.penalty_kill_pct, true), awayVal: fmtStat(away.penalty_kill_pct, true) },
-    { label: 'Shots For/Game', homeVal: fmtStat(home.shots_for_per_game), awayVal: fmtStat(away.shots_for_per_game) },
-    { label: 'Shots Against/Game', homeVal: fmtStat(home.shots_against_per_game), awayVal: fmtStat(away.shots_against_per_game) },
-    { label: 'Faceoff Win %', homeVal: fmtStat(home.faceoff_win_pct, true), awayVal: fmtStat(away.faceoff_win_pct, true) },
+    { label: 'Goals For/Game', homeVal: fmtStat(home.goals_for_per_game), awayVal: fmtStat(away.goals_for_per_game), homeClass: statColor(home.goals_for_per_game, lg.goals_for_per_game), awayClass: statColor(away.goals_for_per_game, lg.goals_for_per_game), avg: fmtStat(lg.goals_for_per_game) },
+    { label: 'Goals Against/Game', homeVal: fmtStat(home.goals_against_per_game), awayVal: fmtStat(away.goals_against_per_game), homeClass: statColor(home.goals_against_per_game, lg.goals_against_per_game, false), awayClass: statColor(away.goals_against_per_game, lg.goals_against_per_game, false), avg: fmtStat(lg.goals_against_per_game) },
+    { label: 'Power Play %', homeVal: fmtStat(home.power_play_pct, true), awayVal: fmtStat(away.power_play_pct, true), homeClass: statColor(home.power_play_pct, lg.power_play_pct), awayClass: statColor(away.power_play_pct, lg.power_play_pct), avg: fmtStat(lg.power_play_pct, true) },
+    { label: 'Penalty Kill %', homeVal: fmtStat(home.penalty_kill_pct, true), awayVal: fmtStat(away.penalty_kill_pct, true), homeClass: statColor(home.penalty_kill_pct, lg.penalty_kill_pct), awayClass: statColor(away.penalty_kill_pct, lg.penalty_kill_pct), avg: fmtStat(lg.penalty_kill_pct, true) },
+    { label: 'Shots For/Game', homeVal: fmtStat(home.shots_for_per_game), awayVal: fmtStat(away.shots_for_per_game), homeClass: statColor(home.shots_for_per_game, lg.shots_for_per_game), awayClass: statColor(away.shots_for_per_game, lg.shots_for_per_game), avg: fmtStat(lg.shots_for_per_game) },
+    { label: 'Shots Against/Game', homeVal: fmtStat(home.shots_against_per_game), awayVal: fmtStat(away.shots_against_per_game), homeClass: statColor(home.shots_against_per_game, lg.shots_against_per_game, false), awayClass: statColor(away.shots_against_per_game, lg.shots_against_per_game, false), avg: fmtStat(lg.shots_against_per_game) },
+    { label: 'Faceoff Win %', homeVal: fmtStat(home.faceoff_win_pct, true), awayVal: fmtStat(away.faceoff_win_pct, true), homeClass: statColor(home.faceoff_win_pct, lg.faceoff_win_pct), awayClass: statColor(away.faceoff_win_pct, lg.faceoff_win_pct), avg: fmtStat(lg.faceoff_win_pct, true) },
   ];
 
   // Compute ATS-like record from recent games
@@ -926,13 +936,21 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
 
         <div className="gd-perf-section">
           <h4 className="gd-perf-title">KEY PERFORMANCE STATS</h4>
-          <div className="gd-perf-grid">
+          <div className="gd-perf-grid gd-perf-grid-3col">
             <div className="gd-perf-col">
               <div className="gd-perf-team-label">{homeLabel}</div>
               {perfStats.map((s) => (
                 <div key={s.label} className="gd-perf-row">
                   <span className="gd-perf-stat-label">{s.label}</span>
-                  <span className="gd-perf-stat-val">{s.homeVal}</span>
+                  <span className={`gd-perf-stat-val ${s.homeClass || ''}`}>{s.homeVal}</span>
+                </div>
+              ))}
+            </div>
+            <div className="gd-perf-col gd-perf-col-avg">
+              <div className="gd-perf-team-label gd-perf-avg-label">Lg Avg</div>
+              {perfStats.map((s) => (
+                <div key={s.label} className="gd-perf-row">
+                  <span className="gd-perf-stat-val gd-perf-avg-val">{s.avg || '-'}</span>
                 </div>
               ))}
             </div>
@@ -941,7 +959,7 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
               {perfStats.map((s) => (
                 <div key={s.label} className="gd-perf-row">
                   <span className="gd-perf-stat-label">{s.label}</span>
-                  <span className="gd-perf-stat-val">{s.awayVal}</span>
+                  <span className={`gd-perf-stat-val ${s.awayClass || ''}`}>{s.awayVal}</span>
                 </div>
               ))}
             </div>

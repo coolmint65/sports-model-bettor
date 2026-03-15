@@ -6046,6 +6046,11 @@ a:hover {
   gap: 12px;
 }
 
+.gd-perf-grid.gd-perf-grid-3col {
+  grid-template-columns: 1fr auto 1fr;
+  gap: 8px;
+}
+
 .gd-perf-col {
   display: flex;
   flex-direction: column;
@@ -6075,6 +6080,30 @@ a:hover {
   font-family: var(--font-mono);
   font-weight: 700;
   color: var(--text-primary);
+}
+
+.gd-perf-stat-val.gd-stat-good {
+  color: var(--accent-green, #4ade80);
+}
+
+.gd-perf-stat-val.gd-stat-bad {
+  color: #e57373;
+}
+
+.gd-perf-col-avg {
+  min-width: 50px;
+  text-align: center;
+}
+
+.gd-perf-avg-label {
+  color: var(--text-muted) !important;
+  font-size: 0.7rem;
+}
+
+.gd-perf-avg-val {
+  color: var(--text-muted) !important;
+  font-weight: 400 !important;
+  font-size: 0.75rem;
 }
 
 /* ─── Betting Trends ──────────────────────────────────── */

@@ -229,6 +229,8 @@ class GameDetailResponse(BaseModel):
     predictions: List[GamePredictionBrief] = []
     top_pick: Optional[Dict[str, Any]] = None
 
+    league_averages: Optional[Dict[str, float]] = None
+
 
 class PredictionResponse(BaseModel):
     """Prediction list response for a game."""
@@ -378,6 +380,33 @@ async def _get_recent_games(
             overtime=ot,
         ))
     return results
+
+
+async def _get_league_averages(session: AsyncSession, season: str) -> Dict[str, float]:
+    """Compute league-wide averages for key stats from all teams in a season."""
+    result = await session.execute(
+        select(TeamStats).where(
+            TeamStats.season == season,
+            TeamStats.games_played > 0,
+        )
+    )
+    all_stats = result.scalars().all()
+    if not all_stats:
+        return {}
+
+    def _avg(attr):
+        vals = [getattr(s, attr) for s in all_stats if getattr(s, attr) is not None]
+        return round(sum(vals) / len(vals), 2) if vals else None
+
+    return {
+        "goals_for_per_game": _avg("goals_for_per_game"),
+        "goals_against_per_game": _avg("goals_against_per_game"),
+        "power_play_pct": _avg("power_play_pct"),
+        "penalty_kill_pct": _avg("penalty_kill_pct"),
+        "shots_for_per_game": _avg("shots_for_per_game"),
+        "shots_against_per_game": _avg("shots_against_per_game"),
+        "faceoff_win_pct": _avg("faceoff_win_pct"),
+    }
 
 
 async def _get_head_to_head(
@@ -769,6 +798,7 @@ async def get_game_details(
     # Gather all analytics data
     home_form = await _get_team_form(game.home_team, session)
     away_form = await _get_team_form(game.away_team, session)
+    league_avgs = await _get_league_averages(session, game.season)
     h2h = await _get_head_to_head(game.home_team_id, game.away_team_id, session)
     h2h_game_records = await _get_h2h_games(game.home_team_id, game.away_team_id, session)
     if h2h is None:
@@ -913,6 +943,7 @@ async def get_game_details(
         away_goalies=away_goalies,
         predictions=predictions,
         top_pick=top_pick_dict,
+        league_averages=league_avgs or None,
     )
 
 
