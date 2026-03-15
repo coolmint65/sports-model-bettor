@@ -13,7 +13,7 @@ independent scoring events (goals in hockey).
 
 import logging
 import math
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from scipy.stats import poisson
 
