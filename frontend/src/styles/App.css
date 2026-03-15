@@ -6143,6 +6143,13 @@ a:hover {
   color: #e57373;
 }
 
+.gd-perf-rank {
+  font-size: 0.6rem;
+  color: var(--text-muted);
+  margin-left: 4px;
+  font-weight: 400;
+}
+
 /* ─── Betting Trends ──────────────────────────────────── */
 .gd-trends-content {
   display: flex;

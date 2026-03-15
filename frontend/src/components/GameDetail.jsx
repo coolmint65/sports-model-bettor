@@ -859,6 +859,9 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
   const awayRank = away.division_rank || '-';
 
   const lg = game.league_averages || {};
+  const homeRanks = lg.home_ranks || {};
+  const awayRanks = lg.away_ranks || {};
+  const totalTeams = lg.total_teams || 32;
 
   // Color-code stats vs league average: green = favorable, red = unfavorable
   const statColor = (val, avg, higherIsBetter = true) => {
@@ -868,14 +871,27 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
     return diff <= 0 ? 'gd-stat-good' : 'gd-stat-bad';
   };
 
+  const fmtRank = (rank) => rank != null ? `#${rank}` : '';
+
+  const makeStat = (label, key, isPct = false, higherIsBetter = true) => ({
+    label,
+    homeVal: fmtStat(home[key], isPct),
+    awayVal: fmtStat(away[key], isPct),
+    homeClass: statColor(home[key], lg[key], higherIsBetter),
+    awayClass: statColor(away[key], lg[key], higherIsBetter),
+    homeRank: fmtRank(homeRanks[key]),
+    awayRank: fmtRank(awayRanks[key]),
+    avg: fmtStat(lg[key], isPct),
+  });
+
   const perfStats = [
-    { label: 'Goals For/Game', homeVal: fmtStat(home.goals_for_per_game), awayVal: fmtStat(away.goals_for_per_game), homeClass: statColor(home.goals_for_per_game, lg.goals_for_per_game), awayClass: statColor(away.goals_for_per_game, lg.goals_for_per_game), avg: fmtStat(lg.goals_for_per_game) },
-    { label: 'Goals Against/Game', homeVal: fmtStat(home.goals_against_per_game), awayVal: fmtStat(away.goals_against_per_game), homeClass: statColor(home.goals_against_per_game, lg.goals_against_per_game, false), awayClass: statColor(away.goals_against_per_game, lg.goals_against_per_game, false), avg: fmtStat(lg.goals_against_per_game) },
-    { label: 'Power Play %', homeVal: fmtStat(home.power_play_pct, true), awayVal: fmtStat(away.power_play_pct, true), homeClass: statColor(home.power_play_pct, lg.power_play_pct), awayClass: statColor(away.power_play_pct, lg.power_play_pct), avg: fmtStat(lg.power_play_pct, true) },
-    { label: 'Penalty Kill %', homeVal: fmtStat(home.penalty_kill_pct, true), awayVal: fmtStat(away.penalty_kill_pct, true), homeClass: statColor(home.penalty_kill_pct, lg.penalty_kill_pct), awayClass: statColor(away.penalty_kill_pct, lg.penalty_kill_pct), avg: fmtStat(lg.penalty_kill_pct, true) },
-    { label: 'Shots For/Game', homeVal: fmtStat(home.shots_for_per_game), awayVal: fmtStat(away.shots_for_per_game), homeClass: statColor(home.shots_for_per_game, lg.shots_for_per_game), awayClass: statColor(away.shots_for_per_game, lg.shots_for_per_game), avg: fmtStat(lg.shots_for_per_game) },
-    { label: 'Shots Against/Game', homeVal: fmtStat(home.shots_against_per_game), awayVal: fmtStat(away.shots_against_per_game), homeClass: statColor(home.shots_against_per_game, lg.shots_against_per_game, false), awayClass: statColor(away.shots_against_per_game, lg.shots_against_per_game, false), avg: fmtStat(lg.shots_against_per_game) },
-    { label: 'Faceoff Win %', homeVal: fmtStat(home.faceoff_win_pct, true), awayVal: fmtStat(away.faceoff_win_pct, true), homeClass: statColor(home.faceoff_win_pct, lg.faceoff_win_pct), awayClass: statColor(away.faceoff_win_pct, lg.faceoff_win_pct), avg: fmtStat(lg.faceoff_win_pct, true) },
+    makeStat('Goals For/Game', 'goals_for_per_game'),
+    makeStat('Goals Against/Game', 'goals_against_per_game', false, false),
+    makeStat('Power Play %', 'power_play_pct', true),
+    makeStat('Penalty Kill %', 'penalty_kill_pct', true),
+    makeStat('Shots For/Game', 'shots_for_per_game'),
+    makeStat('Shots Against/Game', 'shots_against_per_game', false, false),
+    makeStat('Faceoff Win %', 'faceoff_win_pct', true),
   ];
 
   // Compute ATS-like record from recent games
@@ -948,10 +964,16 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
             <tbody>
               {perfStats.map((s) => (
                 <tr key={s.label}>
-                  <td className={`gd-perf-td gd-perf-td-val ${s.homeClass || ''}`}>{s.homeVal}</td>
+                  <td className={`gd-perf-td gd-perf-td-val ${s.homeClass || ''}`}>
+                    {s.homeVal}
+                    {s.homeRank && <span className="gd-perf-rank">{s.homeRank}</span>}
+                  </td>
                   <td className="gd-perf-td gd-perf-td-label">{s.label}</td>
                   <td className="gd-perf-td gd-perf-td-avg">{s.avg || '-'}</td>
-                  <td className={`gd-perf-td gd-perf-td-val ${s.awayClass || ''}`}>{s.awayVal}</td>
+                  <td className={`gd-perf-td gd-perf-td-val ${s.awayClass || ''}`}>
+                    {s.awayVal}
+                    {s.awayRank && <span className="gd-perf-rank">{s.awayRank}</span>}
+                  </td>
                 </tr>
               ))}
             </tbody>

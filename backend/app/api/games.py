@@ -382,8 +382,10 @@ async def _get_recent_games(
     return results
 
 
-async def _get_league_averages(session: AsyncSession, season: str) -> Dict[str, float]:
-    """Compute league-wide averages for key stats from all teams in a season."""
+async def _get_league_context(
+    session: AsyncSession, season: str, home_team_id: int, away_team_id: int,
+) -> Dict[str, Any]:
+    """Compute league averages and per-team ranks for key stats."""
     result = await session.execute(
         select(TeamStats).where(
             TeamStats.season == season,
@@ -394,18 +396,41 @@ async def _get_league_averages(session: AsyncSession, season: str) -> Dict[str, 
     if not all_stats:
         return {}
 
+    stat_keys = [
+        "goals_for_per_game", "goals_against_per_game",
+        "power_play_pct", "penalty_kill_pct",
+        "shots_for_per_game", "shots_against_per_game",
+        "faceoff_win_pct",
+    ]
+    # Stats where lower is better (rank 1 = lowest)
+    lower_is_better = {"goals_against_per_game", "shots_against_per_game"}
+
     def _avg(attr):
         vals = [getattr(s, attr) for s in all_stats if getattr(s, attr) is not None]
         return round(sum(vals) / len(vals), 2) if vals else None
 
+    averages = {k: _avg(k) for k in stat_keys}
+
+    # Compute ranks for both teams
+    def _rank(attr, team_id):
+        vals = [(getattr(s, attr), s.team_id) for s in all_stats if getattr(s, attr) is not None]
+        if not vals:
+            return None
+        reverse = attr not in lower_is_better  # higher is better = descending sort
+        vals.sort(key=lambda x: x[0], reverse=reverse)
+        for i, (_, tid) in enumerate(vals, 1):
+            if tid == team_id:
+                return i
+        return None
+
+    home_ranks = {k: _rank(k, home_team_id) for k in stat_keys}
+    away_ranks = {k: _rank(k, away_team_id) for k in stat_keys}
+
     return {
-        "goals_for_per_game": _avg("goals_for_per_game"),
-        "goals_against_per_game": _avg("goals_against_per_game"),
-        "power_play_pct": _avg("power_play_pct"),
-        "penalty_kill_pct": _avg("penalty_kill_pct"),
-        "shots_for_per_game": _avg("shots_for_per_game"),
-        "shots_against_per_game": _avg("shots_against_per_game"),
-        "faceoff_win_pct": _avg("faceoff_win_pct"),
+        **averages,
+        "home_ranks": home_ranks,
+        "away_ranks": away_ranks,
+        "total_teams": len(all_stats),
     }
 
 
@@ -798,44 +823,29 @@ async def get_game_details(
     # Gather all analytics data
     home_form = await _get_team_form(game.home_team, session)
     away_form = await _get_team_form(game.away_team, session)
-    league_avgs = await _get_league_averages(session, game.season)
+    league_avgs = await _get_league_context(session, game.season, game.home_team_id, game.away_team_id)
     h2h = await _get_head_to_head(game.home_team_id, game.away_team_id, session)
     h2h_game_records = await _get_h2h_games(game.home_team_id, game.away_team_id, session)
-    if h2h is None:
-        # Diagnostic: check what games exist for these teams
-        from sqlalchemy import func as sqla_func
+    if not h2h_game_records:
+        # Diagnostic: check what games exist between these teams
         t1, t2 = game.home_team_id, game.away_team_id
-
-        # Count games involving either team
-        for tid, label in [(t1, "home"), (t2, "away")]:
-            cnt_result = await session.execute(
-                select(sqla_func.count(Game.id)).where(
-                    or_(Game.home_team_id == tid, Game.away_team_id == tid),
-                    sqla_func.lower(Game.status).in_(GAME_FINAL_STATUSES),
-                )
+        h2h_any_result = await session.execute(
+            select(Game.id, Game.date, Game.status, Game.game_type, Game.home_score, Game.away_score)
+            .where(
+                or_(
+                    and_(Game.home_team_id == t1, Game.away_team_id == t2),
+                    and_(Game.home_team_id == t2, Game.away_team_id == t1),
+                ),
             )
-            cnt = cnt_result.scalar() or 0
-
-            # Check for any games between these two teams regardless of filters
-            h2h_any_result = await session.execute(
-                select(Game.id, Game.date, Game.status, Game.game_type, Game.home_score, Game.away_score)
-                .where(
-                    or_(
-                        and_(Game.home_team_id == t1, Game.away_team_id == t2),
-                        and_(Game.home_team_id == t2, Game.away_team_id == t1),
-                    ),
-                )
-                .order_by(Game.date.desc())
-                .limit(5)
-            )
-            h2h_any = h2h_any_result.all()
-            if label == "home":
-                logger.warning(
-                    "H2H debug: team %d has %d completed games. "
-                    "Games between %d and %d (any status): %s",
-                    tid, cnt, t1, t2,
-                    [(r.date, r.status, r.game_type, r.home_score, r.away_score) for r in h2h_any] if h2h_any else "NONE",
-                )
+            .order_by(Game.date.desc())
+            .limit(5)
+        )
+        h2h_any = h2h_any_result.all()
+        logger.warning(
+            "H2H empty for teams %d vs %d. All games between them (any status): %s",
+            t1, t2,
+            [(str(r.date), r.status, r.game_type, r.home_score, r.away_score) for r in h2h_any] if h2h_any else "NONE",
+        )
     home_period = await _compute_period_scoring(game.home_team_id, session)
     away_period = await _compute_period_scoring(game.away_team_id, session)
     home_goalies = await _get_team_goalies(game.home_team_id, session)
