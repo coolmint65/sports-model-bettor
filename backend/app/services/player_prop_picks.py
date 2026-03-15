@@ -1210,6 +1210,53 @@ def _analyze_over_under(
 # Main generation pipeline
 # ---------------------------------------------------------------------------
 
+# Position groups for player disambiguation
+_FORWARD_POSITIONS = {"C", "LW", "RW", "F"}
+_SKATER_POSITIONS = {"C", "LW", "RW", "F", "D"}
+
+
+def _disambiguate_player(candidates: List[Player], market: str) -> Player:
+    """Pick the most likely player when multiple share the same name.
+
+    For scoring/shooting props (goals, points, assists, SOG), prefer
+    forwards over defensemen — sportsbooks almost always mean the
+    higher-scoring forward when the name is ambiguous.
+
+    For saves props, prefer goalies.
+
+    As a final tiebreaker, prefer the player with the lower jersey
+    number or higher external_id (typically the more established player
+    who was registered first).
+    """
+    if market == "player_total_saves":
+        goalies = [p for p in candidates if (p.position or "").upper() == "G"]
+        if goalies:
+            return goalies[0]
+
+    # Scoring / shooting props — prefer forwards over D
+    if market in (
+        "player_goal_scorer_anytime",
+        "player_points",
+        "player_assists",
+        "player_shots_on_goal",
+    ):
+        forwards = [
+            p for p in candidates
+            if (p.position or "").upper() in _FORWARD_POSITIONS
+        ]
+        if forwards:
+            return forwards[0]
+        skaters = [
+            p for p in candidates
+            if (p.position or "").upper() in _SKATER_POSITIONS
+        ]
+        if skaters:
+            return skaters[0]
+
+    # Fallback: return the first candidate (arbitrary but stable)
+    return candidates[0]
+
+
 async def generate_prop_picks(
     session: AsyncSession,
     game_id: int,
@@ -1253,13 +1300,17 @@ async def generate_prop_picks(
     )
     all_players = players_result.scalars().all()
 
-    # Build lookup by lowercase name and last name
-    player_by_name: Dict[str, Player] = {}
+    # Build lookup by player ID (most reliable) and by name
+    player_by_id: Dict[int, Player] = {p.id: p for p in all_players}
+    # For name-based lookup, track duplicates so we can disambiguate
+    player_by_name: Dict[str, List[Player]] = {}
     for p in all_players:
-        player_by_name[p.name.lower()] = p
+        key = p.name.lower()
+        player_by_name.setdefault(key, []).append(p)
         parts = p.name.split()
         if len(parts) >= 2:
-            player_by_name[parts[-1].lower()] = p
+            last = parts[-1].lower()
+            player_by_name.setdefault(last, []).append(p)
 
     # --- Injury filtering (#2) ---
     injured_players = await _get_injured_player_ids(session, team_ids)
@@ -1276,13 +1327,28 @@ async def generate_prop_picks(
     picks: List[PropPick] = []
 
     for prop in all_props:
-        # Match prop player to our Player record
-        player = player_by_name.get(prop.player_name.lower())
+        # Match prop player to our Player record.
+        # Prefer the explicit player_id FK when available (most reliable).
+        player = None
+        if prop.player_id and prop.player_id in player_by_id:
+            player = player_by_id[prop.player_id]
+
         if player is None:
-            # Try last name
-            parts = prop.player_name.split()
-            if len(parts) >= 2:
-                player = player_by_name.get(parts[-1].lower())
+            # Fall back to name-based matching with disambiguation
+            candidates = player_by_name.get(prop.player_name.lower(), [])
+            if not candidates:
+                # Try last name
+                parts = prop.player_name.split()
+                if len(parts) >= 2:
+                    candidates = player_by_name.get(parts[-1].lower(), [])
+
+            if len(candidates) == 1:
+                player = candidates[0]
+            elif len(candidates) > 1:
+                # Disambiguate: for scoring/shooting props, prefer forwards
+                # (C, LW, RW) over defensemen (D). For save props, prefer G.
+                player = _disambiguate_player(candidates, prop.market)
+
         if player is None:
             continue
 
