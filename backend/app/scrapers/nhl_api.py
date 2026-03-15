@@ -275,14 +275,29 @@ class NHLScraper(BaseScraper):
                 v = float(v)
                 return round(v * 100, 2) if v <= 1.0 else round(v, 2)
 
+            # Build teamId → abbreviation map from the data itself
+            # The summary endpoint doesn't include teamTriCode/teamAbbrev,
+            # so we need to map from teamFullName or teamId.
+            _TEAM_ID_TO_ABBREV = {
+                24: "ANA", 53: "ARI", 6: "BOS", 7: "BUF", 20: "CGY",
+                12: "CAR", 16: "CHI", 21: "COL", 29: "CBJ", 25: "DAL",
+                17: "DET", 22: "EDM", 13: "FLA", 26: "LAK", 30: "MIN",
+                8: "MTL", 18: "NSH", 1: "NJD", 2: "NYI", 3: "NYR",
+                9: "OTT", 4: "PHI", 5: "PIT", 28: "SJS", 55: "SEA",
+                19: "STL", 14: "TBL", 10: "TOR", 23: "VAN", 54: "VGK",
+                15: "WSH", 52: "WPG", 68: "UTA",
+            }
+
             results = {}
             for team in data.get("data", []):
                 abbrev = (
                     team.get("teamTriCode")
                     or team.get("teamAbbrev", {}).get("default")
                     or team.get("teamAbbrev")
+                    or _TEAM_ID_TO_ABBREV.get(team.get("teamId"))
                 )
                 if not abbrev or not isinstance(abbrev, str):
+                    logger.debug("Skipping summary team: no abbrev for %s", team.get("teamFullName"))
                     continue
 
                 # NHL API returns PP%/PK% as decimals (0.214) or percentages (21.4)
