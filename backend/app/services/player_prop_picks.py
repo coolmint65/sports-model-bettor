@@ -225,13 +225,15 @@ async def _get_skater_game_stats(
     session: AsyncSession,
     player_id: int,
     team_id: int,
+    exclude_game_id: Optional[int] = None,
 ) -> List[GamePlayerStats]:
     """Get recent game stats for a skater, ordered by most recent.
 
     Eager-loads the Game relationship so callers can determine
-    home/away and compute rest days.
+    home/away and compute rest days.  Excludes the current game
+    to prevent look-ahead bias when re-analyzing after final.
     """
-    result = await session.execute(
+    query = (
         select(GamePlayerStats)
         .join(Game, Game.id == GamePlayerStats.game_id)
         .options(selectinload(GamePlayerStats.game))
@@ -241,8 +243,11 @@ async def _get_skater_game_stats(
             Game.home_team_id.in_([team_id])
             | Game.away_team_id.in_([team_id]),
         )
-        .order_by(desc(Game.date))
-        .limit(RECENT_GAMES_WINDOW)
+    )
+    if exclude_game_id is not None:
+        query = query.where(Game.id != exclude_game_id)
+    result = await session.execute(
+        query.order_by(desc(Game.date)).limit(RECENT_GAMES_WINDOW)
     )
     return list(result.scalars().all())
 
@@ -250,14 +255,16 @@ async def _get_skater_game_stats(
 async def _get_goalie_game_stats(
     session: AsyncSession,
     player_id: int,
+    exclude_game_id: Optional[int] = None,
 ) -> List[GameGoalieStats]:
     """Get recent game stats for a goalie, ordered by most recent.
 
     Filters to completed games and meaningful appearances (>= 30 min TOI)
     to exclude relief appearances that would skew save averages.
     Eager-loads the Game relationship for home/away and rest tracking.
+    Excludes the current game to prevent look-ahead bias.
     """
-    result = await session.execute(
+    query = (
         select(GameGoalieStats)
         .join(Game, Game.id == GameGoalieStats.game_id)
         .options(selectinload(GameGoalieStats.game))
@@ -267,8 +274,11 @@ async def _get_goalie_game_stats(
             # Only include starts / full appearances (>= 30 min TOI).
             (GameGoalieStats.toi >= 30.0) | (GameGoalieStats.toi.is_(None)),
         )
-        .order_by(desc(Game.date))
-        .limit(RECENT_GAMES_WINDOW)
+    )
+    if exclude_game_id is not None:
+        query = query.where(Game.id != exclude_game_id)
+    result = await session.execute(
+        query.order_by(desc(Game.date)).limit(RECENT_GAMES_WINDOW)
     )
     return list(result.scalars().all())
 
@@ -1316,6 +1326,7 @@ async def generate_prop_picks(
             if player.id not in skater_stats_cache:
                 skater_stats_cache[player.id] = await _get_skater_game_stats(
                     session, player.id, player_team_id,
+                    exclude_game_id=game_id,
                 )
             stats = skater_stats_cache[player.id]
 
@@ -1352,6 +1363,7 @@ async def generate_prop_picks(
             if player.id not in skater_stats_cache:
                 skater_stats_cache[player.id] = await _get_skater_game_stats(
                     session, player.id, player_team_id,
+                    exclude_game_id=game_id,
                 )
             stats = skater_stats_cache[player.id]
 
@@ -1385,6 +1397,7 @@ async def generate_prop_picks(
             if player.id not in skater_stats_cache:
                 skater_stats_cache[player.id] = await _get_skater_game_stats(
                     session, player.id, player_team_id,
+                    exclude_game_id=game_id,
                 )
             stats = skater_stats_cache[player.id]
 
@@ -1418,6 +1431,7 @@ async def generate_prop_picks(
             if player.id not in skater_stats_cache:
                 skater_stats_cache[player.id] = await _get_skater_game_stats(
                     session, player.id, player_team_id,
+                    exclude_game_id=game_id,
                 )
             stats = skater_stats_cache[player.id]
 
@@ -1451,6 +1465,7 @@ async def generate_prop_picks(
             if player.id not in goalie_stats_cache:
                 goalie_stats_cache[player.id] = await _get_goalie_game_stats(
                     session, player.id,
+                    exclude_game_id=game_id,
                 )
             stats = goalie_stats_cache[player.id]
 

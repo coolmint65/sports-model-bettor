@@ -19,6 +19,7 @@ from app.database import get_session, get_write_session_context
 from app.models.game import Game, GameGoalieStats, GamePlayerStats
 from app.models.player import Player
 from app.models.player_prop import PlayerPropOdds
+from app.models.prop_pick_snapshot import PropPickSnapshot
 from app.models.team import Team
 
 router = APIRouter(prefix="/api/props", tags=["player-props"])
@@ -366,40 +367,107 @@ _PROP_STAT_FIELD = {
 }
 
 
-async def _grade_prop_picks(
+
+async def _get_or_create_snapshots(
+    session: AsyncSession,
+    game_id: int,
+) -> List["PropPickSnapshot"]:
+    """Return frozen prop pick snapshots for a game.
+
+    If snapshots already exist, return them (picks are frozen).
+    Otherwise, generate fresh picks, persist as snapshots, and return.
+    Uses a write session to save new snapshots.
+    """
+    from app.models.prop_pick_snapshot import PropPickSnapshot
+    from app.services.player_prop_picks import generate_prop_picks
+
+    # Check for existing snapshots
+    existing = await session.execute(
+        select(PropPickSnapshot)
+        .where(PropPickSnapshot.game_id == game_id)
+        .order_by(PropPickSnapshot.edge.desc())
+    )
+    snapshots = list(existing.scalars().all())
+    if snapshots:
+        return snapshots
+
+    # No snapshots yet — generate and persist
+    picks = await generate_prop_picks(session, game_id)
+    if not picks:
+        return []
+
+    async with get_write_session_context() as write_session:
+        new_snapshots = []
+        for p in picks:
+            snap = PropPickSnapshot(
+                game_id=game_id,
+                player_id=p.player_id,
+                player_name=p.player_name,
+                market=p.market,
+                pick_side=p.pick_side,
+                line=p.line,
+                odds=p.odds,
+                model_prob=round(p.model_prob, 4),
+                implied_prob=round(p.implied_prob, 4),
+                edge=round(p.edge, 4),
+                confidence=round(p.confidence, 4),
+                avg_rate=round(p.avg_rate, 2),
+                games_sampled=p.games_sampled,
+                reasoning=p.reasoning,
+            )
+            write_session.add(snap)
+            new_snapshots.append(snap)
+        await write_session.flush()
+
+        # Re-read from the read session so the caller has attached objects
+        result = await session.execute(
+            select(PropPickSnapshot)
+            .where(PropPickSnapshot.game_id == game_id)
+            .order_by(PropPickSnapshot.edge.desc())
+        )
+        return list(result.scalars().all())
+
+
+async def _grade_snapshots(
     session: AsyncSession,
     final_games: List[Game],
-    picks_by_game: Dict,
-) -> Dict[int, Dict[tuple, bool]]:
-    """Grade prop picks for final games against actual player stats.
+    snapshots_by_game: Dict[int, List["PropPickSnapshot"]],
+) -> None:
+    """Grade frozen snapshots for final games and persist outcomes.
 
-    Returns {game_id: {(player_name, market, pick_side): True/False/None}}.
-    True = hit, False = miss, None = can't grade.
+    Only grades snapshots that haven't been graded yet (outcome is None).
     """
-    if not final_games:
-        return {}
+    from app.models.prop_pick_snapshot import PropPickSnapshot
 
-    game_ids = [g.id for g in final_games if g.id in picks_by_game]
+    game_ids = [g.id for g in final_games if g.id in snapshots_by_game]
     if not game_ids:
-        return {}
+        return
 
-    # Load skater stats for final games
+    # Check if any need grading
+    ungraded_ids = set()
+    for gid in game_ids:
+        for snap in snapshots_by_game[gid]:
+            if snap.outcome is None:
+                ungraded_ids.add(gid)
+                break
+    if not ungraded_ids:
+        return
+
+    # Load actual stats for ungraded games
     stats_result = await session.execute(
         select(GamePlayerStats)
         .options(selectinload(GamePlayerStats.player))
-        .where(GamePlayerStats.game_id.in_(game_ids))
+        .where(GamePlayerStats.game_id.in_(ungraded_ids))
     )
     skater_stats = stats_result.scalars().all()
 
-    # Load goalie stats for final games
     goalie_result = await session.execute(
         select(GameGoalieStats)
         .options(selectinload(GameGoalieStats.player))
-        .where(GameGoalieStats.game_id.in_(game_ids))
+        .where(GameGoalieStats.game_id.in_(ungraded_ids))
     )
     goalie_stats = goalie_result.scalars().all()
 
-    # Build lookup: (game_id, player_name_lower) → stats row
     skater_by_game: Dict[tuple, GamePlayerStats] = {}
     for s in skater_stats:
         if s.player:
@@ -410,48 +478,75 @@ async def _grade_prop_picks(
         if g.player:
             goalie_by_game[(g.game_id, g.player.name.lower())] = g
 
-    result: Dict[int, Dict[tuple, bool]] = {}
-    for game_id in game_ids:
-        picks = picks_by_game.get(game_id, [])
-        outcomes: Dict[tuple, Optional[bool]] = {}
-        for p in picks:
-            key = (p.player_name, p.market, p.pick_side)
-            name_lower = p.player_name.lower()
-
-            if p.market == "player_total_saves":
-                gs = goalie_by_game.get((game_id, name_lower))
-                if gs is None:
-                    outcomes[key] = None
+    # Grade and persist
+    async with get_write_session_context() as write_session:
+        for gid in ungraded_ids:
+            for snap in snapshots_by_game[gid]:
+                if snap.outcome is not None:
                     continue
-                actual = gs.saves
-                if p.pick_side == "over":
-                    outcomes[key] = actual > p.line
+
+                name_lower = snap.player_name.lower()
+                outcome = None
+
+                if snap.market == "player_total_saves":
+                    gs = goalie_by_game.get((gid, name_lower))
+                    if gs is not None:
+                        if snap.pick_side == "over":
+                            outcome = gs.saves > snap.line
+                        else:
+                            outcome = gs.saves < snap.line
+                elif snap.market == "player_goal_scorer_anytime":
+                    ss = skater_by_game.get((gid, name_lower))
+                    if ss is not None:
+                        outcome = ss.goals >= 1
                 else:
-                    outcomes[key] = actual < p.line
-            elif p.market == "player_goal_scorer_anytime":
-                ss = skater_by_game.get((game_id, name_lower))
-                if ss is None:
-                    outcomes[key] = None
-                    continue
-                outcomes[key] = ss.goals >= 1
-            else:
-                ss = skater_by_game.get((game_id, name_lower))
-                if ss is None:
-                    outcomes[key] = None
-                    continue
-                field = _PROP_STAT_FIELD.get(p.market)
-                if field is None:
-                    outcomes[key] = None
-                    continue
-                actual = getattr(ss, field, 0)
-                if p.pick_side == "over":
-                    outcomes[key] = actual > p.line
-                else:
-                    outcomes[key] = actual < p.line
+                    ss = skater_by_game.get((gid, name_lower))
+                    if ss is not None:
+                        field = _PROP_STAT_FIELD.get(snap.market)
+                        if field:
+                            actual = getattr(ss, field, 0)
+                            if snap.pick_side == "over":
+                                outcome = actual > snap.line
+                            else:
+                                outcome = actual < snap.line
 
-        result[game_id] = outcomes
+                if outcome is not None:
+                    await write_session.execute(
+                        select(PropPickSnapshot)
+                        .where(PropPickSnapshot.id == snap.id)
+                    )
+                    # Update via direct SQL for efficiency
+                    from sqlalchemy import update
+                    await write_session.execute(
+                        update(PropPickSnapshot)
+                        .where(PropPickSnapshot.id == snap.id)
+                        .values(outcome=outcome)
+                    )
+                    snap.outcome = outcome
 
-    return result
+        await write_session.flush()
+
+
+def _snapshot_to_dict(snap, include_outcome: bool = False) -> dict:
+    """Convert a PropPickSnapshot to API response dict."""
+    d = {
+        "player_name": snap.player_name,
+        "player_id": snap.player_id,
+        "market": snap.market,
+        "pick_side": snap.pick_side,
+        "line": snap.line,
+        "odds": snap.odds,
+        "model_prob": snap.model_prob,
+        "implied_prob": snap.implied_prob,
+        "edge": snap.edge,
+        "confidence": snap.confidence,
+        "avg_rate": snap.avg_rate,
+        "games_sampled": snap.games_sampled,
+        "reasoning": snap.reasoning,
+    }
+    if include_outcome:
+        d["outcome"] = snap.outcome
+    return d
 
 
 @router.get("/picks/today")
@@ -460,12 +555,11 @@ async def get_todays_prop_picks(
 ) -> Dict[str, Any]:
     """Get AI-generated player prop picks for today's games.
 
-    Analyzes player performance data against sportsbook prop lines
-    to identify value bets. Returns picks sorted by edge within
-    each game.  Props remain visible for live and final games,
-    with outcome grading (hit/miss) once stats are available.
+    Picks are frozen on first generation and never re-computed,
+    preventing look-ahead bias when games go final.  Outcomes
+    (hit/miss) are graded against actual stats once available.
     """
-    from app.services.player_prop_picks import generate_all_prop_picks
+    from app.models.prop_pick_snapshot import PropPickSnapshot
 
     today = date.today()
 
@@ -480,23 +574,23 @@ async def get_todays_prop_picks(
     if not games:
         return {"games": [], "total_picks": 0}
 
-    game_ids = [g.id for g in games]
-    picks_by_game = await generate_all_prop_picks(session, game_ids)
+    # Get or create frozen snapshots for each game
+    snapshots_by_game: Dict[int, List[PropPickSnapshot]] = {}
+    for game in games:
+        snapshots = await _get_or_create_snapshots(session, game.id)
+        if snapshots:
+            snapshots_by_game[game.id] = snapshots
 
-    # For final games, grade prop picks against actual player stats
+    # Grade final games
     final_statuses = {s.lower() for s in GAME_FINAL_STATUSES}
-    outcomes_by_game = await _grade_prop_picks(
-        session,
-        [g for g in games if (g.status or "").lower() in final_statuses],
-        picks_by_game,
-    )
+    final_games = [g for g in games if (g.status or "").lower() in final_statuses]
+    await _grade_snapshots(session, final_games, snapshots_by_game)
 
     game_list = []
     total_picks = 0
     for game in games:
-        game_picks = picks_by_game.get(game.id, [])
-        total_picks += len(game_picks)
-        game_outcomes = outcomes_by_game.get(game.id, {})
+        game_snaps = snapshots_by_game.get(game.id, [])
+        total_picks += len(game_snaps)
         game_list.append({
             "game_id": game.id,
             "home_team": game.home_team.abbreviation if game.home_team else "",
@@ -506,27 +600,10 @@ async def get_todays_prop_picks(
             "start_time": game.start_time.isoformat() if game.start_time else None,
             "status": game.status,
             "picks": [
-                {
-                    "player_name": p.player_name,
-                    "player_id": p.player_id,
-                    "market": p.market,
-                    "pick_side": p.pick_side,
-                    "line": p.line,
-                    "odds": p.odds,
-                    "model_prob": round(p.model_prob, 4),
-                    "implied_prob": round(p.implied_prob, 4),
-                    "edge": round(p.edge, 4),
-                    "confidence": round(p.confidence, 4),
-                    "avg_rate": round(p.avg_rate, 2),
-                    "games_sampled": p.games_sampled,
-                    "reasoning": p.reasoning,
-                    "outcome": game_outcomes.get(
-                        (p.player_name, p.market, p.pick_side)
-                    ),
-                }
-                for p in game_picks
+                _snapshot_to_dict(s, include_outcome=True)
+                for s in game_snaps
             ],
-            "pick_count": len(game_picks),
+            "pick_count": len(game_snaps),
         })
 
     return {
@@ -540,9 +617,10 @@ async def get_game_prop_picks(
     game_id: int,
     session: AsyncSession = Depends(get_session),
 ) -> Dict[str, Any]:
-    """Get AI-generated player prop picks for a specific game."""
-    from app.services.player_prop_picks import generate_prop_picks
+    """Get AI-generated player prop picks for a specific game.
 
+    Picks are frozen on first generation.
+    """
     game_result = await session.execute(
         select(Game)
         .options(selectinload(Game.home_team), selectinload(Game.away_team))
@@ -552,29 +630,12 @@ async def get_game_prop_picks(
     if not game:
         return {"error": "Game not found", "picks": []}
 
-    picks = await generate_prop_picks(session, game_id)
+    snapshots = await _get_or_create_snapshots(session, game_id)
 
     return {
         "game_id": game_id,
         "home_team": game.home_team.abbreviation if game.home_team else "",
         "away_team": game.away_team.abbreviation if game.away_team else "",
-        "picks": [
-            {
-                "player_name": p.player_name,
-                "player_id": p.player_id,
-                "market": p.market,
-                "pick_side": p.pick_side,
-                "line": p.line,
-                "odds": p.odds,
-                "model_prob": round(p.model_prob, 4),
-                "implied_prob": round(p.implied_prob, 4),
-                "edge": round(p.edge, 4),
-                "confidence": round(p.confidence, 4),
-                "avg_rate": round(p.avg_rate, 2),
-                "games_sampled": p.games_sampled,
-                "reasoning": p.reasoning,
-            }
-            for p in picks
-        ],
-        "total_picks": len(picks),
+        "picks": [_snapshot_to_dict(s) for s in snapshots],
+        "total_picks": len(snapshots),
     }
