@@ -1280,7 +1280,7 @@ function RecentFormAndH2H({ game, homeAbbr, awayAbbr }) {
       <div className="gd-section-card">
         <div className="gd-section-header">
           <Users size={16} />
-          <h3>Recent Form & Head-to-Head</h3>
+          <h3>{h2hGames.length > 0 ? 'Recent Form & Head-to-Head' : 'Recent Form'}</h3>
         </div>
 
         {/* Recent Form */}
@@ -1353,8 +1353,16 @@ function RecentFormAndH2H({ game, homeAbbr, awayAbbr }) {
           </div>
         )}
 
+        {/* No H2H notice */}
+        {h2hGames.length === 0 && (
+          <div className="gd-no-h2h-notice">
+            <Info size={14} />
+            <span>These teams have not played each other this season yet.</span>
+          </div>
+        )}
+
         {/* H2H Summary */}
-        {h2h && (
+        {h2h && h2hGames.length > 0 && (
           <div className="gd-h2h-section">
             <div className="gd-h2h-title">
               <strong>Head-to-Head</strong>
@@ -1421,11 +1429,11 @@ function RecentFormAndH2H({ game, homeAbbr, awayAbbr }) {
         )}
       </div>
 
-      {/* Performance Analysis — H2H Matchups */}
+      {/* Performance Analysis — H2H Matchups or Independent Scoring */}
       <div className="gd-section-card">
         <div className="gd-section-header">
           <BarChart3 size={16} />
-          <h3>Performance Analysis</h3>
+          <h3>{h2hGames.length > 0 ? 'Head-to-Head Performance' : 'Independent Scoring'}</h3>
         </div>
 
         {h2hGames.length > 0 ? (
@@ -1482,28 +1490,28 @@ function RecentFormAndH2H({ game, homeAbbr, awayAbbr }) {
           </>
         ) : (
           <>
-            {/* Fallback: show independent recent games if no H2H data */}
+            {/* Independent recent form (no H2H data this season) */}
             <div className="gd-perf-boxes">
               <div className="gd-perf-box">
                 <span className="gd-perf-box-label">{awayLabel}</span>
                 <span className="gd-perf-box-record" style={{ color: 'var(--accent-red)' }}>
                   {calcRecord(last5Away)}
                 </span>
-                <span className="gd-perf-box-sub">Last 5</span>
+                <span className="gd-perf-box-sub">Last 5 (all opponents)</span>
               </div>
               <div className="gd-perf-box">
                 <span className="gd-perf-box-label">{homeLabel}</span>
                 <span className="gd-perf-box-record" style={{ color: 'var(--accent-green)' }}>
                   {calcRecord(last5Home)}
                 </span>
-                <span className="gd-perf-box-sub">Last 5</span>
+                <span className="gd-perf-box-sub">Last 5 (all opponents)</span>
               </div>
             </div>
 
             <div className="gd-chart-section">
               <h4 className="gd-chart-title">
                 <TrendingUp size={13} />
-                Recent Scoring
+                Goals Scored (Last 5, All Opponents)
               </h4>
               <ResponsiveContainer width="100%" height={200}>
                 <BarChart
@@ -1525,10 +1533,6 @@ function RecentFormAndH2H({ game, homeAbbr, awayAbbr }) {
                   <Bar dataKey={homeLabel} fill="#00ff88" radius={[3, 3, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
-            </div>
-
-            <div className="gd-h2h-warning" style={{ marginTop: '0.75rem' }}>
-              No head-to-head matchups found in recent games. Showing independent form.
             </div>
           </>
         )}
