@@ -160,15 +160,40 @@ async def _fetch_dailyfaceoff_starters(
                 return games
 
             # Log diagnostics for debugging
-            player_links = re.findall(r'href="([^"]*player[^"]*)"', html[:50000], re.I)
+            player_hrefs = re.findall(r'href="([^"]*player[^"]*)"', html[:80000], re.I)
+            # Also log the actual <a> tags around player links to see structure
+            player_a_tags = re.findall(
+                r'(<a[^>]*player[^>]*>[^<]{0,60}</a>)',
+                html[:80000], re.I,
+            )
+            # Find team abbreviations near player links
+            team_near_players = re.findall(
+                r'([A-Z]{2,3})\s*(?:</[^>]*>\s*)*(?:<[^>]*>\s*)*<a[^>]*player',
+                html[:80000],
+            )
             all_classes = re.findall(r'class="([^"]{3,60})"', html[:30000])
             seen: set = set()
             unique = [c for c in all_classes if c not in seen and not seen.add(c)]
             logger.info(
                 "DailyFaceoff: 0 matchups from %s (%d bytes), "
                 "player_links=%d, sample classes=%s",
-                url, len(html), len(player_links), unique[:20],
+                url, len(html), len(player_hrefs), unique[:20],
             )
+            if player_a_tags:
+                logger.info(
+                    "DailyFaceoff player <a> tags (first 6): %s",
+                    player_a_tags[:6],
+                )
+            if player_hrefs:
+                logger.info(
+                    "DailyFaceoff player hrefs (first 6): %s",
+                    player_hrefs[:6],
+                )
+            if team_near_players:
+                logger.info(
+                    "DailyFaceoff teams near players: %s",
+                    team_near_players[:12],
+                )
         except Exception as exc:
             logger.debug("DailyFaceoff %s failed: %s", url, exc)
             continue
@@ -260,13 +285,25 @@ async def _fetch_nhl_api_starters(
     # Log response structure for debugging
     matchup = data.get("matchup", {})
     gc = matchup.get("goalieComparison", {})
-    logger.debug(
+    # Log at INFO for first game to diagnose structure
+    logger.info(
         "NHL API %s: top keys=%s, matchup keys=%s, goalieComparison=%s",
         game_ext_id,
         sorted(data.keys())[:15],
         sorted(matchup.keys())[:10] if matchup else "NONE",
         "present" if gc else "NONE",
     )
+    # Log the actual goalie data paths
+    for side_name in ("homeTeam", "awayTeam"):
+        side_gc = gc.get(side_name, {}) if gc else {}
+        top_goalie = data.get(side_name, {}).get("startingGoalie", {})
+        if side_gc or top_goalie:
+            logger.info(
+                "NHL API %s %s: goalieComp keys=%s, startingGoalie=%s",
+                game_ext_id, side_name,
+                list(side_gc.keys())[:8] if isinstance(side_gc, dict) else type(side_gc).__name__,
+                str(top_goalie)[:150] if top_goalie else "NONE",
+            )
 
     for side, is_home in [("homeTeam", True), ("awayTeam", False)]:
         team_id = game.home_team_id if is_home else game.away_team_id
