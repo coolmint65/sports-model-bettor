@@ -217,13 +217,13 @@ async def _fetch_dailyfaceoff_starters(
     try:
         resp = await client.get(url, headers=headers)
         if resp.status_code != 200:
-            logger.debug("DailyFaceoff returned %d", resp.status_code)
+            logger.warning("DailyFaceoff returned %d", resp.status_code)
             return []
         games = _parse_dailyfaceoff_html(resp.text)
         logger.info("DailyFaceoff: parsed %d goalie matchups", len(games))
         return games
     except Exception as exc:
-        logger.debug("DailyFaceoff scrape failed: %s", exc)
+        logger.warning("DailyFaceoff scrape failed: %s", exc)
         return []
 
 
@@ -333,13 +333,13 @@ async def _fetch_rotowire_starters(
     try:
         resp = await client.get(url, headers=headers)
         if resp.status_code != 200:
-            logger.debug("RotoWire returned %d", resp.status_code)
+            logger.warning("RotoWire returned %d", resp.status_code)
             return []
         games = _parse_rotowire_html(resp.text)
         logger.info("RotoWire: parsed %d goalie matchups", len(games))
         return games
     except Exception as exc:
-        logger.debug("RotoWire scrape failed: %s", exc)
+        logger.warning("RotoWire scrape failed: %s", exc)
         return []
 
 

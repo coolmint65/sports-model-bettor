@@ -21,6 +21,7 @@ from app.config import settings
 from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES, composite_pick_score, is_heavy_juice
 from app.database import get_session, get_session_context, get_write_session_context
 from app.models.game import Game
+from app.models.player import GoalieStats, Player
 from app.models.prediction import Prediction
 from app.models.team import Team, TeamStats
 from app.services.odds import fresh_implied_prob
@@ -747,6 +748,10 @@ async def _fetch_starters_for_games(
 
     Returns {game_id: {"home": GoalieStarter, "away": GoalieStarter}}.
     Only fetches for games that haven't started yet.
+
+    Uses a three-tier strategy:
+    1. External scrapers (DailyFaceoff, RotoWire, NHL API)
+    2. DB fallback — each team's #1 goalie by games started this season
     """
     upcoming = [
         g for g in games
@@ -756,6 +761,8 @@ async def _fetch_starters_for_games(
         return {}
 
     starters_map: dict[int, dict[str, GoalieStarter]] = {}
+
+    # --- Tier 1: external scrapers ---
     try:
         from app.scrapers.starter_scraper import sync_confirmed_starters
         raw_starters = await sync_confirmed_starters(session)
@@ -772,9 +779,59 @@ async def _fetch_starters_for_games(
                 status=s.get("status"),
             )
     except Exception as exc:
-        logger.debug("Could not fetch starters: %s", exc)
+        logger.warning("Could not fetch starters from scrapers: %s", exc)
+
+    # --- Tier 2: DB fallback for any games missing starters ---
+    missing_team_ids: set[int] = set()
+    for g in upcoming:
+        game_starters = starters_map.get(g.id, {})
+        if "home" not in game_starters:
+            missing_team_ids.add(g.home_team_id)
+        if "away" not in game_starters:
+            missing_team_ids.add(g.away_team_id)
+
+    if missing_team_ids:
+        db_goalie_map = await _db_fallback_starters(session, missing_team_ids)
+        for g in upcoming:
+            if g.id not in starters_map:
+                starters_map[g.id] = {}
+            if "home" not in starters_map[g.id] and g.home_team_id in db_goalie_map:
+                starters_map[g.id]["home"] = db_goalie_map[g.home_team_id]
+            if "away" not in starters_map[g.id] and g.away_team_id in db_goalie_map:
+                starters_map[g.id]["away"] = db_goalie_map[g.away_team_id]
 
     return starters_map
+
+
+async def _db_fallback_starters(
+    session: AsyncSession, team_ids: set[int],
+) -> dict[int, GoalieStarter]:
+    """Look up the likely starter for each team from GoalieStats.
+
+    Picks the goalie with the most games started this season.
+    Returns {team_id: GoalieStarter}.
+    """
+    result = await session.execute(
+        select(GoalieStats, Player)
+        .join(Player, GoalieStats.player_id == Player.id)
+        .where(
+            Player.team_id.in_(team_ids),
+            Player.position == "G",
+        )
+        .order_by(GoalieStats.games_started.desc())
+    )
+    rows = result.all()
+
+    team_starters: dict[int, GoalieStarter] = {}
+    for gs, player in rows:
+        tid = player.team_id
+        if tid not in team_starters:
+            team_starters[tid] = GoalieStarter(
+                name=player.name,
+                confirmed=False,
+                status="Expected",
+            )
+    return team_starters
 
 
 async def _games_for_date(
