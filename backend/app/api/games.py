@@ -229,7 +229,7 @@ class GameDetailResponse(BaseModel):
     predictions: List[GamePredictionBrief] = []
     top_pick: Optional[Dict[str, Any]] = None
 
-    league_averages: Optional[Dict[str, float]] = None
+    league_averages: Optional[Dict[str, Any]] = None
 
 
 class PredictionResponse(BaseModel):
