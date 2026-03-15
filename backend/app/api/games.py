@@ -63,6 +63,8 @@ class TeamForm(BaseModel):
     shots_against_per_game: Optional[float] = None
     faceoff_win_pct: Optional[float] = None
     division_rank: Optional[int] = None
+    division_name: Optional[str] = None
+    division_size: Optional[int] = None
 
     model_config = {"from_attributes": True}
 
@@ -302,6 +304,15 @@ async def _get_team_form(team: Team, session: AsyncSession) -> TeamForm:
         form.shots_against_per_game = stats.shots_against_per_game
         form.faceoff_win_pct = stats.faceoff_win_pct
         form.division_rank = stats.division_rank
+        form.division_name = team.division
+        if team.division:
+            div_count = await session.execute(
+                select(func.count(Team.id)).where(
+                    Team.division == team.division,
+                    Team.active.is_(True),
+                )
+            )
+            form.division_size = div_count.scalar() or 0
 
     # Fallback: compute shots per game from Game records if still missing
     if form.shots_for_per_game is None or form.shots_against_per_game is None:

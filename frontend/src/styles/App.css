@@ -6144,10 +6144,10 @@ a:hover {
 }
 
 .gd-perf-rank {
-  font-size: 0.6rem;
+  font-size: 0.7rem;
   color: var(--text-muted);
   margin-left: 4px;
-  font-weight: 400;
+  font-weight: 500;
 }
 
 /* ─── Betting Trends ──────────────────────────────────── */

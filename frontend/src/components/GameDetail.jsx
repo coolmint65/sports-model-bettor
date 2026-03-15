@@ -687,10 +687,12 @@ function RiskAndMarket({ game, homeAbbr, awayAbbr, homeTeamLabel, awayTeamLabel 
   const odds = game.odds || {};
   const homeML = odds.home_moneyline || 0;
   const awayML = odds.away_moneyline || 0;
-  const homeImplied = homeML < 0 ? Math.abs(homeML) / (Math.abs(homeML) + 100) : 100 / (awayML + 100);
-  const awayImplied = 1 - homeImplied;
-  const homePct = Math.round(homeImplied * 100);
-  const awayPct = Math.round(awayImplied * 100);
+  const homeImplied = homeML < 0 ? Math.abs(homeML) / (Math.abs(homeML) + 100) : 100 / (homeML + 100);
+  const awayImplied = awayML < 0 ? Math.abs(awayML) / (Math.abs(awayML) + 100) : 100 / (awayML + 100);
+  // Normalize to remove vig (raw implied probs sum > 100%)
+  const totalImplied = homeImplied + awayImplied || 1;
+  const homePct = Math.round((homeImplied / totalImplied) * 100);
+  const awayPct = 100 - homePct;
 
   const underdogTeam = homePct < awayPct ? homeTeamLabel : awayTeamLabel;
   const underdogAbbr = homePct < awayPct ? homeAbbr : awayAbbr;
@@ -834,8 +836,8 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
   const awayLabel = away.team_name || 'Away';
   const homeLogo = home.logo_url || teamLogo(game.home_team) || teamLogo(game.home_team_form);
   const awayLogo = away.logo_url || teamLogo(game.away_team) || teamLogo(game.away_team_form);
-  const homeRecord = `${home.wins || 0}-${home.losses || 0}`;
-  const awayRecord = `${away.wins || 0}-${away.losses || 0}`;
+  const homeRecord = `${home.wins || 0}-${home.losses || 0}-${home.ot_losses || 0}`;
+  const awayRecord = `${away.wins || 0}-${away.losses || 0}-${away.ot_losses || 0}`;
   const homeWinPct = home.games_played ? `${Math.round((home.wins / home.games_played) * 100)}%` : '-';
   const awayWinPct = away.games_played ? `${Math.round((away.wins / away.games_played) * 100)}%` : '-';
   const ouLine = game.odds?.over_under_line || 5.5;
@@ -857,6 +859,10 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
   // Division rank from points
   const homeRank = home.division_rank || '-';
   const awayRank = away.division_rank || '-';
+  const homeDivLabel = home.division_name ? `${home.division_name}` : '';
+  const awayDivLabel = away.division_name ? `${away.division_name}` : '';
+  const homeDivSize = home.division_size || '';
+  const awayDivSize = away.division_size || '';
 
   const lg = game.league_averages || {};
   const homeRanks = lg.home_ranks || {};
@@ -924,7 +930,7 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
               {awayRank !== '-' && (
                 <span className="gd-rank-badge">
                   <Award size={11} />
-                  #{awayRank}
+                  #{awayRank}{awayDivSize ? `/${awayDivSize}` : ''}{awayDivLabel ? ` ${awayDivLabel}` : ''}
                 </span>
               )}
             </div>
@@ -942,7 +948,7 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
               {homeRank !== '-' && (
                 <span className="gd-rank-badge">
                   <Award size={11} />
-                  #{homeRank}
+                  #{homeRank}{homeDivSize ? `/${homeDivSize}` : ''}{homeDivLabel ? ` ${homeDivLabel}` : ''}
                 </span>
               )}
             </div>
