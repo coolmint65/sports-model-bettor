@@ -46,6 +46,10 @@ class PlayerPropOdds(TimestampMixin, Base):
     # For anytime goal scorer: only over_price is used (yes price),
     # under_price may be null.
 
+    # Opening prices (captured on first sync for line movement tracking)
+    opening_over_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    opening_under_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
     # Source bookmaker that provided the best line
     bookmaker: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     # When the odds were last refreshed from the API

@@ -461,6 +461,8 @@ async def sync_player_props(db: AsyncSession) -> int:
                     line=prop.get("line"),
                     over_price=prop.get("over_price"),
                     under_price=prop.get("under_price"),
+                    opening_over_price=prop.get("over_price"),
+                    opening_under_price=prop.get("under_price"),
                     bookmaker=prop.get("bookmaker"),
                     odds_updated_at=now_utc,
                 )
