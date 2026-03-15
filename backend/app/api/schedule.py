@@ -20,8 +20,8 @@ from sqlalchemy.orm import selectinload
 from app.config import settings
 from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES, composite_pick_score, is_heavy_juice
 from app.database import get_session, get_session_context, get_write_session_context
-from app.models.game import Game
-from app.models.player import GoalieStats, Player
+from app.models.game import Game, GameGoalieStats
+from app.models.player import Player
 from app.models.prediction import Prediction
 from app.models.team import Team, TeamStats
 from app.services.odds import fresh_implied_prob
@@ -810,30 +810,38 @@ async def _fetch_starters_for_games(
 async def _db_fallback_starters(
     session: AsyncSession, team_ids: set[int],
 ) -> dict[int, GoalieStarter]:
-    """Look up the likely starter for each team from GoalieStats.
+    """Look up the likely starter for each team from GameGoalieStats.
 
-    Picks the goalie with the most games started this season.
+    Counts recent game appearances per goalie per team; the goalie
+    with the most appearances is the presumed starter.
     Returns {team_id: GoalieStarter}.
     """
+    # Find goalies on these teams who have game stats, ordered by
+    # most recent games (highest game_id = most recent)
     result = await session.execute(
-        select(GoalieStats, Player)
-        .join(Player, GoalieStats.player_id == Player.id)
-        .where(
-            Player.team_id.in_(team_ids),
-            Player.position == "G",
+        select(
+            Player.team_id,
+            Player.name,
+            func.count(GameGoalieStats.id).label("appearances"),
         )
-        .order_by(GoalieStats.games_started.desc())
+        .join(GameGoalieStats, GameGoalieStats.player_id == Player.id)
+        .where(Player.team_id.in_(team_ids))
+        .group_by(Player.team_id, Player.id, Player.name)
+        .order_by(func.count(GameGoalieStats.id).desc())
     )
     rows = result.all()
 
     team_starters: dict[int, GoalieStarter] = {}
-    for gs, player in rows:
-        tid = player.team_id
-        if tid not in team_starters:
-            team_starters[tid] = GoalieStarter(
-                name=player.name,
+    for team_id, name, appearances in rows:
+        if team_id not in team_starters:
+            team_starters[team_id] = GoalieStarter(
+                name=name,
                 confirmed=False,
                 status="Expected",
+            )
+            logger.debug(
+                "DB fallback goalie: team_id=%d → %s (%d games)",
+                team_id, name, appearances,
             )
     return team_starters
 

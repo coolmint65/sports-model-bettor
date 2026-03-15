@@ -553,6 +553,10 @@ async def sync_confirmed_starters(db: AsyncSession) -> List[Dict[str, Any]]:
         # Source 1: DailyFaceoff
         dfo_games = await _fetch_dailyfaceoff_starters(client, today)
         if dfo_games:
+            logger.info(
+                "DFO raw data: %s",
+                [{k: v for k, v in g.items()} for g in dfo_games],
+            )
             for dfo_game in dfo_games:
                 raw_away = dfo_game.get("away_team", "")
                 raw_home = dfo_game.get("home_team", "")
@@ -562,7 +566,7 @@ async def sync_confirmed_starters(db: AsyncSession) -> List[Dict[str, Any]]:
 
                 if not away_abbrev or not home_abbrev:
                     logger.warning(
-                        "DFO match failed: away=%r→%s, home=%r→%s, "
+                        "DFO team match failed: away=%r→%s, home=%r→%s, "
                         "goalies=%s vs %s",
                         raw_away, away_abbrev, raw_home, home_abbrev,
                         dfo_game.get("away_goalie", "?"),
@@ -574,8 +578,10 @@ async def sync_confirmed_starters(db: AsyncSession) -> List[Dict[str, Any]]:
                 home_team_id = team_by_abbrev.get(home_abbrev)
 
                 # Find matching game in our DB
+                matched = False
                 for game in games:
                     if game.home_team_id == home_team_id and game.away_team_id == away_team_id:
+                        matched = True
                         for side, goalie_key, status_key, tid, abbrev in [
                             ("away", "away_goalie", "away_status", away_team_id, away_abbrev),
                             ("home", "home_goalie", "home_status", home_team_id, home_abbrev),
@@ -594,6 +600,14 @@ async def sync_confirmed_starters(db: AsyncSession) -> List[Dict[str, Any]]:
                                 })
                         covered_game_ids.add(game.id)
                         break
+                if not matched:
+                    logger.warning(
+                        "DFO game not found in DB: %s@%s (ids %s@%s), "
+                        "DB games: %s",
+                        away_abbrev, home_abbrev,
+                        away_team_id, home_team_id,
+                        [(g.away_team_id, g.home_team_id) for g in games],
+                    )
 
         # Source 2: RotoWire — lightweight HTML, no JS needed.
         # Fills in any games DailyFaceoff missed (DFO often returns 0
