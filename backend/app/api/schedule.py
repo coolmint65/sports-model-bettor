@@ -77,6 +77,7 @@ class GoalieStarter(BaseModel):
     """Confirmed or projected starting goalie for a team."""
     name: Optional[str] = None
     confirmed: bool = False
+    status: Optional[str] = None  # e.g. "Confirmed", "Expected", "Likely", "Projected"
 
 
 class ScheduleGame(BaseModel):
@@ -768,6 +769,7 @@ async def _fetch_starters_for_games(
             starters_map[gid][side] = GoalieStarter(
                 name=s["goalie_name"],
                 confirmed=s["confirmed"],
+                status=s.get("status"),
             )
     except Exception as exc:
         logger.debug("Could not fetch starters: %s", exc)

@@ -999,9 +999,11 @@ def _analyze_atg(
             reasoning += f" | {ctx.days_rest} days rest"
     # Opponent defense
     if ctx.opp_defensive_factor > 1.05:
-        reasoning += f" | Weak opp defense ({ctx.opp_abbrev})"
+        pct_above = (ctx.opp_defensive_factor - 1.0) * 100
+        reasoning += f" | {ctx.opp_abbrev} allows {pct_above:.0f}% more goals than avg"
     elif ctx.opp_defensive_factor < 0.95:
-        reasoning += f" | Strong opp defense ({ctx.opp_abbrev})"
+        pct_below = (1.0 - ctx.opp_defensive_factor) * 100
+        reasoning += f" | {ctx.opp_abbrev} allows {pct_below:.0f}% fewer goals than avg"
     # Line movement
     if line_moved_against:
         reasoning += " | Line moved against"
@@ -1179,9 +1181,19 @@ def _analyze_over_under(
         elif ctx.days_rest >= 3:
             reasoning += f" | {ctx.days_rest} days rest"
     if ctx.opp_defensive_factor > 1.05:
-        reasoning += f" | Weak opp defense ({ctx.opp_abbrev})"
+        pct_above = (ctx.opp_defensive_factor - 1.0) * 100
+        defense_stat = "shots" if market == "player_shots_on_goal" else "goals"
+        if market == "player_total_saves":
+            reasoning += f" | {ctx.opp_abbrev} generates {pct_above:.0f}% more shots than avg"
+        else:
+            reasoning += f" | {ctx.opp_abbrev} allows {pct_above:.0f}% more {defense_stat} than avg"
     elif ctx.opp_defensive_factor < 0.95:
-        reasoning += f" | Strong opp defense ({ctx.opp_abbrev})"
+        pct_below = (1.0 - ctx.opp_defensive_factor) * 100
+        defense_stat = "shots" if market == "player_shots_on_goal" else "goals"
+        if market == "player_total_saves":
+            reasoning += f" | {ctx.opp_abbrev} generates {pct_below:.0f}% fewer shots than avg"
+        else:
+            reasoning += f" | {ctx.opp_abbrev} allows {pct_below:.0f}% fewer {defense_stat} than avg"
     if line_moved_against:
         reasoning += " | Line moved against"
     # Supplementary stats (#9) for skaters only

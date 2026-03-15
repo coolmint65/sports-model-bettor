@@ -409,6 +409,7 @@ async def _fetch_nhl_api_starters(
             "goalie_name": goalie_info["name"],
             "goalie_external_id": str(goalie_info.get("player_id", "")),
             "confirmed": goalie_info["confirmed"],
+            "status": "Confirmed" if goalie_info["confirmed"] else "Projected",
         })
 
     return results
@@ -584,6 +585,7 @@ async def sync_confirmed_starters(db: AsyncSession) -> List[Dict[str, Any]]:
                                     "goalie_name": goalie_name,
                                     "goalie_external_id": "",
                                     "confirmed": "confirm" in status,
+                                    "status": status.strip().title() if status else "Projected",
                                 })
                         covered_game_ids.add(game.id)
                         break
@@ -626,6 +628,7 @@ async def sync_confirmed_starters(db: AsyncSession) -> List[Dict[str, Any]]:
                                     "goalie_name": goalie_name,
                                     "goalie_external_id": "",
                                     "confirmed": "confirm" in status,
+                                    "status": status.strip().title() if status else "Projected",
                                 })
                         covered_game_ids.add(game.id)
                         break
