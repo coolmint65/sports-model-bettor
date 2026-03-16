@@ -74,6 +74,7 @@ class SignalGenerator:
         signals.extend(self._line_movement_signals(features, home_abbr, away_abbr, home_name, away_name))
         signals.extend(self._time_of_day_signals(features, home_abbr, away_abbr))
         signals.extend(self._public_signal_signals(features, home_abbr, away_abbr))
+        signals.extend(self._referee_signals(features))
 
         # Filter noise and sort by strength
         signals = [s for s in signals if s.get("strength", 0) >= 0.2]
@@ -1798,6 +1799,68 @@ class SignalGenerator:
                     icon="bar-chart",
                     tooltip=f"Spread shifted {spread_movement:+.1f} from opening",
                 ))
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    #  Time-of-day signals                                                #
+    # ------------------------------------------------------------------ #
+
+    def _time_of_day_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+    ) -> List[Dict[str, Any]]:
+        """Generate signals when away team faces a body clock disadvantage.
+
+        Only triggers when body_clock_disadvantage > 0.3, indicating the
+        away team is playing significantly earlier than their typical
+        7pm local start.
+        """
+        signals: List[Dict[str, Any]] = []
+        tod = features.get("time_of_day", {})
+
+        body_clock = tod.get("body_clock_disadvantage", 0.0)
+        if body_clock <= 0.3:
+            return signals
+
+        away_local_hour = tod.get("away_local_hour")
+        if away_local_hour is None:
+            return signals
+
+        # Format the local hour for display (e.g. 13 -> "1pm")
+        if away_local_hour == 0:
+            display_hour = "12am"
+        elif away_local_hour < 12:
+            display_hour = f"{away_local_hour}am"
+        elif away_local_hour == 12:
+            display_hour = "12pm"
+        else:
+            display_hour = f"{away_local_hour - 12}pm"
+
+        # Strength scales with body clock disadvantage (0.3-1.0 -> 0.30-0.55)
+        strength = min(0.55, 0.20 + body_clock * 0.35)
+
+        signals.append(_signal(
+            "schedule",
+            f"Early afternoon start: {away_abbr} body clock at {display_hour} local time",
+            "negative", away_abbr, strength,
+            icon="clock",
+            tooltip=(
+                f"{away_abbr} playing {round(body_clock * 8):.0f}h earlier than "
+                f"typical 7pm local puck drop"
+            ),
+        ))
+
+        # If it is also a matinee game, add a complementary home advantage signal
+        if tod.get("is_matinee", False):
+            signals.append(_signal(
+                "schedule",
+                f"Matinee game favours home team {home_abbr}",
+                "positive", home_abbr, strength * 0.7,
+                icon="clock",
+            ))
 
         return signals
 

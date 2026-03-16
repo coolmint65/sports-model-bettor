@@ -312,6 +312,11 @@ def flatten_features(features: Dict[str, Any]) -> Dict[str, float]:
     flat["public_is_rlm"] = 1.0 if pub.get("is_reverse_line_movement") else 0.0
     flat["public_model_agrees"] = 1.0 if pub.get("model_agrees_with_public") else 0.0
 
+    # --- Referee tendency ---
+    ref = features.get("referee", {})
+    flat["referee_penalty_deviation"] = _safe_float(ref.get("penalty_deviation", 0))
+    flat["referee_xg_adjustment"] = _safe_float(ref.get("xg_adjustment", 0))
+
     # --- Game context booleans ---
     flat["is_divisional"] = 1.0 if features.get("is_divisional") else 0.0
     flat["is_cross_conference"] = 1.0 if features.get("is_cross_conference") else 0.0

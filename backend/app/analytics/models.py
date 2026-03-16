@@ -383,6 +383,19 @@ class BettingModel:
             home_xg += home_pp_advantage * SPECIAL_TEAMS_FACTOR
             away_xg += away_pp_advantage * SPECIAL_TEAMS_FACTOR
 
+        # ---- Referee tendency adjustment ----
+        # Refs who call more penalties create more PP opportunities for both
+        # teams, shifting the expected total. Strict refs push totals up;
+        # lenient refs push them down.
+        referee = features.get("referee", {})
+        ref_factor = _mc.referee_penalty_factor
+        if (ref_factor > 0
+                and referee.get("found", False)
+                and referee.get("games_officiated", 0) >= _mc.referee_min_games):
+            ref_xg_adj = referee["xg_adjustment"]
+            home_xg += ref_xg_adj * ref_factor
+            away_xg += ref_xg_adj * ref_factor
+
         # ---- Period-specific scoring rate adjustment ----
         # Teams with strong/weak period tendencies should have xG adjusted.
         # A team that scores heavily in P1 but collapses in P3 has different
