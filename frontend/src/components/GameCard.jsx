@@ -381,10 +381,7 @@ function GameCard({ game, section, medal }) {
               // Quality tier based on bet confidence and edge
               let tier = '';
               let tierLabel = '';
-              if (!hasEdge) {
-                tier = 'dc-pick-chip-skip';
-                tierLabel = 'SKIP';
-              } else if (isBest) {
+              if (isBest) {
                 tier = 'dc-pick-chip-best';
                 tierLabel = 'BEST';
               } else if (conf != null && conf >= 75) {
@@ -393,6 +390,9 @@ function GameCard({ game, section, medal }) {
               } else if (conf != null && conf >= 60) {
                 tier = 'dc-pick-chip-borderline';
                 tierLabel = 'LEAN';
+              } else if (!hasEdge) {
+                tier = 'dc-pick-chip-skip';
+                tierLabel = 'SKIP';
               } else {
                 tier = 'dc-pick-chip-skip';
                 tierLabel = 'SKIP';
