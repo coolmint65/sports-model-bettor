@@ -382,7 +382,7 @@ function GameCard({ game, section, medal }) {
               let tier = '';
               let tierLabel = '';
               // Good juice: plus money or modest favorite (better than -200)
-              const hasGoodJuice = pick.odds_display == null || pick.odds_display > 0 || pick.odds_display >= -200;
+              const hasGoodJuice = pick.odds_display == null || pick.odds_display > 0 || pick.odds_display >= -170;
               // High-confidence with good juice shouldn't be faded even with negative edge
               const unfaded = conf != null && conf >= 60 && hasGoodJuice;
 
