@@ -68,14 +68,14 @@ function classifySegment(segment, pickSide, market) {
     return isOver ? 'negative' : 'positive';
   }
 
-  // Fatigue
+  // Fatigue — always a concern
   if (s.includes('b2b fatigue')) {
-    return isOver ? 'negative' : 'positive';
+    return 'negative';
   }
 
-  // Rest
+  // Rest — neutral context, already factored into model
   if (s.includes('days rest')) {
-    return isOver ? 'positive' : 'negative';
+    return 'neutral';
   }
 
   // Line moved against
