@@ -108,6 +108,31 @@ class BettingModel:
         self.ml_model = ml_model
 
     # ------------------------------------------------------------------ #
+    #  xG adjustment helpers (reduce repetition in _calc_expected_goals)  #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _clamp_xg(xg: float) -> float:
+        """Clamp xG within configured floor/ceiling."""
+        return max(_mc.xg_floor, min(_mc.xg_ceiling, xg))
+
+    @staticmethod
+    def _get_best_cf(
+        ev: Dict[str, Any],
+        close: Dict[str, Any],
+        advanced: Dict[str, Any],
+        adv_min_games: int,
+    ) -> Optional[float]:
+        """Pick best available Corsi For % from 5v5 EV > close-game > all-situations."""
+        if ev.get("games_found", 0) >= _mc.ev_corsi_min_games:
+            return ev.get("ev_cf_pct", 50.0)
+        if close.get("close_games_found", 0) >= _mc.close_game_min_games:
+            return close.get("close_cf_pct", 50.0)
+        if advanced.get("games_found", 0) >= adv_min_games:
+            return advanced.get("corsi_for_pct", 50.0)
+        return None
+
+    # ------------------------------------------------------------------ #
     #  Core: Expected goals calculation                                   #
     # ------------------------------------------------------------------ #
 
