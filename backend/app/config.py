@@ -239,7 +239,9 @@ class ModelConfig(BaseModel):
 
     # Feature #12: Win probability calibration
     calibration_enabled: bool = True            # whether to apply calibration curve
-    calibration_shrinkage: float = 0.18         # shrinkage toward 50% (0=none, 1=always 50%)
+    calibration_shrinkage: float = 0.18         # ML shrinkage toward 50% (0=none, 1=always 50%)
+    calibration_spread_shrinkage: float = 0.35  # spread/total shrinkage (higher because Poisson
+                                                # structurally overestimates margin distributions)
     calibration_min_predictions: int = 50       # min predictions before calibrating
 
     # Feature #13: Consensus line aggregation

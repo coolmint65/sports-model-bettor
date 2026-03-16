@@ -163,11 +163,11 @@ class PredictionManager:
             game_info = game_data.get("game_info", {})
             for pred in game_data.get("predictions", []):
                 confidence = pred.get("confidence", 0)
-                # Raw (uncalibrated) probability — use this for edge
-                # calculation so calibration shrinkage doesn't suppress
-                # genuine model edges.
-                raw_prob = pred.get("probability", confidence)
-                # Use real odds-based implied probability if available
+                # Use calibrated probability for edge calculation.
+                # Raw Poisson probabilities are structurally overconfident
+                # (especially for spreads/totals), producing inflated edges.
+                # Calibrated probability IS our best estimate of the true
+                # probability, so edge = calibrated - implied.
                 implied_prob = pred.get("implied_probability")
                 odds = pred.get("odds")
                 has_real_odds = implied_prob is not None
@@ -176,8 +176,8 @@ class PredictionManager:
                 # Without real odds there is no market to compare against,
                 # so edge is meaningless and should not be persisted.
                 if has_real_odds:
-                    edge = raw_prob - implied_prob
-                    # Cap edge at 15% — after calibration, anything higher signals a model/data issue
+                    edge = confidence - implied_prob
+                    # Cap edge at 15% — anything higher signals a model/data issue
                     edge = min(edge, 0.15)
                 else:
                     edge = None

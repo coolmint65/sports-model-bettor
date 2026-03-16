@@ -98,7 +98,8 @@ function getOutcomeIcon(outcome) {
 }
 
 function PredictionCard({ prediction, showGame = false, compact = false, isFallback = false, homeAbbr, awayAbbr }) {
-  const confidence = confidencePct(prediction.confidence);
+  // Prefer bet_confidence (signal-based) over confidence (win probability)
+  const confidence = confidencePct(prediction.bet_confidence ?? prediction.confidence);
   const edge = confidencePct(prediction.edge);
   const confColor = isFallback ? '#ff9800' : getConfidenceColor(confidence);
   const confLabel = isFallback ? 'Heavy Juice' : getConfidenceLabel(confidence);

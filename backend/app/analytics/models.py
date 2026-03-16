@@ -813,27 +813,30 @@ class BettingModel:
         )
 
     @staticmethod
-    def calibrate_probability(raw_prob: float) -> float:
+    def calibrate_probability(raw_prob: float, bet_type: str = "ml") -> float:
         """Apply calibration shrinkage to model probabilities.
 
         Feature #12: Poisson models are structurally overconfident because
         hockey has massive randomness (puck bounces, posts, empty nets).
-        A model saying 70% typically wins ~63-65% of the time.
 
-        Shrinkage pulls predictions toward 50% to match reality:
-        - 50% stays 50%
-        - 55% becomes ~54.1%
-        - 60% becomes ~58.2%
-        - 65% becomes ~62.3%
-        - 70% becomes ~66.4%
-        - 75% becomes ~70.5%
+        Uses different shrinkage by bet type:
+        - ML (moneyline): 0.18 — mild shrinkage, model is reasonable at 50-65%
+        - Spread/total: 0.35 — aggressive shrinkage because Poisson structurally
+          overestimates margin distributions (empty-net goals, OT, score effects
+          aren't properly modeled)
 
-        Controlled by calibration_shrinkage (0 = no change, 1 = always 50%).
-        Default 0.18 based on typical NHL Poisson overconfidence.
+        Shrinkage pulls predictions toward 50%:
+        - ML:     60% → 58.2%, 65% → 62.3%, 70% → 66.4%
+        - Spread: 70% → 57.0%, 75% → 58.8%, 80% → 62.0%
+
+        Controlled by calibration_shrinkage / calibration_spread_shrinkage.
         """
         if not _mc.calibration_enabled:
             return raw_prob
-        shrinkage = _mc.calibration_shrinkage
+        if bet_type in ("spread", "total"):
+            shrinkage = _mc.calibration_spread_shrinkage
+        else:
+            shrinkage = _mc.calibration_shrinkage
         calibrated = raw_prob * (1.0 - shrinkage) + 0.5 * shrinkage
         return round(max(0.01, min(0.99, calibrated)), 4)
 
@@ -1875,7 +1878,8 @@ class BettingModel:
                 direction: str, line_val: float, prob: float,
                 odds_val: float | None, implied: float | None,
             ) -> Dict[str, Any]:
-                edge = round(prob - implied, 4) if implied else None
+                calibrated = self.calibrate_probability(prob, "total")
+                edge = round(calibrated - implied, 4) if implied else None
                 odds_display = (
                     f" (Odds: {'+' if odds_val > 0 else ''}{int(odds_val)})"
                     if odds_val else ""
@@ -1888,7 +1892,7 @@ class BettingModel:
                 return {
                     "bet_type": "total",
                     "prediction": f"{direction}_{line_val}",
-                    "confidence": self.calibrate_probability(prob),
+                    "confidence": self.calibrate_probability(prob, "total"),
                     "probability": round(prob, 4),
                     "implied_probability": round(implied, 4) if implied else None,
                     "odds": odds_val,
@@ -1915,8 +1919,9 @@ class BettingModel:
 
                 # Put the side with more edge (or higher prob) first
                 # so the top_pick selector sees it as the "best" total.
-                over_edge = (over_p - over_implied) if over_implied else 0
-                under_edge = (under_p - under_implied) if under_implied else 0
+                # Use calibrated probabilities for edge comparison.
+                over_edge = (self.calibrate_probability(over_p, "total") - over_implied) if over_implied else 0
+                under_edge = (self.calibrate_probability(under_p, "total") - under_implied) if under_implied else 0
                 if over_edge >= under_edge:
                     order = [
                         ("over", over_p, op_val, over_implied),
@@ -2096,7 +2101,10 @@ class BettingModel:
                     if s_prob <= 0 or s_odds == 0:
                         continue
                     s_implied = american_odds_to_implied_prob(s_odds)
-                    s_edge = s_prob - s_implied
+                    # Use calibrated probability for edge — raw Poisson
+                    # structurally overestimates spread cover rates.
+                    s_calibrated = self.calibrate_probability(s_prob, "spread")
+                    s_edge = s_calibrated - s_implied
 
                     if s_edge > best_spread_edge:
                         best_spread_edge = s_edge
@@ -2111,7 +2119,7 @@ class BettingModel:
                 predictions.append({
                     "bet_type": "spread",
                     "prediction": best_spread_pred,
-                    "confidence": self.calibrate_probability(best_spread_prob),
+                    "confidence": self.calibrate_probability(best_spread_prob, "spread"),
                     "probability": round(best_spread_prob, 4),
                     "implied_probability": round(best_spread_implied, 4),
                     "odds": best_spread_odds,
@@ -2177,7 +2185,7 @@ class BettingModel:
                     predictions.append({
                         "bet_type": "spread",
                         "prediction": f"{sb_abbr}_{sb_sign}",
-                        "confidence": self.calibrate_probability(sb_prob),
+                        "confidence": self.calibrate_probability(sb_prob, "spread"),
                         "probability": round(sb_prob, 4),
                         "implied_probability": round(spread_implied, 4),
                         "odds": spread_odds_display,

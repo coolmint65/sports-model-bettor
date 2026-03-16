@@ -131,8 +131,8 @@ function formatGameTime(game) {
 
 function getConfidenceBadge(confidence) {
   if (confidence == null) return null;
-  if (confidence >= 70) return { label: 'GOOD BET', className: 'badge-good', icon: TrendingUp };
-  if (confidence >= 55) return { label: 'BORDERLINE', className: 'badge-borderline', icon: Minus };
+  if (confidence >= 75) return { label: 'GOOD BET', className: 'badge-good', icon: TrendingUp };
+  if (confidence >= 60) return { label: 'BORDERLINE', className: 'badge-borderline', icon: Minus };
   return null;
 }
 
@@ -154,7 +154,8 @@ function GameCard({ game, section, medal }) {
   const awayScore = game.away_score ?? game.score?.away ?? null;
   const homeScore = game.home_score ?? game.score?.home ?? null;
   const topPick = game.top_pick || null;
-  const rawConf = topPick?.confidence || game.top_confidence || game.confidence || game.prediction_confidence || null;
+  // Prefer bet_confidence (signal-based) over confidence (win probability)
+  const rawConf = topPick?.bet_confidence || topPick?.confidence || game.top_confidence || game.confidence || game.prediction_confidence || null;
   const confidence = rawConf != null ? confidencePct(rawConf) : null;
   const odds = game.odds || null;
   const periodInfo = statusInfo.isLive ? formatPeriod(game) : { label: null, clock: null };
@@ -346,17 +347,26 @@ function GameCard({ game, section, medal }) {
         <div className="dc-picks-multi">
           {(() => {
             const picks = [mlPick, spreadPick, totalPick].filter(Boolean);
+            // Filter out negative-edge picks — no value in showing bets against us
+            const viablePicks = picks.filter((p) => p.edge == null || p.edge >= 0);
+            if (viablePicks.length === 0 && picks.length > 0) {
+              // All picks have negative edge — show the least-negative one as a LEAN
+              viablePicks.push(picks.reduce((best, p) => ((p.edge ?? -1) > (best.edge ?? -1) ? p : best), picks[0]));
+            }
             // Find the best pick (highest composite_score or edge)
-            const bestPick = picks.reduce((best, p) => {
+            const bestPick = viablePicks.reduce((best, p) => {
               const score = (s) => (s?.composite_score ?? 0) || ((s?.edge ?? 0) * 100 + (s?.confidence ?? 0));
               return score(p) > score(best) ? p : best;
-            }, picks[0]);
+            }, viablePicks[0]);
 
             // Annotate picks with display values for sorting
-            const annotated = picks.map((pick) => {
-              const conf = pick.confidence != null ? confidencePct(pick.confidence) : null;
-              const isBest = pick === bestPick && picks.length > 1;
-              return { pick, conf, isBest };
+            // Use bet_confidence (signal-based) for display, fall back to confidence (win prob)
+            const annotated = viablePicks.map((pick) => {
+              const betConf = pick.bet_confidence != null
+                ? confidencePct(pick.bet_confidence)
+                : (pick.confidence != null ? confidencePct(pick.confidence) : null);
+              const isBest = pick === bestPick && viablePicks.length > 1;
+              return { pick, conf: betConf, isBest };
             });
             // Sort: BEST first, then by confidence descending
             annotated.sort((a, b) => {
@@ -368,16 +378,16 @@ function GameCard({ game, section, medal }) {
               const label = formatMarketPick(pick);
               const edgeVal = pick.edge != null ? pick.edge * 100 : null;
               const edgePct = edgeVal != null ? `${edgeVal >= 0 ? '+' : ''}${edgeVal.toFixed(1)}%` : null;
-              // Quality tier per pick
+              // Quality tier based on bet confidence
               let tier = '';
               let tierLabel = '';
               if (isBest) {
                 tier = 'dc-pick-chip-best';
                 tierLabel = 'BEST';
-              } else if (conf != null && conf >= 70) {
+              } else if (conf != null && conf >= 75) {
                 tier = 'dc-pick-chip-good';
-                tierLabel = 'GOOD';
-              } else if (conf != null && conf >= 55) {
+                tierLabel = 'STRONG';
+              } else if (conf != null && conf >= 60) {
                 tier = 'dc-pick-chip-borderline';
                 tierLabel = 'LEAN';
               } else {

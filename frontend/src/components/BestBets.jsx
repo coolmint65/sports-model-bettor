@@ -39,7 +39,7 @@ function isLiveGame(status) {
 
 function BestBetCard({ bet, rank, isFeatured, onTrack, tracked }) {
   const navigate = useNavigate();
-  const confidence = confidencePct(bet.confidence);
+  const confidence = confidencePct(bet.bet_confidence ?? bet.confidence);
   const edge = confidencePct(bet.edge);
   const confColor = getConfidenceColor(confidence);
   const live = isLiveGame(bet.game_status);
