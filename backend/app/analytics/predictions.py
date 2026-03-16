@@ -222,6 +222,33 @@ class PredictionManager:
                 ):
                     candidates.append(flat)
 
+        # ---- CLV meta-signal: adjust confidence by bet-type performance ----
+        try:
+            from app.analytics.meta_signals import MetaSignalEngine
+
+            meta_engine = MetaSignalEngine()
+            bt_performance = await meta_engine.get_bet_type_performance(db)
+
+            if bt_performance:
+                adjustments_log = []
+                for candidate in candidates:
+                    bt = candidate["bet_type"]
+                    perf = bt_performance.get(bt)
+                    if perf and perf["confidence_adjustment"] != 1.0:
+                        adj = perf["confidence_adjustment"]
+                        old_conf = candidate["confidence"]
+                        candidate["confidence"] = round(old_conf * adj, 4)
+                        pct_change = round((adj - 1.0) * 100, 1)
+                        sign = "+" if pct_change > 0 else ""
+                        adjustments_log.append(f"{bt} confidence {sign}{pct_change}%")
+
+                if adjustments_log:
+                    logger.info(
+                        "CLV meta-signal: %s", ", ".join(adjustments_log)
+                    )
+        except Exception as meta_exc:
+            logger.warning("CLV meta-signal adjustment failed: %s", meta_exc)
+
         # Sort by composite score (confidence + edge + juice quality)
         candidates.sort(
             key=lambda c: composite_pick_score(

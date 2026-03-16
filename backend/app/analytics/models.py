@@ -92,6 +92,10 @@ class BettingModel:
     with an ML model for improved xG estimation when trained.
     """
 
+    # Class-level rolling calibrator — shared across instances.
+    # Set externally by PredictionManager once enough historical data exists.
+    _rolling_calibrator = None
+
     def __init__(self, ml_model=None) -> None:
         """Initialize the betting model with default parameters.
 
@@ -346,10 +350,12 @@ class BettingModel:
             home_xg -= _mc.divisional_under_adj
             away_xg -= _mc.divisional_under_adj
 
-        # Cross-conference travel (away team faces timezone disadvantage)
-        if features.get("is_cross_conference", False):
-            if away_schedule.get("is_travel_disadvantage", False):
-                away_xg -= _mc.timezone_penalty
+        # Graduated travel fatigue (replaces binary is_travel_disadvantage)
+        travel = features.get("travel", {})
+        fatigue_score = travel.get("fatigue_score", 0.0)
+        if fatigue_score > 0:
+            travel_penalty = fatigue_score * _mc.travel_fatigue_factor
+            away_xg -= travel_penalty
 
         # ---- Special teams matchup adjustment ----
         # PP efficiency vs opponent PK, and vice versa.
@@ -797,6 +803,26 @@ class BettingModel:
                         home_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, home_xg))
                         away_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, away_xg))
 
+        # ---- Line movement xG adjustment ----
+        # Sharp money moves lines against public action. When the implied
+        # probability shift exceeds the minimum threshold, nudge xG in the
+        # direction the line is moving. This captures information from
+        # professional bettors that the model might not otherwise see.
+        line_mv = features.get("line_movement", {})
+        ml_implied_shift = line_mv.get("ml_implied_shift", 0.0) or 0.0
+        if abs(ml_implied_shift) > _mc.line_movement_min_shift:
+            lm_factor = _mc.line_movement_factor
+            league_avg = _mc.league_avg_goals
+            # Positive shift = home team became more favored → boost home xG
+            raw_adj = ml_implied_shift * lm_factor * league_avg
+            # Cap the adjustment at ±0.15 xG to prevent overreaction
+            capped_adj = max(-0.15, min(0.15, raw_adj))
+            home_xg += capped_adj
+            away_xg -= capped_adj
+            # Re-apply floor/ceiling
+            home_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, home_xg))
+            away_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, away_xg))
+
         return round(home_xg, 3), round(away_xg, 3)
 
     def _weighted_goals_for(
@@ -814,25 +840,34 @@ class BettingModel:
 
     @staticmethod
     def calibrate_probability(raw_prob: float, bet_type: str = "ml") -> float:
-        """Apply calibration shrinkage to model probabilities.
+        """Apply calibration to model probabilities.
+
+        If a rolling calibrator is fitted (enough historical data), uses
+        empirically-derived bin interpolation.  Otherwise falls back to
+        static shrinkage toward 50%.
 
         Feature #12: Poisson models are structurally overconfident because
         hockey has massive randomness (puck bounces, posts, empty nets).
 
-        Uses different shrinkage by bet type:
+        Static shrinkage (fallback) uses different rates by bet type:
         - ML (moneyline): 0.18 — mild shrinkage, model is reasonable at 50-65%
         - Spread/total: 0.35 — aggressive shrinkage because Poisson structurally
           overestimates margin distributions (empty-net goals, OT, score effects
           aren't properly modeled)
 
-        Shrinkage pulls predictions toward 50%:
-        - ML:     60% → 58.2%, 65% → 62.3%, 70% → 66.4%
-        - Spread: 70% → 57.0%, 75% → 58.8%, 80% → 62.0%
-
         Controlled by calibration_shrinkage / calibration_spread_shrinkage.
         """
         if not _mc.calibration_enabled:
             return raw_prob
+
+        # Use rolling calibrator if fitted
+        if (
+            BettingModel._rolling_calibrator is not None
+            and BettingModel._rolling_calibrator.is_fitted
+        ):
+            return BettingModel._rolling_calibrator.calibrate(raw_prob, bet_type)
+
+        # Static fallback: shrinkage toward 50%
         if bet_type in ("spread", "total"):
             shrinkage = _mc.calibration_spread_shrinkage
         else:

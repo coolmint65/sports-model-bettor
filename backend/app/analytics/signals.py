@@ -70,6 +70,7 @@ class SignalGenerator:
         signals.extend(self._line_stability_signals(features, home_abbr, away_abbr, home_name, away_name))
         signals.extend(self._h2h_recency_signals(features, home_abbr, away_abbr, home_name, away_name))
         signals.extend(self._consensus_signals(features, home_abbr, away_abbr))
+        signals.extend(self._line_movement_signals(features, home_abbr, away_abbr, home_name, away_name))
 
         # Filter noise and sort by strength
         signals = [s for s in signals if s.get("strength", 0) >= 0.2]
@@ -468,6 +469,79 @@ class SignalGenerator:
                 "schedule",
                 f"{away_abbr} on extended road trip ({away_road} games)",
                 "negative", away_abbr, 0.35,
+            ))
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    #  Travel signals                                                     #
+    # ------------------------------------------------------------------ #
+
+    def _travel_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+    ) -> List[Dict[str, Any]]:
+        signals: List[Dict[str, Any]] = []
+        travel = features.get("travel", {})
+        if not travel:
+            return signals
+
+        distance = travel.get("distance_miles", 0)
+        tz_delta = travel.get("timezone_delta", 0)
+        fatigue = travel.get("fatigue_score", 0)
+        is_cross_country = travel.get("is_cross_country", False)
+        is_tz_mismatch = travel.get("is_timezone_mismatch", False)
+
+        # Long road trip with timezone shift
+        if is_cross_country and is_tz_mismatch:
+            direction = "east" if tz_delta > 0 else "west"
+            signals.append(_signal(
+                "travel",
+                f"Long road trip: {distance:,.0f} miles with "
+                f"{abs(tz_delta)}-hour timezone shift ({direction})",
+                "negative", away_abbr,
+                min(0.85, 0.40 + fatigue * 0.45),
+                icon="plane",
+                tooltip=(
+                    f"{away_abbr} traveling {distance:,.0f} miles across "
+                    f"{abs(tz_delta)} time zones — fatigue score {fatigue:.2f}"
+                ),
+            ))
+        elif is_cross_country:
+            # Cross-country but same or close timezone (e.g. north-south)
+            signals.append(_signal(
+                "travel",
+                f"Cross-country travel: {distance:,.0f} miles",
+                "negative", away_abbr,
+                min(0.60, 0.30 + fatigue * 0.30),
+                icon="plane",
+                tooltip=f"{away_abbr} traveling {distance:,.0f} miles",
+            ))
+        elif is_tz_mismatch:
+            # Short distance but timezone mismatch (rare but possible)
+            direction = "east" if tz_delta > 0 else "west"
+            signals.append(_signal(
+                "travel",
+                f"{abs(tz_delta)}-hour timezone shift ({direction}) for {away_abbr}",
+                "negative", away_abbr,
+                min(0.50, 0.25 + fatigue * 0.25),
+                icon="clock",
+                tooltip=(
+                    f"{away_abbr} crossing {abs(tz_delta)} time zones — "
+                    f"body clock adjustment needed"
+                ),
+            ))
+
+        # Home team benefits from minimal travel
+        if fatigue >= 0.4:
+            signals.append(_signal(
+                "travel",
+                f"{home_abbr} at home — no travel fatigue",
+                "positive", home_abbr,
+                min(0.45, 0.20 + fatigue * 0.25),
+                icon="home",
             ))
 
         return signals
@@ -1601,6 +1675,125 @@ class SignalGenerator:
                     min(0.5, 0.25 + diff / 100),
                     icon="bar-chart",
                     tooltip=f"Consensus across {consensus.get('sources_count', 0)} sportsbooks",
+                ))
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    #  Line movement signals                                              #
+    # ------------------------------------------------------------------ #
+
+    def _line_movement_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+        home_name: str,
+        away_name: str,
+    ) -> List[Dict[str, Any]]:
+        """Generate signals from opening-vs-current line movement."""
+        signals: List[Dict[str, Any]] = []
+        lm = features.get("line_movement", {})
+
+        snapshots = lm.get("snapshots_count", 0)
+        if snapshots < 2:
+            return signals
+
+        ml_shift = lm.get("ml_implied_shift", 0.0) or 0.0
+        ml_movement = lm.get("ml_movement", 0.0) or 0.0
+        ou_movement = lm.get("ou_movement", 0.0) or 0.0
+        spread_movement = lm.get("spread_movement", 0.0) or 0.0
+        is_reverse = lm.get("is_reverse_line_movement", False)
+        open_ml = lm.get("home_ml_open")
+        curr_ml = lm.get("home_ml_current")
+
+        # --- Moneyline movement signal ---
+        if abs(ml_shift) >= _mc.line_movement_min_shift and open_ml is not None and curr_ml is not None:
+            if ml_movement < 0:
+                # Home becoming more favored
+                favored_team = home_name
+                favored_abbr = home_abbr
+                impact = "positive"
+            else:
+                favored_team = away_name
+                favored_abbr = away_abbr
+                impact = "positive"
+
+            # Strength scales with magnitude of implied shift
+            strength = min(0.85, 0.35 + abs(ml_shift) * 5.0)
+
+            signals.append(_signal(
+                "market",
+                f"Line moving toward {favored_team} "
+                f"(opened {open_ml:+.0f}, now {curr_ml:+.0f})",
+                impact, favored_abbr, strength,
+                icon="trending-up" if ml_movement < 0 else "trending-down",
+                tooltip=(
+                    f"Implied probability shifted {abs(ml_shift):.1%} toward "
+                    f"{favored_team} across {snapshots} snapshots"
+                ),
+            ))
+
+        # --- Reverse line movement (sharp money indicator) ---
+        if is_reverse and abs(ml_shift) >= _mc.line_movement_min_shift:
+            if ml_movement < 0:
+                sharp_side = home_name
+                sharp_abbr = home_abbr
+            else:
+                sharp_side = away_name
+                sharp_abbr = away_abbr
+
+            signals.append(_signal(
+                "market",
+                f"Reverse line movement detected — sharp money on {sharp_side}",
+                "positive", sharp_abbr,
+                min(0.90, 0.50 + abs(ml_shift) * 4.0),
+                icon="alert-triangle",
+                tooltip=(
+                    "Line moved against expected public betting direction. "
+                    "This often indicates professional/sharp bettors have taken a position."
+                ),
+            ))
+
+        # --- Over/under movement signal ---
+        if abs(ou_movement) >= 0.5:
+            direction = "down" if ou_movement < 0 else "up"
+            open_ou = lm.get("total_open")
+            curr_ou = lm.get("total_current")
+            ou_text = f"Total line moved {direction}"
+            if open_ou is not None and curr_ou is not None:
+                ou_text = f"Total line moved {direction} (opened {open_ou}, now {curr_ou})"
+
+            ou_impact = "under" if ou_movement < 0 else "over"
+            signals.append(_signal(
+                "market",
+                ou_text,
+                "neutral", home_abbr,
+                min(0.65, 0.30 + abs(ou_movement) * 0.3),
+                icon="activity",
+                tooltip=f"Over/under shifted {ou_movement:+.1f} goals from opening",
+            ))
+
+        # --- Spread movement signal ---
+        if abs(spread_movement) >= 0.5:
+            open_spread = lm.get("spread_open")
+            curr_spread = lm.get("spread_current")
+            if open_spread is not None and curr_spread is not None:
+                if spread_movement < 0:
+                    spread_team = home_name
+                    spread_abbr = home_abbr
+                else:
+                    spread_team = away_name
+                    spread_abbr = away_abbr
+
+                signals.append(_signal(
+                    "market",
+                    f"Puck line moved toward {spread_team} "
+                    f"(opened {open_spread:+.1f}, now {curr_spread:+.1f})",
+                    "neutral", spread_abbr,
+                    min(0.55, 0.25 + abs(spread_movement) * 0.25),
+                    icon="bar-chart",
+                    tooltip=f"Spread shifted {spread_movement:+.1f} from opening",
                 ))
 
         return signals

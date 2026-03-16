@@ -330,6 +330,39 @@ async def _settle_bets():
         logger.error("Auto-settlement failed: %s", exc, exc_info=True)
 
 
+async def _check_auto_retrain():
+    """Check if the ML model should be retrained and retrain if needed.
+
+    Runs on a slow cadence (weekly / after enough new games). The
+    actual decision logic lives in auto_retrain.py — this is just
+    the scheduler wrapper that handles session management and logging.
+    """
+    try:
+        from app.analytics.auto_retrain import auto_retrain_if_needed
+
+        async with get_write_session_context() as session:
+            result = await auto_retrain_if_needed(session)
+
+        if result.get("retrained"):
+            if result.get("improved"):
+                logger.info(
+                    "Auto-retrain: model improved (MAE %.4f -> %.4f, %d games)",
+                    result.get("old_mae") or 0.0,
+                    result["new_mae"],
+                    result["games_used"],
+                )
+            else:
+                logger.info(
+                    "Auto-retrain: new model not better, kept old (MAE %.4f vs %.4f)",
+                    result["new_mae"],
+                    result.get("old_mae") or 0.0,
+                )
+        else:
+            logger.debug("Auto-retrain: skipped — %s", result.get("reason", "unknown"))
+    except Exception as exc:
+        logger.error("Auto-retrain check failed: %s", exc, exc_info=True)
+
+
 async def _run_full_data_sync():
     """Run a full data sync (schedule, teams, rosters, odds, injuries, predictions).
 
@@ -407,6 +440,7 @@ async def _scheduler_loop():
     ALT_REFRESH_INTERVAL = 3600  # 60 min — refresh alternate lines (was 1800)
     PROPS_SYNC_INTERVAL = 3600   # 60 min — sync player props (was 1800)
     STARTER_SYNC_INTERVAL = 900  # 15 min — check confirmed starters
+    RETRAIN_CHECK_INTERVAL = 86400  # 24h — check if ML model needs retraining
 
     _scheduler_running = True
     logger.info("Live odds scheduler started (credit-optimised)")
@@ -426,6 +460,7 @@ async def _scheduler_loop():
     last_alt_refresh = 0.0  # force alt refresh on first sync
     last_props_sync = 0.0   # force props sync on first cycle with games
     last_starter_sync = 0.0  # force starter sync on first cycle with games
+    last_retrain_check = 0.0  # force retrain check on first idle cycle
     _iteration = 0
 
     # Brief pause to let the full sync populate today's schedule

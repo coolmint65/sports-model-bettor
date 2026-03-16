@@ -8,6 +8,7 @@ All features are designed for NHL hockey but structured to be sport-adaptable.
 
 import json
 import logging
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import and_, case, desc, func, or_, select
@@ -1536,23 +1537,33 @@ class FeatureEngine:
         betting. A significant move toward one side suggests informed bettors
         have taken a position.
 
-        Returns dict with movement deltas and a directional signal.
+        Returns dict with:
+            - ml_movement: raw moneyline point movement (negative = home more favored)
+            - ml_implied_shift: change in implied probability (positive = home more favored)
+            - ou_movement: over/under line movement (negative = total dropped)
+            - spread_movement: home spread movement
+            - snapshots_count: number of OddsSnapshot records found
+            - is_reverse_line_movement: True if line moved against expected public action
+            - home_ml_open / home_ml_current / away_ml_open / away_ml_current
+            - total_open / total_current / spread_open / spread_current
+            - sharp_signal: 'sharp_home', 'sharp_away', or 'neutral'
         """
         defaults = {
             "home_ml_open": None,
             "away_ml_open": None,
             "home_ml_current": None,
             "away_ml_current": None,
-            "home_ml_move": 0.0,
-            "away_ml_move": 0.0,
+            "ml_movement": 0.0,
+            "ml_implied_shift": 0.0,
             "total_open": None,
             "total_current": None,
-            "total_move": 0.0,
+            "ou_movement": 0.0,
             "spread_open": None,
             "spread_current": None,
-            "spread_move": 0.0,
+            "spread_movement": 0.0,
             "sharp_signal": "neutral",
             "snapshots_count": 0,
+            "is_reverse_line_movement": False,
         }
 
         try:
@@ -1584,65 +1595,139 @@ class FeatureEngine:
             count_result = await db.execute(count_stmt)
             snap_count = count_result.scalar() or 0
 
-            if not opening or not current or snap_count < 2:
-                # Use game-level odds as fallback if only one snapshot
-                if opening:
+            # Determine opening and current ML odds.
+            # If we have 2+ snapshots, use opening vs current snapshot.
+            # If only pregame snapshot exists on Game model, use that as fallback.
+            open_home_ml: Optional[float] = None
+            open_away_ml: Optional[float] = None
+            curr_home_ml: Optional[float] = None
+            curr_away_ml: Optional[float] = None
+            open_ou: Optional[float] = None
+            curr_ou: Optional[float] = None
+            open_spread: Optional[float] = None
+            curr_spread: Optional[float] = None
+
+            if opening and current and snap_count >= 2:
+                open_home_ml = opening.home_moneyline
+                open_away_ml = opening.away_moneyline
+                curr_home_ml = current.home_moneyline
+                curr_away_ml = current.away_moneyline
+                open_ou = opening.over_under_line
+                curr_ou = current.over_under_line
+                open_spread = opening.home_spread_line
+                curr_spread = current.home_spread_line
+            else:
+                # Fallback: use pregame_home_moneyline vs current home_moneyline
+                # from the Game model itself.
+                pregame_ml = getattr(game, "pregame_home_moneyline", None)
+                current_ml = getattr(game, "home_moneyline", None)
+                if pregame_ml is not None and current_ml is not None:
+                    open_home_ml = pregame_ml
+                    curr_home_ml = current_ml
+                    # We don't have pregame away ML on the Game model, but
+                    # we can use the snapshot if available.
+                    if opening:
+                        open_away_ml = opening.away_moneyline
+                        curr_away_ml = (
+                            current.away_moneyline if current else
+                            getattr(game, "away_moneyline", None)
+                        )
+                    else:
+                        curr_away_ml = getattr(game, "away_moneyline", None)
+                elif opening:
+                    # Only one snapshot — record opening values but no movement
                     defaults["home_ml_open"] = opening.home_moneyline
                     defaults["away_ml_open"] = opening.away_moneyline
                     defaults["total_open"] = opening.over_under_line
                     defaults["spread_open"] = opening.home_spread_line
-                defaults["snapshots_count"] = snap_count
-                return defaults
-
-            result = {
-                "home_ml_open": opening.home_moneyline,
-                "away_ml_open": opening.away_moneyline,
-                "home_ml_current": current.home_moneyline,
-                "away_ml_current": current.away_moneyline,
-                "total_open": opening.over_under_line,
-                "total_current": current.over_under_line,
-                "spread_open": opening.home_spread_line,
-                "spread_current": current.home_spread_line,
-                "snapshots_count": snap_count,
-            }
-
-            # Compute movement deltas
-            home_ml_move = 0.0
-            if opening.home_moneyline and current.home_moneyline:
-                home_ml_move = current.home_moneyline - opening.home_moneyline
-            result["home_ml_move"] = home_ml_move
-
-            away_ml_move = 0.0
-            if opening.away_moneyline and current.away_moneyline:
-                away_ml_move = current.away_moneyline - opening.away_moneyline
-            result["away_ml_move"] = away_ml_move
-
-            total_move = 0.0
-            if opening.over_under_line and current.over_under_line:
-                total_move = current.over_under_line - opening.over_under_line
-            result["total_move"] = total_move
-
-            spread_move = 0.0
-            if opening.home_spread_line and current.home_spread_line:
-                spread_move = current.home_spread_line - opening.home_spread_line
-            result["spread_move"] = spread_move
-
-            # Determine sharp signal based on moneyline movement
-            # In American odds: line moving more negative = more favored
-            # Significant threshold: 15+ points of ML movement
-            signal = "neutral"
-            if abs(home_ml_move) >= 15:
-                if home_ml_move < 0:
-                    signal = "sharp_home"  # Home becoming more favored
+                    defaults["snapshots_count"] = snap_count
+                    return defaults
                 else:
-                    signal = "sharp_away"  # Home becoming less favored
-            result["sharp_signal"] = signal
+                    defaults["snapshots_count"] = snap_count
+                    return defaults
 
-            return result
+            # --- Compute movement deltas ---
+            ml_movement = 0.0
+            if open_home_ml is not None and curr_home_ml is not None:
+                ml_movement = curr_home_ml - open_home_ml
+
+            ou_movement = 0.0
+            if open_ou is not None and curr_ou is not None:
+                ou_movement = curr_ou - open_ou
+
+            spread_movement = 0.0
+            if open_spread is not None and curr_spread is not None:
+                spread_movement = curr_spread - open_spread
+
+            # --- Compute implied probability shift ---
+            # Convert opening and current American odds to implied prob,
+            # then take the delta. Positive shift = home team more favored now.
+            ml_implied_shift = 0.0
+            if open_home_ml is not None and curr_home_ml is not None:
+                open_implied = self._american_to_implied(open_home_ml)
+                curr_implied = self._american_to_implied(curr_home_ml)
+                ml_implied_shift = curr_implied - open_implied
+
+            # --- Detect reverse line movement ---
+            # Reverse line movement: the line moves AGAINST the side that
+            # received the majority of public bets. Since we don't have
+            # public betting percentages, we use a heuristic: if the home
+            # team was already the favorite (negative ML) and the line moved
+            # FURTHER toward home, that's likely sharp money (public usually
+            # bets favorites, but sharp money would be needed to move the
+            # line even further toward the already-favored side).
+            is_reverse = False
+            if open_home_ml is not None and curr_home_ml is not None:
+                home_was_favorite = open_home_ml < 0
+                line_moved_toward_home = ml_movement < -10  # 10+ pts more negative
+                line_moved_toward_away = ml_movement > 10
+
+                if home_was_favorite and line_moved_toward_home:
+                    # Public bets favorites → sharp money also on home = RLM
+                    is_reverse = True
+                elif not home_was_favorite and line_moved_toward_away:
+                    # Home was underdog, public on away favorite, line moves
+                    # further toward away = sharp money on away
+                    is_reverse = True
+
+            # --- Determine sharp signal ---
+            signal = "neutral"
+            if abs(ml_movement) >= 15:
+                if ml_movement < 0:
+                    signal = "sharp_home"
+                else:
+                    signal = "sharp_away"
+
+            return {
+                "home_ml_open": open_home_ml,
+                "away_ml_open": open_away_ml,
+                "home_ml_current": curr_home_ml,
+                "away_ml_current": curr_away_ml,
+                "ml_movement": ml_movement,
+                "ml_implied_shift": ml_implied_shift,
+                "total_open": open_ou,
+                "total_current": curr_ou,
+                "ou_movement": ou_movement,
+                "spread_open": open_spread,
+                "spread_current": curr_spread,
+                "spread_movement": spread_movement,
+                "sharp_signal": signal,
+                "snapshots_count": snap_count,
+                "is_reverse_line_movement": is_reverse,
+            }
 
         except Exception as exc:
             logger.warning("Failed to compute line movement for game %s: %s", game_id, exc)
             return defaults
+
+    @staticmethod
+    def _american_to_implied(odds: float) -> float:
+        """Convert American odds to implied probability (0-1)."""
+        if odds < 0:
+            return abs(odds) / (abs(odds) + 100.0)
+        elif odds > 0:
+            return 100.0 / (odds + 100.0)
+        return 0.5
 
     # ------------------------------------------------------------------ #
     #  Starter confirmation confidence                                   #
@@ -2749,6 +2834,96 @@ class FeatureEngine:
         }
 
     # ------------------------------------------------------------------ #
+    #  Time-of-day context (body clock disadvantage)                      #
+    # ------------------------------------------------------------------ #
+
+    def get_time_of_day_context(
+        self,
+        start_time: Optional[datetime],
+        home_abbr: str,
+        away_abbr: str,
+    ) -> Dict[str, Any]:
+        """
+        Compute time-of-day performance context for the away team.
+
+        West coast teams playing early East coast afternoon games
+        historically underperform due to body clock mismatch. This
+        method quantifies that disadvantage.
+
+        Args:
+            start_time: Scheduled puck-drop time in UTC.
+            home_abbr: Home team abbreviation (e.g. "BOS").
+            away_abbr: Away team abbreviation (e.g. "LAK").
+
+        Returns:
+            dict with away_local_hour, is_early_start, is_matinee,
+            body_clock_disadvantage (0-1), and game_hour_utc.
+        """
+        empty: Dict[str, Any] = {
+            "away_local_hour": None,
+            "is_early_start": False,
+            "is_matinee": False,
+            "body_clock_disadvantage": 0.0,
+            "game_hour_utc": None,
+        }
+
+        if start_time is None:
+            return empty
+
+        # Try importing timezone info from the venues module (another agent
+        # may have created it). Fall back to a hardcoded offset dict.
+        try:
+            from app.analytics.venues import TEAM_TZ_OFFSET  # type: ignore[import-untyped]
+        except ImportError:
+            TEAM_TZ_OFFSET = {
+                # Pacific (UTC-8 during standard, but NHL season spans
+                # both; we use a fixed offset for simplicity)
+                "ANA": -8, "LAK": -8, "SJS": -8, "SEA": -8, "VAN": -8, "VGK": -8,
+                # Mountain (UTC-7)
+                "CGY": -7, "COL": -7, "EDM": -7, "UTA": -7,
+                # Central (UTC-6)
+                "CHI": -6, "DAL": -6, "MIN": -6, "NSH": -6, "STL": -6, "WPG": -6,
+                # Eastern: -5 (default)
+            }
+
+        game_hour_utc = start_time.hour
+
+        # Away team local hour
+        away_offset = TEAM_TZ_OFFSET.get(away_abbr, -5)  # default Eastern
+        away_local_hour = (game_hour_utc + away_offset) % 24
+
+        # Early start: game starts before configured threshold in away
+        # team's local time (default 2pm / 14:00)
+        early_threshold = _mc.early_start_threshold
+        is_early_start = away_local_hour < early_threshold
+
+        # Matinee: game starts before 5pm ET (typically weekend afternoon)
+        eastern_hour = (game_hour_utc - 5) % 24
+        is_matinee = eastern_hour < 17
+
+        # Body clock disadvantage: how far from a typical 7pm local start.
+        # Normalized to 0-1 where 0 = no disadvantage, 1 = worst case.
+        # A typical NHL game starts at 7pm local. A game starting at 1pm
+        # local for a west-coast team is 6 hours earlier than normal.
+        typical_start_hour = 19  # 7pm local
+        if away_local_hour < typical_start_hour:
+            hours_early = typical_start_hour - away_local_hour
+        else:
+            hours_early = 0
+
+        # Max realistic disadvantage is ~8 hours (10am local for a Pacific
+        # team). Normalize so 8+ hours = 1.0.
+        body_clock_disadvantage = min(hours_early / 8.0, 1.0)
+
+        return {
+            "away_local_hour": away_local_hour,
+            "is_early_start": is_early_start,
+            "is_matinee": is_matinee,
+            "body_clock_disadvantage": round(body_clock_disadvantage, 3),
+            "game_hour_utc": game_hour_utc,
+        }
+
+    # ------------------------------------------------------------------ #
     #  Build comprehensive feature set for a game                         #
     # ------------------------------------------------------------------ #
 
@@ -2940,6 +3115,13 @@ class FeatureEngine:
             else False
         )
 
+        # Travel distance and timezone context
+        from app.analytics.venues import get_travel_context
+
+        _away_abbr = away_team.abbreviation if away_team else "UNK"
+        _home_abbr = home_team.abbreviation if home_team else "UNK"
+        travel = get_travel_context(_away_abbr, _home_abbr)
+
         features = {
             # Game metadata
             "game_id": game.id,
@@ -3057,6 +3239,8 @@ class FeatureEngine:
             # Schedule spot / situational awareness
             "is_divisional": is_divisional,
             "is_cross_conference": is_cross_conference,
+            # Travel distance and timezone context
+            "travel": travel,
             # Line movement (opening vs current odds)
             "line_movement": line_movement,
             # Feature #6: PP opportunity rate vs opponent

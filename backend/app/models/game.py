@@ -199,6 +199,10 @@ class Game(TimestampMixin, Base):
     away_starter_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     away_starter_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
 
+    # Assigned referees (populated when available from NHL API or external sources)
+    referee_1: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    referee_2: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
     # Relationships
     home_team: Mapped["Team"] = relationship(
         "Team",

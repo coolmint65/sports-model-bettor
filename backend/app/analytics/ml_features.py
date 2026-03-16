@@ -287,6 +287,18 @@ def flatten_features(features: Dict[str, Any]) -> Dict[str, float]:
         flat[f"{prefix}_close_game_wr"] = _safe_float(cr.get("close_game_win_rate"))
         flat[f"{prefix}_scoring_first_rate"] = _safe_float(cr.get("scoring_first_rate"))
 
+    # --- Line movement ---
+    lm = features.get("line_movement", {})
+    flat["line_ml_implied_shift"] = _safe_float(lm.get("ml_implied_shift", 0))
+    flat["line_ou_movement"] = _safe_float(lm.get("ou_movement", 0))
+    flat["line_spread_movement"] = _safe_float(lm.get("spread_movement", 0))
+
+    # --- Travel context ---
+    travel = features.get("travel", {})
+    flat["travel_distance_miles"] = _safe_float(travel.get("distance_miles"))
+    flat["travel_timezone_delta"] = _safe_float(travel.get("timezone_delta"))
+    flat["travel_fatigue_score"] = _safe_float(travel.get("fatigue_score"))
+
     # --- Game context booleans ---
     flat["is_divisional"] = 1.0 if features.get("is_divisional") else 0.0
     flat["is_cross_conference"] = 1.0 if features.get("is_cross_conference") else 0.0
@@ -317,6 +329,10 @@ def flatten_features(features: Dict[str, Any]) -> Dict[str, float]:
     flat["diff_shooting_pct"] = flat.get("home_advanced_shooting_pct", 0) - flat.get("away_advanced_shooting_pct", 0)
     flat["diff_pdo"] = flat.get("home_advanced_pdo", 0) - flat.get("away_advanced_pdo", 0)
     flat["diff_hd_proxy"] = flat.get("home_advanced_hd_proxy", 0) - flat.get("away_advanced_hd_proxy", 0)
+
+    # Line movement differential (implied shift already encodes direction;
+    # positive = home more favored, so this is directly usable as a differential)
+    flat["diff_line_movement"] = flat.get("line_ml_implied_shift", 0)
 
     return flat
 

@@ -125,6 +125,10 @@ class ModelConfig(BaseModel):
     divisional_under_adj: float = 0.06    # divisional games tend to go under
     timezone_penalty: float = 0.06        # west coast team playing east coast afternoon
 
+    # Graduated travel fatigue (replaces binary is_travel_disadvantage)
+    travel_fatigue_factor: float = 0.12        # max xG penalty for worst travel
+    travel_fatigue_min_distance: int = 500     # miles, no penalty below this
+
     # Score state tendencies (live model)
     trailing_desperation_boost: float = 0.25   # trailing by 1 in 3rd, boost scoring rate
     leading_shell_reduction: float = 0.20      # leading by 2+, reduce scoring rate
@@ -196,6 +200,10 @@ class ModelConfig(BaseModel):
     composite_weight_market_edge: float = 0.09
     composite_weight_line_movement: float = 0.08
 
+    # Line movement: opening-vs-current odds shift as xG adjustment
+    line_movement_factor: float = 0.15          # how much line movement adjusts xG
+    line_movement_min_shift: float = 0.02       # minimum implied prob shift to trigger
+
     # Faceoff contribution to defensive factor
     faceoff_defense_weight: float = 0.10
 
@@ -260,6 +268,10 @@ class ModelConfig(BaseModel):
     poisson_max_goals: int = 12
     total_lines: List[float] = [3.5, 4.5, 5.5, 6.5, 7.5, 8.5]
     puck_line: float = 1.5
+
+    # Referee tendency adjustment
+    referee_penalty_factor: float = 0.10      # weight of referee tendency adjustment on xG
+    referee_min_games: int = 20               # minimum games officiated for ref data to apply
 
     # Feature extraction windows
     form_window_short: int = 5
