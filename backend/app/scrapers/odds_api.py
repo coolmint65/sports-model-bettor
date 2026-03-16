@@ -9,6 +9,7 @@ Operates gracefully when no key is configured (logs a warning, returns empty).
 """
 
 import logging
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -19,55 +20,12 @@ from app.config import settings
 from app.models.game import Game
 from app.models.team import Team
 from app.scrapers.base import BaseScraper, ScraperError
+from app.scrapers.team_map import NHL_TEAM_MAP, resolve_team
 
 logger = logging.getLogger(__name__)
 
-# Mapping of common Odds API team names to NHL abbreviations.
-# The Odds API uses full team names; we map them to the 3-letter codes
-# stored in our database.
-ODDS_API_TEAM_MAP: Dict[str, str] = {
-    "Anaheim Ducks": "ANA",
-    "Arizona Coyotes": "ARI",
-    "Boston Bruins": "BOS",
-    "Buffalo Sabres": "BUF",
-    "Calgary Flames": "CGY",
-    "Carolina Hurricanes": "CAR",
-    "Chicago Blackhawks": "CHI",
-    "Colorado Avalanche": "COL",
-    "Columbus Blue Jackets": "CBJ",
-    "Dallas Stars": "DAL",
-    "Detroit Red Wings": "DET",
-    "Edmonton Oilers": "EDM",
-    "Florida Panthers": "FLA",
-    "Los Angeles Kings": "LAK",
-    "LA Kings": "LAK",
-    "L.A. Kings": "LAK",
-    "Minnesota Wild": "MIN",
-    "Montreal Canadiens": "MTL",
-    "Montréal Canadiens": "MTL",
-    "Nashville Predators": "NSH",
-    "New Jersey Devils": "NJD",
-    "New York Islanders": "NYI",
-    "NY Islanders": "NYI",
-    "New York Rangers": "NYR",
-    "NY Rangers": "NYR",
-    "Ottawa Senators": "OTT",
-    "Philadelphia Flyers": "PHI",
-    "Pittsburgh Penguins": "PIT",
-    "San Jose Sharks": "SJS",
-    "Seattle Kraken": "SEA",
-    "St. Louis Blues": "STL",
-    "St Louis Blues": "STL",
-    "Saint Louis Blues": "STL",
-    "Tampa Bay Lightning": "TBL",
-    "Toronto Maple Leafs": "TOR",
-    "Utah Hockey Club": "UTA",
-    "Utah HC": "UTA",
-    "Vancouver Canucks": "VAN",
-    "Vegas Golden Knights": "VGK",
-    "Washington Capitals": "WSH",
-    "Winnipeg Jets": "WPG",
-}
+# Re-export for any code that imports ODDS_API_TEAM_MAP from here.
+ODDS_API_TEAM_MAP = NHL_TEAM_MAP
 
 
 class OddsScraper(BaseScraper):
@@ -107,23 +65,7 @@ class OddsScraper(BaseScraper):
     @staticmethod
     def _resolve_team(name: str) -> str:
         """Resolve team name with direct + fuzzy matching."""
-        if not name:
-            return ""
-        # Direct lookup
-        abbr = ODDS_API_TEAM_MAP.get(name, "")
-        if abbr:
-            return abbr
-        # Fuzzy: check if any known name is a substring
-        name_lower = name.lower()
-        for full_name, code in ODDS_API_TEAM_MAP.items():
-            if full_name.lower() in name_lower or name_lower in full_name.lower():
-                return code
-        # Mascot matching
-        mascot = name.split()[-1] if name else ""
-        for full_name, code in ODDS_API_TEAM_MAP.items():
-            if full_name.split()[-1].lower() == mascot.lower():
-                return code
-        return ""
+        return resolve_team(name)
 
     # ------------------------------------------------------------------
     # Fetch odds

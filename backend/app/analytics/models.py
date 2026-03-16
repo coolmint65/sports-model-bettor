@@ -410,30 +410,19 @@ class BettingModel:
 
         # ---- Period-specific scoring rate adjustment ----
         # Teams with strong/weak period tendencies should have xG adjusted.
-        # A team that scores heavily in P1 but collapses in P3 has different
-        # value than raw goals-per-game suggests.
-        home_periods = features.get("home_periods", {})
-        away_periods = features.get("away_periods", {})
         league_period_avg = self.league_avg / 3.0  # ~1.02 per period
 
-        if home_periods.get("games_found", 0) >= 10:
-            # Sum of period averages vs expected (league_avg)
-            home_period_total = (
-                home_periods.get("avg_p1_for", league_period_avg)
-                + home_periods.get("avg_p2_for", league_period_avg)
-                + home_periods.get("avg_p3_for", league_period_avg)
-            )
-            period_dev = home_period_total - self.league_avg
-            home_xg += period_dev * _mc.period_scoring_factor
-
-        if away_periods.get("games_found", 0) >= 10:
-            away_period_total = (
-                away_periods.get("avg_p1_for", league_period_avg)
-                + away_periods.get("avg_p2_for", league_period_avg)
-                + away_periods.get("avg_p3_for", league_period_avg)
-            )
-            period_dev = away_period_total - self.league_avg
-            away_xg += period_dev * _mc.period_scoring_factor
+        for side_key, xg_attr in [("home_periods", "home"), ("away_periods", "away")]:
+            periods = features.get(side_key, {})
+            if periods.get("games_found", 0) >= 10:
+                period_total = sum(
+                    periods.get(f"avg_p{p}_for", league_period_avg) for p in (1, 2, 3)
+                )
+                period_dev = period_total - self.league_avg
+                if xg_attr == "home":
+                    home_xg += period_dev * _mc.period_scoring_factor
+                else:
+                    away_xg += period_dev * _mc.period_scoring_factor
 
         # ---- Possession adjustment (unified, best-available metric) ----
         # Three possession metrics exist (5v5 EV Corsi, close-game Corsi,
@@ -462,14 +451,13 @@ class BettingModel:
 
         # Shot quality (shooting%) adjustment — kept separate as it measures
         # a distinct signal (finishing ability, not possession volume).
-        if home_advanced.get("games_found", 0) >= adv_min_games:
-            home_sh_pct = home_advanced.get("shooting_pct", 8.0)
-            sh_deviation = (home_sh_pct - 8.0) / 100.0
-            home_xg *= 1.0 + sh_deviation * _mc.shot_quality_factor
-        if away_advanced.get("games_found", 0) >= adv_min_games:
-            away_sh_pct = away_advanced.get("shooting_pct", 8.0)
-            sh_deviation = (away_sh_pct - 8.0) / 100.0
-            away_xg *= 1.0 + sh_deviation * _mc.shot_quality_factor
+        for adv, xg_attr in [(home_advanced, "home"), (away_advanced, "away")]:
+            if adv.get("games_found", 0) >= adv_min_games:
+                sh_deviation = (adv.get("shooting_pct", 8.0) - 8.0) / 100.0
+                if xg_attr == "home":
+                    home_xg *= 1.0 + sh_deviation * _mc.shot_quality_factor
+                else:
+                    away_xg *= 1.0 + sh_deviation * _mc.shot_quality_factor
 
         # ---- PDO regression (luck adjustment) ----
         # PDO = shooting% + save%. League average is ~1.000.
@@ -478,12 +466,14 @@ class BettingModel:
         # Low PDO (<0.990) → xG depressed by bad luck → increase.
         pdo_factor = _mc.pdo_regression_factor
         if pdo_factor > 0:
-            home_pdo = features.get("home_form_10", {}).get("pdo", 1.0)
-            away_pdo = features.get("away_form_10", {}).get("pdo", 1.0)
-            if home_pdo != 1.0:
-                home_xg -= (home_pdo - 1.0) * pdo_factor * self.league_avg
-            if away_pdo != 1.0:
-                away_xg -= (away_pdo - 1.0) * pdo_factor * self.league_avg
+            for form_key, xg_attr in [("home_form_10", "home"), ("away_form_10", "away")]:
+                pdo = features.get(form_key, {}).get("pdo", 1.0)
+                if pdo != 1.0:
+                    adj = (pdo - 1.0) * pdo_factor * self.league_avg
+                    if xg_attr == "home":
+                        home_xg -= adj
+                    else:
+                        away_xg -= adj
 
         # ---- Goalie recent save% trend (hot/cold streaks) ----
         # A goalie whose L5 save% is significantly above/below their season

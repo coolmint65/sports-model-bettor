@@ -4,23 +4,20 @@ import {
   Clock,
   ChevronRight,
   TrendingUp,
-  Radio,
   Calendar,
   Minus,
   Target,
 } from 'lucide-react';
-import { format } from 'date-fns';
 import {
   teamName,
   teamAbbrev,
-  teamLogo,
   confidencePct,
-  parseAsUTC,
   isLiveStatus,
   formatBetType,
   formatPredictionValue,
 } from '../utils/teams';
-import { formatAmericanOdds } from '../utils/formatting';
+import { formatAmericanOdds, formatGameDate, formatGameTime } from '../utils/formatting';
+import TeamLogo from './shared/TeamLogo';
 
 function getStatusDisplay(game) {
   const status = game.status || game.game_state || '';
@@ -89,45 +86,6 @@ function parseClock(str) {
   return (parseInt(parts[0], 10) || 0) * 60 + (parseInt(parts[1], 10) || 0);
 }
 
-function TeamLogo({ team, size = 36 }) {
-  const logo = teamLogo(team);
-  if (!logo) return null;
-  return (
-    <img
-      className="team-logo"
-      src={logo}
-      alt=""
-      width={size}
-      height={size}
-      loading="lazy"
-      onError={(e) => { e.target.style.display = 'none'; }}
-    />
-  );
-}
-
-function formatGameDate(game) {
-  try {
-    const dateStr = game.start_time || game.datetime;
-    if (!dateStr) return null;
-    const date = parseAsUTC(dateStr);
-    if (!date || isNaN(date.getTime())) return null;
-    return format(date, 'EEE, MMM d');
-  } catch {
-    return null;
-  }
-}
-
-function formatGameTime(game) {
-  try {
-    const dateStr = game.start_time || game.datetime;
-    if (!dateStr) return 'TBD';
-    const date = parseAsUTC(dateStr);
-    if (!date || isNaN(date.getTime())) return 'TBD';
-    return format(date, 'h:mm a');
-  } catch {
-    return game.time || 'TBD';
-  }
-}
 
 function getConfidenceBadge(confidence) {
   if (confidence == null) return null;
