@@ -434,6 +434,14 @@ class Settings(BaseModel):
     # Applied at the DB level where we only have implied prob.
     best_bet_max_implied: float = 0.6667
 
+    # Bet type performance gating.
+    # If a bet type performs poorly over a rolling window, it is excluded
+    # from best-bet recommendations until performance improves.
+    gate_min_hit_rate: float = 0.45       # below this hit rate = gated
+    gate_min_roi: float = -0.15           # below this ROI = gated
+    gate_min_sample_size: int = 30        # need this many bets before gating
+    gate_lookback_days: int = 60          # rolling window for performance check
+
     # Scheduling
     scrape_interval_minutes: int = 30
     odds_refresh_interval_minutes: int = 15

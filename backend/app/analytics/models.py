@@ -832,6 +832,34 @@ class BettingModel:
             home_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, home_xg))
             away_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, away_xg))
 
+        # ---- Contrarian / public betting xG adjustment ----
+        # When the model disagrees with heavy public action (contrarian_value
+        # exceeds the threshold), boost the model's preferred side slightly.
+        # This is a confidence signal, not an xG override, so the max
+        # adjustment is capped at ±contrarian_factor (default 0.08 xG).
+        pub = features.get("public_signal", {})
+        contrarian_val = pub.get("contrarian_value", 0.0) or 0.0
+        if contrarian_val > _mc.contrarian_min_value and not pub.get(
+            "model_agrees_with_public", True
+        ):
+            # Model's preferred side is opposite to public side.
+            # Boost the side the model prefers (the non-public side).
+            public_side = pub.get("ml_public_side")
+            adj = contrarian_val * _mc.contrarian_factor
+            # Cap at contrarian_factor to keep adjustment small
+            adj = min(adj, _mc.contrarian_factor)
+            if public_side == "home":
+                # Public is on home → model prefers away → boost away xG
+                away_xg += adj
+                home_xg -= adj
+            elif public_side == "away":
+                # Public is on away → model prefers home → boost home xG
+                home_xg += adj
+                away_xg -= adj
+            # Re-apply floor/ceiling
+            home_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, home_xg))
+            away_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, away_xg))
+
         return round(home_xg, 3), round(away_xg, 3)
 
     def _weighted_goals_for(

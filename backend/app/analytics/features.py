@@ -3285,6 +3285,8 @@ class FeatureEngine:
             "consensus_line": consensus_line,
             # Time-of-day context (body clock disadvantage)
             "time_of_day": time_of_day,
+            # Referee tendency data
+            "referee": referee_data,
         }
 
         # Public signal needs the partially-built features dict (odds + line_movement)

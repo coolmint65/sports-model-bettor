@@ -299,6 +299,12 @@ def flatten_features(features: Dict[str, Any]) -> Dict[str, float]:
     flat["travel_timezone_delta"] = _safe_float(travel.get("timezone_delta"))
     flat["travel_fatigue_score"] = _safe_float(travel.get("fatigue_score"))
 
+    # --- Time-of-day context ---
+    tod = features.get("time_of_day", {})
+    flat["time_body_clock_disadvantage"] = _safe_float(tod.get("body_clock_disadvantage", 0))
+    flat["time_is_early_start"] = 1.0 if tod.get("is_early_start") else 0.0
+    flat["time_is_matinee"] = 1.0 if tod.get("is_matinee") else 0.0
+
     # --- Game context booleans ---
     flat["is_divisional"] = 1.0 if features.get("is_divisional") else 0.0
     flat["is_cross_conference"] = 1.0 if features.get("is_cross_conference") else 0.0
