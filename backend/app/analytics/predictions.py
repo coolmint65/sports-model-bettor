@@ -336,6 +336,82 @@ class PredictionManager:
         return best_bets
 
     # ------------------------------------------------------------------ #
+    #  Bet type performance gating                                        #
+    # ------------------------------------------------------------------ #
+
+    async def _get_gated_bet_types(self, db: AsyncSession) -> Set[str]:
+        """Determine which bet types should be gated based on recent performance.
+
+        Queries the last N days (gate_lookback_days) of settled prematch
+        predictions grouped by bet type.  A bet type is gated if:
+          - hit_rate < gate_min_hit_rate AND sample_size >= gate_min_sample_size
+          - OR roi < gate_min_roi AND sample_size >= gate_min_sample_size
+
+        Returns:
+            Set of bet type strings that should be excluded from best bets.
+        """
+        lookback = datetime.now(timezone.utc) - timedelta(
+            days=settings.gate_lookback_days
+        )
+
+        stmt = (
+            select(
+                Prediction.bet_type,
+                func.count(BetResult.id).label("total"),
+                func.sum(
+                    func.cast(BetResult.was_correct, type_=func.literal(1).type)
+                ).label("wins"),
+                func.sum(BetResult.profit_loss).label("profit"),
+            )
+            .join(Prediction, BetResult.prediction_id == Prediction.id)
+            .where(
+                and_(
+                    Prediction.phase == "prematch",
+                    BetResult.settled_at >= lookback,
+                )
+            )
+            .group_by(Prediction.bet_type)
+        )
+        result = await db.execute(stmt)
+        rows = result.all()
+
+        gated: Set[str] = set()
+        for row in rows:
+            bt = row.bet_type
+            total = row.total or 0
+            wins = row.wins or 0
+            profit = row.profit or 0.0
+
+            if total < settings.gate_min_sample_size:
+                continue
+
+            hit_rate = wins / total if total > 0 else 0.0
+            roi = profit / total if total > 0 else 0.0
+
+            if hit_rate < settings.gate_min_hit_rate:
+                logger.info(
+                    "Gating %s bets: %.0f%% hit rate over %d-day window "
+                    "(%d samples)",
+                    bt,
+                    hit_rate * 100,
+                    settings.gate_lookback_days,
+                    total,
+                )
+                gated.add(bt)
+            elif roi < settings.gate_min_roi:
+                logger.info(
+                    "Gating %s bets: %.1f%% ROI over %d-day window "
+                    "(%d samples)",
+                    bt,
+                    roi * 100,
+                    settings.gate_lookback_days,
+                    total,
+                )
+                gated.add(bt)
+
+        return gated
+
+    # ------------------------------------------------------------------ #
     #  Evaluate past predictions                                          #
     # ------------------------------------------------------------------ #
 
