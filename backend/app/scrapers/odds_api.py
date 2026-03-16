@@ -292,7 +292,6 @@ class OddsScraper(BaseScraper):
             ]
             if home_spreads:
                 # Find the most common absolute spread value (mode)
-                from collections import Counter
                 spread_counts = Counter(
                     abs(s["home_spread"]) for s in home_spreads
                 )
@@ -318,7 +317,6 @@ class OddsScraper(BaseScraper):
             totals = [t.get("total", 0) for t in all_totals if t.get("total")]
             if totals:
                 # Find the most common total line
-                from collections import Counter
                 total_counts = Counter(totals)
                 consensus_total = total_counts.most_common(1)[0][0]
                 best["over_under"] = consensus_total

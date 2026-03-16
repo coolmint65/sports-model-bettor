@@ -480,20 +480,18 @@ class BettingModel:
         # average is on a streak that should shift expected goals.
         goalie_trend_factor = _mc.goalie_trend_factor
         if goalie_trend_factor > 0:
-            # Home goalie trend affects away_xg (a hot home goalie suppresses away scoring)
-            home_g = features.get("home_goalie", {})
-            away_g = features.get("away_goalie", {})
-            home_l5_sv = home_g.get("last5_save_pct", 0.0)
-            home_season_sv = home_g.get("season_save_pct", 0.0)
-            if home_l5_sv > 0 and home_season_sv > 0:
-                sv_trend = home_l5_sv - home_season_sv  # positive = hot streak
-                away_xg *= 1.0 - sv_trend * goalie_trend_factor * 10.0  # scale: .010 sv% diff → 1.5% xG shift
-
-            away_l5_sv = away_g.get("last5_save_pct", 0.0)
-            away_season_sv = away_g.get("season_save_pct", 0.0)
-            if away_l5_sv > 0 and away_season_sv > 0:
-                sv_trend = away_l5_sv - away_season_sv
-                home_xg *= 1.0 - sv_trend * goalie_trend_factor * 10.0
+            # Each goalie's trend affects the OPPOSING team's xG
+            for goalie_key, opp_attr in [("home_goalie", "away"), ("away_goalie", "home")]:
+                g = features.get(goalie_key, {})
+                l5_sv = g.get("last5_save_pct", 0.0)
+                season_sv = g.get("season_save_pct", 0.0)
+                if l5_sv > 0 and season_sv > 0:
+                    sv_trend = l5_sv - season_sv  # positive = hot streak
+                    mult = 1.0 - sv_trend * goalie_trend_factor * 10.0
+                    if opp_attr == "away":
+                        away_xg *= mult
+                    else:
+                        home_xg *= mult
 
         # ---- Goalie vs. specific opponent adjustment ----
         # A goalie who historically performs poorly against this opponent

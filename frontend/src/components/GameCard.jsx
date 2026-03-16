@@ -96,6 +96,65 @@ function getConfidenceBadge(confidence) {
   return { label: 'NO EDGE', className: 'badge-skip', icon: Minus };
 }
 
+function getPickTier(conf, isBest, hasEdge, hasGoodJuice) {
+  const unfaded = conf != null && conf >= 60 && hasGoodJuice;
+  if (isBest) return { tier: 'dc-pick-chip-best', tierLabel: 'BEST' };
+  if (conf != null && conf >= 75 && (hasEdge || unfaded)) return { tier: 'dc-pick-chip-good', tierLabel: 'STRONG' };
+  if (conf != null && conf >= 60 && (hasEdge || unfaded)) return { tier: 'dc-pick-chip-borderline', tierLabel: 'LEAN' };
+  return { tier: 'dc-pick-chip-skip', tierLabel: 'SKIP' };
+}
+
+function PickChips({ mlPick, spreadPick, totalPick, formatMarketPick }) {
+  const picks = [mlPick, spreadPick, totalPick].filter(Boolean);
+  const positivePicks = picks.filter((p) => p.edge == null || p.edge >= 0);
+  const bestPick = positivePicks.length > 0
+    ? positivePicks.reduce((best, p) => {
+        const score = (s) => (s?.composite_score ?? 0) || ((s?.edge ?? 0) * 100 + (s?.confidence ?? 0));
+        return score(p) > score(best) ? p : best;
+      }, positivePicks[0])
+    : null;
+
+  const annotated = picks.map((pick) => {
+    const betConf = pick.bet_confidence != null
+      ? confidencePct(pick.bet_confidence)
+      : (pick.confidence != null ? confidencePct(pick.confidence) : null);
+    const isBest = bestPick && pick === bestPick && positivePicks.length > 1;
+    const hasEdge = pick.edge == null || pick.edge >= 0;
+    return { pick, conf: betConf, isBest, hasEdge };
+  });
+
+  annotated.sort((a, b) => {
+    if (a.isBest !== b.isBest) return a.isBest ? -1 : 1;
+    if (a.hasEdge !== b.hasEdge) return a.hasEdge ? -1 : 1;
+    return (b.conf ?? 0) - (a.conf ?? 0);
+  });
+
+  return annotated.map(({ pick, conf, isBest, hasEdge }) => {
+    const label = formatMarketPick(pick);
+    const edgeVal = pick.edge != null ? pick.edge * 100 : null;
+    const edgePct = edgeVal != null ? `${edgeVal >= 0 ? '+' : ''}${edgeVal.toFixed(1)}%` : null;
+    const hasGoodJuice = pick.odds_display == null || pick.odds_display > 0 || pick.odds_display >= -170;
+    const { tier, tierLabel } = getPickTier(conf, isBest, hasEdge, hasGoodJuice);
+
+    return (
+      <div key={pick.bet_type} className={`dc-pick-chip ${tier}`}>
+        <Target size={11} />
+        <span className="dc-pick-chip-label">{label}</span>
+        {pick.odds_display != null && (
+          <span className="dc-pick-chip-odds">{formatAmericanOdds(pick.odds_display)}</span>
+        )}
+        {edgePct != null && (
+          <span className={`dc-pick-chip-edge${edgeVal < 0 ? ' dc-pick-chip-edge-neg' : ''}`}>Edge {edgePct}</span>
+        )}
+        {conf != null && (
+          <span className="dc-pick-chip-conf">{Math.round(conf)}%</span>
+        )}
+        <span className="dc-pick-chip-badge">{tierLabel}</span>
+      </div>
+    );
+  });
+}
+
 const MEDAL_STYLES = {
   gold: { className: 'rank-gold', label: '#1' },
   silver: { className: 'rank-silver', label: '#2' },
@@ -305,79 +364,12 @@ function GameCard({ game, section, medal }) {
       {/* Per-market pick bars (best ML, best Spread, best O/U) */}
       {topPicks.length > 0 ? (
         <div className="dc-picks-multi">
-          {(() => {
-            const picks = [mlPick, spreadPick, totalPick].filter(Boolean);
-            // Find the best pick among positive-edge picks
-            const positivePicks = picks.filter((p) => p.edge == null || p.edge >= 0);
-            const bestPick = positivePicks.length > 0
-              ? positivePicks.reduce((best, p) => {
-                  const score = (s) => (s?.composite_score ?? 0) || ((s?.edge ?? 0) * 100 + (s?.confidence ?? 0));
-                  return score(p) > score(best) ? p : best;
-                }, positivePicks[0])
-              : null;
-
-            // Show ALL picks — use bet_confidence for display, dim negative-edge ones
-            const annotated = picks.map((pick) => {
-              const betConf = pick.bet_confidence != null
-                ? confidencePct(pick.bet_confidence)
-                : (pick.confidence != null ? confidencePct(pick.confidence) : null);
-              const isBest = bestPick && pick === bestPick && positivePicks.length > 1;
-              const hasEdge = pick.edge == null || pick.edge >= 0;
-              return { pick, conf: betConf, isBest, hasEdge };
-            });
-            // Sort: BEST first, then positive-edge, then by confidence descending
-            annotated.sort((a, b) => {
-              if (a.isBest !== b.isBest) return a.isBest ? -1 : 1;
-              if (a.hasEdge !== b.hasEdge) return a.hasEdge ? -1 : 1;
-              return (b.conf ?? 0) - (a.conf ?? 0);
-            });
-
-            return annotated.map(({ pick, conf, isBest, hasEdge }) => {
-              const label = formatMarketPick(pick);
-              const edgeVal = pick.edge != null ? pick.edge * 100 : null;
-              const edgePct = edgeVal != null ? `${edgeVal >= 0 ? '+' : ''}${edgeVal.toFixed(1)}%` : null;
-              // Quality tier based on bet confidence and edge
-              let tier = '';
-              let tierLabel = '';
-              // Good juice: plus money or modest favorite (better than -200)
-              const hasGoodJuice = pick.odds_display == null || pick.odds_display > 0 || pick.odds_display >= -170;
-              // High-confidence with good juice shouldn't be faded even with negative edge
-              const unfaded = conf != null && conf >= 60 && hasGoodJuice;
-
-              if (isBest) {
-                tier = 'dc-pick-chip-best';
-                tierLabel = 'BEST';
-              } else if (conf != null && conf >= 75 && (hasEdge || unfaded)) {
-                tier = 'dc-pick-chip-good';
-                tierLabel = 'STRONG';
-              } else if (conf != null && conf >= 60 && (hasEdge || unfaded)) {
-                tier = 'dc-pick-chip-borderline';
-                tierLabel = 'LEAN';
-              } else if (!hasEdge) {
-                tier = 'dc-pick-chip-skip';
-                tierLabel = 'SKIP';
-              } else {
-                tier = 'dc-pick-chip-skip';
-                tierLabel = 'SKIP';
-              }
-              return (
-                <div key={pick.bet_type} className={`dc-pick-chip ${tier}`}>
-                  <Target size={11} />
-                  <span className="dc-pick-chip-label">{label}</span>
-                  {pick.odds_display != null && (
-                    <span className="dc-pick-chip-odds">{formatAmericanOdds(pick.odds_display)}</span>
-                  )}
-                  {edgePct != null && (
-                    <span className={`dc-pick-chip-edge${edgeVal < 0 ? ' dc-pick-chip-edge-neg' : ''}`}>Edge {edgePct}</span>
-                  )}
-                  {conf != null && (
-                    <span className="dc-pick-chip-conf">{Math.round(conf)}%</span>
-                  )}
-                  <span className="dc-pick-chip-badge">{tierLabel}</span>
-                </div>
-              );
-            });
-          })()}
+          <PickChips
+            mlPick={mlPick}
+            spreadPick={spreadPick}
+            totalPick={totalPick}
+            formatMarketPick={formatMarketPick}
+          />
         </div>
       ) : topPick && pickBetType ? (
         <div className="dc-pick-bar">

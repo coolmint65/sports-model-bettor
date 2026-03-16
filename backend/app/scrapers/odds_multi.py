@@ -29,6 +29,9 @@ from app.config import settings
 from app.constants import SCRAPER_HEADERS
 from app.models.game import Game
 from app.models.team import Team
+from app.scrapers.http_helpers import make_request as _make_request
+from app.scrapers.team_map import NHL_TEAM_MAP, NHL_ABBREVIATIONS, resolve_team
+from app.services.odds import american_to_implied as _svc_american_to_implied
 
 logger = logging.getLogger(__name__)
 
