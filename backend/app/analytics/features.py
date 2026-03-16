@@ -1722,12 +1722,13 @@ class FeatureEngine:
 
     @staticmethod
     def _american_to_implied(odds: float) -> float:
-        """Convert American odds to implied probability (0-1)."""
-        if odds < 0:
-            return abs(odds) / (abs(odds) + 100.0)
-        elif odds > 0:
-            return 100.0 / (odds + 100.0)
-        return 0.5
+        """Convert American odds to implied probability (0-1).
+
+        Delegates to the canonical implementation in services.odds.
+        """
+        from app.services.odds import american_to_implied
+        result = american_to_implied(odds)
+        return result if result is not None else 0.5
 
     # ------------------------------------------------------------------ #
     #  Starter confirmation confidence                                   #

@@ -54,33 +54,25 @@ REST_ADVANTAGE_CAP = _mc.rest_advantage_cap
 
 
 def american_odds_to_implied_prob(odds: float) -> float:
-    """
-    Convert American odds to implied probability.
+    """Convert American odds to implied probability (0-1).
 
-    - Negative odds (favorite): implied = |odds| / (|odds| + 100)
-    - Positive odds (underdog): implied = 100 / (odds + 100)
-
-    Returns a probability between 0 and 1.
+    Delegates to the canonical implementation in services.odds.
+    Returns 0.5 for even money (odds=0).
     """
-    if odds < 0:
-        return abs(odds) / (abs(odds) + 100.0)
-    elif odds > 0:
-        return 100.0 / (odds + 100.0)
-    return 0.5  # Even money
+    from app.services.odds import american_to_implied
+    result = american_to_implied(odds)
+    return result if result is not None else 0.5
 
 
 def implied_prob_to_american_odds(prob: float) -> float:
-    """
-    Convert implied probability to American odds.
+    """Convert implied probability to American odds.
 
-    Returns American odds (negative for favorites, positive for underdogs).
+    Delegates to the canonical implementation in services.odds.
+    Returns 0.0 for out-of-range probabilities.
     """
-    if prob <= 0 or prob >= 1:
-        return 0.0
-    if prob > 0.5:
-        return -(prob / (1 - prob)) * 100.0
-    else:
-        return ((1 - prob) / prob) * 100.0
+    from app.services.odds import implied_to_american
+    result = implied_to_american(prob)
+    return float(result) if result is not None else 0.0
 
 
 class BettingModel:
