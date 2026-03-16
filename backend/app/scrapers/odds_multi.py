@@ -44,105 +44,17 @@ _OU_LINE_MIN = 4.0
 _OU_LINE_MAX = 15.0
 
 # ---------------------------------------------------------------------------
-# Team-name normalisation maps (sportsbook name -> 3-letter NHL abbreviation)
+# Team-name normalisation — delegates to the canonical team_map module.
+# Re-exports for backward compatibility with code that imports from here.
 # ---------------------------------------------------------------------------
 
-# DraftKings uses the city + mascot (same as Odds API mostly)
-_COMMON_TEAM_MAP: Dict[str, str] = {
-    # Full names (primary)
-    "Anaheim Ducks": "ANA",
-    "Arizona Coyotes": "ARI",
-    "Boston Bruins": "BOS",
-    "Buffalo Sabres": "BUF",
-    "Calgary Flames": "CGY",
-    "Carolina Hurricanes": "CAR",
-    "Chicago Blackhawks": "CHI",
-    "Colorado Avalanche": "COL",
-    "Columbus Blue Jackets": "CBJ",
-    "Dallas Stars": "DAL",
-    "Detroit Red Wings": "DET",
-    "Edmonton Oilers": "EDM",
-    "Florida Panthers": "FLA",
-    "Los Angeles Kings": "LAK",
-    "Minnesota Wild": "MIN",
-    "Montreal Canadiens": "MTL",
-    "Nashville Predators": "NSH",
-    "New Jersey Devils": "NJD",
-    "New York Islanders": "NYI",
-    "New York Rangers": "NYR",
-    "Ottawa Senators": "OTT",
-    "Philadelphia Flyers": "PHI",
-    "Pittsburgh Penguins": "PIT",
-    "San Jose Sharks": "SJS",
-    "Seattle Kraken": "SEA",
-    "St. Louis Blues": "STL",
-    "Tampa Bay Lightning": "TBL",
-    "Toronto Maple Leafs": "TOR",
-    "Utah Hockey Club": "UTA",
-    "Vancouver Canucks": "VAN",
-    "Vegas Golden Knights": "VGK",
-    "Washington Capitals": "WSH",
-    "Winnipeg Jets": "WPG",
-    # Common sportsbook variants (city-only, short names, etc.)
-    "LA Kings": "LAK",
-    "L.A. Kings": "LAK",
-    "Montréal Canadiens": "MTL",
-    "NY Islanders": "NYI",
-    "NY Rangers": "NYR",
-    "N.Y. Islanders": "NYI",
-    "N.Y. Rangers": "NYR",
-    "St Louis Blues": "STL",
-    "Saint Louis Blues": "STL",
-    "Utah HC": "UTA",
-    "Utah Mammoth": "UTA",
-    "Utah": "UTA",
-    "Vegas": "VGK",
-    "Golden Knights": "VGK",
-    "Tampa Bay": "TBL",
-    "Lightning": "TBL",
-    "Maple Leafs": "TOR",
-    "Blue Jackets": "CBJ",
-    "Red Wings": "DET",
-}
-
-# Reverse lookup: 3-letter abbreviation → itself.  Handles cases where
-# sportsbooks return the abbreviation directly (e.g., "PIT", "NYR").
-_ABBREV_SET = set(_COMMON_TEAM_MAP.values())
-
-# Track unmapped names to log them (avoid flooding with duplicates)
-_unmapped_logged: set = set()
+_COMMON_TEAM_MAP = NHL_TEAM_MAP
+_ABBREV_SET = NHL_ABBREVIATIONS
 
 
 def _map_team(name: str) -> str:
     """Resolve a team name to its 3-letter abbreviation."""
-    if not name:
-        return ""
-    stripped = name.strip()
-    # If the input IS already a 3-letter abbreviation, return it
-    upper = stripped.upper()
-    if upper in _ABBREV_SET:
-        return upper
-    # Direct lookup
-    abbr = _COMMON_TEAM_MAP.get(stripped, "")
-    if abbr:
-        return abbr
-    # Fuzzy: check if any known name is a substring
-    name_lower = stripped.lower()
-    for full_name, code in _COMMON_TEAM_MAP.items():
-        if full_name.lower() in name_lower or name_lower in full_name.lower():
-            return code
-    # Try matching just the mascot (last word)
-    mascot = stripped.split()[-1] if stripped else ""
-    for full_name, code in _COMMON_TEAM_MAP.items():
-        if full_name.split()[-1].lower() == mascot.lower():
-            return code
-    # Log unmapped name once per unique name at debug level.
-    # Non-NHL teams from sportsbook APIs (NCAAB, etc.) are expected
-    # noise and don't warrant warning-level logs.
-    if stripped not in _unmapped_logged:
-        _unmapped_logged.add(stripped)
-        logger.debug("UNMAPPED TEAM NAME: %r — add to _COMMON_TEAM_MAP", stripped)
-    return ""
+    return resolve_team(name)
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +69,6 @@ def decimal_to_american(decimal_odds: float) -> float:
         return round((decimal_odds - 1) * 100, 0)
     else:
         return round(-100 / (decimal_odds - 1), 0)
-
 
 
 
@@ -365,59 +276,7 @@ def _validate_event(event: OddsEvent) -> OddsEvent:
 # Source-specific fetchers
 # ---------------------------------------------------------------------------
 
-async def _make_request(
-    client: httpx.AsyncClient,
-    url: str,
-    headers: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    timeout: float = 10.0,
-    max_retries: int = 2,
-) -> Optional[Any]:
-    """Make a GET request with error handling. Returns parsed JSON or None.
-
-    Retries on 429 (rate limited) with exponential backoff up to
-    *max_retries* times.
-    """
-    # Strip API key from log output
-    _log_url = url.split("?")[0]
-    for attempt in range(1 + max_retries):
-        try:
-            resp = await client.get(
-                url,
-                headers=headers or {},
-                params=params,
-                timeout=timeout,
-            )
-            if resp.status_code == 200:
-                # Log Odds API credit usage from response headers
-                used = resp.headers.get("x-requests-used")
-                remaining = resp.headers.get("x-requests-remaining")
-                if used or remaining:
-                    logger.info(
-                        "Odds API credits: used=%s remaining=%s (%s)",
-                        used or "?", remaining or "?", _log_url,
-                    )
-                return resp.json()
-            # Retry on 429 with exponential backoff
-            if resp.status_code == 429 and attempt < max_retries:
-                wait = 2 ** attempt  # 1s, 2s
-                logger.info("429 from %s — retrying in %ds (attempt %d/%d)",
-                            _log_url, wait, attempt + 1, max_retries)
-                await asyncio.sleep(wait)
-                continue
-            # Log non-200 without dumping raw HTML into the console.
-            logger.warning("HTTP %d from %s", resp.status_code, _log_url)
-            return None
-        except httpx.TimeoutException:
-            logger.warning("Timeout (%.0fs) for %s", timeout, _log_url)
-            return None
-        except httpx.ConnectError as exc:
-            logger.warning("Connection failed for %s: %s", _log_url, exc)
-            return None
-        except Exception as exc:
-            logger.warning("Request failed for %s: %s", _log_url, exc)
-            return None
-    return None
+# _make_request is imported from app.scrapers.http_helpers above.
 
 
 # ---- DraftKings ----
@@ -2334,21 +2193,26 @@ async def _fetch_hardrock(
 # ---------------------------------------------------------------------------
 
 def _american_to_implied(odds: float) -> float:
-    """Convert American odds to implied probability (0-1)."""
-    if odds > 0:
-        return 100.0 / (odds + 100.0)
-    return abs(odds) / (abs(odds) + 100.0)
+    """Convert American odds to implied probability (0-1).
+
+    Thin wrapper around the canonical implementation in services.odds,
+    adapted for the non-Optional signature used throughout this module.
+    """
+    result = _svc_american_to_implied(odds)
+    return result if result is not None else 0.0
 
 
 def _implied_to_american(prob: float) -> float:
     """Convert implied probability (0-1) back to American odds."""
+    from app.services.odds import implied_to_american
+    result = implied_to_american(prob)
+    if result is not None:
+        return result
     if prob >= 1.0:
         return -10000.0
     if prob <= 0.0:
         return 10000.0
-    if prob > 0.5:
-        return -(prob / (1.0 - prob)) * 100.0
-    return ((1.0 - prob) / prob) * 100.0
+    return 0.0
 
 
 def _mean_odds(odds_list: List[float]) -> float:

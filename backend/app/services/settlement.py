@@ -57,8 +57,6 @@ async def settle_completed_games(db: AsyncSession) -> Dict[str, Any]:
 
 async def _settle_predictions(db: AsyncSession) -> int:
     """Grade ungraded predictions for completed games."""
-    from app.analytics.models import american_odds_to_implied_prob
-
     # Only grade prematch predictions — live predictions are ephemeral
     # and regenerated constantly, so they shouldn't count toward stats.
     stmt = (

@@ -19,48 +19,14 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.team import Team, TeamEVStats
+from app.scrapers.team_map import MONEYPUCK_TEAM_MAP
 
 logger = logging.getLogger(__name__)
 
 MONEYPUCK_BASE = "https://moneypuck.com/moneypuck/playerData/seasonSummary"
 
-# MoneyPuck team names → standard NHL abbreviations.
-# MoneyPuck uses full team names in the "team" column of the CSV.
-_TEAM_NAME_MAP: Dict[str, str] = {
-    "ANA": "ANA",
-    "ARI": "ARI",
-    "BOS": "BOS",
-    "BUF": "BUF",
-    "CAR": "CAR",
-    "CBJ": "CBJ",
-    "CGY": "CGY",
-    "CHI": "CHI",
-    "COL": "COL",
-    "DAL": "DAL",
-    "DET": "DET",
-    "EDM": "EDM",
-    "FLA": "FLA",
-    "L.A": "LAK",
-    "MIN": "MIN",
-    "MTL": "MTL",
-    "N.J": "NJD",
-    "NSH": "NSH",
-    "NYI": "NYI",
-    "NYR": "NYR",
-    "OTT": "OTT",
-    "PHI": "PHI",
-    "PIT": "PIT",
-    "S.J": "SJS",
-    "SEA": "SEA",
-    "STL": "STL",
-    "T.B": "TBL",
-    "TOR": "TOR",
-    "UTA": "UTA",
-    "VAN": "VAN",
-    "VGK": "VGK",
-    "WPG": "WPG",
-    "WSH": "WSH",
-}
+# Re-export for backward compatibility
+_TEAM_NAME_MAP = MONEYPUCK_TEAM_MAP
 
 
 def _current_season_year() -> int:

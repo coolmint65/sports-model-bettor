@@ -7,8 +7,8 @@ metrics so the prediction model can accurately assess lineup impact.
 """
 
 import logging
-from datetime import date, datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Dict, Optional
 
 import httpx
 from sqlalchemy import and_, func, select
@@ -205,20 +205,8 @@ async def _get_player_metrics(
 
     Returns (ppg, gpg, avg_toi) from the last 20 games.
     """
-    stmt = (
-        select(
-            func.avg(GamePlayerStats.points).label("ppg"),
-            func.avg(GamePlayerStats.goals).label("gpg"),
-            func.avg(GamePlayerStats.toi).label("avg_toi"),
-        )
-        .where(GamePlayerStats.player_id == player_id)
-        .order_by(GamePlayerStats.id.desc())
-        .limit(20)
-    )
-
     # SQLAlchemy doesn't support LIMIT on aggregates directly,
     # so use a subquery approach
-    from sqlalchemy import literal_column
     sub = (
         select(
             GamePlayerStats.points,
@@ -254,7 +242,6 @@ async def _deactivate_stale_reports(db: AsyncSession) -> None:
     We use a conservative approach: only deactivate reports that
     haven't been updated in the last 48 hours.
     """
-    from datetime import timedelta
     cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
 
     stmt = (

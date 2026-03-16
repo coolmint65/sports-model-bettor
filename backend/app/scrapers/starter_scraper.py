@@ -11,7 +11,6 @@ All sources are scraped per-day and merged.  DailyFaceoff is the
 primary source; the NHL API fills in any gaps.
 """
 
-import json
 import logging
 import re
 from datetime import date

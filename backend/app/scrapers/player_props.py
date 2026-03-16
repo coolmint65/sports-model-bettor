@@ -27,6 +27,7 @@ from app.models.game import Game
 from app.models.player import Player
 from app.models.player_prop import PlayerPropOdds
 from app.models.team import Team
+from app.scrapers.http_helpers import make_request as _make_request_shared
 
 logger = logging.getLogger(__name__)
 
@@ -72,38 +73,13 @@ async def _make_request(
     timeout: float = 10.0,
     max_retries: int = 2,
 ) -> Optional[Any]:
-    """GET with retry on 429.  Returns parsed JSON or None."""
-    _log_url = url.split("?")[0]
-    for attempt in range(1 + max_retries):
-        try:
-            resp = await client.get(url, params=params, timeout=timeout)
-            if resp.status_code == 200:
-                # Log Odds API credit usage from response headers
-                used = resp.headers.get("x-requests-used")
-                remaining = resp.headers.get("x-requests-remaining")
-                if used or remaining:
-                    logger.info(
-                        "Props API credits: used=%s remaining=%s (%s)",
-                        used or "?", remaining or "?", _log_url,
-                    )
-                return resp.json()
-            if resp.status_code == 429 and attempt < max_retries:
-                wait = 2 ** attempt
-                logger.info(
-                    "Props 429 from %s — retry in %ds (%d/%d)",
-                    _log_url, wait, attempt + 1, max_retries,
-                )
-                await asyncio.sleep(wait)
-                continue
-            logger.warning("Props HTTP %d from %s", resp.status_code, _log_url)
-            return None
-        except (httpx.TimeoutException, httpx.ConnectError) as exc:
-            logger.warning("Props request failed for %s: %s", _log_url, exc)
-            return None
-        except Exception as exc:
-            logger.warning("Props request error for %s: %s", _log_url, exc)
-            return None
-    return None
+    """GET with retry on 429.  Returns parsed JSON or None.
+
+    Delegates to the shared make_request helper in http_helpers.
+    """
+    return await _make_request_shared(
+        client, url, params=params, timeout=timeout, max_retries=max_retries,
+    )
 
 
 def _parse_prop_outcomes(

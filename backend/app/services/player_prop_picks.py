@@ -41,6 +41,7 @@ from app.models.matchup import PlayerMatchupStats
 from app.models.player import Player
 from app.models.player_prop import PlayerPropOdds
 from app.models.team import Team, TeamStats
+from app.services.odds import american_to_implied as _svc_american_to_implied
 
 logger = logging.getLogger(__name__)
 
@@ -112,13 +113,11 @@ def _calibrate_prop_prob(raw_prob: float) -> float:
 
 
 def _american_to_implied(american: Optional[float]) -> Optional[float]:
-    """Convert American odds to implied probability (includes vig)."""
-    if american is None:
-        return None
-    if american >= 100:
-        return 100 / (american + 100)
-    else:
-        return abs(american) / (abs(american) + 100)
+    """Convert American odds to implied probability (includes vig).
+
+    Delegates to the canonical implementation in services.odds.
+    """
+    return _svc_american_to_implied(american)
 
 
 def _remove_vig(
