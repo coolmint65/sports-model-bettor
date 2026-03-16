@@ -1,7 +1,7 @@
 import { Target, TrendingUp, Star, CheckCircle, XCircle, AlertCircle, AlertTriangle, Info } from 'lucide-react';
 import { useState } from 'react';
 import { confidencePct, formatBetType, formatPredictionValue, teamAbbrev } from '../utils/teams';
-import { getConfidenceColor } from '../utils/formatting';
+import { getConfidenceColor, getConfidenceLabel } from '../utils/formatting';
 
 /**
  * Parse reasoning text, stripping {{team:...}} and {{tooltip:...}} markers.
@@ -76,13 +76,6 @@ function ReasoningLine({ item }) {
       )}
     </li>
   );
-}
-
-function getConfidenceLabel(confidence) {
-  if (confidence >= 75) return 'Very High';
-  if (confidence >= 60) return 'High';
-  if (confidence >= 45) return 'Medium';
-  return 'Low';
 }
 
 function getOutcomeIcon(outcome) {

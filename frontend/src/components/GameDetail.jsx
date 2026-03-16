@@ -15,9 +15,7 @@ import {
   AlertTriangle,
   Lock,
   Shield,
-  Activity,
   Calendar,
-  ChevronRight,
   CheckSquare,
   Info,
   Zap,
@@ -25,39 +23,20 @@ import {
   Cloud,
   User,
 } from 'lucide-react';
-import { format, formatDistanceToNowStrict } from 'date-fns';
+import { format } from 'date-fns';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { fetchGameDetails, fetchGameInjuries } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import { useWebSocketEvent } from '../hooks/useWebSocket';
 import PredictionCard from './PredictionCard';
-import { teamName, teamAbbrev, teamLogo, parseAsUTC, isLiveStatus, confidencePct } from '../utils/teams';
-import { formatAmericanOddsOrDash, getConfidenceColor } from '../utils/formatting';
+import { teamName, teamAbbrev, teamLogo, isLiveStatus, confidencePct } from '../utils/teams';
+import { formatAmericanOddsOrDash, getConfidenceColor, formatGameDate as sharedFormatGameDate, formatGameTime } from '../utils/formatting';
 
 const LIVE_POLL_INTERVAL = 30_000;
 
+/** GameDetail uses a longer date format than the card view */
 function formatGameDate(game) {
-  try {
-    const dateStr = game.start_time || game.datetime;
-    if (!dateStr) return 'TBD';
-    const date = parseAsUTC(dateStr);
-    if (!date || isNaN(date.getTime())) return 'TBD';
-    return format(date, 'EEEE, MMMM d, yyyy');
-  } catch {
-    return 'TBD';
-  }
-}
-
-function formatGameTime(game) {
-  try {
-    const dateStr = game.start_time || game.datetime;
-    if (!dateStr) return 'TBD';
-    const date = parseAsUTC(dateStr);
-    if (!date || isNaN(date.getTime())) return 'TBD';
-    return format(date, 'h:mm a');
-  } catch {
-    return game.time || 'TBD';
-  }
+  return sharedFormatGameDate(game, 'EEEE, MMMM d, yyyy') || 'TBD';
 }
 
 const formatAmericanOdds = formatAmericanOddsOrDash;
@@ -860,6 +839,72 @@ function fmtStat(val, isPct = false, decimals = 2) {
   return val.toFixed(decimals);
 }
 
+/* ──────────────────── Scoring Trends Sub-component ──────────────────── */
+function ScoringTrends({ recentGames, ouLine }) {
+  if (recentGames.length === 0) return null;
+  const last10 = recentGames.slice(0, 10);
+  const count = Math.min(recentGames.length, 10);
+  const avgGF = (last10.reduce((s, g) => s + (g.goals_for || 0), 0) / count).toFixed(1);
+  const avgGA = (last10.reduce((s, g) => s + (g.goals_against || 0), 0) / count).toFixed(1);
+  const avgTotal = (last10.reduce((s, g) => s + (g.goals_for || 0) + (g.goals_against || 0), 0) / count).toFixed(1);
+  const overCount = last10.filter((g) => (g.goals_for || 0) + (g.goals_against || 0) > ouLine).length;
+  const underCount = last10.filter((g) => (g.goals_for || 0) + (g.goals_against || 0) <= ouLine).length;
+
+  return (
+    <div className="gd-trends-scoring">
+      <div className="gd-trends-scoring-title">Scoring (Last {count})</div>
+      <div className="gd-trends-row">
+        <span className="gd-trends-label">Avg Goals For</span>
+        <span className="gd-trends-val">{avgGF}</span>
+      </div>
+      <div className="gd-trends-row">
+        <span className="gd-trends-label">Avg Goals Against</span>
+        <span className="gd-trends-val">{avgGA}</span>
+      </div>
+      <div className="gd-trends-row">
+        <span className="gd-trends-label">Avg Total</span>
+        <span className="gd-trends-val">{avgTotal}</span>
+      </div>
+      <div className="gd-trends-row">
+        <span className="gd-trends-label">Over {ouLine}</span>
+        <span className="gd-trends-val">{overCount}-{underCount}</span>
+      </div>
+    </div>
+  );
+}
+
+/* ──────────────────── Trends Team Column Sub-component ──────────────────── */
+function TrendsTeamColumn({ label, locationLabel, locationRecord, form, recentGames, ouLine, getStreak, computeATS }) {
+  return (
+    <div className="gd-trends-team">
+      <div className="gd-trends-team-label">{label}</div>
+      <div className="gd-trends-rows">
+        <div className="gd-trends-row">
+          <span className="gd-trends-label">Overall</span>
+          <span className="gd-trends-val">{form.wins || 0}-{form.losses || 0}-{form.ot_losses || 0}</span>
+        </div>
+        <div className="gd-trends-row">
+          <span className="gd-trends-label">{locationLabel}</span>
+          <span className="gd-trends-val">{locationRecord || '-'}</span>
+        </div>
+        <div className="gd-trends-row">
+          <span className="gd-trends-label">Last 10</span>
+          <span className="gd-trends-val">{form.record_last_10 || computeATS(recentGames.slice(0, 10)) || '-'}</span>
+        </div>
+        <div className="gd-trends-row">
+          <span className="gd-trends-label">Last 5</span>
+          <span className="gd-trends-val">{computeATS(recentGames.slice(0, 5)) || '-'}</span>
+        </div>
+        <div className="gd-trends-row">
+          <span className="gd-trends-label">Streak</span>
+          <span className="gd-trends-val">{getStreak(recentGames)}</span>
+        </div>
+      </div>
+      <ScoringTrends recentGames={recentGames} ouLine={ouLine} />
+    </div>
+  );
+}
+
 /* ──────────────────── Season Stats & Standings + Betting Trends ──────────────────── */
 function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
   const home = game.home_team_form || {};
@@ -1027,116 +1072,26 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
         </div>
         <div className="gd-trends-content">
           <div className="gd-trends-teams">
-            <div className="gd-trends-team">
-              <div className="gd-trends-team-label">{awayLabel}</div>
-              <div className="gd-trends-rows">
-                <div className="gd-trends-row">
-                  <span className="gd-trends-label">Overall</span>
-                  <span className="gd-trends-val">{away.wins || 0}-{away.losses || 0}-{away.ot_losses || 0}</span>
-                </div>
-                <div className="gd-trends-row">
-                  <span className="gd-trends-label">Away</span>
-                  <span className="gd-trends-val">{away.away_record || '-'}</span>
-                </div>
-                <div className="gd-trends-row">
-                  <span className="gd-trends-label">Last 10</span>
-                  <span className="gd-trends-val">{away.record_last_10 || computeATS(awayRecent.slice(0, 10)) || '-'}</span>
-                </div>
-                <div className="gd-trends-row">
-                  <span className="gd-trends-label">Last 5</span>
-                  <span className="gd-trends-val">{computeATS(awayRecent.slice(0, 5)) || '-'}</span>
-                </div>
-                <div className="gd-trends-row">
-                  <span className="gd-trends-label">Streak</span>
-                  <span className="gd-trends-val">{getStreak(awayRecent)}</span>
-                </div>
-              </div>
-              {/* Scoring trends */}
-              {awayRecent.length > 0 && (
-                <div className="gd-trends-scoring">
-                  <div className="gd-trends-scoring-title">Scoring (Last {Math.min(awayRecent.length, 10)})</div>
-                  <div className="gd-trends-row">
-                    <span className="gd-trends-label">Avg Goals For</span>
-                    <span className="gd-trends-val">
-                      {(awayRecent.slice(0, 10).reduce((s, g) => s + (g.goals_for || 0), 0) / Math.min(awayRecent.length, 10)).toFixed(1)}
-                    </span>
-                  </div>
-                  <div className="gd-trends-row">
-                    <span className="gd-trends-label">Avg Goals Against</span>
-                    <span className="gd-trends-val">
-                      {(awayRecent.slice(0, 10).reduce((s, g) => s + (g.goals_against || 0), 0) / Math.min(awayRecent.length, 10)).toFixed(1)}
-                    </span>
-                  </div>
-                  <div className="gd-trends-row">
-                    <span className="gd-trends-label">Avg Total</span>
-                    <span className="gd-trends-val">
-                      {(awayRecent.slice(0, 10).reduce((s, g) => s + (g.goals_for || 0) + (g.goals_against || 0), 0) / Math.min(awayRecent.length, 10)).toFixed(1)}
-                    </span>
-                  </div>
-                  <div className="gd-trends-row">
-                    <span className="gd-trends-label">Over {ouLine}</span>
-                    <span className="gd-trends-val">
-                      {awayRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) > ouLine).length}-{awayRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) <= ouLine).length}
-                    </span>
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="gd-trends-team">
-              <div className="gd-trends-team-label">{homeLabel}</div>
-              <div className="gd-trends-rows">
-                <div className="gd-trends-row">
-                  <span className="gd-trends-label">Overall</span>
-                  <span className="gd-trends-val">{home.wins || 0}-{home.losses || 0}-{home.ot_losses || 0}</span>
-                </div>
-                <div className="gd-trends-row">
-                  <span className="gd-trends-label">Home</span>
-                  <span className="gd-trends-val">{home.home_record || '-'}</span>
-                </div>
-                <div className="gd-trends-row">
-                  <span className="gd-trends-label">Last 10</span>
-                  <span className="gd-trends-val">{home.record_last_10 || computeATS(homeRecent.slice(0, 10)) || '-'}</span>
-                </div>
-                <div className="gd-trends-row">
-                  <span className="gd-trends-label">Last 5</span>
-                  <span className="gd-trends-val">{computeATS(homeRecent.slice(0, 5)) || '-'}</span>
-                </div>
-                <div className="gd-trends-row">
-                  <span className="gd-trends-label">Streak</span>
-                  <span className="gd-trends-val">{getStreak(homeRecent)}</span>
-                </div>
-              </div>
-              {/* Scoring trends */}
-              {homeRecent.length > 0 && (
-                <div className="gd-trends-scoring">
-                  <div className="gd-trends-scoring-title">Scoring (Last {Math.min(homeRecent.length, 10)})</div>
-                  <div className="gd-trends-row">
-                    <span className="gd-trends-label">Avg Goals For</span>
-                    <span className="gd-trends-val">
-                      {(homeRecent.slice(0, 10).reduce((s, g) => s + (g.goals_for || 0), 0) / Math.min(homeRecent.length, 10)).toFixed(1)}
-                    </span>
-                  </div>
-                  <div className="gd-trends-row">
-                    <span className="gd-trends-label">Avg Goals Against</span>
-                    <span className="gd-trends-val">
-                      {(homeRecent.slice(0, 10).reduce((s, g) => s + (g.goals_against || 0), 0) / Math.min(homeRecent.length, 10)).toFixed(1)}
-                    </span>
-                  </div>
-                  <div className="gd-trends-row">
-                    <span className="gd-trends-label">Avg Total</span>
-                    <span className="gd-trends-val">
-                      {(homeRecent.slice(0, 10).reduce((s, g) => s + (g.goals_for || 0) + (g.goals_against || 0), 0) / Math.min(homeRecent.length, 10)).toFixed(1)}
-                    </span>
-                  </div>
-                  <div className="gd-trends-row">
-                    <span className="gd-trends-label">Over {ouLine}</span>
-                    <span className="gd-trends-val">
-                      {homeRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) > ouLine).length}-{homeRecent.slice(0, 10).filter((g) => (g.goals_for || 0) + (g.goals_against || 0) <= ouLine).length}
-                    </span>
-                  </div>
-                </div>
-              )}
-            </div>
+            <TrendsTeamColumn
+              label={awayLabel}
+              locationLabel="Away"
+              locationRecord={away.away_record}
+              form={away}
+              recentGames={awayRecent}
+              ouLine={ouLine}
+              getStreak={getStreak}
+              computeATS={computeATS}
+            />
+            <TrendsTeamColumn
+              label={homeLabel}
+              locationLabel="Home"
+              locationRecord={home.home_record}
+              form={home}
+              recentGames={homeRecent}
+              ouLine={ouLine}
+              getStreak={getStreak}
+              computeATS={computeATS}
+            />
           </div>
         </div>
       </div>

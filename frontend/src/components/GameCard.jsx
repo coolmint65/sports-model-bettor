@@ -12,7 +12,6 @@ import {
   teamName,
   teamAbbrev,
   confidencePct,
-  isLiveStatus,
   formatBetType,
   formatPredictionValue,
 } from '../utils/teams';

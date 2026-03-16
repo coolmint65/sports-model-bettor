@@ -16,8 +16,6 @@ function SportPage() {
   const currentSport = sport || 'nhl';
   const [activeTab, setActiveTab] = useState('dashboard');
 
-  const sportLabel = currentSport.toUpperCase();
-
   return (
     <div className="sport-page">
       <div className="sport-page-tabs">
