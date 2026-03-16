@@ -285,6 +285,25 @@ class PredictionManager:
         except Exception as meta_exc:
             logger.warning("CLV meta-signal adjustment failed: %s", meta_exc)
 
+        # ---- Bet type performance gating ----
+        # If a bet type has historically poor results, exclude it from
+        # best-bet candidates to avoid recommending losing strategies.
+        gated_bet_types = await self._get_gated_bet_types(db)
+
+        if gated_bet_types:
+            pre_gate_count = len(candidates)
+            candidates = [
+                c for c in candidates if c["bet_type"] not in gated_bet_types
+            ]
+            removed = pre_gate_count - len(candidates)
+            if removed > 0:
+                logger.info(
+                    "Performance gating removed %d candidates "
+                    "(gated types: %s)",
+                    removed,
+                    ", ".join(sorted(gated_bet_types)),
+                )
+
         # Sort by composite score (confidence + edge + juice quality)
         candidates.sort(
             key=lambda c: composite_pick_score(
@@ -299,6 +318,11 @@ class PredictionManager:
         # Flag the #1 pick
         if best_bets:
             best_bets[0]["is_best_bet"] = True
+
+        # Include gated bet types on each best bet so the frontend knows
+        gated_list = sorted(gated_bet_types) if gated_bet_types else []
+        for bet in best_bets:
+            bet["gated_bet_types"] = gated_list
 
         # Persist ALL predictions to database so they appear in game details
         for pred_data in all_flat:

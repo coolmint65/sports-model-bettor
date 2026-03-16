@@ -72,6 +72,7 @@ class SignalGenerator:
         signals.extend(self._h2h_recency_signals(features, home_abbr, away_abbr, home_name, away_name))
         signals.extend(self._consensus_signals(features, home_abbr, away_abbr))
         signals.extend(self._line_movement_signals(features, home_abbr, away_abbr, home_name, away_name))
+        signals.extend(self._time_of_day_signals(features, home_abbr, away_abbr))
 
         # Filter noise and sort by strength
         signals = [s for s in signals if s.get("strength", 0) >= 0.2]

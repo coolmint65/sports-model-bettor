@@ -305,6 +305,13 @@ def flatten_features(features: Dict[str, Any]) -> Dict[str, float]:
     flat["time_is_early_start"] = 1.0 if tod.get("is_early_start") else 0.0
     flat["time_is_matinee"] = 1.0 if tod.get("is_matinee") else 0.0
 
+    # --- Public betting signal ---
+    pub = features.get("public_signal", {})
+    flat["public_ml_pct_estimate"] = _safe_float(pub.get("ml_public_pct_estimate"))
+    flat["public_contrarian_value"] = _safe_float(pub.get("contrarian_value"))
+    flat["public_is_rlm"] = 1.0 if pub.get("is_reverse_line_movement") else 0.0
+    flat["public_model_agrees"] = 1.0 if pub.get("model_agrees_with_public") else 0.0
+
     # --- Game context booleans ---
     flat["is_divisional"] = 1.0 if features.get("is_divisional") else 0.0
     flat["is_cross_conference"] = 1.0 if features.get("is_cross_conference") else 0.0
