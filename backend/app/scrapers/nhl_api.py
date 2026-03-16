@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.game import Game, GameGoalieStats, GamePlayerStats, HeadToHead
-from app.models.player import Player, GoalieStats, PlayerStats
+from app.models.player import Player
 from app.models.team import Team, TeamStats
 from app.scrapers.base import APIResponseError, BaseScraper
 
