@@ -371,7 +371,7 @@ _PROP_STAT_FIELD = {
 
 
 
-PROP_MODEL_VERSION = 4  # Bump when calibration or model logic changes
+PROP_MODEL_VERSION = 5  # Bump when calibration or model logic changes
 
 async def _get_or_create_snapshots(
     session: AsyncSession,

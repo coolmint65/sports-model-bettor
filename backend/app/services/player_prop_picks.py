@@ -1010,7 +1010,7 @@ def _analyze_atg(
     if matchup and matchup.adjustment != 0:
         reasoning += f" | Matchup: {matchup.reasoning}"
     # Home/away context
-    reasoning += f" | {'Playing at home' if ctx.is_home else 'Playing away'}"
+    reasoning += f" | {'At home' if ctx.is_home else 'On the road'}"
     # Rest context
     if ctx.days_rest is not None:
         if ctx.days_rest <= 1:
@@ -1198,7 +1198,7 @@ def _analyze_over_under(
     )
     if matchup and matchup.adjustment != 0:
         reasoning += f" | Matchup: {matchup.reasoning}"
-    reasoning += f" | {'Playing at home' if ctx.is_home else 'Playing away'}"
+    reasoning += f" | {'At home' if ctx.is_home else 'On the road'}"
     if ctx.days_rest is not None:
         if ctx.days_rest <= 1:
             reasoning += " | B2B fatigue"
