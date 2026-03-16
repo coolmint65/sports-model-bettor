@@ -1864,6 +1864,144 @@ class SignalGenerator:
 
         return signals
 
+    # ------------------------------------------------------------------ #
+    #  Public betting / contrarian signals                                #
+    # ------------------------------------------------------------------ #
+
+    def _public_signal_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+    ) -> List[Dict[str, Any]]:
+        """Generate signals from public betting percentage estimates."""
+        signals: List[Dict[str, Any]] = []
+        pub = features.get("public_signal", {})
+
+        contrarian_val = pub.get("contrarian_value", 0.0) or 0.0
+        if contrarian_val <= 0.3:
+            return signals
+
+        ml_public_side = pub.get("ml_public_side")
+        ml_pct = pub.get("ml_public_pct_estimate", 50)
+        is_rlm = pub.get("is_reverse_line_movement", False)
+        model_agrees = pub.get("model_agrees_with_public", True)
+
+        if ml_public_side is None:
+            return signals
+
+        public_abbr = home_abbr if ml_public_side == "home" else away_abbr
+        sharp_abbr = away_abbr if ml_public_side == "home" else home_abbr
+
+        # Fading public signal
+        if not model_agrees:
+            signals.append(_signal(
+                "contrarian",
+                f"Fading public: ~{ml_pct:.0f}% of bets on {public_abbr}, "
+                f"model says {sharp_abbr}",
+                "positive", sharp_abbr,
+                0.6,
+                icon="users",
+                tooltip=(
+                    f"Public estimated at {ml_pct:.0f}% on {public_abbr} "
+                    f"based on moneyline magnitude"
+                ),
+            ))
+
+        # Reverse line movement signal
+        if is_rlm:
+            signals.append(_signal(
+                "contrarian",
+                f"Reverse line movement: sharp money on {sharp_abbr} "
+                f"despite public on {public_abbr}",
+                "positive", sharp_abbr,
+                0.8,
+                icon="trending-down",
+                tooltip=(
+                    "Line is moving opposite to expected public pressure — "
+                    "indicates professional/sharp money on the other side"
+                ),
+            ))
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    #  Referee tendency signals                                           #
+    # ------------------------------------------------------------------ #
+
+    def _referee_signals(
+        self,
+        features: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """Generate signals based on assigned referee penalty tendencies."""
+        signals: List[Dict[str, Any]] = []
+        referee = features.get("referee", {})
+
+        if not referee.get("found", False):
+            return signals
+
+        if referee.get("games_officiated", 0) < _mc.referee_min_games:
+            return signals
+
+        ref_name = referee["ref_name"]
+        style = referee.get("style", "unknown")
+        avg_pen = referee.get("avg_penalties_pg", 0)
+        deviation = referee.get("penalty_deviation", 0)
+        total_adj = referee.get("total_adjustment", 0)
+
+        if style == "strict":
+            strength = min(0.55 + abs(deviation) * 0.05, 0.75)
+            signals.append(_signal(
+                "referee",
+                (
+                    f"Strict referee ({ref_name}): avg {avg_pen:.1f} penalties/game, "
+                    f"expect more PP chances (+{total_adj:.2f} total goals adj)"
+                ),
+                "over",
+                "total",
+                strength,
+                tooltip=(
+                    f"{ref_name} calls {deviation:+.1f} penalties above league avg. "
+                    f"More PPs historically produce higher-scoring games."
+                ),
+            ))
+        elif style == "lenient":
+            strength = min(0.45 + abs(deviation) * 0.05, 0.70)
+            signals.append(_signal(
+                "referee",
+                (
+                    f"Lenient referee ({ref_name}): avg {avg_pen:.1f} penalties/game, "
+                    f"expect fewer PP chances ({total_adj:.2f} total goals adj)"
+                ),
+                "under",
+                "total",
+                strength,
+                tooltip=(
+                    f"{ref_name} calls {deviation:+.1f} penalties vs league avg. "
+                    f"Fewer PPs historically produce lower-scoring games."
+                ),
+            ))
+        elif style == "moderate" and abs(deviation) > 0.3:
+            # Only signal moderate refs if deviation is notable
+            impact = "over" if deviation > 0 else "under"
+            strength = 0.30 + abs(deviation) * 0.05
+            signals.append(_signal(
+                "referee",
+                (
+                    f"Referee {ref_name}: avg {avg_pen:.1f} penalties/game "
+                    f"({deviation:+.1f} vs league avg)"
+                ),
+                impact,
+                "total",
+                strength,
+                tooltip=(
+                    f"{ref_name} has a slight {style} tendency that may "
+                    f"affect scoring pace."
+                ),
+            ))
+
+        return signals
+
 
 # ------------------------------------------------------------------ #
 #  Helper                                                             #

@@ -1010,6 +1010,32 @@ class NHLScraper(BaseScraper):
             db, game, player_by_game.get("awayTeam", {})
         )
 
+        # -- Referee assignments --
+        # The NHL boxscore endpoint (api-web.nhle.com/v1/gamecenter/{id}/boxscore)
+        # does NOT currently include referee assignments in the standard response.
+        # The landing endpoint sometimes has officials under summary.gameInfo.referees
+        # but this is inconsistent. Try to extract if present, otherwise leave null.
+        #
+        # TODO: For reliable referee data, integrate with an external source such
+        # as Scouting The Refs (scoutingtherefs.com) or Daily Faceoff's officials
+        # page. A dedicated scraper could populate game.referee_1 / referee_2
+        # before game time for use in pre-game predictions.
+        try:
+            game_info = self.safe_get(boxscore, "summary", "gameInfo") or {}
+            referees_list = game_info.get("referees", [])
+            if referees_list and len(referees_list) >= 1:
+                ref_1 = referees_list[0]
+                game.referee_1 = (
+                    ref_1.get("default") if isinstance(ref_1, dict) else str(ref_1)
+                )
+            if referees_list and len(referees_list) >= 2:
+                ref_2 = referees_list[1]
+                game.referee_2 = (
+                    ref_2.get("default") if isinstance(ref_2, dict) else str(ref_2)
+                )
+        except Exception:
+            pass  # Referee data is optional; don't fail the sync
+
         # -- Update head-to-head --
         await self._update_head_to_head(db, game)
 
