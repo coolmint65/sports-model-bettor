@@ -3569,6 +3569,18 @@ a:hover {
   font-size: 0.75rem;
   line-height: 1.4;
 }
+.prop-reason-segment {
+  /* inline so segments wrap naturally */
+}
+.prop-reason-neutral {
+  color: var(--text-tertiary, #7a82a6);
+}
+.prop-reason-positive {
+  color: var(--accent-green, #00ff88);
+}
+.prop-reason-negative {
+  color: var(--accent-orange, #ff9800);
+}
 
 /* Prop outcome styling */
 .prop-pick-hit {

@@ -45,6 +45,76 @@ const MARKET_ORDER = [
   'player_total_saves',
 ];
 
+/**
+ * Classify a reasoning segment as positive, negative, or neutral
+ * relative to whether it helps the pick hit.
+ */
+function classifySegment(segment, pickSide, market) {
+  const s = segment.toLowerCase().trim();
+  const isOver = pickSide === 'over' || pickSide === 'yes';
+
+  // Opponent defense: "more" = more goals/shots allowed = good for over, bad for under
+  if (s.includes('more goals than avg') || s.includes('more shots than avg')) {
+    if (market === 'player_total_saves') {
+      // For saves: opponent generates more shots = good for over saves
+      return isOver ? 'positive' : 'negative';
+    }
+    return isOver ? 'positive' : 'negative';
+  }
+  if (s.includes('fewer goals than avg') || s.includes('fewer shots than avg')) {
+    if (market === 'player_total_saves') {
+      return isOver ? 'negative' : 'positive';
+    }
+    return isOver ? 'negative' : 'positive';
+  }
+
+  // Fatigue
+  if (s.includes('b2b fatigue')) {
+    return isOver ? 'negative' : 'positive';
+  }
+
+  // Rest
+  if (s.includes('days rest')) {
+    return isOver ? 'positive' : 'negative';
+  }
+
+  // Line moved against
+  if (s.includes('line moved against')) {
+    return 'negative';
+  }
+
+  // PP goals / physical / active — supplementary positives for over
+  if (s.includes('pp goals') || s.includes('physical') || s.includes('active defensively')) {
+    return isOver ? 'positive' : 'neutral';
+  }
+
+  // Neutral: "Playing at home", "Playing away", "Matchup:", base stats
+  return 'neutral';
+}
+
+function PropReasoning({ reasoning, pickSide, market }) {
+  if (!reasoning) return null;
+
+  const segments = reasoning.split(' | ');
+  // First segment is always the base stat line — keep neutral
+  const base = segments[0];
+  const factors = segments.slice(1);
+
+  return (
+    <>
+      <span className="prop-reason-segment prop-reason-neutral">{base}</span>
+      {factors.map((seg, i) => {
+        const cls = classifySegment(seg, pickSide, market);
+        return (
+          <span key={i} className={`prop-reason-segment prop-reason-${cls}`}>
+            {' | '}{seg}
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
 function PropPickCard({ pick, rank }) {
   const config = MARKET_CONFIG[pick.market] || {};
   const Icon = config.icon || Target;
@@ -87,7 +157,9 @@ function PropPickCard({ pick, rank }) {
         </span>
         <span className="prop-pick-conf">{confPct}%</span>
       </div>
-      <div className="prop-pick-reasoning">{pick.reasoning}</div>
+      <div className="prop-pick-reasoning">
+        <PropReasoning reasoning={pick.reasoning} pickSide={pick.pick_side} market={pick.market} />
+      </div>
     </div>
   );
 }
