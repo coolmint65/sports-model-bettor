@@ -381,13 +381,18 @@ function GameCard({ game, section, medal }) {
               // Quality tier based on bet confidence and edge
               let tier = '';
               let tierLabel = '';
+              // Good juice: plus money or modest favorite (better than -200)
+              const hasGoodJuice = pick.odds_display == null || pick.odds_display > 0 || pick.odds_display >= -200;
+              // High-confidence with good juice shouldn't be faded even with negative edge
+              const unfaded = conf != null && conf >= 60 && hasGoodJuice;
+
               if (isBest) {
                 tier = 'dc-pick-chip-best';
                 tierLabel = 'BEST';
-              } else if (conf != null && conf >= 75) {
+              } else if (conf != null && conf >= 75 && (hasEdge || unfaded)) {
                 tier = 'dc-pick-chip-good';
                 tierLabel = 'STRONG';
-              } else if (conf != null && conf >= 60) {
+              } else if (conf != null && conf >= 60 && (hasEdge || unfaded)) {
                 tier = 'dc-pick-chip-borderline';
                 tierLabel = 'LEAN';
               } else if (!hasEdge) {
