@@ -10,7 +10,7 @@ it favors, and a strength score used for ordering.
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from app.config import settings
 
@@ -102,73 +102,35 @@ class SignalGenerator:
         home_games = home_f5.get("games_found", 0)
         away_games = away_f5.get("games_found", 0)
 
-        # Hot streak (4-1 or 5-0)
-        if home_wr >= 0.80 and home_games >= 5:
-            w = int(home_wr * home_games)
-            l = home_games - w
-            signals.append(_signal(
-                "form",
-                f"{home_name} on hot streak ({w}-{l} L5)",
-                "positive", home_abbr, 0.75,
-                icon="fire",
-            ))
-        if away_wr >= 0.80 and away_games >= 5:
-            w = int(away_wr * away_games)
-            l = away_games - w
-            signals.append(_signal(
-                "form",
-                f"{away_name} on hot streak ({w}-{l} L5)",
-                "positive", away_abbr, 0.75,
-                icon="fire",
-            ))
-
-        # Strong recent form (3-2 or better)
-        if 0.60 <= home_wr < 0.80 and home_games >= 5:
-            w = int(home_wr * home_games)
-            l = home_games - w
-            signals.append(_signal(
-                "form",
-                f"{home_name} solid recent form ({w}-{l} L5)",
-                "positive", home_abbr, 0.45,
-                icon="chart",
-            ))
-        if 0.60 <= away_wr < 0.80 and away_games >= 5:
-            w = int(away_wr * away_games)
-            l = away_games - w
-            signals.append(_signal(
-                "form",
-                f"{away_name} solid recent form ({w}-{l} L5)",
-                "positive", away_abbr, 0.45,
-                icon="chart",
-            ))
-
-        # Struggling (0-1 wins)
-        if home_wr <= 0.20 and home_games >= 5:
-            signals.append(_signal(
-                "form", f"{home_name} struggling in recent games", "negative", home_abbr, 0.65,
-            ))
-        if away_wr <= 0.20 and away_games >= 5:
-            signals.append(_signal(
-                "form", f"{away_name} struggling in recent games", "negative", away_abbr, 0.65,
-            ))
-
-        # Cold stretch (1-4 or worse)
-        if 0.20 < home_wr <= 0.40 and home_games >= 5:
-            w = int(home_wr * home_games)
-            l = home_games - w
-            signals.append(_signal(
-                "form",
-                f"{home_name} in cold stretch ({w}-{l} L5)",
-                "negative", home_abbr, 0.45,
-            ))
-        if 0.20 < away_wr <= 0.40 and away_games >= 5:
-            w = int(away_wr * away_games)
-            l = away_games - w
-            signals.append(_signal(
-                "form",
-                f"{away_name} in cold stretch ({w}-{l} L5)",
-                "negative", away_abbr, 0.45,
-            ))
+        # L5 form tiers — each team checked against the same thresholds
+        for abbr, name, wr, games in [
+            (home_abbr, home_name, home_wr, home_games),
+            (away_abbr, away_name, away_wr, away_games),
+        ]:
+            if games < 5:
+                continue
+            w = int(wr * games)
+            l = games - w
+            if wr >= 0.80:
+                signals.append(_signal(
+                    "form", f"{name} on hot streak ({w}-{l} L5)",
+                    "positive", abbr, 0.75, icon="fire",
+                ))
+            elif wr >= 0.60:
+                signals.append(_signal(
+                    "form", f"{name} solid recent form ({w}-{l} L5)",
+                    "positive", abbr, 0.45, icon="chart",
+                ))
+            elif wr <= 0.20:
+                signals.append(_signal(
+                    "form", f"{name} struggling in recent games",
+                    "negative", abbr, 0.65,
+                ))
+            elif wr <= 0.40:
+                signals.append(_signal(
+                    "form", f"{name} in cold stretch ({w}-{l} L5)",
+                    "negative", abbr, 0.45,
+                ))
 
         # Form comparison when there's a notable difference
         if home_games >= 3 and away_games >= 3:
@@ -304,24 +266,16 @@ class SignalGenerator:
 
         diff = abs(home_cf - away_cf)
         if diff >= threshold:
-            if home_cf > away_cf:
-                signals.append(_signal(
-                    "possession",
-                    f"{home_name} has significant 5v5 possession edge ({diff:.1f}%)",
-                    "positive", home_abbr,
-                    min(0.85, 0.50 + diff / 20.0),
-                    icon="chart",
-                    tooltip="5v5 possession is measured by Corsi For % (CF%) — the share of all shot attempts (goals, saves, misses, blocks) a team generates at even strength. Higher CF% = more time controlling the puck.",
-                ))
-            else:
-                signals.append(_signal(
-                    "possession",
-                    f"{away_name} has significant 5v5 possession edge ({diff:.1f}%)",
-                    "positive", away_abbr,
-                    min(0.85, 0.50 + diff / 20.0),
-                    icon="chart",
-                    tooltip="5v5 possession is measured by Corsi For % (CF%) — the share of all shot attempts (goals, saves, misses, blocks) a team generates at even strength. Higher CF% = more time controlling the puck.",
-                ))
+            better_name = home_name if home_cf > away_cf else away_name
+            better_abbr = home_abbr if home_cf > away_cf else away_abbr
+            signals.append(_signal(
+                "possession",
+                f"{better_name} has significant 5v5 possession edge ({diff:.1f}%)",
+                "positive", better_abbr,
+                min(0.85, 0.50 + diff / 20.0),
+                icon="chart",
+                tooltip="5v5 possession is measured by Corsi For % (CF%) — the share of all shot attempts (goals, saves, misses, blocks) a team generates at even strength. Higher CF% = more time controlling the puck.",
+            ))
 
         # General possession note
         for abbr, ev in [(home_abbr, home_ev), (away_abbr, away_ev)]:
@@ -385,22 +339,18 @@ class SignalGenerator:
         home_close_cf = home_close.get("close_cf_pct", 50.0)
         away_close_cf = away_close.get("close_cf_pct", 50.0)
 
-        if home_ev_cf > away_ev_cf and home_close_cf > away_close_cf:
-            if (home_ev_cf - away_ev_cf) >= 3.0:
+        for abbr, ev_cf, opp_ev_cf, cls_cf, opp_cls_cf in [
+            (home_abbr, home_ev_cf, away_ev_cf, home_close_cf, away_close_cf),
+            (away_abbr, away_ev_cf, home_ev_cf, away_close_cf, home_close_cf),
+        ]:
+            if ev_cf > opp_ev_cf and cls_cf > opp_cls_cf and (ev_cf - opp_ev_cf) >= 3.0:
                 signals.append(_signal(
                     "possession",
                     "Both 5v5 and close-game possession favor pick",
-                    "positive", home_abbr, 0.60,
+                    "positive", abbr, 0.60,
                     icon="chart",
                 ))
-        elif away_ev_cf > home_ev_cf and away_close_cf > home_close_cf:
-            if (away_ev_cf - home_ev_cf) >= 3.0:
-                signals.append(_signal(
-                    "possession",
-                    "Both 5v5 and close-game possession favor pick",
-                    "positive", away_abbr, 0.60,
-                    icon="chart",
-                ))
+                break  # Only one team can hold both advantages
 
         return signals
 
@@ -419,26 +369,20 @@ class SignalGenerator:
         away_sched = features.get("away_schedule", {})
 
         # Back-to-back
-        if home_sched.get("is_back_to_back", False):
-            signals.append(_signal(
-                "schedule", f"{home_abbr} on B2B", "negative", home_abbr, 0.50,
-            ))
-            if not away_sched.get("is_back_to_back", False):
+        for abbr, opp_abbr, sched, opp_sched in [
+            (home_abbr, away_abbr, home_sched, away_sched),
+            (away_abbr, home_abbr, away_sched, home_sched),
+        ]:
+            if sched.get("is_back_to_back", False):
                 signals.append(_signal(
-                    "schedule",
-                    f"{home_abbr} on back-to-back (fatigue advantage for {away_abbr})",
-                    "positive", away_abbr, 0.45,
+                    "schedule", f"{abbr} on B2B", "negative", abbr, 0.50,
                 ))
-        if away_sched.get("is_back_to_back", False):
-            signals.append(_signal(
-                "schedule", f"{away_abbr} on B2B", "negative", away_abbr, 0.50,
-            ))
-            if not home_sched.get("is_back_to_back", False):
-                signals.append(_signal(
-                    "schedule",
-                    f"{away_abbr} on back-to-back (fatigue advantage for {home_abbr})",
-                    "positive", home_abbr, 0.45,
-                ))
+                if not opp_sched.get("is_back_to_back", False):
+                    signals.append(_signal(
+                        "schedule",
+                        f"{abbr} on back-to-back (fatigue advantage for {opp_abbr})",
+                        "positive", opp_abbr, 0.45,
+                    ))
 
         # Rest advantage
         home_rest = home_sched.get("days_rest", 1)
@@ -457,14 +401,11 @@ class SignalGenerator:
             ))
 
         # Lookahead / letdown
-        if home_sched.get("is_lookahead", False):
-            signals.append(_signal(
-                "schedule", f"{home_abbr} in lookahead spot", "negative", home_abbr, 0.35,
-            ))
-        if away_sched.get("is_lookahead", False):
-            signals.append(_signal(
-                "schedule", f"{away_abbr} in lookahead spot", "negative", away_abbr, 0.35,
-            ))
+        for abbr, sched in [(home_abbr, home_sched), (away_abbr, away_sched)]:
+            if sched.get("is_lookahead", False):
+                signals.append(_signal(
+                    "schedule", f"{abbr} in lookahead spot", "negative", abbr, 0.35,
+                ))
 
         # Road trip fatigue
         away_road = away_sched.get("consecutive_road_games", 0)
@@ -606,18 +547,16 @@ class SignalGenerator:
         away_pk = away_st.get("pk_pct", 80.0)
 
         # Elite PP vs poor PK
-        if home_pp >= 25.0 and away_pk <= 77.0:
-            signals.append(_signal(
-                "special_teams",
-                f"{home_abbr} elite PP vs poor PK",
-                "positive", home_abbr, 0.55,
-            ))
-        if away_pp >= 25.0 and home_pk <= 77.0:
-            signals.append(_signal(
-                "special_teams",
-                f"{away_abbr} elite PP vs poor PK",
-                "positive", away_abbr, 0.55,
-            ))
+        for abbr, pp, opp_pk in [
+            (home_abbr, home_pp, away_pk),
+            (away_abbr, away_pp, home_pk),
+        ]:
+            if pp >= 25.0 and opp_pk <= 77.0:
+                signals.append(_signal(
+                    "special_teams",
+                    f"{abbr} elite PP vs poor PK",
+                    "positive", abbr, 0.55,
+                ))
 
         return signals
 
@@ -1489,42 +1428,30 @@ class SignalGenerator:
         away_abbr: str,
     ) -> List[Dict[str, Any]]:
         signals = []
-        home_pp = features.get("home_pp_opportunity", {})
-        away_pp = features.get("away_pp_opportunity", {})
 
-        if home_pp.get("games_found", 0) >= 5:
-            home_net = home_pp.get("net_pp_impact", 0.0)
-            if home_net > 0.15:
+        for abbr, key in [(home_abbr, "home_pp_opportunity"), (away_abbr, "away_pp_opportunity")]:
+            pp = features.get(key, {})
+            if pp.get("games_found", 0) < 5:
+                continue
+            net = pp.get("net_pp_impact", 0.0)
+            if net > 0.15:
                 signals.append(_signal(
                     "special_teams",
-                    f"{home_abbr} PP opportunity edge: undisciplined opponent "
-                    f"gives {home_pp.get('pp_opportunities_for', 0):.1f} PP/game "
-                    f"vs {home_pp.get('team_pp_pct', 20):.0f}% PP conversion",
-                    "positive", home_abbr,
-                    min(0.7, 0.3 + home_net),
+                    f"{abbr} PP opportunity edge: undisciplined opponent "
+                    f"gives {pp.get('pp_opportunities_for', 0):.1f} PP/game "
+                    f"vs {pp.get('team_pp_pct', 20):.0f}% PP conversion",
+                    "positive", abbr,
+                    min(0.7, 0.3 + net),
                     icon="zap",
                 ))
-            elif home_net < -0.15:
+            elif net < -0.15:
                 signals.append(_signal(
                     "special_teams",
-                    f"{home_abbr} faces PP disadvantage: draws {home_pp.get('pp_opportunities_against', 0):.1f} "
-                    f"penalties/game vs opponent's {home_pp.get('opponent_pp_pct', 20):.0f}% PP",
-                    "negative", home_abbr,
-                    min(0.7, 0.3 + abs(home_net)),
+                    f"{abbr} faces PP disadvantage: draws {pp.get('pp_opportunities_against', 0):.1f} "
+                    f"penalties/game vs opponent's {pp.get('opponent_pp_pct', 20):.0f}% PP",
+                    "negative", abbr,
+                    min(0.7, 0.3 + abs(net)),
                     icon="alert-triangle",
-                ))
-
-        if away_pp.get("games_found", 0) >= 5:
-            away_net = away_pp.get("net_pp_impact", 0.0)
-            if away_net > 0.15:
-                signals.append(_signal(
-                    "special_teams",
-                    f"{away_abbr} PP opportunity edge: undisciplined opponent "
-                    f"gives {away_pp.get('pp_opportunities_for', 0):.1f} PP/game "
-                    f"vs {away_pp.get('team_pp_pct', 20):.0f}% PP conversion",
-                    "positive", away_abbr,
-                    min(0.7, 0.3 + away_net),
-                    icon="zap",
                 ))
 
         return signals

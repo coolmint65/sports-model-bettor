@@ -493,46 +493,39 @@ class BettingModel:
                     else:
                         home_xg *= mult
 
-        # ---- Goalie vs. specific opponent adjustment ----
-        # A goalie who historically performs poorly against this opponent
-        # (low SV%, high GAA) should have opponent xG adjusted upward.
+        # ---- Goalie vs. specific opponent & venue splits adjustments ----
+        # Both follow the same pattern: compare a goalie's save% in a specific
+        # context to their season average, then adjust the OPPOSING team's xG.
+        _goalie_sv_adjustments = []
+
         goalie_vs_factor = _mc.goalie_vs_team_factor
         if goalie_vs_factor > 0:
-            home_gvt = features.get("home_goalie_vs_team", {})
-            away_gvt = features.get("away_goalie_vs_team", {})
+            for gvt_key, goalie_key, opp_attr in [
+                ("home_goalie_vs_team", "home_goalie", "away"),
+                ("away_goalie_vs_team", "away_goalie", "home"),
+            ]:
+                gvt = features.get(gvt_key, {})
+                if gvt.get("significant", False):
+                    sv_diff = gvt["vs_save_pct"] - features.get(goalie_key, {}).get("season_save_pct", 0.900)
+                    _goalie_sv_adjustments.append((opp_attr, sv_diff, goalie_vs_factor))
 
-            # Home goalie vs away team → affects away_xg
-            if home_gvt.get("significant", False):
-                vs_sv = home_gvt["vs_save_pct"]
-                season_sv = features.get("home_goalie", {}).get("season_save_pct", 0.900)
-                sv_diff = vs_sv - season_sv  # negative = worse vs this team
-                away_xg *= 1.0 - sv_diff * goalie_vs_factor * 10.0
-
-            # Away goalie vs home team → affects home_xg
-            if away_gvt.get("significant", False):
-                vs_sv = away_gvt["vs_save_pct"]
-                season_sv = features.get("away_goalie", {}).get("season_save_pct", 0.900)
-                sv_diff = vs_sv - season_sv
-                home_xg *= 1.0 - sv_diff * goalie_vs_factor * 10.0
-
-        # ---- Goalie venue splits adjustment ----
-        # A goalie performing notably differently at home vs away shifts xG.
         venue_factor = _mc.goalie_venue_factor
         if venue_factor > 0:
-            home_venue = features.get("home_goalie_venue", {})
-            away_venue = features.get("away_goalie_venue", {})
+            for venue_key, goalie_key, opp_attr in [
+                ("home_goalie_venue", "home_goalie", "away"),
+                ("away_goalie_venue", "away_goalie", "home"),
+            ]:
+                venue = features.get(venue_key, {})
+                if venue.get("significant", False):
+                    sv_diff = venue["venue_save_pct"] - features.get(goalie_key, {}).get("season_save_pct", 0.900)
+                    _goalie_sv_adjustments.append((opp_attr, sv_diff, venue_factor))
 
-            if home_venue.get("significant", False):
-                venue_sv = home_venue["venue_save_pct"]
-                season_sv = features.get("home_goalie", {}).get("season_save_pct", 0.900)
-                sv_diff = venue_sv - season_sv
-                away_xg *= 1.0 - sv_diff * venue_factor * 10.0
-
-            if away_venue.get("significant", False):
-                venue_sv = away_venue["venue_save_pct"]
-                season_sv = features.get("away_goalie", {}).get("season_save_pct", 0.900)
-                sv_diff = venue_sv - season_sv
-                home_xg *= 1.0 - sv_diff * venue_factor * 10.0
+        for opp_attr, sv_diff, factor in _goalie_sv_adjustments:
+            mult = 1.0 - sv_diff * factor * 10.0
+            if opp_attr == "away":
+                away_xg *= mult
+            else:
+                home_xg *= mult
 
         # ---- Goalie workload fatigue adjustment ----
         # A goalie who has faced heavy shot volume recently is more
@@ -575,123 +568,102 @@ class BettingModel:
                 away_xg *= 1.0 + pace_adj
 
         # ---- Score-close performance adjustment ----
-        # Teams that perform well in tight games are more likely to
-        # sustain that output than teams padding stats in blowouts.
+        # Teams that perform well in tight games sustain output better
+        # than teams padding stats in blowouts.
         sc_factor = _mc.score_close_factor
         if sc_factor > 0:
-            home_sc = features.get("home_score_close", {})
-            away_sc = features.get("away_score_close", {})
-            if home_sc.get("close_games_found", 0) >= _mc.score_close_min_games:
-                close_off = home_sc.get("close_gf_pg", home_xg)
-                home_xg = home_xg * (1.0 - sc_factor) + close_off * sc_factor
-            if away_sc.get("close_games_found", 0) >= _mc.score_close_min_games:
-                close_off = away_sc.get("close_gf_pg", away_xg)
-                away_xg = away_xg * (1.0 - sc_factor) + close_off * sc_factor
+            for side_key, xg_attr in [("home_score_close", "home"), ("away_score_close", "away")]:
+                sc = features.get(side_key, {})
+                if sc.get("close_games_found", 0) >= _mc.score_close_min_games:
+                    close_off = sc.get("close_gf_pg", home_xg if xg_attr == "home" else away_xg)
+                    if xg_attr == "home":
+                        home_xg = home_xg * (1.0 - sc_factor) + close_off * sc_factor
+                    else:
+                        away_xg = away_xg * (1.0 - sc_factor) + close_off * sc_factor
 
         # ---- Penalty discipline adjustment ----
-        # Undisciplined teams give opponents more power-play chances,
-        # effectively boosting the opponent's expected goals.
+        # Undisciplined teams give opponents more power-play chances.
         home_disc = features.get("home_discipline", {})
         away_disc = features.get("away_discipline", {})
         disc_factor = _mc.penalty_discipline_factor
         if disc_factor > 0 and home_disc.get("games_found", 0) >= 5 and away_disc.get("games_found", 0) >= 5:
-            # Discipline rating: 0 = undisciplined (12+ PIM), 1 = disciplined (4 PIM)
-            # Undisciplined team boosts opponent's xG
             home_disc_rating = home_disc.get("discipline_rating", 0.5)
             away_disc_rating = away_disc.get("discipline_rating", 0.5)
-            # How much opponent benefits from our lack of discipline
             away_xg += (0.5 - home_disc_rating) * disc_factor
             home_xg += (0.5 - away_disc_rating) * disc_factor
 
-        # ---- Close-game record (clutch factor) ----
-        # Teams that consistently win/lose tight games have a clutch factor
-        # that raw xG misses — mental toughness, coaching, late-game execution.
+        # ---- Close-game record (clutch factor) & Scoring-first tendency ----
         home_close_rec = features.get("home_close_record", {})
         away_close_rec = features.get("away_close_record", {})
+
         close_factor = _mc.close_game_record_factor
         if close_factor > 0:
             min_close = _mc.close_game_record_min_games
-            if home_close_rec.get("close_games_found", 0) >= min_close:
-                close_dev = home_close_rec["close_game_win_rate"] - 0.5
-                home_xg += close_dev * close_factor
-            if away_close_rec.get("close_games_found", 0) >= min_close:
-                close_dev = away_close_rec["close_game_win_rate"] - 0.5
-                away_xg += close_dev * close_factor
+            for rec, xg_attr in [(home_close_rec, "home"), (away_close_rec, "away")]:
+                if rec.get("close_games_found", 0) >= min_close:
+                    close_dev = rec["close_game_win_rate"] - 0.5
+                    if xg_attr == "home":
+                        home_xg += close_dev * close_factor
+                    else:
+                        away_xg += close_dev * close_factor
 
-        # ---- Scoring-first tendency ----
-        # Teams that win the first period have a significant advantage.
-        # NHL teams that score first win ~67% of the time.
         scoring_first_factor = _mc.scoring_first_factor
         if scoring_first_factor > 0:
-            min_p1 = _mc.scoring_first_min_games
-            home_sf_rate = home_close_rec.get("scoring_first_rate", 0.5)
-            away_sf_rate = away_close_rec.get("scoring_first_rate", 0.5)
-            if home_close_rec.get("close_games_found", 0) >= 5:
-                home_xg += (home_sf_rate - 0.35) * scoring_first_factor  # 0.35 = league avg rate of leading after P1
-            if away_close_rec.get("close_games_found", 0) >= 5:
-                away_xg += (away_sf_rate - 0.35) * scoring_first_factor
+            for rec, xg_attr in [(home_close_rec, "home"), (away_close_rec, "away")]:
+                if rec.get("close_games_found", 0) >= 5:
+                    sf_rate = rec.get("scoring_first_rate", 0.5)
+                    adj = (sf_rate - 0.35) * scoring_first_factor
+                    if xg_attr == "home":
+                        home_xg += adj
+                    else:
+                        away_xg += adj
 
-        # ---- Feature #6: PP opportunity rate vs opponent ----
-        # An undisciplined team facing an elite PP gives up more goals
-        # than PP% and PK% alone capture. Adjust based on opportunity
-        # rate differential.
+        # ---- PP opportunity rate vs opponent ----
         pp_factor = _mc.pp_opportunity_factor
         if pp_factor > 0:
             home_pp_opp = features.get("home_pp_opportunity", {})
             away_pp_opp = features.get("away_pp_opportunity", {})
             if (home_pp_opp.get("games_found", 0) >= _mc.pp_opportunity_min_games and
                     away_pp_opp.get("games_found", 0) >= _mc.pp_opportunity_min_games):
-                # Net PP impact: positive = team generates more PP goals than it gives up
-                home_net = home_pp_opp.get("net_pp_impact", 0.0)
-                away_net = away_pp_opp.get("net_pp_impact", 0.0)
-                home_xg += home_net * pp_factor
-                away_xg += away_net * pp_factor
+                home_xg += home_pp_opp.get("net_pp_impact", 0.0) * pp_factor
+                away_xg += away_pp_opp.get("net_pp_impact", 0.0) * pp_factor
 
-        # ---- Feature #7: Shooting quality against (HDSV% proxy) ----
-        # Teams that face higher-quality shots have an inflated GAA.
-        # A goalie with good GSAE is stopping harder shots than average.
+        # ---- Shot quality against (GSAE) ----
+        # Positive GSAE = stopping more than expected → reduce opponent xG.
         sq_factor = _mc.shot_quality_against_factor
         if sq_factor > 0:
-            home_sq = features.get("home_shot_quality", {})
-            away_sq = features.get("away_shot_quality", {})
-            # Away team shoots against home defense. If home defense
-            # faces hard shots (quality_index > 1) but still has good
-            # GSAE, the defense is better than raw stats show.
-            if home_sq.get("games_found", 0) >= _mc.shot_quality_min_games:
-                gsae = home_sq.get("goals_saved_above_expected", 0.0)
-                # Positive GSAE = stopping more than expected → reduce away xG
-                away_xg -= gsae / max(home_sq["games_found"], 1) * sq_factor
-            if away_sq.get("games_found", 0) >= _mc.shot_quality_min_games:
-                gsae = away_sq.get("goals_saved_above_expected", 0.0)
-                home_xg -= gsae / max(away_sq["games_found"], 1) * sq_factor
+            for side_key, opp_attr in [("home_shot_quality", "away"), ("away_shot_quality", "home")]:
+                sq = features.get(side_key, {})
+                if sq.get("games_found", 0) >= _mc.shot_quality_min_games:
+                    gsae = sq.get("goals_saved_above_expected", 0.0)
+                    adj = gsae / max(sq["games_found"], 1) * sq_factor
+                    if opp_attr == "away":
+                        away_xg -= adj
+                    else:
+                        home_xg -= adj
 
-        # ---- Feature #9: Line combination stability ----
-        # Unstable forward lines (missing regulars, recent trades) have
-        # reduced chemistry. Penalize teams with low top-6 stability.
+        # ---- Line combination stability ----
+        # Penalize teams with low top-6 stability (reduced chemistry).
         ls_factor = _mc.line_stability_factor
         if ls_factor > 0:
-            home_ls = features.get("home_line_stability", {})
-            away_ls = features.get("away_line_stability", {})
             ls_threshold = _mc.line_stability_threshold
-            if home_ls.get("games_found", 0) >= 5:
-                stability = home_ls.get("top6_stability", 1.0)
-                if stability < ls_threshold:
-                    home_xg *= 1.0 - (ls_threshold - stability) * ls_factor
-            if away_ls.get("games_found", 0) >= 5:
-                stability = away_ls.get("top6_stability", 1.0)
-                if stability < ls_threshold:
-                    away_xg *= 1.0 - (ls_threshold - stability) * ls_factor
+            for side_key, xg_attr in [("home_line_stability", "home"), ("away_line_stability", "away")]:
+                ls = features.get(side_key, {})
+                if ls.get("games_found", 0) >= 5:
+                    stability = ls.get("top6_stability", 1.0)
+                    if stability < ls_threshold:
+                        mult = 1.0 - (ls_threshold - stability) * ls_factor
+                        if xg_attr == "home":
+                            home_xg *= mult
+                        else:
+                            away_xg *= mult
 
-        # ---- Feature #11: Recency-weighted H2H ----
-        # When the recency-weighted H2H diverges from the raw H2H,
-        # the matchup dynamics are shifting. Apply the delta as an
-        # additional adjustment.
+        # ---- Recency-weighted H2H ----
         h2h_recency_factor = _mc.h2h_recency_factor
         if h2h_recency_factor > 0:
             h2h_w = features.get("h2h_weighted", {})
             if h2h_w.get("games_found", 0) >= 3:
                 recency_shift = h2h_w.get("recency_shift", 0.0)
-                # Positive shift = home team trending up in this matchup
                 home_xg += recency_shift * h2h_recency_factor * self.league_avg
                 away_xg -= recency_shift * h2h_recency_factor * self.league_avg
 
@@ -750,13 +722,10 @@ class BettingModel:
         away_xg = away_xg * (1.0 - reg) + self.league_avg * reg
 
         # ---- Floor / ceiling ----
-        home_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, home_xg))
-        away_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, away_xg))
+        home_xg = self._clamp_xg(home_xg)
+        away_xg = self._clamp_xg(away_xg)
 
         # ---- ML model blend ----
-        # When a trained ML model is available, blend its xG predictions
-        # with the Poisson-based xG. The blend weight controls how much
-        # influence the ML model has (0 = pure Poisson, 1 = pure ML).
         if self.ml_model and self.ml_model.is_trained:
             blend = _mc.ml_blend_weight
             if blend > 0:
@@ -764,9 +733,8 @@ class BettingModel:
                     ml_home, ml_away = self.ml_model.predict_xg(features)
                     home_xg = home_xg * (1.0 - blend) + ml_home * blend
                     away_xg = away_xg * (1.0 - blend) + ml_away * blend
-                    # Re-apply floor/ceiling after blending
-                    home_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, home_xg))
-                    away_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, away_xg))
+                    home_xg = self._clamp_xg(home_xg)
+                    away_xg = self._clamp_xg(away_xg)
                 except Exception as e:
                     logger.warning("ML model prediction failed, using Poisson only: %s", e)
 
@@ -799,16 +767,11 @@ class BettingModel:
                         xg_diff_implied = logit_home * 0.74
                         market_home_xg = model_total / 2.0 + xg_diff_implied / 2.0
                         market_away_xg = model_total / 2.0 - xg_diff_implied / 2.0
-                        # Clamp market xG to reasonable range
-                        market_home_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, market_home_xg))
-                        market_away_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, market_away_xg))
-                        # Blend model xG with market xG
+                        market_home_xg = self._clamp_xg(model_total / 2.0 + xg_diff_implied / 2.0)
+                        market_away_xg = self._clamp_xg(model_total / 2.0 - xg_diff_implied / 2.0)
                         mw = _mc.market_prior_weight
-                        home_xg = home_xg * (1.0 - mw) + market_home_xg * mw
-                        away_xg = away_xg * (1.0 - mw) + market_away_xg * mw
-                        # Re-apply floor/ceiling after blending
-                        home_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, home_xg))
-                        away_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, away_xg))
+                        home_xg = self._clamp_xg(home_xg * (1.0 - mw) + market_home_xg * mw)
+                        away_xg = self._clamp_xg(away_xg * (1.0 - mw) + market_away_xg * mw)
 
         # ---- Line movement xG adjustment ----
         # Sharp money moves lines against public action. When the implied
@@ -824,11 +787,8 @@ class BettingModel:
             raw_adj = ml_implied_shift * lm_factor * league_avg
             # Cap the adjustment at ±0.15 xG to prevent overreaction
             capped_adj = max(-0.15, min(0.15, raw_adj))
-            home_xg += capped_adj
-            away_xg -= capped_adj
-            # Re-apply floor/ceiling
-            home_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, home_xg))
-            away_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, away_xg))
+            home_xg = self._clamp_xg(home_xg + capped_adj)
+            away_xg = self._clamp_xg(away_xg - capped_adj)
 
         # ---- Contrarian / public betting xG adjustment ----
         # When the model disagrees with heavy public action (contrarian_value
@@ -854,9 +814,8 @@ class BettingModel:
                 # Public is on away → model prefers home → boost home xG
                 home_xg += adj
                 away_xg -= adj
-            # Re-apply floor/ceiling
-            home_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, home_xg))
-            away_xg = max(_mc.xg_floor, min(_mc.xg_ceiling, away_xg))
+            home_xg = self._clamp_xg(home_xg)
+            away_xg = self._clamp_xg(away_xg)
 
         return round(home_xg, 3), round(away_xg, 3)
 
