@@ -591,6 +591,14 @@ async def _scheduler_loop():
             # Runs every cycle (lightweight — only queries for unsettled).
             await _settle_bets()
 
+            # Auto-retrain ML model check — runs daily (or after enough
+            # new settled games). The actual retrain is CPU-bound but
+            # short (~10-30s), so we run it inline on a slow cadence.
+            now = loop.time()
+            if now - last_retrain_check >= RETRAIN_CHECK_INTERVAL:
+                await _check_auto_retrain()
+                last_retrain_check = now
+
             # Periodic full data sync — run as background task so it
             # never blocks the fast odds loop
             now = loop.time()

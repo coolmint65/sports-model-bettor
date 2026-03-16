@@ -124,6 +124,8 @@ class ModelConfig(BaseModel):
     lookahead_penalty: float = 0.08       # playing a weak team before a rival
     divisional_under_adj: float = 0.06    # divisional games tend to go under
     timezone_penalty: float = 0.06        # west coast team playing east coast afternoon
+    early_start_penalty: float = 0.10     # max xG penalty for worst body clock mismatch
+    early_start_threshold: int = 14       # hour in local time, games before this are "early"
 
     # Graduated travel fatigue (replaces binary is_travel_disadvantage)
     travel_fatigue_factor: float = 0.12        # max xG penalty for worst travel
@@ -203,6 +205,10 @@ class ModelConfig(BaseModel):
     # Line movement: opening-vs-current odds shift as xG adjustment
     line_movement_factor: float = 0.15          # how much line movement adjusts xG
     line_movement_min_shift: float = 0.02       # minimum implied prob shift to trigger
+
+    # Public betting / contrarian signal
+    contrarian_factor: float = 0.08             # max xG boost when fading heavy public action
+    contrarian_min_value: float = 0.5           # minimum contrarian score to trigger adjustment
 
     # Faceoff contribution to defensive factor
     faceoff_defense_weight: float = 0.10

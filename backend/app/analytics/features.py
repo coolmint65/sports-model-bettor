@@ -3098,8 +3098,35 @@ class FeatureEngine:
         # Feature #13: Consensus line aggregation
         consensus_line = await self.get_consensus_line(db, game.id)
 
+        # Referee tendency impact
+        # The Game model has optional referee_1/referee_2 fields. When referee
+        # assignments are available (from NHL API or external sources like
+        # Scouting The Refs), we compute the expected scoring impact.
+        # Gracefully degrades: returns empty dict when ref data is unavailable.
+        from app.analytics.referees import get_referee_impact
+        referee_data: Dict[str, Any] = {}
+        ref_1_name = getattr(game, "referee_1", None)
+        if ref_1_name:
+            referee_data = get_referee_impact(ref_1_name)
+        # If referee_1 was not matched, try the second referee as a fallback.
+        if not referee_data.get("found", False):
+            ref_2_name = getattr(game, "referee_2", None)
+            if ref_2_name:
+                referee_data = get_referee_impact(ref_2_name)
+
         # Line movement features (opening vs current odds)
         line_movement = await self.get_line_movement(db, game.id, game)
+
+        # Public betting signal (synthetic estimate from odds shape).
+        # Must be called after odds and line_movement are available.
+        from app.analytics.public_signal import estimate_public_side
+
+        # Time-of-day context (body clock disadvantage for away team)
+        home_abbr_val = home_team.abbreviation if home_team else "UNK"
+        away_abbr_val = away_team.abbreviation if away_team else "UNK"
+        time_of_day = self.get_time_of_day_context(
+            game.start_time, home_abbr_val, away_abbr_val
+        )
 
         # Divisional matchup detection (affects total scoring tendencies)
         is_divisional = (
@@ -3256,7 +3283,12 @@ class FeatureEngine:
             "h2h_weighted": h2h_weighted,
             # Feature #13: Consensus line aggregation
             "consensus_line": consensus_line,
+            # Time-of-day context (body clock disadvantage)
+            "time_of_day": time_of_day,
         }
+
+        # Public signal needs the partially-built features dict (odds + line_movement)
+        features["public_signal"] = estimate_public_side(features)
 
         return features
 

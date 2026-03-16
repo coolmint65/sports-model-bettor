@@ -44,6 +44,7 @@ class SignalGenerator:
         signals.extend(self._ev_possession_signals(features, home_abbr, away_abbr, home_name, away_name))
         signals.extend(self._close_game_signals(features, home_abbr, away_abbr, home_name, away_name))
         signals.extend(self._schedule_signals(features, home_abbr, away_abbr))
+        signals.extend(self._travel_signals(features, home_abbr, away_abbr))
         signals.extend(self._injury_signals(features, home_abbr, away_abbr))
         signals.extend(self._special_teams_signals(features, home_abbr, away_abbr))
         signals.extend(self._matchup_signals(features, home_abbr, away_abbr))

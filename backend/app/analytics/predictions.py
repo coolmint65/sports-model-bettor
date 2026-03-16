@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.analytics.calibration import RollingCalibrator
 from app.analytics.features import FeatureEngine
 from app.analytics.models import BettingModel
 from app.analytics.signals import SignalGenerator
@@ -39,6 +40,8 @@ class PredictionManager:
         self.feature_engine = FeatureEngine()
         self.ml_model = self._load_ml_model()
         self.model = BettingModel(ml_model=self.ml_model)
+        self._rolling_calibrator = RollingCalibrator()
+        self._calibrator_initialized = False
 
     @staticmethod
     def _load_ml_model():
@@ -52,6 +55,34 @@ class PredictionManager:
         except Exception as e:
             logger.debug("ML model not available: %s", e)
         return None
+
+    # ------------------------------------------------------------------ #
+    #  Rolling calibrator initialization                                  #
+    # ------------------------------------------------------------------ #
+
+    async def _init_rolling_calibrator(self, db: AsyncSession) -> None:
+        """Lazily fit the rolling calibrator from historical results.
+
+        Called once on the first prediction generation.  If enough settled
+        prematch predictions exist, the calibrator replaces static
+        shrinkage.  Otherwise static calibration remains the fallback.
+        """
+        self._calibrator_initialized = True
+        try:
+            result = await self._rolling_calibrator.fit_from_history(db)
+            if result:
+                BettingModel._rolling_calibrator = self._rolling_calibrator
+                logger.info(
+                    "Rolling calibrator activated: %d samples, %d bins",
+                    result["sample_size"],
+                    len(result["bins"]),
+                )
+            else:
+                logger.info(
+                    "Rolling calibrator not fitted — using static calibration"
+                )
+        except Exception as e:
+            logger.error("Failed to initialize rolling calibrator: %s", e)
 
     # ------------------------------------------------------------------ #
     #  Generate predictions for a date's games                            #
@@ -77,6 +108,11 @@ class PredictionManager:
         """
         game_date = self._parse_date(target_date)
         logger.info("Generating predictions for %s", game_date)
+
+        # Lazily fit the rolling calibrator on first prediction run.
+        # Requires a db session, so we can't do this in __init__.
+        if not self._calibrator_initialized:
+            await self._init_rolling_calibrator(db)
 
         # Fetch all non-final games for the target date.
         # Uses the shared GAME_PREDICTABLE_STATUSES constant so that
