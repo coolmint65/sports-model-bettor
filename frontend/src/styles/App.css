@@ -5750,6 +5750,43 @@ a:hover {
   color: var(--text-muted);
 }
 
+.gd-bet-rating-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 2px 10px;
+  border-radius: 12px;
+  background: rgba(0, 255, 136, 0.08);
+  border: 1px solid currentColor;
+  margin-top: 2px;
+}
+.gd-bet-rating-strong { background: rgba(0, 255, 136, 0.12); }
+.gd-bet-rating-good { background: rgba(0, 255, 136, 0.08); }
+.gd-bet-rating-lean { background: rgba(255, 193, 7, 0.08); }
+.gd-bet-rating-spec { background: rgba(255, 71, 87, 0.08); }
+
+.gd-confidence-secondary {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 8px;
+}
+.gd-win-prob-label {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.gd-win-prob-value {
+  font-size: 1.1rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+
 .gd-risk-badge {
   font-size: 0.75rem;
   font-weight: 600;

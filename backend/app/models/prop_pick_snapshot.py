@@ -72,6 +72,7 @@ class PropPickSnapshot(TimestampMixin, Base):
     games_sampled: Mapped[int] = mapped_column(Integer, nullable=False)
     reasoning: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     outcome: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    model_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     # Relationships
     game: Mapped["Game"] = relationship("Game")

@@ -69,6 +69,13 @@ function getConfidenceLabel(confidence) {
   return 'LOW';
 }
 
+function getBetRatingLabel(betConf) {
+  if (betConf >= 80) return { label: 'STRONG BET', color: 'var(--accent-green)', tier: 'strong' };
+  if (betConf >= 70) return { label: 'GOOD BET', color: 'var(--accent-green)', tier: 'good' };
+  if (betConf >= 60) return { label: 'LEAN', color: 'var(--accent-gold)', tier: 'lean' };
+  return { label: 'SPECULATIVE', color: 'var(--accent-red)', tier: 'spec' };
+}
+
 function getRiskLevel(confidence, edge) {
   const edgePct = edge != null ? confidencePct(edge) : 0;
   if (confidence >= 75 && edgePct > 5) return { label: 'Low', color: 'var(--accent-green)', score: 25 };
@@ -97,8 +104,9 @@ function formatPeriodLabel(game) {
 }
 
 /* ──────────────────── Header Section ──────────────────── */
-function GameHeader({ game, awayAbbr, homeAbbr, awayTeamLabel, homeTeamLabel, confidence, isLive, venue, pickIsHome, pickIsAway }) {
-  const confLabel = confidence != null ? getConfidenceLabel(confidence) : null;
+function GameHeader({ game, awayAbbr, homeAbbr, awayTeamLabel, homeTeamLabel, confidence, betConfidence, isLive, venue, pickIsHome, pickIsAway }) {
+  const displayConf = betConfidence ?? confidence;
+  const rating = displayConf != null ? getBetRatingLabel(displayConf) : null;
 
   return (
     <div className="gd-header">
@@ -189,10 +197,10 @@ function GameHeader({ game, awayAbbr, homeAbbr, awayTeamLabel, homeTeamLabel, co
       <div className="gd-header-meta">
         <div className="gd-header-tags">
           <span className="dc-tag dc-tag-sport">Hockey</span>
-          {confLabel && (
-            <span className={`dc-tag dc-tag-confidence ${confidence >= 70 ? 'badge-good' : confidence >= 55 ? 'badge-borderline' : 'badge-low'}`}>
+          {rating && (
+            <span className={`dc-tag dc-tag-confidence ${displayConf >= 70 ? 'badge-good' : displayConf >= 55 ? 'badge-borderline' : 'badge-low'}`}>
               <TrendingUp size={12} />
-              {confLabel} - {Math.round(confidence)}%
+              {rating.label} - {Math.round(displayConf)}%
             </span>
           )}
         </div>
@@ -489,6 +497,7 @@ function AIAnalysis({ game, homeAbbr, awayAbbr, homeTeamLabel, awayTeamLabel }) 
         bet_type: game.top_pick.bet_type,
         prediction_value: game.top_pick.prediction_value,
         confidence: game.top_pick.confidence,
+        bet_confidence: game.top_pick.bet_confidence,
         edge: game.top_pick.edge,
         reasoning: game.top_pick.reasoning,
         recommended: !game.top_pick.is_fallback,
@@ -496,12 +505,14 @@ function AIAnalysis({ game, homeAbbr, awayAbbr, homeTeamLabel, awayTeamLabel }) 
     : predictions.find((p) => p.recommended) || predictions[0];
   if (!topPick) return null;
 
-  const confidence = confidencePct(topPick.confidence);
+  const winProb = confidencePct(topPick.confidence);
+  const betConf = topPick.bet_confidence != null ? confidencePct(topPick.bet_confidence) : winProb;
   const edge = confidencePct(topPick.edge || 0);
-  const risk = getRiskLevel(confidence, topPick.edge);
-  const stake = getStakeLevel(confidence);
-  const confColor = getConfidenceColor(confidence);
-  const isQualified = confidence >= 70 && edge > 3;
+  const risk = getRiskLevel(betConf, topPick.edge);
+  const stake = getStakeLevel(betConf);
+  const confColor = getConfidenceColor(betConf);
+  const betRating = getBetRatingLabel(betConf);
+  const isQualified = betConf >= 70 && edge > 3;
 
   const rawReasoning = topPick.reasoning || topPick.reason || topPick.analysis || '';
   const cleaned = cleanReasoningText(rawReasoning);
@@ -634,16 +645,23 @@ function AIAnalysis({ game, homeAbbr, awayAbbr, homeTeamLabel, awayTeamLabel }) 
         </div>
       )}
 
-      {/* Confidence + Risk */}
+      {/* Bet Rating + Risk */}
       <div className="gd-confidence-row">
         <div className="gd-confidence-big">
           <span className="gd-confidence-pct" style={{ color: confColor }}>
-            {Math.round(confidence)}%
+            {Math.round(betConf)}%
           </span>
           <span className="gd-confidence-label">
-            <Info size={12} />
-            AI Confidence
+            <Target size={12} />
+            Bet Rating
           </span>
+          <span className={`gd-bet-rating-badge gd-bet-rating-${betRating.tier}`} style={{ color: betRating.color }}>
+            {betRating.label}
+          </span>
+        </div>
+        <div className="gd-confidence-secondary">
+          <span className="gd-win-prob-label">Win Prob</span>
+          <span className="gd-win-prob-value">{Math.round(winProb)}%</span>
         </div>
         <span className={`gd-risk-badge`} style={{ color: risk.color, borderColor: risk.color }}>
           {risk.label} Risk
@@ -663,8 +681,8 @@ function AIAnalysis({ game, homeAbbr, awayAbbr, homeTeamLabel, awayTeamLabel }) 
             <span className="gd-suggested-sub">{pickSide}</span>
           </div>
           <div className="gd-suggested-item">
-            <span className="gd-suggested-label">Confidence</span>
-            <strong>{Math.round(confidence)}%</strong>
+            <span className="gd-suggested-label">Bet Rating</span>
+            <strong style={{ color: betRating.color }}>{Math.round(betConf)}%</strong>
           </div>
           <div className="gd-suggested-item">
             <span className="gd-suggested-label">Risk Level</span>
@@ -686,8 +704,10 @@ function RiskAndMarket({ game, homeAbbr, awayAbbr, homeTeamLabel, awayTeamLabel 
   const topPick = predictions.find((p) => p.recommended) || predictions[0];
   if (!topPick) return null;
 
-  const confidence = confidencePct(topPick.confidence);
-  const risk = getRiskLevel(confidence, topPick.edge);
+  const betConf = topPick.bet_confidence != null ? confidencePct(topPick.bet_confidence) : confidencePct(topPick.confidence);
+  const winProb = confidencePct(topPick.confidence);
+  const confidence = betConf;
+  const risk = getRiskLevel(betConf, topPick.edge);
 
   // Derive market interest from odds differential
   const odds = game.odds || {};
@@ -732,9 +752,15 @@ function RiskAndMarket({ game, homeAbbr, awayAbbr, homeTeamLabel, awayTeamLabel 
           {/* Risk factors breakdown */}
           <div className="gd-risk-factors">
             <div className="gd-risk-factor-row">
-              <span className="gd-risk-factor-label">Model Confidence</span>
-              <span className="gd-risk-factor-val" style={{ color: confidence >= 65 ? 'var(--accent-green)' : confidence >= 55 ? 'var(--accent-gold)' : 'var(--accent-red)' }}>
-                {Math.round(confidence)}%
+              <span className="gd-risk-factor-label">Bet Rating</span>
+              <span className="gd-risk-factor-val" style={{ color: betConf >= 70 ? 'var(--accent-green)' : betConf >= 60 ? 'var(--accent-gold)' : 'var(--accent-red)' }}>
+                {Math.round(betConf)}%
+              </span>
+            </div>
+            <div className="gd-risk-factor-row">
+              <span className="gd-risk-factor-label">Win Probability</span>
+              <span className="gd-risk-factor-val" style={{ color: winProb >= 55 ? 'var(--accent-green)' : 'var(--text-muted)' }}>
+                {Math.round(winProb)}%
               </span>
             </div>
             <div className="gd-risk-factor-row">
@@ -1733,6 +1759,7 @@ function GameDetail() {
   const predictions = game.predictions || game.bets || [];
   const topPick = game.top_pick || predictions.find((p) => p.recommended) || predictions[0];
   const confidence = topPick ? confidencePct(topPick.confidence) : null;
+  const betConfidence = topPick?.bet_confidence != null ? confidencePct(topPick.bet_confidence) : null;
 
   // Determine which team the AI picked
   const pickValue = (topPick?.prediction_value || '').toLowerCase();
@@ -1762,6 +1789,7 @@ function GameDetail() {
         awayTeamLabel={awayTeamLabel}
         homeTeamLabel={homeTeamLabel}
         confidence={confidence}
+        betConfidence={betConfidence}
         isLive={isLive}
         venue={venue}
         pickIsHome={pickIsHome}

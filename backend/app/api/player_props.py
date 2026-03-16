@@ -371,14 +371,18 @@ _PROP_STAT_FIELD = {
 
 
 
+PROP_MODEL_VERSION = 2  # Bump when calibration or model logic changes
+
 async def _get_or_create_snapshots(
     session: AsyncSession,
     game_id: int,
 ) -> List["PropPickSnapshot"]:
     """Return frozen prop pick snapshots for a game.
 
-    If snapshots already exist, return them (picks are frozen).
-    Otherwise, generate fresh picks, persist as snapshots, and return.
+    If snapshots already exist and match the current model version,
+    return them (picks are frozen).  If they're from an older model
+    version, delete and regenerate.  Otherwise, generate fresh picks,
+    persist as snapshots, and return.
     Uses a write session to save new snapshots.
     """
     from app.models.prop_pick_snapshot import PropPickSnapshot
@@ -392,7 +396,27 @@ async def _get_or_create_snapshots(
     )
     snapshots = list(existing.scalars().all())
     if snapshots:
-        return snapshots
+        # Check if snapshots are from the current model version
+        if snapshots[0].model_version == PROP_MODEL_VERSION:
+            return snapshots
+        # Stale snapshots — delete and regenerate (only for non-graded games)
+        if any(s.outcome is not None for s in snapshots):
+            # Already graded — don't regenerate, keep historical record
+            return snapshots
+        logger.info(
+            "Regenerating prop picks for game %d (version %s → %s)",
+            game_id, snapshots[0].model_version, PROP_MODEL_VERSION,
+        )
+        try:
+            async with get_write_session_context() as write_session:
+                from sqlalchemy import delete as sa_delete
+                await write_session.execute(
+                    sa_delete(PropPickSnapshot)
+                    .where(PropPickSnapshot.game_id == game_id)
+                )
+        except Exception:
+            logger.exception("Failed to delete stale prop snapshots for game %d", game_id)
+            return snapshots
 
     # No snapshots yet — generate and persist
     picks = await generate_prop_picks(session, game_id)
@@ -418,6 +442,7 @@ async def _get_or_create_snapshots(
                     avg_rate=round(p.avg_rate, 2),
                     games_sampled=p.games_sampled,
                     reasoning=p.reasoning,
+                    model_version=PROP_MODEL_VERSION,
                 )
                 write_session.add(snap)
                 new_snapshots.append(snap)

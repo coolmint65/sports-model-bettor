@@ -131,8 +131,9 @@ function formatGameTime(game) {
 
 function getConfidenceBadge(confidence) {
   if (confidence == null) return null;
-  if (confidence >= 75) return { label: 'GOOD BET', className: 'badge-good', icon: TrendingUp };
-  if (confidence >= 60) return { label: 'BORDERLINE', className: 'badge-borderline', icon: Minus };
+  if (confidence >= 80) return { label: 'STRONG BET', className: 'badge-good', icon: TrendingUp };
+  if (confidence >= 70) return { label: 'GOOD BET', className: 'badge-good', icon: TrendingUp };
+  if (confidence >= 60) return { label: 'LEAN', className: 'badge-borderline', icon: Minus };
   return null;
 }
 

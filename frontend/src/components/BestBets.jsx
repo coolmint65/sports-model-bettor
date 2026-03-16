@@ -116,7 +116,7 @@ function BestBetCard({ bet, rank, isFeatured, onTrack, tracked }) {
 
         <div className="best-bet-metrics">
           <div className="metric">
-            <span className="metric-label">Confidence</span>
+            <span className="metric-label">Bet Rating</span>
             <div className="confidence-bar-container">
               <div
                 className="confidence-bar"

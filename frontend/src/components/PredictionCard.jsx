@@ -162,7 +162,7 @@ function PredictionCard({ prediction, showGame = false, compact = false, isFallb
 
       <div className="prediction-metrics">
         <div className="prediction-metric">
-          <span className="prediction-metric-label">Confidence</span>
+          <span className="prediction-metric-label">Bet Rating</span>
           <div className="prediction-confidence-bar-wrap">
             <div className="prediction-confidence-bar-bg">
               <div

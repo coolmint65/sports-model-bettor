@@ -286,6 +286,8 @@ async def _migrate_add_columns() -> None:
         ("game", "away_starter_status", "VARCHAR(20)"),
         # Bet confidence (signal-based, separate from win probability)
         ("prediction", "bet_confidence", "FLOAT"),
+        # Prop pick snapshot model version for cache invalidation
+        ("prop_pick_snapshot", "model_version", "INTEGER"),
     ]
 
     async with engine.begin() as conn:
