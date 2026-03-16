@@ -8,7 +8,7 @@ Used by:
 - Backtester (parameter evaluation)
 """
 
-from typing import Any, Dict, Optional
+from typing import Optional
 
 from app.models.game import Game
 

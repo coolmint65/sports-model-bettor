@@ -23,7 +23,6 @@ from app.models.game import Game, GameGoalieStats, GamePlayerStats
 from app.models.player import Player
 from app.models.player_prop import PlayerPropOdds
 from app.models.prop_pick_snapshot import PropPickSnapshot
-from app.models.team import Team
 
 router = APIRouter(prefix="/api/props", tags=["player-props"])
 

@@ -3,10 +3,10 @@ API endpoints for injury reports and their impact on predictions.
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import and_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_session

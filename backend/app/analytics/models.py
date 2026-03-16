@@ -2285,7 +2285,7 @@ class BettingModel:
             dict with buckets (list of {range, predicted, actual, count}),
             brier_score, and suggested_shrinkage.
         """
-        from sqlalchemy import select, func, and_
+        from sqlalchemy import select, func
         from app.models.prediction import Prediction, BetResult
 
         stmt = (

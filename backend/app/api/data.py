@@ -691,7 +691,6 @@ async def diagnose_odds_matching(
     """
     from datetime import date as date_type, timedelta
     from datetime import datetime as dt_cls
-    from datetime import timezone as tz
 
     from app.scrapers.odds_multi import MultiSourceOddsScraper
 

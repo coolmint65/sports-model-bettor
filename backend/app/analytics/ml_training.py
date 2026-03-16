@@ -19,7 +19,7 @@ import numpy as np
 
 from app.analytics.features import FeatureEngine
 from app.analytics.ml_features import flatten_features, get_feature_names
-from app.analytics.ml_model import MLModel, TrainingMetrics
+from app.analytics.ml_model import MLModel
 from app.config import settings
 from app.constants import GAME_FINAL_STATUSES
 

@@ -11,8 +11,7 @@ so it continuously learns from its mistakes.
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 from sqlalchemy import and_, func, select

@@ -6,8 +6,7 @@ into a flat numeric vector suitable for scikit-learn models. Handles missing
 values gracefully (HistGradientBoosting accepts NaN natively).
 """
 
-import math
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import numpy as np
 

@@ -855,7 +855,7 @@ async def _db_fallback_starters(
     # For each finished game, a goalie in GameGoalieStats either
     # played for the home team or away team. We use the Game's
     # team IDs to figure out which side.
-    from sqlalchemy import literal, union_all, case
+    from sqlalchemy import literal
 
     # Subquery: for each GameGoalieStats row, determine the team
     # by checking if the goalie's Player.team_id matches home or away.

@@ -13,7 +13,7 @@ insufficient data is available.
 import logging
 from typing import Any, Dict, Optional
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.prediction import BetResult, Prediction

@@ -8,7 +8,7 @@ Provides endpoints for:
 - Predictions and bet results
 """
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -20,7 +20,7 @@ from sqlalchemy.orm import selectinload
 from app.config import settings
 from app.database import get_session
 from app.models.game import Game, HeadToHead
-from app.models.player import GoalieStats, Player, PlayerStats
+from app.models.player import Player
 from app.models.prediction import BetResult, Prediction
 from app.models.team import Team, TeamStats
 

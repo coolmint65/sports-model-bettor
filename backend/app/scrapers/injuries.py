@@ -14,7 +14,7 @@ daily status report JSON feed when available.
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession

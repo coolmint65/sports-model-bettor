@@ -28,8 +28,8 @@ Supported markets:
 import logging
 import math
 from dataclasses import dataclass, field
-from datetime import date, timedelta
-from typing import Any, Dict, List, Optional
+from datetime import date
+from typing import Dict, List, Optional
 
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession

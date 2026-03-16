@@ -3,7 +3,7 @@ API endpoints for player and team matchup analytics.
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import and_, select

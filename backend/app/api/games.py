@@ -7,7 +7,7 @@ analytical features for a specific game.
 """
 
 import logging
-from datetime import date, datetime, timezone, timedelta
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES, composite_pick_score, is_heavy_juice
+from app.constants import GAME_FINAL_STATUSES, composite_pick_score, is_heavy_juice
 from app.database import get_session
 from app.models.game import Game, GameGoalieStats, HeadToHead
 from app.models.injury import InjuryReport

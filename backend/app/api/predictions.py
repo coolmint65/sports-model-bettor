@@ -14,21 +14,21 @@ Predictions are split into two phases:
 """
 
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import and_, delete, func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES, composite_pick_score
-from app.database import get_session, get_session_context, get_write_session_context
-from app.services.odds import american_to_implied, fresh_implied_prob, implied_to_american as implied_prob_to_american
+from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES
+from app.database import get_session, get_write_session_context
+from app.services.odds import fresh_implied_prob
 from app.models.game import Game
 from app.models.prediction import BetResult, Prediction, TrackedBet
 from app.models.team import Team

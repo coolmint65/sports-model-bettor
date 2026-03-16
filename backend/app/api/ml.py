@@ -5,7 +5,7 @@ Provides endpoints to trigger training, check model status, and
 inspect feature importance.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession

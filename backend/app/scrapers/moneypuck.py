@@ -11,7 +11,7 @@ Updated nightly by MoneyPuck.
 
 import io
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from typing import Dict, Optional
 
 import httpx

@@ -10,7 +10,6 @@ import logging
 from typing import Any, Dict
 
 from fastapi import APIRouter
-from pydantic import ValidationError
 
 from app.config import settings
 

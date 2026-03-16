@@ -11,9 +11,9 @@ play high-scoring games against each other.
 import logging
 import math
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
-from sqlalchemy import and_, case, desc, func, or_, select
+from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
