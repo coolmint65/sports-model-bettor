@@ -3,46 +3,17 @@ import { useNavigate } from 'react-router-dom';
 import { Trophy, TrendingUp, Target, Star, ChevronRight, Radio, Plus, Check, Layers, RefreshCw } from 'lucide-react';
 import { fetchBestBets, trackBet, fetchTrackedBets, regeneratePredictions } from '../utils/api';
 import { useApi } from '../hooks/useApi';
-import { teamName, teamAbbrev, confidencePct, formatBetType, formatPredictionValue } from '../utils/teams';
+import { teamName, confidencePct, formatBetType, formatPredictionValue, isLiveStatus } from '../utils/teams';
+import { formatAmericanOdds, formatOddsFromProb, getConfidenceColor } from '../utils/formatting';
 
 const BEST_BETS_POLL_INTERVAL = 60_000; // 60 seconds
-
-function formatAmericanOdds(odds) {
-  if (odds == null) return null;
-  const v = Math.round(odds);
-  return v > 0 ? `+${v}` : `${v}`;
-}
-
-function formatOddsFromProb(impliedProb) {
-  if (!impliedProb || impliedProb <= 0 || impliedProb >= 1) return null;
-  if (impliedProb > 0.5) {
-    const odds = Math.round(-(impliedProb / (1 - impliedProb)) * 100);
-    return odds.toString();
-  } else {
-    const odds = Math.round(((1 - impliedProb) / impliedProb) * 100);
-    return `+${odds}`;
-  }
-}
-
-function getConfidenceColor(confidence) {
-  if (confidence >= 75) return '#00ff88';
-  if (confidence >= 60) return '#4fc3f7';
-  if (confidence >= 45) return '#ffd700';
-  return '#ff5252';
-}
-
-function isLiveGame(status) {
-  if (!status) return false;
-  const s = status.toLowerCase();
-  return s === 'in_progress' || s === 'live' || s === 'in progress';
-}
 
 function BestBetCard({ bet, rank, isFeatured, onTrack, tracked }) {
   const navigate = useNavigate();
   const confidence = confidencePct(bet.bet_confidence ?? bet.confidence);
   const edge = confidencePct(bet.edge);
   const confColor = getConfidenceColor(confidence);
-  const live = isLiveGame(bet.game_status);
+  const live = isLiveStatus(bet.game_status);
   const phase = bet.phase || 'prematch';
   const units = bet.units || 1;
 
@@ -259,7 +230,7 @@ function BestBets() {
     } finally {
       setTrackingId(null);
     }
-  }, [trackedIds]);
+  }, [isBetTracked]);
 
   const handleRegenerate = useCallback(async () => {
     if (regenerating) return;

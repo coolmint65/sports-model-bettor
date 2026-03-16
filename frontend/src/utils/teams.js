@@ -42,7 +42,7 @@ export function confidencePct(value) {
 export function isLiveStatus(status) {
   if (!status) return false;
   const s = status.toLowerCase();
-  return s === 'in_progress' || s === 'live' || s === 'active';
+  return s === 'in_progress' || s === 'live' || s === 'active' || s === 'in progress';
 }
 
 /**

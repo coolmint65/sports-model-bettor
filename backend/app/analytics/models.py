@@ -276,49 +276,47 @@ class BettingModel:
 
         # ---- Player talent adjustment ----
         # Teams with elite top-6 forwards score more; adjust xG accordingly.
-        home_skaters = features.get("home_skaters", {})
-        away_skaters = features.get("away_skaters", {})
-        if home_skaters.get("games_found", 0) >= 5:
-            talent_diff = home_skaters.get("top6_fwd_ppg", LEAGUE_AVG_TOP6_PPG) - LEAGUE_AVG_TOP6_PPG
-            home_xg *= 1.0 + talent_diff * SKATER_TALENT_FACTOR
-        if away_skaters.get("games_found", 0) >= 5:
-            talent_diff = away_skaters.get("top6_fwd_ppg", LEAGUE_AVG_TOP6_PPG) - LEAGUE_AVG_TOP6_PPG
-            away_xg *= 1.0 + talent_diff * SKATER_TALENT_FACTOR
+        for side_key, xg_attr in [("home_skaters", "home"), ("away_skaters", "away")]:
+            skaters = features.get(side_key, {})
+            if skaters.get("games_found", 0) >= 5:
+                talent_diff = skaters.get("top6_fwd_ppg", LEAGUE_AVG_TOP6_PPG) - LEAGUE_AVG_TOP6_PPG
+                if xg_attr == "home":
+                    home_xg *= 1.0 + talent_diff * SKATER_TALENT_FACTOR
+                else:
+                    away_xg *= 1.0 + talent_diff * SKATER_TALENT_FACTOR
 
         # ---- Lineup depletion adjustment ----
         # Missing regular players reduce a team's expected output.
-        home_lineup = features.get("home_lineup", {})
-        away_lineup = features.get("away_lineup", {})
-        home_strength = home_lineup.get("lineup_strength", 1.0)
-        away_strength = away_lineup.get("lineup_strength", 1.0)
-        if home_strength < 1.0:
-            depletion = (1.0 - home_strength) * LINEUP_DEPLETION_FACTOR
-            home_xg *= (1.0 - depletion)
-        if away_strength < 1.0:
-            depletion = (1.0 - away_strength) * LINEUP_DEPLETION_FACTOR
-            away_xg *= (1.0 - depletion)
+        for side_key, xg_attr in [("home_lineup", "home"), ("away_lineup", "away")]:
+            strength = features.get(side_key, {}).get("lineup_strength", 1.0)
+            if strength < 1.0:
+                depletion = (1.0 - strength) * LINEUP_DEPLETION_FACTOR
+                if xg_attr == "home":
+                    home_xg *= (1.0 - depletion)
+                else:
+                    away_xg *= (1.0 - depletion)
 
         # ---- Injury impact adjustment ----
         # Uses structured injury data for more precise lineup impact.
         home_injuries = features.get("home_injuries", {})
         away_injuries = features.get("away_injuries", {})
-        home_injury_impact = home_injuries.get("xg_reduction", 0.0)
-        away_injury_impact = away_injuries.get("xg_reduction", 0.0)
-        if home_injury_impact > 0:
-            home_xg *= (1.0 - min(home_injury_impact, _mc.injury_impact_factor))
-        if away_injury_impact > 0:
-            away_xg *= (1.0 - min(away_injury_impact, _mc.injury_impact_factor))
+        for inj, xg_attr in [(home_injuries, "home"), (away_injuries, "away")]:
+            impact = inj.get("xg_reduction", 0.0)
+            if impact > 0:
+                if xg_attr == "home":
+                    home_xg *= (1.0 - min(impact, _mc.injury_impact_factor))
+                else:
+                    away_xg *= (1.0 - min(impact, _mc.injury_impact_factor))
 
         # ---- Player matchup adjustment ----
         # Key players who historically perform well/poorly against this opponent.
-        home_matchup = features.get("home_player_matchup", {})
-        away_matchup = features.get("away_player_matchup", {})
-        home_matchup_boost = home_matchup.get("matchup_boost", 0.0)
-        away_matchup_boost = away_matchup.get("matchup_boost", 0.0)
-        if home_matchup_boost != 0.0:
-            home_xg *= (1.0 + home_matchup_boost * PLAYER_MATCHUP_FACTOR)
-        if away_matchup_boost != 0.0:
-            away_xg *= (1.0 + away_matchup_boost * PLAYER_MATCHUP_FACTOR)
+        for side_key, xg_attr in [("home_player_matchup", "home"), ("away_player_matchup", "away")]:
+            boost = features.get(side_key, {}).get("matchup_boost", 0.0)
+            if boost != 0.0:
+                if xg_attr == "home":
+                    home_xg *= (1.0 + boost * PLAYER_MATCHUP_FACTOR)
+                else:
+                    away_xg *= (1.0 + boost * PLAYER_MATCHUP_FACTOR)
 
         # ---- Team matchup scoring tendency ----
         # Do these two teams produce higher/lower scoring games historically?
@@ -333,42 +331,31 @@ class BettingModel:
                 away_xg *= (1.0 + scoring_adj)
 
         # ---- Schedule fatigue adjustment ----
-        # Back-to-back and rest days affect performance.
+        # Back-to-back, rest days, lookahead/letdown affect performance.
         home_schedule = features.get("home_schedule", {})
         away_schedule = features.get("away_schedule", {})
-        if home_schedule.get("is_back_to_back", False):
-            home_xg -= BACK_TO_BACK_PENALTY
-        if away_schedule.get("is_back_to_back", False):
-            away_xg -= BACK_TO_BACK_PENALTY
 
-        home_rest_days = home_schedule.get("days_rest", 1)
-        away_rest_days = away_schedule.get("days_rest", 1)
-        if home_rest_days > 1:
-            rest_bonus = min((home_rest_days - 1) * REST_ADVANTAGE_PER_DAY, REST_ADVANTAGE_CAP)
-            home_xg += rest_bonus
-        if away_rest_days > 1:
-            rest_bonus = min((away_rest_days - 1) * REST_ADVANTAGE_PER_DAY, REST_ADVANTAGE_CAP)
-            away_xg += rest_bonus
+        for sched, xg_attr in [(home_schedule, "home"), (away_schedule, "away")]:
+            adj = 0.0
+            if sched.get("is_back_to_back", False):
+                adj -= BACK_TO_BACK_PENALTY
+            rest_days = sched.get("days_rest", 1)
+            if rest_days > 1:
+                adj += min((rest_days - 1) * REST_ADVANTAGE_PER_DAY, REST_ADVANTAGE_CAP)
+            if sched.get("is_lookahead", False):
+                adj -= _mc.lookahead_penalty
+            if sched.get("is_letdown", False):
+                adj -= _mc.lookahead_penalty * 0.75
+            if xg_attr == "home":
+                home_xg += adj
+            else:
+                away_xg += adj
 
-        # Road trip fatigue
+        # Road trip fatigue (away team only)
         away_road_games = away_schedule.get("consecutive_road_games", 0)
         if away_road_games > _mc.road_trip_fatigue_threshold:
             road_penalty = (away_road_games - _mc.road_trip_fatigue_threshold) * _mc.road_trip_fatigue_per_game
             away_xg -= min(road_penalty, 0.10)
-
-        # ---- Schedule spot / situational awareness ----
-        # Lookahead: team playing a weak opponent before a divisional rival
-        # tends to underperform (saving energy for the big game).
-        if home_schedule.get("is_lookahead", False):
-            home_xg -= _mc.lookahead_penalty
-        if away_schedule.get("is_lookahead", False):
-            away_xg -= _mc.lookahead_penalty
-
-        # Letdown: team coming off a hard-fought divisional OT game
-        if home_schedule.get("is_letdown", False):
-            home_xg -= _mc.lookahead_penalty * 0.75
-        if away_schedule.get("is_letdown", False):
-            away_xg -= _mc.lookahead_penalty * 0.75
 
         # Divisional games tend to be tighter / go under
         if features.get("is_divisional", False):
@@ -462,31 +449,16 @@ class BettingModel:
         adv_min_games = _mc.advanced_metrics_min_games
         possession_factor = _mc.unified_possession_factor
 
-        # Home team: pick best available CF%
-        home_cf_used = None
-        if home_ev.get("games_found", 0) >= _mc.ev_corsi_min_games:
-            home_cf_used = home_ev.get("ev_cf_pct", 50.0)
-        elif home_close.get("close_games_found", 0) >= _mc.close_game_min_games:
-            home_cf_used = home_close.get("close_cf_pct", 50.0)
-        elif home_advanced.get("games_found", 0) >= adv_min_games:
-            home_cf_used = home_advanced.get("corsi_for_pct", 50.0)
-
-        if home_cf_used is not None:
-            cf_deviation = (home_cf_used - 50.0) / 100.0
-            home_xg *= 1.0 + cf_deviation * possession_factor
-
-        # Away team: pick best available CF%
-        away_cf_used = None
-        if away_ev.get("games_found", 0) >= _mc.ev_corsi_min_games:
-            away_cf_used = away_ev.get("ev_cf_pct", 50.0)
-        elif away_close.get("close_games_found", 0) >= _mc.close_game_min_games:
-            away_cf_used = away_close.get("close_cf_pct", 50.0)
-        elif away_advanced.get("games_found", 0) >= adv_min_games:
-            away_cf_used = away_advanced.get("corsi_for_pct", 50.0)
-
-        if away_cf_used is not None:
-            cf_deviation = (away_cf_used - 50.0) / 100.0
-            away_xg *= 1.0 + cf_deviation * possession_factor
+        for cf_used, is_home in [
+            (self._get_best_cf(home_ev, home_close, home_advanced, adv_min_games), True),
+            (self._get_best_cf(away_ev, away_close, away_advanced, adv_min_games), False),
+        ]:
+            if cf_used is not None:
+                cf_deviation = (cf_used - 50.0) / 100.0
+                if is_home:
+                    home_xg *= 1.0 + cf_deviation * possession_factor
+                else:
+                    away_xg *= 1.0 + cf_deviation * possession_factor
 
         # Shot quality (shooting%) adjustment — kept separate as it measures
         # a distinct signal (finishing ability, not possession volume).
