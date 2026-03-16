@@ -31,6 +31,67 @@ logger = logging.getLogger(__name__)
 
 
 # ------------------------------------------------------------------ #
+#  Odds helpers                                                       #
+# ------------------------------------------------------------------ #
+
+def _compute_profit(odds: float, won: bool) -> float:
+    """
+    Calculate profit/loss for a 1-unit bet using American odds.
+
+    Win at +150 → 1.50 units profit.
+    Win at -200 → 0.50 units profit.
+    Loss → -1.0 units (always lose the stake).
+    """
+    if won:
+        if odds > 0:
+            return odds / 100.0
+        else:
+            return 100.0 / abs(odds)
+    return -1.0
+
+
+def _extract_odds_for_prediction(
+    bet_type: str,
+    prediction_value: str,
+    features: Dict[str, Any],
+) -> Optional[float]:
+    """
+    Look up the American odds that correspond to a specific prediction
+    from the pre-built features dict.
+
+    Returns None when odds data is unavailable.
+    """
+    odds_data = features.get("odds")
+    if not odds_data or not isinstance(odds_data, dict):
+        return None
+
+    home_abbr = features.get("home_team_abbr", "")
+
+    if bet_type == "ml":
+        is_home = prediction_value == home_abbr or prediction_value == "home"
+        key = "home_moneyline" if is_home else "away_moneyline"
+        return odds_data.get(key)
+
+    if bet_type == "total":
+        direction = prediction_value.split("_")[0] if "_" in prediction_value else prediction_value
+        if direction == "over":
+            return odds_data.get("over_price")
+        elif direction == "under":
+            return odds_data.get("under_price")
+        return None
+
+    if bet_type == "spread":
+        # prediction_value is like "EDM_-1.5" or "home_-1.5"
+        parts = prediction_value.split("_", 1)
+        team_part = parts[0] if len(parts) > 1 else prediction_value
+        is_home = (team_part == home_abbr) or ("home" in prediction_value.lower())
+        key = "home_spread_price" if is_home else "away_spread_price"
+        return odds_data.get(key)
+
+    return None
+
+
+# ------------------------------------------------------------------ #
 #  Data structures                                                    #
 # ------------------------------------------------------------------ #
 
@@ -41,6 +102,8 @@ class BacktestResult:
     total_predictions: int = 0
     correct_predictions: int = 0
     total_profit: float = 0.0
+    flat_profit: float = 0.0
+    bets_with_odds: int = 0
     log_loss_sum: float = 0.0
     ml_correct: int = 0
     ml_total: int = 0
@@ -54,8 +117,12 @@ class BacktestResult:
         return self.correct_predictions / self.total_predictions if self.total_predictions > 0 else 0.0
 
     @property
-    def roi(self) -> float:
+    def odds_roi(self) -> float:
         return self.total_profit / self.total_predictions if self.total_predictions > 0 else 0.0
+
+    @property
+    def flat_roi(self) -> float:
+        return self.flat_profit / self.total_predictions if self.total_predictions > 0 else 0.0
 
     @property
     def avg_log_loss(self) -> float:
@@ -74,7 +141,11 @@ class BacktestResult:
             "params": self.params,
             "total_predictions": self.total_predictions,
             "hit_rate": round(self.hit_rate, 4),
-            "roi": round(self.roi, 4),
+            "odds_roi": round(self.odds_roi, 4),
+            "flat_roi": round(self.flat_roi, 4),
+            "total_profit": round(self.total_profit, 2),
+            "flat_profit": round(self.flat_profit, 2),
+            "bets_with_odds": self.bets_with_odds,
             "avg_log_loss": round(self.avg_log_loss, 4),
             "ml_hit_rate": round(self.ml_hit_rate, 4),
             "total_hit_rate": round(self.total_hit_rate, 4),
@@ -206,11 +277,22 @@ class Backtester:
                             continue
 
                         result.total_predictions += 1
+
+                        # Flat P/L (old method, kept for comparison)
                         if was_correct:
                             result.correct_predictions += 1
-                            result.total_profit += 1.0
+                            result.flat_profit += 1.0
                         else:
-                            result.total_profit -= 1.0
+                            result.flat_profit -= 1.0
+
+                        # Odds-based P/L (real payouts)
+                        bet_odds = _extract_odds_for_prediction(bt, pv, features)
+                        if bet_odds is not None:
+                            result.bets_with_odds += 1
+                            result.total_profit += _compute_profit(bet_odds, was_correct)
+                        else:
+                            # Fall back to flat ±1 when odds unavailable
+                            result.total_profit += 1.0 if was_correct else -1.0
 
                         # Log loss: -log(p) if correct, -log(1-p) if wrong
                         p = max(min(conf, 0.999), 0.001)
@@ -304,7 +386,7 @@ class Backtester:
                 "  params=%s -> hit=%.3f, roi=%.3f, ll=%.3f (%d preds)",
                 {k: round(v, 3) for k, v in params.items()},
                 bt_result.hit_rate,
-                bt_result.roi,
+                bt_result.odds_roi,
                 bt_result.avg_log_loss,
                 bt_result.total_predictions,
             )
@@ -313,7 +395,7 @@ class Backtester:
         if metric == "log_loss":
             results.sort(key=lambda r: r.avg_log_loss)
         elif metric == "roi":
-            results.sort(key=lambda r: r.roi, reverse=True)
+            results.sort(key=lambda r: r.odds_roi, reverse=True)
         else:
             results.sort(key=lambda r: r.hit_rate, reverse=True)
 
