@@ -357,6 +357,15 @@ class BettingModel:
             travel_penalty = fatigue_score * _mc.travel_fatigue_factor
             away_xg -= travel_penalty
 
+        # ---- Time-of-day body clock adjustment ----
+        # West coast teams playing early East coast afternoon games
+        # historically underperform. Only penalise the away team (the
+        # home team is on their normal schedule).
+        time_of_day = features.get("time_of_day", {})
+        body_clock = time_of_day.get("body_clock_disadvantage", 0.0)
+        if body_clock > 0.3:
+            away_xg -= body_clock * _mc.early_start_penalty
+
         # ---- Special teams matchup adjustment ----
         # PP efficiency vs opponent PK, and vice versa.
         home_special = features.get("home_special_teams", {})
