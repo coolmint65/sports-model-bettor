@@ -134,7 +134,8 @@ function getConfidenceBadge(confidence) {
   if (confidence >= 80) return { label: 'STRONG BET', className: 'badge-good', icon: TrendingUp };
   if (confidence >= 70) return { label: 'GOOD BET', className: 'badge-good', icon: TrendingUp };
   if (confidence >= 60) return { label: 'LEAN', className: 'badge-borderline', icon: Minus };
-  return null;
+  if (confidence >= 50) return { label: 'SPECULATIVE', className: 'badge-skip', icon: Minus };
+  return { label: 'NO EDGE', className: 'badge-skip', icon: Minus };
 }
 
 const MEDAL_STYLES = {
@@ -294,7 +295,7 @@ function GameCard({ game, section, medal }) {
         {badge && (
           <span className={`dc-tag dc-tag-confidence ${badge.className}`}>
             <badge.icon size={12} />
-            {badge.label}
+            {badge.label} {confidence != null ? `${Math.round(confidence)}%` : ''}
           </span>
         )}
       </div>
@@ -393,8 +394,8 @@ function GameCard({ game, section, medal }) {
                 tier = 'dc-pick-chip-borderline';
                 tierLabel = 'LEAN';
               } else {
-                tier = 'dc-pick-chip-borderline';
-                tierLabel = 'LEAN';
+                tier = 'dc-pick-chip-skip';
+                tierLabel = 'SKIP';
               }
               return (
                 <div key={pick.bet_type} className={`dc-pick-chip ${tier}`}>
