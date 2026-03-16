@@ -56,6 +56,12 @@ MIN_GAMES = 5
 MIN_MATCHUP_GAMES = 3
 # Minimum edge to consider a pick worth recommending
 MIN_PICK_EDGE = 0.05
+
+# Calibration shrinkage for player props. Poisson/Normal models
+# structurally overestimate player prop probabilities because they
+# don't model variance from ice time changes, scratches, blowouts,
+# coaching decisions, etc. Same shrinkage level as game totals.
+PROP_CALIBRATION_SHRINKAGE = 0.35
 # Minimum confidence to include a pick
 MIN_PICK_CONFIDENCE = 0.55
 # Maximum picks to return per game (top N by edge)
@@ -94,6 +100,16 @@ SHARP_MOVE_THRESHOLD = 15  # American odds points of movement to flag
 # ---------------------------------------------------------------------------
 # Math helpers
 # ---------------------------------------------------------------------------
+
+def _calibrate_prop_prob(raw_prob: float) -> float:
+    """Apply calibration shrinkage to a raw model probability.
+
+    Pulls the probability toward 50% to correct for structural
+    overconfidence in Poisson/Normal models when applied to player props.
+    """
+    calibrated = raw_prob * (1.0 - PROP_CALIBRATION_SHRINKAGE) + 0.5 * PROP_CALIBRATION_SHRINKAGE
+    return max(0.01, min(0.99, calibrated))
+
 
 def _american_to_implied(american: Optional[float]) -> Optional[float]:
     """Convert American odds to implied probability (includes vig)."""
@@ -945,6 +961,10 @@ def _analyze_atg(
 
     model_prob = _poisson_at_least_one(adjusted_goals)
 
+    # Apply calibration shrinkage — Poisson models structurally overestimate
+    # player prop probabilities just like game totals/spreads.
+    model_prob = _calibrate_prop_prob(model_prob)
+
     # Raw implied probability is what you bet against (includes vig).
     implied = _american_to_implied(prop.over_price)
     if implied is None or implied <= 0:
@@ -1092,7 +1112,11 @@ def _analyze_over_under(
         p_over = _poisson_over(adjusted_rate, prop.line)
     p_under = 1.0 - p_over
 
-    # Use RAW implied probabilities for edge calculation
+    # Apply calibration shrinkage before computing edge — Poisson/Normal
+    # models structurally overestimate player prop probabilities.
+    p_over_cal = _calibrate_prop_prob(p_over)
+    p_under_cal = _calibrate_prop_prob(p_under)
+
     implied_over = _american_to_implied(prop.over_price)
     implied_under = _american_to_implied(prop.under_price)
 
@@ -1104,20 +1128,20 @@ def _analyze_over_under(
     best_odds = None
 
     if implied_over and implied_over > 0:
-        over_edge = p_over - implied_over
+        over_edge = p_over_cal - implied_over
         if over_edge > best_edge:
             best_side = "over"
             best_edge = over_edge
-            best_model_prob = p_over
+            best_model_prob = p_over_cal
             best_implied = implied_over
             best_odds = prop.over_price
 
     if implied_under and implied_under > 0:
-        under_edge = p_under - implied_under
+        under_edge = p_under_cal - implied_under
         if under_edge > best_edge:
             best_side = "under"
             best_edge = under_edge
-            best_model_prob = p_under
+            best_model_prob = p_under_cal
             best_implied = implied_under
             best_odds = prop.under_price
 

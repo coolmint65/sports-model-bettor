@@ -347,41 +347,42 @@ function GameCard({ game, section, medal }) {
         <div className="dc-picks-multi">
           {(() => {
             const picks = [mlPick, spreadPick, totalPick].filter(Boolean);
-            // Filter out negative-edge picks — no value in showing bets against us
-            const viablePicks = picks.filter((p) => p.edge == null || p.edge >= 0);
-            if (viablePicks.length === 0 && picks.length > 0) {
-              // All picks have negative edge — show the least-negative one as a LEAN
-              viablePicks.push(picks.reduce((best, p) => ((p.edge ?? -1) > (best.edge ?? -1) ? p : best), picks[0]));
-            }
-            // Find the best pick (highest composite_score or edge)
-            const bestPick = viablePicks.reduce((best, p) => {
-              const score = (s) => (s?.composite_score ?? 0) || ((s?.edge ?? 0) * 100 + (s?.confidence ?? 0));
-              return score(p) > score(best) ? p : best;
-            }, viablePicks[0]);
+            // Find the best pick among positive-edge picks
+            const positivePicks = picks.filter((p) => p.edge == null || p.edge >= 0);
+            const bestPick = positivePicks.length > 0
+              ? positivePicks.reduce((best, p) => {
+                  const score = (s) => (s?.composite_score ?? 0) || ((s?.edge ?? 0) * 100 + (s?.confidence ?? 0));
+                  return score(p) > score(best) ? p : best;
+                }, positivePicks[0])
+              : null;
 
-            // Annotate picks with display values for sorting
-            // Use bet_confidence (signal-based) for display, fall back to confidence (win prob)
-            const annotated = viablePicks.map((pick) => {
+            // Show ALL picks — use bet_confidence for display, dim negative-edge ones
+            const annotated = picks.map((pick) => {
               const betConf = pick.bet_confidence != null
                 ? confidencePct(pick.bet_confidence)
                 : (pick.confidence != null ? confidencePct(pick.confidence) : null);
-              const isBest = pick === bestPick && viablePicks.length > 1;
-              return { pick, conf: betConf, isBest };
+              const isBest = bestPick && pick === bestPick && positivePicks.length > 1;
+              const hasEdge = pick.edge == null || pick.edge >= 0;
+              return { pick, conf: betConf, isBest, hasEdge };
             });
-            // Sort: BEST first, then by confidence descending
+            // Sort: BEST first, then positive-edge, then by confidence descending
             annotated.sort((a, b) => {
               if (a.isBest !== b.isBest) return a.isBest ? -1 : 1;
+              if (a.hasEdge !== b.hasEdge) return a.hasEdge ? -1 : 1;
               return (b.conf ?? 0) - (a.conf ?? 0);
             });
 
-            return annotated.map(({ pick, conf, isBest }) => {
+            return annotated.map(({ pick, conf, isBest, hasEdge }) => {
               const label = formatMarketPick(pick);
               const edgeVal = pick.edge != null ? pick.edge * 100 : null;
               const edgePct = edgeVal != null ? `${edgeVal >= 0 ? '+' : ''}${edgeVal.toFixed(1)}%` : null;
-              // Quality tier based on bet confidence
+              // Quality tier based on bet confidence and edge
               let tier = '';
               let tierLabel = '';
-              if (isBest) {
+              if (!hasEdge) {
+                tier = 'dc-pick-chip-skip';
+                tierLabel = 'SKIP';
+              } else if (isBest) {
                 tier = 'dc-pick-chip-best';
                 tierLabel = 'BEST';
               } else if (conf != null && conf >= 75) {
@@ -441,16 +442,24 @@ function GameCard({ game, section, medal }) {
               </span>
             </div>
           )}
-          {spreadLine != null && (
-            <div className={`dc-odds-pill ${pickBetType === 'spread' ? 'dc-odds-pill-active' : ''}`}>
-              <span className="dc-odds-label">PL</span>
-              <span className="dc-odds-val">
-                <span className={pickIsAway && pickBetType === 'spread' ? 'dc-pick-highlight' : ''}>{awaySpreadLine != null ? (awaySpreadLine > 0 ? '+' : '') + awaySpreadLine : `-${Math.abs(spreadLine)}`}</span>
-                <span className="dc-odds-sep">/</span>
-                <span className={pickIsHome && pickBetType === 'spread' ? 'dc-pick-highlight' : ''}>{spreadLine > 0 ? '+' : ''}{spreadLine}</span>
-              </span>
-            </div>
-          )}
+          <div className={`dc-odds-pill ${pickBetType === 'spread' ? 'dc-odds-pill-active' : ''}`}>
+            <span className="dc-odds-label">PL</span>
+            <span className="dc-odds-val">
+              {spreadLine != null ? (
+                <>
+                  <span className={pickIsAway && pickBetType === 'spread' ? 'dc-pick-highlight' : ''}>{awaySpreadLine != null ? (awaySpreadLine > 0 ? '+' : '') + awaySpreadLine : `-${Math.abs(spreadLine)}`}</span>
+                  <span className="dc-odds-sep">/</span>
+                  <span className={pickIsHome && pickBetType === 'spread' ? 'dc-pick-highlight' : ''}>{spreadLine > 0 ? '+' : ''}{spreadLine}</span>
+                </>
+              ) : (
+                <>
+                  <span className={pickIsAway && pickBetType === 'spread' ? 'dc-pick-highlight' : ''}>+1.5</span>
+                  <span className="dc-odds-sep">/</span>
+                  <span className={pickIsHome && pickBetType === 'spread' ? 'dc-pick-highlight' : ''}>-1.5</span>
+                </>
+              )}
+            </span>
+          </div>
           {ouLine != null && (
             <div className={`dc-odds-pill ${pickBetType === 'total' ? 'dc-odds-pill-active' : ''}`}>
               <span className="dc-odds-label">

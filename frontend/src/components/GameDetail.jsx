@@ -250,35 +250,41 @@ function OddsCards({ game, homeAbbr, awayAbbr, pickBetType, pickIsHome, pickIsAw
       )}
 
       {/* Spread */}
-      {odds.home_spread_line != null && (
-        <div className={`gd-odds-card ${locked ? 'gd-odds-locked' : ''} ${pickBetType === 'spread' ? 'gd-odds-card-picked' : ''}`}>
-          <div className="gd-odds-card-header">
-            <TrendingUp size={14} />
-            <span>Spread</span>
-          </div>
-          {locked ? (
-            <div className="gd-odds-locked-body"><Lock size={16} /></div>
-          ) : (
-            <div className="gd-odds-card-body">
-              <div className={`gd-odds-side ${pickIsHome && pickBetType === 'spread' ? 'gd-odds-side-picked' : ''}`}>
-                <span className="gd-odds-team">{homeAbbr}</span>
-                <span className="gd-odds-big">
-                  {odds.home_spread_line > 0 ? '+' : ''}{odds.home_spread_line}
-                </span>
-                <span className="gd-odds-price">({formatAmericanOdds(odds.home_spread_price)})</span>
-              </div>
-              <span className="gd-odds-vs">VS</span>
-              <div className={`gd-odds-side ${pickIsAway && pickBetType === 'spread' ? 'gd-odds-side-picked' : ''}`}>
-                <span className="gd-odds-team">{awayAbbr}</span>
-                <span className="gd-odds-big">
-                  {odds.away_spread_line != null ? ((odds.away_spread_line > 0 ? '+' : '') + odds.away_spread_line) : ''}
-                </span>
-                <span className="gd-odds-price">({formatAmericanOdds(odds.away_spread_price)})</span>
-              </div>
-            </div>
-          )}
+      <div className={`gd-odds-card ${locked ? 'gd-odds-locked' : ''} ${pickBetType === 'spread' ? 'gd-odds-card-picked' : ''}`}>
+        <div className="gd-odds-card-header">
+          <TrendingUp size={14} />
+          <span>Spread</span>
         </div>
-      )}
+        {locked ? (
+          <div className="gd-odds-locked-body"><Lock size={16} /></div>
+        ) : (
+          <div className="gd-odds-card-body">
+            <div className={`gd-odds-side ${pickIsHome && pickBetType === 'spread' ? 'gd-odds-side-picked' : ''}`}>
+              <span className="gd-odds-team">{homeAbbr}</span>
+              <span className="gd-odds-big">
+                {odds.home_spread_line != null
+                  ? `${odds.home_spread_line > 0 ? '+' : ''}${odds.home_spread_line}`
+                  : '-1.5'}
+              </span>
+              {odds.home_spread_price != null
+                ? <span className="gd-odds-price">({formatAmericanOdds(odds.home_spread_price)})</span>
+                : <span className="gd-odds-price gd-odds-pending">TBD</span>}
+            </div>
+            <span className="gd-odds-vs">VS</span>
+            <div className={`gd-odds-side ${pickIsAway && pickBetType === 'spread' ? 'gd-odds-side-picked' : ''}`}>
+              <span className="gd-odds-team">{awayAbbr}</span>
+              <span className="gd-odds-big">
+                {odds.away_spread_line != null
+                  ? `${odds.away_spread_line > 0 ? '+' : ''}${odds.away_spread_line}`
+                  : '+1.5'}
+              </span>
+              {odds.away_spread_price != null
+                ? <span className="gd-odds-price">({formatAmericanOdds(odds.away_spread_price)})</span>
+                : <span className="gd-odds-price gd-odds-pending">TBD</span>}
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Total O/U */}
       {odds.over_under_line != null && (

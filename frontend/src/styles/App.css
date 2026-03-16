@@ -5057,6 +5057,21 @@ a:hover {
   background: rgba(255, 152, 0, 0.1);
 }
 
+.dc-pick-chip-skip {
+  border-color: var(--text-muted, #666);
+  background: rgba(100, 100, 100, 0.04);
+  opacity: 0.55;
+}
+
+.dc-pick-chip-skip .dc-pick-chip-label {
+  color: var(--text-muted, #888);
+}
+
+.dc-pick-chip-skip .dc-pick-chip-badge {
+  color: var(--text-muted, #888);
+  background: rgba(100, 100, 100, 0.1);
+}
+
 .dc-odds-pill-active {
   border-color: var(--accent-green);
   background: rgba(0, 255, 136, 0.08);
@@ -5368,6 +5383,12 @@ a:hover {
   font-size: 0.72rem;
   color: var(--text-dim);
   font-family: var(--font-mono);
+}
+
+.gd-odds-pending {
+  color: var(--text-muted, #666);
+  font-style: italic;
+  font-family: var(--font-sans);
 }
 
 .gd-odds-vs {

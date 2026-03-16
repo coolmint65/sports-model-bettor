@@ -2159,43 +2159,49 @@ class BettingModel:
                     american_odds_to_implied_prob(float(dog_price))
                     if dog_price is not None else DEFAULT_DOG_PLUS_IMPLIED
                 )
-                fav_edge = fav_cover_prob - fav_implied
-                dog_edge = dog_cover_prob - dog_implied
+                # Use calibrated probabilities for fallback edge comparison
+                fav_cal = self.calibrate_probability(fav_cover_prob, "spread")
+                dog_cal = self.calibrate_probability(dog_cover_prob, "spread")
+                fav_edge = fav_cal - fav_implied
+                dog_edge = dog_cal - dog_implied
 
                 if fav_edge >= dog_edge:
                     sb_abbr = fav_abbr
                     sb_sign = "-1.5"
                     sb_prob = fav_cover_prob
                     sb_price = fav_price
+                    sb_implied = fav_implied
                 else:
                     sb_abbr = dog_abbr
                     sb_sign = "+1.5"
                     sb_prob = dog_cover_prob
                     sb_price = dog_price
+                    sb_implied = dog_implied
 
-                # Only generate a spread prediction if we have real
-                # sportsbook prices.  Without them we can't compute a
-                # reliable implied probability or verify the juice level,
-                # and defaulting to -110 (the old behaviour) lets
-                # heavy-juice spreads (-230 etc.) slip past the filter.
+                # Generate spread prediction whether or not we have real
+                # sportsbook prices. Without prices, use default NHL puck
+                # line implied probabilities (already computed above).
                 if sb_price is not None:
                     spread_odds_display = float(sb_price)
                     spread_implied = american_odds_to_implied_prob(spread_odds_display)
+                else:
+                    spread_odds_display = None
+                    spread_implied = sb_implied
 
-                    predictions.append({
-                        "bet_type": "spread",
-                        "prediction": f"{sb_abbr}_{sb_sign}",
-                        "confidence": self.calibrate_probability(sb_prob, "spread"),
-                        "probability": round(sb_prob, 4),
-                        "implied_probability": round(spread_implied, 4),
-                        "odds": spread_odds_display,
-                        "reasoning": self._build_clean_reasons(
-                            features, sb_abbr,
-                            away_abbr if sb_abbr == home_abbr else home_abbr,
-                            "spread", spread,
-                        ),
-                        "details": spread,
-                    })
+                predictions.append({
+                    "bet_type": "spread",
+                    "prediction": f"{sb_abbr}_{sb_sign}",
+                    "confidence": self.calibrate_probability(sb_prob, "spread"),
+                    "probability": round(sb_prob, 4),
+                    "implied_probability": round(spread_implied, 4),
+                    "odds": spread_odds_display,
+                    "reasoning": self._build_clean_reasons(
+                        features, sb_abbr,
+                        away_abbr if sb_abbr == home_abbr else home_abbr,
+                        "spread", spread,
+                    ),
+                    "details": spread,
+                })
         except Exception as e:
             logger.error("Spread prediction failed: %s", e)
 
@@ -2204,6 +2210,12 @@ class BettingModel:
             from app.props import PropEngine
             prop_engine = PropEngine()
             prop_preds = prop_engine.run(features, odds_data, matrix, home_xg, away_xg)
+            # Apply calibration to prop predictions — props use raw model
+            # probabilities without shrinkage, producing inflated edges.
+            # Props are structurally similar to totals (over/under on stats).
+            for pp in prop_preds:
+                raw_conf = pp.get("confidence", 0.5)
+                pp["confidence"] = self.calibrate_probability(raw_conf, "total")
             predictions.extend(prop_preds)
         except Exception as e:
             logger.error("Prop predictions failed: %s", e)
