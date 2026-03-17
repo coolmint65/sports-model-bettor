@@ -53,6 +53,11 @@ _props_cache: Dict[str, List[Dict[str, Any]]] = {}  # event_id -> parsed props
 _props_cache_ts: float = 0.0
 _PROPS_CACHE_TTL: float = 3600.0  # 60 minutes (conserve Odds API credits)
 
+# Limit concurrent per-event requests to avoid triggering 429 rate limits.
+# The Odds API has per-second rate limits; firing 15+ requests at once
+# reliably triggers them.  3 concurrent requests is a safe balance.
+_CONCURRENT_EVENT_LIMIT = 3
+
 
 def props_cache_fresh() -> bool:
     """Return True if the props cache is still within its TTL."""
@@ -255,9 +260,15 @@ async def fetch_all_player_props(
         len(event_ids), len(PROP_MARKETS), len(event_ids) * len(PROP_MARKETS),
     )
 
-    # Fetch props for all events concurrently
+    # Fetch props with bounded concurrency to avoid 429 rate limits.
+    sem = asyncio.Semaphore(_CONCURRENT_EVENT_LIMIT)
+
+    async def _throttled_fetch(eid: str) -> List[Dict[str, Any]]:
+        async with sem:
+            return await _fetch_event_props(client, eid)
+
     results = await asyncio.gather(
-        *(_fetch_event_props(client, eid) for eid in event_ids),
+        *(_throttled_fetch(eid) for eid in event_ids),
         return_exceptions=True,
     )
 
