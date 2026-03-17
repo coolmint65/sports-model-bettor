@@ -56,7 +56,7 @@ class NBAScraper(BaseScraper):
     """
     Scraper for the balldontlie NBA API.
 
-    Uses the public JSON API at https://api.balldontlie.io/v1 to retrieve
+    Uses the public JSON API at https://api.balldontlie.io/nba/v1 to retrieve
     teams, players, schedules, and box scores.
     """
 
@@ -65,7 +65,7 @@ class NBAScraper(BaseScraper):
 
     def __init__(
         self,
-        base_url: str = "https://api.balldontlie.io/v1",
+        base_url: str = "https://api.balldontlie.io/nba/v1",
         rate_limit: float = 0.5,
         **kwargs,
     ):

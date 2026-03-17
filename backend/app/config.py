@@ -482,7 +482,7 @@ class Settings(BaseModel):
         ),
         "nba": SportConfig(
             name="NBA",
-            api_base_url="https://api.balldontlie.io/v1",
+            api_base_url="https://api.balldontlie.io/nba/v1",
             default_season=_current_nba_season(),
             game_types={
                 "regular": "2",
