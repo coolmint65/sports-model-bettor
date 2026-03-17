@@ -1410,6 +1410,7 @@ async def _fetch_bovada(client: httpx.AsyncClient) -> List[OddsEvent]:
 # the primary request returns no usable bookmaker data.
 _odds_api_cache: Dict[str, Any] = {"data": None, "timestamp": 0.0}
 _ODDS_API_CACHE_TTL = 10.0  # seconds
+_odds_api_lock = asyncio.Lock()  # prevents duplicate concurrent fetches
 
 # ---------------------------------------------------------------------------
 # Alternate-line cache — fetched once pregame, reused across fast sync cycles.
@@ -1432,9 +1433,13 @@ async def _fetch_odds_api_raw(
     etc.) in one response.  Falls back to individual regions if the
     combined request fails.  The result is cached for
     ``_ODDS_API_CACHE_TTL`` seconds.
+
+    An asyncio lock prevents concurrent callers (e.g. _fetch_odds_api and
+    _fetch_hardrock running in parallel) from issuing duplicate requests.
     """
     import time as _time
 
+    # Fast path: return cached data without acquiring the lock
     now = _time.monotonic()
     if (
         _odds_api_cache["data"] is not None
@@ -1442,76 +1447,83 @@ async def _fetch_odds_api_raw(
     ):
         return _odds_api_cache["data"]
 
-    api_key = settings.odds_api_key
-    if not api_key:
-        logger.warning(
-            "ODDS_API_KEY is not set — The Odds API will not be called. "
-            "Create backend/.env with your key (see .env.example)."
-        )
+    async with _odds_api_lock:
+        # Re-check cache after acquiring lock (another caller may have filled it)
+        now = _time.monotonic()
+        if (
+            _odds_api_cache["data"] is not None
+            and now - _odds_api_cache["timestamp"] < _ODDS_API_CACHE_TTL
+        ):
+            return _odds_api_cache["data"]
+
+        api_key = settings.odds_api_key
+        if not api_key:
+            logger.warning(
+                "ODDS_API_KEY is not set — The Odds API will not be called. "
+                "Create backend/.env with your key (see .env.example)."
+            )
+            return None
+
+        url = "https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds"
+
+        # Core markets for the bulk /odds endpoint.  Period markets (h2h_p1,
+        # spreads_p1, totals_p1) must be fetched per-event via the
+        # /events/{eventId}/odds endpoint — they are not supported in bulk.
+        # BTTS removed: rarely useful for hockey odds modeling.
+        _MARKET_SETS = [
+            "h2h,spreads,totals",
+        ]
+
+        # Use a single region to halve credit usage.  "us" covers
+        # FanDuel, DraftKings, BetMGM, Caesars which is sufficient.
+        for markets in _MARKET_SETS:
+            for region in ("us",):
+                params = {
+                    "apiKey": api_key,
+                    "regions": region,
+                    "markets": markets,
+                    "oddsFormat": "american",
+                }
+
+                data = await _make_request(client, url, params=params)
+                if data is None:
+                    logger.warning(
+                        "Odds API: markets=%r region='%s' failed "
+                        "(network error or HTTP error).",
+                        markets, region,
+                    )
+                    continue
+                if isinstance(data, dict) and data.get("message"):
+                    # API returns {"message": "..."} for auth errors
+                    logger.warning("Odds API error: %s", data.get("message"))
+                    return None
+                if isinstance(data, list) and len(data) > 0:
+                    # Check that at least one event has bookmaker data
+                    has_bookmakers = any(
+                        len(ev.get("bookmakers", [])) > 0 for ev in data
+                    )
+                    if has_bookmakers:
+                        total_books = set()
+                        for ev in data:
+                            for bm in ev.get("bookmakers", []):
+                                total_books.add(bm.get("key", "unknown"))
+                        logger.info(
+                            "Odds API: got %d events from '%s' region(s), "
+                            "markets=%r, %d bookmakers: %s",
+                            len(data), region, markets, len(total_books),
+                            ", ".join(sorted(total_books)),
+                        )
+                        _odds_api_cache["data"] = data
+                        _odds_api_cache["timestamp"] = now
+                        return data
+                    else:
+                        logger.info(
+                            "Odds API: '%s' region returned %d events but no bookmakers, trying next",
+                            region, len(data),
+                        )
+
+        logger.warning("Odds API: all region attempts failed — no data returned")
         return None
-
-    url = "https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds"
-
-    # Try market sets in order: full (with game props + period markets)
-    # then core-only.  Each market × region = 1 credit.
-    # Full set: h2h, spreads, totals, btts, h2h_h1, totals_h1, spreads_h1
-    #   = 7 credits per sync (covers ALL events in a single call).
-    # Fallback: core 3 markets only if the extended set fails.
-    _MARKET_SETS = [
-        "h2h,spreads,totals,btts,h2h_h1,totals_h1,spreads_h1",
-        "h2h,spreads,totals",
-    ]
-
-    # Use a single region to halve credit usage.  "us" covers
-    # FanDuel, DraftKings, BetMGM, Caesars which is sufficient.
-    for markets in _MARKET_SETS:
-        for region in ("us",):
-            params = {
-                "apiKey": api_key,
-                "regions": region,
-                "markets": markets,
-                "oddsFormat": "american",
-            }
-
-            data = await _make_request(client, url, params=params)
-            if data is None:
-                logger.warning(
-                    "Odds API: markets=%r region='%s' failed "
-                    "(network error or HTTP error).",
-                    markets, region,
-                )
-                continue
-            if isinstance(data, dict) and data.get("message"):
-                # API returns {"message": "..."} for auth errors
-                logger.warning("Odds API error: %s", data.get("message"))
-                return None
-            if isinstance(data, list) and len(data) > 0:
-                # Check that at least one event has bookmaker data
-                has_bookmakers = any(
-                    len(ev.get("bookmakers", [])) > 0 for ev in data
-                )
-                if has_bookmakers:
-                    total_books = set()
-                    for ev in data:
-                        for bm in ev.get("bookmakers", []):
-                            total_books.add(bm.get("key", "unknown"))
-                    logger.info(
-                        "Odds API: got %d events from '%s' region(s), "
-                        "markets=%r, %d bookmakers: %s",
-                        len(data), region, markets, len(total_books),
-                        ", ".join(sorted(total_books)),
-                    )
-                    _odds_api_cache["data"] = data
-                    _odds_api_cache["timestamp"] = now
-                    return data
-                else:
-                    logger.info(
-                        "Odds API: '%s' region returned %d events but no bookmakers, trying next",
-                        region, len(data),
-                    )
-
-    logger.warning("Odds API: all region attempts failed — no data returned")
-    return None
 
 
 async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
@@ -1556,7 +1568,7 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
         all_reg_away: List[float] = []
         all_reg_draw: List[float] = []
 
-        # 1st period markets (h2h_h1, spreads_h1, totals_h1)
+        # 1st period markets (h2h_p1, spreads_p1, totals_p1)
         all_p1_home_ml: List[float] = []
         all_p1_away_ml: List[float] = []
         all_p1_draw: List[float] = []
@@ -1622,7 +1634,7 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
                         all_total.append((line, over_p, under_p))
 
                 # --- 1st period markets ---
-                elif mkey == "h2h_h1":
+                elif mkey == "h2h_p1":
                     for oc in outcomes:
                         name = oc.get("name", "")
                         price = float(oc.get("price", 0))
@@ -1633,7 +1645,7 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
                         elif name.lower() in ("draw", "tie"):
                             all_p1_draw.append(price)
 
-                elif mkey == "spreads_h1":
+                elif mkey == "spreads_p1":
                     for oc in outcomes:
                         name = oc.get("name", "")
                         point = float(oc.get("point", 0))
@@ -1643,7 +1655,7 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
                         elif name == away_team:
                             all_p1_away_spread.append((point, price))
 
-                elif mkey == "totals_h1":
+                elif mkey == "totals_p1":
                     p1_over = p1_under = 0.0
                     p1_line = 0.0
                     for oc in outcomes:
@@ -2002,7 +2014,7 @@ async def _fetch_hardrock(
             mkey = market.get("key", "")
             outcomes = market.get("outcomes", [])
 
-            if mkey == "h2h_h1":
+            if mkey == "h2h_p1":
                 for oc in outcomes:
                     name = oc.get("name", "")
                     price = float(oc.get("price", 0))
@@ -2013,7 +2025,7 @@ async def _fetch_hardrock(
                     elif name.lower() in ("draw", "tie"):
                         hr_p1_draw = price
 
-            elif mkey == "spreads_h1":
+            elif mkey == "spreads_p1":
                 for oc in outcomes:
                     name = oc.get("name", "")
                     point = float(oc.get("point", 0))
@@ -2024,7 +2036,7 @@ async def _fetch_hardrock(
                     elif name == away_team:
                         hr_p1_asp = price
 
-            elif mkey == "totals_h1":
+            elif mkey == "totals_p1":
                 for oc in outcomes:
                     point = float(oc.get("point", 0))
                     price = float(oc.get("price", 0))

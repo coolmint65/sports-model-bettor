@@ -64,7 +64,19 @@ async def make_request(
                 )
                 await asyncio.sleep(wait)
                 continue
-            logger.warning("HTTP %d from %s", resp.status_code, _log_url)
+            # Log response body on client errors to aid debugging
+            body_snippet = ""
+            if 400 <= resp.status_code < 500:
+                try:
+                    body_snippet = resp.text[:300]
+                except Exception:
+                    body_snippet = "(could not read body)"
+            logger.warning(
+                "HTTP %d from %s%s",
+                resp.status_code,
+                _log_url,
+                f" — {body_snippet}" if body_snippet else "",
+            )
             return None
         except httpx.TimeoutException:
             logger.warning("Timeout (%.0fs) for %s", timeout, _log_url)
