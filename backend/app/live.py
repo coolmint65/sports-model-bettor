@@ -534,6 +534,23 @@ async def _scheduler_loop():
 
     loop = asyncio.get_event_loop()
 
+    # Quick NBA schedule sync BEFORE the full data sync.
+    # The full sync runs NHL first (30-60+ minutes), so NBA games
+    # wouldn't appear until it finishes without this early sync.
+    try:
+        from app.scrapers.nba_api import NBAScraper
+        nba_scraper = NBAScraper()
+        try:
+            async with get_write_session_context() as session:
+                await nba_scraper.sync_teams(session)
+            async with get_write_session_context() as session:
+                await nba_scraper.sync_schedule(session)
+            logger.info("Early NBA schedule sync completed")
+        finally:
+            await nba_scraper.close()
+    except Exception as exc:
+        logger.warning("Early NBA schedule sync failed: %s", exc)
+
     # Launch the full data sync as a BACKGROUND task so it never blocks
     # the fast odds polling loop.  Previous behaviour was to await the
     # full sync here — if the H2H historical sync took 30-60+ minutes,

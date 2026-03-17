@@ -1,4 +1,4 @@
-import { NavLink, useParams } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 
 const SPORTS = [
   { key: 'nhl', label: 'NHL', icon: '🏒', active: true },
@@ -10,8 +10,9 @@ const SPORTS = [
 ];
 
 function SportsSidebar() {
-  const { sport } = useParams();
-  const currentSport = sport || 'nhl';
+  // useLocation works outside <Routes>; useParams does not.
+  const { pathname } = useLocation();
+  const currentSport = pathname.split('/')[1] || 'nhl';
 
   return (
     <aside className="sports-sidebar">
