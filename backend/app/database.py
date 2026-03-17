@@ -299,6 +299,9 @@ async def _migrate_add_columns() -> None:
         ("prediction", "bet_confidence", "FLOAT"),
         # Prop pick snapshot model version for cache invalidation
         ("prop_pick_snapshot", "model_version", "INTEGER"),
+        # Assigned referees
+        ("game", "referee_1", "VARCHAR(100)"),
+        ("game", "referee_2", "VARCHAR(100)"),
     ]
 
     async with engine.begin() as conn:
