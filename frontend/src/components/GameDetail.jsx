@@ -876,14 +876,14 @@ function ScoringTrends({ recentGames, ouLine }) {
 }
 
 /* ──────────────────── Trends Team Column Sub-component ──────────────────── */
-function TrendsTeamColumn({ label, locationLabel, locationRecord, form, recentGames, ouLine, getStreak, computeATS }) {
+function TrendsTeamColumn({ label, locationLabel, locationRecord, form, recentGames, ouLine, getStreak, computeATS, fmtRecord }) {
   return (
     <div className="gd-trends-team">
       <div className="gd-trends-team-label">{label}</div>
       <div className="gd-trends-rows">
         <div className="gd-trends-row">
           <span className="gd-trends-label">Overall</span>
-          <span className="gd-trends-val">{form.wins || 0}-{form.losses || 0}-{form.ot_losses || 0}</span>
+          <span className="gd-trends-val">{fmtRecord ? fmtRecord(form) : `${form.wins || 0}-${form.losses || 0}-${form.ot_losses || 0}`}</span>
         </div>
         <div className="gd-trends-row">
           <span className="gd-trends-label">{locationLabel}</span>
@@ -915,8 +915,12 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
   const awayLabel = away.team_name || 'Away';
   const homeLogo = home.logo_url || teamLogo(game.home_team) || teamLogo(game.home_team_form);
   const awayLogo = away.logo_url || teamLogo(game.away_team) || teamLogo(game.away_team_form);
-  const homeRecord = `${home.wins || 0}-${home.losses || 0}-${home.ot_losses || 0}`;
-  const awayRecord = `${away.wins || 0}-${away.losses || 0}-${away.ot_losses || 0}`;
+  const isNBASport = (game.sport || 'nhl').toLowerCase() === 'nba';
+  const fmtRecord = (f) => isNBASport
+    ? `${f.wins || 0}-${f.losses || 0}`
+    : `${f.wins || 0}-${f.losses || 0}-${f.ot_losses || 0}`;
+  const homeRecord = fmtRecord(home);
+  const awayRecord = fmtRecord(away);
   const homeWinPct = home.games_played ? `${Math.round((home.wins / home.games_played) * 100)}%` : '-';
   const awayWinPct = away.games_played ? `${Math.round((away.wins / away.games_played) * 100)}%` : '-';
   const ouLine = game.odds?.over_under_line || 5.5;
@@ -1087,6 +1091,7 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
               ouLine={ouLine}
               getStreak={getStreak}
               computeATS={computeATS}
+              fmtRecord={fmtRecord}
             />
             <TrendsTeamColumn
               label={homeLabel}
@@ -1097,6 +1102,7 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
               ouLine={ouLine}
               getStreak={getStreak}
               computeATS={computeATS}
+              fmtRecord={fmtRecord}
             />
           </div>
         </div>

@@ -174,7 +174,12 @@ def _build_team_brief(team: Team, stats: Optional[TeamStats] = None) -> TeamBrie
         brief.losses = stats.losses
         brief.ot_losses = stats.ot_losses
         brief.points = stats.points
-        brief.record = f"{stats.wins}-{stats.losses}-{stats.ot_losses}"
+        # NBA uses W-L; NHL (and other OTL sports) uses W-L-OTL
+        sport = getattr(team, "sport", "nhl") or "nhl"
+        if sport == "nba":
+            brief.record = f"{stats.wins}-{stats.losses}"
+        else:
+            brief.record = f"{stats.wins}-{stats.losses}-{stats.ot_losses}"
     return brief
 
 

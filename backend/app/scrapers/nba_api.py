@@ -33,6 +33,18 @@ _BDL_ABBREV_MAP: Dict[str, str] = {
     "UTA": "UTA", "WAS": "WAS",
 }
 
+# Canonical abbreviation -> ESPN CDN abbreviation (lowercase).
+# ESPN uses shorter codes for a handful of teams.
+_ESPN_ABBREV_MAP: Dict[str, str] = {
+    "GSW": "gs", "NOP": "no", "NYK": "ny", "SAS": "sa", "WAS": "wsh",
+}
+
+
+def _espn_logo_url(abbreviation: str) -> str:
+    """Return an ESPN CDN logo URL for the given NBA team abbreviation."""
+    espn_abbr = _ESPN_ABBREV_MAP.get(abbreviation, abbreviation.lower())
+    return f"https://a.espncdn.com/i/teamlogos/nba/500/{espn_abbr}.png"
+
 
 def _safe_int(val) -> Optional[int]:
     if val is None:
@@ -125,6 +137,8 @@ class NBAScraper(BaseScraper):
             )
             existing = result.scalar_one_or_none()
 
+            logo_url = _espn_logo_url(abbreviation)
+
             if existing:
                 existing.name = full_name
                 existing.abbreviation = abbreviation
@@ -133,6 +147,7 @@ class NBAScraper(BaseScraper):
                 existing.division = division
                 existing.sport = "nba"
                 existing.active = True
+                existing.logo_url = logo_url
             else:
                 team = Team(
                     external_id=f"nba_{team_id}",
@@ -143,6 +158,7 @@ class NBAScraper(BaseScraper):
                     division=division,
                     sport="nba",
                     active=True,
+                    logo_url=logo_url,
                 )
                 session.add(team)
 
@@ -518,8 +534,14 @@ class NBAScraper(BaseScraper):
             if not games:
                 continue
 
+            # Games are ordered by date DESC (most recent first).
+            # Accumulate overall, home/away, and recent-form records.
             wins = losses = 0
+            home_w = home_l = away_w = away_l = 0
             total_pf = total_pa = 0
+
+            # Recent form: track W/L for the N most-recent games
+            recent_results: List[str] = []  # "W" or "L", newest first
 
             for g in games:
                 is_home = g.home_team_id == team.id
@@ -527,12 +549,34 @@ class NBAScraper(BaseScraper):
                 pa = (g.away_score or 0) if is_home else (g.home_score or 0)
                 total_pf += pf
                 total_pa += pa
-                if pf > pa:
+                won = pf > pa
+                if won:
                     wins += 1
+                    if is_home:
+                        home_w += 1
+                    else:
+                        away_w += 1
                 else:
                     losses += 1
+                    if is_home:
+                        home_l += 1
+                    else:
+                        away_l += 1
+                recent_results.append("W" if won else "L")
 
             gp = len(games)
+
+            def _fmt_record(results: List[str]) -> str:
+                """Format a W-L record string from a list of 'W'/'L' entries."""
+                w = results.count("W")
+                l_ = results.count("L")
+                return f"{w}-{l_}"
+
+            home_record = f"{home_w}-{home_l}"
+            away_record = f"{away_w}-{away_l}"
+            record_last_5 = _fmt_record(recent_results[:5]) if len(recent_results) >= 5 else None
+            record_last_10 = _fmt_record(recent_results[:10]) if len(recent_results) >= 10 else None
+            record_last_20 = _fmt_record(recent_results[:20]) if len(recent_results) >= 20 else None
 
             # Upsert TeamStats
             stats_result = await session.execute(
@@ -543,30 +587,32 @@ class NBAScraper(BaseScraper):
             )
             existing = stats_result.scalar_one_or_none()
 
+            stat_fields = dict(
+                games_played=gp,
+                wins=wins,
+                losses=losses,
+                goals_for=total_pf,
+                goals_against=total_pa,
+                goals_for_per_game=round(total_pf / gp, 2) if gp else 0,
+                goals_against_per_game=round(total_pa / gp, 2) if gp else 0,
+                points=wins,  # NBA "points" = wins for standings
+                home_record=home_record,
+                away_record=away_record,
+                record_last_5=record_last_5,
+                record_last_10=record_last_10,
+                record_last_20=record_last_20,
+                date_updated=datetime.now(timezone.utc),
+            )
+
             if existing:
-                existing.games_played = gp
-                existing.wins = wins
-                existing.losses = losses
-                existing.goals_for = total_pf
-                existing.goals_against = total_pa
-                existing.goals_for_per_game = round(total_pf / gp, 2) if gp else 0
-                existing.goals_against_per_game = round(total_pa / gp, 2) if gp else 0
-                existing.points = wins  # NBA "points" = wins for standings
-                existing.date_updated = datetime.now(timezone.utc)
+                for k, v in stat_fields.items():
+                    setattr(existing, k, v)
             else:
                 ts = TeamStats(
                     team_id=team.id,
                     season=season,
-                    games_played=gp,
-                    wins=wins,
-                    losses=losses,
                     ot_losses=0,
-                    goals_for=total_pf,
-                    goals_against=total_pa,
-                    goals_for_per_game=round(total_pf / gp, 2) if gp else 0,
-                    goals_against_per_game=round(total_pa / gp, 2) if gp else 0,
-                    points=wins,
-                    date_updated=datetime.now(timezone.utc),
+                    **stat_fields,
                 )
                 session.add(ts)
 

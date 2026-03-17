@@ -1466,12 +1466,11 @@ async def _fetch_odds_api_raw(
 
         url = "https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds"
 
-        # Core markets for the bulk /odds endpoint.  Period markets (h2h_p1,
-        # spreads_p1, totals_p1) must be fetched per-event via the
-        # /events/{eventId}/odds endpoint — they are not supported in bulk.
-        # BTTS removed: rarely useful for hockey odds modeling.
+        # Core + 1st-period markets in a single bulk request.
+        # The Odds API v4 supports period markets (h2h_p1, spreads_p1,
+        # totals_p1) in the bulk /odds endpoint.
         _MARKET_SETS = [
-            "h2h,spreads,totals",
+            "h2h,spreads,totals,h2h_p1,spreads_p1,totals_p1",
         ]
 
         # Use a single region to halve credit usage.  "us" covers
