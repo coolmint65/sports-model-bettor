@@ -1073,40 +1073,15 @@ async def _try_sync_schedule(
 
 @router.get("/live", response_model=ScheduleResponse)
 async def get_live_games(sport: Optional[str] = None):
-    """Return all currently in-progress games.
+    """Return all currently in-progress games — pure read from local DB.
 
-    Syncs scores/clock from sport API for live games. Odds syncing is
-    handled by the background scheduler — not inline in GET requests.
-
-    NOTE: Uses explicit session management (not Depends) to avoid holding
-    idle connections during write operations — prevents QueuePool exhaustion.
+    All external syncing (scores, clock, odds) is handled by the
+    background scheduler.  This endpoint only reads committed data.
     """
-    # Check for live games with a short-lived read session.
     live_filters = [func.lower(Game.status).in_(("in_progress", "live"))]
     if sport:
         live_filters.append(Game.sport == sport)
 
-    async with get_session_context() as session:
-        result = await session.execute(
-            select(Game)
-            .options(selectinload(Game.home_team), selectinload(Game.away_team))
-            .where(*live_filters)
-            .order_by(Game.start_time.asc().nulls_last(), Game.id.asc())
-        )
-        games = result.scalars().all()
-        game_dates = {game.date for game in games} if games else set()
-    # Session closed before write operation.
-
-    # Sync scores/clock from sport API (not odds — scheduler handles that).
-    if game_dates:
-        try:
-            async with get_write_session_context() as write_session:
-                for gd in game_dates:
-                    await _try_sync_schedule(write_session, target_date=gd, sport=sport)
-        except Exception as exc:
-            logger.warning("Live schedule sync failed: %s", exc)
-
-    # Re-read with a fresh session to pick up committed changes.
     async with get_session_context() as session:
         result = await session.execute(
             select(Game)
@@ -1143,32 +1118,17 @@ async def get_live_games(sport: Optional[str] = None):
 
 @router.get("/today", response_model=ScheduleResponse)
 async def get_today_schedule(sport: Optional[str] = None):
-    """Return today's schedule.
+    """Return today's schedule — pure read from local DB.
 
-    Syncs scores/clock from sport API for live games. Odds and predictions
-    are kept fresh by the background scheduler — this endpoint only reads.
-
-    NOTE: Uses explicit session management (not Depends) to avoid holding
-    idle connections during write operations — prevents QueuePool exhaustion.
+    All external syncing (schedule, odds, starters, predictions) is
+    handled by the background scheduler in app.live.  GET endpoints
+    never call external APIs or acquire the write lock, so they
+    respond instantly regardless of what the scheduler is doing.
     """
     today = date.today()
 
-    # Initial read with a short-lived session.
     async with get_session_context() as session:
         games = await _games_for_date(today, session, sport=sport)
-    # Session closed before potential write.
-
-    has_live = any(g.status and g.status.lower() in ("in_progress", "live") for g in games)
-    if not games or has_live:
-        try:
-            async with get_write_session_context() as write_session:
-                await _try_sync_schedule(write_session, target_date=today, sport=sport)
-        except Exception as exc:
-            logger.warning("Today schedule sync failed: %s", exc)
-
-        # Re-read with a fresh session to see committed data.
-        async with get_session_context() as session:
-            games = await _games_for_date(today, session, sport=sport)
 
     return ScheduleResponse(date=today, game_count=len(games), games=games)
 
