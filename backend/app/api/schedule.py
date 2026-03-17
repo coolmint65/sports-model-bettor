@@ -85,6 +85,7 @@ class GoalieStarter(BaseModel):
 class ScheduleGame(BaseModel):
     id: int
     external_id: str
+    sport: str = "nhl"
     game_date: date
     start_time: Optional[datetime] = None
     venue: Optional[str] = None
@@ -227,6 +228,7 @@ def _build_schedule_game(
     return ScheduleGame(
         id=game.id,
         external_id=game.external_id,
+        sport=game.sport,
         game_date=game.date,
         start_time=game.start_time,
         venue=game.venue,

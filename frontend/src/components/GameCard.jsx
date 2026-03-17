@@ -160,10 +160,19 @@ const MEDAL_STYLES = {
   bronze: { className: 'rank-bronze', label: '#3' },
 };
 
+const SPORT_LABELS = {
+  nhl: { sport: 'Hockey', league: 'NHL' },
+  nba: { sport: 'Basketball', league: 'NBA' },
+  nfl: { sport: 'Football', league: 'NFL' },
+  mlb: { sport: 'Baseball', league: 'MLB' },
+};
+
 function GameCard({ game, section, medal }) {
   const navigate = useNavigate();
   const gameId = game.game_id || game.id;
   const statusInfo = getStatusDisplay(game);
+  const sportKey = (game.sport || 'nhl').toLowerCase();
+  const sportLabel = SPORT_LABELS[sportKey] || SPORT_LABELS.nhl;
 
   const awayName = teamName(game.away_team, 'Away');
   const homeName = teamName(game.home_team, 'Home');
@@ -306,8 +315,8 @@ function GameCard({ game, section, medal }) {
 
       {/* Top tags row */}
       <div className="dc-tags">
-        <span className="dc-tag dc-tag-sport">Hockey</span>
-        <span className="dc-tag dc-tag-league">NHL</span>
+        <span className="dc-tag dc-tag-sport">{sportLabel.sport}</span>
+        <span className="dc-tag dc-tag-league">{sportLabel.league}</span>
         {badge && (
           <span className={`dc-tag dc-tag-confidence ${badge.className}`}>
             <badge.icon size={12} />
