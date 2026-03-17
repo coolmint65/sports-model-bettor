@@ -22,6 +22,7 @@ from app.analytics.ml_features import flatten_features, get_feature_names
 from app.analytics.ml_model import MLModel
 from app.config import settings
 from app.constants import GAME_FINAL_STATUSES
+from app.database import async_session_factory
 
 logger = logging.getLogger(__name__)
 
@@ -77,34 +78,47 @@ async def build_training_data(
 
     logger.info("Building training data from %d completed games", len(games))
 
-    feature_engine = FeatureEngine()
     feature_names = get_feature_names()
     n_features = len(feature_names)
+
+    # --- Process games concurrently in batches for speed --- #
+    BATCH_SIZE = 10  # concurrent games per batch (bounded to avoid DB contention)
+
+    async def _process_game(game):
+        """Build features for a single game using its own DB session."""
+        async with async_session_factory() as session:
+            feature_engine = FeatureEngine()
+            features = await feature_engine.build_game_features(session, game.id)
+            flat = flatten_features(features)
+            row = np.array(
+                [flat.get(name, float("nan")) for name in feature_names],
+                dtype=np.float64,
+            )
+            return row, float(game.home_score), float(game.away_score)
 
     rows: List[np.ndarray] = []
     home_goals: List[float] = []
     away_goals: List[float] = []
     n_skipped = 0
 
-    for i, game in enumerate(games):
-        try:
-            features = await feature_engine.build_game_features(db, game.id)
-            flat = flatten_features(features)
+    for batch_start in range(0, len(games), BATCH_SIZE):
+        batch = games[batch_start : batch_start + BATCH_SIZE]
+        tasks = [_process_game(g) for g in batch]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            row = np.array(
-                [flat.get(name, float("nan")) for name in feature_names],
-                dtype=np.float64,
-            )
-            rows.append(row)
-            home_goals.append(float(game.home_score))
-            away_goals.append(float(game.away_score))
+        for game, result in zip(batch, results):
+            if isinstance(result, Exception):
+                logger.debug("Skipping game %d: %s", game.id, result)
+                n_skipped += 1
+            else:
+                row, h_score, a_score = result
+                rows.append(row)
+                home_goals.append(h_score)
+                away_goals.append(a_score)
 
-            if (i + 1) % 50 == 0:
-                logger.info("  Processed %d/%d games", i + 1, len(games))
-        except Exception as e:
-            logger.debug("Skipping game %d: %s", game.id, e)
-            n_skipped += 1
-            continue
+        processed = min(batch_start + BATCH_SIZE, len(games))
+        if processed % 50 < BATCH_SIZE or processed == len(games):
+            logger.info("  Processed %d/%d games", processed, len(games))
 
     if not rows:
         return np.array([]), np.array([]), np.array([]), n_skipped

@@ -6,6 +6,7 @@ goalie performance, period-level scoring, and head-to-head matchup history.
 All features are designed for NHL hockey but structured to be sport-adaptable.
 """
 
+import asyncio
 import json
 import logging
 from datetime import datetime
@@ -386,33 +387,31 @@ class FeatureEngine:
         last10_save_pct, last10_gaa = self._calc_goalie_recent(recent_games[:10])
 
         # Count consecutive starts for workload/fatigue detection.
-        # recent_games is ordered by date desc, so count how many
-        # consecutive games this goalie started (all have decisions).
-        consecutive_starts = len(recent_games)  # all fetched have decisions = starts
-
-        # Also check if team had a game where a *different* goalie started
-        # (i.e., the backup played). Query the team's recent games to see
-        # if this goalie started all of them.
+        # Fetch the team's recent games and batch-check which ones this
+        # goalie started, avoiding N+1 individual queries.
         team_recent = await self._get_recent_games(db, team_id, 10)
+        team_recent_ids = [tg.id for tg in team_recent]
+
         consecutive_starts = 0
-        for tg in team_recent:
-            # Check if this goalie got the decision in this game
-            gs_stmt = (
-                select(GameGoalieStats)
+        if team_recent_ids:
+            batch_stmt = (
+                select(GameGoalieStats.game_id)
                 .where(
                     and_(
-                        GameGoalieStats.game_id == tg.id,
+                        GameGoalieStats.game_id.in_(team_recent_ids),
                         GameGoalieStats.player_id == goalie_id,
                         GameGoalieStats.decision.isnot(None),
                     )
                 )
-                .limit(1)
             )
-            gs_result = await db.execute(gs_stmt)
-            if gs_result.scalars().first():
-                consecutive_starts += 1
-            else:
-                break  # different goalie started — streak over
+            batch_result = await db.execute(batch_stmt)
+            started_game_ids = set(batch_result.scalars().all())
+
+            for tg in team_recent:
+                if tg.id in started_game_ids:
+                    consecutive_starts += 1
+                else:
+                    break  # different goalie started — streak over
 
         logger.info(
             "Goalie: team_id=%d → %s (id=%d) | SV%% %.3f GAA %.2f | "
@@ -2956,167 +2955,168 @@ class FeatureEngine:
         home_id = game.home_team_id
         away_id = game.away_team_id
 
-        # Fetch team names
-        home_team = await self._get_team(db, home_id)
-        away_team = await self._get_team(db, away_id)
+        # -------------------------------------------------------------- #
+        #  Phase 1: All independent feature fetches run concurrently.     #
+        # -------------------------------------------------------------- #
+        (
+            home_team, away_team,
+            home_form_5, home_form_10, home_season, home_splits,
+            home_goalie, home_periods, home_ot,
+            away_form_5, away_form_10, away_season, away_splits,
+            away_goalie, away_periods, away_ot,
+            home_skaters, away_skaters, home_lineup, away_lineup,
+            h2h,
+            home_injuries, away_injuries,
+            home_schedule, away_schedule,
+            home_special, away_special,
+            home_advanced, away_advanced,
+            home_ev_possession, away_ev_possession,
+            home_close_possession, away_close_possession,
+            home_pace, away_pace,
+            home_score_close, away_score_close,
+            home_discipline, away_discipline,
+            home_close_record, away_close_record,
+            home_pp_opp, away_pp_opp,
+            home_shot_quality, away_shot_quality,
+            home_line_stability, away_line_stability,
+            h2h_weighted,
+            consensus_line,
+            line_movement,
+        ) = await asyncio.gather(
+            self._get_team(db, home_id),
+            self._get_team(db, away_id),
+            # Home team core
+            self.get_team_form(db, home_id, last_n=5),
+            self.get_team_form(db, home_id, last_n=10),
+            self.get_season_stats(db, home_id),
+            self.get_team_home_away_splits(db, home_id, is_home=True),
+            self.get_goalie_features(db, home_id),
+            self.get_period_stats(db, home_id),
+            self.get_overtime_tendency(db, home_id),
+            # Away team core
+            self.get_team_form(db, away_id, last_n=5),
+            self.get_team_form(db, away_id, last_n=10),
+            self.get_season_stats(db, away_id),
+            self.get_team_home_away_splits(db, away_id, is_home=False),
+            self.get_goalie_features(db, away_id),
+            self.get_period_stats(db, away_id),
+            self.get_overtime_tendency(db, away_id),
+            # Player talent and lineup
+            self.get_skater_impact(db, home_id),
+            self.get_skater_impact(db, away_id),
+            self.get_lineup_status(db, home_id),
+            self.get_lineup_status(db, away_id),
+            # Head-to-head
+            self.get_h2h_stats(db, home_id, away_id),
+            # Injuries
+            self.get_injury_impact(db, home_id),
+            self.get_injury_impact(db, away_id),
+            # Schedule context
+            self.get_schedule_context(db, home_id, game.date),
+            self.get_schedule_context(db, away_id, game.date),
+            # Special teams
+            self.get_special_teams_matchup(db, home_id),
+            self.get_special_teams_matchup(db, away_id),
+            # Advanced metrics
+            self.get_advanced_metrics(db, home_id),
+            self.get_advanced_metrics(db, away_id),
+            # Possession
+            self.get_ev_possession_metrics(db, home_id),
+            self.get_ev_possession_metrics(db, away_id),
+            self.get_close_game_possession(db, home_id),
+            self.get_close_game_possession(db, away_id),
+            # Pace / tempo
+            self.get_pace_metrics(db, home_id),
+            self.get_pace_metrics(db, away_id),
+            # Score-close
+            self.get_score_close_stats(db, home_id),
+            self.get_score_close_stats(db, away_id),
+            # Discipline
+            self.get_penalty_discipline(db, home_id),
+            self.get_penalty_discipline(db, away_id),
+            # Close-game record
+            self.get_close_game_record(db, home_id),
+            self.get_close_game_record(db, away_id),
+            # PP opportunity rate
+            self.get_pp_opportunity_rate(db, home_id, away_id),
+            self.get_pp_opportunity_rate(db, away_id, home_id),
+            # Shooting quality against
+            self.get_shooting_quality_against(db, home_id),
+            self.get_shooting_quality_against(db, away_id),
+            # Line stability
+            self.get_line_combination_stability(db, home_id),
+            self.get_line_combination_stability(db, away_id),
+            # Recency-weighted H2H
+            self.get_recency_weighted_h2h(db, home_id, away_id),
+            # Consensus line
+            self.get_consensus_line(db, game.id),
+            # Line movement
+            self.get_line_movement(db, game.id, game),
+        )
 
-        # Build all features concurrently-style (sequential in async)
-        # Home team features
-        home_form_5 = await self.get_team_form(db, home_id, last_n=5)
-        home_form_10 = await self.get_team_form(db, home_id, last_n=10)
-        home_season = await self.get_season_stats(db, home_id)
-        home_splits = await self.get_team_home_away_splits(db, home_id, is_home=True)
-        home_goalie = await self.get_goalie_features(db, home_id)
-        home_periods = await self.get_period_stats(db, home_id)
-        home_ot = await self.get_overtime_tendency(db, home_id)
+        # -------------------------------------------------------------- #
+        #  Phase 2: Goalie-dependent features (need goalie_id from P1).   #
+        # -------------------------------------------------------------- #
 
-        # Away team features
-        away_form_5 = await self.get_team_form(db, away_id, last_n=5)
-        away_form_10 = await self.get_team_form(db, away_id, last_n=10)
-        away_season = await self.get_season_stats(db, away_id)
-        away_splits = await self.get_team_home_away_splits(db, away_id, is_home=False)
-        away_goalie = await self.get_goalie_features(db, away_id)
-        away_periods = await self.get_period_stats(db, away_id)
-        away_ot = await self.get_overtime_tendency(db, away_id)
-
-        # Player talent and lineup status
-        home_skaters = await self.get_skater_impact(db, home_id)
-        away_skaters = await self.get_skater_impact(db, away_id)
-        home_lineup = await self.get_lineup_status(db, home_id)
-        away_lineup = await self.get_lineup_status(db, away_id)
-
-        # Head-to-head
-        h2h = await self.get_h2h_stats(db, home_id, away_id)
-
-        # Injury impact
-        home_injuries = await self.get_injury_impact(db, home_id)
-        away_injuries = await self.get_injury_impact(db, away_id)
-
-        # Schedule context
-        home_schedule = await self.get_schedule_context(db, home_id, game.date)
-        away_schedule = await self.get_schedule_context(db, away_id, game.date)
-
-        # Special teams
-        home_special = await self.get_special_teams_matchup(db, home_id)
-        away_special = await self.get_special_teams_matchup(db, away_id)
-
-        # Advanced metrics (Corsi-proxy, shot quality, PDO)
-        home_advanced = await self.get_advanced_metrics(db, home_id)
-        away_advanced = await self.get_advanced_metrics(db, away_id)
-
-        # 5v5 even-strength possession (MoneyPuck)
-        home_ev_possession = await self.get_ev_possession_metrics(db, home_id)
-        away_ev_possession = await self.get_ev_possession_metrics(db, away_id)
-
-        # Close-game possession
-        home_close_possession = await self.get_close_game_possession(db, home_id)
-        away_close_possession = await self.get_close_game_possession(db, away_id)
-
-        # Goalie tier classification (augments existing goalie features)
+        # Goalie tier classification (sync, no DB)
         home_goalie = self.classify_goalie_tier(home_goalie)
         away_goalie = self.classify_goalie_tier(away_goalie)
 
-        # Feature #1: Confirmed starter integration (NHL API)
-        home_goalie = await self.get_confirmed_starter(
-            db, game.id, home_id, home_goalie
-        )
-        away_goalie = await self.get_confirmed_starter(
-            db, game.id, away_id, away_goalie
+        # Confirmed starter integration
+        home_goalie, away_goalie = await asyncio.gather(
+            self.get_confirmed_starter(db, game.id, home_id, home_goalie),
+            self.get_confirmed_starter(db, game.id, away_id, away_goalie),
         )
 
-        # Feature #3: Goalie venue splits (home vs away)
-        home_goalie_venue = await self.get_goalie_venue_splits(
-            db, home_goalie.get("goalie_id"), home_id, is_home=True
-        )
-        away_goalie_venue = await self.get_goalie_venue_splits(
-            db, away_goalie.get("goalie_id"), away_id, is_home=False
-        )
-
-        # Feature #5: Goalie workload / shot-based fatigue
-        home_goalie_workload = await self.get_goalie_workload(
-            db, home_goalie.get("goalie_id")
-        )
-        away_goalie_workload = await self.get_goalie_workload(
-            db, away_goalie.get("goalie_id")
-        )
-
-        # Goalie vs. specific opponent history
-        home_goalie_vs_team = await self.get_goalie_vs_team(
-            db, home_goalie.get("goalie_id"), home_id, away_id
-        )
-        away_goalie_vs_team = await self.get_goalie_vs_team(
-            db, away_goalie.get("goalie_id"), away_id, home_id
+        # Goalie venue, workload, and vs-team — all depend on goalie_id
+        (
+            home_goalie_venue, away_goalie_venue,
+            home_goalie_workload, away_goalie_workload,
+            home_goalie_vs_team, away_goalie_vs_team,
+        ) = await asyncio.gather(
+            self.get_goalie_venue_splits(
+                db, home_goalie.get("goalie_id"), home_id, is_home=True
+            ),
+            self.get_goalie_venue_splits(
+                db, away_goalie.get("goalie_id"), away_id, is_home=False
+            ),
+            self.get_goalie_workload(db, home_goalie.get("goalie_id")),
+            self.get_goalie_workload(db, away_goalie.get("goalie_id")),
+            self.get_goalie_vs_team(
+                db, home_goalie.get("goalie_id"), home_id, away_id
+            ),
+            self.get_goalie_vs_team(
+                db, away_goalie.get("goalie_id"), away_id, home_id
+            ),
         )
 
-        # Starter confirmation confidence
+        # Starter confirmation confidence (sync)
         home_starter_status = self.assess_starter_confidence(home_goalie, home_schedule)
         away_starter_status = self.assess_starter_confidence(away_goalie, away_schedule)
 
-        # Player and team matchups (uses MatchupEngine)
+        # -------------------------------------------------------------- #
+        #  Phase 3: Matchup features.                                     #
+        # -------------------------------------------------------------- #
         from app.analytics.matchups import MatchupEngine
         matchup_engine = MatchupEngine()
-        home_player_matchup = await matchup_engine.get_team_player_matchup_impact(
-            db, home_id, away_id
-        )
-        away_player_matchup = await matchup_engine.get_team_player_matchup_impact(
-            db, away_id, home_id
-        )
-        team_matchup = await matchup_engine.get_team_matchup_features(
-            db, home_id, away_id
+        (
+            home_player_matchup, away_player_matchup, team_matchup,
+        ) = await asyncio.gather(
+            matchup_engine.get_team_player_matchup_impact(db, home_id, away_id),
+            matchup_engine.get_team_player_matchup_impact(db, away_id, home_id),
+            matchup_engine.get_team_matchup_features(db, home_id, away_id),
         )
 
-        # Feature #4: Pace / tempo metrics
-        home_pace = await self.get_pace_metrics(db, home_id)
-        away_pace = await self.get_pace_metrics(db, away_id)
-
-        # Feature #2: Score-close stats
-        home_score_close = await self.get_score_close_stats(db, home_id)
-        away_score_close = await self.get_score_close_stats(db, away_id)
-
-        # Penalty discipline
-        home_discipline = await self.get_penalty_discipline(db, home_id)
-        away_discipline = await self.get_penalty_discipline(db, away_id)
-
-        # Close-game record (clutch factor + scoring first)
-        home_close_record = await self.get_close_game_record(db, home_id)
-        away_close_record = await self.get_close_game_record(db, away_id)
-
-        # Feature #6: PP opportunity rate vs opponent
-        home_pp_opp = await self.get_pp_opportunity_rate(db, home_id, away_id)
-        away_pp_opp = await self.get_pp_opportunity_rate(db, away_id, home_id)
-
-        # Feature #7: Shooting quality against (HDSV% proxy)
-        home_shot_quality = await self.get_shooting_quality_against(db, home_id)
-        away_shot_quality = await self.get_shooting_quality_against(db, away_id)
-
-        # Feature #9: Line combination stability
-        home_line_stability = await self.get_line_combination_stability(db, home_id)
-        away_line_stability = await self.get_line_combination_stability(db, away_id)
-
-        # Feature #11: Recency-weighted H2H
-        h2h_weighted = await self.get_recency_weighted_h2h(db, home_id, away_id)
-
-        # Feature #13: Consensus line aggregation
-        consensus_line = await self.get_consensus_line(db, game.id)
-
-        # Referee tendency impact
-        # The Game model has optional referee_1/referee_2 fields. When referee
-        # assignments are available (from NHL API or external sources like
-        # Scouting The Refs), we compute the expected scoring impact.
-        # Gracefully degrades: returns empty dict when ref data is unavailable.
+        # Referee tendency impact (sync — in-memory lookup)
         from app.analytics.referees import get_referee_impact
         referee_data: Dict[str, Any] = {}
         ref_1_name = getattr(game, "referee_1", None)
         if ref_1_name:
             referee_data = get_referee_impact(ref_1_name)
-        # If referee_1 was not matched, try the second referee as a fallback.
         if not referee_data.get("found", False):
             ref_2_name = getattr(game, "referee_2", None)
             if ref_2_name:
                 referee_data = get_referee_impact(ref_2_name)
-
-        # Line movement features (opening vs current odds)
-        line_movement = await self.get_line_movement(db, game.id, game)
 
         # Public betting signal (synthetic estimate from odds shape).
         # Must be called after odds and line_movement are available.
