@@ -292,6 +292,75 @@ async def _sync_confirmed_starters():
         logger.error("Starter sync failed: %s", exc, exc_info=True)
 
 
+async def _refresh_live_game_statuses():
+    """Lightweight schedule refresh to catch games that just went final.
+
+    During the fast odds loop, game statuses are never updated because
+    ``_sync_odds_and_broadcast`` only touches odds columns.  This leaves
+    games stuck as ``in_progress`` until the next full sync (up to 60 min).
+
+    This function calls ``sync_schedule()`` which re-reads the NHL / NBA
+    schedule API and updates the ``status`` column for today's games.
+    It also kicks off ``sync_game_results()`` for any that just became
+    final, so period scores, boxscores, and winning_team are populated
+    immediately.
+    """
+    try:
+        from datetime import date as date_type
+
+        today_str = date_type.today().isoformat()
+
+        # --- NHL ---
+        try:
+            from app.scrapers.nhl_api import NHLScraper
+
+            scraper = NHLScraper()
+            try:
+                async with get_write_session_context() as session:
+                    games = await scraper.sync_schedule(session, today_str)
+                    newly_final = [
+                        g for g in games
+                        if g.status in ("final", "completed", "off", "official")
+                    ]
+
+                if newly_final:
+                    async with get_write_session_context() as session:
+                        for game in newly_final:
+                            try:
+                                await scraper.sync_game_results(
+                                    session, int(game.external_id)
+                                )
+                            except Exception as exc:
+                                logger.warning(
+                                    "Game result sync failed for %s: %s",
+                                    game.external_id, exc,
+                                )
+                    logger.info(
+                        "Status refresh: %d NHL game(s) transitioned to final",
+                        len(newly_final),
+                    )
+            finally:
+                await scraper.close()
+        except Exception as exc:
+            logger.error("NHL status refresh failed: %s", exc, exc_info=True)
+
+        # --- NBA ---
+        try:
+            from app.scrapers.nba_api import NBAScraper
+
+            nba_scraper = NBAScraper()
+            try:
+                async with get_write_session_context() as session:
+                    await nba_scraper.sync_schedule(session, today_str)
+            finally:
+                await nba_scraper.close()
+        except Exception as exc:
+            logger.error("NBA status refresh failed: %s", exc, exc_info=True)
+
+    except Exception as exc:
+        logger.error("Game status refresh failed: %s", exc, exc_info=True)
+
+
 async def _sync_player_props():
     """Fetch and persist player prop odds for today's games.
 
@@ -653,6 +722,12 @@ async def _scheduler_loop():
                 if need_alt_refresh:
                     last_alt_refresh = now
                     logger.info("Alt-line cache refreshed")
+
+            # Refresh game statuses when games are live so that games
+            # transitioning to "final" are caught promptly (every cycle)
+            # instead of waiting up to 60 min for the next full sync.
+            if live_count > 0:
+                await _refresh_live_game_statuses()
 
             # Sync player props:
             # - Always on first cycle (last_props_sync == 0) so picks are
