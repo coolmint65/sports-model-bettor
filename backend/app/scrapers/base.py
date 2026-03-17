@@ -150,22 +150,31 @@ class BaseScraper(ABC):
     # Core HTTP methods
     # ------------------------------------------------------------------
 
+    # Default cache TTL; subclasses can override per-scraper.
+    # Set to 0 to disable caching for a scraper.
+    DEFAULT_CACHE_TTL = 0.0
+
     async def fetch_json(
         self,
         path: str,
         params: Optional[Dict[str, Any]] = None,
         method: str = "GET",
+        cache_ttl: Optional[float] = None,
     ) -> Any:
         """
         Fetch a URL and return the parsed JSON response.
 
         Handles rate limiting, retries with exponential backoff,
-        and structured error reporting.
+        and structured error reporting.  When ``cache_ttl`` (or the
+        scraper's ``DEFAULT_CACHE_TTL``) is > 0, GET responses are
+        served from the local HTTP response cache if still fresh.
 
         Args:
             path: URL path relative to `base_url` (e.g., "/standings/now").
             params: Optional query parameters.
             method: HTTP method (default GET).
+            cache_ttl: Override cache TTL for this request (seconds).
+                       0 = skip cache.  None = use DEFAULT_CACHE_TTL.
 
         Returns:
             Parsed JSON response (dict or list).
@@ -176,6 +185,20 @@ class BaseScraper(ABC):
             ScraperError: If the request fails after all retries.
         """
         url = path if path.startswith("http") else path
+        full_url = f"{self.base_url}/{url.lstrip('/')}" if not url.startswith("http") else url
+
+        # --- Local cache check (GET only) ---
+        ttl = cache_ttl if cache_ttl is not None else self.DEFAULT_CACHE_TTL
+        if method.upper() == "GET" and ttl > 0:
+            try:
+                from app.cache import get_cached_response, set_cached_response
+                cached = await get_cached_response(full_url, params)
+                if cached is not None:
+                    logger.debug("Cache HIT: %s", full_url)
+                    return cached
+            except Exception as exc:
+                logger.debug("Cache read error (non-fatal): %s", exc)
+
         client = self._get_client()
         last_exception: Optional[Exception] = None
 
@@ -193,7 +216,16 @@ class BaseScraper(ABC):
                 response = await client.request(method, url, params=params)
 
                 if response.status_code == 200:
-                    return response.json()
+                    data = response.json()
+                    # Store in local cache for future requests
+                    if method.upper() == "GET" and ttl > 0:
+                        try:
+                            await set_cached_response(
+                                full_url, params, data, ttl,
+                            )
+                        except Exception as exc:
+                            logger.debug("Cache write error (non-fatal): %s", exc)
+                    return data
 
                 if response.status_code == 429:
                     retry_after = int(

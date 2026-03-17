@@ -60,6 +60,9 @@ class NBAScraper(BaseScraper):
     teams, players, schedules, and box scores.
     """
 
+    # Cache NBA API responses for 2 minutes.
+    DEFAULT_CACHE_TTL = 120.0
+
     def __init__(
         self,
         base_url: str = "https://api.balldontlie.io/v1",

@@ -16,6 +16,7 @@ from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
+from app.cache import get_cached_feature, set_cached_feature
 from app.config import settings
 from app.models.game import Game, GameGoalieStats, GamePlayerStats, HeadToHead
 from app.models.injury import InjuryReport
@@ -55,6 +56,10 @@ class FeatureEngine:
             dict with keys: win_rate, avg_goals_for, avg_goals_against,
             avg_shots, avg_total_goals, games_found.
         """
+        cached = get_cached_feature("team_form", team_id, last_n)
+        if cached is not None:
+            return cached
+
         games = await self._get_recent_games(db, team_id, last_n)
 
         if not games:
@@ -114,7 +119,7 @@ class FeatureEngine:
         # Momentum-weighted avg: captures scoring direction/trend
         momentum_avg_gf = weighted_gf / weight_sum if weight_sum > 0 else goals_for_total / games_counted
 
-        return {
+        result = {
             "win_rate": round(wins / games_counted, 4),
             "avg_goals_for": round(goals_for_total / games_counted, 3),
             "avg_goals_against": round(goals_against_total / games_counted, 3),
@@ -125,6 +130,8 @@ class FeatureEngine:
             "save_pct": round(save_pct, 4),
             "momentum_avg_gf": round(momentum_avg_gf, 3),
         }
+        set_cached_feature("team_form", team_id, last_n, data=result)
+        return result
 
     # ------------------------------------------------------------------ #
     #  Home / away splits                                                 #
@@ -320,6 +327,10 @@ class FeatureEngine:
             last5_save_pct, last5_gaa, last10_save_pct, last10_gaa,
             games_started_season.
         """
+        cached = get_cached_feature("goalie_features", team_id)
+        if cached is not None:
+            return cached
+
         # Find the most likely starter: goalie with the most recent game
         # GameGoalieStats doesn't have team_id/starter columns, so we
         # join through Game to filter by team and use decision to find starters.
@@ -423,7 +434,7 @@ class FeatureEngine:
             games_started, consecutive_starts,
         )
 
-        return {
+        result = {
             "goalie_name": goalie_name,
             "goalie_id": goalie_id,
             "season_save_pct": round(season_save_pct, 4),
@@ -435,6 +446,8 @@ class FeatureEngine:
             "games_started_season": games_started,
             "consecutive_starts": consecutive_starts,
         }
+        set_cached_feature("goalie_features", team_id, data=result)
+        return result
 
     # ------------------------------------------------------------------ #
     #  Goalie vs. specific opponent                                       #
@@ -569,6 +582,10 @@ class FeatureEngine:
             avg_p1_against, avg_p2_against, avg_p3_against,
             first_period_scoring_rate, games_found.
         """
+        cached = get_cached_feature("period_stats", team_id, last_n)
+        if cached is not None:
+            return cached
+
         games = await self._get_recent_games(db, team_id, last_n)
 
         p_for = [0.0, 0.0, 0.0]
@@ -615,7 +632,7 @@ class FeatureEngine:
             }
 
         n = games_with_periods
-        return {
+        result = {
             "avg_p1_for": round(p_for[0] / n, 3),
             "avg_p2_for": round(p_for[1] / n, 3),
             "avg_p3_for": round(p_for[2] / n, 3),
@@ -625,6 +642,8 @@ class FeatureEngine:
             "first_period_scoring_rate": round(first_period_scored / n, 4),
             "games_found": games_with_periods,
         }
+        set_cached_feature("period_stats", team_id, last_n, data=result)
+        return result
 
     # ------------------------------------------------------------------ #
     #  Overtime tendency                                                  #
@@ -642,6 +661,10 @@ class FeatureEngine:
         Returns:
             dict with keys: ot_pct, ot_win_rate, games_found.
         """
+        cached = get_cached_feature("overtime_tendency", team_id, last_n)
+        if cached is not None:
+            return cached
+
         games = await self._get_recent_games(db, team_id, last_n)
 
         if not games:
@@ -663,11 +686,13 @@ class FeatureEngine:
         ot_pct = round(ot_games / total, 4) if total > 0 else 0.0
         ot_win_rate = round(ot_wins / ot_games, 4) if ot_games > 0 else 0.5
 
-        return {
+        result = {
             "ot_pct": ot_pct,
             "ot_win_rate": ot_win_rate,
             "games_found": total,
         }
+        set_cached_feature("overtime_tendency", team_id, last_n, data=result)
+        return result
 
     # ------------------------------------------------------------------ #
     #  Skater talent / offensive depth                                   #
@@ -692,6 +717,10 @@ class FeatureEngine:
             dict with keys: top6_fwd_ppg, top4_def_ppg, star_ppg,
             team_skater_ppg, games_found.
         """
+        cached = get_cached_feature("skater_impact", team_id, n_games)
+        if cached is not None:
+            return cached
+
         # Get recent completed games for this team
         recent_games = await self._get_recent_games(db, team_id, n_games)
         if not recent_games:
@@ -768,13 +797,15 @@ class FeatureEngine:
             if all_skaters else 0.0
         )
 
-        return {
+        result = {
             "top6_fwd_ppg": round(top6_fwd_ppg, 3),
             "top4_def_ppg": round(top4_def_ppg, 3),
             "star_ppg": round(star_ppg, 3),
             "team_skater_ppg": round(team_skater_ppg, 3),
             "games_found": n_actual,
         }
+        set_cached_feature("skater_impact", team_id, n_games, data=result)
+        return result
 
     # ------------------------------------------------------------------ #
     #  Lineup availability / missing player impact                       #
@@ -970,6 +1001,10 @@ class FeatureEngine:
             dict with xg_reduction (float 0-1), injured_players (list),
             total_missing_ppg, total_missing_gpg, goalie_injured (bool).
         """
+        cached = get_cached_feature("injury_impact", team_id)
+        if cached is not None:
+            return cached
+
         stmt = (
             select(InjuryReport)
             .join(Player, InjuryReport.player_id == Player.id)
@@ -1032,7 +1067,7 @@ class FeatureEngine:
                 _ic.max_injury_reduction,
             )
 
-        return {
+        result = {
             "xg_reduction": round(xg_reduction, 4),
             "total_missing_ppg": round(total_ppg_lost, 3),
             "total_missing_gpg": round(total_gpg_lost, 3),
@@ -1040,6 +1075,8 @@ class FeatureEngine:
             "goalie_injured": goalie_injured,
             "injured_players": injured_players,
         }
+        set_cached_feature("injury_impact", team_id, data=result)
+        return result
 
     # ------------------------------------------------------------------ #
     #  Schedule context (B2B, rest, road trips)                           #

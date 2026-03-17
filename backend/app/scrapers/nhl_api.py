@@ -40,6 +40,10 @@ class NHLScraper(BaseScraper):
     All data is normalised and persisted through SQLAlchemy async sessions.
     """
 
+    # Cache NHL API responses for 2 minutes — schedule/standings data
+    # doesn't change more often than that.
+    DEFAULT_CACHE_TTL = 120.0
+
     def __init__(
         self,
         base_url: str = settings.nhl_api_base,

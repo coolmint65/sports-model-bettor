@@ -54,6 +54,9 @@ class ESPNScraper(BaseScraper):
     - Goals for/against per game
     """
 
+    # Cache ESPN responses for 10 minutes — stats update slowly.
+    DEFAULT_CACHE_TTL = 600.0
+
     def __init__(self, **kwargs):
         super().__init__(
             base_url="https://site.api.espn.com/apis/site/v2/sports/hockey/nhl",

@@ -47,6 +47,8 @@ class OddsScraper(BaseScraper):
 
     REGIONS = "us"
     ODDS_FORMAT = "american"
+    # Cache odds for 60 seconds — balances freshness vs API credits.
+    DEFAULT_CACHE_TTL = 60.0
 
     def __init__(
         self,

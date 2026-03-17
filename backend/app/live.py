@@ -694,6 +694,14 @@ async def _scheduler_loop():
                     _full_sync_task = asyncio.create_task(_run_full_data_sync())
                 last_full_sync = now
 
+            # Periodically clean expired HTTP response cache entries
+            if _iteration % 20 == 0:
+                try:
+                    from app.cache import clear_expired_responses
+                    await clear_expired_responses()
+                except Exception:
+                    pass
+
             # Sleep only the remaining time in the interval, accounting
             # for how long the sync took
             elapsed = loop.time() - cycle_start
