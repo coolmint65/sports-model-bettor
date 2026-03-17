@@ -1983,20 +1983,11 @@ class FeatureEngine:
                 "get_confirmed_starter: game_id=%d not found in DB!", game_id,
             )
 
-        # --- Source 2: live scraper fallback if Game model has no starter ---
-        if not confirmed_name:
-            try:
-                from app.scrapers.starter_scraper import get_confirmed_starter_for_team
-                confirmed = await get_confirmed_starter_for_team(db, game_id, team_id)
-            except Exception as exc:
-                logger.debug("Starter confirmation unavailable: %s", exc)
-                confirmed = None
-
-            if confirmed:
-                confirmed_name = confirmed.get("goalie_name", "")
-                is_confirmed = confirmed.get("confirmed", False)
-                status = confirmed.get("status", "").lower()
-                source = "dfo"
+        # No external scraper fallback — starters are persisted to the
+        # Game model by the background scheduler (_sync_confirmed_starters
+        # in app.live).  Calling the scraper inline caused repeated full
+        # DFO/NHL API scrapes for every team in every game, leading to
+        # 30s+ request timeouts.
 
         if not confirmed_name:
             logger.info(
