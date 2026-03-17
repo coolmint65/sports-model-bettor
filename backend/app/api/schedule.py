@@ -964,21 +964,39 @@ async def _games_for_date(
     all_team_ids = list({g.home_team_id for g in games} | {g.away_team_id for g in games})
     stats_map = await _batch_load_team_stats(all_team_ids, session)
 
-    # Fetch starting goalies for upcoming games
-    starters_map = await _fetch_starters_for_games(games, session)
-
+    # Read starting goalies from persisted Game model fields.
+    # External scraping is handled by the background scheduler
+    # (_sync_confirmed_starters in app.live) every 15 minutes —
+    # no need to call external APIs inline on every request.
     schedule_games: List[ScheduleGame] = []
     for game in games:
         home_brief = _build_team_brief(game.home_team, stats_map.get(game.home_team_id))
         away_brief = _build_team_brief(game.away_team, stats_map.get(game.away_team_id))
-        game_starters = starters_map.get(game.id, {})
+        home_starter = (
+            GoalieStarter(
+                name=game.home_starter_name,
+                confirmed=game.home_starter_status in ("Confirmed",),
+                status=game.home_starter_status,
+            )
+            if game.home_starter_name
+            else None
+        )
+        away_starter = (
+            GoalieStarter(
+                name=game.away_starter_name,
+                confirmed=game.away_starter_status in ("Confirmed",),
+                status=game.away_starter_status,
+            )
+            if game.away_starter_name
+            else None
+        )
         schedule_games.append(
             _build_schedule_game(
                 game, home_brief, away_brief,
                 top_picks.get(game.id),
                 top_props.get(game.id),
-                home_starter=game_starters.get("home"),
-                away_starter=game_starters.get("away"),
+                home_starter=home_starter,
+                away_starter=away_starter,
                 top_picks=top_picks_by_market.get(game.id),
             )
         )

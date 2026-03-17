@@ -241,22 +241,53 @@ async def _sync_odds_and_broadcast(skip_alternates: bool = True):
 
 
 async def _sync_confirmed_starters():
-    """Fetch confirmed starting goalies from the NHL API.
+    """Fetch confirmed starting goalies and persist to Game model.
 
     Runs every 15 minutes when there are games today. The NHL typically
     confirms starters 1-3 hours before puck drop, so frequent checks
     during the pregame window catch these confirmations early.
+
+    Persists starters to Game.home_starter_name / away_starter_name so
+    the schedule endpoints can read them from the DB without calling
+    external scrapers inline.
     """
     try:
-        async with get_session_context() as session:
+        async with get_write_session_context() as session:
             from app.scrapers.starter_scraper import sync_confirmed_starters
             starters = await sync_confirmed_starters(session)
+            if not starters:
+                return
+
             confirmed = [s for s in starters if s["confirmed"]]
             if confirmed:
                 logger.info(
                     "Confirmed starters: %s",
                     ", ".join(f"{s['goalie_name']} ({s['team_abbrev']})" for s in confirmed),
                 )
+
+            # Persist starters to Game model so schedule endpoints
+            # can read them without re-scraping.
+            game_ids = {s["game_id"] for s in starters}
+            games_result = await session.execute(
+                select(Game).where(Game.id.in_(game_ids))
+            )
+            game_map = {g.id: g for g in games_result.scalars().all()}
+
+            # Group starters by game and side
+            for s in starters:
+                game = game_map.get(s["game_id"])
+                if not game:
+                    continue
+                if s["team_id"] == game.home_team_id:
+                    if game.home_starter_name != s["goalie_name"]:
+                        game.home_starter_name = s["goalie_name"]
+                        game.home_starter_status = s.get("status", "Expected")
+                        session.add(game)
+                elif s["team_id"] == game.away_team_id:
+                    if game.away_starter_name != s["goalie_name"]:
+                        game.away_starter_name = s["goalie_name"]
+                        game.away_starter_status = s.get("status", "Expected")
+                        session.add(game)
     except Exception as exc:
         logger.error("Starter sync failed: %s", exc, exc_info=True)
 
