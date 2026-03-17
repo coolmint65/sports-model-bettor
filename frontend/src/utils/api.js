@@ -17,8 +17,10 @@ api.interceptors.response.use(
 );
 
 // Schedule endpoints
-export const fetchTodaySchedule = () => api.get('/schedule/today');
-export const fetchLiveGames = () => api.get('/schedule/live');
+export const fetchTodaySchedule = (sport) =>
+  api.get('/schedule/today', { params: sport ? { sport } : {} });
+export const fetchLiveGames = (sport) =>
+  api.get('/schedule/live', { params: sport ? { sport } : {} });
 export const fetchGameDetails = (gameId) => api.get(`/games/${gameId}`);
 export const fetchLineMovement = (gameId) => api.get(`/games/${gameId}/line-movement`);
 export const fetchGameInjuries = (gameId) => api.get(`/games/${gameId}/injuries`);

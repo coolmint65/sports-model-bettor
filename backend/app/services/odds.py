@@ -173,6 +173,33 @@ async def sync_odds(
             return []
 
 
+async def sync_nba_odds(
+    session: AsyncSession,
+    force: bool = False,
+) -> List[Dict[str, Any]]:
+    """Sync NBA odds from The Odds API.
+
+    Uses the OddsScraper with sport="nba" to fetch moneyline, spread,
+    and totals for NBA games.
+
+    Returns list of matched game dicts.
+    """
+    global _last_sync_at
+
+    try:
+        from app.scrapers.odds_api import OddsScraper
+
+        async with OddsScraper(sport="nba") as scraper:
+            matched = await scraper.sync_odds(session)
+            await session.flush()
+            session.expire_all()
+            logger.info("NBA odds sync: matched %d games", len(matched) if matched else 0)
+            return matched or []
+    except Exception as exc:
+        logger.error("NBA odds sync failed: %s", exc, exc_info=True)
+        return []
+
+
 async def sync_player_props(session: AsyncSession) -> int:
     """Sync player prop odds from The Odds API.
 

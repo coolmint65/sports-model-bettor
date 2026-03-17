@@ -184,6 +184,26 @@ async def _run_full_sync():
             except Exception as exc:
                 logger.warning("Historical H2H sync failed (non-critical): %s", exc)
 
+            # 2b. NBA data sync (teams, players, schedule, stats)
+            _sync_state["step"] = "Syncing NBA data..."
+            try:
+                from app.scrapers.nba_api import NBAScraper
+
+                nba_scraper = NBAScraper()
+                try:
+                    async with get_write_session_context() as session:
+                        await nba_scraper.sync_teams(session)
+                    async with get_write_session_context() as session:
+                        await nba_scraper.sync_players(session)
+                    async with get_write_session_context() as session:
+                        await nba_scraper.sync_schedule(session)
+                    async with get_write_session_context() as session:
+                        await nba_scraper.sync_team_stats(session)
+                finally:
+                    await nba_scraper.close()
+            except Exception as exc:
+                logger.warning("NBA data sync failed (non-critical): %s", exc)
+
             # 3. Odds via service layer (own session)
             _sync_state["step"] = "Syncing betting odds (multi-source)..."
             try:
@@ -194,6 +214,17 @@ async def _run_full_sync():
                     logger.info("Multi-source odds sync matched %d games", len(matched))
             except Exception as exc:
                 logger.warning("Multi-source odds sync failed: %s", exc, exc_info=True)
+
+            # 3a. NBA odds sync
+            _sync_state["step"] = "Syncing NBA odds..."
+            try:
+                from app.services.odds import sync_nba_odds
+
+                async with get_write_session_context() as session:
+                    nba_matched = await sync_nba_odds(session, force=True)
+                    logger.info("NBA odds sync matched %d games", len(nba_matched))
+            except Exception as exc:
+                logger.warning("NBA odds sync failed (non-critical): %s", exc)
 
             # 3.5. Injury reports (own session)
             _sync_state["step"] = "Syncing injury reports..."
@@ -209,6 +240,17 @@ async def _run_full_sync():
                     await inj_scraper.close()
             except Exception as exc:
                 logger.warning("Injury sync failed (non-critical): %s", exc)
+
+            # 3.6. NBA injury reports (own session)
+            _sync_state["step"] = "Syncing NBA injury reports..."
+            try:
+                from app.scrapers.nba_injury_scraper import fetch_nba_injury_reports
+
+                async with get_write_session_context() as session:
+                    nba_inj_count = await fetch_nba_injury_reports(session)
+                    logger.info("NBA injury sync: %d records updated", nba_inj_count)
+            except Exception as exc:
+                logger.warning("NBA injury sync failed (non-critical): %s", exc)
 
             # 4. Predictions (own session with savepoint)
             _sync_state["step"] = "Generating predictions..."

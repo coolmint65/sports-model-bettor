@@ -163,11 +163,32 @@ async def _sync_odds_and_broadcast(skip_alternates: bool = True):
             )
             # Session commits on exit via get_session_context()
 
-        if not matched:
+        # Also sync NBA odds
+        nba_matched = []
+        try:
+            async with get_write_session_context() as session:
+                today = date.today()
+                nba_games_result = await session.execute(
+                    select(func.count(Game.id)).where(
+                        Game.date == today,
+                        Game.sport == "nba",
+                        ~func.lower(Game.status).in_(GAME_FINAL_STATUSES),
+                    )
+                )
+                nba_game_count = nba_games_result.scalar() or 0
+                if nba_game_count > 0:
+                    from app.services.odds import sync_nba_odds
+                    nba_matched = await sync_nba_odds(session, force=True)
+        except Exception as exc:
+            logger.error("NBA odds sync failed: %s", exc, exc_info=True)
+
+        all_matched = (matched or []) + (nba_matched or [])
+
+        if not all_matched:
             logger.debug("Odds sync: no games matched from sportsbooks")
             return
 
-        logger.info("Odds sync committed: %d games updated", len(matched))
+        logger.info("Odds sync committed: %d games updated", len(all_matched))
 
         # Phase 2: Re-query committed data, detect changes, broadcast.
         async with get_session_context() as session:
@@ -377,7 +398,7 @@ async def _run_full_data_sync():
         await _run_full_sync()
         logger.info("Periodic full data sync completed")
 
-        # Sync injury reports
+        # Sync NHL injury reports
         try:
             from app.scrapers.injury_scraper import fetch_injury_reports
             async with get_write_session_context() as session:
@@ -386,7 +407,42 @@ async def _run_full_data_sync():
         except Exception as inj_exc:
             logger.error("Injury sync failed: %s", inj_exc)
 
-        # Sync MoneyPuck 5v5 possession data
+        # Sync NBA injury reports
+        try:
+            from app.scrapers.nba_injury_scraper import fetch_nba_injury_reports
+            async with get_write_session_context() as session:
+                nba_inj_count = await fetch_nba_injury_reports(session)
+                logger.info("NBA injury sync: %d records updated", nba_inj_count)
+        except Exception as nba_inj_exc:
+            logger.error("NBA injury sync failed: %s", nba_inj_exc)
+
+        # Sync NBA data (teams, players, schedule, stats)
+        try:
+            from app.scrapers.nba_api import NBAScraper
+            nba_scraper = NBAScraper()
+            try:
+                async with get_write_session_context() as session:
+                    await nba_scraper.sync_teams(session)
+                async with get_write_session_context() as session:
+                    await nba_scraper.sync_schedule(session)
+                async with get_write_session_context() as session:
+                    await nba_scraper.sync_team_stats(session)
+            finally:
+                await nba_scraper.close()
+            logger.info("NBA data sync completed")
+        except Exception as nba_exc:
+            logger.error("NBA data sync failed: %s", nba_exc)
+
+        # Sync NBA odds
+        try:
+            from app.services.odds import sync_nba_odds
+            async with get_write_session_context() as session:
+                nba_odds = await sync_nba_odds(session, force=True)
+                logger.info("NBA odds sync: %d games matched", len(nba_odds))
+        except Exception as nba_odds_exc:
+            logger.error("NBA odds sync failed: %s", nba_odds_exc)
+
+        # Sync MoneyPuck 5v5 possession data (NHL only)
         try:
             from app.scrapers.moneypuck import sync_moneypuck_ev_stats
             async with get_write_session_context() as session:
@@ -395,7 +451,7 @@ async def _run_full_data_sync():
         except Exception as mp_exc:
             logger.error("MoneyPuck sync failed: %s", mp_exc)
 
-        # Sync ESPN team stats (PP%, PK%, shots, faceoffs)
+        # Sync ESPN team stats — PP%, PK%, shots, faceoffs (NHL only)
         try:
             from app.scrapers.espn import ESPNScraper
             espn = ESPNScraper()

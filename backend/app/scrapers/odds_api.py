@@ -20,26 +20,31 @@ from app.config import settings
 from app.models.game import Game
 from app.models.team import Team
 from app.scrapers.base import BaseScraper, ScraperError
-from app.scrapers.team_map import NHL_TEAM_MAP, resolve_team
+from app.scrapers.team_map import NHL_TEAM_MAP, resolve_team, resolve_nba_team, resolve_team_for_sport
 
 logger = logging.getLogger(__name__)
 
 # Re-export for any code that imports ODDS_API_TEAM_MAP from here.
 ODDS_API_TEAM_MAP = NHL_TEAM_MAP
 
+# Sport key mapping for The Odds API
+ODDS_API_SPORT_KEYS = {
+    "nhl": "icehockey_nhl",
+    "nba": "basketball_nba",
+}
+
 
 class OddsScraper(BaseScraper):
     """
     Scraper for The Odds API.
 
-    Fetches live and pre-match odds for NHL games. Supports moneyline,
-    spread (puck line), and totals (over/under) markets.
+    Fetches live and pre-match odds for games. Supports moneyline,
+    spread, and totals (over/under) markets for multiple sports.
 
     The API key is loaded from `settings.odds_api_key`. If no key is
     configured, all fetch methods return empty results with a warning.
     """
 
-    SPORT_KEY = "icehockey_nhl"
     REGIONS = "us"
     ODDS_FORMAT = "american"
 
@@ -48,10 +53,13 @@ class OddsScraper(BaseScraper):
         base_url: str = settings.odds_api_base,
         api_key: Optional[str] = None,
         rate_limit: float = 1.0,
+        sport: str = "nhl",
         **kwargs,
     ):
         super().__init__(base_url=base_url, rate_limit=rate_limit, **kwargs)
         self.api_key = api_key or settings.odds_api_key
+        self.sport = sport
+        self.sport_key = ODDS_API_SPORT_KEYS.get(sport, "icehockey_nhl")
         if not self.api_key:
             logger.warning(
                 "No ODDS_API_KEY configured. Odds fetching will be disabled. "
@@ -62,41 +70,33 @@ class OddsScraper(BaseScraper):
     def _has_key(self) -> bool:
         return bool(self.api_key)
 
-    @staticmethod
-    def _resolve_team(name: str) -> str:
+    def _resolve_team(self, name: str) -> str:
         """Resolve team name with direct + fuzzy matching."""
-        return resolve_team(name)
+        return resolve_team_for_sport(name, self.sport)
 
     # ------------------------------------------------------------------
     # Fetch odds
     # ------------------------------------------------------------------
 
-    async def fetch_nhl_odds(
+    async def fetch_odds(
         self,
         markets: str = "h2h,spreads,totals",
     ) -> List[Dict[str, Any]]:
         """
-        Fetch current odds for all upcoming NHL games.
+        Fetch current odds for all upcoming games of the configured sport.
 
         Args:
             markets: Comma-separated market types. Defaults to
-                     "h2h,spreads,totals" (moneyline, puck line, over/under).
+                     "h2h,spreads,totals" (moneyline, spread, over/under).
 
         Returns:
-            List of normalised odds dicts, one per game. Each dict contains:
-            - commence_time: ISO datetime of game start
-            - home_team: full team name from the API
-            - away_team: full team name from the API
-            - home_abbrev: mapped 3-letter abbreviation
-            - away_abbrev: mapped 3-letter abbreviation
-            - bookmakers: list of bookmaker odds snapshots
-            - best_odds: dict with the best available odds across books
+            List of normalised odds dicts, one per game.
         """
         if not self._has_key:
             logger.warning("Odds API key not set; returning empty odds list.")
             return []
 
-        path = f"/sports/{self.SPORT_KEY}/odds"
+        path = f"/sports/{self.sport_key}/odds"
         params = {
             "apiKey": self.api_key,
             "regions": self.REGIONS,
@@ -120,8 +120,15 @@ class OddsScraper(BaseScraper):
             if parsed:
                 results.append(parsed)
 
-        logger.info("Fetched odds for %d NHL events", len(results))
+        logger.info("Fetched odds for %d %s events", len(results), self.sport.upper())
         return results
+
+    async def fetch_nhl_odds(
+        self,
+        markets: str = "h2h,spreads,totals",
+    ) -> List[Dict[str, Any]]:
+        """Backward-compatible alias for fetch_odds (NHL)."""
+        return await self.fetch_odds(markets=markets)
 
     def _parse_event(self, event: dict) -> Optional[Dict[str, Any]]:
         """Parse a single event from the Odds API response."""
@@ -359,7 +366,7 @@ class OddsScraper(BaseScraper):
             logger.warning("No API key; skipping odds sync.")
             return []
 
-        odds_list = await self.fetch_nhl_odds()
+        odds_list = await self.fetch_odds()
         matched: List[Dict[str, Any]] = []
 
         for odds in odds_list:
@@ -383,14 +390,20 @@ class OddsScraper(BaseScraper):
             else:
                 continue
 
-            # Find matching teams
+            # Find matching teams (scoped to sport)
             home_result = await db.execute(
-                select(Team).where(Team.abbreviation == home_abbrev)
+                select(Team).where(
+                    Team.abbreviation == home_abbrev,
+                    Team.sport == self.sport,
+                )
             )
             home_team = home_result.scalar_one_or_none()
 
             away_result = await db.execute(
-                select(Team).where(Team.abbreviation == away_abbrev)
+                select(Team).where(
+                    Team.abbreviation == away_abbrev,
+                    Team.sport == self.sport,
+                )
             )
             away_team = away_result.scalar_one_or_none()
 
@@ -478,7 +491,7 @@ class OddsScraper(BaseScraper):
         if not self._has_key:
             return None
 
-        path = f"/sports/{self.SPORT_KEY}/odds"
+        path = f"/sports/{self.sport_key}/odds"
         params = {
             "apiKey": self.api_key,
             "regions": self.REGIONS,

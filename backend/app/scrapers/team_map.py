@@ -102,12 +102,72 @@ MONEYPUCK_TEAM_MAP: Dict[str, str] = {
 # -------------------------------------------------------------------------
 NHL_ABBREVIATIONS = set(NHL_TEAM_MAP.values()) | set(MONEYPUCK_TEAM_MAP.values())
 
+# -------------------------------------------------------------------------
+# NBA full-name -> abbreviation
+# -------------------------------------------------------------------------
+NBA_TEAM_MAP: Dict[str, str] = {
+    # Full names
+    "Atlanta Hawks": "ATL",
+    "Boston Celtics": "BOS",
+    "Brooklyn Nets": "BKN",
+    "Charlotte Hornets": "CHA",
+    "Chicago Bulls": "CHI",
+    "Cleveland Cavaliers": "CLE",
+    "Dallas Mavericks": "DAL",
+    "Denver Nuggets": "DEN",
+    "Detroit Pistons": "DET",
+    "Golden State Warriors": "GSW",
+    "Houston Rockets": "HOU",
+    "Indiana Pacers": "IND",
+    "Los Angeles Clippers": "LAC",
+    "Los Angeles Lakers": "LAL",
+    "Memphis Grizzlies": "MEM",
+    "Miami Heat": "MIA",
+    "Milwaukee Bucks": "MIL",
+    "Minnesota Timberwolves": "MIN",
+    "New Orleans Pelicans": "NOP",
+    "New York Knicks": "NYK",
+    "Oklahoma City Thunder": "OKC",
+    "Orlando Magic": "ORL",
+    "Philadelphia 76ers": "PHI",
+    "Phoenix Suns": "PHX",
+    "Portland Trail Blazers": "POR",
+    "Sacramento Kings": "SAC",
+    "San Antonio Spurs": "SAS",
+    "Toronto Raptors": "TOR",
+    "Utah Jazz": "UTA",
+    "Washington Wizards": "WAS",
+    # ----- Sportsbook / API variants -----
+    "LA Clippers": "LAC",
+    "LA Lakers": "LAL",
+    "L.A. Clippers": "LAC",
+    "L.A. Lakers": "LAL",
+    "NY Knicks": "NYK",
+    "N.Y. Knicks": "NYK",
+    "GS Warriors": "GSW",
+    "Golden State": "GSW",
+    "OKC Thunder": "OKC",
+    "Oklahoma City": "OKC",
+    "San Antonio": "SAS",
+    "New Orleans": "NOP",
+    "New York": "NYK",
+    "Portland": "POR",
+    "Trail Blazers": "POR",
+    "Timberwolves": "MIN",
+    "76ers": "PHI",
+    "Sixers": "PHI",
+}
+
+NBA_ABBREVIATIONS = set(NBA_TEAM_MAP.values())
+
 # Track unmapped names to avoid log flooding
 _unmapped_logged: set = set()
 
 
-def resolve_team(name: str) -> str:
-    """Resolve a team name to its 3-letter NHL abbreviation.
+def _resolve_against_map(
+    name: str, team_map: Dict[str, str], abbreviations: set
+) -> str:
+    """Resolve a team name against a specific team map.
 
     Tries in order:
       1. Direct abbreviation match (e.g. "BOS" -> "BOS")
@@ -123,17 +183,17 @@ def resolve_team(name: str) -> str:
 
     # Already a valid abbreviation?
     upper = stripped.upper()
-    if upper in NHL_ABBREVIATIONS:
+    if upper in abbreviations:
         return upper
 
     # Direct lookup
-    abbr = NHL_TEAM_MAP.get(stripped, "")
+    abbr = team_map.get(stripped, "")
     if abbr:
         return abbr
 
     # Fuzzy: substring matching
     name_lower = stripped.lower()
-    for full_name, code in NHL_TEAM_MAP.items():
+    for full_name, code in team_map.items():
         if full_name.lower() in name_lower or name_lower in full_name.lower():
             return code
 
@@ -141,13 +201,51 @@ def resolve_team(name: str) -> str:
     mascot = stripped.split()[-1] if stripped else ""
     if mascot:
         mascot_lower = mascot.lower()
-        for full_name, code in NHL_TEAM_MAP.items():
+        for full_name, code in team_map.items():
             if full_name.split()[-1].lower() == mascot_lower:
                 return code
 
+    return ""
+
+
+def resolve_team(name: str) -> str:
+    """Resolve a team name to its 3-letter NHL abbreviation.
+
+    Returns empty string if no match is found.
+    """
+    result = _resolve_against_map(name, NHL_TEAM_MAP, NHL_ABBREVIATIONS)
+    if result:
+        return result
+
     # Log unmapped name once
-    if stripped not in _unmapped_logged:
+    stripped = name.strip() if name else ""
+    if stripped and stripped not in _unmapped_logged:
         _unmapped_logged.add(stripped)
         logger.debug("UNMAPPED TEAM NAME: %r — add to NHL_TEAM_MAP", stripped)
 
     return ""
+
+
+def resolve_nba_team(name: str) -> str:
+    """Resolve a team name to its 3-letter NBA abbreviation.
+
+    Returns empty string if no match is found.
+    """
+    result = _resolve_against_map(name, NBA_TEAM_MAP, NBA_ABBREVIATIONS)
+    if result:
+        return result
+
+    # Log unmapped name once
+    stripped = name.strip() if name else ""
+    if stripped and stripped not in _unmapped_logged:
+        _unmapped_logged.add(stripped)
+        logger.debug("UNMAPPED NBA TEAM NAME: %r — add to NBA_TEAM_MAP", stripped)
+
+    return ""
+
+
+def resolve_team_for_sport(name: str, sport: str = "nhl") -> str:
+    """Resolve a team name using the correct sport-specific map."""
+    if sport == "nba":
+        return resolve_nba_team(name)
+    return resolve_team(name)

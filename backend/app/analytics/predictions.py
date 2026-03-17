@@ -42,6 +42,8 @@ class PredictionManager:
         self.model = BettingModel(ml_model=self.ml_model)
         self._rolling_calibrator = RollingCalibrator()
         self._calibrator_initialized = False
+        # Lazy-loaded NBA model
+        self._nba_model = None
 
     @staticmethod
     def _load_ml_model():
@@ -579,7 +581,16 @@ class PredictionManager:
         """
         features = await self.feature_engine.build_game_features(db, game.id)
 
-        predictions = await self.model.predict_all(features)
+        # Dispatch to the correct model based on sport
+        if game.sport == "nba":
+            if self._nba_model is None:
+                from app.analytics.nba_model import NBABettingModel
+                self._nba_model = NBABettingModel()
+            # Attach game object for market prior blending
+            features["game_obj"] = game
+            predictions = await self._nba_model.predict_all(features)
+        else:
+            predictions = await self.model.predict_all(features)
 
         # For live games, adjust predictions based on current score and
         # time remaining so confidence reflects the actual game state
@@ -675,6 +686,52 @@ class PredictionManager:
             if relevant:
                 pred["reasoning"] = "; ".join(relevant[:8])
 
+        # Build features summary — sport-aware
+        fs = {
+            "home_form_5_wr": features["home_form_5"]["win_rate"],
+            "away_form_5_wr": features["away_form_5"]["win_rate"],
+            "home_season_gf": features["home_season"]["goals_for_pg"],
+            "away_season_gf": features["away_season"]["goals_for_pg"],
+            "h2h_games": features["h2h"]["games_found"],
+            # Injury summaries
+            "home_injured_count": features.get("home_injuries", {}).get("injured_count", 0),
+            "away_injured_count": features.get("away_injuries", {}).get("injured_count", 0),
+            "home_injury_xg_reduction": features.get("home_injuries", {}).get("xg_reduction", 0),
+            "away_injury_xg_reduction": features.get("away_injuries", {}).get("xg_reduction", 0),
+            # Schedule
+            "home_b2b": features.get("home_schedule", {}).get("is_back_to_back", False),
+            "away_b2b": features.get("away_schedule", {}).get("is_back_to_back", False),
+            "home_days_rest": features.get("home_schedule", {}).get("days_rest", 0),
+            "away_days_rest": features.get("away_schedule", {}).get("days_rest", 0),
+            # Matchups
+            "home_matchup_boost": features.get("home_player_matchup", {}).get("matchup_boost", 0),
+            "away_matchup_boost": features.get("away_player_matchup", {}).get("matchup_boost", 0),
+            "matchup_avg_total": features.get("team_matchup", {}).get("avg_total_goals"),
+            # Composite edge
+            "composite_edge_score": top_pick.get("composite_edge", {}).get("composite_score"),
+            "composite_edge_grade": top_pick.get("composite_edge", {}).get("composite_grade"),
+        }
+
+        # NHL-specific fields
+        if game.sport != "nba":
+            fs.update({
+                "home_goalie": features.get("home_goalie", {}).get("goalie_name"),
+                "away_goalie": features.get("away_goalie", {}).get("goalie_name"),
+                "home_ev_cf_pct": features.get("home_ev_possession", {}).get("ev_cf_pct"),
+                "away_ev_cf_pct": features.get("away_ev_possession", {}).get("ev_cf_pct"),
+                "home_close_cf_pct": features.get("home_close_possession", {}).get("close_cf_pct"),
+                "away_close_cf_pct": features.get("away_close_possession", {}).get("close_cf_pct"),
+                "home_goalie_tier": features.get("home_goalie", {}).get("tier"),
+                "away_goalie_tier": features.get("away_goalie", {}).get("tier"),
+                "home_starter_confidence": features.get("home_starter_status", {}).get("starter_confidence"),
+                "away_starter_confidence": features.get("away_starter_status", {}).get("starter_confidence"),
+            })
+        else:
+            fs.update({
+                "home_goalie": None,
+                "away_goalie": None,
+            })
+
         return {
             "game_id": game.id,
             "status": game.status,
@@ -682,44 +739,7 @@ class PredictionManager:
             "predictions": predictions,
             "top_pick": top_pick,
             "signals": signals,
-            "features_summary": {
-                "home_form_5_wr": features["home_form_5"]["win_rate"],
-                "away_form_5_wr": features["away_form_5"]["win_rate"],
-                "home_season_gf": features["home_season"]["goals_for_pg"],
-                "away_season_gf": features["away_season"]["goals_for_pg"],
-                "h2h_games": features["h2h"]["games_found"],
-                "home_goalie": features["home_goalie"]["goalie_name"],
-                "away_goalie": features["away_goalie"]["goalie_name"],
-                # Injury summaries
-                "home_injured_count": features.get("home_injuries", {}).get("injured_count", 0),
-                "away_injured_count": features.get("away_injuries", {}).get("injured_count", 0),
-                "home_injury_xg_reduction": features.get("home_injuries", {}).get("xg_reduction", 0),
-                "away_injury_xg_reduction": features.get("away_injuries", {}).get("xg_reduction", 0),
-                # Schedule
-                "home_b2b": features.get("home_schedule", {}).get("is_back_to_back", False),
-                "away_b2b": features.get("away_schedule", {}).get("is_back_to_back", False),
-                "home_days_rest": features.get("home_schedule", {}).get("days_rest", 0),
-                "away_days_rest": features.get("away_schedule", {}).get("days_rest", 0),
-                # Matchups
-                "home_matchup_boost": features.get("home_player_matchup", {}).get("matchup_boost", 0),
-                "away_matchup_boost": features.get("away_player_matchup", {}).get("matchup_boost", 0),
-                "matchup_avg_total": features.get("team_matchup", {}).get("avg_total_goals"),
-                # 5v5 possession (MoneyPuck)
-                "home_ev_cf_pct": features.get("home_ev_possession", {}).get("ev_cf_pct"),
-                "away_ev_cf_pct": features.get("away_ev_possession", {}).get("ev_cf_pct"),
-                # Close-game possession
-                "home_close_cf_pct": features.get("home_close_possession", {}).get("close_cf_pct"),
-                "away_close_cf_pct": features.get("away_close_possession", {}).get("close_cf_pct"),
-                # Goalie tiers
-                "home_goalie_tier": features.get("home_goalie", {}).get("tier"),
-                "away_goalie_tier": features.get("away_goalie", {}).get("tier"),
-                # Starter confidence
-                "home_starter_confidence": features.get("home_starter_status", {}).get("starter_confidence"),
-                "away_starter_confidence": features.get("away_starter_status", {}).get("starter_confidence"),
-                # Composite edge
-                "composite_edge_score": top_pick.get("composite_edge", {}).get("composite_score"),
-                "composite_edge_grade": top_pick.get("composite_edge", {}).get("composite_grade"),
-            },
+            "features_summary": fs,
         }
 
     # ------------------------------------------------------------------ #

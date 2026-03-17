@@ -301,13 +301,16 @@ async def _build_prediction_detail(
 
 
 async def _get_predictions_for_date(
-    target_date: date, session: AsyncSession
+    target_date: date, session: AsyncSession, sport: Optional[str] = None,
 ) -> List[PredictionDetail]:
+    filters = [Game.date == target_date]
+    if sport:
+        filters.append(Game.sport == sport)
     result = await session.execute(
         select(Prediction)
         .options(selectinload(Prediction.result))
         .join(Game, Game.id == Prediction.game_id)
-        .where(Game.date == target_date)
+        .where(*filters)
         .order_by(Prediction.confidence.desc().nulls_last())
     )
     predictions = result.scalars().all()
@@ -485,17 +488,18 @@ async def _try_generate_predictions(
 
 @router.get("/today", response_model=TodayPredictionsResponse)
 async def get_today_predictions(
+    sport: Optional[str] = None,
     session: AsyncSession = Depends(get_session),
 ):
     today = date.today()
-    predictions = await _get_predictions_for_date(today, session)
+    predictions = await _get_predictions_for_date(today, session, sport=sport)
 
     if not predictions:
         try:
             async with session.begin_nested():
                 await _try_generate_predictions(session, target_date=today)
                 await session.flush()
-            predictions = await _get_predictions_for_date(today, session)
+            predictions = await _get_predictions_for_date(today, session, sport=sport)
         except Exception as exc:
             logger.warning("Today predictions: auto-generation failed: %s", exc)
 

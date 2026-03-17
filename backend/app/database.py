@@ -279,6 +279,17 @@ async def _migrate_add_columns() -> None:
         ("player_prop_odds", "opening_under_price", "FLOAT"),
         # Division rank from standings
         ("team_stats", "division_rank", "INTEGER"),
+        # Q4 scores for NBA (4 quarters)
+        ("game", "home_score_p4", "INTEGER"),
+        ("game", "away_score_p4", "INTEGER"),
+        # Basketball-specific player stats
+        ("game_player_stats", "rebounds", "INTEGER"),
+        ("game_player_stats", "steals", "INTEGER"),
+        ("game_player_stats", "blocks", "INTEGER"),
+        ("game_player_stats", "turnovers", "INTEGER"),
+        ("game_player_stats", "three_pointers_made", "INTEGER"),
+        ("game_player_stats", "free_throws_made", "INTEGER"),
+        ("game_player_stats", "free_throws_attempted", "INTEGER"),
         # Starting goalies (from DFO / NHL API)
         ("game", "home_starter_name", "VARCHAR(100)"),
         ("game", "home_starter_status", "VARCHAR(20)"),

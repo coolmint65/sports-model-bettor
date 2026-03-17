@@ -50,6 +50,17 @@ def _current_nhl_season() -> str:
     return f"{start_year}{start_year + 1}"
 
 
+def _current_nba_season() -> str:
+    """Compute the current NBA season year (e.g. '2025').
+
+    The NBA season starts in October — if we're in Jan-Sep, we're in the
+    second half of the previous year's season. The balldontlie API uses
+    the start year as the season identifier.
+    """
+    today = date.today()
+    return str(today.year if today.month >= 10 else today.year - 1)
+
+
 class SportConfig(BaseModel):
     """Configuration for a specific sport."""
 
@@ -303,6 +314,63 @@ class ModelConfig(BaseModel):
     market_prior_weight: float = 0.35       # 0=pure model, 1=pure market (0.35 = 65/35 blend)
 
 
+class NBAModelConfig(BaseModel):
+    """Tunable constants for the NBA Gaussian prediction model.
+
+    Basketball scoring follows a roughly normal distribution (mean ~112 pts,
+    stdev ~12 pts), so we use Gaussian CDF rather than Poisson.
+    """
+
+    # League baselines (2024-25 season averages)
+    league_avg_points: float = 112.5
+    league_avg_pace: float = 100.0  # possessions per 48 minutes
+
+    # Home court advantage (additive points for home team)
+    home_court_advantage: float = 2.5
+
+    # Standard deviation for team scoring (derived from historical variance)
+    scoring_std_dev: float = 12.0
+
+    # Form window weights (same as NHL — sport-agnostic)
+    weight_form_5: float = 0.35
+    weight_form_10: float = 0.35
+    weight_season: float = 0.30
+
+    # Feature factor weights
+    injury_impact_factor: float = 0.20
+    rest_advantage_per_day: float = 1.5   # points per extra rest day
+    rest_advantage_cap: float = 4.0       # max rest advantage in points
+    back_to_back_penalty: float = 3.0     # points penalty for B2B
+
+    # Expected points bounds
+    xp_floor: float = 95.0
+    xp_ceiling: float = 135.0
+
+    # Total lines commonly offered
+    total_lines: List[float] = [210.5, 215.5, 220.5, 225.5, 230.5, 235.5]
+
+    # Spread is variable in NBA (not fixed like NHL puck line)
+    default_spread: float = 0.0
+
+    # Position impact multipliers for injuries
+    position_multipliers: Dict[str, float] = {
+        "PG": 1.0,
+        "SG": 0.9,
+        "SF": 0.9,
+        "PF": 0.85,
+        "C": 1.1,
+    }
+
+    # Calibration
+    calibration_shrinkage: float = 0.15
+    market_prior_weight: float = 0.35
+
+    # Feature extraction windows
+    form_window_short: int = 5
+    form_window_medium: int = 10
+    form_window_long: int = 20
+
+
 class InjuryConfig(BaseModel):
     """Configuration for injury impact calculations."""
 
@@ -325,6 +393,15 @@ class InjuryConfig(BaseModel):
         "RW": 0.9,
         "D": 0.85,
         "G": 1.5,  # goalie injuries are most impactful
+    }
+
+    # NBA position impact multipliers
+    nba_position_multipliers: Dict[str, float] = {
+        "PG": 1.0,
+        "SG": 0.9,
+        "SF": 0.9,
+        "PF": 0.85,
+        "C": 1.1,
     }
 
     # Cap on total injury-based xG reduction
@@ -377,6 +454,7 @@ class Settings(BaseModel):
 
     # API Keys (loaded from environment)
     odds_api_key: Optional[str] = os.environ.get("ODDS_API_KEY", None)
+    balldontlie_api_key: Optional[str] = os.environ.get("BALLDONTLIE_API_KEY", None)
 
     # API Base URLs
     nhl_api_base: str = "https://api-web.nhle.com/v1"
@@ -401,6 +479,19 @@ class Settings(BaseModel):
             periods=3,
             overtime=True,
             shootout=True,
+        ),
+        "nba": SportConfig(
+            name="NBA",
+            api_base_url="https://api.balldontlie.io/v1",
+            default_season=_current_nba_season(),
+            game_types={
+                "regular": "2",
+                "playoffs": "3",
+            },
+            positions=["PG", "SG", "SF", "PF", "C"],
+            periods=4,
+            overtime=True,
+            shootout=False,
         ),
     }
 
@@ -448,6 +539,7 @@ class Settings(BaseModel):
 
     # Model tuning
     model: ModelConfig = ModelConfig()
+    nba_model: NBAModelConfig = NBAModelConfig()
     injury: InjuryConfig = InjuryConfig()
     matchup: MatchupConfig = MatchupConfig()
 

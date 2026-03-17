@@ -1,7 +1,7 @@
 """
 Schedule API routes.
 
-Provides endpoints for retrieving NHL game schedules by date.
+Provides endpoints for retrieving game schedules by date.
 Odds syncing is handled by the background scheduler (app.live) —
 GET endpoints are read-only.
 """
@@ -942,12 +942,15 @@ async def _db_fallback_starters(
 
 
 async def _games_for_date(
-    target_date: date, session: AsyncSession
+    target_date: date, session: AsyncSession, sport: Optional[str] = None,
 ) -> List[ScheduleGame]:
+    filters = [Game.date == target_date]
+    if sport:
+        filters.append(Game.sport == sport)
     result = await session.execute(
         select(Game)
         .options(selectinload(Game.home_team), selectinload(Game.away_team))
-        .where(Game.date == target_date)
+        .where(*filters)
         .order_by(Game.start_time.asc().nulls_last(), Game.id.asc())
     )
     games = result.scalars().all()
@@ -987,13 +990,14 @@ _SCHEDULE_SYNC_THROTTLE = 30  # seconds — prevent rapid-fire syncs
 
 
 async def _try_sync_schedule(
-    session: AsyncSession, target_date: Optional[date] = None
+    session: AsyncSession, target_date: Optional[date] = None,
+    sport: Optional[str] = None,
 ) -> int:
-    """Sync schedule from NHL API. Throttled to once per 30s.
+    """Sync schedule from the sport's API. Throttled to once per 30s.
 
     Multiple endpoints (``/live``, ``/today``) call this inline on every
     request.  Without throttling, 2 WebSocket clients cause rapid-fire
-    schedule syncs (8+ in 5 seconds) which hammers the NHL API and
+    schedule syncs (8+ in 5 seconds) which hammers the API and
     slows down response times.
     """
     global _last_schedule_sync
@@ -1001,6 +1005,29 @@ async def _try_sync_schedule(
     if now - _last_schedule_sync < _SCHEDULE_SYNC_THROTTLE:
         return 0
     _last_schedule_sync = now
+
+    # NBA schedule sync uses the NBA scraper
+    if sport == "nba":
+        try:
+            from app.scrapers.nba_api import NBAScraper
+
+            scraper = NBAScraper()
+            try:
+                games = await scraper.sync_schedule(session)
+                return len(games) if isinstance(games, list) else 0
+            finally:
+                await scraper.close()
+        except ImportError:
+            raise HTTPException(
+                status_code=503,
+                detail="NBA scraper module is not available.",
+            )
+        except Exception as exc:
+            logger.error("Failed to sync schedule from NBA API: %s", exc, exc_info=True)
+            raise HTTPException(
+                status_code=502,
+                detail="Failed to sync schedule from NBA API",
+            )
 
     try:
         from app.scrapers.nhl_api import NHLScraper
@@ -1027,33 +1054,37 @@ async def _try_sync_schedule(
 # ---------------------------------------------------------------------------
 
 @router.get("/live", response_model=ScheduleResponse)
-async def get_live_games():
+async def get_live_games(sport: Optional[str] = None):
     """Return all currently in-progress games.
 
-    Syncs scores/clock from NHL API for live games. Odds syncing is
+    Syncs scores/clock from sport API for live games. Odds syncing is
     handled by the background scheduler — not inline in GET requests.
 
     NOTE: Uses explicit session management (not Depends) to avoid holding
     idle connections during write operations — prevents QueuePool exhaustion.
     """
     # Check for live games with a short-lived read session.
+    live_filters = [func.lower(Game.status).in_(("in_progress", "live"))]
+    if sport:
+        live_filters.append(Game.sport == sport)
+
     async with get_session_context() as session:
         result = await session.execute(
             select(Game)
             .options(selectinload(Game.home_team), selectinload(Game.away_team))
-            .where(func.lower(Game.status).in_(("in_progress", "live")))
+            .where(*live_filters)
             .order_by(Game.start_time.asc().nulls_last(), Game.id.asc())
         )
         games = result.scalars().all()
         game_dates = {game.date for game in games} if games else set()
     # Session closed before write operation.
 
-    # Sync scores/clock from NHL API (not odds — scheduler handles that).
+    # Sync scores/clock from sport API (not odds — scheduler handles that).
     if game_dates:
         try:
             async with get_write_session_context() as write_session:
                 for gd in game_dates:
-                    await _try_sync_schedule(write_session, target_date=gd)
+                    await _try_sync_schedule(write_session, target_date=gd, sport=sport)
         except Exception as exc:
             logger.warning("Live schedule sync failed: %s", exc)
 
@@ -1062,7 +1093,7 @@ async def get_live_games():
         result = await session.execute(
             select(Game)
             .options(selectinload(Game.home_team), selectinload(Game.away_team))
-            .where(func.lower(Game.status).in_(("in_progress", "live")))
+            .where(*live_filters)
             .order_by(Game.start_time.asc().nulls_last(), Game.id.asc())
         )
         games = result.scalars().all()
@@ -1093,10 +1124,10 @@ async def get_live_games():
 
 
 @router.get("/today", response_model=ScheduleResponse)
-async def get_today_schedule():
+async def get_today_schedule(sport: Optional[str] = None):
     """Return today's schedule.
 
-    Syncs scores/clock from NHL API for live games. Odds and predictions
+    Syncs scores/clock from sport API for live games. Odds and predictions
     are kept fresh by the background scheduler — this endpoint only reads.
 
     NOTE: Uses explicit session management (not Depends) to avoid holding
@@ -1106,20 +1137,20 @@ async def get_today_schedule():
 
     # Initial read with a short-lived session.
     async with get_session_context() as session:
-        games = await _games_for_date(today, session)
+        games = await _games_for_date(today, session, sport=sport)
     # Session closed before potential write.
 
     has_live = any(g.status and g.status.lower() in ("in_progress", "live") for g in games)
     if not games or has_live:
         try:
             async with get_write_session_context() as write_session:
-                await _try_sync_schedule(write_session, target_date=today)
+                await _try_sync_schedule(write_session, target_date=today, sport=sport)
         except Exception as exc:
             logger.warning("Today schedule sync failed: %s", exc)
 
         # Re-read with a fresh session to see committed data.
         async with get_session_context() as session:
-            games = await _games_for_date(today, session)
+            games = await _games_for_date(today, session, sport=sport)
 
     return ScheduleResponse(date=today, game_count=len(games), games=games)
 
@@ -1127,6 +1158,7 @@ async def get_today_schedule():
 @router.get("/{date_str}", response_model=ScheduleResponse)
 async def get_schedule_by_date(
     date_str: str,
+    sport: Optional[str] = None,
     session: AsyncSession = Depends(get_session),
 ):
     try:
@@ -1137,7 +1169,7 @@ async def get_schedule_by_date(
             detail=f"Invalid date format '{date_str}'. Expected YYYY-MM-DD.",
         )
 
-    games = await _games_for_date(target_date, session)
+    games = await _games_for_date(target_date, session, sport=sport)
     return ScheduleResponse(
         date=target_date, game_count=len(games), games=games
     )

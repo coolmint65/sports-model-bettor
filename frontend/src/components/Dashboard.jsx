@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { useParams } from 'react-router-dom';
 import { Calendar, Radio, RefreshCw } from 'lucide-react';
 import { format } from 'date-fns';
 import GameCard from './GameCard';
@@ -11,12 +12,17 @@ const LIVE_POLL_INTERVAL = 5_000;
 const IDLE_POLL_INTERVAL = 60_000;
 
 function Dashboard() {
+  const { sport } = useParams();
+  const currentSport = sport || 'nhl';
+
+  const fetchSchedule = useCallback(() => fetchTodaySchedule(currentSport), [currentSport]);
+
   const {
     data: scheduleData,
     loading: scheduleLoading,
     error: scheduleError,
     silentRefetch,
-  } = useApi(fetchTodaySchedule);
+  } = useApi(fetchSchedule);
 
   const [liveGames, setLiveGames] = useState([]);
   const [regenerating, setRegenerating] = useState(false);
@@ -25,13 +31,13 @@ function Dashboard() {
 
   const pollLive = useCallback(async () => {
     try {
-      const res = await fetchLiveGames();
+      const res = await fetchLiveGames(currentSport);
       const games = res?.data?.games || res?.data || [];
       setLiveGames(games);
     } catch {
       // Silently fail
     }
-  }, []);
+  }, [currentSport]);
 
   useWebSocketEvent('odds_update', useCallback(() => {
     silentRefetch();

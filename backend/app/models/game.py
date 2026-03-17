@@ -97,6 +97,10 @@ class Game(TimestampMixin, Base):
     home_score_p3: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     away_score_p3: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
+    # Period 4 / Quarter 4 scores (used by NBA)
+    home_score_p4: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    away_score_p4: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
     # Overtime scores
     home_score_ot: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     away_score_ot: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -274,9 +278,18 @@ class GamePlayerStats(TimestampMixin, Base):
     # Ice time (minutes as float)
     toi: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
-    # Special teams
+    # Special teams (NHL)
     pp_goals: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     sh_goals: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # Basketball-specific stats (nullable — only populated for NBA)
+    rebounds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    steals: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    blocks: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    turnovers: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    three_pointers_made: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    free_throws_made: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    free_throws_attempted: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     # Relationships
     game: Mapped["Game"] = relationship("Game", back_populates="player_stats")
