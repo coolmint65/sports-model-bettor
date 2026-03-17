@@ -294,10 +294,9 @@ async def _run_full_sync():
                         new_count = new_count_result.scalar() or 0
 
                         if deleted_count > 0 and new_count == 0:
-                            logger.warning(
-                                "Sync: deleted %d predictions but regenerated 0. "
-                                "Best bets returned %d. Games may have unexpected statuses.",
-                                deleted_count, len(new_bets),
+                            raise RuntimeError(
+                                f"Prediction regen produced 0 results after deleting "
+                                f"{deleted_count}. Rolling back to preserve old predictions."
                             )
                         else:
                             logger.info(

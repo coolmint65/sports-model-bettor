@@ -288,12 +288,12 @@ class NBABettingModel:
             cover_prob = cover_prob * (1 - _nba.calibration_shrinkage) + 0.5 * _nba.calibration_shrinkage
 
             if cover_prob >= 0.5:
-                spread_pick = f"{home_abbr} {game_spread_line:+.1f}"
+                spread_pick = f"{home_abbr}_{game_spread_line:+.1f}"
                 spread_conf = cover_prob
                 spread_odds = getattr(game, "home_spread_price", None) if game else None
             else:
                 away_spread = getattr(game, "away_spread_line", None)
-                spread_pick = f"{away_abbr} {away_spread:+.1f}" if away_spread else f"{away_abbr}"
+                spread_pick = f"{away_abbr}_{away_spread:+.1f}" if away_spread else f"{away_abbr}"
                 spread_conf = 1.0 - cover_prob
                 spread_odds = getattr(game, "away_spread_price", None) if game else None
 

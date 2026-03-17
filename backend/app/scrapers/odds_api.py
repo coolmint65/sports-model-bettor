@@ -10,8 +10,9 @@ Operates gracefully when no key is configured (logs a warning, returns empty).
 
 import logging
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -378,7 +379,12 @@ class OddsScraper(BaseScraper):
             if not home_abbrev or not away_abbrev:
                 continue
 
-            # Parse commence_time to date for matching
+            # Parse commence_time to the LOCAL game date.
+            # The DB stores Game.date as the local (ET) calendar date,
+            # but commence_time from the Odds API is UTC.  A 7 PM ET
+            # game is midnight UTC the next day — so we must convert to
+            # ET before extracting .date() to avoid a one-day mismatch
+            # for evening games.
             commence = odds.get("commence_time", "")
             game_date = None
             if commence:
@@ -386,7 +392,8 @@ class OddsScraper(BaseScraper):
                     dt = datetime.fromisoformat(
                         commence.replace("Z", "+00:00")
                     )
-                    game_date = dt.date()
+                    dt_et = dt.astimezone(ZoneInfo("America/New_York"))
+                    game_date = dt_et.date()
                 except (ValueError, TypeError):
                     continue
             else:
@@ -417,19 +424,24 @@ class OddsScraper(BaseScraper):
                 )
                 continue
 
-            # Find the matching game
-            game_result = await db.execute(
-                select(Game).where(
-                    Game.home_team_id == home_team.id,
-                    Game.away_team_id == away_team.id,
-                    Game.date == game_date,
+            # Find the matching game.  Try exact date first, then
+            # adjacent days as a safety net for DST edge cases.
+            game = None
+            for candidate_date in (game_date, game_date - timedelta(days=1), game_date + timedelta(days=1)):
+                game_result = await db.execute(
+                    select(Game).where(
+                        Game.home_team_id == home_team.id,
+                        Game.away_team_id == away_team.id,
+                        Game.date == candidate_date,
+                    )
                 )
-            )
-            game = game_result.scalar_one_or_none()
+                game = game_result.scalar_one_or_none()
+                if game is not None:
+                    break
 
             if game is None:
                 logger.debug(
-                    "No game found for %s vs %s on %s",
+                    "No game found for %s vs %s on %s (±1 day)",
                     home_abbrev,
                     away_abbrev,
                     game_date,
