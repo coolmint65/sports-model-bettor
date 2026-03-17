@@ -445,7 +445,10 @@ class NHLScraper(BaseScraper):
             return None
 
         result = await db.execute(
-            select(Team).where(Team.abbreviation == abbrev)
+            select(Team).where(
+                Team.abbreviation == abbrev,
+                Team.sport == "nhl",
+            )
         )
         team = result.scalar_one_or_none()
 

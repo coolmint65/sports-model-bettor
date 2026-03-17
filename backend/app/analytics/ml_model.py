@@ -149,8 +149,8 @@ class MLModel:
             metrics.cv_home_xg_mae = float(-cv_home.mean())
             metrics.cv_away_xg_mae = float(-cv_away.mean())
 
-        # Feature importance
-        if self.feature_names:
+        # Feature importance (only available in sklearn >= 1.4)
+        if self.feature_names and hasattr(self.home_model, "feature_importances_"):
             metrics.top_features_home = self._top_features(
                 self.home_model.feature_importances_
             )

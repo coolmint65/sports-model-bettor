@@ -34,7 +34,10 @@ async def get_player_vs_team(
     deviates from their overall average when facing this opponent.
     """
     # Look up team
-    team_stmt = select(Team).where(Team.abbreviation == team_abbr.upper())
+    team_stmt = select(Team).where(
+        Team.abbreviation == team_abbr.upper(),
+        Team.sport == "nhl",
+    )
     team_result = await db.execute(team_stmt)
     team = team_result.scalars().first()
 
@@ -116,11 +119,17 @@ async def get_team_vs_team(
     and how these teams tend to play against each other.
     """
     # Look up teams
-    t1_stmt = select(Team).where(Team.abbreviation == team1_abbr.upper())
+    t1_stmt = select(Team).where(
+        Team.abbreviation == team1_abbr.upper(),
+        Team.sport == "nhl",
+    )
     t1_result = await db.execute(t1_stmt)
     team1 = t1_result.scalars().first()
 
-    t2_stmt = select(Team).where(Team.abbreviation == team2_abbr.upper())
+    t2_stmt = select(Team).where(
+        Team.abbreviation == team2_abbr.upper(),
+        Team.sport == "nhl",
+    )
     t2_result = await db.execute(t2_stmt)
     team2 = t2_result.scalars().first()
 
@@ -203,8 +212,14 @@ async def refresh_matchup_data(
     db: AsyncSession = Depends(get_session),
 ) -> Dict[str, Any]:
     """Manually refresh matchup data between two teams."""
-    t1_stmt = select(Team).where(Team.abbreviation == team1_abbr.upper())
-    t2_stmt = select(Team).where(Team.abbreviation == team2_abbr.upper())
+    t1_stmt = select(Team).where(
+        Team.abbreviation == team1_abbr.upper(),
+        Team.sport == "nhl",
+    )
+    t2_stmt = select(Team).where(
+        Team.abbreviation == team2_abbr.upper(),
+        Team.sport == "nhl",
+    )
 
     t1 = (await db.execute(t1_stmt)).scalars().first()
     t2 = (await db.execute(t2_stmt)).scalars().first()

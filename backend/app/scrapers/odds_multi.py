@@ -3052,12 +3052,18 @@ class MultiSourceOddsScraper:
 
             # Find matching teams
             home_result = await db.execute(
-                select(Team).where(Team.abbreviation == home_abbrev)
+                select(Team).where(
+                    Team.abbreviation == home_abbrev,
+                    Team.sport == "nhl",
+                )
             )
             home_team = home_result.scalar_one_or_none()
 
             away_result = await db.execute(
-                select(Team).where(Team.abbreviation == away_abbrev)
+                select(Team).where(
+                    Team.abbreviation == away_abbrev,
+                    Team.sport == "nhl",
+                )
             )
             away_team = away_result.scalar_one_or_none()
 

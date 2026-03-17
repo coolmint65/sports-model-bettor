@@ -8,7 +8,7 @@ TeamStats holds aggregated season-level statistics for a team.
 from datetime import date, datetime
 from typing import TYPE_CHECKING, List, Optional
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
@@ -45,6 +45,10 @@ class Team(TimestampMixin, Base):
     sport: Mapped[str] = mapped_column(String(20), nullable=False, default="nhl")
     logo_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    __table_args__ = (
+        UniqueConstraint("abbreviation", "sport", name="uq_team_abbrev_sport"),
+    )
 
     # Relationships
     stats: Mapped[List["TeamStats"]] = relationship(

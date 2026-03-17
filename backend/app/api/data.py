@@ -790,11 +790,17 @@ async def diagnose_odds_matching(
 
         # Look up teams in DB
         home_result = await session.execute(
-            select(Team).where(Team.abbreviation == home_abbrev)
+            select(Team).where(
+                Team.abbreviation == home_abbrev,
+                Team.sport == "nhl",
+            )
         )
         home_team = home_result.scalar_one_or_none()
         away_result = await session.execute(
-            select(Team).where(Team.abbreviation == away_abbrev)
+            select(Team).where(
+                Team.abbreviation == away_abbrev,
+                Team.sport == "nhl",
+            )
         )
         away_team = away_result.scalar_one_or_none()
 

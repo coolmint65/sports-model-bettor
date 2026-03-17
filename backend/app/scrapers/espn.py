@@ -246,7 +246,10 @@ class ESPNScraper(BaseScraper):
         for abbrev, espn_stats in all_stats.items():
             # Find the team
             result = await db.execute(
-                select(Team).where(Team.abbreviation == abbrev)
+                select(Team).where(
+                    Team.abbreviation == abbrev,
+                    Team.sport == "nhl",
+                )
             )
             team = result.scalar_one_or_none()
             if not team:

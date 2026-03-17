@@ -32,7 +32,10 @@ async def get_team_injuries(
         active_only: If True, only return active (current) injuries.
     """
     # Look up team
-    team_stmt = select(Team).where(Team.abbreviation == team_abbr.upper())
+    team_stmt = select(Team).where(
+        Team.abbreviation == team_abbr.upper(),
+        Team.sport == "nhl",
+    )
     team_result = await db.execute(team_stmt)
     team = team_result.scalars().first()
 

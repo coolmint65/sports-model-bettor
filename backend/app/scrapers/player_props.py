@@ -356,12 +356,18 @@ async def sync_player_props(db: AsyncSession) -> int:
 
         # Look up teams
         home_result = await db.execute(
-            select(Team).where(Team.abbreviation == home_abbr)
+            select(Team).where(
+                Team.abbreviation == home_abbr,
+                Team.sport == "nhl",
+            )
         )
         home_team = home_result.scalar_one_or_none()
 
         away_result = await db.execute(
-            select(Team).where(Team.abbreviation == away_abbr)
+            select(Team).where(
+                Team.abbreviation == away_abbr,
+                Team.sport == "nhl",
+            )
         )
         away_team = away_result.scalar_one_or_none()
 
