@@ -122,6 +122,10 @@ class TeamStats(TimestampMixin, Base):
         String(20), nullable=False, index=True
     )
 
+    __table_args__ = (
+        UniqueConstraint("team_id", "season", name="uq_teamstats_team_season"),
+    )
+
     # Record
     games_played: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     wins: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

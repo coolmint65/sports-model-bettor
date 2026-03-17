@@ -562,7 +562,7 @@ class NHLScraper(BaseScraper):
                     TeamStats.season == season,
                 )
             )
-            stats = result.scalar_one_or_none()
+            stats = result.scalars().first()
 
             home_w = entry.get("home_wins", 0)
             home_l = entry.get("home_losses", 0)

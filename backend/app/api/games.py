@@ -186,6 +186,7 @@ class GameDetailResponse(BaseModel):
 
     id: int
     external_id: str
+    sport: str = "nhl"
     game_date: date
     start_time: Optional[str] = None
     venue: Optional[str] = None
@@ -957,6 +958,7 @@ async def get_game_details(
     return GameDetailResponse(
         id=game.id,
         external_id=game.external_id,
+        sport=game.sport,
         game_date=game.date,
         start_time=game.start_time.isoformat() if game.start_time else None,
         venue=game.venue,

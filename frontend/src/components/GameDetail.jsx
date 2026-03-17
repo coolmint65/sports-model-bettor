@@ -175,7 +175,9 @@ function GameHeader({ game, awayAbbr, homeAbbr, awayTeamLabel, homeTeamLabel, co
       {/* Right side: tags + meta */}
       <div className="gd-header-meta">
         <div className="gd-header-tags">
-          <span className="dc-tag dc-tag-sport">Hockey</span>
+          <span className="dc-tag dc-tag-sport">{
+            ({ nhl: 'Hockey', nba: 'Basketball', nfl: 'Football', mlb: 'Baseball' })[(game.sport || 'nhl').toLowerCase()] || 'Hockey'
+          }</span>
           {rating && (
             <span className={`dc-tag dc-tag-confidence ${displayConf >= 70 ? 'badge-good' : displayConf >= 55 ? 'badge-borderline' : 'badge-low'}`}>
               <TrendingUp size={12} />
@@ -967,7 +969,11 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
     avg: fmtStat(lg[key], isPct),
   });
 
-  const perfStats = [
+  const isNBA = (game.sport || 'nhl').toLowerCase() === 'nba';
+  const perfStats = isNBA ? [
+    makeStat('Points/Game', 'goals_for_per_game'),
+    makeStat('Points Against/Game', 'goals_against_per_game', false, false),
+  ] : [
     makeStat('Goals For/Game', 'goals_for_per_game'),
     makeStat('Goals Against/Game', 'goals_against_per_game', false, false),
     makeStat('Power Play %', 'power_play_pct', true),
