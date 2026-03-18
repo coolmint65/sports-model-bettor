@@ -3504,7 +3504,7 @@ a:hover {
 
 .prop-pick-headshot {
   width: 60px;
-  align-self: stretch;
+  height: 60px;
   border-radius: 8px;
   object-fit: cover;
   flex-shrink: 0;
