@@ -158,6 +158,22 @@ class TeamStats(TimestampMixin, Base):
     # Other
     faceoff_win_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
+    # NBA-specific stats (per-game averages)
+    fg_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    three_pt_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    ft_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    rebounds_per_game: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    assists_per_game: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    turnovers_per_game: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    steals_per_game: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    blocks_per_game: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    three_pt_made_per_game: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    opp_fg_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    opp_three_pt_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    pace: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    offensive_rating: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    defensive_rating: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
     # Recent form (stored as strings, e.g., "3-1-1")
     record_last_5: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     record_last_10: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)

@@ -989,7 +989,7 @@ class FeatureEngine:
         gp = stats.games_played
         win_pct = round(stats.wins / gp, 4) if gp > 0 else 0.5
 
-        return {
+        result = {
             "goals_for_pg": stats.goals_for_per_game or round(stats.goals_for / gp, 3),
             "goals_against_pg": stats.goals_against_per_game or round(stats.goals_against / gp, 3),
             "pp_pct": stats.power_play_pct or 20.0,
@@ -999,6 +999,25 @@ class FeatureEngine:
             "faceoff_pct": stats.faceoff_win_pct or 50.0,
             "win_pct": win_pct,
         }
+
+        # Attach NBA-specific stats if available
+        if getattr(stats, "fg_pct", None) is not None:
+            result.update({
+                "fg_pct": stats.fg_pct,
+                "three_pt_pct": stats.three_pt_pct,
+                "ft_pct": stats.ft_pct,
+                "rebounds_pg": stats.rebounds_per_game,
+                "assists_pg": stats.assists_per_game,
+                "turnovers_pg": stats.turnovers_per_game,
+                "steals_pg": stats.steals_per_game,
+                "blocks_pg": stats.blocks_per_game,
+                "three_pt_made_pg": stats.three_pt_made_per_game,
+                "pace": stats.pace,
+                "offensive_rating": stats.offensive_rating,
+                "defensive_rating": stats.defensive_rating,
+            })
+
+        return result
 
     # ------------------------------------------------------------------ #
     #  Injury impact features                                              #
@@ -3358,30 +3377,37 @@ class FeatureEngine:
     ) -> Dict[str, Any]:
         """Build features for an NBA game.
 
-        Uses only the features relevant for basketball: team form,
-        season stats, H2H, injuries, schedule context, and odds.
-        Skips all NHL-specific features (goalies, special teams,
-        possession metrics, etc.).
+        Uses basketball-relevant features: team form, season stats (incl.
+        efficiency, pace, shooting, rebounding, turnovers), H2H, injuries,
+        schedule context, home/away splits, and odds.
+        Skips all NHL-specific features (goalies, special teams, etc.).
         """
         home_id = game.home_team_id
         away_id = game.away_team_id
 
         (
             home_team, away_team,
-            home_form_5, home_form_10, home_season, home_splits,
-            away_form_5, away_form_10, away_season, away_splits,
+            home_form_5, home_form_10, home_form_20,
+            home_season, home_splits,
+            away_form_5, away_form_10, away_form_20,
+            away_season, away_splits,
             h2h,
             home_injuries, away_injuries,
             home_schedule, away_schedule,
+            h2h_weighted,
+            consensus_line,
+            line_movement,
         ) = await asyncio.gather(
             self._get_team(db, home_id),
             self._get_team(db, away_id),
             self.get_team_form(db, home_id, last_n=5),
             self.get_team_form(db, home_id, last_n=10),
+            self.get_team_form(db, home_id, last_n=20),
             self.get_season_stats(db, home_id),
             self.get_team_home_away_splits(db, home_id, is_home=True),
             self.get_team_form(db, away_id, last_n=5),
             self.get_team_form(db, away_id, last_n=10),
+            self.get_team_form(db, away_id, last_n=20),
             self.get_season_stats(db, away_id),
             self.get_team_home_away_splits(db, away_id, is_home=False),
             self.get_h2h_stats(db, home_id, away_id),
@@ -3389,11 +3415,14 @@ class FeatureEngine:
             self.get_injury_impact(db, away_id),
             self.get_schedule_context(db, home_id, game.date),
             self.get_schedule_context(db, away_id, game.date),
+            self.get_recency_weighted_h2h(db, home_id, away_id),
+            self.get_consensus_line(db, game.id),
+            self.get_line_movement(db, game.id, game),
         )
 
-        # Odds and line movement (reuses existing methods)
-        consensus_line = await self.get_consensus_line(db, game.id)
-        line_movement = await self.get_line_movement(db, game.id, game)
+        # Divisional context
+        divisional = self._is_same_division(home_team, away_team) if home_team and away_team else False
+        cross_conf = self._is_cross_conference(home_team, away_team) if home_team and away_team else False
 
         features: Dict[str, Any] = {
             "game_id": game.id,
@@ -3419,14 +3448,17 @@ class FeatureEngine:
             # Team form
             "home_form_5": home_form_5,
             "home_form_10": home_form_10,
+            "home_form_20": home_form_20,
             "home_season": home_season,
             "home_splits": home_splits,
             "away_form_5": away_form_5,
             "away_form_10": away_form_10,
+            "away_form_20": away_form_20,
             "away_season": away_season,
             "away_splits": away_splits,
             # H2H
             "h2h": h2h,
+            "h2h_weighted": h2h_weighted,
             # Injuries
             "home_injuries": home_injuries,
             "away_injuries": away_injuries,
@@ -3438,6 +3470,9 @@ class FeatureEngine:
             # Line movement
             "line_movement": line_movement,
             "consensus_line": consensus_line,
+            # Division / conference context
+            "is_divisional": divisional,
+            "is_cross_conference": cross_conf,
         }
 
         return features

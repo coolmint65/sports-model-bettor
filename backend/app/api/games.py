@@ -65,6 +65,19 @@ class TeamForm(BaseModel):
     division_rank: Optional[int] = None
     division_name: Optional[str] = None
     division_size: Optional[int] = None
+    # NBA-specific stats
+    fg_pct: Optional[float] = None
+    three_pt_pct: Optional[float] = None
+    ft_pct: Optional[float] = None
+    rebounds_per_game: Optional[float] = None
+    assists_per_game: Optional[float] = None
+    turnovers_per_game: Optional[float] = None
+    steals_per_game: Optional[float] = None
+    blocks_per_game: Optional[float] = None
+    three_pt_made_per_game: Optional[float] = None
+    pace: Optional[float] = None
+    offensive_rating: Optional[float] = None
+    defensive_rating: Optional[float] = None
 
     model_config = {"from_attributes": True}
 
@@ -312,6 +325,19 @@ async def _get_team_form(team: Team, session: AsyncSession) -> TeamForm:
         form.faceoff_win_pct = stats.faceoff_win_pct
         form.division_rank = stats.division_rank
         form.division_name = team.division
+        # NBA-specific stats
+        form.fg_pct = getattr(stats, "fg_pct", None)
+        form.three_pt_pct = getattr(stats, "three_pt_pct", None)
+        form.ft_pct = getattr(stats, "ft_pct", None)
+        form.rebounds_per_game = getattr(stats, "rebounds_per_game", None)
+        form.assists_per_game = getattr(stats, "assists_per_game", None)
+        form.turnovers_per_game = getattr(stats, "turnovers_per_game", None)
+        form.steals_per_game = getattr(stats, "steals_per_game", None)
+        form.blocks_per_game = getattr(stats, "blocks_per_game", None)
+        form.three_pt_made_per_game = getattr(stats, "three_pt_made_per_game", None)
+        form.pace = getattr(stats, "pace", None)
+        form.offensive_rating = getattr(stats, "offensive_rating", None)
+        form.defensive_rating = getattr(stats, "defensive_rating", None)
         if team.division:
             div_count = await session.execute(
                 select(func.count(Team.id)).where(
@@ -419,6 +445,10 @@ async def _get_league_context(
     if sport == "nba":
         stat_keys = [
             "goals_for_per_game", "goals_against_per_game",
+            "fg_pct", "three_pt_pct", "ft_pct",
+            "rebounds_per_game", "assists_per_game",
+            "turnovers_per_game", "steals_per_game", "blocks_per_game",
+            "pace", "offensive_rating", "defensive_rating",
         ]
     else:
         stat_keys = [
@@ -428,7 +458,10 @@ async def _get_league_context(
             "faceoff_win_pct",
         ]
     # Stats where lower is better (rank 1 = lowest)
-    lower_is_better = {"goals_against_per_game", "shots_against_per_game"}
+    lower_is_better = {
+        "goals_against_per_game", "shots_against_per_game",
+        "turnovers_per_game", "defensive_rating",
+    }
 
     def _avg(attr):
         vals = [getattr(s, attr) for s in all_stats if getattr(s, attr) is not None]

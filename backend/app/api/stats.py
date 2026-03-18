@@ -52,6 +52,19 @@ class TeamStatsDetail(BaseModel):
     record_last_20: Optional[str] = None
     home_record: Optional[str] = None
     away_record: Optional[str] = None
+    # NBA-specific stats
+    fg_pct: Optional[float] = None
+    three_pt_pct: Optional[float] = None
+    ft_pct: Optional[float] = None
+    rebounds_per_game: Optional[float] = None
+    assists_per_game: Optional[float] = None
+    turnovers_per_game: Optional[float] = None
+    steals_per_game: Optional[float] = None
+    blocks_per_game: Optional[float] = None
+    three_pt_made_per_game: Optional[float] = None
+    pace: Optional[float] = None
+    offensive_rating: Optional[float] = None
+    defensive_rating: Optional[float] = None
 
     model_config = {"from_attributes": True}
 

@@ -57,6 +57,15 @@ class SignalGenerator:
         signals.extend(self._time_of_day_signals(features, home_abbr, away_abbr))
         signals.extend(self._public_signal_signals(features, home_abbr, away_abbr))
 
+        # NBA-specific signals (pace, efficiency, shooting, rebounding, turnovers)
+        if is_nba:
+            signals.extend(self._nba_pace_signals(features, home_abbr, away_abbr, home_name, away_name))
+            signals.extend(self._nba_efficiency_signals(features, home_abbr, away_abbr, home_name, away_name))
+            signals.extend(self._nba_shooting_signals(features, home_abbr, away_abbr, home_name, away_name))
+            signals.extend(self._nba_rebounding_signals(features, home_abbr, away_abbr, home_name, away_name))
+            signals.extend(self._nba_turnover_signals(features, home_abbr, away_abbr, home_name, away_name))
+            signals.extend(self._nba_ft_signals(features, home_abbr, away_abbr, home_name, away_name))
+
         # NHL-specific signals (goalies, special teams, possession, shots, etc.)
         if not is_nba:
             signals.extend(self._goalie_signals(features, home_abbr, away_abbr))
@@ -1931,6 +1940,341 @@ class SignalGenerator:
                     f"{ref_name} has a slight {style} tendency that may "
                     f"affect scoring pace."
                 ),
+            ))
+
+        return signals
+
+
+    # ------------------------------------------------------------------ #
+    #  NBA: Pace signals                                                   #
+    # ------------------------------------------------------------------ #
+
+    def _nba_pace_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+        home_name: str,
+        away_name: str,
+    ) -> List[Dict[str, Any]]:
+        signals = []
+        home_s = features.get("home_season", {})
+        away_s = features.get("away_season", {})
+        home_pace = home_s.get("pace")
+        away_pace = away_s.get("pace")
+        league_pace = settings.nba_model.league_avg_pace
+
+        if home_pace is None or away_pace is None:
+            return signals
+
+        matchup_pace = (home_pace + away_pace) / 2
+        pace_diff = matchup_pace - league_pace
+
+        if pace_diff > 3:
+            signals.append(_signal(
+                "pace",
+                f"Fast-paced matchup (avg {matchup_pace:.0f} poss/game) favors the Over",
+                "positive", "", 0.55, icon="zap",
+                tooltip=f"{home_name}: {home_pace:.0f} pace, {away_name}: {away_pace:.0f} pace, Lg avg: {league_pace:.0f}",
+            ))
+        elif pace_diff < -3:
+            signals.append(_signal(
+                "pace",
+                f"Slow-paced matchup (avg {matchup_pace:.0f} poss/game) favors the Under",
+                "negative", "", 0.55, icon="timer",
+                tooltip=f"{home_name}: {home_pace:.0f} pace, {away_name}: {away_pace:.0f} pace, Lg avg: {league_pace:.0f}",
+            ))
+
+        # Big pace mismatch: one team fast, the other slow
+        if abs(home_pace - away_pace) > 5:
+            fast_team = home_name if home_pace > away_pace else away_name
+            fast_abbr = home_abbr if home_pace > away_pace else away_abbr
+            signals.append(_signal(
+                "pace",
+                f"{fast_team} wants to push tempo (pace gap: {abs(home_pace - away_pace):.0f})",
+                "neutral", fast_abbr, 0.35,
+                tooltip="Large pace mismatch — the team that controls tempo has an edge",
+            ))
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    #  NBA: Offensive/Defensive efficiency signals                         #
+    # ------------------------------------------------------------------ #
+
+    def _nba_efficiency_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+        home_name: str,
+        away_name: str,
+    ) -> List[Dict[str, Any]]:
+        signals = []
+        home_s = features.get("home_season", {})
+        away_s = features.get("away_season", {})
+        home_ortg = home_s.get("offensive_rating")
+        away_ortg = away_s.get("offensive_rating")
+        home_drtg = home_s.get("defensive_rating")
+        away_drtg = away_s.get("defensive_rating")
+
+        if home_ortg is None or away_ortg is None:
+            return signals
+
+        # Net rating advantage
+        home_net = (home_ortg - (home_drtg or home_ortg)) if home_drtg else 0
+        away_net = (away_ortg - (away_drtg or away_ortg)) if away_drtg else 0
+        net_diff = home_net - away_net
+
+        if abs(net_diff) > 4:
+            better = home_name if net_diff > 0 else away_name
+            better_abbr = home_abbr if net_diff > 0 else away_abbr
+            signals.append(_signal(
+                "efficiency",
+                f"{better} has a significant net rating advantage ({abs(net_diff):.1f} pts/100 poss)",
+                "positive", better_abbr, min(0.80, 0.45 + abs(net_diff) * 0.03),
+                icon="chart",
+                tooltip="Net rating = Offensive Rating - Defensive Rating per 100 possessions",
+            ))
+        elif abs(net_diff) > 2:
+            better = home_name if net_diff > 0 else away_name
+            better_abbr = home_abbr if net_diff > 0 else away_abbr
+            signals.append(_signal(
+                "efficiency",
+                f"{better} edges opponent in net efficiency ({abs(net_diff):.1f} pts/100 poss)",
+                "positive", better_abbr, 0.40,
+            ))
+
+        # Elite offense signal
+        for name, abbr, ortg in [
+            (home_name, home_abbr, home_ortg),
+            (away_name, away_abbr, away_ortg),
+        ]:
+            if ortg and ortg >= 115:
+                signals.append(_signal(
+                    "efficiency",
+                    f"{name} has elite offensive efficiency ({ortg:.1f} ORtg)",
+                    "positive", abbr, 0.50, icon="fire",
+                    tooltip="Offensive Rating: points scored per 100 possessions",
+                ))
+
+        # Elite defense signal
+        if home_drtg and away_drtg:
+            for name, abbr, drtg in [
+                (home_name, home_abbr, home_drtg),
+                (away_name, away_abbr, away_drtg),
+            ]:
+                if drtg and drtg <= 108:
+                    signals.append(_signal(
+                        "efficiency",
+                        f"{name} has elite defensive efficiency ({drtg:.1f} DRtg)",
+                        "positive", abbr, 0.50, icon="shield",
+                        tooltip="Defensive Rating: points allowed per 100 possessions (lower is better)",
+                    ))
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    #  NBA: Shooting signals                                               #
+    # ------------------------------------------------------------------ #
+
+    def _nba_shooting_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+        home_name: str,
+        away_name: str,
+    ) -> List[Dict[str, Any]]:
+        signals = []
+        home_s = features.get("home_season", {})
+        away_s = features.get("away_season", {})
+
+        home_3pct = home_s.get("three_pt_pct")
+        away_3pct = away_s.get("three_pt_pct")
+        home_fg = home_s.get("fg_pct")
+        away_fg = away_s.get("fg_pct")
+        home_3pm = home_s.get("three_pt_made_pg")
+        away_3pm = away_s.get("three_pt_made_pg")
+
+        # 3PT% gap
+        if home_3pct is not None and away_3pct is not None:
+            diff = home_3pct - away_3pct
+            if abs(diff) >= 3:
+                better = home_name if diff > 0 else away_name
+                better_abbr = home_abbr if diff > 0 else away_abbr
+                signals.append(_signal(
+                    "shooting",
+                    f"{better} shoots significantly better from 3 ({max(home_3pct, away_3pct):.1f}% vs {min(home_3pct, away_3pct):.1f}%)",
+                    "positive", better_abbr, 0.50, icon="target",
+                    tooltip="Three-point shooting percentage gap",
+                ))
+            elif abs(diff) >= 1.5:
+                better = home_name if diff > 0 else away_name
+                better_abbr = home_abbr if diff > 0 else away_abbr
+                signals.append(_signal(
+                    "shooting",
+                    f"{better} has 3PT shooting edge ({max(home_3pct, away_3pct):.1f}% vs {min(home_3pct, away_3pct):.1f}%)",
+                    "positive", better_abbr, 0.35,
+                ))
+
+        # Volume 3PT shooters
+        if home_3pm is not None and away_3pm is not None:
+            combined = home_3pm + away_3pm
+            if combined >= 28:
+                signals.append(_signal(
+                    "shooting",
+                    f"Heavy 3PT volume matchup ({combined:.0f} combined 3PM/game)",
+                    "neutral", "", 0.40, icon="target",
+                    tooltip="High 3PT volume increases scoring variance",
+                ))
+
+        # FG% advantage
+        if home_fg is not None and away_fg is not None:
+            diff = home_fg - away_fg
+            if abs(diff) >= 3:
+                better = home_name if diff > 0 else away_name
+                better_abbr = home_abbr if diff > 0 else away_abbr
+                signals.append(_signal(
+                    "shooting",
+                    f"{better} shoots better overall ({max(home_fg, away_fg):.1f}% FG vs {min(home_fg, away_fg):.1f}%)",
+                    "positive", better_abbr, 0.40,
+                ))
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    #  NBA: Rebounding signals                                             #
+    # ------------------------------------------------------------------ #
+
+    def _nba_rebounding_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+        home_name: str,
+        away_name: str,
+    ) -> List[Dict[str, Any]]:
+        signals = []
+        home_s = features.get("home_season", {})
+        away_s = features.get("away_season", {})
+        home_reb = home_s.get("rebounds_pg")
+        away_reb = away_s.get("rebounds_pg")
+
+        if home_reb is None or away_reb is None:
+            return signals
+
+        diff = home_reb - away_reb
+        if abs(diff) >= 5:
+            better = home_name if diff > 0 else away_name
+            better_abbr = home_abbr if diff > 0 else away_abbr
+            signals.append(_signal(
+                "rebounding",
+                f"{better} dominates the boards ({max(home_reb, away_reb):.1f} vs {min(home_reb, away_reb):.1f} RPG)",
+                "positive", better_abbr, 0.55, icon="shield",
+                tooltip="Rebounding advantage creates extra possessions",
+            ))
+        elif abs(diff) >= 3:
+            better = home_name if diff > 0 else away_name
+            better_abbr = home_abbr if diff > 0 else away_abbr
+            signals.append(_signal(
+                "rebounding",
+                f"{better} has a rebounding edge ({max(home_reb, away_reb):.1f} vs {min(home_reb, away_reb):.1f} RPG)",
+                "positive", better_abbr, 0.40,
+            ))
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    #  NBA: Turnover signals                                               #
+    # ------------------------------------------------------------------ #
+
+    def _nba_turnover_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+        home_name: str,
+        away_name: str,
+    ) -> List[Dict[str, Any]]:
+        signals = []
+        home_s = features.get("home_season", {})
+        away_s = features.get("away_season", {})
+        home_tov = home_s.get("turnovers_pg")
+        away_tov = away_s.get("turnovers_pg")
+        home_stl = home_s.get("steals_pg")
+        away_stl = away_s.get("steals_pg")
+
+        if home_tov is None or away_tov is None:
+            return signals
+
+        # Team that commits fewer turnovers
+        diff = away_tov - home_tov  # positive = home commits fewer
+        if abs(diff) >= 3:
+            better = home_name if diff > 0 else away_name
+            better_abbr = home_abbr if diff > 0 else away_abbr
+            worse_tov = max(home_tov, away_tov)
+            signals.append(_signal(
+                "turnovers",
+                f"{better} takes much better care of the ball (opponent averages {worse_tov:.1f} TOV/game)",
+                "positive", better_abbr, 0.50,
+                tooltip="Turnover differential creates extra possessions and transition opportunities",
+            ))
+        elif abs(diff) >= 1.5:
+            better = home_name if diff > 0 else away_name
+            better_abbr = home_abbr if diff > 0 else away_abbr
+            signals.append(_signal(
+                "turnovers",
+                f"{better} has better ball security (turnover advantage)",
+                "positive", better_abbr, 0.35,
+            ))
+
+        # Steals matchup
+        if home_stl is not None and away_stl is not None:
+            stl_diff = home_stl - away_stl
+            if abs(stl_diff) >= 2:
+                better = home_name if stl_diff > 0 else away_name
+                better_abbr = home_abbr if stl_diff > 0 else away_abbr
+                signals.append(_signal(
+                    "turnovers",
+                    f"{better}'s defense forces more turnovers ({max(home_stl, away_stl):.1f} STL/game)",
+                    "positive", better_abbr, 0.40, icon="shield",
+                    tooltip="Active hands defense creates transition scoring opportunities",
+                ))
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    #  NBA: Free throw signals                                             #
+    # ------------------------------------------------------------------ #
+
+    def _nba_ft_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+        home_name: str,
+        away_name: str,
+    ) -> List[Dict[str, Any]]:
+        signals = []
+        home_s = features.get("home_season", {})
+        away_s = features.get("away_season", {})
+        home_ft = home_s.get("ft_pct")
+        away_ft = away_s.get("ft_pct")
+
+        if home_ft is None or away_ft is None:
+            return signals
+
+        # Major FT% gap (matters in close games)
+        diff = home_ft - away_ft
+        if abs(diff) >= 5:
+            better = home_name if diff > 0 else away_name
+            better_abbr = home_abbr if diff > 0 else away_abbr
+            signals.append(_signal(
+                "free_throws",
+                f"{better} is a significantly better FT shooting team ({max(home_ft, away_ft):.1f}% vs {min(home_ft, away_ft):.1f}%)",
+                "positive", better_abbr, 0.35,
+                tooltip="Free throw accuracy matters in close games and with intentional fouling",
             ))
 
         return signals

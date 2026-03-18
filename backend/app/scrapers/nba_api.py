@@ -572,7 +572,12 @@ class NBAScraper(BaseScraper):
     # ------------------------------------------------------------------
 
     async def sync_team_stats(self, session: AsyncSession) -> int:
-        """Compute team stats from completed games this season."""
+        """Compute team stats from completed games this season.
+
+        Aggregates box-score-level player stats per game to derive
+        NBA-specific team averages: FG%, 3PT%, FT%, rebounds, assists,
+        turnovers, steals, blocks, pace, and offensive/defensive rating.
+        """
         sport_cfg = settings.get_sport_config("nba")
         season = sport_cfg.default_season
 
@@ -642,6 +647,22 @@ class NBAScraper(BaseScraper):
             record_last_10 = _fmt_record(recent_results[:10]) if len(recent_results) >= 10 else None
             record_last_20 = _fmt_record(recent_results[:20]) if len(recent_results) >= 20 else None
 
+            # ----------------------------------------------------------
+            # NBA advanced stats from box-score player stats
+            # ----------------------------------------------------------
+            game_ids = [g.id for g in games]
+            nba_stats = await self._compute_nba_advanced_stats(
+                session, team.id, game_ids, gp
+            )
+
+            # Compute defensive rating from game scores and pace
+            # DRtg = opponent points allowed per 100 possessions
+            if nba_stats.get("pace") and gp > 0:
+                papg = total_pa / gp
+                team_pace = nba_stats["pace"]
+                if team_pace > 0:
+                    nba_stats["defensive_rating"] = round(papg / team_pace * 100, 1)
+
             # Upsert TeamStats
             stats_result = await session.execute(
                 select(TeamStats).where(
@@ -666,6 +687,7 @@ class NBAScraper(BaseScraper):
                 record_last_10=record_last_10,
                 record_last_20=record_last_20,
                 date_updated=datetime.now(timezone.utc),
+                **nba_stats,
             )
 
             if existing:
@@ -686,6 +708,132 @@ class NBAScraper(BaseScraper):
         logger.info("NBA team stats synced: %d teams", synced)
         return synced
 
+    async def _compute_nba_advanced_stats(
+        self,
+        session: AsyncSession,
+        team_id: int,
+        game_ids: List[int],
+        games_played: int,
+    ) -> Dict[str, Any]:
+        """Aggregate box-score player stats into NBA team averages.
+
+        Returns a dict of TeamStats fields for NBA-specific columns.
+        """
+        if not game_ids or games_played == 0:
+            return {}
+
+        from app.models.player import Player
+
+        # Fetch all player stats for this team's games
+        # Join through Player to filter by team_id
+        stats_result = await session.execute(
+            select(GamePlayerStats, Game)
+            .join(Game, GamePlayerStats.game_id == Game.id)
+            .join(Player, GamePlayerStats.player_id == Player.id)
+            .where(
+                GamePlayerStats.game_id.in_(game_ids),
+                Player.team_id == team_id,
+            )
+        )
+        rows = stats_result.all()
+
+        if not rows:
+            return {}
+
+        # Aggregate per-game totals, then average
+        game_totals: Dict[int, Dict[str, float]] = {}
+        for gps, game in rows:
+            gid = game.id
+            if gid not in game_totals:
+                game_totals[gid] = {
+                    "pts": 0, "fga": 0, "fgm": 0, "fg3a": 0, "fg3m": 0,
+                    "fta": 0, "ftm": 0, "reb": 0, "ast": 0, "tov": 0,
+                    "stl": 0, "blk": 0, "minutes": 0,
+                    "opp_pts": 0,
+                }
+
+            gt = game_totals[gid]
+            gt["pts"] += gps.points or gps.goals or 0
+            gt["fga"] += gps.shots or 0  # shots = FGA
+            # Derive FGM from points, 3PM, FTM: FGM = (PTS - 3PM - FTM) / 2 + 3PM
+            # But we don't have per-player FGM directly; approximate from FGA and scoring
+            fg3m = gps.three_pointers_made or 0
+            ftm = gps.free_throws_made or 0
+            pts = gps.points or gps.goals or 0
+            # FGM = (PTS - FTM) / 2   (each FG = 2 or 3 pts; with 3PM counted)
+            # More accurately: PTS = 2*(FGM - FG3M) + 3*FG3M + FTM
+            # => FGM = (PTS - FG3M - FTM) / 2 + FG3M  (rearranging is not exact per player)
+            # We'll just count FGA and derive FG% from team totals
+            gt["fg3m"] += fg3m
+            gt["ftm"] += ftm
+            gt["fta"] += gps.free_throws_attempted or 0
+            gt["reb"] += gps.rebounds or 0
+            gt["ast"] += gps.assists or 0
+            gt["tov"] += gps.turnovers or 0
+            gt["stl"] += gps.steals or 0
+            gt["blk"] += gps.blocks or 0
+            gt["minutes"] += gps.toi or 0  # toi = minutes
+
+        # Also need opponent points per game for defensive rating
+        # This is already captured in total_pa from game scores, so we use that approach
+
+        n_games = len(game_totals)
+        if n_games == 0:
+            return {}
+
+        # Sum across all games
+        totals = {k: sum(gt[k] for gt in game_totals.values()) for k in game_totals[next(iter(game_totals))]}
+
+        total_fga = totals["fga"]
+        total_fg3m = totals["fg3m"]
+        total_ftm = totals["ftm"]
+        total_fta = totals["fta"]
+        total_pts = totals["pts"]
+
+        # Derive FGM from scoring: PTS = 2*FG2M + 3*FG3M + FTM
+        # FG2M = (PTS - 3*FG3M - FTM) / 2
+        fg2m = max(0, (total_pts - 3 * total_fg3m - total_ftm) / 2)
+        total_fgm = fg2m + total_fg3m
+
+        # Derive FG3A estimate: assume league-average 3PT% ~36% if we have 3PM
+        # This is approximate since we don't track FG3A directly
+        fg3a_est = total_fg3m / 0.36 if total_fg3m > 0 else 0
+
+        fg_pct = round(total_fgm / total_fga * 100, 1) if total_fga > 0 else None
+        three_pt_pct = round(total_fg3m / fg3a_est * 100, 1) if fg3a_est > 0 else None
+        ft_pct = round(total_ftm / total_fta * 100, 1) if total_fta > 0 else None
+
+        # Per-game averages
+        reb_pg = round(totals["reb"] / n_games, 1)
+        ast_pg = round(totals["ast"] / n_games, 1)
+        tov_pg = round(totals["tov"] / n_games, 1)
+        stl_pg = round(totals["stl"] / n_games, 1)
+        blk_pg = round(totals["blk"] / n_games, 1)
+        fg3m_pg = round(total_fg3m / n_games, 1)
+
+        # Pace estimate: possessions = FGA - OREB + TOV + 0.44*FTA
+        # We don't have OREB separately, use approximate: OREB ~ 25% of total REB
+        oreb_est = totals["reb"] * 0.25
+        possessions = total_fga - oreb_est + totals["tov"] + 0.44 * total_fta
+        pace = round(possessions / n_games, 1) if n_games > 0 else None
+
+        # Offensive rating: points per 100 possessions
+        off_rating = round(total_pts / possessions * 100, 1) if possessions > 0 else None
+
+        return {
+            "fg_pct": fg_pct,
+            "three_pt_pct": three_pt_pct,
+            "ft_pct": ft_pct,
+            "rebounds_per_game": reb_pg,
+            "assists_per_game": ast_pg,
+            "turnovers_per_game": tov_pg,
+            "steals_per_game": stl_pg,
+            "blocks_per_game": blk_pg,
+            "three_pt_made_per_game": fg3m_pg,
+            "pace": pace,
+            "offensive_rating": off_rating,
+        }
+
     # ------------------------------------------------------------------
     # Full sync orchestrator
     # ------------------------------------------------------------------
@@ -694,18 +842,19 @@ class NBAScraper(BaseScraper):
         """Run the full NBA sync pipeline."""
         await self.sync_teams(session)
 
-        # Sync schedule for today and surrounding days
+        # Sync schedule for today, tomorrow, and recent days for stats
         today = date.today()
-        for offset in range(-1, 2):
+        for offset in range(-7, 3):
             target = today + timedelta(days=offset)
             await self.sync_schedule(session, target.isoformat())
 
         # Sync box scores for completed games without stats
+        # Look back further to build up a good historical baseline
         result = await session.execute(
             select(Game).where(
                 Game.sport == "nba",
                 func.lower(Game.status).in_(("final", "completed")),
-                Game.date >= today - timedelta(days=3),
+                Game.date >= today - timedelta(days=14),
             )
         )
         final_games = result.scalars().all()

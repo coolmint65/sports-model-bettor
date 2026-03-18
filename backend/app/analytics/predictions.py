@@ -730,6 +730,21 @@ class PredictionManager:
             fs.update({
                 "home_goalie": None,
                 "away_goalie": None,
+                # NBA-specific feature summaries
+                "home_pace": features.get("home_season", {}).get("pace"),
+                "away_pace": features.get("away_season", {}).get("pace"),
+                "home_off_rating": features.get("home_season", {}).get("offensive_rating"),
+                "away_off_rating": features.get("away_season", {}).get("offensive_rating"),
+                "home_def_rating": features.get("home_season", {}).get("defensive_rating"),
+                "away_def_rating": features.get("away_season", {}).get("defensive_rating"),
+                "home_fg_pct": features.get("home_season", {}).get("fg_pct"),
+                "away_fg_pct": features.get("away_season", {}).get("fg_pct"),
+                "home_3pt_pct": features.get("home_season", {}).get("three_pt_pct"),
+                "away_3pt_pct": features.get("away_season", {}).get("three_pt_pct"),
+                "home_reb_pg": features.get("home_season", {}).get("rebounds_pg"),
+                "away_reb_pg": features.get("away_season", {}).get("rebounds_pg"),
+                "home_tov_pg": features.get("home_season", {}).get("turnovers_pg"),
+                "away_tov_pg": features.get("away_season", {}).get("turnovers_pg"),
             })
 
         return {

@@ -977,6 +977,17 @@ function StatsAndTrends({ game, homeAbbr, awayAbbr }) {
   const perfStats = isNBA ? [
     makeStat('Points/Game', 'goals_for_per_game'),
     makeStat('Points Against/Game', 'goals_against_per_game', false, false),
+    makeStat('FG%', 'fg_pct', true, true),
+    makeStat('3PT%', 'three_pt_pct', true, true),
+    makeStat('FT%', 'ft_pct', true, true),
+    makeStat('Rebounds/Game', 'rebounds_per_game'),
+    makeStat('Assists/Game', 'assists_per_game'),
+    makeStat('Turnovers/Game', 'turnovers_per_game', false, false),
+    makeStat('Steals/Game', 'steals_per_game'),
+    makeStat('Blocks/Game', 'blocks_per_game'),
+    makeStat('Off Rating', 'offensive_rating'),
+    makeStat('Def Rating', 'defensive_rating', false, false),
+    makeStat('Pace', 'pace'),
   ] : [
     makeStat('Goals For/Game', 'goals_for_per_game'),
     makeStat('Goals Against/Game', 'goals_against_per_game', false, false),

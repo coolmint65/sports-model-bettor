@@ -302,6 +302,21 @@ async def _migrate_add_columns() -> None:
         # Assigned referees
         ("game", "referee_1", "VARCHAR(100)"),
         ("game", "referee_2", "VARCHAR(100)"),
+        # NBA-specific team stats
+        ("team_stats", "fg_pct", "FLOAT"),
+        ("team_stats", "three_pt_pct", "FLOAT"),
+        ("team_stats", "ft_pct", "FLOAT"),
+        ("team_stats", "rebounds_per_game", "FLOAT"),
+        ("team_stats", "assists_per_game", "FLOAT"),
+        ("team_stats", "turnovers_per_game", "FLOAT"),
+        ("team_stats", "steals_per_game", "FLOAT"),
+        ("team_stats", "blocks_per_game", "FLOAT"),
+        ("team_stats", "three_pt_made_per_game", "FLOAT"),
+        ("team_stats", "opp_fg_pct", "FLOAT"),
+        ("team_stats", "opp_three_pt_pct", "FLOAT"),
+        ("team_stats", "pace", "FLOAT"),
+        ("team_stats", "offensive_rating", "FLOAT"),
+        ("team_stats", "defensive_rating", "FLOAT"),
     ]
 
     async with engine.begin() as conn:

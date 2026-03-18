@@ -40,8 +40,8 @@ class NBABettingModel:
     ) -> Tuple[float, float]:
         """Calculate expected points for home and away teams.
 
-        Combines recent form, season averages, and adjustments for
-        home court, rest, and injuries.
+        Combines recent form, season averages, pace, offensive/defensive
+        efficiency, and adjustments for home court, rest, and injuries.
 
         Returns:
             (home_expected_points, away_expected_points)
@@ -103,6 +103,71 @@ class NBABettingModel:
         # Expected points = offense * opponent_defensive_factor
         home_xp = home_off * home_def_factor
         away_xp = away_off * away_def_factor
+
+        # ── Pace adjustment ──
+        # If both teams have pace data, adjust total based on combined pace
+        # relative to league average. Fast teams push totals up; slow teams
+        # pull them down.
+        league_pace = _nba.league_avg_pace
+        home_pace = home_season.get("pace")
+        away_pace = away_season.get("pace")
+        if home_pace and away_pace and league_pace > 0:
+            matchup_pace = (home_pace + away_pace) / 2
+            pace_factor = matchup_pace / league_pace
+            home_xp *= pace_factor
+            away_xp *= pace_factor
+
+        # ── Efficiency adjustment ──
+        # Offensive/defensive rating (points per 100 possessions) provides
+        # a pace-independent quality signal.  If available, blend it in.
+        home_ortg = home_season.get("offensive_rating")
+        away_ortg = away_season.get("offensive_rating")
+        home_drtg = home_season.get("defensive_rating")
+        away_drtg = away_season.get("defensive_rating")
+
+        if home_ortg and away_drtg and league_pace > 0:
+            # Expected home pts from efficiency: (home_ortg vs away_defense)
+            # Scale to per-game by league pace estimate
+            eff_home_xp = ((home_ortg + (self.league_avg * 100 / league_pace - away_drtg)) / 2) * league_pace / 100
+            home_xp = 0.7 * home_xp + 0.3 * eff_home_xp
+
+        if away_ortg and home_drtg and league_pace > 0:
+            eff_away_xp = ((away_ortg + (self.league_avg * 100 / league_pace - home_drtg)) / 2) * league_pace / 100
+            away_xp = 0.7 * away_xp + 0.3 * eff_away_xp
+
+        # ── Turnover differential ──
+        # Teams that commit fewer turnovers and force more create extra
+        # possessions. This provides a scoring edge.
+        home_tov = home_season.get("turnovers_pg")
+        away_tov = away_season.get("turnovers_pg")
+        home_stl = home_season.get("steals_pg")
+        away_stl = away_season.get("steals_pg")
+        if home_tov is not None and away_tov is not None and home_stl is not None and away_stl is not None:
+            # Net turnovers forced: steals - turnovers committed
+            home_net_tov = away_tov - home_tov + (home_stl - away_stl) * 0.5
+            away_net_tov = home_tov - away_tov + (away_stl - home_stl) * 0.5
+            # Each net turnover ~ 1 point of expected scoring edge
+            home_xp += home_net_tov * 0.5
+            away_xp += away_net_tov * 0.5
+
+        # ── Three-point shooting gap ──
+        # Teams with a big 3PT% advantage get a slight boost
+        home_3pct = home_season.get("three_pt_pct")
+        away_3pct = away_season.get("three_pt_pct")
+        if home_3pct is not None and away_3pct is not None:
+            three_pt_diff = (home_3pct - away_3pct)  # percentage points
+            # ~0.3 pts per percentage point difference in 3PT%
+            home_xp += three_pt_diff * 0.3
+            away_xp -= three_pt_diff * 0.3
+
+        # ── Rebounding advantage ──
+        home_reb = home_season.get("rebounds_pg")
+        away_reb = away_season.get("rebounds_pg")
+        if home_reb is not None and away_reb is not None:
+            reb_diff = home_reb - away_reb
+            # Each extra rebound ~ 0.15 points of expected scoring
+            home_xp += reb_diff * 0.15
+            away_xp -= reb_diff * 0.15
 
         # Home court advantage
         home_xp += self.home_court_adj
