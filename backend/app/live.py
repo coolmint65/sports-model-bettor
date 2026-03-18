@@ -738,10 +738,14 @@ async def _scheduler_loop():
                     last_alt_refresh = now
                     logger.info("Alt-line cache refreshed")
 
-            # Refresh game statuses when games are live so that games
-            # transitioning to "final" are caught promptly (every cycle)
+            # Refresh game statuses when games are live OR within the
+            # pregame window so that games transitioning from "scheduled"
+            # to "in_progress" (and then to "final") are caught promptly
             # instead of waiting up to 60 min for the next full sync.
-            if live_count > 0:
+            # Without this, NBA games stay stuck as "scheduled" because
+            # the status refresh was only triggered when live_count > 0,
+            # creating a chicken-and-egg problem.
+            if live_count > 0 or games_within_window:
                 await _refresh_live_game_statuses()
 
             # Sync player props:

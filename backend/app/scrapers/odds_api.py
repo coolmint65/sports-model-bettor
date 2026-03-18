@@ -372,11 +372,24 @@ class OddsScraper(BaseScraper):
         odds_list = await self.fetch_odds()
         matched: List[Dict[str, Any]] = []
 
+        logger.info(
+            "%s odds sync: fetched %d events from API",
+            self.sport.upper(), len(odds_list),
+        )
+
         for odds in odds_list:
             home_abbrev = odds.get("home_abbrev", "")
             away_abbrev = odds.get("away_abbrev", "")
+            raw_home = odds.get("home_team", "")
+            raw_away = odds.get("away_team", "")
 
             if not home_abbrev or not away_abbrev:
+                logger.warning(
+                    "%s odds: team resolution failed — "
+                    "home=%r->%r, away=%r->%r",
+                    self.sport.upper(),
+                    raw_home, home_abbrev, raw_away, away_abbrev,
+                )
                 continue
 
             # Parse commence_time to the LOCAL game date.
@@ -417,16 +430,23 @@ class OddsScraper(BaseScraper):
             away_team = away_result.scalar_one_or_none()
 
             if not home_team or not away_team:
-                logger.debug(
-                    "Could not find teams for odds: %s vs %s",
-                    home_abbrev,
-                    away_abbrev,
+                logger.warning(
+                    "%s odds: DB team lookup failed for %s vs %s "
+                    "(home_team=%s, away_team=%s, sport=%s)",
+                    self.sport.upper(),
+                    home_abbrev, away_abbrev,
+                    "found" if home_team else "MISSING",
+                    "found" if away_team else "MISSING",
+                    self.sport,
                 )
                 continue
 
             # Find the matching game.  Try exact date first, then
             # adjacent days as a safety net for DST edge cases.
+            # Also try swapped home/away — the Odds API and schedule
+            # API can disagree on which team is home vs away.
             game = None
+            swapped = False
             for candidate_date in (game_date, game_date - timedelta(days=1), game_date + timedelta(days=1)):
                 game_result = await db.execute(
                     select(Game).where(
@@ -438,22 +458,68 @@ class OddsScraper(BaseScraper):
                 game = game_result.scalar_one_or_none()
                 if game is not None:
                     break
+                # Try swapped home/away
+                game_result = await db.execute(
+                    select(Game).where(
+                        Game.home_team_id == away_team.id,
+                        Game.away_team_id == home_team.id,
+                        Game.date == candidate_date,
+                    )
+                )
+                game = game_result.scalar_one_or_none()
+                if game is not None:
+                    swapped = True
+                    logger.info(
+                        "%s odds: matched %s@%s with swapped home/away on %s",
+                        self.sport.upper(), away_abbrev, home_abbrev,
+                        candidate_date,
+                    )
+                    break
 
             if game is None:
-                logger.debug(
-                    "No game found for %s vs %s on %s (±1 day)",
-                    home_abbrev,
-                    away_abbrev,
+                logger.warning(
+                    "%s odds: no game found for %s (id=%d) vs %s (id=%d) "
+                    "on %s (±1 day)",
+                    self.sport.upper(),
+                    home_abbrev, home_team.id,
+                    away_abbrev, away_team.id,
                     game_date,
                 )
                 continue
 
-            # Persist odds to the Game record
+            # Persist odds to the Game record.
+            # When home/away is swapped between the Odds API and our DB,
+            # flip the moneyline and spread assignments so they match
+            # the DB's home/away orientation.
             best_odds = odds.get("best_odds", {})
-            if best_odds.get("home_moneyline") is not None:
-                game.home_moneyline = best_odds["home_moneyline"]
-            if best_odds.get("away_moneyline") is not None:
-                game.away_moneyline = best_odds["away_moneyline"]
+            if swapped:
+                # Odds API's "home" is our DB's "away" and vice versa
+                if best_odds.get("home_moneyline") is not None:
+                    game.away_moneyline = best_odds["home_moneyline"]
+                if best_odds.get("away_moneyline") is not None:
+                    game.home_moneyline = best_odds["away_moneyline"]
+                if best_odds.get("home_spread") is not None:
+                    game.away_spread_line = best_odds["home_spread"]
+                if best_odds.get("away_spread") is not None:
+                    game.home_spread_line = best_odds["away_spread"]
+                if best_odds.get("home_spread_price") is not None:
+                    game.away_spread_price = best_odds["home_spread_price"]
+                if best_odds.get("away_spread_price") is not None:
+                    game.home_spread_price = best_odds["away_spread_price"]
+            else:
+                if best_odds.get("home_moneyline") is not None:
+                    game.home_moneyline = best_odds["home_moneyline"]
+                if best_odds.get("away_moneyline") is not None:
+                    game.away_moneyline = best_odds["away_moneyline"]
+                if best_odds.get("home_spread") is not None:
+                    game.home_spread_line = best_odds["home_spread"]
+                if best_odds.get("away_spread") is not None:
+                    game.away_spread_line = best_odds["away_spread"]
+                if best_odds.get("home_spread_price") is not None:
+                    game.home_spread_price = best_odds["home_spread_price"]
+                if best_odds.get("away_spread_price") is not None:
+                    game.away_spread_price = best_odds["away_spread_price"]
+            # Totals and O/U are not directional — same regardless of swap
             if best_odds.get("over_under") is not None:
                 ou_raw = float(best_odds["over_under"])
                 # NHL: normalize whole-number lines to .5 (e.g., 7 → 6.5).
@@ -462,14 +528,6 @@ class OddsScraper(BaseScraper):
                 if self.sport == "nhl" and ou_raw % 1 != 0.5:
                     ou_raw = float(int(ou_raw) - 1) + 0.5
                 game.over_under_line = ou_raw
-            if best_odds.get("home_spread") is not None:
-                game.home_spread_line = best_odds["home_spread"]
-            if best_odds.get("away_spread") is not None:
-                game.away_spread_line = best_odds["away_spread"]
-            if best_odds.get("home_spread_price") is not None:
-                game.home_spread_price = best_odds["home_spread_price"]
-            if best_odds.get("away_spread_price") is not None:
-                game.away_spread_price = best_odds["away_spread_price"]
             if best_odds.get("over_price") is not None:
                 game.over_price = best_odds["over_price"]
             if best_odds.get("under_price") is not None:

@@ -311,17 +311,63 @@ class NBAScraper(BaseScraper):
             except (ValueError, TypeError):
                 game_date = date.today()
 
-            # Map status
+            # Map status.
+            # BallDontLie API status values:
+            #   - "Final" → game is over
+            #   - "1st Qtr", "2nd Qtr", "3rd Qtr", "4th Qtr",
+            #     "Halftime", "OT", "In Progress" → game is live
+            #   - ISO datetime string or empty → game hasn't started
             api_status = g.get("status", "")
-            if api_status in ("Final", "final"):
+            status_lower = api_status.lower().strip()
+            if status_lower in ("final",):
                 status = "final"
-            elif api_status in ("In Progress", "in_progress"):
+            elif status_lower in (
+                "in progress", "in_progress",
+                "1st qtr", "2nd qtr", "3rd qtr", "4th qtr",
+                "halftime", "ot", "overtime",
+                "1st quarter", "2nd quarter", "3rd quarter", "4th quarter",
+            ):
                 status = "in_progress"
             else:
                 status = "scheduled"
 
             home_score = _safe_int(g.get("home_team_score"))
             away_score = _safe_int(g.get("visitor_team_score"))
+
+            # Parse period/quarter from status for live games
+            period = None
+            period_type = None
+            in_intermission = False
+            clock = None
+            if status == "in_progress":
+                if "1st" in status_lower:
+                    period = 1
+                elif "2nd" in status_lower:
+                    period = 2
+                elif "3rd" in status_lower:
+                    period = 3
+                elif "4th" in status_lower:
+                    period = 4
+                elif "ot" in status_lower or "overtime" in status_lower:
+                    period = 5
+                    period_type = "OT"
+                if "halftime" in status_lower:
+                    period = 2
+                    in_intermission = True
+
+                # Also try the "period" field from the API if available
+                api_period = g.get("period")
+                if api_period and isinstance(api_period, int) and api_period > 0:
+                    period = api_period
+                    if api_period > 4:
+                        period_type = "OT"
+
+                # Try the "time" field for clock info
+                api_time = g.get("time")
+                if api_time and isinstance(api_time, str) and ":" in api_time:
+                    clock = api_time  # e.g., "5:30"
+                else:
+                    clock = None
 
             # Determine season
             season = g.get("season", self.default_season)
@@ -350,6 +396,15 @@ class NBAScraper(BaseScraper):
                 existing.away_score = away_score
                 if start_time:
                     existing.start_time = start_time
+                # Update live game info
+                if status == "in_progress":
+                    if period is not None:
+                        existing.period = period
+                    if period_type is not None:
+                        existing.period_type = period_type
+                    existing.in_intermission = in_intermission
+                    if clock is not None:
+                        existing.clock = clock
                 # Determine winner
                 if status == "final" and home_score is not None and away_score is not None:
                     if home_score > away_score:
