@@ -903,21 +903,15 @@ async def get_game_details(
     """
     game = await _get_game_or_404(game_id, session)
 
-    # Sync scores/clock from the appropriate API for live games
-    # Odds syncing is handled by the background scheduler (app.live)
+    # Sync scores/clock from the appropriate API for live games.
+    # Uses the throttled helper (30s cooldown) shared with the schedule
+    # endpoints so that rapid page views don't hammer the NHL/NBA API.
     sport = (game.sport or "nhl").lower()
     if game.status and game.status.lower() in ("in_progress", "live"):
         try:
-            if sport == "nba":
-                from app.scrapers.nba_api import NBAScraper
+            from app.api.schedule import _try_sync_schedule
 
-                scraper = NBAScraper()
-                await scraper.sync_schedule(session, str(game.date))
-            else:
-                from app.scrapers.nhl_api import NHLScraper
-
-                scraper = NHLScraper()
-                await scraper.sync_schedule(session, str(game.date))
+            await _try_sync_schedule(session, target_date=game.date, sport=sport)
             await session.flush()
             game = await _get_game_or_404(game_id, session)
         except Exception as exc:
