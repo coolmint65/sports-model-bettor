@@ -154,6 +154,18 @@ async def init_db() -> None:
         await conn.execute(text("PRAGMA journal_mode=WAL"))
         await conn.run_sync(Base.metadata.create_all)
 
+        # HTTP response cache — used by scrapers to avoid redundant API calls.
+        # Created here (not lazily) to guarantee it exists before any scraper runs.
+        await conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS http_response_cache (
+                cache_key   TEXT PRIMARY KEY,
+                url         TEXT NOT NULL,
+                response    TEXT NOT NULL,
+                fetched_at  REAL NOT NULL,
+                ttl         REAL NOT NULL
+            )
+        """))
+
     # Add new columns to existing tables if they don't exist yet (SQLite)
     await _migrate_add_columns()
 

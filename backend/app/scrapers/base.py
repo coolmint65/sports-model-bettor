@@ -259,8 +259,9 @@ class BaseScraper(ABC):
                 if cached is not None:
                     logger.debug("Cache HIT: %s", full_url)
                     return cached
+                logger.debug("Cache MISS: %s", full_url)
             except Exception as exc:
-                logger.debug("Cache read error (non-fatal): %s", exc)
+                logger.warning("Cache read FAILED for %s: %s", full_url, exc)
 
         client = self._get_client()
         last_exception: Optional[Exception] = None
@@ -288,7 +289,7 @@ class BaseScraper(ABC):
                                 full_url, params, data, ttl,
                             )
                         except Exception as exc:
-                            logger.debug("Cache write error (non-fatal): %s", exc)
+                            logger.warning("Cache write FAILED for %s: %s", full_url, exc)
                     return data
 
                 if response.status_code == 429:
