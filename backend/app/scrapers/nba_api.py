@@ -78,7 +78,7 @@ class NBAScraper(BaseScraper):
     def __init__(
         self,
         base_url: str = "https://api.balldontlie.io/nba/v1",
-        rate_limit: float = 2.0,
+        rate_limit: float = 1.0,
         **kwargs,
     ):
         api_key = settings.balldontlie_api_key
@@ -175,9 +175,29 @@ class NBAScraper(BaseScraper):
     async def sync_players(self, session: AsyncSession) -> int:
         """Sync NBA players into the database (paginated).
 
-        Players rarely change, so this uses a 24-hour cache TTL to avoid
-        hitting the API on every sync cycle.
+        Only runs the full paginated fetch on the initial seed (when fewer
+        than 400 NBA players exist in the DB).  After that, new players are
+        discovered incrementally via box-score syncing, avoiding the repeated
+        bulk pagination that triggers API rate limits.
         """
+        # Skip bulk sync if we already have a healthy player roster.
+        # New players are picked up automatically from box-score data.
+        count_result = await session.execute(
+            select(func.count(Player.id)).where(Player.sport == "nba")
+        )
+        existing_count = count_result.scalar() or 0
+        if existing_count >= 400:
+            logger.info(
+                "NBA player roster already seeded (%d players), skipping bulk /players sync",
+                existing_count,
+            )
+            return 0
+
+        logger.info(
+            "NBA player roster has %d players — running initial bulk sync",
+            existing_count,
+        )
+
         synced = 0
         cursor = None
 
@@ -655,13 +675,40 @@ class NBAScraper(BaseScraper):
             if not player_id:
                 continue
 
-            # Find player in DB
+            # Find or create player from box-score data.
+            # This ensures new players are picked up incrementally
+            # without needing the bulk /players pagination endpoint.
             player_result = await session.execute(
                 select(Player).where(Player.external_id == f"nba_{player_id}")
             )
             player = player_result.scalar_one_or_none()
             if not player:
-                continue
+                first_name = player_data.get("first_name", "")
+                last_name = player_data.get("last_name", "")
+                full_name = f"{first_name} {last_name}".strip()
+                position = player_data.get("position", "")
+
+                # Resolve team from box-score player data
+                team_data = stat.get("team", {}) or player_data.get("team", {})
+                team_bdl_id = str(team_data.get("id", "")) if team_data else ""
+                team_db = None
+                if team_bdl_id:
+                    team_result = await session.execute(
+                        select(Team).where(Team.external_id == f"nba_{team_bdl_id}")
+                    )
+                    team_db = team_result.scalar_one_or_none()
+
+                player = Player(
+                    external_id=f"nba_{player_id}",
+                    name=full_name or f"Player {player_id}",
+                    team_id=team_db.id if team_db else None,
+                    position=position,
+                    sport="nba",
+                    active=True,
+                )
+                session.add(player)
+                await session.flush()
+                logger.debug("Auto-created NBA player from box score: %s (%s)", player.name, player.external_id)
 
             minutes_str = stat.get("min", "")
             minutes = None
