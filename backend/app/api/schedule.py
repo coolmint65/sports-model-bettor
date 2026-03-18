@@ -1038,7 +1038,8 @@ async def _try_sync_schedule(
 
             scraper = NBAScraper()
             try:
-                games = await scraper.sync_schedule(session)
+                date_str = target_date.isoformat() if target_date else None
+                games = await scraper.sync_schedule(session, target_date=date_str)
                 return len(games) if isinstance(games, list) else 0
             finally:
                 await scraper.close()
