@@ -115,9 +115,16 @@ function PropReasoning({ reasoning, pickSide, market }) {
   );
 }
 
-function PlayerHeadshot({ playerExtId, playerName }) {
-  if (!playerExtId) return null;
-  const headshotUrl = `https://assets.nhle.com/headshots/current/168x168/${playerExtId}.png`;
+function getNhlSeason() {
+  const now = new Date();
+  const year = now.getMonth() >= 9 ? now.getFullYear() : now.getFullYear() - 1;
+  return `${year}${year + 1}`;
+}
+
+function PlayerHeadshot({ playerExtId, playerName, teamAbbrev }) {
+  if (!playerExtId || !teamAbbrev) return null;
+  const season = getNhlSeason();
+  const headshotUrl = `https://assets.nhle.com/mugs/nhl/${season}/${teamAbbrev}/${playerExtId}.png`;
   return (
     <img
       className="prop-pick-headshot"
@@ -145,7 +152,7 @@ function PropPickCard({ pick, rank }) {
 
   return (
     <div className={`prop-pick-card ${outcomeClass}`}>
-      <PlayerHeadshot playerExtId={pick.player_ext_id} playerName={pick.player_name} />
+      <PlayerHeadshot playerExtId={pick.player_ext_id} playerName={pick.player_name} teamAbbrev={pick.team_abbrev} />
       <div className="prop-pick-content">
         <div className="prop-pick-header">
           <div className="prop-pick-player">
