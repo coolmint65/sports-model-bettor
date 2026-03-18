@@ -565,7 +565,7 @@ async def _grade_snapshots(
                 )
 
 
-def _snapshot_to_dict(snap, include_outcome: bool = False, player_team_map: dict = None) -> dict:
+def _snapshot_to_dict(snap, include_outcome: bool = False, player_team_map: dict = None, player_number_map: dict = None) -> dict:
     """Convert a PropPickSnapshot to API response dict."""
     d = {
         "player_name": snap.player_name,
@@ -582,6 +582,7 @@ def _snapshot_to_dict(snap, include_outcome: bool = False, player_team_map: dict
         "games_sampled": snap.games_sampled,
         "reasoning": snap.reasoning,
         "team_abbrev": (player_team_map or {}).get(snap.player_id) if snap.player_id else None,
+        "jersey_number": (player_number_map or {}).get(snap.player_id) if snap.player_id else None,
     }
     if include_outcome:
         d["outcome"] = snap.outcome
@@ -642,6 +643,7 @@ async def get_todays_prop_picks(
         if s.player_id
     }
     player_team_map: Dict[int, str] = {}
+    player_number_map: Dict[int, int | None] = {}
     if all_player_ids:
         player_result = await session.execute(
             select(Player)
@@ -651,6 +653,7 @@ async def get_todays_prop_picks(
         for p in player_result.scalars():
             if p.team:
                 player_team_map[p.id] = p.team.abbreviation
+            player_number_map[p.id] = p.jersey_number
 
     game_list = []
     total_picks = 0
@@ -666,7 +669,7 @@ async def get_todays_prop_picks(
             "start_time": game.start_time.isoformat() if game.start_time else None,
             "status": game.status,
             "picks": [
-                _snapshot_to_dict(s, include_outcome=True, player_team_map=player_team_map)
+                _snapshot_to_dict(s, include_outcome=True, player_team_map=player_team_map, player_number_map=player_number_map)
                 for s in game_snaps
             ],
             "pick_count": len(game_snaps),

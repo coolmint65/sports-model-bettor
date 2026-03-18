@@ -142,6 +142,7 @@ function PropPickCard({ pick, rank }) {
           )}
           <Icon size={14} style={{ color: config.color }} />
           <span className="prop-pick-name">{pick.player_name}</span>
+          {pick.jersey_number != null && <span className="prop-pick-number">#{pick.jersey_number}</span>}
           {pick.team_abbrev && <span className="prop-pick-team">{pick.team_abbrev}</span>}
         </div>
         <div className="prop-pick-edge" style={{ color: edgeVal >= 0 ? '#00ff88' : 'var(--accent-red, #ff5252)' }}>

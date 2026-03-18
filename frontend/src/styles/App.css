@@ -3526,6 +3526,13 @@ a:hover {
   color: var(--text-primary);
 }
 
+.prop-pick-number {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
 .prop-pick-team {
   font-size: 0.68rem;
   font-weight: 700;
