@@ -3498,14 +3498,14 @@ a:hover {
   background: var(--surface-primary, #141829);
   border-left: 3px solid var(--accent-green, #00ff88);
   display: flex;
-  align-items: flex-start;
+  align-items: stretch;
   gap: 12px;
 }
 
 .prop-pick-headshot {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
+  width: 60px;
+  align-self: stretch;
+  border-radius: 8px;
   object-fit: cover;
   flex-shrink: 0;
   background: rgba(160, 160, 184, 0.1);
