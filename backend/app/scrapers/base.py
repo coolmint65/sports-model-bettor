@@ -38,6 +38,69 @@ class APIResponseError(ScraperError):
         super().__init__(message)
 
 
+class _SharedRateLimiter:
+    """Per-host sliding-window rate limiter shared across scraper instances.
+
+    Multiple scraper instances hitting the same base_url (e.g. three
+    NBAScraper() objects) must share a single request window — otherwise
+    each starts with a fresh counter and collectively exceeds the API limit.
+    """
+
+    _instances: Dict[str, "_SharedRateLimiter"] = {}
+
+    def __init__(self, rpm_limit: int, min_delay: float):
+        self.rpm_limit = rpm_limit
+        self.min_delay = min_delay
+        self._lock = asyncio.Lock()
+        self._timestamps: collections.deque = collections.deque()
+
+    @classmethod
+    def get(cls, base_url: str, rpm_limit: int, min_delay: float) -> "_SharedRateLimiter":
+        """Return (or create) the singleton limiter for *base_url*."""
+        if base_url not in cls._instances:
+            cls._instances[base_url] = cls(rpm_limit, min_delay)
+        limiter = cls._instances[base_url]
+        # Update limits if a later instance requests tighter values
+        limiter.rpm_limit = min(limiter.rpm_limit, rpm_limit)
+        limiter.min_delay = max(limiter.min_delay, min_delay)
+        return limiter
+
+    async def wait(self) -> None:
+        """Block until both the min-delay and RPM budget allow a request."""
+        async with self._lock:
+            now = time.monotonic()
+
+            # --- Per-request minimum delay ---
+            if self._timestamps:
+                elapsed = now - self._timestamps[-1]
+                if elapsed < self.min_delay:
+                    wait_time = self.min_delay - elapsed
+                    logger.debug("Rate limit: waiting %.2fs (min delay)", wait_time)
+                    await asyncio.sleep(wait_time)
+                    now = time.monotonic()
+
+            # --- Sliding window: prune entries older than 60s ---
+            window = 60.0
+            while self._timestamps and (now - self._timestamps[0]) > window:
+                self._timestamps.popleft()
+
+            # --- If at the RPM ceiling, wait until oldest entry expires ---
+            if len(self._timestamps) >= self.rpm_limit:
+                wait_until = self._timestamps[0] + window
+                wait_time = wait_until - now
+                if wait_time > 0:
+                    logger.info(
+                        "Rate limit: %d/%d requests in last 60s, waiting %.1fs",
+                        len(self._timestamps), self.rpm_limit, wait_time,
+                    )
+                    await asyncio.sleep(wait_time)
+                    now = time.monotonic()
+                    while self._timestamps and (now - self._timestamps[0]) > window:
+                        self._timestamps.popleft()
+
+            self._timestamps.append(now)
+
+
 class BaseScraper(ABC):
     """
     Abstract base class for all data scrapers.
@@ -45,7 +108,7 @@ class BaseScraper(ABC):
     Provides:
     - Async HTTP client (httpx) with connection pooling
     - Automatic retries with exponential backoff
-    - Rate limiting to respect API constraints
+    - Rate limiting to respect API constraints (shared per host)
     - Consistent error handling and logging
     - Graceful resource cleanup
 
@@ -77,16 +140,16 @@ class BaseScraper(ABC):
         self.max_retries = max_retries
         self.retry_backoff = retry_backoff
         self.rate_limit = rate_limit
-        self._rate_lock = asyncio.Lock()
 
-        # Sliding window rate limiter: tracks request timestamps over
-        # the last 60 seconds.  If requests_per_minute is set, it takes
-        # precedence; otherwise we derive it from the per-request delay.
+        # Derive RPM from per-request delay if not explicitly set
         if requests_per_minute > 0:
-            self._rpm_limit = requests_per_minute
+            rpm = requests_per_minute
         else:
-            self._rpm_limit = max(1, int(60.0 / rate_limit))
-        self._request_timestamps: collections.deque = collections.deque()
+            rpm = max(1, int(60.0 / rate_limit))
+
+        # Shared per-host — all scraper instances hitting the same
+        # base_url coordinate through a single rate limiter.
+        self._limiter = _SharedRateLimiter.get(self.base_url, rpm, rate_limit)
 
         # Build default headers
         self._headers = {
@@ -142,46 +205,8 @@ class BaseScraper(ABC):
     # ------------------------------------------------------------------
 
     async def _wait_for_rate_limit(self) -> None:
-        """
-        Sliding-window rate limiter that enforces both:
-        1. A per-request minimum delay (``self.rate_limit`` seconds).
-        2. A requests-per-minute ceiling (``self._rpm_limit``).
-
-        Uses an async lock so concurrent callers queue up properly.
-        """
-        async with self._rate_lock:
-            now = time.monotonic()
-
-            # --- Per-request minimum delay ---
-            if self._request_timestamps:
-                elapsed = now - self._request_timestamps[-1]
-                if elapsed < self.rate_limit:
-                    wait_time = self.rate_limit - elapsed
-                    logger.debug("Rate limit: waiting %.2fs (min delay)", wait_time)
-                    await asyncio.sleep(wait_time)
-                    now = time.monotonic()
-
-            # --- Sliding window: prune entries older than 60s ---
-            window = 60.0
-            while self._request_timestamps and (now - self._request_timestamps[0]) > window:
-                self._request_timestamps.popleft()
-
-            # --- If at the RPM ceiling, wait until the oldest entry expires ---
-            if len(self._request_timestamps) >= self._rpm_limit:
-                wait_until = self._request_timestamps[0] + window
-                wait_time = wait_until - now
-                if wait_time > 0:
-                    logger.info(
-                        "Rate limit: %d/%d requests in last 60s, waiting %.1fs",
-                        len(self._request_timestamps), self._rpm_limit, wait_time,
-                    )
-                    await asyncio.sleep(wait_time)
-                    now = time.monotonic()
-                    # Re-prune after sleeping
-                    while self._request_timestamps and (now - self._request_timestamps[0]) > window:
-                        self._request_timestamps.popleft()
-
-            self._request_timestamps.append(now)
+        """Delegate to the shared per-host rate limiter."""
+        await self._limiter.wait()
 
     # ------------------------------------------------------------------
     # Core HTTP methods
