@@ -956,6 +956,25 @@ class FeatureEngine:
         stats = result.scalars().first()
 
         if not stats or stats.games_played == 0:
+            # Check if this is an NBA team so we return basketball-level defaults
+            team_result = await db.execute(
+                select(Team.sport).where(Team.id == team_id)
+            )
+            sport = (team_result.scalar() or "nhl").lower()
+
+            if sport == "nba":
+                _nba_cfg = settings.nba_model
+                return {
+                    "goals_for_pg": _nba_cfg.league_avg_points,
+                    "goals_against_pg": _nba_cfg.league_avg_points,
+                    "pp_pct": 0.0,
+                    "pk_pct": 0.0,
+                    "shots_for_pg": 0.0,
+                    "shots_against_pg": 0.0,
+                    "faceoff_pct": 0.0,
+                    "win_pct": 0.5,
+                }
+
             return {
                 "goals_for_pg": 3.0,
                 "goals_against_pg": 3.0,

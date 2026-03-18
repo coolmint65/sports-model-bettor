@@ -49,7 +49,7 @@ export function isLiveStatus(status) {
  * Format a raw bet_type string into a human-readable label.
  * e.g., "period_total" → "Period Total", "ml" → "Moneyline"
  */
-const BET_TYPE_LABELS = {
+const NHL_BET_TYPE_LABELS = {
   ml: 'Moneyline',
   total: 'Total Goals',
   spread: 'Puck Line',
@@ -62,10 +62,22 @@ const BET_TYPE_LABELS = {
   regulation_winner: 'Reg. Winner',
 };
 
-export function formatBetType(betType) {
+const NBA_BET_TYPE_LABELS = {
+  ml: 'Moneyline',
+  total: 'Total Points',
+  spread: 'Point Spread',
+  period_total: '1st Half Total',
+  period_winner: '1st Half Winner',
+  period_spread: '1st Half Spread',
+  overtime: 'Overtime',
+};
+
+export function formatBetType(betType, sport) {
   if (!betType) return 'Prediction';
   const lower = betType.toLowerCase();
-  if (BET_TYPE_LABELS[lower]) return BET_TYPE_LABELS[lower];
+  const sportLower = (sport || 'nhl').toLowerCase();
+  const labels = sportLower === 'nba' ? NBA_BET_TYPE_LABELS : NHL_BET_TYPE_LABELS;
+  if (labels[lower]) return labels[lower];
   // Fallback: replace underscores with spaces and title-case
   return lower
     .split('_')

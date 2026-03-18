@@ -90,7 +90,7 @@ function getOutcomeIcon(outcome) {
   return <AlertCircle size={16} className="outcome-push" />;
 }
 
-function PredictionCard({ prediction, showGame = false, compact = false, isFallback = false, homeAbbr, awayAbbr }) {
+function PredictionCard({ prediction, showGame = false, compact = false, isFallback = false, homeAbbr, awayAbbr, sport }) {
   // Prefer bet_confidence (signal-based) over confidence (win probability)
   const confidence = confidencePct(prediction.bet_confidence ?? prediction.confidence);
   const edge = confidencePct(prediction.edge);
@@ -98,7 +98,7 @@ function PredictionCard({ prediction, showGame = false, compact = false, isFallb
   const confLabel = isFallback ? 'Heavy Juice' : getConfidenceLabel(confidence);
   const isBestBet = prediction.is_best_bet || prediction.best_bet || false;
   const outcome = prediction.outcome || prediction.result || null;
-  const betType = formatBetType(prediction.bet_type || prediction.type);
+  const betType = formatBetType(prediction.bet_type || prediction.type, sport);
   // Use provided abbreviations, or derive from prediction's team objects
   const hAbbr = homeAbbr || teamAbbrev(prediction.home_team, null);
   const aAbbr = awayAbbr || teamAbbrev(prediction.away_team, null);

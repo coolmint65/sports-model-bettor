@@ -308,7 +308,7 @@ function GameCard({ game, section, medal }) {
       const isOver = val.includes('over');
       return `${isOver ? 'Over' : 'Under'} ${ouLine || ''}`;
     }
-    return formatBetType(bt);
+    return formatBetType(bt, sportKey);
   };
 
   return (
@@ -390,7 +390,7 @@ function GameCard({ game, section, medal }) {
           <span className="dc-pick-bar-text">
             <strong>
               {pickIsHome ? homeAbbr : pickIsAway ? awayAbbr : ''}{' '}
-              {pickBetType === 'ml' ? 'ML' : pickBetType === 'spread' ? 'Spread' : pickBetType === 'total' ? (pickIsOver ? 'Over' : 'Under') + ' ' + (ouLine || '') : formatBetType(pickBetType) + (topPick?.prediction_value ? ' ' + formatPredictionValue(topPick.prediction_value, homeAbbr, awayAbbr, pickBetType) : '')}
+              {pickBetType === 'ml' ? 'ML' : pickBetType === 'spread' ? 'Spread' : pickBetType === 'total' ? (pickIsOver ? 'Over' : 'Under') + ' ' + (ouLine || '') : formatBetType(pickBetType, sportKey) + (topPick?.prediction_value ? ' ' + formatPredictionValue(topPick.prediction_value, homeAbbr, awayAbbr, pickBetType) : '')}
             </strong>
           </span>
           {confidence != null && (
@@ -413,7 +413,7 @@ function GameCard({ game, section, medal }) {
             </div>
           )}
           <div className={`dc-odds-pill ${pickBetType === 'spread' ? 'dc-odds-pill-active' : ''}`}>
-            <span className="dc-odds-label">PL</span>
+            <span className="dc-odds-label">{sportKey === 'nba' ? 'PS' : 'PL'}</span>
             <span className="dc-odds-val">
               {spreadLine != null ? (
                 <>

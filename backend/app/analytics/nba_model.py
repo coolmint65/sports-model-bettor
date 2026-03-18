@@ -54,11 +54,31 @@ class NBABettingModel:
         home_papg = home_season.get("goals_against_pg", self.league_avg)
         away_papg = away_season.get("goals_against_pg", self.league_avg)
 
+        # Guard against hockey-level defaults leaking in when no NBA
+        # stats exist.  If season avg is far below NBA range (< 50 ppg),
+        # it's clearly a hockey default — reset to league average.
+        if home_ppg < 50:
+            home_ppg = self.league_avg
+        if away_ppg < 50:
+            away_ppg = self.league_avg
+        if home_papg < 50:
+            home_papg = self.league_avg
+        if away_papg < 50:
+            away_papg = self.league_avg
+
         # Recent form (L5, L10)
         home_form_5 = features.get("home_form_5", {})
         home_form_10 = features.get("home_form_10", {})
         away_form_5 = features.get("away_form_5", {})
         away_form_10 = features.get("away_form_10", {})
+
+        # Use season PPG as default for form when games_found is 0
+        # (form returns hockey-level 3.0 defaults otherwise)
+        def _form_gf(form, default):
+            if form.get("games_found", 0) == 0:
+                return default
+            val = form.get("avg_goals_for", default)
+            return val if val and val >= 50 else default
 
         # Weighted offensive rating
         w5 = _nba.weight_form_5
@@ -66,13 +86,13 @@ class NBABettingModel:
         ws = _nba.weight_season
 
         home_off = (
-            w5 * home_form_5.get("avg_goals_for", home_ppg)
-            + w10 * home_form_10.get("avg_goals_for", home_ppg)
+            w5 * _form_gf(home_form_5, home_ppg)
+            + w10 * _form_gf(home_form_10, home_ppg)
             + ws * home_ppg
         )
         away_off = (
-            w5 * away_form_5.get("avg_goals_for", away_ppg)
-            + w10 * away_form_10.get("avg_goals_for", away_ppg)
+            w5 * _form_gf(away_form_5, away_ppg)
+            + w10 * _form_gf(away_form_10, away_ppg)
             + ws * away_ppg
         )
 

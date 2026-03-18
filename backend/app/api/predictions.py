@@ -996,6 +996,7 @@ async def regenerate_predictions():
     # Step 1: Sync starting goalies so predictions use the correct starters.
     # Full schedule sync is skipped (runs via scheduler), but starters must
     # be fresh so the model doesn't use the wrong goalie.
+    # Only applies to NHL games — NBA has no goalie concept.
     try:
         async with get_write_session_context() as session:
             stmt = select(Game).where(
@@ -1006,17 +1007,20 @@ async def regenerate_predictions():
             )
             result = await session.execute(stmt)
             upcoming_games = result.scalars().all()
+            # Filter to NHL-only games for goalie starter sync
+            nhl_games = [g for g in upcoming_games if (g.sport or "nhl").lower() != "nba"]
             logger.info(
-                "Regenerate starter sync: found %d upcoming games (statuses: %s)",
+                "Regenerate starter sync: found %d upcoming games (%d NHL) (statuses: %s)",
                 len(upcoming_games),
+                len(nhl_games),
                 [g.status for g in upcoming_games],
             )
-            if upcoming_games:
+            if nhl_games:
                 from app.api.schedule import _fetch_starters_for_games
-                starters_map = await _fetch_starters_for_games(upcoming_games, session)
+                starters_map = await _fetch_starters_for_games(nhl_games, session)
                 await session.flush()
                 # Log what was persisted
-                for g in upcoming_games:
+                for g in nhl_games:
                     logger.info(
                         "Regenerate: game %d starters after sync: "
                         "home=%r (%r), away=%r (%r)",
