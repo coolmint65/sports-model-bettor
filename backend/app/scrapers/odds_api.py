@@ -456,8 +456,10 @@ class OddsScraper(BaseScraper):
                 game.away_moneyline = best_odds["away_moneyline"]
             if best_odds.get("over_under") is not None:
                 ou_raw = float(best_odds["over_under"])
-                # Normalize whole-number lines to .5 (e.g., 7 → 6.5)
-                if ou_raw % 1 != 0.5:
+                # NHL: normalize whole-number lines to .5 (e.g., 7 → 6.5).
+                # NBA totals are much higher (200+) and should not be
+                # modified — the API already returns correct .5 lines.
+                if self.sport == "nhl" and ou_raw % 1 != 0.5:
                     ou_raw = float(int(ou_raw) - 1) + 0.5
                 game.over_under_line = ou_raw
             if best_odds.get("home_spread") is not None:

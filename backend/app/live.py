@@ -414,6 +414,21 @@ async def _regenerate_predictions():
                 bets = await pm.get_best_bets(session)
                 pred_count = len(bets) if bets else 0
 
+            # Backfill odds onto prematch predictions that were generated
+            # before odds were available.  This happens when the scheduler
+            # generates predictions early (e.g., NBA games synced before
+            # NBA odds arrive) — the prematch lock prevents re-generation,
+            # so we update the existing rows with fresh odds data instead.
+            try:
+                from app.api.predictions import _backfill_prediction_odds
+                backfilled = await _backfill_prediction_odds(session, today)
+                if backfilled:
+                    logger.info(
+                        "Scheduler: backfilled odds on %d predictions", backfilled
+                    )
+            except Exception as bf_exc:
+                logger.warning("Scheduler odds backfill failed: %s", bf_exc)
+
             logger.info("Predictions regenerated: %d bets", pred_count)
 
             # Notify clients that predictions were updated

@@ -279,66 +279,76 @@ class NBABettingModel:
 
         # --- Spread ---
         game_spread_line = getattr(game, "home_spread_line", None) if game else None
-        if game_spread_line is not None:
-            # Probability of home team covering the spread
-            adjusted_spread = spread + game_spread_line  # game_spread_line is negative for favorites
-            cover_prob = norm.cdf(adjusted_spread / combined_std)
+        if game_spread_line is None:
+            # No sportsbook line — use the model's predicted spread as the
+            # reference line so we still generate a spread prediction.
+            game_spread_line = -round(spread * 2) / 2  # round to nearest 0.5
 
-            # Apply shrinkage
-            cover_prob = cover_prob * (1 - _nba.calibration_shrinkage) + 0.5 * _nba.calibration_shrinkage
+        # Probability of home team covering the spread
+        adjusted_spread = spread + game_spread_line  # game_spread_line is negative for favorites
+        cover_prob = norm.cdf(adjusted_spread / combined_std)
 
-            if cover_prob >= 0.5:
-                spread_pick = f"{home_abbr}_{game_spread_line:+.1f}"
-                spread_conf = cover_prob
-                spread_odds = getattr(game, "home_spread_price", None) if game else None
-            else:
-                away_spread = getattr(game, "away_spread_line", None)
-                spread_pick = f"{away_abbr}_{away_spread:+.1f}" if away_spread else f"{away_abbr}"
-                spread_conf = 1.0 - cover_prob
-                spread_odds = getattr(game, "away_spread_price", None) if game else None
+        # Apply shrinkage
+        cover_prob = cover_prob * (1 - _nba.calibration_shrinkage) + 0.5 * _nba.calibration_shrinkage
 
-            spread_implied = american_odds_to_implied_prob(spread_odds) if spread_odds else None
+        if cover_prob >= 0.5:
+            spread_pick = f"{home_abbr}_{game_spread_line:+.1f}"
+            spread_conf = cover_prob
+            spread_odds = getattr(game, "home_spread_price", None) if game else None
+        else:
+            away_spread = getattr(game, "away_spread_line", None)
+            if away_spread is None:
+                away_spread = -game_spread_line
+            spread_pick = f"{away_abbr}_{away_spread:+.1f}"
+            spread_conf = 1.0 - cover_prob
+            spread_odds = getattr(game, "away_spread_price", None) if game else None
 
-            predictions.append({
-                "bet_type": "spread",
-                "prediction": spread_pick,
-                "confidence": round(spread_conf, 4),
-                "probability": round(spread_conf, 4),
-                "odds": spread_odds,
-                "implied_probability": round(spread_implied, 4) if spread_implied else None,
-                "reasoning": f"Model spread: {spread:+.1f} vs line {game_spread_line:+.1f}",
-            })
+        spread_implied = american_odds_to_implied_prob(spread_odds) if spread_odds else None
+
+        predictions.append({
+            "bet_type": "spread",
+            "prediction": spread_pick,
+            "confidence": round(spread_conf, 4),
+            "probability": round(spread_conf, 4),
+            "odds": spread_odds,
+            "implied_probability": round(spread_implied, 4) if spread_implied else None,
+            "reasoning": f"Model spread: {spread:+.1f} vs line {game_spread_line:+.1f}",
+        })
 
         # --- Total ---
         ou_line = getattr(game, "over_under_line", None) if game else None
-        if ou_line is not None:
-            over_prob = 1.0 - norm.cdf((ou_line - total_xp) / total_std)
-            under_prob = 1.0 - over_prob
+        if ou_line is None:
+            # No sportsbook line — use model's expected total rounded to
+            # nearest 0.5 so we still generate a total prediction.
+            ou_line = round(total_xp * 2) / 2
 
-            # Apply shrinkage
-            over_prob = over_prob * (1 - _nba.calibration_shrinkage) + 0.5 * _nba.calibration_shrinkage
-            under_prob = 1.0 - over_prob
+        over_prob = 1.0 - norm.cdf((ou_line - total_xp) / total_std)
+        under_prob = 1.0 - over_prob
 
-            if over_prob >= under_prob:
-                total_pick = f"over_{ou_line}"
-                total_conf = over_prob
-                total_odds = getattr(game, "over_price", None) if game else None
-            else:
-                total_pick = f"under_{ou_line}"
-                total_conf = under_prob
-                total_odds = getattr(game, "under_price", None) if game else None
+        # Apply shrinkage
+        over_prob = over_prob * (1 - _nba.calibration_shrinkage) + 0.5 * _nba.calibration_shrinkage
+        under_prob = 1.0 - over_prob
 
-            total_implied = american_odds_to_implied_prob(total_odds) if total_odds else None
+        if over_prob >= under_prob:
+            total_pick = f"over_{ou_line}"
+            total_conf = over_prob
+            total_odds = getattr(game, "over_price", None) if game else None
+        else:
+            total_pick = f"under_{ou_line}"
+            total_conf = under_prob
+            total_odds = getattr(game, "under_price", None) if game else None
 
-            predictions.append({
-                "bet_type": "total",
-                "prediction": total_pick,
-                "confidence": round(total_conf, 4),
-                "probability": round(total_conf, 4),
-                "odds": total_odds,
-                "implied_probability": round(total_implied, 4) if total_implied else None,
-                "reasoning": f"Model total: {total_xp:.1f} vs line {ou_line:.1f}",
-            })
+        total_implied = american_odds_to_implied_prob(total_odds) if total_odds else None
+
+        predictions.append({
+            "bet_type": "total",
+            "prediction": total_pick,
+            "confidence": round(total_conf, 4),
+            "probability": round(total_conf, 4),
+            "odds": total_odds,
+            "implied_probability": round(total_implied, 4) if total_implied else None,
+            "reasoning": f"Model total: {total_xp:.1f} vs line {ou_line:.1f}",
+        })
 
         # Sort by confidence descending
         predictions.sort(key=lambda p: p.get("confidence", 0), reverse=True)

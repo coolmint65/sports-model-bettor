@@ -1060,6 +1060,7 @@ async def regenerate_predictions():
     steps.append(f"cleared {deleted} predictions")
 
     # Step 3: Sync fresh odds (slow HTTP call — own session).
+    # NHL odds via MultiSourceOddsScraper, NBA odds via OddsScraper.
     odds_matched = 0
     try:
         async with get_write_session_context() as write_session:
@@ -1068,11 +1069,25 @@ async def regenerate_predictions():
             async with MultiSourceOddsScraper() as odds_scraper:
                 matched = await odds_scraper.sync_odds(write_session)
                 odds_matched = len(matched) if matched else 0
-                logger.info("Regenerate: odds sync matched %d games", odds_matched)
-        steps.append(f"odds synced ({odds_matched} games)")
+                logger.info("Regenerate: NHL odds sync matched %d games", odds_matched)
+        steps.append(f"NHL odds synced ({odds_matched} games)")
     except Exception as exc:
-        logger.warning("Regenerate: odds sync failed: %s", exc)
-        steps.append(f"odds sync failed: {exc}")
+        logger.warning("Regenerate: NHL odds sync failed: %s", exc)
+        steps.append(f"NHL odds sync failed: {exc}")
+
+    # NBA odds sync
+    nba_odds_matched = 0
+    try:
+        async with get_write_session_context() as write_session:
+            from app.services.odds import sync_nba_odds
+            nba_matched = await sync_nba_odds(write_session, force=True)
+            nba_odds_matched = len(nba_matched) if nba_matched else 0
+            logger.info("Regenerate: NBA odds sync matched %d games", nba_odds_matched)
+        odds_matched += nba_odds_matched
+        steps.append(f"NBA odds synced ({nba_odds_matched} games)")
+    except Exception as exc:
+        logger.warning("Regenerate: NBA odds sync failed: %s", exc)
+        steps.append(f"NBA odds sync failed: {exc}")
 
     # Step 4: Generate fresh predictions (prematch lock is fully cleared)
     try:
