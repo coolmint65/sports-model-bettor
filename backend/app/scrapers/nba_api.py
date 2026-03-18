@@ -173,9 +173,16 @@ class NBAScraper(BaseScraper):
     # ------------------------------------------------------------------
 
     async def sync_players(self, session: AsyncSession) -> int:
-        """Sync NBA players into the database (paginated)."""
+        """Sync NBA players into the database (paginated).
+
+        Players rarely change, so this uses a 24-hour cache TTL to avoid
+        hitting the API on every sync cycle.
+        """
         synced = 0
         cursor = None
+
+        # 24-hour cache — rosters barely change intra-day
+        player_cache_ttl = 86_400.0
 
         for _ in range(100):  # safety limit
             params: Dict[str, Any] = {"per_page": 100}
@@ -183,7 +190,9 @@ class NBAScraper(BaseScraper):
                 params["cursor"] = cursor
 
             try:
-                data = await self.fetch_json("/players", params=params)
+                data = await self.fetch_json(
+                    "/players", params=params, cache_ttl=player_cache_ttl
+                )
             except Exception as exc:
                 logger.error("Failed to fetch NBA players: %s", exc)
                 break
@@ -459,9 +468,17 @@ class NBAScraper(BaseScraper):
 
         The balldontlie API supports a ``seasons[]`` query parameter and
         returns up to 100 results per page with cursor-based pagination.
+
+        Uses a 6-hour cache TTL since historical game results don't
+        change.  Today's live games are refreshed separately via
+        ``sync_schedule``.
         """
         if season is None:
             season = int(self.default_season)
+
+        # 6-hour cache — historical games don't change; live/today
+        # are refreshed via sync_schedule with the default shorter TTL.
+        season_cache_ttl = 21_600.0
 
         synced_total = 0
         cursor = None
@@ -475,7 +492,9 @@ class NBAScraper(BaseScraper):
                 params["cursor"] = cursor
 
             try:
-                data = await self.fetch_json("/games", params=params)
+                data = await self.fetch_json(
+                    "/games", params=params, cache_ttl=season_cache_ttl
+                )
             except Exception as exc:
                 logger.error("Failed to fetch NBA season schedule (season=%s): %s", season, exc)
                 break
@@ -609,7 +628,10 @@ class NBAScraper(BaseScraper):
 
         params = {"game_ids[]": numeric_id, "per_page": 100}
         try:
-            data = await self.fetch_json("/stats", params=params)
+            # Box scores for finished games never change — cache 7 days
+            data = await self.fetch_json(
+                "/stats", params=params, cache_ttl=604_800.0
+            )
         except Exception as exc:
             logger.error("Failed to fetch NBA stats for game %s: %s", numeric_id, exc)
             return 0
@@ -737,9 +759,11 @@ class NBAScraper(BaseScraper):
             "per_page": 100,
         }
 
+        # 1-hour cache — team averages update slowly
         try:
             data = await self.fetch_json(
-                "/team_season_averages/general", params=params
+                "/team_season_averages/general", params=params,
+                cache_ttl=3_600.0,
             )
         except Exception as exc:
             logger.error("Failed to fetch NBA team season averages: %s", exc)
@@ -1203,32 +1227,36 @@ class NBAScraper(BaseScraper):
     async def sync_all(self, session: AsyncSession) -> None:
         """Run the full NBA sync pipeline.
 
-        Fetches the entire current season's schedule and pulls team-level
-        season averages directly from the API (1 call for all 30 teams)
-        instead of requiring per-game box score fetching.
+        All expensive API calls use long cache TTLs so repeated syncs
+        (every 60 min) serve from SQLite cache and make zero network
+        requests until the cache expires:
 
-        Box scores are still synced for recent games (last 14 days) to
-        support player-level analytics — but team stats no longer depend
-        on having every box score.
+        - Teams: 120s (default) — 1 call, 30 teams
+        - Players: 24h cache — paginated, ~5 calls
+        - Season schedule: 6h cache — paginated, ~15 calls
+        - Team season averages: 1h cache — 1 call, 30 teams
+        - Box scores: 120s (default) — only last 14 days, only missing
         """
         await self.sync_teams(session)
 
-        # Sync the full current season schedule via paginated API
+        # Players (24h cache — rosters barely change)
+        await self.sync_players(session)
+
+        # Full current season schedule (6h cache per page)
         current_season = int(self.default_season)
         await self.sync_season_schedule(session, season=current_season)
 
-        # Also sync today/tomorrow via the date-based endpoint for
-        # up-to-the-minute live status updates
+        # Today/tomorrow via date endpoint for live status (short cache)
         today = date.today()
         for offset in range(0, 3):
             target = today + timedelta(days=offset)
             await self.sync_schedule(session, target.isoformat())
 
-        # Team stats from the API (1 call, no box scores needed)
+        # Team stats from the API (1h cache, 1 call)
         await self.sync_team_stats_from_api(session)
 
-        # Box scores for recent games only — used for player-level
-        # analytics, not for team stats.  Keeps API calls manageable.
+        # Box scores for recent games only — player-level analytics.
+        # Only fetches games missing stats to avoid redundant calls.
         result = await session.execute(
             select(Game).where(
                 Game.sport == "nba",
@@ -1251,5 +1279,6 @@ class NBAScraper(BaseScraper):
                 await self.sync_game_stats(session, game.external_id)
                 synced_box += 1
 
-        logger.info("NBA box scores synced for %d games", synced_box)
+        if synced_box:
+            logger.info("NBA box scores synced for %d games", synced_box)
         logger.info("NBA full sync completed")

@@ -184,23 +184,18 @@ async def _run_full_sync():
             except Exception as exc:
                 logger.warning("Historical H2H sync failed (non-critical): %s", exc)
 
-            # 2b. NBA data sync (teams, players, schedule, stats)
+            # 2b. NBA data sync (teams, schedule, stats)
+            # Uses sync_all which fetches the full season schedule (cached
+            # for 6h), team stats from the API (1 call, cached 1h), and
+            # only recent box scores.  Players use a 24h cache so the
+            # paginated /players calls don't hit rate limits.
             _sync_state["step"] = "Syncing NBA data..."
             try:
                 from app.scrapers.nba_api import NBAScraper
 
-                nba_scraper = NBAScraper()
-                try:
+                async with NBAScraper() as nba_scraper:
                     async with get_write_session_context() as session:
-                        await nba_scraper.sync_teams(session)
-                    async with get_write_session_context() as session:
-                        await nba_scraper.sync_players(session)
-                    async with get_write_session_context() as session:
-                        await nba_scraper.sync_schedule(session)
-                    async with get_write_session_context() as session:
-                        await nba_scraper.sync_team_stats(session)
-                finally:
-                    await nba_scraper.close()
+                        await nba_scraper.sync_all(session)
             except Exception as exc:
                 logger.warning("NBA data sync failed (non-critical): %s", exc)
 
