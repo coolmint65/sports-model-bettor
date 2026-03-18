@@ -449,6 +449,154 @@ class NBAScraper(BaseScraper):
         return synced
 
     # ------------------------------------------------------------------
+    # Season schedule (paginated – fetches the full season)
+    # ------------------------------------------------------------------
+
+    async def sync_season_schedule(
+        self, session: AsyncSession, season: Optional[int] = None
+    ) -> int:
+        """Sync all NBA games for a full season using cursor pagination.
+
+        The balldontlie API supports a ``seasons[]`` query parameter and
+        returns up to 100 results per page with cursor-based pagination.
+        """
+        if season is None:
+            season = int(self.default_season)
+
+        synced_total = 0
+        cursor = None
+
+        for _ in range(200):  # safety limit (~200 pages × 100 = 20 000 games max)
+            params: Dict[str, Any] = {
+                "seasons[]": season,
+                "per_page": 100,
+            }
+            if cursor:
+                params["cursor"] = cursor
+
+            try:
+                data = await self.fetch_json("/games", params=params)
+            except Exception as exc:
+                logger.error("Failed to fetch NBA season schedule (season=%s): %s", season, exc)
+                break
+
+            games_data = data.get("data", [])
+            if not games_data:
+                break
+
+            for g in games_data:
+                game_id = str(g.get("id", ""))
+                if not game_id:
+                    continue
+
+                home_team_data = g.get("home_team", {})
+                away_team_data = g.get("visitor_team", {})
+
+                home_bdl_id = str(home_team_data.get("id", ""))
+                away_bdl_id = str(away_team_data.get("id", ""))
+
+                home_result = await session.execute(
+                    select(Team).where(Team.external_id == f"nba_{home_bdl_id}")
+                )
+                home_team = home_result.scalar_one_or_none()
+
+                away_result = await session.execute(
+                    select(Team).where(Team.external_id == f"nba_{away_bdl_id}")
+                )
+                away_team = away_result.scalar_one_or_none()
+
+                if not home_team or not away_team:
+                    continue
+
+                game_date_str = g.get("date", "")[:10]
+                try:
+                    game_date = date.fromisoformat(game_date_str)
+                except (ValueError, TypeError):
+                    game_date = date.today()
+
+                api_status = g.get("status", "")
+                status_lower = api_status.lower().strip()
+                if status_lower in ("final",):
+                    status = "final"
+                elif status_lower in (
+                    "in progress", "in_progress",
+                    "1st qtr", "2nd qtr", "3rd qtr", "4th qtr",
+                    "halftime", "ot", "overtime",
+                    "1st quarter", "2nd quarter", "3rd quarter", "4th quarter",
+                ):
+                    status = "in_progress"
+                else:
+                    status = "scheduled"
+
+                home_score = _safe_int(g.get("home_team_score"))
+                away_score = _safe_int(g.get("visitor_team_score"))
+
+                game_season = g.get("season", self.default_season)
+
+                start_time = None
+                datetime_str = g.get("datetime") or g.get("date", "")
+                if datetime_str:
+                    try:
+                        start_time = datetime.fromisoformat(
+                            datetime_str.replace("Z", "+00:00")
+                        )
+                    except (ValueError, TypeError):
+                        pass
+
+                external_id = f"nba_{game_id}"
+                result = await session.execute(
+                    select(Game).where(Game.external_id == external_id)
+                )
+                existing = result.scalar_one_or_none()
+
+                if existing:
+                    existing.status = status
+                    existing.home_score = home_score
+                    existing.away_score = away_score
+                    if start_time:
+                        existing.start_time = start_time
+                    if status == "final" and home_score is not None and away_score is not None:
+                        if home_score > away_score:
+                            existing.winning_team_id = home_team.id
+                        elif away_score > home_score:
+                            existing.winning_team_id = away_team.id
+                else:
+                    game_obj = Game(
+                        external_id=external_id,
+                        sport="nba",
+                        season=str(game_season),
+                        game_type="regular",
+                        date=game_date,
+                        start_time=start_time,
+                        home_team_id=home_team.id,
+                        away_team_id=away_team.id,
+                        status=status,
+                        home_score=home_score,
+                        away_score=away_score,
+                    )
+                    if status == "final" and home_score is not None and away_score is not None:
+                        if home_score > away_score:
+                            game_obj.winning_team_id = home_team.id
+                        elif away_score > home_score:
+                            game_obj.winning_team_id = away_team.id
+                    session.add(game_obj)
+
+                synced_total += 1
+
+            await session.flush()
+
+            # Next page
+            meta = data.get("meta", {})
+            cursor = meta.get("next_cursor")
+            if not cursor:
+                break
+
+        logger.info(
+            "NBA season schedule synced (season=%s): %d games", season, synced_total
+        )
+        return synced_total
+
+    # ------------------------------------------------------------------
     # Box scores (game stats)
     # ------------------------------------------------------------------
 
@@ -839,28 +987,39 @@ class NBAScraper(BaseScraper):
     # ------------------------------------------------------------------
 
     async def sync_all(self, session: AsyncSession) -> None:
-        """Run the full NBA sync pipeline."""
+        """Run the full NBA sync pipeline.
+
+        Fetches the entire current season's schedule (not just a narrow
+        date window) so that team stats are computed from all completed
+        games.  Box score player stats are synced for every finished game
+        that doesn't already have them.
+        """
         await self.sync_teams(session)
 
-        # Sync schedule for today, tomorrow, and recent days for stats
+        # Sync the full current season schedule via paginated API
+        current_season = int(self.default_season)
+        await self.sync_season_schedule(session, season=current_season)
+
+        # Also sync today/tomorrow via the date-based endpoint for
+        # up-to-the-minute live status updates
         today = date.today()
-        for offset in range(-7, 3):
+        for offset in range(0, 3):
             target = today + timedelta(days=offset)
             await self.sync_schedule(session, target.isoformat())
 
-        # Sync box scores for completed games without stats
-        # Look back further to build up a good historical baseline
+        # Sync box scores for ALL completed games this season that are
+        # missing player-level stats (no 14-day cap).
         result = await session.execute(
             select(Game).where(
                 Game.sport == "nba",
+                Game.season == str(current_season),
                 func.lower(Game.status).in_(("final", "completed")),
-                Game.date >= today - timedelta(days=14),
             )
         )
         final_games = result.scalars().all()
 
+        synced_box = 0
         for game in final_games:
-            # Check if stats already exist
             stats_result = await session.execute(
                 select(func.count(GamePlayerStats.id)).where(
                     GamePlayerStats.game_id == game.id
@@ -869,6 +1028,9 @@ class NBAScraper(BaseScraper):
             stats_count = stats_result.scalar() or 0
             if stats_count == 0:
                 await self.sync_game_stats(session, game.external_id)
+                synced_box += 1
+
+        logger.info("NBA box scores synced for %d games", synced_box)
 
         await self.sync_team_stats(session)
 

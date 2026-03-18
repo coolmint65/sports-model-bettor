@@ -14,7 +14,7 @@ Predictions are split into two phases:
 """
 
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
 
 logger = logging.getLogger(__name__)
@@ -1032,6 +1032,37 @@ async def regenerate_predictions():
     except Exception as exc:
         logger.warning("Regenerate: starter sync failed: %s", exc)
         steps.append(f"starter sync failed: {exc}")
+
+    # Step 1b: Sync NBA schedule + team stats so predictions have real data.
+    try:
+        async with get_write_session_context() as session:
+            from app.scrapers.nba_api import NBAScraper
+            async with NBAScraper() as nba_scraper:
+                # Sync today and nearby days for live status
+                for offset in range(-1, 3):
+                    target = (today + timedelta(days=offset)).isoformat()
+                    await nba_scraper.sync_schedule(session, target)
+                # Sync box scores for recent final games missing stats
+                from app.models.game import GamePlayerStats as GPS
+                recent_result = await session.execute(
+                    select(Game).where(
+                        Game.sport == "nba",
+                        func.lower(Game.status).in_(("final", "completed")),
+                        Game.date >= today - timedelta(days=30),
+                    )
+                )
+                for g in recent_result.scalars().all():
+                    cnt = await session.execute(
+                        select(func.count(GPS.id)).where(GPS.game_id == g.id)
+                    )
+                    if (cnt.scalar() or 0) == 0:
+                        await nba_scraper.sync_game_stats(session, g.external_id)
+                # Recompute team stats from all available box scores
+                await nba_scraper.sync_team_stats(session)
+        steps.append("NBA schedule & stats synced")
+    except Exception as exc:
+        logger.warning("Regenerate: NBA schedule/stats sync failed: %s", exc)
+        steps.append(f"NBA schedule/stats sync failed: {exc}")
 
     # Step 2: Delete ALL predictions for today's games (not just prematch,
     # not just market types — nuke everything so the prematch lock is

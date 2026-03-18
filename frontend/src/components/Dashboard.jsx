@@ -8,8 +8,8 @@ import { useApi } from '../hooks/useApi';
 import { useWebSocketEvent } from '../hooks/useWebSocket';
 import { isLiveStatus, confidencePct } from '../utils/teams';
 
-const LIVE_POLL_INTERVAL = 5_000;
-const IDLE_POLL_INTERVAL = 60_000;
+const LIVE_POLL_INTERVAL = 30_000;     // 30 seconds when games are live
+const IDLE_POLL_INTERVAL = 120_000;    // 2 minutes when no live games
 
 function Dashboard() {
   const { sport } = useParams();
@@ -90,15 +90,31 @@ function Dashboard() {
   const todayHasLive = games.some((g) => isLiveStatus(g.status));
   const hasAnyLive = liveGames.length > 0 || todayHasLive;
 
+  // Use a ref so interval changes don't re-trigger the effect (avoids feedback loop)
+  const hasAnyLiveRef = useRef(hasAnyLive);
+  useEffect(() => { hasAnyLiveRef.current = hasAnyLive; }, [hasAnyLive]);
+
   const intervalRef = useRef(null);
   useEffect(() => {
     pollLive();
 
-    const interval = hasAnyLive ? LIVE_POLL_INTERVAL : IDLE_POLL_INTERVAL;
-    intervalRef.current = setInterval(() => {
+    const tick = () => {
       silentRefetch();
       pollLive();
-    }, interval);
+    };
+
+    // Start with idle interval; dynamically adjust inside the tick
+    const startInterval = () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      const ms = hasAnyLiveRef.current ? LIVE_POLL_INTERVAL : IDLE_POLL_INTERVAL;
+      intervalRef.current = setInterval(() => {
+        tick();
+        // Re-evaluate interval after each tick
+        const newMs = hasAnyLiveRef.current ? LIVE_POLL_INTERVAL : IDLE_POLL_INTERVAL;
+        if (newMs !== ms) startInterval();
+      }, ms);
+    };
+    startInterval();
 
     return () => {
       if (intervalRef.current) {
@@ -106,7 +122,9 @@ function Dashboard() {
         intervalRef.current = null;
       }
     };
-  }, [hasAnyLive, silentRefetch, pollLive]);
+    // Only re-create on sport change, not on hasAnyLive toggling
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSport]);
 
   useEffect(() => {
     const onSynced = () => silentRefetch();
