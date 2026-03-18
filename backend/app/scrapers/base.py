@@ -251,9 +251,10 @@ class BaseScraper(ABC):
 
         # --- Local cache check (GET only) ---
         ttl = cache_ttl if cache_ttl is not None else self.DEFAULT_CACHE_TTL
-        if method.upper() == "GET" and ttl > 0:
+        use_cache = method.upper() == "GET" and ttl > 0
+        if use_cache:
             try:
-                from app.cache import get_cached_response, set_cached_response
+                from app.cache import get_cached_response
                 cached = await get_cached_response(full_url, params)
                 if cached is not None:
                     logger.debug("Cache HIT: %s", full_url)
@@ -280,8 +281,9 @@ class BaseScraper(ABC):
                 if response.status_code == 200:
                     data = response.json()
                     # Store in local cache for future requests
-                    if method.upper() == "GET" and ttl > 0:
+                    if use_cache:
                         try:
+                            from app.cache import set_cached_response
                             await set_cached_response(
                                 full_url, params, data, ttl,
                             )
@@ -290,6 +292,20 @@ class BaseScraper(ABC):
                     return data
 
                 if response.status_code == 429:
+                    # --- Stale-while-error: serve expired cache rather
+                    # than blocking on retries that will likely also 429.
+                    if use_cache:
+                        try:
+                            from app.cache import get_stale_response
+                            stale = await get_stale_response(full_url, params)
+                            if stale is not None:
+                                logger.info(
+                                    "Rate limited (429) on %s — serving stale cache", url,
+                                )
+                                return stale
+                        except Exception:
+                            pass
+
                     retry_after = int(
                         response.headers.get("Retry-After", self.retry_backoff * attempt * 2)
                     )

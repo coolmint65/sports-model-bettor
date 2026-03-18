@@ -72,8 +72,9 @@ class NBAScraper(BaseScraper):
     teams, players, schedules, and box scores.
     """
 
-    # Cache NBA API responses for 2 minutes.
-    DEFAULT_CACHE_TTL = 120.0
+    # Default cache for NBA API responses.  Most endpoints override this
+    # with a longer TTL; this fallback covers any one-off calls.
+    DEFAULT_CACHE_TTL = 3_600.0  # 1 hour
 
     def __init__(
         self,
@@ -109,7 +110,8 @@ class NBAScraper(BaseScraper):
     async def sync_teams(self, session: AsyncSession) -> int:
         """Sync all NBA teams into the database."""
         try:
-            data = await self.fetch_json("/teams")
+            # Teams never change mid-season — cache for 7 days.
+            data = await self.fetch_json("/teams", cache_ttl=604_800.0)
         except Exception as exc:
             logger.error("Failed to fetch NBA teams: %s", exc)
             return 0
@@ -298,7 +300,9 @@ class NBAScraper(BaseScraper):
         }
 
         try:
-            data = await self.fetch_json("/games", params=params)
+            # Daily schedule: 15 min cache — balances freshness for
+            # live game status with minimising API calls.
+            data = await self.fetch_json("/games", params=params, cache_ttl=900.0)
         except Exception as exc:
             logger.error("Failed to fetch NBA schedule: %s", exc)
             return 0

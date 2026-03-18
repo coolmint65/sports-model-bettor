@@ -105,6 +105,41 @@ async def get_cached_response(
         return None
 
 
+async def get_stale_response(
+    url: str,
+    params: Optional[Dict] = None,
+) -> Optional[Any]:
+    """Return cached JSON response even if expired (stale-while-error).
+
+    Used as a fallback when the API returns a 429 or other transient error.
+    Better to serve slightly stale data than no data at all.
+    """
+    await _init_response_cache()
+
+    from sqlalchemy import text
+
+    from app.database import engine
+
+    key = _make_cache_key(url, params)
+
+    async with engine.connect() as conn:
+        row = await conn.execute(
+            text(
+                "SELECT response FROM http_response_cache WHERE cache_key = :key"
+            ),
+            {"key": key},
+        )
+        result = row.fetchone()
+
+    if result is None:
+        return None
+
+    try:
+        return json.loads(result[0])
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
 async def set_cached_response(
     url: str,
     params: Optional[Dict],
