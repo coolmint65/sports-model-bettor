@@ -6,6 +6,7 @@ their own fetch/sync methods using the shared HTTP infrastructure.
 """
 
 import asyncio
+import collections
 import logging
 import time
 from abc import ABC, abstractmethod
@@ -56,6 +57,7 @@ class BaseScraper(ABC):
     DEFAULT_MAX_RETRIES = 3
     DEFAULT_RETRY_BACKOFF = 1.0  # seconds, multiplied by attempt number
     DEFAULT_RATE_LIMIT = 1.0  # minimum seconds between requests
+    DEFAULT_REQUESTS_PER_MINUTE = 0  # 0 = derive from rate_limit
     DEFAULT_USER_AGENT = (
         "SportsModelBettor/1.0 (async data scraper; contact: dev@example.com)"
     )
@@ -67,6 +69,7 @@ class BaseScraper(ABC):
         max_retries: int = DEFAULT_MAX_RETRIES,
         retry_backoff: float = DEFAULT_RETRY_BACKOFF,
         rate_limit: float = DEFAULT_RATE_LIMIT,
+        requests_per_minute: int = DEFAULT_REQUESTS_PER_MINUTE,
         headers: Optional[Dict[str, str]] = None,
     ):
         self.base_url = base_url.rstrip("/")
@@ -74,8 +77,16 @@ class BaseScraper(ABC):
         self.max_retries = max_retries
         self.retry_backoff = retry_backoff
         self.rate_limit = rate_limit
-        self._last_request_time: float = 0.0
         self._rate_lock = asyncio.Lock()
+
+        # Sliding window rate limiter: tracks request timestamps over
+        # the last 60 seconds.  If requests_per_minute is set, it takes
+        # precedence; otherwise we derive it from the per-request delay.
+        if requests_per_minute > 0:
+            self._rpm_limit = requests_per_minute
+        else:
+            self._rpm_limit = max(1, int(60.0 / rate_limit))
+        self._request_timestamps: collections.deque = collections.deque()
 
         # Build default headers
         self._headers = {
@@ -132,19 +143,45 @@ class BaseScraper(ABC):
 
     async def _wait_for_rate_limit(self) -> None:
         """
-        Ensure at least `self.rate_limit` seconds pass between requests.
+        Sliding-window rate limiter that enforces both:
+        1. A per-request minimum delay (``self.rate_limit`` seconds).
+        2. A requests-per-minute ceiling (``self._rpm_limit``).
 
-        Uses an async lock to prevent concurrent requests from bypassing
-        the rate limiter.
+        Uses an async lock so concurrent callers queue up properly.
         """
         async with self._rate_lock:
             now = time.monotonic()
-            elapsed = now - self._last_request_time
-            if elapsed < self.rate_limit:
-                wait_time = self.rate_limit - elapsed
-                logger.debug("Rate limit: waiting %.2fs", wait_time)
-                await asyncio.sleep(wait_time)
-            self._last_request_time = time.monotonic()
+
+            # --- Per-request minimum delay ---
+            if self._request_timestamps:
+                elapsed = now - self._request_timestamps[-1]
+                if elapsed < self.rate_limit:
+                    wait_time = self.rate_limit - elapsed
+                    logger.debug("Rate limit: waiting %.2fs (min delay)", wait_time)
+                    await asyncio.sleep(wait_time)
+                    now = time.monotonic()
+
+            # --- Sliding window: prune entries older than 60s ---
+            window = 60.0
+            while self._request_timestamps and (now - self._request_timestamps[0]) > window:
+                self._request_timestamps.popleft()
+
+            # --- If at the RPM ceiling, wait until the oldest entry expires ---
+            if len(self._request_timestamps) >= self._rpm_limit:
+                wait_until = self._request_timestamps[0] + window
+                wait_time = wait_until - now
+                if wait_time > 0:
+                    logger.info(
+                        "Rate limit: %d/%d requests in last 60s, waiting %.1fs",
+                        len(self._request_timestamps), self._rpm_limit, wait_time,
+                    )
+                    await asyncio.sleep(wait_time)
+                    now = time.monotonic()
+                    # Re-prune after sleeping
+                    while self._request_timestamps and (now - self._request_timestamps[0]) > window:
+                        self._request_timestamps.popleft()
+
+            self._request_timestamps.append(now)
 
     # ------------------------------------------------------------------
     # Core HTTP methods

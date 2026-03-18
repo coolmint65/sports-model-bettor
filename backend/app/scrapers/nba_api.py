@@ -78,7 +78,8 @@ class NBAScraper(BaseScraper):
     def __init__(
         self,
         base_url: str = "https://api.balldontlie.io/nba/v1",
-        rate_limit: float = 1.0,
+        rate_limit: float = 2.0,
+        requests_per_minute: int = 30,
         **kwargs,
     ):
         api_key = settings.balldontlie_api_key
@@ -88,6 +89,7 @@ class NBAScraper(BaseScraper):
         super().__init__(
             base_url=base_url,
             rate_limit=rate_limit,
+            requests_per_minute=requests_per_minute,
             headers=headers,
             **kwargs,
         )
@@ -496,31 +498,10 @@ class NBAScraper(BaseScraper):
         if season is None:
             season = int(self.default_season)
 
-        # Skip bulk season fetch if we already have a full season of games.
-        # An NBA regular season has ~1230 games; 1000 is a safe threshold
-        # that indicates the initial seed is complete.  New/live games are
-        # picked up by the daily sync_schedule calls (today + tomorrow).
-        count_result = await session.execute(
-            select(func.count(Game.id)).where(
-                Game.sport == "nba",
-                Game.season == str(season),
-            )
-        )
-        existing_games = count_result.scalar() or 0
-        if existing_games >= 1000:
-            logger.info(
-                "NBA season %s already seeded (%d games), skipping bulk /games sync",
-                season, existing_games,
-            )
-            return 0
-
-        logger.info(
-            "NBA season %s has %d games — running bulk schedule sync",
-            season, existing_games,
-        )
-
         # 6-hour cache — historical games don't change; live/today
         # are refreshed via sync_schedule with the default shorter TTL.
+        # The sliding-window rate limiter ensures we stay within the
+        # API's per-minute budget even during full-season pagination.
         season_cache_ttl = 21_600.0
 
         synced_total = 0
@@ -1328,6 +1309,10 @@ class NBAScraper(BaseScraper):
 
         # Box scores for recent games only — player-level analytics.
         # Only fetches games missing stats to avoid redundant calls.
+        # Capped at 10 per cycle to stay within rate limits; the rest
+        # will be picked up in subsequent sync cycles.
+        max_box_scores_per_cycle = 10
+
         result = await session.execute(
             select(Game).where(
                 Game.sport == "nba",
@@ -1340,6 +1325,12 @@ class NBAScraper(BaseScraper):
 
         synced_box = 0
         for game in final_games:
+            if synced_box >= max_box_scores_per_cycle:
+                logger.info(
+                    "Box score cap reached (%d/%d), deferring rest to next cycle",
+                    synced_box, max_box_scores_per_cycle,
+                )
+                break
             stats_result = await session.execute(
                 select(func.count(GamePlayerStats.id)).where(
                     GamePlayerStats.game_id == game.id
