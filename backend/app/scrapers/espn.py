@@ -249,9 +249,9 @@ class ESPNScraper(BaseScraper):
                 select(Team).where(
                     Team.abbreviation == abbrev,
                     Team.sport == "nhl",
-                )
+                ).order_by(Team.id)
             )
-            team = result.scalar_one_or_none()
+            team = result.scalars().first()
             if not team:
                 logger.debug("No team found for ESPN abbrev %s", abbrev)
                 continue

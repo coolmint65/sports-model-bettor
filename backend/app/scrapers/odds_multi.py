@@ -296,8 +296,8 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
         "Origin": "https://sportsbook.draftkings.com",
         "Sec-Fetch-Dest": "empty",
         "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "same-origin",
-        "Sec-Ch-Ua": '"Chromium";v="134", "Google Chrome";v="134", "Not:A-Brand";v="99"',
+        "Sec-Fetch-Site": "same-site",
+        "Sec-Ch-Ua": '"Chromium";v="135", "Google Chrome";v="135", "Not:A-Brand";v="99"',
         "Sec-Ch-Ua-Mobile": "?0",
         "Sec-Ch-Ua-Platform": '"Windows"',
     }
@@ -659,7 +659,7 @@ async def _fetch_fanduel(client: httpx.AsyncClient) -> List[OddsEvent]:
     events: List[OddsEvent] = []
     headers = {
         **SCRAPER_HEADERS,
-        "Sec-Ch-Ua": '"Chromium";v="134", "Google Chrome";v="134", "Not:A-Brand";v="99"',
+        "Sec-Ch-Ua": '"Chromium";v="135", "Google Chrome";v="135", "Not:A-Brand";v="99"',
         "Sec-Ch-Ua-Mobile": "?0",
         "Sec-Ch-Ua-Platform": '"Windows"',
     }
@@ -3049,22 +3049,22 @@ class MultiSourceOddsScraper:
                 odds.get("commence_time", ""), game_date,
             )
 
-            # Find matching teams
+            # Find matching teams (use .first() to tolerate duplicate rows)
             home_result = await db.execute(
                 select(Team).where(
                     Team.abbreviation == home_abbrev,
                     Team.sport == "nhl",
-                )
+                ).order_by(Team.id)
             )
-            home_team = home_result.scalar_one_or_none()
+            home_team = home_result.scalars().first()
 
             away_result = await db.execute(
                 select(Team).where(
                     Team.abbreviation == away_abbrev,
                     Team.sport == "nhl",
-                )
+                ).order_by(Team.id)
             )
-            away_team = away_result.scalar_one_or_none()
+            away_team = away_result.scalars().first()
 
             if not home_team or not away_team:
                 logger.warning(

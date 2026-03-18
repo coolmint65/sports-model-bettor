@@ -151,9 +151,9 @@ class InjuryScraper(BaseScraper):
 
         Returns the total number of active injuries found.
         """
-        # Get all active teams
+        # Get all active NHL teams (this scraper uses the NHL API)
         result = await db.execute(
-            select(Team).where(Team.active.is_(True))
+            select(Team).where(Team.active.is_(True), Team.sport == "nhl")
         )
         teams = result.scalars().all()
 

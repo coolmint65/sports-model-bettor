@@ -54,6 +54,7 @@ function formatPeriod(game) {
 }
 
 function LiveClock({ serverClock, running }) {
+  const hasClock = serverClock != null && serverClock !== '';
   const [seconds, setSeconds] = useState(() => parseClock(serverClock));
   const prevServer = useRef(serverClock);
 
@@ -71,6 +72,10 @@ function LiveClock({ serverClock, running }) {
     }, 1000);
     return () => clearInterval(id);
   }, [running, seconds > 0]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!hasClock) {
+    return <span className="live-clock">--:--</span>;
+  }
 
   const mins = Math.floor(seconds / 60);
   const secs = seconds % 60;

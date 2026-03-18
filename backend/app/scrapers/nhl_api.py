@@ -448,9 +448,9 @@ class NHLScraper(BaseScraper):
             select(Team).where(
                 Team.abbreviation == abbrev,
                 Team.sport == "nhl",
-            )
+            ).order_by(Team.id)
         )
-        team = result.scalar_one_or_none()
+        team = result.scalars().first()
 
         if team is None:
             team = Team(

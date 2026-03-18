@@ -412,22 +412,25 @@ class OddsScraper(BaseScraper):
             else:
                 continue
 
-            # Find matching teams (scoped to sport)
+            # Find matching teams (scoped to sport).
+            # Use .first() instead of .scalar_one_or_none() because
+            # duplicate team rows may exist if the unique constraint
+            # migration hasn't been applied yet.
             home_result = await db.execute(
                 select(Team).where(
                     Team.abbreviation == home_abbrev,
                     Team.sport == self.sport,
-                )
+                ).order_by(Team.id)
             )
-            home_team = home_result.scalar_one_or_none()
+            home_team = home_result.scalars().first()
 
             away_result = await db.execute(
                 select(Team).where(
                     Team.abbreviation == away_abbrev,
                     Team.sport == self.sport,
-                )
+                ).order_by(Team.id)
             )
-            away_team = away_result.scalar_one_or_none()
+            away_team = away_result.scalars().first()
 
             if not home_team or not away_team:
                 logger.warning(

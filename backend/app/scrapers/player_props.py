@@ -370,17 +370,17 @@ async def sync_player_props(db: AsyncSession) -> int:
             select(Team).where(
                 Team.abbreviation == home_abbr,
                 Team.sport == "nhl",
-            )
+            ).order_by(Team.id)
         )
-        home_team = home_result.scalar_one_or_none()
+        home_team = home_result.scalars().first()
 
         away_result = await db.execute(
             select(Team).where(
                 Team.abbreviation == away_abbr,
                 Team.sport == "nhl",
-            )
+            ).order_by(Team.id)
         )
-        away_team = away_result.scalar_one_or_none()
+        away_team = away_result.scalars().first()
 
         if not home_team or not away_team:
             continue

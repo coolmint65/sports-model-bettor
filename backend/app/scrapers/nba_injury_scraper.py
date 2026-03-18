@@ -76,9 +76,9 @@ async def fetch_nba_injury_reports(db: AsyncSession) -> int:
             select(Team).where(
                 Team.abbreviation == team_abbr,
                 Team.sport == "nba",
-            )
+            ).order_by(Team.id)
         )
-        team = team_result.scalar_one_or_none()
+        team = team_result.scalars().first()
         if not team:
             continue
 

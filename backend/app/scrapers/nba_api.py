@@ -362,10 +362,19 @@ class NBAScraper(BaseScraper):
                     if api_period > 4:
                         period_type = "OT"
 
-                # Try the "time" field for clock info
-                api_time = g.get("time")
-                if api_time and isinstance(api_time, str) and ":" in api_time:
-                    clock = api_time  # e.g., "5:30"
+                # Try multiple field names for the game clock.
+                # BallDontLie uses "time" but may also have "clock" or
+                # "game_clock" depending on the API version.
+                for clock_field in ("time", "clock", "game_clock"):
+                    api_time = g.get(clock_field)
+                    if (
+                        api_time
+                        and isinstance(api_time, str)
+                        and ":" in api_time
+                        and api_time.lower() not in ("final", "half", "halftime")
+                    ):
+                        clock = api_time  # e.g., "5:30"
+                        break
                 else:
                     clock = None
 

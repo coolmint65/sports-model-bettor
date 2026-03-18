@@ -228,20 +228,16 @@ class BaseScraper(ABC):
                     return data
 
                 if response.status_code == 429:
-                    max_retry_wait = 15  # Cap wait to avoid blocking pipeline
                     retry_after = int(
                         response.headers.get("Retry-After", self.retry_backoff * attempt * 2)
                     )
-                    if retry_after > max_retry_wait:
-                        logger.warning(
-                            "Rate limited (429) on %s. Retry-After %ds exceeds cap; waiting %ds.",
-                            url, retry_after, max_retry_wait,
-                        )
-                        retry_after = max_retry_wait
-                    else:
-                        logger.warning(
-                            "Rate limited (429) on %s. Retrying in %ds.", url, retry_after
-                        )
+                    # Clamp to a sane maximum (2 min) but always respect
+                    # the server's Retry-After to avoid repeated 429s.
+                    retry_after = min(retry_after, 120)
+                    logger.warning(
+                        "Rate limited (429) on %s. Retrying in %ds (attempt %d/%d).",
+                        url, retry_after, attempt, self.max_retries,
+                    )
                     await asyncio.sleep(retry_after)
                     last_exception = RateLimitError(
                         f"Rate limited on {url}"
