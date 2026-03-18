@@ -78,7 +78,7 @@ class NBAScraper(BaseScraper):
     def __init__(
         self,
         base_url: str = "https://api.balldontlie.io/nba/v1",
-        rate_limit: float = 0.5,
+        rate_limit: float = 2.0,
         **kwargs,
     ):
         api_key = settings.balldontlie_api_key
