@@ -3497,6 +3497,23 @@ a:hover {
   padding: 12px 16px;
   background: var(--surface-primary, #141829);
   border-left: 3px solid var(--accent-green, #00ff88);
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.prop-pick-headshot {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: rgba(160, 160, 184, 0.1);
+}
+
+.prop-pick-content {
+  flex: 1;
+  min-width: 0;
 }
 
 .prop-pick-header {

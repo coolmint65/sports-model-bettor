@@ -115,6 +115,20 @@ function PropReasoning({ reasoning, pickSide, market }) {
   );
 }
 
+function PlayerHeadshot({ playerExtId, playerName }) {
+  if (!playerExtId) return null;
+  const headshotUrl = `https://assets.nhle.com/headshots/current/168x168/${playerExtId}.png`;
+  return (
+    <img
+      className="prop-pick-headshot"
+      src={headshotUrl}
+      alt={playerName}
+      loading="lazy"
+      onError={(e) => { e.target.style.display = 'none'; }}
+    />
+  );
+}
+
 function PropPickCard({ pick, rank }) {
   const config = MARKET_CONFIG[pick.market] || {};
   const Icon = config.icon || Target;
@@ -131,35 +145,38 @@ function PropPickCard({ pick, rank }) {
 
   return (
     <div className={`prop-pick-card ${outcomeClass}`}>
-      <div className="prop-pick-header">
-        <div className="prop-pick-player">
-          {outcome === true ? (
-            <Check size={16} className="prop-outcome-icon prop-outcome-hit" />
-          ) : outcome === false ? (
-            <X size={16} className="prop-outcome-icon prop-outcome-miss" />
-          ) : (
-            <span className="prop-pick-rank">#{rank}</span>
-          )}
-          <Icon size={14} style={{ color: config.color }} />
-          <span className="prop-pick-name">{pick.player_name}</span>
-          {pick.jersey_number != null && <span className="prop-pick-number">#{pick.jersey_number}</span>}
-          {pick.team_abbrev && <span className="prop-pick-team">{pick.team_abbrev}</span>}
+      <PlayerHeadshot playerExtId={pick.player_ext_id} playerName={pick.player_name} />
+      <div className="prop-pick-content">
+        <div className="prop-pick-header">
+          <div className="prop-pick-player">
+            {outcome === true ? (
+              <Check size={16} className="prop-outcome-icon prop-outcome-hit" />
+            ) : outcome === false ? (
+              <X size={16} className="prop-outcome-icon prop-outcome-miss" />
+            ) : (
+              <span className="prop-pick-rank">#{rank}</span>
+            )}
+            <Icon size={14} style={{ color: config.color }} />
+            <span className="prop-pick-name">{pick.player_name}</span>
+            {pick.jersey_number != null && <span className="prop-pick-number">#{pick.jersey_number}</span>}
+            {pick.team_abbrev && <span className="prop-pick-team">{pick.team_abbrev}</span>}
+          </div>
+          <div className="prop-pick-edge" style={{ color: edgeVal >= 0 ? '#00ff88' : 'var(--accent-red, #ff5252)' }}>
+            Edge {edgePct}
+          </div>
         </div>
-        <div className="prop-pick-edge" style={{ color: edgeVal >= 0 ? '#00ff88' : 'var(--accent-red, #ff5252)' }}>
-          Edge {edgePct}
+        <div className="prop-pick-details">
+          <span className="prop-pick-label" style={{ color: config.color }}>
+            {config.shortLabel}: {pickLabel}
+          </span>
+          <span className="prop-pick-odds">
+            {formatAmericanOdds(pick.odds)}
+          </span>
+          <span className="prop-pick-conf">{confPct}%</span>
         </div>
-      </div>
-      <div className="prop-pick-details">
-        <span className="prop-pick-label" style={{ color: config.color }}>
-          {config.shortLabel}: {pickLabel}
-        </span>
-        <span className="prop-pick-odds">
-          {formatAmericanOdds(pick.odds)}
-        </span>
-        <span className="prop-pick-conf">{confPct}%</span>
-      </div>
-      <div className="prop-pick-reasoning">
-        <PropReasoning reasoning={pick.reasoning} pickSide={pick.pick_side} market={pick.market} />
+        <div className="prop-pick-reasoning">
+          <PropReasoning reasoning={pick.reasoning} pickSide={pick.pick_side} market={pick.market} />
+        </div>
       </div>
     </div>
   );
