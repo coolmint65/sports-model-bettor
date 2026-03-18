@@ -290,8 +290,14 @@ async def _get_team_form(team: Team, session: AsyncSession) -> TeamForm:
         form.games_played = stats.games_played
         gd = stats.goals_for - stats.goals_against if stats.goals_for and stats.goals_against else None
         form.goal_diff = gd
-        total_possible = stats.games_played * 2 if stats.games_played else 0
-        form.points_pct = round(stats.points / total_possible, 3) if total_possible > 0 else None
+        # For NBA, points = wins, so points_pct = win%
+        # For NHL, total_possible = games_played * 2 (2-point system)
+        sport = (team.sport or "nhl").lower()
+        if sport == "nba":
+            form.points_pct = round(stats.wins / stats.games_played, 3) if stats.games_played > 0 else None
+        else:
+            total_possible = stats.games_played * 2 if stats.games_played else 0
+            form.points_pct = round(stats.points / total_possible, 3) if total_possible > 0 else None
         form.record_last_5 = stats.record_last_5
         form.record_last_10 = stats.record_last_10
         form.record_last_20 = stats.record_last_20
@@ -396,6 +402,7 @@ async def _get_recent_games(
 
 async def _get_league_context(
     session: AsyncSession, season: str, home_team_id: int, away_team_id: int,
+    sport: str = "nhl",
 ) -> Dict[str, Any]:
     """Compute league averages and per-team ranks for key stats."""
     result = await session.execute(
@@ -408,12 +415,18 @@ async def _get_league_context(
     if not all_stats:
         return {}
 
-    stat_keys = [
-        "goals_for_per_game", "goals_against_per_game",
-        "power_play_pct", "penalty_kill_pct",
-        "shots_for_per_game", "shots_against_per_game",
-        "faceoff_win_pct",
-    ]
+    # Use sport-appropriate stat keys
+    if sport == "nba":
+        stat_keys = [
+            "goals_for_per_game", "goals_against_per_game",
+        ]
+    else:
+        stat_keys = [
+            "goals_for_per_game", "goals_against_per_game",
+            "power_play_pct", "penalty_kill_pct",
+            "shots_for_per_game", "shots_against_per_game",
+            "faceoff_win_pct",
+        ]
     # Stats where lower is better (rank 1 = lowest)
     lower_is_better = {"goals_against_per_game", "shots_against_per_game"}
 
@@ -652,18 +665,61 @@ async def _get_team_goalies(
     return goalie_infos
 
 
+async def _compute_quarter_scoring_nba(
+    team_id: int, session: AsyncSession,
+) -> PeriodScoring:
+    """Estimate NBA quarter scoring averages from total game scores.
+
+    NBA scoring is roughly evenly distributed: ~25% per quarter with
+    a slight uptick in Q4.
+    """
+    result = await session.execute(
+        select(Game).where(
+            or_(Game.home_team_id == team_id, Game.away_team_id == team_id),
+            func.lower(Game.status).in_(GAME_FINAL_STATUSES),
+            Game.home_score.isnot(None),
+            Game.sport == "nba",
+        )
+        .order_by(Game.date.desc())
+        .limit(20)
+    )
+    games = result.scalars().all()
+
+    if not games:
+        return PeriodScoring()
+
+    total_points = 0.0
+    counted = 0
+    for game in games:
+        is_home = game.home_team_id == team_id
+        pts = (game.home_score if is_home else game.away_score) or 0
+        total_points += pts
+        counted += 1
+
+    if counted == 0:
+        return PeriodScoring()
+
+    avg_per_game = total_points / counted
+    # NBA quarter distribution: Q1 ~24%, Q2 ~25%, Q3 ~25%, Q4 ~26%
+    return PeriodScoring(
+        period_1_avg=round(avg_per_game * 0.24, 1),
+        period_2_avg=round(avg_per_game * 0.25, 1),
+        period_3_avg=round(avg_per_game * 0.26, 1),
+    )
+
+
 async def _compute_period_scoring(
-    team_id: int, session: AsyncSession
+    team_id: int, session: AsyncSession, sport: str = "nhl"
 ) -> PeriodScoring:
     """
     Compute average period-by-period scoring for a team from completed games.
 
-    Tries three approaches in order:
-      1. Games with detailed per-period scores (from boxscore sync).
-      2. Games with total scores (from historical sync) — estimates period
-         breakdown using the typical NHL 32/33/35% distribution.
-      3. TeamStats ``goals_for_per_game`` as a final fallback.
+    For NHL: tries per-period scores, then estimates from totals using 32/33/35%.
+    For NBA: estimates quarter breakdown from totals using 25% per quarter.
     """
+    if sport == "nba":
+        return await _compute_quarter_scoring_nba(team_id, session)
+
     # ---- Approach 1: per-period scores from boxscore data ----
     result = await session.execute(
         select(Game).where(
@@ -847,14 +903,21 @@ async def get_game_details(
     """
     game = await _get_game_or_404(game_id, session)
 
-    # Sync scores/clock from NHL API for live games
+    # Sync scores/clock from the appropriate API for live games
     # Odds syncing is handled by the background scheduler (app.live)
+    sport = (game.sport or "nhl").lower()
     if game.status and game.status.lower() in ("in_progress", "live"):
         try:
-            from app.scrapers.nhl_api import NHLScraper
+            if sport == "nba":
+                from app.scrapers.nba_api import NBAScraper
 
-            scraper = NHLScraper()
-            await scraper.sync_schedule(session, str(game.date))
+                scraper = NBAScraper()
+                await scraper.sync_schedule(session, str(game.date))
+            else:
+                from app.scrapers.nhl_api import NHLScraper
+
+                scraper = NHLScraper()
+                await scraper.sync_schedule(session, str(game.date))
             await session.flush()
             game = await _get_game_or_404(game_id, session)
         except Exception as exc:
@@ -863,13 +926,18 @@ async def get_game_details(
     # Gather all analytics data
     home_form = await _get_team_form(game.home_team, session)
     away_form = await _get_team_form(game.away_team, session)
-    league_avgs = await _get_league_context(session, game.season, game.home_team_id, game.away_team_id)
+    league_avgs = await _get_league_context(session, game.season, game.home_team_id, game.away_team_id, sport=sport)
     h2h = await _get_head_to_head(game.home_team_id, game.away_team_id, session)
     h2h_game_records = await _get_h2h_games(game.home_team_id, game.away_team_id, session)
-    home_period = await _compute_period_scoring(game.home_team_id, session)
-    away_period = await _compute_period_scoring(game.away_team_id, session)
-    home_goalies = await _get_team_goalies(game.home_team_id, session)
-    away_goalies = await _get_team_goalies(game.away_team_id, session)
+    home_period = await _compute_period_scoring(game.home_team_id, session, sport=sport)
+    away_period = await _compute_period_scoring(game.away_team_id, session, sport=sport)
+    # Goalies are only relevant for NHL
+    if sport == "nba":
+        home_goalies = []
+        away_goalies = []
+    else:
+        home_goalies = await _get_team_goalies(game.home_team_id, session)
+        away_goalies = await _get_team_goalies(game.away_team_id, session)
     predictions = await _get_game_predictions(game.id, session, game=game)
 
     # Compute the same top_pick the dashboard uses so the game detail
@@ -929,9 +997,9 @@ async def get_game_details(
             under_price=game.pregame_under_price,
         )
 
-    # Build game props info
+    # Build game props info (NHL-specific props like BTTS, regulation winner, period markets)
     game_props_info = None
-    has_any_game_prop = any([
+    has_any_game_prop = sport != "nba" and any([
         game.btts_yes_price, game.btts_no_price,
         game.reg_home_price, game.reg_away_price, game.reg_draw_price,
         game.period1_home_ml, game.period1_away_ml,

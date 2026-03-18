@@ -2980,6 +2980,11 @@ class FeatureEngine:
         if not game:
             raise ValueError(f"Game with id={game_id} not found")
 
+        # Dispatch to sport-specific feature builder
+        sport = (game.sport or "nhl").lower()
+        if sport == "nba":
+            return await self._build_nba_features(db, game)
+
         home_id = game.home_team_id
         away_id = game.away_team_id
 
@@ -3320,6 +3325,101 @@ class FeatureEngine:
 
         # Public signal needs the partially-built features dict (odds + line_movement)
         features["public_signal"] = estimate_public_side(features)
+
+        return features
+
+    # ------------------------------------------------------------------ #
+    #  NBA-specific feature builder                                      #
+    # ------------------------------------------------------------------ #
+
+    async def _build_nba_features(
+        self,
+        db: AsyncSession,
+        game: Game,
+    ) -> Dict[str, Any]:
+        """Build features for an NBA game.
+
+        Uses only the features relevant for basketball: team form,
+        season stats, H2H, injuries, schedule context, and odds.
+        Skips all NHL-specific features (goalies, special teams,
+        possession metrics, etc.).
+        """
+        home_id = game.home_team_id
+        away_id = game.away_team_id
+
+        (
+            home_team, away_team,
+            home_form_5, home_form_10, home_season, home_splits,
+            away_form_5, away_form_10, away_season, away_splits,
+            h2h,
+            home_injuries, away_injuries,
+            home_schedule, away_schedule,
+        ) = await asyncio.gather(
+            self._get_team(db, home_id),
+            self._get_team(db, away_id),
+            self.get_team_form(db, home_id, last_n=5),
+            self.get_team_form(db, home_id, last_n=10),
+            self.get_season_stats(db, home_id),
+            self.get_team_home_away_splits(db, home_id, is_home=True),
+            self.get_team_form(db, away_id, last_n=5),
+            self.get_team_form(db, away_id, last_n=10),
+            self.get_season_stats(db, away_id),
+            self.get_team_home_away_splits(db, away_id, is_home=False),
+            self.get_h2h_stats(db, home_id, away_id),
+            self.get_injury_impact(db, home_id),
+            self.get_injury_impact(db, away_id),
+            self.get_schedule_context(db, home_id, game.date),
+            self.get_schedule_context(db, away_id, game.date),
+        )
+
+        # Odds and line movement (reuses existing methods)
+        consensus_line = await self.get_consensus_line(db, game.id)
+        line_movement = await self.get_line_movement(db, game.id, game)
+
+        features: Dict[str, Any] = {
+            "game_id": game.id,
+            "game_date": str(game.date),
+            "sport": "nba",
+            "home_team_id": home_id,
+            "away_team_id": away_id,
+            "home_team_name": home_team.name if home_team else "Unknown",
+            "away_team_name": away_team.name if away_team else "Unknown",
+            "home_team_abbr": home_team.abbreviation if home_team else "UNK",
+            "away_team_abbr": away_team.abbreviation if away_team else "UNK",
+            "odds": {
+                "home_moneyline": getattr(game, "home_moneyline", None),
+                "away_moneyline": getattr(game, "away_moneyline", None),
+                "over_under_line": getattr(game, "over_under_line", None),
+                "home_spread_line": getattr(game, "home_spread_line", None),
+                "away_spread_line": getattr(game, "away_spread_line", None),
+                "home_spread_price": getattr(game, "home_spread_price", None),
+                "away_spread_price": getattr(game, "away_spread_price", None),
+                "over_price": getattr(game, "over_price", None),
+                "under_price": getattr(game, "under_price", None),
+            },
+            # Team form
+            "home_form_5": home_form_5,
+            "home_form_10": home_form_10,
+            "home_season": home_season,
+            "home_splits": home_splits,
+            "away_form_5": away_form_5,
+            "away_form_10": away_form_10,
+            "away_season": away_season,
+            "away_splits": away_splits,
+            # H2H
+            "h2h": h2h,
+            # Injuries
+            "home_injuries": home_injuries,
+            "away_injuries": away_injuries,
+            # Schedule
+            "home_schedule": home_schedule,
+            "away_schedule": away_schedule,
+            # Game object for model
+            "game_obj": game,
+            # Line movement
+            "line_movement": line_movement,
+            "consensus_line": consensus_line,
+        }
 
         return features
 

@@ -516,7 +516,7 @@ function AIAnalysis({ game, homeAbbr, awayAbbr, homeTeamLabel, awayTeamLabel }) 
 
   // Categorize reasons into positive/negative/neutral
   const negativeKeywords = ['losing', 'loss', 'struggle', 'injury', 'missing', 'without', 'concern', 'decline', 'losing streak'];
-  const positiveKeywords = ['strong', 'winning', 'advantage', 'record', 'home-ice', 'dominant', 'superior', 'hot streak', 'edge', 'dominates'];
+  const positiveKeywords = ['strong', 'winning', 'advantage', 'record', 'home-ice', 'home-court', 'dominant', 'superior', 'hot streak', 'edge', 'dominates'];
   const categorized = reasons.slice(0, 6).map((r) => {
     const lower = r.toLowerCase();
     if (negativeKeywords.some((k) => lower.includes(k))) return { text: r, type: 'negative' };
@@ -1218,7 +1218,7 @@ function VenueSection({ game }) {
 }
 
 /* ──────────────────── Recent Form & H2H ──────────────────── */
-function RecentFormAndH2H({ game, homeAbbr, awayAbbr }) {
+function RecentFormAndH2H({ game, homeAbbr, awayAbbr, sport }) {
   const homeForm = game.home_recent_games || [];
   const awayForm = game.away_recent_games || [];
   const homeLabel = game.home_team_form?.team_name || 'Home';
@@ -1516,7 +1516,7 @@ function RecentFormAndH2H({ game, homeAbbr, awayAbbr }) {
             <div className="gd-chart-section">
               <h4 className="gd-chart-title">
                 <TrendingUp size={13} />
-                Goals Scored (Last 5, All Opponents)
+                {(sport || game.sport || 'nhl').toLowerCase() === 'nba' ? 'Points' : 'Goals'} Scored (Last 5, All Opponents)
               </h4>
               <ResponsiveContainer width="100%" height={200}>
                 <BarChart
@@ -1794,7 +1794,7 @@ function GameDetail() {
             <StatsAndTrends game={game} homeAbbr={homeAbbr} awayAbbr={awayAbbr} />
             <GoalieMatchup game={game} />
             <VenueSection game={game} />
-            <RecentFormAndH2H game={game} homeAbbr={homeAbbr} awayAbbr={awayAbbr} />
+            <RecentFormAndH2H game={game} homeAbbr={homeAbbr} awayAbbr={awayAbbr} sport={(game.sport || 'nhl').toLowerCase()} />
           </>
         ) : (
           <PredictionsTab game={game} />
