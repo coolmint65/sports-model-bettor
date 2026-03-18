@@ -75,6 +75,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await start_scheduler()
     yield
     await stop_scheduler()
+    from app.cache import close_cache_db
+    await close_cache_db()
     await close_db()
 
 
