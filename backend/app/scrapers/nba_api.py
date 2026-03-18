@@ -6,7 +6,9 @@ data into the local SQLAlchemy database.  Requires a free API key set via
 the BALLDONTLIE_API_KEY environment variable.
 """
 
+import asyncio
 import logging
+import random
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -79,8 +81,8 @@ class NBAScraper(BaseScraper):
     def __init__(
         self,
         base_url: str = "https://api.balldontlie.io/nba/v1",
-        rate_limit: float = 2.0,
-        requests_per_minute: int = 30,
+        rate_limit: float = 3.0,
+        requests_per_minute: int = 20,
         **kwargs,
     ):
         api_key = settings.balldontlie_api_key
@@ -487,6 +489,12 @@ class NBAScraper(BaseScraper):
     # Season schedule (paginated – fetches the full season)
     # ------------------------------------------------------------------
 
+    # Minimum number of games in the DB for a season to be considered
+    # "seeded".  An NBA regular season has 1,230 games; 1,000 gives
+    # headroom for mid-season starts while avoiding the full paginated
+    # fetch on every sync cycle.
+    _SEASON_SEEDED_THRESHOLD = 1_000
+
     async def sync_season_schedule(
         self, session: AsyncSession, season: Optional[int] = None
     ) -> int:
@@ -498,9 +506,29 @@ class NBAScraper(BaseScraper):
         Uses a 6-hour cache TTL since historical game results don't
         change.  Today's live games are refreshed separately via
         ``sync_schedule``.
+
+        Once the season is seeded (>= 1,000 games in DB), this method
+        is a no-op — daily updates come through ``sync_schedule``.
         """
         if season is None:
             season = int(self.default_season)
+
+        # Skip if already seeded — daily games are refreshed via
+        # sync_schedule, so re-paginating the full season is wasteful
+        # and burns through the API rate limit budget.
+        existing = await session.execute(
+            select(func.count(Game.id)).where(
+                Game.sport == "nba",
+                Game.season == str(season),
+            )
+        )
+        game_count = existing.scalar() or 0
+        if game_count >= self._SEASON_SEEDED_THRESHOLD:
+            logger.info(
+                "NBA season %d already seeded (%d games), skipping full schedule fetch",
+                season, game_count,
+            )
+            return 0
 
         # 6-hour cache — historical games don't change; live/today
         # are refreshed via sync_schedule with the default shorter TTL.
@@ -637,6 +665,10 @@ class NBAScraper(BaseScraper):
             cursor = meta.get("next_cursor")
             if not cursor:
                 break
+
+            # Random jitter (1–3s) between pages to spread requests and
+            # avoid bursting through the API's rate-limit window.
+            await asyncio.sleep(1.0 + random.random() * 2.0)
 
         logger.info(
             "NBA season schedule synced (season=%s): %d games", season, synced_total
