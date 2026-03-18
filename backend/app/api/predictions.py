@@ -1034,31 +1034,18 @@ async def regenerate_predictions():
         steps.append(f"starter sync failed: {exc}")
 
     # Step 1b: Sync NBA schedule + team stats so predictions have real data.
+    # Uses the team_season_averages API endpoint (1 call for all 30 teams)
+    # instead of per-game box score fetching — avoids rate limits.
     try:
         async with get_write_session_context() as session:
             from app.scrapers.nba_api import NBAScraper
             async with NBAScraper() as nba_scraper:
-                # Sync today and nearby days for live status
-                for offset in range(-1, 3):
+                # Sync today + tomorrow schedule (2 API calls)
+                for offset in range(0, 2):
                     target = (today + timedelta(days=offset)).isoformat()
                     await nba_scraper.sync_schedule(session, target)
-                # Sync box scores for recent final games missing stats
-                from app.models.game import GamePlayerStats as GPS
-                recent_result = await session.execute(
-                    select(Game).where(
-                        Game.sport == "nba",
-                        func.lower(Game.status).in_(("final", "completed")),
-                        Game.date >= today - timedelta(days=30),
-                    )
-                )
-                for g in recent_result.scalars().all():
-                    cnt = await session.execute(
-                        select(func.count(GPS.id)).where(GPS.game_id == g.id)
-                    )
-                    if (cnt.scalar() or 0) == 0:
-                        await nba_scraper.sync_game_stats(session, g.external_id)
-                # Recompute team stats from all available box scores
-                await nba_scraper.sync_team_stats(session)
+                # Team stats from API (1 API call — no box scores needed)
+                await nba_scraper.sync_team_stats_from_api(session)
         steps.append("NBA schedule & stats synced")
     except Exception as exc:
         logger.warning("Regenerate: NBA schedule/stats sync failed: %s", exc)

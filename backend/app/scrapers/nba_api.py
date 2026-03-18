@@ -719,12 +719,226 @@ class NBAScraper(BaseScraper):
     # Team stats (standings + averages)
     # ------------------------------------------------------------------
 
+    async def sync_team_stats_from_api(self, session: AsyncSession) -> int:
+        """Fetch team season averages from the balldontlie API.
+
+        Uses the ``/team_season_averages/general?type=base`` endpoint to
+        get team-level stats (FG%, 3PT%, rebounds, etc.) in a single
+        paginated call — no per-game box score fetching required.
+        """
+        sport_cfg = settings.get_sport_config("nba")
+        season = sport_cfg.default_season
+
+        # Fetch team season averages from the API (all 30 teams fit in one page)
+        params: Dict[str, Any] = {
+            "season": int(season),
+            "season_type": "regular",
+            "type": "base",
+            "per_page": 100,
+        }
+
+        try:
+            data = await self.fetch_json(
+                "/team_season_averages/general", params=params
+            )
+        except Exception as exc:
+            logger.error("Failed to fetch NBA team season averages: %s", exc)
+            return 0
+
+        entries = data.get("data", [])
+        if not entries:
+            logger.warning("NBA team_season_averages returned no data")
+            return 0
+
+        # Build a map of abbreviation -> DB team for quick lookup
+        team_result = await session.execute(
+            select(Team).where(Team.sport == "nba", Team.active == True)
+        )
+        teams_by_abbr = {t.abbreviation: t for t in team_result.scalars().all()}
+        teams_by_name = {t.name: t for t in teams_by_abbr.values()}
+
+        synced = 0
+        for entry in entries:
+            api_team = entry.get("team", {})
+            stats = entry.get("stats", {})
+            if not api_team or not stats:
+                continue
+
+            # Resolve team
+            abbr = api_team.get("abbreviation", "")
+            abbr = _BDL_ABBREV_MAP.get(abbr, abbr)
+            team = teams_by_abbr.get(abbr)
+            if not team:
+                team = teams_by_name.get(api_team.get("full_name", ""))
+            if not team:
+                logger.debug("NBA team_season_averages: team not found for %s", abbr)
+                continue
+
+            # Extract stats — field names come from the API response
+            gp = _safe_int(stats.get("gp")) or _safe_int(stats.get("games_played")) or 0
+            wins = _safe_int(stats.get("w")) or _safe_int(stats.get("wins")) or 0
+            losses = _safe_int(stats.get("l")) or _safe_int(stats.get("losses")) or 0
+            pts = _safe_float(stats.get("pts")) or 0
+            fg_pct = _safe_float(stats.get("fg_pct"))
+            fg3_pct = _safe_float(stats.get("fg3_pct"))
+            ft_pct = _safe_float(stats.get("ft_pct"))
+            reb = _safe_float(stats.get("reb"))
+            ast = _safe_float(stats.get("ast"))
+            tov = _safe_float(stats.get("tov")) or _safe_float(stats.get("turnover"))
+            stl = _safe_float(stats.get("stl"))
+            blk = _safe_float(stats.get("blk"))
+            fg3m = _safe_float(stats.get("fg3m"))
+            opp_pts = _safe_float(stats.get("opp_pts"))
+            pace_val = _safe_float(stats.get("pace"))
+            off_rating = _safe_float(stats.get("off_rating"))
+            def_rating = _safe_float(stats.get("def_rating"))
+            fga = _safe_float(stats.get("fga"))
+            fta = _safe_float(stats.get("fta"))
+            min_val = _safe_float(stats.get("min"))
+
+            # Convert percentages: API may return as 0.48 or 48.0
+            if fg_pct is not None and fg_pct < 1:
+                fg_pct = round(fg_pct * 100, 1)
+            if fg3_pct is not None and fg3_pct < 1:
+                fg3_pct = round(fg3_pct * 100, 1)
+            if ft_pct is not None and ft_pct < 1:
+                ft_pct = round(ft_pct * 100, 1)
+
+            # Estimate pace if not directly provided
+            if pace_val is None and fga and reb and tov and fta:
+                oreb_est = (reb or 0) * 0.25
+                possessions = fga - oreb_est + (tov or 0) + 0.44 * fta
+                pace_val = round(possessions, 1)
+
+            # Estimate offensive rating if not provided
+            if off_rating is None and pace_val and pace_val > 0 and pts:
+                off_rating = round(pts / pace_val * 100, 1)
+
+            # Estimate defensive rating if not provided
+            if def_rating is None and pace_val and pace_val > 0 and opp_pts:
+                def_rating = round(opp_pts / pace_val * 100, 1)
+
+            # Also compute W-L from completed games in DB for records
+            games_result = await session.execute(
+                select(Game).where(
+                    Game.sport == "nba",
+                    Game.season == season,
+                    func.lower(Game.status).in_(("final", "completed")),
+                    (Game.home_team_id == team.id) | (Game.away_team_id == team.id),
+                ).order_by(Game.date.desc())
+            )
+            db_games = games_result.scalars().all()
+
+            # Compute records from DB games
+            home_w = home_l = away_w = away_l = 0
+            total_pf = total_pa = 0
+            recent_results: List[str] = []
+
+            for g in db_games:
+                is_home = g.home_team_id == team.id
+                pf = (g.home_score or 0) if is_home else (g.away_score or 0)
+                pa = (g.away_score or 0) if is_home else (g.home_score or 0)
+                total_pf += pf
+                total_pa += pa
+                won = pf > pa
+                if won:
+                    if is_home:
+                        home_w += 1
+                    else:
+                        away_w += 1
+                else:
+                    if is_home:
+                        home_l += 1
+                    else:
+                        away_l += 1
+                recent_results.append("W" if won else "L")
+
+            # Use DB-computed W/L if API didn't provide
+            if wins == 0 and losses == 0 and db_games:
+                wins = recent_results.count("W")
+                losses = recent_results.count("L")
+                gp = len(db_games)
+
+            def _fmt_record(results: List[str]) -> str:
+                w = results.count("W")
+                l_ = results.count("L")
+                return f"{w}-{l_}"
+
+            home_record = f"{home_w}-{home_l}"
+            away_record = f"{away_w}-{away_l}"
+            record_last_5 = _fmt_record(recent_results[:5]) if len(recent_results) >= 5 else None
+            record_last_10 = _fmt_record(recent_results[:10]) if len(recent_results) >= 10 else None
+            record_last_20 = _fmt_record(recent_results[:20]) if len(recent_results) >= 20 else None
+
+            goals_for_pg = round(total_pf / gp, 2) if gp > 0 else (pts or 0)
+            goals_against_pg = round(total_pa / gp, 2) if gp > 0 else (opp_pts or 0)
+
+            # Upsert TeamStats
+            stats_result = await session.execute(
+                select(TeamStats).where(
+                    TeamStats.team_id == team.id,
+                    TeamStats.season == season,
+                )
+            )
+            existing = stats_result.scalar_one_or_none()
+
+            stat_fields = dict(
+                games_played=gp,
+                wins=wins,
+                losses=losses,
+                goals_for=total_pf or int(pts * gp) if pts else 0,
+                goals_against=total_pa or int((opp_pts or 0) * gp) if opp_pts else 0,
+                goals_for_per_game=goals_for_pg,
+                goals_against_per_game=goals_against_pg,
+                points=wins,
+                home_record=home_record,
+                away_record=away_record,
+                record_last_5=record_last_5,
+                record_last_10=record_last_10,
+                record_last_20=record_last_20,
+                fg_pct=fg_pct,
+                three_pt_pct=fg3_pct,
+                ft_pct=ft_pct,
+                rebounds_per_game=reb,
+                assists_per_game=ast,
+                turnovers_per_game=tov,
+                steals_per_game=stl,
+                blocks_per_game=blk,
+                three_pt_made_per_game=fg3m,
+                pace=pace_val,
+                offensive_rating=off_rating,
+                defensive_rating=def_rating,
+                date_updated=datetime.now(timezone.utc),
+            )
+
+            if existing:
+                for k, v in stat_fields.items():
+                    setattr(existing, k, v)
+            else:
+                ts = TeamStats(
+                    team_id=team.id,
+                    season=season,
+                    ot_losses=0,
+                    **stat_fields,
+                )
+                session.add(ts)
+
+            synced += 1
+
+        await session.flush()
+        logger.info("NBA team stats synced from API: %d teams", synced)
+        return synced
+
     async def sync_team_stats(self, session: AsyncSession) -> int:
         """Compute team stats from completed games this season.
 
         Aggregates box-score-level player stats per game to derive
         NBA-specific team averages: FG%, 3PT%, FT%, rebounds, assists,
         turnovers, steals, blocks, pace, and offensive/defensive rating.
+
+        Prefer ``sync_team_stats_from_api`` when possible — it fetches
+        the same data in a single API call instead of requiring box
+        scores for every game.
         """
         sport_cfg = settings.get_sport_config("nba")
         season = sport_cfg.default_season
@@ -989,10 +1203,13 @@ class NBAScraper(BaseScraper):
     async def sync_all(self, session: AsyncSession) -> None:
         """Run the full NBA sync pipeline.
 
-        Fetches the entire current season's schedule (not just a narrow
-        date window) so that team stats are computed from all completed
-        games.  Box score player stats are synced for every finished game
-        that doesn't already have them.
+        Fetches the entire current season's schedule and pulls team-level
+        season averages directly from the API (1 call for all 30 teams)
+        instead of requiring per-game box score fetching.
+
+        Box scores are still synced for recent games (last 14 days) to
+        support player-level analytics — but team stats no longer depend
+        on having every box score.
         """
         await self.sync_teams(session)
 
@@ -1007,13 +1224,17 @@ class NBAScraper(BaseScraper):
             target = today + timedelta(days=offset)
             await self.sync_schedule(session, target.isoformat())
 
-        # Sync box scores for ALL completed games this season that are
-        # missing player-level stats (no 14-day cap).
+        # Team stats from the API (1 call, no box scores needed)
+        await self.sync_team_stats_from_api(session)
+
+        # Box scores for recent games only — used for player-level
+        # analytics, not for team stats.  Keeps API calls manageable.
         result = await session.execute(
             select(Game).where(
                 Game.sport == "nba",
                 Game.season == str(current_season),
                 func.lower(Game.status).in_(("final", "completed")),
+                Game.date >= today - timedelta(days=14),
             )
         )
         final_games = result.scalars().all()
@@ -1031,7 +1252,4 @@ class NBAScraper(BaseScraper):
                 synced_box += 1
 
         logger.info("NBA box scores synced for %d games", synced_box)
-
-        await self.sync_team_stats(session)
-
         logger.info("NBA full sync completed")
