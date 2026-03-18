@@ -531,22 +531,8 @@ async def _run_full_data_sync():
         except Exception as nba_inj_exc:
             logger.error("NBA injury sync failed: %s", nba_inj_exc)
 
-        # Sync NBA data (teams, players, schedule, stats)
-        try:
-            from app.scrapers.nba_api import NBAScraper
-            nba_scraper = NBAScraper()
-            try:
-                async with get_write_session_context() as session:
-                    await nba_scraper.sync_teams(session)
-                async with get_write_session_context() as session:
-                    await nba_scraper.sync_schedule(session)
-                async with get_write_session_context() as session:
-                    await nba_scraper.sync_team_stats(session)
-            finally:
-                await nba_scraper.close()
-            logger.info("NBA data sync completed")
-        except Exception as nba_exc:
-            logger.error("NBA data sync failed: %s", nba_exc)
+        # NBA data already synced by _run_full_sync → sync_all.
+        # No duplicate calls needed here.
 
         # Sync NBA odds
         try:
@@ -617,23 +603,6 @@ async def _scheduler_loop():
     logger.info("Live odds scheduler started (credit-optimised)")
 
     loop = asyncio.get_event_loop()
-
-    # Quick NBA schedule sync BEFORE the full data sync.
-    # The full sync runs NHL first (30-60+ minutes), so NBA games
-    # wouldn't appear until it finishes without this early sync.
-    try:
-        from app.scrapers.nba_api import NBAScraper
-        nba_scraper = NBAScraper()
-        try:
-            async with get_write_session_context() as session:
-                await nba_scraper.sync_teams(session)
-            async with get_write_session_context() as session:
-                await nba_scraper.sync_schedule(session)
-            logger.info("Early NBA schedule sync completed")
-        finally:
-            await nba_scraper.close()
-    except Exception as exc:
-        logger.warning("Early NBA schedule sync failed: %s", exc)
 
     # Launch the full data sync as a BACKGROUND task so it never blocks
     # the fast odds polling loop.  Previous behaviour was to await the
