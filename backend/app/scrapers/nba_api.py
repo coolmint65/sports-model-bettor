@@ -496,6 +496,29 @@ class NBAScraper(BaseScraper):
         if season is None:
             season = int(self.default_season)
 
+        # Skip bulk season fetch if we already have a full season of games.
+        # An NBA regular season has ~1230 games; 1000 is a safe threshold
+        # that indicates the initial seed is complete.  New/live games are
+        # picked up by the daily sync_schedule calls (today + tomorrow).
+        count_result = await session.execute(
+            select(func.count(Game.id)).where(
+                Game.sport == "nba",
+                Game.season == str(season),
+            )
+        )
+        existing_games = count_result.scalar() or 0
+        if existing_games >= 1000:
+            logger.info(
+                "NBA season %s already seeded (%d games), skipping bulk /games sync",
+                season, existing_games,
+            )
+            return 0
+
+        logger.info(
+            "NBA season %s has %d games — running bulk schedule sync",
+            season, existing_games,
+        )
+
         # 6-hour cache — historical games don't change; live/today
         # are refreshed via sync_schedule with the default shorter TTL.
         season_cache_ttl = 21_600.0
@@ -1274,15 +1297,16 @@ class NBAScraper(BaseScraper):
     async def sync_all(self, session: AsyncSession) -> None:
         """Run the full NBA sync pipeline.
 
-        All expensive API calls use long cache TTLs so repeated syncs
-        (every 60 min) serve from SQLite cache and make zero network
-        requests until the cache expires:
+        Paginated endpoints (players, season schedule) only run their
+        bulk fetch on initial seed.  After that, new data is discovered
+        incrementally via date-specific schedule calls and box-score
+        player auto-creation.
 
-        - Teams: 120s (default) — 1 call, 30 teams
-        - Players: 24h cache — paginated, ~5 calls
-        - Season schedule: 6h cache — paginated, ~15 calls
+        - Teams: 120s cache — 1 call, 30 teams
+        - Players: skipped once seeded (400+); new ones auto-created from box scores
+        - Season schedule: skipped once seeded (1000+ games); daily games via sync_schedule
         - Team season averages: 1h cache — 1 call, 30 teams
-        - Box scores: 120s (default) — only last 14 days, only missing
+        - Box scores: 7-day cache — only last 14 days, only missing
         """
         await self.sync_teams(session)
 
