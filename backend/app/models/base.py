@@ -5,15 +5,42 @@ Provides the Base class for all ORM models and reusable mixins
 for common columns like timestamps.
 """
 
+import json
 from datetime import datetime, timezone
+from typing import Any, Optional
 
-from sqlalchemy import DateTime, Integer, func
+from sqlalchemy import DateTime, Integer, Text, func
 from sqlalchemy.orm import (
     DeclarativeBase,
     Mapped,
     declared_attr,
     mapped_column,
 )
+from sqlalchemy.types import TypeDecorator
+
+
+class JSONText(TypeDecorator):
+    """JSON stored as TEXT — portable replacement for sa.JSON on SQLite.
+
+    SQLAlchemy's built-in JSON type can trigger ``CompileError: Can't
+    generate DDL for NullType()`` on certain Python / SQLite / platform
+    combinations (notably Python 3.14 on Windows).  This TypeDecorator
+    avoids the issue by rendering as plain TEXT in DDL while providing
+    identical automatic ``json.dumps`` / ``json.loads`` round-tripping.
+    """
+
+    impl = Text
+    cache_ok = True
+
+    def process_bind_param(self, value: Optional[Any], dialect: Any) -> Optional[str]:
+        if value is not None:
+            return json.dumps(value)
+        return value
+
+    def process_result_value(self, value: Optional[str], dialect: Any) -> Optional[Any]:
+        if value is not None:
+            return json.loads(value)
+        return value
 
 
 class Base(DeclarativeBase):

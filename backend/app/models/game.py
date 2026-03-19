@@ -19,10 +19,9 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
 )
-from sqlalchemy.types import JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base, TimestampMixin
+from app.models.base import Base, JSONText, TimestampMixin
 
 if TYPE_CHECKING:
     from app.models.player import Player
@@ -146,12 +145,12 @@ class Game(TimestampMixin, Base):
     # All available total lines from sportsbooks (JSON list)
     # e.g. [{"line": 4.5, "over_price": -180, "under_price": 150}, ...]
     all_total_lines: Mapped[Optional[str]] = mapped_column(
-        JSON, nullable=True, default=None
+        JSONText, nullable=True, default=None
     )
     # All available spread lines from sportsbooks (JSON list)
     # e.g. [{"line": 1.5, "home_spread": -1.5, "away_spread": 1.5, "home_price": ..., "away_price": ...}, ...]
     all_spread_lines: Mapped[Optional[str]] = mapped_column(
-        JSON, nullable=True, default=None
+        JSONText, nullable=True, default=None
     )
 
     # Both Teams to Score (BTTS) odds
