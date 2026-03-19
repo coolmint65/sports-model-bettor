@@ -743,10 +743,18 @@ async def get_live_games(
     Syncs scores/clock from NHL API for live games. Odds syncing is
     handled by the background scheduler — not inline in GET requests.
     """
+    today = date.today()
+
+    # Only return live games from today.  Games from past dates that
+    # are still marked "in_progress" are stale (the scheduler cleans
+    # them up, but this guards against any that slip through).
     result = await session.execute(
         select(Game)
         .options(selectinload(Game.home_team), selectinload(Game.away_team))
-        .where(func.lower(Game.status).in_(("in_progress", "live")))
+        .where(
+            Game.date == today,
+            func.lower(Game.status).in_(("in_progress", "live")),
+        )
         .order_by(Game.start_time.asc().nulls_last(), Game.id.asc())
     )
     games = result.scalars().all()
@@ -755,8 +763,7 @@ async def get_live_games(
     if games:
         try:
             async with session.begin_nested():
-                for game in games:
-                    await _try_sync_schedule(session, target_date=game.date)
+                await _try_sync_schedule(session, target_date=today)
                 await session.flush()
         except Exception as exc:
             logger.warning("Live schedule sync failed: %s", exc)
@@ -765,7 +772,10 @@ async def get_live_games(
         result = await session.execute(
             select(Game)
             .options(selectinload(Game.home_team), selectinload(Game.away_team))
-            .where(func.lower(Game.status).in_(("in_progress", "live")))
+            .where(
+                Game.date == today,
+                func.lower(Game.status).in_(("in_progress", "live")),
+            )
             .order_by(Game.start_time.asc().nulls_last(), Game.id.asc())
         )
         games = result.scalars().all()
@@ -787,7 +797,6 @@ async def get_live_games(
             top_picks.get(game.id), top_props.get(game.id),
         ))
 
-    today = date.today()
     return ScheduleResponse(date=today, game_count=len(schedule_games), games=schedule_games)
 
 

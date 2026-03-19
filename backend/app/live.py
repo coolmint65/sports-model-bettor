@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Set
 from fastapi import WebSocket, WebSocketDisconnect
 
 from app.utils import serialize_utc_datetime
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload
 
 from app.constants import GAME_FINAL_STATUSES
@@ -270,6 +270,35 @@ async def _run_full_data_sync():
         logger.error("Periodic full data sync failed: %s", exc, exc_info=True)
 
 
+async def _finalize_stale_games():
+    """Mark in-progress games from past dates as final.
+
+    When the server crosses midnight (or restarts the next day), games
+    from yesterday that were still 'in_progress' get orphaned because
+    the scheduler only syncs today's games.  This sweeps them up.
+    """
+    try:
+        async with get_session_context() as session:
+            today = date.today()
+            result = await session.execute(
+                update(Game)
+                .where(
+                    Game.date < today,
+                    func.lower(Game.status).in_(("in_progress", "live")),
+                )
+                .values(status="final")
+                .returning(Game.id)
+            )
+            stale_ids = result.scalars().all()
+            if stale_ids:
+                logger.info(
+                    "Finalized %d stale in-progress games from past dates: %s",
+                    len(stale_ids), stale_ids,
+                )
+    except Exception as exc:
+        logger.warning("Stale game cleanup failed: %s", exc)
+
+
 async def _scheduler_loop():
     """Adaptive scheduler: fast odds when live, slower predictions & full sync.
 
@@ -304,6 +333,10 @@ async def _scheduler_loop():
     last_full_sync = loop.time()
     last_pred_regen = loop.time()
     _iteration = 0
+
+    # Clean up any in-progress games from past dates that were
+    # orphaned when the server crossed midnight or restarted.
+    await _finalize_stale_games()
 
     # Brief pause to let the full sync populate today's schedule
     # before we start querying for games.
