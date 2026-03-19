@@ -59,6 +59,7 @@ class SignalGenerator:
 
         # NBA-specific signals (pace, efficiency, shooting, rebounding, turnovers)
         if is_nba:
+            signals.extend(self._nba_record_signals(features, home_abbr, away_abbr, home_name, away_name))
             signals.extend(self._nba_pace_signals(features, home_abbr, away_abbr, home_name, away_name))
             signals.extend(self._nba_efficiency_signals(features, home_abbr, away_abbr, home_name, away_name))
             signals.extend(self._nba_shooting_signals(features, home_abbr, away_abbr, home_name, away_name))
@@ -117,65 +118,54 @@ class SignalGenerator:
         home_games = home_f5.get("games_found", 0)
         away_games = away_f5.get("games_found", 0)
 
-        # L5 form tiers — each team checked against the same thresholds
-        for abbr, name, wr, games in [
-            (home_abbr, home_name, home_wr, home_games),
-            (away_abbr, away_name, away_wr, away_games),
-        ]:
-            if games < 5:
-                continue
-            w = int(wr * games)
-            l = games - w
-            if wr >= 0.80:
-                signals.append(_signal(
-                    "form", f"{name} on hot streak ({w}-{l} L5)",
-                    "positive", abbr, 0.75, icon="fire",
-                ))
-            elif wr >= 0.60:
-                signals.append(_signal(
-                    "form", f"{name} solid recent form ({w}-{l} L5)",
-                    "positive", abbr, 0.45, icon="chart",
-                ))
-            elif wr <= 0.20:
-                signals.append(_signal(
-                    "form", f"{name} struggling in recent games",
-                    "negative", abbr, 0.65,
-                ))
-            elif wr <= 0.40:
-                signals.append(_signal(
-                    "form", f"{name} in cold stretch ({w}-{l} L5)",
-                    "negative", abbr, 0.45,
-                ))
-
-        # Form comparison when there's a notable difference
-        if home_games >= 3 and away_games >= 3:
-            diff = home_wr - away_wr
-            if abs(diff) >= 0.20:
-                better = home_name if diff > 0 else away_name
-                better_abbr = home_abbr if diff > 0 else away_abbr
-                signals.append(_signal(
-                    "form",
-                    f"{better} has stronger recent form",
-                    "positive", better_abbr, 0.35,
-                ))
-
-        # L10 form context
+        # Pick the single most notable form signal per team (L5 preferred, L10 if more notable)
         home_f10 = features.get("home_form_10", {})
         away_f10 = features.get("away_form_10", {})
         h10_wr = home_f10.get("win_rate", 0.5)
         a10_wr = away_f10.get("win_rate", 0.5)
         h10_games = home_f10.get("games_found", 0)
         a10_games = away_f10.get("games_found", 0)
-        if h10_games >= 8 and a10_games >= 8 and abs(h10_wr - a10_wr) >= 0.25:
-            better = home_name if h10_wr > a10_wr else away_name
-            better_abbr = home_abbr if h10_wr > a10_wr else away_abbr
-            h10_w = int(h10_wr * h10_games) if h10_wr > a10_wr else int(a10_wr * a10_games)
-            h10_l = (h10_games if h10_wr > a10_wr else a10_games) - h10_w
-            signals.append(_signal(
-                "form",
-                f"{better} stronger over last 10 games ({h10_w}-{h10_l})",
-                "positive", better_abbr, 0.40,
-            ))
+
+        for abbr, name, wr, games, wr10, games10 in [
+            (home_abbr, home_name, home_wr, home_games, h10_wr, h10_games),
+            (away_abbr, away_name, away_wr, away_games, a10_wr, a10_games),
+        ]:
+            # Prefer L5 streak if extreme, else fall back to L10
+            if games >= 5:
+                w = int(wr * games)
+                l = games - w
+                if wr >= 0.80:
+                    signals.append(_signal(
+                        "form", f"{name} on hot streak ({w}-{l} L5)",
+                        "positive", abbr, 0.75, icon="fire",
+                    ))
+                    continue  # skip L10 for this team
+                elif wr <= 0.20:
+                    signals.append(_signal(
+                        "form", f"{name} struggling badly ({w}-{l} L5)",
+                        "negative", abbr, 0.65,
+                    ))
+                    continue
+                elif wr <= 0.40:
+                    signals.append(_signal(
+                        "form", f"{name} in cold stretch ({w}-{l} L5)",
+                        "negative", abbr, 0.45,
+                    ))
+                    continue
+            # Only add L10 context if L5 wasn't extreme enough
+            if games10 >= 8:
+                w10 = int(wr10 * games10)
+                l10 = games10 - w10
+                if wr10 >= 0.70:
+                    signals.append(_signal(
+                        "form", f"{name} strong over last 10 ({w10}-{l10})",
+                        "positive", abbr, 0.50, icon="chart",
+                    ))
+                elif wr10 <= 0.30:
+                    signals.append(_signal(
+                        "form", f"{name} struggling over last 10 ({w10}-{l10})",
+                        "negative", abbr, 0.45,
+                    ))
 
         return signals
 
@@ -1174,32 +1164,56 @@ class SignalGenerator:
         signals = []
         home_season = features.get("home_season", {})
         away_season = features.get("away_season", {})
+        is_nba = features.get("sport", "nhl") == "nba"
 
         home_gf = home_season.get("goals_for_pg", 3.0)
         home_ga = home_season.get("goals_against_pg", 3.0)
         away_gf = away_season.get("goals_for_pg", 3.0)
         away_ga = away_season.get("goals_against_pg", 3.0)
 
+        # Use sport-appropriate thresholds and labels
+        unit = "PPG" if is_nba else "GF/g"
+        def_unit = "PA/g" if is_nba else "GA/g"
+        threshold = 5.0 if is_nba else 0.5
+
         # Home offense vs away defense
         home_off_edge = home_gf - away_ga
-        if home_off_edge >= 0.5:
+        if home_off_edge >= threshold:
             signals.append(_signal(
                 "matchup",
-                f"{home_name} offense ({home_gf:.1f} GF/g) vs weak defense ({away_ga:.1f} GA/g)",
+                f"{home_name} offense ({home_gf:.1f} {unit}) vs weak defense ({away_ga:.1f} {def_unit})",
                 "positive", home_abbr,
-                min(0.65, 0.35 + home_off_edge / 3.0),
+                min(0.65, 0.35 + (home_off_edge / threshold) * 0.10),
                 icon="chart",
             ))
 
         # Away offense vs home defense
         away_off_edge = away_gf - home_ga
-        if away_off_edge >= 0.5:
+        if away_off_edge >= threshold:
             signals.append(_signal(
                 "matchup",
-                f"{away_name} offense ({away_gf:.1f} GF/g) vs weak defense ({home_ga:.1f} GA/g)",
+                f"{away_name} offense ({away_gf:.1f} {unit}) vs weak defense ({home_ga:.1f} {def_unit})",
                 "positive", away_abbr,
-                min(0.65, 0.35 + away_off_edge / 3.0),
+                min(0.65, 0.35 + (away_off_edge / threshold) * 0.10),
                 icon="chart",
+            ))
+
+        # Scoring differential advantage (new signal for diversity)
+        home_diff = home_gf - home_ga
+        away_diff = away_gf - away_ga
+        diff_gap = home_diff - away_diff
+        diff_threshold = 6.0 if is_nba else 0.6
+        if abs(diff_gap) >= diff_threshold:
+            better = home_name if diff_gap > 0 else away_name
+            better_abbr = home_abbr if diff_gap > 0 else away_abbr
+            better_diff = home_diff if diff_gap > 0 else away_diff
+            signals.append(_signal(
+                "matchup",
+                f"{better} has superior scoring margin ({better_diff:+.1f} per game)",
+                "positive", better_abbr,
+                min(0.60, 0.35 + abs(diff_gap) / (diff_threshold * 4)),
+                icon="chart",
+                tooltip="Scoring margin = Points scored - Points allowed per game",
             ))
 
         return signals
@@ -1944,6 +1958,66 @@ class SignalGenerator:
 
         return signals
 
+
+    # ------------------------------------------------------------------ #
+    #  NBA: Season record & home court signals                             #
+    # ------------------------------------------------------------------ #
+
+    def _nba_record_signals(
+        self,
+        features: Dict[str, Any],
+        home_abbr: str,
+        away_abbr: str,
+        home_name: str,
+        away_name: str,
+    ) -> List[Dict[str, Any]]:
+        signals = []
+        home_s = features.get("home_season", {})
+        away_s = features.get("away_season", {})
+        home_wp = home_s.get("win_pct", 0.5)
+        away_wp = away_s.get("win_pct", 0.5)
+
+        # Win percentage gap
+        wp_diff = home_wp - away_wp
+        if abs(wp_diff) >= 0.15:
+            better = home_name if wp_diff > 0 else away_name
+            better_abbr = home_abbr if wp_diff > 0 else away_abbr
+            better_wp = max(home_wp, away_wp)
+            worse_wp = min(home_wp, away_wp)
+            signals.append(_signal(
+                "record",
+                f"{better} significantly better season record ({better_wp:.0%} vs {worse_wp:.0%} win rate)",
+                "positive", better_abbr,
+                min(0.65, 0.35 + abs(wp_diff)),
+                icon="chart",
+                tooltip="Season win percentage comparison",
+            ))
+
+        # Home court advantage
+        home_splits = features.get("home_splits", {})
+        home_split_wr = home_splits.get("win_rate", 0.5)
+        home_split_games = home_splits.get("games_found", 0)
+        if home_split_wr >= 0.65 and home_split_games >= 10:
+            signals.append(_signal(
+                "venue",
+                f"{home_name} strong at home ({home_split_wr:.0%} home win rate)",
+                "positive", home_abbr, 0.45, icon="home",
+                tooltip="Home court advantage with a strong home record",
+            ))
+
+        # Away team road woes
+        away_splits = features.get("away_splits", {})
+        away_split_wr = away_splits.get("win_rate", 0.5)
+        away_split_games = away_splits.get("games_found", 0)
+        if away_split_wr <= 0.35 and away_split_games >= 10:
+            signals.append(_signal(
+                "venue",
+                f"{away_name} poor on the road ({away_split_wr:.0%} away win rate)",
+                "negative", away_abbr, 0.40,
+                tooltip="Team struggles away from home",
+            ))
+
+        return signals
 
     # ------------------------------------------------------------------ #
     #  NBA: Pace signals                                                   #

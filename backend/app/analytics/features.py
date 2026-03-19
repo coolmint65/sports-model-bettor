@@ -963,6 +963,45 @@ class FeatureEngine:
             sport = (team_result.scalar() or "nhl").lower()
 
             if sport == "nba":
+                # Try to compute from Game records before falling back to defaults
+                game_fb_result = await db.execute(
+                    select(Game).where(
+                        or_(Game.home_team_id == team_id, Game.away_team_id == team_id),
+                        Game.status == "final",
+                        Game.home_score.isnot(None),
+                    ).order_by(Game.date.desc()).limit(82)
+                )
+                fb_games = game_fb_result.scalars().all()
+                if fb_games:
+                    fb_wins = fb_losses = 0
+                    fb_pf = fb_pa = 0
+                    for g in fb_games:
+                        is_home = g.home_team_id == team_id
+                        pf = (g.home_score or 0) if is_home else (g.away_score or 0)
+                        pa = (g.away_score or 0) if is_home else (g.home_score or 0)
+                        fb_pf += pf
+                        fb_pa += pa
+                        if pf > pa:
+                            fb_wins += 1
+                        else:
+                            fb_losses += 1
+                    fb_gp = len(fb_games)
+                    base_result = {
+                        "goals_for_pg": round(fb_pf / fb_gp, 2),
+                        "goals_against_pg": round(fb_pa / fb_gp, 2),
+                        "pp_pct": 0.0,
+                        "pk_pct": 0.0,
+                        "shots_for_pg": 0.0,
+                        "shots_against_pg": 0.0,
+                        "faceoff_pct": 0.0,
+                        "win_pct": round(fb_wins / fb_gp, 4),
+                    }
+                    # Also try box-score-derived NBA stats
+                    nba_fb = await self._compute_nba_season_from_box_scores(db, team_id)
+                    if nba_fb:
+                        base_result.update(nba_fb)
+                    return base_result
+
                 _nba_cfg = settings.nba_model
                 return {
                     "goals_for_pg": _nba_cfg.league_avg_points,
@@ -1016,6 +1055,109 @@ class FeatureEngine:
                 "offensive_rating": stats.offensive_rating,
                 "defensive_rating": stats.defensive_rating,
             })
+        else:
+            # Fallback: compute NBA stats from GamePlayerStats box scores
+            team_result_q = await db.execute(
+                select(Team.sport).where(Team.id == team_id)
+            )
+            team_sport = (team_result_q.scalar() or "nhl").lower()
+            if team_sport == "nba":
+                nba_fallback = await self._compute_nba_season_from_box_scores(db, team_id)
+                if nba_fallback:
+                    result.update(nba_fallback)
+
+        return result
+
+    async def _compute_nba_season_from_box_scores(
+        self,
+        db: AsyncSession,
+        team_id: int,
+    ) -> Dict[str, Any]:
+        """Compute NBA team stats from GamePlayerStats as fallback."""
+        game_result = await db.execute(
+            select(Game)
+            .where(
+                or_(Game.home_team_id == team_id, Game.away_team_id == team_id),
+                Game.status == "final",
+                Game.home_score.isnot(None),
+            )
+            .order_by(Game.date.desc())
+            .limit(82)
+        )
+        games = game_result.scalars().all()
+        if not games:
+            return {}
+
+        game_ids = [g.id for g in games]
+        ps_result = await db.execute(
+            select(GamePlayerStats)
+            .join(Player, GamePlayerStats.player_id == Player.id)
+            .where(
+                GamePlayerStats.game_id.in_(game_ids),
+                Player.team_id == team_id,
+            )
+        )
+        player_stats = ps_result.scalars().all()
+        if not player_stats:
+            return {}
+
+        game_totals: Dict[int, Dict[str, float]] = {}
+        for ps in player_stats:
+            gt = game_totals.setdefault(ps.game_id, {
+                "pts": 0, "fga": 0, "fg3m": 0, "ftm": 0,
+                "fta": 0, "reb": 0, "ast": 0, "tov": 0,
+                "stl": 0, "blk": 0,
+            })
+            gt["pts"] += ps.points or ps.goals or 0
+            gt["fga"] += ps.shots or 0
+            gt["fg3m"] += ps.three_pointers_made or 0
+            gt["ftm"] += ps.free_throws_made or 0
+            gt["fta"] += ps.free_throws_attempted or 0
+            gt["reb"] += ps.rebounds or 0
+            gt["ast"] += ps.assists or 0
+            gt["tov"] += ps.turnovers or 0
+            gt["stl"] += ps.steals or 0
+            gt["blk"] += ps.blocks or 0
+
+        n_games = len(game_totals)
+        if n_games == 0:
+            return {}
+
+        totals = {k: sum(gt[k] for gt in game_totals.values()) for k in next(iter(game_totals.values()))}
+        total_fga = totals["fga"]
+        total_fg3m = totals["fg3m"]
+        total_ftm = totals["ftm"]
+        total_fta = totals["fta"]
+        total_pts = totals["pts"]
+
+        fg2m = max(0, (total_pts - 3 * total_fg3m - total_ftm) / 2)
+        total_fgm = fg2m + total_fg3m
+        fg3a_est = total_fg3m / 0.36 if total_fg3m > 0 else 0
+
+        result: Dict[str, Any] = {}
+        if total_fga > 0:
+            result["fg_pct"] = round(total_fgm / total_fga * 100, 1)
+        if fg3a_est > 0:
+            result["three_pt_pct"] = round(total_fg3m / fg3a_est * 100, 1)
+        if total_fta > 0:
+            result["ft_pct"] = round(total_ftm / total_fta * 100, 1)
+        result["rebounds_pg"] = round(totals["reb"] / n_games, 1)
+        result["assists_pg"] = round(totals["ast"] / n_games, 1)
+        result["turnovers_pg"] = round(totals["tov"] / n_games, 1)
+        result["steals_pg"] = round(totals["stl"] / n_games, 1)
+        result["blocks_pg"] = round(totals["blk"] / n_games, 1)
+        result["three_pt_made_pg"] = round(total_fg3m / n_games, 1)
+
+        oreb_est = totals["reb"] * 0.25
+        possessions = total_fga - oreb_est + totals["tov"] + 0.44 * total_fta
+        if possessions > 0:
+            result["pace"] = round(possessions / n_games, 1)
+            result["offensive_rating"] = round(total_pts / possessions * 100, 1)
+            total_pa = sum(
+                (g.away_score or 0) if g.home_team_id == team_id else (g.home_score or 0)
+                for g in games if g.id in game_totals
+            )
+            result["defensive_rating"] = round(total_pa / possessions * 100, 1)
 
         return result
 

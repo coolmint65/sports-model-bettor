@@ -515,8 +515,8 @@ function AIAnalysis({ game, homeAbbr, awayAbbr, homeTeamLabel, awayTeamLabel }) 
   }
 
   // Categorize reasons into positive/negative/neutral
-  const negativeKeywords = ['losing', 'loss', 'struggle', 'injury', 'missing', 'without', 'concern', 'decline', 'losing streak'];
-  const positiveKeywords = ['strong', 'winning', 'advantage', 'record', 'home-ice', 'home-court', 'dominant', 'superior', 'hot streak', 'edge', 'dominates'];
+  const negativeKeywords = ['losing', 'loss', 'struggle', 'struggling', 'injury', 'missing', 'without', 'concern', 'decline', 'losing streak', 'cold stretch', 'weak', 'poor', 'woes'];
+  const positiveKeywords = ['strong', 'winning', 'advantage', 'record', 'home-ice', 'home-court', 'dominant', 'superior', 'hot streak', 'edge', 'dominates', 'elite', 'better', 'shoots', 'shooting', 'efficient', 'significantly'];
   const categorized = reasons.slice(0, 6).map((r) => {
     const lower = r.toLowerCase();
     if (negativeKeywords.some((k) => lower.includes(k))) return { text: r, type: 'negative' };

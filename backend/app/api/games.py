@@ -21,7 +21,7 @@ from sqlalchemy.orm import selectinload
 from app.config import settings
 from app.constants import GAME_FINAL_STATUSES, composite_pick_score, is_heavy_juice
 from app.database import get_session
-from app.models.game import Game, GameGoalieStats, HeadToHead
+from app.models.game import Game, GameGoalieStats, GamePlayerStats, HeadToHead
 from app.models.injury import InjuryReport
 from app.models.odds_history import OddsSnapshot
 from app.models.player import GoalieStats, Player
@@ -347,35 +347,165 @@ async def _get_team_form(team: Team, session: AsyncSession) -> TeamForm:
             )
             form.division_size = div_count.scalar() or 0
 
-    # Fallback: compute shots per game from Game records if still missing
-    if form.shots_for_per_game is None or form.shots_against_per_game is None:
-        shot_result = await session.execute(
+    # Fallback: compute stats from Game records when TeamStats is missing data
+    sport = (team.sport or "nhl").lower()
+    needs_basic = form.wins == 0 and form.losses == 0
+    needs_shots = form.shots_for_per_game is None or form.shots_against_per_game is None
+    needs_nba = sport == "nba" and form.fg_pct is None
+
+    if needs_basic or needs_shots or needs_nba:
+        game_result = await session.execute(
             select(Game)
             .where(
                 or_(Game.home_team_id == team.id, Game.away_team_id == team.id),
                 func.lower(Game.status).in_(GAME_FINAL_STATUSES),
-                Game.home_shots.isnot(None),
-                Game.away_shots.isnot(None),
+                Game.home_score.isnot(None),
             )
             .order_by(Game.date.desc())
-            .limit(30)
+            .limit(82)  # full NBA season
         )
-        recent_games = shot_result.scalars().all()
-        if recent_games:
+        recent_games = game_result.scalars().all()
+
+        if recent_games and needs_basic:
+            wins = losses = home_w = home_l = away_w = away_l = 0
+            total_pf = total_pa = 0
+            results_list = []
+            for g in recent_games:
+                is_home = g.home_team_id == team.id
+                pf = (g.home_score or 0) if is_home else (g.away_score or 0)
+                pa = (g.away_score or 0) if is_home else (g.home_score or 0)
+                total_pf += pf
+                total_pa += pa
+                won = pf > pa
+                results_list.append("W" if won else "L")
+                if won:
+                    wins += 1
+                    if is_home:
+                        home_w += 1
+                    else:
+                        away_w += 1
+                else:
+                    losses += 1
+                    if is_home:
+                        home_l += 1
+                    else:
+                        away_l += 1
+
+            gp = len(recent_games)
+            form.wins = wins
+            form.losses = losses
+            form.games_played = gp
+            form.points = wins  # NBA: points = wins
+            form.goal_diff = total_pf - total_pa
+            if sport == "nba" and gp > 0:
+                form.points_pct = round(wins / gp, 3)
+            form.home_record = f"{home_w}-{home_l}"
+            form.away_record = f"{away_w}-{away_l}"
+            if form.goals_for_per_game is None and gp > 0:
+                form.goals_for_per_game = round(total_pf / gp, 2)
+            if form.goals_against_per_game is None and gp > 0:
+                form.goals_against_per_game = round(total_pa / gp, 2)
+
+            def _fmt(res):
+                return f"{res.count('W')}-{res.count('L')}"
+
+            if form.record_last_5 is None and len(results_list) >= 5:
+                form.record_last_5 = _fmt(results_list[:5])
+            if form.record_last_10 is None and len(results_list) >= 10:
+                form.record_last_10 = _fmt(results_list[:10])
+            if form.record_last_20 is None and len(results_list) >= 20:
+                form.record_last_20 = _fmt(results_list[:20])
+
+        if recent_games and needs_shots:
             shots_for_total = 0
             shots_against_total = 0
-            for g in recent_games:
+            shot_games = [g for g in recent_games if g.home_shots is not None and g.away_shots is not None]
+            for g in shot_games[:30]:
                 if g.home_team_id == team.id:
                     shots_for_total += g.home_shots
                     shots_against_total += g.away_shots
                 else:
                     shots_for_total += g.away_shots
                     shots_against_total += g.home_shots
-            n = len(recent_games)
-            if form.shots_for_per_game is None:
-                form.shots_for_per_game = round(shots_for_total / n, 1)
-            if form.shots_against_per_game is None:
-                form.shots_against_per_game = round(shots_against_total / n, 1)
+            n = len(shot_games[:30])
+            if n > 0:
+                if form.shots_for_per_game is None:
+                    form.shots_for_per_game = round(shots_for_total / n, 1)
+                if form.shots_against_per_game is None:
+                    form.shots_against_per_game = round(shots_against_total / n, 1)
+
+        # NBA-specific: compute from GamePlayerStats box scores
+        if recent_games and needs_nba:
+            game_ids = [g.id for g in recent_games]
+            ps_result = await session.execute(
+                select(GamePlayerStats)
+                .join(Player, GamePlayerStats.player_id == Player.id)
+                .where(
+                    GamePlayerStats.game_id.in_(game_ids),
+                    Player.team_id == team.id,
+                )
+            )
+            player_stats = ps_result.scalars().all()
+
+            if player_stats:
+                # Aggregate per-game totals
+                game_totals: dict = {}
+                for ps in player_stats:
+                    gt = game_totals.setdefault(ps.game_id, {
+                        "pts": 0, "fga": 0, "fg3m": 0, "ftm": 0,
+                        "fta": 0, "reb": 0, "ast": 0, "tov": 0,
+                        "stl": 0, "blk": 0,
+                    })
+                    gt["pts"] += ps.points or ps.goals or 0
+                    gt["fga"] += ps.shots or 0
+                    gt["fg3m"] += ps.three_pointers_made or 0
+                    gt["ftm"] += ps.free_throws_made or 0
+                    gt["fta"] += ps.free_throws_attempted or 0
+                    gt["reb"] += ps.rebounds or 0
+                    gt["ast"] += ps.assists or 0
+                    gt["tov"] += ps.turnovers or 0
+                    gt["stl"] += ps.steals or 0
+                    gt["blk"] += ps.blocks or 0
+
+                n_games = len(game_totals)
+                if n_games > 0:
+                    totals = {k: sum(gt[k] for gt in game_totals.values()) for k in next(iter(game_totals.values()))}
+                    total_fga = totals["fga"]
+                    total_fg3m = totals["fg3m"]
+                    total_ftm = totals["ftm"]
+                    total_fta = totals["fta"]
+                    total_pts = totals["pts"]
+
+                    # Derive FGM: PTS = 2*(FGM - FG3M) + 3*FG3M + FTM
+                    fg2m = max(0, (total_pts - 3 * total_fg3m - total_ftm) / 2)
+                    total_fgm = fg2m + total_fg3m
+                    fg3a_est = total_fg3m / 0.36 if total_fg3m > 0 else 0
+
+                    if total_fga > 0:
+                        form.fg_pct = round(total_fgm / total_fga * 100, 1)
+                    if fg3a_est > 0:
+                        form.three_pt_pct = round(total_fg3m / fg3a_est * 100, 1)
+                    if total_fta > 0:
+                        form.ft_pct = round(total_ftm / total_fta * 100, 1)
+                    form.rebounds_per_game = round(totals["reb"] / n_games, 1)
+                    form.assists_per_game = round(totals["ast"] / n_games, 1)
+                    form.turnovers_per_game = round(totals["tov"] / n_games, 1)
+                    form.steals_per_game = round(totals["stl"] / n_games, 1)
+                    form.blocks_per_game = round(totals["blk"] / n_games, 1)
+                    form.three_pt_made_per_game = round(total_fg3m / n_games, 1)
+
+                    # Pace & ratings
+                    oreb_est = totals["reb"] * 0.25
+                    possessions = total_fga - oreb_est + totals["tov"] + 0.44 * total_fta
+                    if possessions > 0:
+                        form.pace = round(possessions / n_games, 1)
+                        form.offensive_rating = round(total_pts / possessions * 100, 1)
+                        # Defensive rating from game scores
+                        total_pa_fb = sum(
+                            (g.away_score or 0) if g.home_team_id == team.id else (g.home_score or 0)
+                            for g in recent_games if g.id in game_totals
+                        )
+                        form.defensive_rating = round(total_pa_fb / possessions * 100, 1)
 
     return form
 
