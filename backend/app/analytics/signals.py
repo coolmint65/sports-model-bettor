@@ -697,9 +697,10 @@ class SignalGenerator:
                 better_name = features.get("home_team_name", home_abbr) if home_diff > away_diff else features.get("away_team_name", away_abbr)
                 better_abbr = home_abbr if home_diff > away_diff else away_abbr
                 better_diff = max(home_diff, away_diff)
+                diff_label = "point differential" if features.get("sport") == "nba" else "goal differential"
                 signals.append(_signal(
                     "season",
-                    f"{better_name} has better goal differential ({better_diff:+.2f}/game)",
+                    f"{better_name} has better {diff_label} ({better_diff:+.2f}/game)",
                     "positive", better_abbr, 0.40,
                     icon="chart",
                 ))

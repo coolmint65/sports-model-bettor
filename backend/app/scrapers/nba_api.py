@@ -861,6 +861,27 @@ class NBAScraper(BaseScraper):
             logger.warning("NBA team_season_averages returned no data")
             return 0
 
+        # Fetch advanced stats (pace, off_rating, def_rating) separately
+        # since type=base doesn't include them.
+        adv_by_abbr: Dict[str, Dict[str, Any]] = {}
+        try:
+            adv_params = {**params, "type": "advanced"}
+            adv_data = await self.fetch_json(
+                "/team_season_averages/general", params=adv_params,
+                cache_ttl=3_600.0,
+            )
+            for adv_entry in adv_data.get("data", []):
+                adv_team = adv_entry.get("team", {})
+                adv_stats = adv_entry.get("stats")
+                if not adv_stats:
+                    adv_stats = {k: v for k, v in adv_entry.items() if k not in ("team", "id", "season", "season_type", "meta")}
+                if adv_team and adv_stats:
+                    a_abbr = adv_team.get("abbreviation", "")
+                    a_abbr = _BDL_ABBREV_MAP.get(a_abbr, a_abbr)
+                    adv_by_abbr[a_abbr] = adv_stats
+        except Exception as exc:
+            logger.warning("Failed to fetch advanced team stats (non-critical): %s", exc)
+
         # Build a map of abbreviation -> DB team for quick lookup
         team_result = await session.execute(
             select(Team).where(Team.sport == "nba", Team.active == True)
@@ -871,7 +892,12 @@ class NBAScraper(BaseScraper):
         synced = 0
         for entry in entries:
             api_team = entry.get("team", {})
-            stats = entry.get("stats", {})
+            # The API may nest stats under a "stats" key, or return
+            # them flat alongside "team".  Handle both formats.
+            stats = entry.get("stats")
+            if not stats:
+                # Flat format — stats are top-level keys on the entry
+                stats = {k: v for k, v in entry.items() if k not in ("team", "id", "season", "season_type", "meta")}
             if not api_team or not stats:
                 continue
 
@@ -900,9 +926,12 @@ class NBAScraper(BaseScraper):
             blk = _safe_float(stats.get("blk"))
             fg3m = _safe_float(stats.get("fg3m"))
             opp_pts = _safe_float(stats.get("opp_pts"))
-            pace_val = _safe_float(stats.get("pace"))
-            off_rating = _safe_float(stats.get("off_rating"))
-            def_rating = _safe_float(stats.get("def_rating"))
+
+            # Merge advanced stats if available (pace, ratings)
+            adv = adv_by_abbr.get(abbr, {})
+            pace_val = _safe_float(stats.get("pace")) or _safe_float(adv.get("pace"))
+            off_rating = _safe_float(stats.get("off_rating")) or _safe_float(adv.get("off_rating")) or _safe_float(adv.get("offensive_rating"))
+            def_rating = _safe_float(stats.get("def_rating")) or _safe_float(adv.get("def_rating")) or _safe_float(adv.get("defensive_rating"))
             fga = _safe_float(stats.get("fga"))
             fta = _safe_float(stats.get("fta"))
             min_val = _safe_float(stats.get("min"))
@@ -1035,6 +1064,12 @@ class NBAScraper(BaseScraper):
                 session.add(ts)
 
             synced += 1
+            if fg_pct is None and reb is None:
+                logger.warning(
+                    "NBA team %s: base stats missing (fg_pct=%s, reb=%s) — "
+                    "API response keys: %s",
+                    abbr, fg_pct, reb, list(stats.keys())[:15],
+                )
 
         await session.flush()
         logger.info("NBA team stats synced from API: %d teams", synced)

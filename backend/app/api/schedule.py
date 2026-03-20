@@ -1086,7 +1086,11 @@ async def get_live_games(sport: Optional[str] = None):
     All external syncing (scores, clock, odds) is handled by the
     background scheduler.  This endpoint only reads committed data.
     """
-    live_filters = [func.lower(Game.status).in_(("in_progress", "live"))]
+    today = date.today()
+    live_filters = [
+        func.lower(Game.status).in_(("in_progress", "live")),
+        Game.date == today,
+    ]
     if sport:
         live_filters.append(Game.sport == sport)
 

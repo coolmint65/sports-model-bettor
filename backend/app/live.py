@@ -357,6 +357,34 @@ async def _refresh_live_game_statuses():
         except Exception as exc:
             logger.error("NBA status refresh failed: %s", exc, exc_info=True)
 
+        # Clean up stale games from previous days still stuck as
+        # "in_progress"/"live".  These arise when a game's status was
+        # never updated to final (e.g. server was offline at end of
+        # game, API glitch, etc.).  Force them to "final" so they stop
+        # appearing in the Live Now section.
+        try:
+            from datetime import date as date_type
+
+            today = date_type.today()
+            async with get_write_session_context() as session:
+                stale_result = await session.execute(
+                    select(Game).where(
+                        Game.date < today,
+                        func.lower(Game.status).in_(("in_progress", "live")),
+                    )
+                )
+                stale_games = stale_result.scalars().all()
+                if stale_games:
+                    for g in stale_games:
+                        g.status = "final"
+                    logger.warning(
+                        "Cleaned up %d stale game(s) from previous days "
+                        "stuck as in_progress/live",
+                        len(stale_games),
+                    )
+        except Exception as exc:
+            logger.error("Stale game cleanup failed: %s", exc, exc_info=True)
+
     except Exception as exc:
         logger.error("Game status refresh failed: %s", exc, exc_info=True)
 
