@@ -11,7 +11,7 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import Integer, and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analytics.calibration import RollingCalibrator
@@ -361,7 +361,7 @@ class PredictionManager:
                 Prediction.bet_type,
                 func.count(BetResult.id).label("total"),
                 func.sum(
-                    func.cast(BetResult.was_correct, type_=func.literal(1).type)
+                    func.cast(BetResult.was_correct, Integer)
                 ).label("wins"),
                 func.sum(BetResult.profit_loss).label("profit"),
             )
@@ -441,7 +441,7 @@ class PredictionManager:
             select(
                 func.count(BetResult.id).label("total"),
                 func.sum(
-                    func.cast(BetResult.was_correct, type_=func.literal(1).type)
+                    func.cast(BetResult.was_correct, Integer)
                 ).label("wins"),
                 func.sum(BetResult.profit_loss).label("total_profit"),
             )
@@ -465,7 +465,7 @@ class PredictionManager:
                 Prediction.bet_type,
                 func.count(BetResult.id).label("total"),
                 func.sum(
-                    func.cast(BetResult.was_correct, type_=func.literal(1).type)
+                    func.cast(BetResult.was_correct, Integer)
                 ).label("wins"),
                 func.sum(BetResult.profit_loss).label("profit"),
             )
@@ -522,7 +522,7 @@ class PredictionManager:
                 select(
                     func.count(BetResult.id).label("total"),
                     func.sum(
-                        func.cast(BetResult.was_correct, type_=func.literal(1).type)
+                        func.cast(BetResult.was_correct, Integer)
                     ).label("wins"),
                     func.sum(BetResult.profit_loss).label("profit"),
                 )

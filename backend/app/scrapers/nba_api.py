@@ -38,7 +38,7 @@ _BDL_ABBREV_MAP: Dict[str, str] = {
 # Canonical abbreviation -> ESPN CDN abbreviation (lowercase).
 # ESPN uses shorter codes for a handful of teams.
 _ESPN_ABBREV_MAP: Dict[str, str] = {
-    "GSW": "gs", "NOP": "no", "NYK": "ny", "SAS": "sa", "WAS": "wsh",
+    "GSW": "gs", "NOP": "no", "NYK": "ny", "SAS": "sa", "UTA": "utah", "WAS": "wsh",
 }
 
 

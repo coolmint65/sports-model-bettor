@@ -13,7 +13,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import Integer, and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.prediction import BetResult, Prediction
@@ -90,7 +90,7 @@ class MetaSignalEngine:
                 func.sum(
                     func.cast(
                         BetResult.was_correct,
-                        type_=func.literal(1).type,
+                        Integer,
                     )
                 ).label("wins"),
                 func.sum(BetResult.profit_loss).label("total_profit"),
