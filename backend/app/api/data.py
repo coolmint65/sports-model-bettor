@@ -226,13 +226,13 @@ async def _run_full_sync():
             except Exception as exc:
                 logger.warning("Multi-source odds sync failed: %s", exc, exc_info=True)
 
-            # 3a. NBA odds sync
+            # 3a. NBA odds sync (via unified sync_sport_odds)
             _sync_state["step"] = "Syncing NBA odds..."
             try:
-                from app.services.odds import sync_nba_odds
+                from app.services.odds import sync_sport_odds
 
                 async with get_write_session_context() as session:
-                    nba_matched = await sync_nba_odds(session, force=True)
+                    nba_matched = await sync_sport_odds(session, sport="nba", force=True)
                     logger.info("NBA odds sync matched %d games", len(nba_matched))
             except Exception as exc:
                 logger.warning("NBA odds sync failed (non-critical): %s", exc)

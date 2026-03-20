@@ -1,5 +1,5 @@
 """
-Odds scraper for NHL games — primary/fallback architecture.
+Multi-sport odds scraper — primary/fallback architecture.
 
 PRIMARY: The Odds API (Hard Rock Bet via us2 region + generic US
 bookmakers: FanDuel, BetMGM, Caesars, DraftKings, PointsBet, etc.)
@@ -7,7 +7,8 @@ provides clean, validated pricing. Requires ODDS_API_KEY env var.
 
 FALLBACK: Direct sportsbook scrapers (DraftKings, FanDuel, Kambi,
 Bovada) are only activated when The Odds API returns no data — e.g.
-API key expired, rate-limited, or service outage.
+API key expired, rate-limited, or service outage.  Fallback scrapers
+are currently NHL-only.
 
 This avoids unnecessary scraper load and API credit waste during
 normal operation while keeping resilience for edge cases.
@@ -30,18 +31,30 @@ from app.constants import SCRAPER_HEADERS
 from app.models.game import Game
 from app.models.team import Team
 from app.scrapers.http_helpers import make_request as _make_request
-from app.scrapers.team_map import NHL_TEAM_MAP, NHL_ABBREVIATIONS, resolve_team
+from app.scrapers.team_map import (
+    NHL_TEAM_MAP, NHL_ABBREVIATIONS, NBA_TEAM_MAP, NBA_ABBREVIATIONS,
+    resolve_team, resolve_team_for_sport,
+)
 from app.services.odds import american_to_implied as _svc_american_to_implied
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# O/U line plausibility range.
-# Pregame NHL totals are 4.5-8.5, but live totals climb as goals are scored.
-# Upper bound of 15.0 covers any realistic in-progress scenario.
+# O/U line plausibility ranges — sport-specific defaults.
+# These are used as fallbacks when SportConfig is not available in context.
 # ---------------------------------------------------------------------------
 _OU_LINE_MIN = 4.0
 _OU_LINE_MAX = 15.0
+
+_SPORT_OU_RANGES: Dict[str, Tuple[float, float]] = {
+    "nhl": (4.0, 15.0),
+    "nba": (180.0, 280.0),
+}
+
+_SPORT_SPREAD_MIN: Dict[str, float] = {
+    "nhl": 1.5,
+    "nba": 0.5,
+}
 
 # ---------------------------------------------------------------------------
 # Team-name normalisation — delegates to the canonical team_map module.
@@ -51,10 +64,20 @@ _OU_LINE_MAX = 15.0
 _COMMON_TEAM_MAP = NHL_TEAM_MAP
 _ABBREV_SET = NHL_ABBREVIATIONS
 
+_SPORT_TEAM_MAPS: Dict[str, dict] = {
+    "nhl": NHL_TEAM_MAP,
+    "nba": NBA_TEAM_MAP,
+}
 
-def _map_team(name: str) -> str:
+_SPORT_ABBREV_SETS: Dict[str, set] = {
+    "nhl": NHL_ABBREVIATIONS,
+    "nba": NBA_ABBREVIATIONS,
+}
+
+
+def _map_team(name: str, sport: str = "nhl") -> str:
     """Resolve a team name to its 3-letter abbreviation."""
-    return resolve_team(name)
+    return resolve_team_for_sport(name, sport)
 
 
 # ---------------------------------------------------------------------------
@@ -72,29 +95,27 @@ def decimal_to_american(decimal_odds: float) -> float:
 
 
 
-def _normalize_spread_line(val: float) -> float:
+def _normalize_spread_line(val: float, sport: str = "nhl") -> float:
     """Normalize a spread value to the nearest .5 increment.
 
-    NHL sportsbooks always use .5 lines (±1.5, ±2.5, etc.) but some
-    scraped sources return whole numbers (±1, ±2).  Snap to .5.
-    Also enforces a minimum of ±1.5 since puck lines below that
-    (e.g. ±0.5) don't exist in standard NHL betting.
+    Enforces sport-specific minimum spread: NHL puck lines are ±1.5,
+    NBA spreads can be ±0.5.
     """
+    spread_min = _SPORT_SPREAD_MIN.get(sport, 0.5)
+
     if val == 0:
         return val
     if val % 1 == 0.5 or val % 1 == -0.5:
         sign = -1 if val < 0 else 1
-        # Enforce minimum ±1.5
-        if abs(val) < 1.5:
-            return sign * 1.5
+        if abs(val) < spread_min:
+            return sign * spread_min
         return val
     sign = -1 if val < 0 else 1
     result = sign * (round(abs(val) * 2) / 2)
     if result % 1 == 0:
         result += sign * 0.5
-    # Enforce minimum ±1.5
-    if abs(result) < 1.5:
-        result = sign * 1.5
+    if abs(result) < spread_min:
+        result = sign * spread_min
     return result
 
 
@@ -106,7 +127,7 @@ class OddsEvent:
     """Normalised odds for a single game from a single source."""
 
     __slots__ = (
-        "source", "home_team", "away_team", "home_abbr", "away_abbr",
+        "source", "sport", "home_team", "away_team", "home_abbr", "away_abbr",
         "commence_time", "home_ml", "away_ml",
         "home_spread", "away_spread", "home_spread_price", "away_spread_price",
         "total_line", "over_price", "under_price",
@@ -138,12 +159,14 @@ class OddsEvent:
         under_price: float = -110.0,
         alt_totals: Optional[List] = None,
         alt_spreads: Optional[List] = None,
+        sport: str = "nhl",
     ):
         self.source = source
+        self.sport = sport
         self.home_team = home_team
         self.away_team = away_team
-        self.home_abbr = _map_team(home_team)
-        self.away_abbr = _map_team(away_team)
+        self.home_abbr = _map_team(home_team, sport)
+        self.away_abbr = _map_team(away_team, sport)
         self.commence_time = commence_time
         self.home_ml = home_ml
         self.away_ml = away_ml
@@ -1438,116 +1461,27 @@ _ALT_LINE_CACHE_TTL: float = 3600.0  # 60 minutes (conserve Odds API credits)
 
 async def _fetch_odds_api_raw(
     client: httpx.AsyncClient,
+    sport: str = "nhl",
 ) -> Optional[List[Dict[str, Any]]]:
-    """Fetch raw data from The Odds API with caching.
+    """Fetch raw data from The Odds API via the centralized gateway.
 
-    Requests the combined ``us,us2`` regions in a single API call to get
-    ALL US sportsbooks (FanDuel, DraftKings, BetMGM, Caesars, Hard Rock,
-    etc.) in one response.  Falls back to individual regions if the
-    combined request fails.  The result is cached for
-    ``_ODDS_API_CACHE_TTL`` seconds.
-
-    An asyncio lock prevents concurrent callers (e.g. _fetch_odds_api and
-    _fetch_hardrock running in parallel) from issuing duplicate requests.
+    Uses SportConfig to determine sport key and markets — no hardcoded
+    sport keys or market strings.  The gateway handles caching, rate
+    limiting, credit tracking, and retries.
     """
-    import time as _time
+    from app.scrapers.odds_gateway import fetch_bulk_odds
 
-    # Fast path: return cached data without acquiring the lock
-    now = _time.monotonic()
-    if (
-        _odds_api_cache["data"] is not None
-        and now - _odds_api_cache["timestamp"] < _ODDS_API_CACHE_TTL
-    ):
-        return _odds_api_cache["data"]
-
-    async with _odds_api_lock:
-        # Re-check cache after acquiring lock (another caller may have filled it)
-        now = _time.monotonic()
-        if (
-            _odds_api_cache["data"] is not None
-            and now - _odds_api_cache["timestamp"] < _ODDS_API_CACHE_TTL
-        ):
-            return _odds_api_cache["data"]
-
-        api_key = settings.odds_api_key
-        if not api_key:
-            logger.warning(
-                "ODDS_API_KEY is not set — The Odds API will not be called. "
-                "Create backend/.env with your key (see .env.example)."
-            )
-            return None
-
-        url = "https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds"
-
-        # Core + 1st-period markets in a single bulk request.
-        # The Odds API v4 supports period markets (h2h_p1, spreads_p1,
-        # totals_p1) in the bulk /odds endpoint.
-        _MARKET_SETS = [
-            "h2h,spreads,totals,h2h_p1,spreads_p1,totals_p1",
-        ]
-
-        # Use a single region to halve credit usage.  "us" covers
-        # FanDuel, DraftKings, BetMGM, Caesars which is sufficient.
-        for markets in _MARKET_SETS:
-            for region in ("us",):
-                params = {
-                    "apiKey": api_key,
-                    "regions": region,
-                    "markets": markets,
-                    "oddsFormat": "american",
-                }
-
-                data = await _make_request(client, url, params=params)
-                if data is None:
-                    logger.warning(
-                        "Odds API: markets=%r region='%s' failed "
-                        "(network error or HTTP error).",
-                        markets, region,
-                    )
-                    continue
-                if isinstance(data, dict) and data.get("message"):
-                    # API returns {"message": "..."} for auth errors
-                    logger.warning("Odds API error: %s", data.get("message"))
-                    return None
-                if isinstance(data, list) and len(data) > 0:
-                    # Check that at least one event has bookmaker data
-                    has_bookmakers = any(
-                        len(ev.get("bookmakers", [])) > 0 for ev in data
-                    )
-                    if has_bookmakers:
-                        total_books = set()
-                        for ev in data:
-                            for bm in ev.get("bookmakers", []):
-                                total_books.add(bm.get("key", "unknown"))
-                        logger.info(
-                            "Odds API: got %d events from '%s' region(s), "
-                            "markets=%r, %d bookmakers: %s",
-                            len(data), region, markets, len(total_books),
-                            ", ".join(sorted(total_books)),
-                        )
-                        _odds_api_cache["data"] = data
-                        _odds_api_cache["timestamp"] = now
-                        return data
-                    else:
-                        logger.info(
-                            "Odds API: '%s' region returned %d events but no bookmakers, trying next",
-                            region, len(data),
-                        )
-
-        logger.warning("Odds API: all region attempts failed -- no data returned")
-        return None
+    return await fetch_bulk_odds(sport)
 
 
-async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
+async def _fetch_odds_api(
+    client: httpx.AsyncClient, sport: str = "nhl",
+) -> List[OddsEvent]:
     """
-    Fetch NHL odds from The Odds API (v4).
+    Fetch odds from The Odds API (v4) for a given sport.
 
     Requires ODDS_API_KEY environment variable. Returns empty list if
-    no key is configured. This is a paid/rate-limited source — we use
-    it as a fallback/supplementary source.
-
-    Uses a combined us+us2 region request shared with ``_fetch_hardrock``
-    to avoid doubling API quota usage.
+    no key is configured. Uses the centralized gateway for all API calls.
     """
     events: List[OddsEvent] = []
     api_key = settings.odds_api_key
@@ -1555,9 +1489,9 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
         logger.info("The Odds API: no API key configured, skipping")
         return events
 
-    data = await _fetch_odds_api_raw(client)
+    data = await _fetch_odds_api_raw(client, sport=sport)
     if not data:
-        logger.info("The Odds API: no data returned")
+        logger.info("The Odds API: no data returned for sport=%s", sport)
         return events
 
     for ev in data:
@@ -1760,6 +1694,7 @@ async def _fetch_odds_api(client: httpx.AsyncClient) -> List[OddsEvent]:
             over_price=round(over_price),
             under_price=round(under_price),
             alt_totals=oa_alt_totals,
+            sport=sport,
         )
 
         # Attach 1st period odds
@@ -1829,30 +1764,25 @@ async def _fetch_hardrock_alt_lines(
     event_id: str,
     home_team: str,
     away_team: str,
+    sport: str = "nhl",
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Fetch alternate spreads and totals for a single event from Hard Rock.
 
-    Uses the per-event endpoint ``/events/{eventId}/odds`` which supports
-    additional markets like ``alternate_spreads`` and ``alternate_totals``.
+    Uses the per-event endpoint ``/events/{eventId}/odds`` via the
+    centralized gateway.
 
     Returns (alt_totals, alt_spreads) lists ready for ``OddsEvent``.
     """
+    from app.scrapers.odds_gateway import fetch_event_odds
+
     alt_totals: List[Dict[str, Any]] = []
     alt_spreads: List[Dict[str, Any]] = []
 
-    api_key = settings.odds_api_key
-    if not api_key:
-        return alt_totals, alt_spreads
-
-    url = f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/events/{event_id}/odds"
-    params = {
-        "apiKey": api_key,
-        "regions": "us2",
-        "markets": "alternate_spreads,alternate_totals",
-        "oddsFormat": "american",
-    }
-
-    data = await _make_request(client, url, params=params)
+    data = await fetch_event_odds(
+        sport, event_id,
+        markets="alternate_spreads,alternate_totals",
+        regions="us2",
+    )
     if not data or not isinstance(data, dict):
         return alt_totals, alt_spreads
 
@@ -1924,9 +1854,10 @@ async def _fetch_hardrock_alt_lines(
 async def _fetch_hardrock(
     client: httpx.AsyncClient,
     skip_alternates: bool = False,
+    sport: str = "nhl",
 ) -> List[OddsEvent]:
     """
-    Fetch NHL odds specifically from Hard Rock Bet via The Odds API (us2 region).
+    Fetch odds specifically from Hard Rock Bet via The Odds API (us2 region).
 
     Hard Rock Bet uses Kambi Odds Feed+ on a proprietary platform with no
     public API.  The Odds API aggregator includes Hard Rock in its ``us2``
@@ -1951,9 +1882,9 @@ async def _fetch_hardrock(
         logger.info("Hard Rock: no Odds API key configured, skipping")
         return events
 
-    data = await _fetch_odds_api_raw(client)
+    data = await _fetch_odds_api_raw(client, sport=sport)
     if not data:
-        logger.info("Hard Rock: no data returned from Odds API")
+        logger.info("Hard Rock: no data returned from Odds API (sport=%s)", sport)
         return events
 
     # First pass: extract primary lines and collect event IDs for alt-line fetch
@@ -2114,7 +2045,8 @@ async def _fetch_hardrock(
         async def _throttled_alt(pd: Dict[str, Any]):
             async with _alt_sem:
                 return await _fetch_hardrock_alt_lines(
-                    client, pd["event_id"], pd["home_team"], pd["away_team"]
+                    client, pd["event_id"], pd["home_team"], pd["away_team"],
+                    sport=sport,
                 )
 
         alt_results = await asyncio.gather(
@@ -2161,6 +2093,7 @@ async def _fetch_hardrock(
             under_price=pd["under_price"],
             alt_totals=alt_totals,
             alt_spreads=alt_spreads,
+            sport=sport,
         )
 
         # Attach 1st period odds from Hard Rock
@@ -2832,16 +2765,21 @@ def _merge_odds_events(
 class MultiSourceOddsScraper:
     """
     Orchestrates odds fetching from multiple sportsbook sources and
-    merges them to find the best available lines for each NHL game.
+    merges them to find the best available lines for each game.
+
+    Supports multiple sports via the ``sport`` parameter.  The Odds API
+    is used as the primary source for all sports.  Direct sportsbook
+    scrapers (DraftKings, FanDuel, Kambi, Bovada) are NHL-only fallbacks.
 
     Usage:
-        scraper = MultiSourceOddsScraper()
+        scraper = MultiSourceOddsScraper(sport="nhl")
         odds = await scraper.fetch_best_odds()
         await scraper.sync_odds(db_session)
         await scraper.close()
     """
 
-    def __init__(self):
+    def __init__(self, sport: str = "nhl"):
+        self.sport = sport
         self._client: Optional[httpx.AsyncClient] = None
 
     def _get_client(self) -> httpx.AsyncClient:
@@ -2887,11 +2825,12 @@ class MultiSourceOddsScraper:
         credit usage for fast sync cycles.
         """
         client = self._get_client()
+        sport = self.sport
 
         # ── Phase 1: Odds API (primary) ─────────────────────────────
         primary_results = await asyncio.gather(
-            _fetch_hardrock(client, skip_alternates=skip_alternates),
-            _fetch_odds_api(client),
+            _fetch_hardrock(client, skip_alternates=skip_alternates, sport=sport),
+            _fetch_odds_api(client, sport=sport),
             return_exceptions=True,
         )
 
@@ -2917,9 +2856,16 @@ class MultiSourceOddsScraper:
             self._log_events(all_events, primary_names)
             return _merge_odds_events(all_events)
 
-        # ── Phase 2: Direct scrapers (fallback) ─────────────────────
+        # ── Phase 2: Direct scrapers (fallback, NHL-only) ────────────
+        if sport != "nhl":
+            logger.warning(
+                "Odds API returned no data for sport=%s — no fallback scrapers available",
+                sport,
+            )
+            return []
+
         logger.warning(
-            "Odds API returned no data — falling back to direct scrapers"
+            "Odds API returned no data — falling back to direct scrapers (NHL)"
         )
 
         fallback_results = await asyncio.gather(
@@ -3070,7 +3016,7 @@ class MultiSourceOddsScraper:
             home_result = await db.execute(
                 select(Team).where(
                     Team.abbreviation == home_abbrev,
-                    Team.sport == "nhl",
+                    Team.sport == self.sport,
                 ).order_by(Team.id)
             )
             home_team = home_result.scalars().first()
@@ -3078,7 +3024,7 @@ class MultiSourceOddsScraper:
             away_result = await db.execute(
                 select(Team).where(
                     Team.abbreviation == away_abbrev,
-                    Team.sport == "nhl",
+                    Team.sport == self.sport,
                 ).order_by(Team.id)
             )
             away_team = away_result.scalars().first()
@@ -3180,8 +3126,9 @@ class MultiSourceOddsScraper:
                     ou_raw = round(ou_raw * 2) / 2
                     if ou_raw % 1 == 0:
                         ou_raw += 0.5
-                # Sanity check: must be within plausible range (includes live totals)
-                if _OU_LINE_MIN <= ou_raw <= _OU_LINE_MAX:
+                # Sanity check: must be within sport-specific plausible range
+                ou_min, ou_max = _SPORT_OU_RANGES.get(self.sport, (_OU_LINE_MIN, _OU_LINE_MAX))
+                if ou_min <= ou_raw <= ou_max:
                     if op is not None and up is not None:
                         if validate_total_line_pair(ou_raw, op, up):
                             game.over_under_line = ou_raw
@@ -3211,9 +3158,9 @@ class MultiSourceOddsScraper:
             hsp = best.get("home_spread_price")
             asp = best.get("away_spread_price")
             if hs is not None:
-                game.home_spread_line = _normalize_spread_line(float(hs))
+                game.home_spread_line = _normalize_spread_line(float(hs), sport=self.sport)
             if aws is not None:
-                game.away_spread_line = _normalize_spread_line(float(aws))
+                game.away_spread_line = _normalize_spread_line(float(aws), sport=self.sport)
             if hsp is not None and asp is not None:
                 if validate_spread_pair(hsp, asp):
                     game.home_spread_price = hsp

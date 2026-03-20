@@ -1081,35 +1081,23 @@ async def regenerate_predictions():
     )
     steps.append(f"cleared {deleted} predictions")
 
-    # Step 3: Sync fresh odds (slow HTTP call — own session).
-    # NHL odds via MultiSourceOddsScraper, NBA odds via OddsScraper.
+    # Step 3: Sync fresh odds for all sports (slow HTTP call — own session).
+    from app.config import settings as _cfg
+    from app.services.odds import sync_sport_odds
+
     odds_matched = 0
-    try:
-        async with get_write_session_context() as write_session:
-            from app.scrapers.odds_multi import MultiSourceOddsScraper
-
-            async with MultiSourceOddsScraper() as odds_scraper:
-                matched = await odds_scraper.sync_odds(write_session)
-                odds_matched = len(matched) if matched else 0
-                logger.info("Regenerate: NHL odds sync matched %d games", odds_matched)
-        steps.append(f"NHL odds synced ({odds_matched} games)")
-    except Exception as exc:
-        logger.warning("Regenerate: NHL odds sync failed: %s", exc)
-        steps.append(f"NHL odds sync failed: {exc}")
-
-    # NBA odds sync
-    nba_odds_matched = 0
-    try:
-        async with get_write_session_context() as write_session:
-            from app.services.odds import sync_nba_odds
-            nba_matched = await sync_nba_odds(write_session, force=True)
-            nba_odds_matched = len(nba_matched) if nba_matched else 0
-            logger.info("Regenerate: NBA odds sync matched %d games", nba_odds_matched)
-        odds_matched += nba_odds_matched
-        steps.append(f"NBA odds synced ({nba_odds_matched} games)")
-    except Exception as exc:
-        logger.warning("Regenerate: NBA odds sync failed: %s", exc)
-        steps.append(f"NBA odds sync failed: {exc}")
+    for sport in _cfg.sports:
+        sport_matched = 0
+        try:
+            async with get_write_session_context() as write_session:
+                matched = await sync_sport_odds(write_session, sport=sport, force=True)
+                sport_matched = len(matched) if matched else 0
+                logger.info("Regenerate: %s odds sync matched %d games", sport.upper(), sport_matched)
+            odds_matched += sport_matched
+            steps.append(f"{sport.upper()} odds synced ({sport_matched} games)")
+        except Exception as exc:
+            logger.warning("Regenerate: %s odds sync failed: %s", sport.upper(), exc)
+            steps.append(f"{sport.upper()} odds sync failed: {exc}")
 
     # Step 4: Generate fresh predictions (prematch lock is fully cleared)
     try:

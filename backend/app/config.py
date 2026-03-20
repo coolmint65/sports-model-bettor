@@ -73,6 +73,17 @@ class SportConfig(BaseModel):
     overtime: bool
     shootout: bool
 
+    # Odds API integration
+    odds_api_sport_key: str = ""
+    odds_api_bulk_markets: str = "h2h,spreads,totals"
+    odds_api_prop_markets: List[str] = []
+    odds_api_regions: str = "us"
+
+    # Line validation ranges (sport-specific)
+    ou_line_min: float = 0.5
+    ou_line_max: float = 20.0
+    spread_min: float = 0.5
+
 
 class ModelConfig(BaseModel):
     """Tunable constants for the Poisson prediction model.
@@ -479,6 +490,19 @@ class Settings(BaseModel):
             periods=3,
             overtime=True,
             shootout=True,
+            odds_api_sport_key="icehockey_nhl",
+            odds_api_bulk_markets="h2h,spreads,totals",
+            odds_api_prop_markets=[
+                "player_goal_scorer_anytime",
+                "player_shots_on_goal",
+                "player_points",
+                "player_assists",
+                "player_total_saves",
+            ],
+            odds_api_regions="us",
+            ou_line_min=4.0,
+            ou_line_max=15.0,
+            spread_min=1.5,
         ),
         "nba": SportConfig(
             name="NBA",
@@ -492,6 +516,18 @@ class Settings(BaseModel):
             periods=4,
             overtime=True,
             shootout=False,
+            odds_api_sport_key="basketball_nba",
+            odds_api_bulk_markets="h2h,spreads,totals",
+            odds_api_prop_markets=[
+                "player_points",
+                "player_rebounds",
+                "player_assists",
+                "player_threes",
+            ],
+            odds_api_regions="us",
+            ou_line_min=180.0,
+            ou_line_max=280.0,
+            spread_min=0.5,
         ),
     }
 

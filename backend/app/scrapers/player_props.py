@@ -1,14 +1,14 @@
 """
 Player prop odds scraper using The Odds API per-event endpoint.
 
-Fetches NHL player prop markets (ATG, SOG, Points, Assists, Saves)
-for today's games and persists them to the PlayerPropOdds table.
+Fetches sport-specific player prop markets for today's games and
+persists them to the PlayerPropOdds table.
 
-Uses the bulk /odds endpoint (cached) to discover event IDs, then
-fetches props per-event from /events/{eventId}/odds.  Prop lines
-are refreshed on a slow cadence (30 min) since they rarely move.
+Uses the bulk /odds endpoint (cached via gateway) to discover event
+IDs, then fetches props per-event.  Prop lines are refreshed on a
+slow cadence (60 min) since they rarely move.
 
-Credit cost: 5 markets × 1 region × N games per sync.
+Credit cost: N markets × 1 region × G games per sync.
 """
 
 import asyncio
@@ -18,7 +18,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
-import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,43 +26,28 @@ from app.models.game import Game
 from app.models.player import Player
 from app.models.player_prop import PlayerPropOdds
 from app.models.team import Team
-from app.scrapers.http_helpers import make_request as _make_request_shared
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Markets we care about
+# Cache — avoids re-fetching props within the TTL window.
+# Keyed by sport to prevent cross-sport cache collisions.
 # ---------------------------------------------------------------------------
 
-PROP_MARKETS: List[str] = [
-    "player_goal_scorer_anytime",  # ATG
-    "player_shots_on_goal",        # SOG
-    "player_points",               # Points (G+A)
-    "player_assists",              # Assists
-    "player_total_saves",          # Goalie saves
-]
-
-PROP_MARKETS_CSV = ",".join(PROP_MARKETS)
-
-# ---------------------------------------------------------------------------
-# Cache — avoids re-fetching props within the TTL window
-# ---------------------------------------------------------------------------
-
-_props_cache: Dict[str, List[Dict[str, Any]]] = {}  # event_id -> parsed props
-_props_cache_ts: float = 0.0
+_props_cache: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}  # sport -> {event_id -> props}
+_props_cache_ts: Dict[str, float] = {}  # sport -> monotonic timestamp
 _PROPS_CACHE_TTL: float = 3600.0  # 60 minutes (conserve Odds API credits)
 
 # Limit concurrent per-event requests to avoid triggering 429 rate limits.
-# The Odds API has per-second rate limits; firing 15+ requests at once
-# reliably triggers them.  3 concurrent requests is a safe balance.
 _CONCURRENT_EVENT_LIMIT = 3
 
 
-def props_cache_fresh() -> bool:
-    """Return True if the props cache is still within its TTL."""
+def props_cache_fresh(sport: str = "nhl") -> bool:
+    """Return True if the props cache is still within its TTL for a sport."""
+    ts = _props_cache_ts.get(sport, 0.0)
     return (
-        bool(_props_cache)
-        and (_time_mod.monotonic() - _props_cache_ts) < _PROPS_CACHE_TTL
+        bool(_props_cache.get(sport))
+        and (_time_mod.monotonic() - ts) < _PROPS_CACHE_TTL
     )
 
 
@@ -71,29 +55,13 @@ def props_cache_fresh() -> bool:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-async def _make_request(
-    client: httpx.AsyncClient,
-    url: str,
-    params: Optional[Dict[str, Any]] = None,
-    timeout: float = 10.0,
-    max_retries: int = 2,
-) -> Optional[Any]:
-    """GET with retry on 429.  Returns parsed JSON or None.
-
-    Delegates to the shared make_request helper in http_helpers.
-    """
-    return await _make_request_shared(
-        client, url, params=params, timeout=timeout, max_retries=max_retries,
-    )
-
-
 def _parse_prop_outcomes(
     market_key: str,
     outcomes: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
     """Parse outcomes from an Odds API prop market into our internal format.
 
-    For over/under markets (SOG, Points, Assists, Saves):
+    For over/under markets (SOG, Points, Assists, Saves, Rebounds, etc.):
         Groups outcomes by (player_name, point) into over/under pairs.
 
     For anytime goal scorer:
@@ -148,30 +116,25 @@ def _parse_prop_outcomes(
 
 
 async def _fetch_event_props(
-    client: httpx.AsyncClient,
     event_id: str,
+    sport: str = "nhl",
 ) -> List[Dict[str, Any]]:
-    """Fetch player props for a single Odds API event.
+    """Fetch player props for a single event via the gateway.
 
     Returns a list of prop dicts ready for DB persistence.
-    Cost: 5 credits (1 per market with data × 1 region).
     """
-    api_key = settings.odds_api_key
-    if not api_key:
+    from app.scrapers.odds_gateway import fetch_event_odds
+
+    sport_cfg = settings.get_sport_config(sport)
+    markets_csv = ",".join(sport_cfg.odds_api_prop_markets)
+    if not markets_csv:
         return []
 
-    url = (
-        f"https://api.the-odds-api.com/v4/sports/icehockey_nhl"
-        f"/events/{event_id}/odds"
+    data = await fetch_event_odds(
+        sport, event_id,
+        markets=markets_csv,
+        regions=sport_cfg.odds_api_regions,
     )
-    params = {
-        "apiKey": api_key,
-        "regions": "us",
-        "markets": PROP_MARKETS_CSV,
-        "oddsFormat": "american",
-    }
-
-    data = await _make_request(client, url, params=params)
     if not data or not isinstance(data, dict):
         return []
 
@@ -179,15 +142,16 @@ async def _fetch_event_props(
     home_team = data.get("home_team", "")
     away_team = data.get("away_team", "")
 
+    prop_markets = set(sport_cfg.odds_api_prop_markets)
+
     # Aggregate best lines across all bookmakers.
-    # For each (player, market, line) keep the best over and under prices.
     best: Dict[Tuple[str, str, Optional[float]], Dict[str, Any]] = {}
 
     for bm in data.get("bookmakers", []):
         bm_key = bm.get("key", "")
         for market in bm.get("markets", []):
             mkey = market.get("key", "")
-            if mkey not in PROP_MARKETS:
+            if mkey not in prop_markets:
                 continue
             outcomes = market.get("outcomes", [])
             parsed = _parse_prop_outcomes(mkey, outcomes)
@@ -197,13 +161,11 @@ async def _fetch_event_props(
                     best[pk] = {**prop, "bookmaker": bm_key}
                 else:
                     existing = best[pk]
-                    # Keep highest over_price (best for bettor)
                     op = prop.get("over_price")
                     if op is not None:
                         if existing.get("over_price") is None or op > existing["over_price"]:
                             existing["over_price"] = op
                             existing["bookmaker"] = bm_key
-                    # Keep highest under_price (best for bettor)
                     up = prop.get("under_price")
                     if up is not None:
                         if existing.get("under_price") is None or up > existing["under_price"]:
@@ -223,41 +185,45 @@ async def _fetch_event_props(
 # ---------------------------------------------------------------------------
 
 async def fetch_all_player_props(
-    client: httpx.AsyncClient,
+    sport: str = "nhl",
 ) -> Dict[str, List[Dict[str, Any]]]:
-    """Fetch player props for all today's NHL events.
+    """Fetch player props for all today's events of a given sport.
 
-    Uses the cached bulk odds response to discover event IDs (free),
-    then fetches props per-event (5 credits each).
+    Uses the cached bulk odds response (via gateway) to discover event
+    IDs, then fetches props per-event.
 
     Returns {event_id: [prop_dicts]}.
     """
     global _props_cache, _props_cache_ts
 
-    if props_cache_fresh():
+    if props_cache_fresh(sport):
+        cached = _props_cache.get(sport, {})
         logger.debug(
-            "Player props: using cache (%d events, age %.0fs)",
-            len(_props_cache),
-            _time_mod.monotonic() - _props_cache_ts,
+            "Player props: using %s cache (%d events, age %.0fs)",
+            sport.upper(), len(cached),
+            _time_mod.monotonic() - _props_cache_ts.get(sport, 0.0),
         )
-        return _props_cache
+        return cached
 
     # Discover event IDs from the cached bulk odds response
-    from app.scrapers.odds_multi import _fetch_odds_api_raw
+    from app.scrapers.odds_gateway import fetch_bulk_odds
 
-    raw = await _fetch_odds_api_raw(client)
+    raw = await fetch_bulk_odds(sport)
     if not raw:
-        logger.warning("Player props: no bulk odds data -- cannot discover events")
-        return _props_cache  # return stale cache if available
+        logger.warning("Player props: no bulk %s odds data -- cannot discover events", sport.upper())
+        return _props_cache.get(sport, {})
 
     event_ids = [ev.get("id") for ev in raw if ev.get("id")]
     if not event_ids:
-        logger.warning("Player props: no event IDs in bulk response")
-        return _props_cache
+        logger.warning("Player props: no event IDs in %s bulk response", sport.upper())
+        return _props_cache.get(sport, {})
+
+    sport_cfg = settings.get_sport_config(sport)
+    n_markets = len(sport_cfg.odds_api_prop_markets)
 
     logger.info(
-        "Player props: fetching %d events × %d markets = ~%d credits",
-        len(event_ids), len(PROP_MARKETS), len(event_ids) * len(PROP_MARKETS),
+        "Player props: fetching %d %s events × %d markets = ~%d credits",
+        len(event_ids), sport.upper(), n_markets, len(event_ids) * n_markets,
     )
 
     # Fetch props with bounded concurrency to avoid 429 rate limits.
@@ -265,7 +231,7 @@ async def fetch_all_player_props(
 
     async def _throttled_fetch(eid: str) -> List[Dict[str, Any]]:
         async with sem:
-            return await _fetch_event_props(client, eid)
+            return await _fetch_event_props(eid, sport=sport)
 
     results = await asyncio.gather(
         *(_throttled_fetch(eid) for eid in event_ids),
@@ -281,16 +247,16 @@ async def fetch_all_player_props(
 
     total_props = sum(len(v) for v in new_cache.values())
     logger.info(
-        "Player props: fetched %d prop lines across %d events",
-        total_props, len(new_cache),
+        "Player props: fetched %d %s prop lines across %d events",
+        total_props, sport.upper(), len(new_cache),
     )
 
-    _props_cache = new_cache
-    _props_cache_ts = _time_mod.monotonic()
-    return _props_cache
+    _props_cache[sport] = new_cache
+    _props_cache_ts[sport] = _time_mod.monotonic()
+    return new_cache
 
 
-async def sync_player_props(db: AsyncSession) -> int:
+async def sync_player_props(db: AsyncSession, sport: str = "nhl") -> int:
     """Fetch player props and persist to PlayerPropOdds table.
 
     Matches events to Game records by team names and date,
@@ -298,23 +264,16 @@ async def sync_player_props(db: AsyncSession) -> int:
 
     Returns the number of prop lines synced.
     """
-    from app.scrapers.odds_multi import _fetch_odds_api_raw, _map_team
+    from app.scrapers.odds_gateway import fetch_bulk_odds
+    from app.scrapers.team_map import resolve_team_for_sport
 
-    async with httpx.AsyncClient(
-        follow_redirects=True,
-        limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
-    ) as client:
-        props_by_event = await fetch_all_player_props(client)
+    props_by_event = await fetch_all_player_props(sport=sport)
 
     if not props_by_event:
         return 0
 
-    # We need to map event_id -> Game.  Re-read the bulk data for team info.
-    async with httpx.AsyncClient(
-        follow_redirects=True,
-        limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
-    ) as client:
-        raw = await _fetch_odds_api_raw(client)
+    # Re-read the bulk data for team info (uses gateway cache — free).
+    raw = await fetch_bulk_odds(sport)
 
     if not raw:
         return 0
@@ -325,8 +284,8 @@ async def sync_player_props(db: AsyncSession) -> int:
         eid = ev.get("id", "")
         if not eid:
             continue
-        home_abbr = _map_team(ev.get("home_team", ""))
-        away_abbr = _map_team(ev.get("away_team", ""))
+        home_abbr = resolve_team_for_sport(ev.get("home_team", ""), sport)
+        away_abbr = resolve_team_for_sport(ev.get("away_team", ""), sport)
         if home_abbr and away_abbr:
             event_meta[eid] = {
                 "home_abbr": home_abbr,
@@ -365,11 +324,11 @@ async def sync_player_props(db: AsyncSession) -> int:
         if not game_date:
             continue
 
-        # Look up teams
+        # Look up teams with sport filter
         home_result = await db.execute(
             select(Team).where(
                 Team.abbreviation == home_abbr,
-                Team.sport == "nhl",
+                Team.sport == sport,
             ).order_by(Team.id)
         )
         home_team = home_result.scalars().first()
@@ -377,7 +336,7 @@ async def sync_player_props(db: AsyncSession) -> int:
         away_result = await db.execute(
             select(Team).where(
                 Team.abbreviation == away_abbr,
-                Team.sport == "nhl",
+                Team.sport == sport,
             ).order_by(Team.id)
         )
         away_team = away_result.scalars().first()
@@ -407,7 +366,6 @@ async def sync_player_props(db: AsyncSession) -> int:
             continue
 
         # Try to match player names to Player records (best-effort)
-        # Build a lookup of lowercase name -> player_id for this game's teams
         players_result = await db.execute(
             select(Player).where(
                 Player.team_id.in_([home_team.id, away_team.id]),
@@ -418,7 +376,6 @@ async def sync_player_props(db: AsyncSession) -> int:
         player_lookup: Dict[str, int] = {}
         for p in players:
             player_lookup[p.name.lower()] = p.id
-            # Also store last name for fuzzy matching
             parts = p.name.split()
             if len(parts) >= 2:
                 player_lookup[parts[-1].lower()] = p.id
@@ -431,7 +388,6 @@ async def sync_player_props(db: AsyncSession) -> int:
             # Try to resolve player_id
             player_id = player_lookup.get(player_name.lower())
             if player_id is None:
-                # Try last name match
                 name_parts = player_name.split()
                 if len(name_parts) >= 2:
                     player_id = player_lookup.get(name_parts[-1].lower())
@@ -472,5 +428,5 @@ async def sync_player_props(db: AsyncSession) -> int:
             synced += 1
 
     await db.flush()
-    logger.info("Player props: synced %d prop lines", synced)
+    logger.info("Player props: synced %d %s prop lines", synced, sport.upper())
     return synced

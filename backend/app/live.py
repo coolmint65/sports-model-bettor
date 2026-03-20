@@ -137,52 +137,34 @@ async def _sync_odds_and_broadcast(skip_alternates: bool = True):
         # even before we broadcast via WebSocket.
         # Uses get_write_session_context() to hold the global write lock
         # for the entire transaction, preventing SQLite "database is locked".
-        matched = []
-        async with get_write_session_context() as session:
-            today = date.today()
+        # Sync odds for all configured sports
+        from app.config import settings as _cfg
+        from app.services.odds import sync_sport_odds
 
-            # Check if there are any non-final games to sync
-            games_result = await session.execute(
-                select(func.count(Game.id)).where(
-                    Game.date == today,
-                    ~func.lower(Game.status).in_(GAME_FINAL_STATUSES),
-                )
-            )
-            game_count = games_result.scalar() or 0
-
-            if not game_count:
-                logger.debug("Odds sync: no non-final games today")
-                return
-
-            # Odds-only sync (no prediction regen) — force=True to
-            # bypass the service-layer throttle since the scheduler
-            # already controls pacing.
-            from app.services.odds import sync_odds
-            matched = await sync_odds(
-                session, force=True, skip_alternates=skip_alternates,
-            )
-            # Session commits on exit via get_session_context()
-
-        # Also sync NBA odds
-        nba_matched = []
-        try:
-            async with get_write_session_context() as session:
-                today = date.today()
-                nba_games_result = await session.execute(
-                    select(func.count(Game.id)).where(
-                        Game.date == today,
-                        Game.sport == "nba",
-                        ~func.lower(Game.status).in_(GAME_FINAL_STATUSES),
+        all_matched = []
+        for sport in _cfg.sports:
+            try:
+                async with get_write_session_context() as session:
+                    today = date.today()
+                    games_result = await session.execute(
+                        select(func.count(Game.id)).where(
+                            Game.date == today,
+                            Game.sport == sport,
+                            ~func.lower(Game.status).in_(GAME_FINAL_STATUSES),
+                        )
                     )
-                )
-                nba_game_count = nba_games_result.scalar() or 0
-                if nba_game_count > 0:
-                    from app.services.odds import sync_nba_odds
-                    nba_matched = await sync_nba_odds(session, force=True)
-        except Exception as exc:
-            logger.error("NBA odds sync failed: %s", exc, exc_info=True)
+                    game_count = games_result.scalar() or 0
+                    if not game_count:
+                        logger.debug("Odds sync: no non-final %s games today", sport.upper())
+                        continue
 
-        all_matched = (matched or []) + (nba_matched or [])
+                    matched = await sync_sport_odds(
+                        session, sport=sport, force=True,
+                        skip_alternates=skip_alternates,
+                    )
+                    all_matched.extend(matched or [])
+            except Exception as exc:
+                logger.error("%s odds sync failed: %s", sport.upper(), exc, exc_info=True)
 
         if not all_matched:
             logger.debug("Odds sync: no games matched from sportsbooks")
@@ -395,13 +377,28 @@ async def _sync_player_props():
     Runs every 30 minutes whenever there are games scheduled today,
     regardless of how far away game time is. Uses per-event Odds API
     calls (5 credits per game).
+
+    Skipped entirely when Odds API credits are low to preserve budget
+    for core odds sync.
     """
+    from app.scrapers.odds_gateway import credits_are_low
+
+    if credits_are_low():
+        logger.info("Player props sync skipped: Odds API credits are low")
+        return
+
     try:
-        async with get_write_session_context() as session:
-            from app.services.odds import sync_player_props
-            count = await sync_player_props(session)
-            if count:
-                logger.info("Player props sync: %d lines updated", count)
+        from app.config import settings as _cfg
+        from app.services.odds import sync_player_props
+
+        for sport in _cfg.sports:
+            sport_cfg = _cfg.get_sport_config(sport)
+            if not sport_cfg.odds_api_prop_markets:
+                continue
+            async with get_write_session_context() as session:
+                count = await sync_player_props(session, sport=sport)
+                if count:
+                    logger.info("%s player props sync: %d lines updated", sport.upper(), count)
     except Exception as exc:
         logger.error("Player props sync failed: %s", exc, exc_info=True)
 
@@ -562,11 +559,11 @@ async def _run_full_data_sync():
         # NBA data already synced by _run_full_sync → sync_all.
         # No duplicate calls needed here.
 
-        # Sync NBA odds
+        # Sync NBA odds (via unified sync_sport_odds)
         try:
-            from app.services.odds import sync_nba_odds
+            from app.services.odds import sync_sport_odds
             async with get_write_session_context() as session:
-                nba_odds = await sync_nba_odds(session, force=True)
+                nba_odds = await sync_sport_odds(session, sport="nba", force=True)
                 logger.info("NBA odds sync: %d games matched", len(nba_odds))
         except Exception as nba_odds_exc:
             logger.error("NBA odds sync failed: %s", nba_odds_exc)
@@ -736,10 +733,13 @@ async def _scheduler_loop():
             if should_sync:
                 # Decide whether this cycle should also refresh alt lines.
                 # Alt lines are refreshed every ALT_REFRESH_INTERVAL or on
-                # the first sync of the session.
+                # the first sync of the session.  Skip alt refresh when
+                # Odds API credits are low to preserve budget.
+                from app.scrapers.odds_gateway import credits_are_low as _credits_low
                 now = loop.time()
                 need_alt_refresh = (
                     now - last_alt_refresh >= ALT_REFRESH_INTERVAL
+                    and not _credits_low()
                 )
                 await _sync_odds_and_broadcast(
                     skip_alternates=not need_alt_refresh,

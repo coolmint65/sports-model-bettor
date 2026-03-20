@@ -19,10 +19,18 @@ from app.models.prediction import Prediction
 
 logger = logging.getLogger(__name__)
 
-# Throttle to avoid sportsbook API rate limits
+# Throttle to avoid sportsbook API rate limits — per-sport to avoid
+# one sport's sync blocking the other.
 _SYNC_MIN_INTERVAL = timedelta(minutes=2)
-_sync_lock = asyncio.Lock()
-_last_sync_at: Optional[datetime] = None
+_sync_locks: Dict[str, asyncio.Lock] = {}
+_last_sync_at: Dict[str, Optional[datetime]] = {}
+
+
+def _get_sync_lock(sport: str) -> asyncio.Lock:
+    """Get or create a per-sport sync lock."""
+    if sport not in _sync_locks:
+        _sync_locks[sport] = asyncio.Lock()
+    return _sync_locks[sport]
 
 
 # ---------------------------------------------------------------------------
@@ -125,86 +133,78 @@ def fresh_implied_prob(pred: Prediction, game: Optional[Game]) -> Optional[float
 # Centralized odds sync
 # ---------------------------------------------------------------------------
 
-async def sync_odds(
+async def sync_sport_odds(
     session: AsyncSession,
+    sport: str = "nhl",
     force: bool = False,
     skip_alternates: bool = False,
 ) -> List[Dict[str, Any]]:
-    """Sync odds from all sportsbook sources.
+    """Sync odds for a specific sport from all sportsbook sources.
 
-    Throttled to avoid API rate limits. Use force=True to bypass throttle.
+    Uses MultiSourceOddsScraper which routes through the centralized
+    Odds API gateway.  All sports share the same rate limiter and
+    credit budget.
 
-    When ``skip_alternates`` is True, the per-event alternate line API calls
-    are skipped in favour of cached data.  This is the "fast path" used by
-    the live scheduler to dramatically reduce Odds API credit consumption.
+    Throttled per-sport to avoid API rate limits. Use force=True to bypass.
 
     Returns list of matched game dicts.
     """
-    global _last_sync_at
+    lock = _get_sync_lock(sport)
 
-    async with _sync_lock:
+    async with lock:
         now = datetime.now(timezone.utc)
-        if not force and _last_sync_at is not None:
-            elapsed = now - _last_sync_at
+        last = _last_sync_at.get(sport)
+        if not force and last is not None:
+            elapsed = now - last
             if elapsed < _SYNC_MIN_INTERVAL:
                 logger.debug(
-                    "Odds sync throttled (last sync %s ago)", elapsed
+                    "%s odds sync throttled (last sync %s ago)", sport.upper(), elapsed
                 )
                 return []
 
         try:
             from app.scrapers.odds_multi import MultiSourceOddsScraper
 
-            async with MultiSourceOddsScraper() as scraper:
+            async with MultiSourceOddsScraper(sport=sport) as scraper:
                 matched = await scraper.sync_odds(
                     session, skip_alternates=skip_alternates,
                 )
                 await session.flush()
                 session.expire_all()
-                _last_sync_at = now
+                _last_sync_at[sport] = now
                 logger.info(
-                    "Odds sync: matched %d games (skip_alt=%s)",
-                    len(matched) if matched else 0, skip_alternates,
+                    "%s odds sync: matched %d games (skip_alt=%s)",
+                    sport.upper(), len(matched) if matched else 0, skip_alternates,
                 )
                 return matched or []
         except Exception as exc:
-            _last_sync_at = now  # Still throttle on failure
-            logger.error("Odds sync failed: %s", exc, exc_info=True)
+            _last_sync_at[sport] = now  # Still throttle on failure
+            logger.error("%s odds sync failed: %s", sport.upper(), exc, exc_info=True)
             return []
+
+
+async def sync_odds(
+    session: AsyncSession,
+    force: bool = False,
+    skip_alternates: bool = False,
+) -> List[Dict[str, Any]]:
+    """Sync NHL odds (backward-compatible wrapper)."""
+    return await sync_sport_odds(session, sport="nhl", force=force, skip_alternates=skip_alternates)
 
 
 async def sync_nba_odds(
     session: AsyncSession,
     force: bool = False,
 ) -> List[Dict[str, Any]]:
-    """Sync NBA odds from The Odds API.
-
-    Uses the OddsScraper with sport="nba" to fetch moneyline, spread,
-    and totals for NBA games.
-
-    Returns list of matched game dicts.
-    """
-    global _last_sync_at
-
-    try:
-        from app.scrapers.odds_api import OddsScraper
-
-        async with OddsScraper(sport="nba") as scraper:
-            matched = await scraper.sync_odds(session)
-            await session.flush()
-            session.expire_all()
-            logger.info("NBA odds sync: matched %d games", len(matched) if matched else 0)
-            return matched or []
-    except Exception as exc:
-        logger.error("NBA odds sync failed: %s", exc, exc_info=True)
-        return []
+    """Sync NBA odds (backward-compatible wrapper)."""
+    return await sync_sport_odds(session, sport="nba", force=force)
 
 
-async def sync_player_props(session: AsyncSession) -> int:
-    """Sync player prop odds from The Odds API.
+async def sync_player_props(session: AsyncSession, sport: str = "nhl") -> int:
+    """Sync player prop odds from The Odds API for a given sport.
 
-    Fetches ATG, SOG, Points, Assists, and Saves props for today's
-    games and upserts them into the PlayerPropOdds table.
+    Fetches sport-specific prop markets for today's games and upserts
+    them into the PlayerPropOdds table.
 
     Uses a 30-minute cache so repeated calls within the window are free.
     Returns the number of prop lines synced.
@@ -212,12 +212,12 @@ async def sync_player_props(session: AsyncSession) -> int:
     try:
         from app.scrapers.player_props import sync_player_props as _sync
 
-        count = await _sync(session)
+        count = await _sync(session, sport=sport)
         await session.flush()
         session.expire_all()
         return count
     except Exception as exc:
-        logger.error("Player props sync failed: %s", exc, exc_info=True)
+        logger.error("%s player props sync failed: %s", sport.upper(), exc, exc_info=True)
         return 0
 
 
@@ -236,7 +236,13 @@ async def sync_odds_and_regenerate(
     from app.constants import GAME_FINAL_STATUSES
     from app.models.prediction import Prediction
 
-    matched = await sync_odds(session, force=force)
+    # Sync odds for all configured sports
+    all_matched: List[Dict[str, Any]] = []
+    from app.config import settings as _settings
+    for _sport in _settings.sports:
+        sport_matched = await sync_sport_odds(session, sport=_sport, force=force)
+        all_matched.extend(sport_matched)
+    matched = all_matched
 
     today = date.today()
     pred_count = 0
