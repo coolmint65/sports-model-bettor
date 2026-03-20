@@ -59,7 +59,7 @@ async def make_request(
             if resp.status_code == 429 and attempt < max_retries:
                 wait = 2 ** attempt
                 logger.info(
-                    "429 from %s — retrying in %ds (attempt %d/%d)",
+                    "429 from %s -- retrying in %ds (attempt %d/%d)",
                     _log_url, wait, attempt + 1, max_retries,
                 )
                 await asyncio.sleep(wait)
@@ -75,7 +75,7 @@ async def make_request(
                 "HTTP %d from %s%s",
                 resp.status_code,
                 _log_url,
-                f" — {body_snippet}" if body_snippet else "",
+                f" -- {body_snippet}" if body_snippet else "",
             )
             return None
         except httpx.TimeoutException:

@@ -221,7 +221,7 @@ def resolve_team(name: str) -> str:
     stripped = name.strip() if name else ""
     if stripped and stripped not in _unmapped_logged:
         _unmapped_logged.add(stripped)
-        logger.debug("UNMAPPED TEAM NAME: %r — add to NHL_TEAM_MAP", stripped)
+        logger.debug("UNMAPPED TEAM NAME: %r -- add to NHL_TEAM_MAP", stripped)
 
     return ""
 
@@ -239,7 +239,7 @@ def resolve_nba_team(name: str) -> str:
     stripped = name.strip() if name else ""
     if stripped and stripped not in _unmapped_logged:
         _unmapped_logged.add(stripped)
-        logger.debug("UNMAPPED NBA TEAM NAME: %r — add to NBA_TEAM_MAP", stripped)
+        logger.debug("UNMAPPED NBA TEAM NAME: %r -- add to NBA_TEAM_MAP", stripped)
 
     return ""
 

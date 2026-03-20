@@ -522,7 +522,7 @@ async def _check_auto_retrain():
                     result.get("old_mae") or 0.0,
                 )
         else:
-            logger.debug("Auto-retrain: skipped — %s", result.get("reason", "unknown"))
+            logger.debug("Auto-retrain: skipped -- %s", result.get("reason", "unknown"))
     except Exception as exc:
         logger.error("Auto-retrain check failed: %s", exc, exc_info=True)
 
@@ -874,7 +874,7 @@ async def ensure_scheduler_alive():
     """Restart the scheduler if it died.  Called from the health endpoint."""
     global _scheduler_task
     if _scheduler_running and (_scheduler_task is None or _scheduler_task.done()):
-        logger.warning("Scheduler task died — restarting automatically")
+        logger.warning("Scheduler task died -- restarting automatically")
         _scheduler_task = asyncio.create_task(_scheduler_loop())
 
 

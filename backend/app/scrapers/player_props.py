@@ -247,7 +247,7 @@ async def fetch_all_player_props(
 
     raw = await _fetch_odds_api_raw(client)
     if not raw:
-        logger.warning("Player props: no bulk odds data — cannot discover events")
+        logger.warning("Player props: no bulk odds data -- cannot discover events")
         return _props_cache  # return stale cache if available
 
     event_ids = [ev.get("id") for ev in raw if ev.get("id")]

@@ -294,37 +294,50 @@ async def _fetch_draftkings(client: httpx.AsyncClient) -> List[OddsEvent]:
         **SCRAPER_HEADERS,
         "Referer": "https://sportsbook.draftkings.com/",
         "Origin": "https://sportsbook.draftkings.com",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "DNT": "1",
         "Sec-Fetch-Dest": "empty",
         "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "same-site",
-        "Sec-Ch-Ua": '"Chromium";v="135", "Google Chrome";v="135", "Not:A-Brand";v="99"',
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Ch-Ua": '"Chromium";v="136", "Google Chrome";v="136", "Not:A-Brand";v="99"',
         "Sec-Ch-Ua-Mobile": "?0",
         "Sec-Ch-Ua-Platform": '"Windows"',
     }
 
     # DraftKings NHL event group ID: 42133
-    # Try multiple endpoint variants (DK changes these periodically)
-    # Include Illinois and Nashville subdomains which have been
-    # more reliable for non-US IPs in some reports.
+    # Try V6 API first (current), then V5 (legacy), across multiple
+    # state-specific subdomains.  DK rotates which endpoints are
+    # accessible from different regions.
     urls = [
+        "https://sportsbook.draftkings.com/sites/US-SB/api/v6/eventgroups/42133?format=json",
         "https://sportsbook.draftkings.com/sites/US-SB/api/v5/eventgroups/42133?format=json",
         "https://sportsbook-us-il.draftkings.com/sites/US-IL-SB/api/v5/eventgroups/42133?format=json",
         "https://sportsbook-nash.draftkings.com/sites/US-SB/api/v5/eventgroups/42133?format=json",
         "https://sportsbook-us-nj.draftkings.com/sites/US-NJ-SB/api/v5/eventgroups/42133?format=json",
     ]
     data = None
-    for url in urls:
+    for i, url in enumerate(urls):
         # Use matching Referer/Origin for state-specific subdomains
         domain = url.split("/sites/")[0] if "/sites/" in url else "https://sportsbook.draftkings.com"
         headers["Referer"] = domain + "/"
         headers["Origin"] = domain
+        # same-origin for the primary domain, same-site for subdomains
+        headers["Sec-Fetch-Site"] = (
+            "same-origin" if "sportsbook.draftkings.com/sites" in url
+            else "same-site"
+        )
         data = await _make_request(client, url, headers=headers)
         if data:
             logger.info("DraftKings: connected via %s", url.split("/sites/")[1].split("/")[0] if "/sites/" in url else url)
             break
+        # Small delay between attempts to avoid triggering rate-limit
+        if i < len(urls) - 1:
+            await asyncio.sleep(1)
 
     if not data:
-        logger.warning("DraftKings: all %d endpoints failed — no data", len(urls))
+        logger.warning("DraftKings: all %d endpoints returned 403/error -- no data", len(urls))
         return events
 
     try:
@@ -1345,7 +1358,7 @@ async def _fetch_bovada(client: httpx.AsyncClient) -> List[OddsEvent]:
                     if _signs_wrong:
                         logger.debug(
                             "Bovada %s @ %s: fixing spread H/A swap "
-                            "(home %+.1f @ %+.0f ↔ away %+.1f @ %+.0f)",
+                            "(home %+.1f @ %+.0f <-> away %+.1f @ %+.0f)",
                             away_name, home_name,
                             odds.get("home_spread", 0),
                             odds.get("home_spread_price", 0),
@@ -1521,7 +1534,7 @@ async def _fetch_odds_api_raw(
                             region, len(data),
                         )
 
-        logger.warning("Odds API: all region attempts failed — no data returned")
+        logger.warning("Odds API: all region attempts failed -- no data returned")
         return None
 
 

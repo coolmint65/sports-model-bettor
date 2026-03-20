@@ -425,7 +425,7 @@ class FeatureEngine:
                     break  # different goalie started — streak over
 
         logger.info(
-            "Goalie: team_id=%d → %s (id=%d) | SV%% %.3f GAA %.2f | "
+            "Goalie: team_id=%d -> %s (id=%d) | SV%% %.3f GAA %.2f | "
             "L5 SV%% %.3f GAA %.2f | L10 SV%% %.3f GAA %.2f | %d GS | %d consec",
             team_id, goalie_name, goalie_id,
             season_save_pct, season_gaa,
@@ -2232,7 +2232,7 @@ class FeatureEngine:
 
             if player:
                 logger.info(
-                    "Starter switch: %s → %s (team_id=%d, status=%s, source=%s)",
+                    "Starter switch: %s -> %s (team_id=%d, status=%s, source=%s)",
                     projected_name, confirmed_name, team_id, status, source,
                 )
                 new_features = await self._get_goalie_features_for_player(

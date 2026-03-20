@@ -44,7 +44,7 @@ async def should_retrain(db: AsyncSession) -> bool:
     loaded = model.load(model_path)
 
     if not loaded:
-        logger.info("No existing ML model found — retrain needed")
+        logger.info("No existing ML model found -- retrain needed")
         return True
 
     # Determine how many settled games exist.

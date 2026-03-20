@@ -23,11 +23,12 @@ from app.config import settings
 # Register "JSON" as a recognized column type for SQLite reflection.
 # Older migrations added columns with type "JSON" which Python 3.14 /
 # Windows SQLAlchemy can't resolve, causing a NullType CompileError.
-# Mapping it to Text matches our JSONText TypeDecorator (impl = Text).
+# Force-set it to Text (matching our JSONText TypeDecorator impl) even
+# if SQLAlchemy already registered a JSON type — the built-in mapping
+# can still produce NullType on certain platform/version combinations.
 try:
     from sqlalchemy.dialects.sqlite.base import ischema_names as _sqlite_types
-    if "JSON" not in _sqlite_types:
-        _sqlite_types["JSON"] = Text
+    _sqlite_types["JSON"] = Text
 except Exception:
     pass  # Non-SQLite dialects don't need this
 

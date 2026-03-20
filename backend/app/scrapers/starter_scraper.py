@@ -481,7 +481,7 @@ async def sync_confirmed_starters(db: AsyncSession) -> List[Dict[str, Any]]:
 
                 if not away_abbrev or not home_abbrev:
                     logger.warning(
-                        "DFO team match failed: away=%r→%s, home=%r→%s, "
+                        "DFO team match failed: away=%r->%s, home=%r->%s, "
                         "goalies=%s vs %s",
                         raw_away, away_abbrev, raw_home, home_abbrev,
                         dfo_game.get("away_goalie", "?"),

@@ -403,7 +403,7 @@ async def _get_or_create_snapshots(
             # Already graded — don't regenerate, keep historical record
             return snapshots
         logger.info(
-            "Regenerating prop picks for game %d (version %s → %s)",
+            "Regenerating prop picks for game %d (version %s -> %s)",
             game_id, snapshots[0].model_version, PROP_MODEL_VERSION,
         )
         try:

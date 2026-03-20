@@ -942,7 +942,7 @@ async def _db_fallback_starters(
                 status="Expected",
             )
             logger.info(
-                "DB fallback goalie: team_id=%d → %s (%d games)",
+                "DB fallback goalie: team_id=%d -> %s (%d games)",
                 tid, name, appearances,
             )
     return team_starters
