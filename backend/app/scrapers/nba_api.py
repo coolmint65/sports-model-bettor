@@ -693,6 +693,10 @@ class NBAScraper(BaseScraper):
                 "/stats", params=params, cache_ttl=604_800.0
             )
         except Exception as exc:
+            exc_str = str(exc)
+            if "401" in exc_str or "Unauthorized" in exc_str:
+                # Re-raise 401 so the caller can stop the loop
+                raise
             logger.error("Failed to fetch NBA stats for game %s: %s", numeric_id, exc)
             return 0
 

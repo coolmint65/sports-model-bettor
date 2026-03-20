@@ -428,7 +428,16 @@ class ESPNNBAScraper(BaseScraper):
                         pass
 
         if not stat_lookup:
+            # Log what keys we DID find in the response for diagnostics
+            logger.debug(
+                "ESPN NBA stat_lookup empty. Response keys: %s, categories found: %d",
+                list(data.keys())[:10] if isinstance(data, dict) else type(data).__name__,
+                len(categories),
+            )
             return None
+
+        # Log raw stat names for debugging (first team only to avoid spam)
+        logger.debug("ESPN NBA raw stat names: %s", list(stat_lookup.keys())[:30])
 
         # Map ESPN stat names (lowercased) to our internal field names.
         # ESPN uses various naming conventions across API versions.
