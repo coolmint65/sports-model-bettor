@@ -23,7 +23,13 @@ async def make_request(
     max_retries: int = 2,
     log_credit_headers: bool = True,
 ) -> Optional[Any]:
-    """Make a GET request with retry on 429.  Returns parsed JSON or None.
+    """Make a GET request with retry on 429 and transient errors.
+
+    Retries on:
+    - HTTP 429 (rate limit) with exponential backoff
+    - Timeout / connection errors with exponential backoff
+
+    Returns parsed JSON or None.
 
     Args:
         client: httpx async client to use.
@@ -31,7 +37,7 @@ async def make_request(
         headers: Optional request headers.
         params: Optional query parameters.
         timeout: Request timeout in seconds.
-        max_retries: Number of retries on 429 rate-limit responses.
+        max_retries: Number of retries on retryable errors.
         log_credit_headers: If True, log Odds API credit usage headers.
     """
     # Strip API key from log output
@@ -57,10 +63,26 @@ async def make_request(
                 return resp.json()
             # Retry on 429 with exponential backoff
             if resp.status_code == 429 and attempt < max_retries:
-                wait = 2 ** attempt
-                logger.info(
+                retry_after = resp.headers.get("Retry-After")
+                if retry_after:
+                    try:
+                        wait = min(int(retry_after), 60)
+                    except (ValueError, TypeError):
+                        wait = 2 ** (attempt + 1)
+                else:
+                    wait = 2 ** (attempt + 1)
+                logger.warning(
                     "429 from %s -- retrying in %ds (attempt %d/%d)",
                     _log_url, wait, attempt + 1, max_retries,
+                )
+                await asyncio.sleep(wait)
+                continue
+            # Retry on 5xx server errors
+            if resp.status_code >= 500 and attempt < max_retries:
+                wait = 2 ** (attempt + 1)
+                logger.warning(
+                    "HTTP %d from %s -- retrying in %ds (attempt %d/%d)",
+                    resp.status_code, _log_url, wait, attempt + 1, max_retries,
                 )
                 await asyncio.sleep(wait)
                 continue
@@ -78,11 +100,20 @@ async def make_request(
                 f" -- {body_snippet}" if body_snippet else "",
             )
             return None
-        except httpx.TimeoutException:
-            logger.warning("Timeout (%.0fs) for %s", timeout, _log_url)
-            return None
-        except httpx.ConnectError as exc:
-            logger.warning("Connection failed for %s: %s", _log_url, exc)
+        except (httpx.TimeoutException, httpx.ConnectError) as exc:
+            if attempt < max_retries:
+                wait = 2 ** (attempt + 1)
+                logger.warning(
+                    "%s for %s -- retrying in %ds (attempt %d/%d)",
+                    type(exc).__name__, _log_url, wait,
+                    attempt + 1, max_retries,
+                )
+                await asyncio.sleep(wait)
+                continue
+            logger.warning(
+                "%s for %s (exhausted %d retries)",
+                type(exc).__name__, _log_url, max_retries,
+            )
             return None
         except Exception as exc:
             logger.warning("Request failed for %s: %s", _log_url, exc)

@@ -2106,15 +2106,19 @@ async def _fetch_hardrock(
             len(alt_map), now_mono - _alt_line_cache_ts,
         )
     else:
-        # Full fetch: one API call per event
-        alt_results = await asyncio.gather(
-            *(
-                _fetch_hardrock_alt_lines(
+        # Full fetch: one API call per event.
+        # Limit concurrency to avoid triggering Odds API per-second
+        # rate limits — same approach as player_props.
+        _alt_sem = asyncio.Semaphore(3)
+
+        async def _throttled_alt(pd: Dict[str, Any]):
+            async with _alt_sem:
+                return await _fetch_hardrock_alt_lines(
                     client, pd["event_id"], pd["home_team"], pd["away_team"]
                 )
-                for pd in primary_data
-                if pd["event_id"]
-            ),
+
+        alt_results = await asyncio.gather(
+            *(_throttled_alt(pd) for pd in primary_data if pd["event_id"]),
             return_exceptions=True,
         )
 
