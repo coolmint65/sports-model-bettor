@@ -1376,9 +1376,13 @@ class NBAScraper(BaseScraper):
         # Players (24h cache — rosters barely change)
         await self.sync_players(session)
 
-        # Full current season schedule (6h cache per page)
+        # Full season schedules — current season + 2 prior seasons for
+        # H2H historical data.  Each call is a no-op once seeded (>= 1000
+        # games in DB), so only the initial sync is expensive.
         current_season = int(self.default_season)
-        await self.sync_season_schedule(session, season=current_season)
+        for season_offset in range(0, 3):
+            s = current_season - season_offset
+            await self.sync_season_schedule(session, season=s)
 
         # Today/tomorrow via date endpoint for live status (short cache)
         today = date.today()

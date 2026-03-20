@@ -419,85 +419,142 @@ class ESPNNBAScraper(BaseScraper):
 
         for category in categories:
             for stat_item in category.get("stats", []):
-                name = stat_item.get("name", "").lower()
                 value = stat_item.get("value")
-                if value is not None:
+                if value is None:
+                    continue
+                try:
+                    fval = float(value)
+                except (ValueError, TypeError):
+                    continue
+                # Index by every available identifier so we match regardless
+                # of which naming convention this ESPN API version uses.
+                for key_field in ("name", "displayName", "abbreviation",
+                                  "shortDisplayName"):
+                    raw = stat_item.get(key_field, "")
+                    if raw:
+                        stat_lookup[raw.lower()] = fval
+                # ESPN often provides a per-game value separately
+                per_game = stat_item.get("perGame")
+                if per_game is not None:
                     try:
-                        stat_lookup[name] = float(value)
+                        pg_val = float(per_game)
+                        name = stat_item.get("name", "")
+                        if name:
+                            stat_lookup[name.lower() + "pergame"] = pg_val
                     except (ValueError, TypeError):
                         pass
 
         if not stat_lookup:
             # Log what keys we DID find in the response for diagnostics
-            logger.debug(
+            logger.warning(
                 "ESPN NBA stat_lookup empty. Response keys: %s, categories found: %d",
                 list(data.keys())[:10] if isinstance(data, dict) else type(data).__name__,
                 len(categories),
             )
             return None
 
-        # Log raw stat names for debugging (first team only to avoid spam)
-        logger.debug("ESPN NBA raw stat names: %s", list(stat_lookup.keys())[:30])
+        # Log raw stat names at INFO level to diagnose mapping gaps
+        logger.info("ESPN NBA raw stat names: %s", sorted(stat_lookup.keys())[:40])
 
         # Map ESPN stat names (lowercased) to our internal field names.
-        # ESPN uses various naming conventions across API versions.
+        # ESPN uses various naming conventions across API versions:
+        #   - Long camelCase: "fieldGoalPct", "reboundsPerGame"
+        #   - Abbreviated: "FG%", "REB", "AST", "STL"
+        #   - Display names: "Field Goal Pct", "Rebounds Per Game"
+        # We index by name, displayName, abbreviation, and shortDisplayName
+        # so all conventions are covered.
         stat_name_map = {
-            # Shooting percentages
+            # Shooting percentages -- long form
             "fieldgoalpct": "fg_pct",
             "fieldgoalpercentage": "fg_pct",
             "fgpct": "fg_pct",
+            "field goal pct": "fg_pct",
+            "field goal percentage": "fg_pct",
+            "field goals percentage": "fg_pct",
             "fg%": "fg_pct",
             "threepointfieldgoalpct": "three_pt_pct",
             "threepointfieldgoalpercentage": "three_pt_pct",
             "3ptpct": "three_pt_pct",
             "threepointpct": "three_pt_pct",
             "3pt%": "three_pt_pct",
+            "3p%": "three_pt_pct",
             "threepointers%": "three_pt_pct",
+            "three point pct": "three_pt_pct",
+            "three point field goal pct": "three_pt_pct",
+            "three point field goal percentage": "three_pt_pct",
+            "3-point field goal pct": "three_pt_pct",
+            "three point %": "three_pt_pct",
             "freethrowpct": "ft_pct",
             "freethrowpercentage": "ft_pct",
             "ftpct": "ft_pct",
             "ft%": "ft_pct",
-            # Per-game averages
+            "free throw pct": "ft_pct",
+            "free throw percentage": "ft_pct",
+            # Per-game averages -- long form
             "reboundspergame": "rebounds_per_game",
             "avgrebounds": "rebounds_per_game",
             "totalreboundspergame": "rebounds_per_game",
             "rebpergame": "rebounds_per_game",
+            "rebounds per game": "rebounds_per_game",
+            "total rebounds per game": "rebounds_per_game",
             "assistspergame": "assists_per_game",
             "avgassists": "assists_per_game",
             "astpergame": "assists_per_game",
+            "assists per game": "assists_per_game",
             "turnoverspergame": "turnovers_per_game",
             "avgturnovers": "turnovers_per_game",
             "tovpergame": "turnovers_per_game",
+            "turnovers per game": "turnovers_per_game",
             "stealspergame": "steals_per_game",
             "avgsteals": "steals_per_game",
             "stlpergame": "steals_per_game",
+            "steals per game": "steals_per_game",
             "blockspergame": "blocks_per_game",
             "avgblocks": "blocks_per_game",
             "blkpergame": "blocks_per_game",
+            "blocks per game": "blocks_per_game",
             "pointspergame": "points_per_game",
             "avgpoints": "points_per_game",
             "ppg": "points_per_game",
+            "points per game": "points_per_game",
             "threepointfieldgoalsmadepergame": "three_pt_made_per_game",
             "avg3pointfieldgoalsmade": "three_pt_made_per_game",
             "threepointsmadepergame": "three_pt_made_per_game",
             "3ptmadepergame": "three_pt_made_per_game",
+            "three point field goals made per game": "three_pt_made_per_game",
+            # ESPN abbreviated stat names (common in splitCategories format)
+            "reb": "rebounds_per_game",
+            "ast": "assists_per_game",
+            "stl": "steals_per_game",
+            "blk": "blocks_per_game",
+            "tov": "turnovers_per_game",
+            "to": "turnovers_per_game",
+            "3pm": "three_pt_made_per_game",
+            "pts": "points_per_game",
+            "gp": "games_played",
             # Advanced
             "offensiverating": "offensive_rating",
             "offrtg": "offensive_rating",
             "ortg": "offensive_rating",
+            "offensive rating": "offensive_rating",
             "defensiverating": "defensive_rating",
             "defrtg": "defensive_rating",
             "drtg": "defensive_rating",
+            "defensive rating": "defensive_rating",
             "pace": "pace",
             "possessionspergame": "pace",
+            "possessions per game": "pace",
             # Scoring
             "gamesplayed": "games_played",
+            "games played": "games_played",
             "totalpoints": "total_points",
+            "total points": "total_points",
             "pointsagainstpergame": "points_against_per_game",
             "avgpointsagainst": "points_against_per_game",
             "oppavgpoints": "points_against_per_game",
             "opponentpointspergame": "points_against_per_game",
             "oppppg": "points_against_per_game",
+            "opponent points per game": "points_against_per_game",
             # Defensive stats
             "opponentfieldgoalpct": "opp_fg_pct",
             "oppfg%": "opp_fg_pct",
@@ -508,8 +565,40 @@ class ESPNNBAScraper(BaseScraper):
         result = {}
         for espn_name, our_name in stat_name_map.items():
             val = stat_lookup.get(espn_name)
-            if val is not None:
+            if val is not None and our_name not in result:
                 result[our_name] = val
+
+        # Log which stats we mapped vs total available for diagnostics
+        if result:
+            logger.debug(
+                "ESPN NBA mapped %d stats from %d raw entries",
+                len(result), len(stat_lookup),
+            )
+        else:
+            logger.warning(
+                "ESPN NBA stat mapping produced no results. "
+                "Raw stat names: %s",
+                sorted(stat_lookup.keys())[:30],
+            )
+
+        # ESPN abbreviated names (reb, ast, etc.) may return season totals
+        # instead of per-game averages.  Detect using stat-specific upper
+        # bounds — no NBA team per-game average exceeds these values.
+        gp = result.get("games_played", 0)
+        per_game_max = {
+            "points_per_game": 200,
+            "rebounds_per_game": 80,
+            "assists_per_game": 50,
+            "turnovers_per_game": 30,
+            "steals_per_game": 25,
+            "blocks_per_game": 20,
+            "three_pt_made_per_game": 30,
+        }
+        for key, threshold in per_game_max.items():
+            val = result.get(key)
+            if val is not None and val > threshold and gp > 0:
+                # Almost certainly a season total — convert to per-game
+                result[key] = round(val / gp, 1)
 
         # Convert percentages if they're in decimal form (0.48 → 48.0)
         for pct_key in ("fg_pct", "three_pt_pct", "ft_pct"):
