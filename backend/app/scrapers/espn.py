@@ -361,18 +361,59 @@ class ESPNNBAScraper(BaseScraper):
         return await self.fetch_json(f"/teams/{espn_team_id}/statistics")
 
     def _parse_team_stats(self, data: Dict[str, Any]) -> Optional[Dict[str, float]]:
-        """Parse ESPN NBA team statistics response into a flat dict."""
-        # Build a flat lookup of stat name → value from ESPN's nested format
+        """Parse ESPN NBA team statistics response into a flat dict.
+
+        ESPN returns stats in several different formats depending on the
+        endpoint version and sport.  This parser handles all known layouts:
+
+        1. ``{results: {stats: {categories: [...]}}}``
+        2. ``{statistics: {splits: [{categories: [...]}]}}``
+        3. ``{statistics: [{splits: [{categories: [...]}]}]}``  (list)
+        4. ``{results: {statistics: [{categories: [...]}]}}``
+        5. Top-level ``{categories: [...]}``
+        6. Flat ``{splitCategories: [{stats: [...]}]}``
+        """
         stat_lookup: Dict[str, float] = {}
 
         results = data.get("results", data)
-        categories = []
+        categories: list = []
 
+        # Format 1: results.stats.categories
         if "stats" in results:
-            categories = results["stats"].get("categories", [])
+            stats_obj = results["stats"]
+            if isinstance(stats_obj, dict):
+                categories = stats_obj.get("categories", [])
+
+        # Format 2/3: statistics (dict or list)
         if not categories and "statistics" in results:
-            for split in results.get("statistics", {}).get("splits", []):
-                categories.extend(split.get("categories", []))
+            statistics = results["statistics"]
+            if isinstance(statistics, list):
+                # Format 3: statistics is a list of split groups
+                for stat_group in statistics:
+                    if isinstance(stat_group, dict):
+                        # Each group may have direct categories
+                        categories.extend(stat_group.get("categories", []))
+                        # Or nested splits
+                        for split in stat_group.get("splits", []):
+                            if isinstance(split, dict):
+                                categories.extend(split.get("categories", []))
+            elif isinstance(statistics, dict):
+                # Format 2: statistics.splits.categories
+                splits = statistics.get("splits", [])
+                if isinstance(splits, list):
+                    for split in splits:
+                        if isinstance(split, dict):
+                            categories.extend(split.get("categories", []))
+                # Also try direct categories on the statistics object
+                categories.extend(statistics.get("categories", []))
+
+        # Format 6: splitCategories (newer ESPN format)
+        if not categories:
+            split_cats = results.get("splitCategories", [])
+            if isinstance(split_cats, list):
+                categories.extend(split_cats)
+
+        # Format 5: top-level categories
         if not categories:
             categories = results.get("categories", [])
 
@@ -389,46 +430,70 @@ class ESPNNBAScraper(BaseScraper):
         if not stat_lookup:
             return None
 
-        # Map ESPN stat names to our internal field names
+        # Map ESPN stat names (lowercased) to our internal field names.
+        # ESPN uses various naming conventions across API versions.
         stat_name_map = {
             # Shooting percentages
             "fieldgoalpct": "fg_pct",
             "fieldgoalpercentage": "fg_pct",
             "fgpct": "fg_pct",
+            "fg%": "fg_pct",
             "threepointfieldgoalpct": "three_pt_pct",
             "threepointfieldgoalpercentage": "three_pt_pct",
             "3ptpct": "three_pt_pct",
             "threepointpct": "three_pt_pct",
+            "3pt%": "three_pt_pct",
+            "threepointers%": "three_pt_pct",
             "freethrowpct": "ft_pct",
             "freethrowpercentage": "ft_pct",
             "ftpct": "ft_pct",
+            "ft%": "ft_pct",
             # Per-game averages
             "reboundspergame": "rebounds_per_game",
             "avgrebounds": "rebounds_per_game",
+            "totalreboundspergame": "rebounds_per_game",
+            "rebpergame": "rebounds_per_game",
             "assistspergame": "assists_per_game",
             "avgassists": "assists_per_game",
+            "astpergame": "assists_per_game",
             "turnoverspergame": "turnovers_per_game",
             "avgturnovers": "turnovers_per_game",
+            "tovpergame": "turnovers_per_game",
             "stealspergame": "steals_per_game",
             "avgsteals": "steals_per_game",
+            "stlpergame": "steals_per_game",
             "blockspergame": "blocks_per_game",
             "avgblocks": "blocks_per_game",
+            "blkpergame": "blocks_per_game",
             "pointspergame": "points_per_game",
             "avgpoints": "points_per_game",
+            "ppg": "points_per_game",
             "threepointfieldgoalsmadepergame": "three_pt_made_per_game",
             "avg3pointfieldgoalsmade": "three_pt_made_per_game",
+            "threepointsmadepergame": "three_pt_made_per_game",
+            "3ptmadepergame": "three_pt_made_per_game",
             # Advanced
             "offensiverating": "offensive_rating",
             "offrtg": "offensive_rating",
+            "ortg": "offensive_rating",
             "defensiverating": "defensive_rating",
             "defrtg": "defensive_rating",
+            "drtg": "defensive_rating",
             "pace": "pace",
+            "possessionspergame": "pace",
             # Scoring
             "gamesplayed": "games_played",
             "totalpoints": "total_points",
             "pointsagainstpergame": "points_against_per_game",
             "avgpointsagainst": "points_against_per_game",
             "oppavgpoints": "points_against_per_game",
+            "opponentpointspergame": "points_against_per_game",
+            "oppppg": "points_against_per_game",
+            # Defensive stats
+            "opponentfieldgoalpct": "opp_fg_pct",
+            "oppfg%": "opp_fg_pct",
+            "opponentthreepointpct": "opp_three_pt_pct",
+            "opp3pt%": "opp_three_pt_pct",
         }
 
         result = {}
@@ -448,6 +513,7 @@ class ESPNNBAScraper(BaseScraper):
         """Fetch stats for all NBA teams, keyed by canonical abbreviation."""
         teams = await self.fetch_teams()
         all_stats = {}
+        parse_failures = 0
 
         for team_info in teams:
             espn_id = team_info.get("espn_id")
@@ -463,11 +529,27 @@ class ESPNNBAScraper(BaseScraper):
                 if stats:
                     all_stats[nba_abbrev] = stats
                     logger.debug("ESPN NBA stats for %s: %s", nba_abbrev, stats)
+                else:
+                    parse_failures += 1
+                    # Log the response structure to help diagnose parsing issues
+                    top_keys = list(data.keys())[:10] if isinstance(data, dict) else type(data).__name__
+                    logger.warning(
+                        "ESPN NBA stats parsed to empty for %s. Response top-level keys: %s",
+                        nba_abbrev, top_keys,
+                    )
             except Exception as exc:
                 logger.warning("Failed to fetch ESPN NBA stats for %s: %s", nba_abbrev, exc)
                 continue
 
-        logger.info("Fetched ESPN NBA stats for %d teams", len(all_stats))
+        if parse_failures > 10:
+            logger.error(
+                "ESPN NBA stat parsing failed for %d/%d teams — response format may have changed",
+                parse_failures, len(teams),
+            )
+        logger.info(
+            "Fetched ESPN NBA stats for %d/%d teams (%d parse failures)",
+            len(all_stats), len(teams), parse_failures,
+        )
         return all_stats
 
     async def sync_team_stats(self, db: AsyncSession) -> int:
@@ -525,7 +607,9 @@ class ESPNNBAScraper(BaseScraper):
 
             changed = False
 
-            # NBA shooting stats
+            # NBA shooting stats — always update from ESPN since it's
+            # authoritative and free (unlike paid BallDontLie endpoints).
+            # Only skip if ESPN didn't return the stat at all.
             for field, key in [
                 ("fg_pct", "fg_pct"),
                 ("three_pt_pct", "three_pt_pct"),
@@ -540,15 +624,15 @@ class ESPNNBAScraper(BaseScraper):
                 ("offensive_rating", "offensive_rating"),
                 ("defensive_rating", "defensive_rating"),
             ]:
-                if getattr(stats, field, None) is None and key in espn_stats:
+                if key in espn_stats:
                     setattr(stats, field, espn_stats[key])
                     changed = True
 
-            # Also fill in scoring per-game from ESPN if missing
-            if stats.goals_for_per_game is None and "points_per_game" in espn_stats:
+            # Also fill in scoring per-game from ESPN
+            if "points_per_game" in espn_stats:
                 stats.goals_for_per_game = espn_stats["points_per_game"]
                 changed = True
-            if stats.goals_against_per_game is None and "points_against_per_game" in espn_stats:
+            if "points_against_per_game" in espn_stats:
                 stats.goals_against_per_game = espn_stats["points_against_per_game"]
                 changed = True
 

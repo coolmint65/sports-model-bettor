@@ -194,6 +194,18 @@ class GamePropsInfo(BaseModel):
     period1_under_price: Optional[float] = None
 
 
+class SituationalFactors(BaseModel):
+    """Extra situational analysis factors for a team in a game."""
+
+    rest_days: Optional[int] = None       # Days since last game
+    is_back_to_back: bool = False         # Playing on consecutive days
+    scoring_margin: Optional[float] = None  # Avg margin (pts for - pts against)
+    last_10_record: Optional[str] = None  # W-L in last 10
+    home_away_record: Optional[str] = None  # Record in this venue type
+    streak: Optional[str] = None          # Current streak e.g. "W3" or "L2"
+    avg_total_last_10: Optional[float] = None  # Avg combined score last 10
+
+
 class GameDetailResponse(BaseModel):
     """Full game details response with analytics context."""
 
@@ -246,6 +258,10 @@ class GameDetailResponse(BaseModel):
     top_pick: Optional[Dict[str, Any]] = None
 
     league_averages: Optional[Dict[str, Any]] = None
+
+    # Situational factors
+    home_situational: Optional[SituationalFactors] = None
+    away_situational: Optional[SituationalFactors] = None
 
 
 class PredictionResponse(BaseModel):
@@ -352,6 +368,12 @@ async def _get_team_form(team: Team, session: AsyncSession) -> TeamForm:
     needs_basic = form.wins == 0 and form.losses == 0
     needs_shots = form.shots_for_per_game is None or form.shots_against_per_game is None
     needs_nba = sport == "nba" and form.fg_pct is None
+    # Also fall back if key NBA stats are missing even when we have W/L
+    if sport == "nba" and not needs_nba:
+        needs_nba = any(
+            getattr(form, f) is None
+            for f in ("rebounds_per_game", "assists_per_game", "pace", "offensive_rating")
+        )
 
     if needs_basic or needs_shots or needs_nba:
         game_result = await session.execute(
@@ -623,7 +645,8 @@ async def _get_league_context(
 
 
 async def _get_head_to_head(
-    team1_id: int, team2_id: int, session: AsyncSession
+    team1_id: int, team2_id: int, session: AsyncSession,
+    sport: str = "nhl",
 ) -> Optional[HeadToHeadRecord]:
     """Compute H2H from ALL completed regular-season Game records.
 
@@ -631,6 +654,16 @@ async def _get_head_to_head(
     current season, so the user can see the full historical matchup.
     """
     lo, hi = sorted([team1_id, team2_id])
+
+    # NHL API stores game_type as "2" for regular season,
+    # NBA stores it as "regular". Include both plus NULL to be safe.
+    game_type_filter = Game.game_type.in_(("2", "regular"))
+    if sport == "nba":
+        # Also include NULL game_type for NBA games that might not have it set
+        game_type_filter = or_(
+            Game.game_type.in_(("2", "regular")),
+            Game.game_type.is_(None),
+        )
 
     result = await session.execute(
         select(Game)
@@ -642,8 +675,7 @@ async def _get_head_to_head(
             func.lower(Game.status).in_(GAME_FINAL_STATUSES),
             Game.home_score.isnot(None),
             Game.away_score.isnot(None),
-            # NHL API stores game_type as "2" for regular season
-            Game.game_type.in_(("2", "regular")),
+            game_type_filter,
         )
         .order_by(Game.date.desc())
     )
@@ -709,10 +741,19 @@ async def _get_head_to_head(
 
 
 async def _get_h2h_games(
-    team1_id: int, team2_id: int, session: AsyncSession, limit: int = 10
+    team1_id: int, team2_id: int, session: AsyncSession, limit: int = 10,
+    sport: str = "nhl",
 ) -> List[RecentGameResult]:
     """Return individual H2H game records between two teams."""
     lo, hi = sorted([team1_id, team2_id])
+
+    game_type_filter = Game.game_type.in_(("2", "regular"))
+    if sport == "nba":
+        game_type_filter = or_(
+            Game.game_type.in_(("2", "regular")),
+            Game.game_type.is_(None),
+        )
+
     result = await session.execute(
         select(Game)
         .options(selectinload(Game.home_team), selectinload(Game.away_team))
@@ -722,7 +763,7 @@ async def _get_h2h_games(
                 and_(Game.home_team_id == hi, Game.away_team_id == lo),
             ),
             func.lower(Game.status).in_(GAME_FINAL_STATUSES),
-            Game.game_type.in_(("2", "regular")),
+            game_type_filter,
             Game.home_score.isnot(None),
             Game.away_score.isnot(None),
         )
@@ -965,6 +1006,64 @@ async def _compute_period_scoring(
     return PeriodScoring()
 
 
+async def _compute_situational_factors(
+    team_id: int, game_date: date, recent_games: List[RecentGameResult],
+    is_home: bool, session: AsyncSession,
+) -> SituationalFactors:
+    """Compute situational factors for a team heading into a game."""
+    factors = SituationalFactors()
+
+    if not recent_games:
+        return factors
+
+    # Rest days — days since the most recent completed game
+    latest = recent_games[0] if recent_games else None
+    if latest and latest.game_date:
+        delta = (game_date - latest.game_date).days
+        factors.rest_days = delta
+        factors.is_back_to_back = delta <= 1
+
+    # Current streak
+    streak_char = recent_games[0].result if recent_games else None
+    streak_count = 0
+    for g in recent_games:
+        if g.result == streak_char:
+            streak_count += 1
+        else:
+            break
+    if streak_char and streak_count > 0:
+        factors.streak = f"{streak_char}{streak_count}"
+
+    # Scoring margin (avg over recent games, up to 20)
+    scored = [g.goals_for for g in recent_games[:20]]
+    allowed = [g.goals_against for g in recent_games[:20]]
+    if scored and allowed:
+        factors.scoring_margin = round(
+            sum(scored) / len(scored) - sum(allowed) / len(allowed), 1
+        )
+
+    # Last 10 record
+    last10 = recent_games[:10]
+    if len(last10) >= 5:
+        w = sum(1 for g in last10 if g.result == "W")
+        l = len(last10) - w
+        factors.last_10_record = f"{w}-{l}"
+
+    # Home/away specific record
+    venue_games = [g for g in recent_games if g.home_away == ("home" if is_home else "away")]
+    if venue_games:
+        w = sum(1 for g in venue_games if g.result == "W")
+        l = len(venue_games) - w
+        factors.home_away_record = f"{w}-{l}"
+
+    # Average combined total last 10
+    totals = [g.goals_for + g.goals_against for g in recent_games[:10]]
+    if totals:
+        factors.avg_total_last_10 = round(sum(totals) / len(totals), 1)
+
+    return factors
+
+
 from app.services.odds import fresh_implied_prob as _fresh_implied_for_pred  # noqa: E402
 
 
@@ -1084,8 +1183,8 @@ async def get_game_details(
     home_form = await _get_team_form(game.home_team, session)
     away_form = await _get_team_form(game.away_team, session)
     league_avgs = await _get_league_context(session, game.season, game.home_team_id, game.away_team_id, sport=sport)
-    h2h = await _get_head_to_head(game.home_team_id, game.away_team_id, session)
-    h2h_game_records = await _get_h2h_games(game.home_team_id, game.away_team_id, session)
+    h2h = await _get_head_to_head(game.home_team_id, game.away_team_id, session, sport=sport)
+    h2h_game_records = await _get_h2h_games(game.home_team_id, game.away_team_id, session, sport=sport)
     home_period = await _compute_period_scoring(game.home_team_id, session, sport=sport)
     away_period = await _compute_period_scoring(game.away_team_id, session, sport=sport)
     # Goalies are only relevant for NHL
@@ -1106,6 +1205,14 @@ async def get_game_details(
 
     home_recent = await _get_recent_games(game.home_team_id, session, limit=50)
     away_recent = await _get_recent_games(game.away_team_id, session, limit=50)
+
+    # Situational factors
+    home_situational = await _compute_situational_factors(
+        game.home_team_id, game.date, home_recent, is_home=True, session=session,
+    )
+    away_situational = await _compute_situational_factors(
+        game.away_team_id, game.date, away_recent, is_home=False, session=session,
+    )
 
     # Build period scores from individual columns
     parsed_period_scores = None
@@ -1219,6 +1326,8 @@ async def get_game_details(
         predictions=predictions,
         top_pick=top_pick_dict,
         league_averages=league_avgs or None,
+        home_situational=home_situational,
+        away_situational=away_situational,
     )
 
 

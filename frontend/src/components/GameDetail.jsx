@@ -1193,6 +1193,84 @@ function GoalieMatchup({ game }) {
   );
 }
 
+/* ──────────────────── Situational Factors ──────────────────── */
+function SituationalFactors({ game }) {
+  const homeSit = game.home_situational;
+  const awaySit = game.away_situational;
+  if (!homeSit && !awaySit) return null;
+
+  const homeLabel = game.home_team_form?.team_name || 'Home';
+  const awayLabel = game.away_team_form?.team_name || 'Away';
+  const homeAbbr = game.home_team_form?.abbreviation || 'HME';
+  const awayAbbr = game.away_team_form?.abbreviation || 'AWY';
+  const isNBA = (game.sport || 'nhl').toLowerCase() === 'nba';
+  const scoringLabel = isNBA ? 'Pts' : 'Goals';
+
+  const renderTeamFactors = (sit, label, abbr, isHome) => {
+    if (!sit) return null;
+    const b2bClass = sit.is_back_to_back ? 'gd-factor-warn' : 'gd-factor-ok';
+    const restLabel = sit.rest_days != null
+      ? (sit.rest_days === 0 ? 'Same day' : sit.rest_days === 1 ? '1 day rest' : `${sit.rest_days} days rest`)
+      : '-';
+    const marginClass = sit.scoring_margin != null
+      ? (sit.scoring_margin > 0 ? 'gd-stat-good' : sit.scoring_margin < 0 ? 'gd-stat-bad' : '')
+      : '';
+    const marginSign = sit.scoring_margin > 0 ? '+' : '';
+
+    return (
+      <div className="gd-sit-team">
+        <div className="gd-sit-team-name">{label}</div>
+        <div className="gd-sit-factors">
+          <div className="gd-sit-factor">
+            <span className="gd-sit-label">Rest</span>
+            <span className={`gd-sit-value ${b2bClass}`}>
+              {restLabel}
+              {sit.is_back_to_back && <span className="gd-sit-b2b-badge">B2B</span>}
+            </span>
+          </div>
+          <div className="gd-sit-factor">
+            <span className="gd-sit-label">Streak</span>
+            <span className={`gd-sit-value ${sit.streak?.startsWith('W') ? 'gd-stat-good' : sit.streak?.startsWith('L') ? 'gd-stat-bad' : ''}`}>
+              {sit.streak || '-'}
+            </span>
+          </div>
+          <div className="gd-sit-factor">
+            <span className="gd-sit-label">{scoringLabel} Margin</span>
+            <span className={`gd-sit-value ${marginClass}`}>
+              {sit.scoring_margin != null ? `${marginSign}${sit.scoring_margin}` : '-'}
+            </span>
+          </div>
+          <div className="gd-sit-factor">
+            <span className="gd-sit-label">{isHome ? 'Home' : 'Away'} Record</span>
+            <span className="gd-sit-value">{sit.home_away_record || '-'}</span>
+          </div>
+          <div className="gd-sit-factor">
+            <span className="gd-sit-label">Last 10</span>
+            <span className="gd-sit-value">{sit.last_10_record || '-'}</span>
+          </div>
+          <div className="gd-sit-factor">
+            <span className="gd-sit-label">Avg Total (L10)</span>
+            <span className="gd-sit-value">{sit.avg_total_last_10 != null ? sit.avg_total_last_10.toFixed(1) : '-'}</span>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="gd-section-card">
+      <div className="gd-section-header">
+        <Zap size={16} />
+        <h3>Situational Factors</h3>
+      </div>
+      <div className="gd-sit-content">
+        {renderTeamFactors(awaySit, awayLabel, awayAbbr, false)}
+        {renderTeamFactors(homeSit, homeLabel, homeAbbr, true)}
+      </div>
+    </div>
+  );
+}
+
 /* ──────────────────── Venue & Conditions ──────────────────── */
 function VenueSection({ game }) {
   const venue = game.venue || game.arena || '';
@@ -1804,6 +1882,7 @@ function GameDetail() {
             <AIAnalysis game={game} homeAbbr={homeAbbr} awayAbbr={awayAbbr} homeTeamLabel={homeTeamLabel} awayTeamLabel={awayTeamLabel} />
             <RiskAndMarket game={game} homeAbbr={homeAbbr} awayAbbr={awayAbbr} homeTeamLabel={homeTeamLabel} awayTeamLabel={awayTeamLabel} />
             <StatsAndTrends game={game} homeAbbr={homeAbbr} awayAbbr={awayAbbr} />
+            <SituationalFactors game={game} />
             <GoalieMatchup game={game} />
             <VenueSection game={game} />
             <RecentFormAndH2H game={game} homeAbbr={homeAbbr} awayAbbr={awayAbbr} sport={(game.sport || 'nhl').toLowerCase()} />
