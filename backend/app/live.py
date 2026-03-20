@@ -591,6 +591,19 @@ async def _run_full_data_sync():
         except Exception as espn_exc:
             logger.error("ESPN stats sync failed: %s", espn_exc)
 
+        # Sync ESPN NBA team stats — FG%, 3PT%, FT%, pace, ratings, etc.
+        try:
+            from app.scrapers.espn import ESPNNBAScraper
+            espn_nba = ESPNNBAScraper()
+            try:
+                async with get_write_session_context() as session:
+                    count = await espn_nba.sync_team_stats(session)
+                    logger.info("ESPN NBA stats sync: %d teams updated", count)
+            finally:
+                await espn_nba.close()
+        except Exception as espn_nba_exc:
+            logger.error("ESPN NBA stats sync failed: %s", espn_nba_exc)
+
     except Exception as exc:
         logger.error("Periodic full data sync failed: %s", exc, exc_info=True)
 

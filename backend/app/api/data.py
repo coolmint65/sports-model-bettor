@@ -199,6 +199,22 @@ async def _run_full_sync():
             except Exception as exc:
                 logger.warning("NBA data sync failed (non-critical): %s", exc)
 
+            # 2c. ESPN NBA stats (free API — fills in FG%, 3PT%, pace, etc.
+            # when balldontlie paid endpoints are unavailable)
+            _sync_state["step"] = "Syncing ESPN NBA stats..."
+            try:
+                from app.scrapers.espn import ESPNNBAScraper
+
+                espn_nba = ESPNNBAScraper()
+                try:
+                    async with get_write_session_context() as session:
+                        count = await espn_nba.sync_team_stats(session)
+                        logger.info("ESPN NBA stats sync: %d teams updated", count)
+                finally:
+                    await espn_nba.close()
+            except Exception as exc:
+                logger.warning("ESPN NBA stats sync failed (non-critical): %s", exc)
+
             # 3. Odds via service layer (own session)
             _sync_state["step"] = "Syncing betting odds (multi-source)..."
             try:

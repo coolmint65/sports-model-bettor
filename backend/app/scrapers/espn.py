@@ -1,11 +1,13 @@
 """
-ESPN NHL data scraper.
+ESPN sports data scrapers.
 
-Fetches team statistics, standings, and power rankings from ESPN's public API
-to supplement data from the NHL API. ESPN provides PP%, PK%, shots per game,
-faceoff win %, and other key stats that the NHL standings endpoint lacks.
+Fetches team statistics from ESPN's public API to supplement data from
+league-specific APIs. ESPN provides stats that other APIs may require
+paid tiers for.
 
-ESPN Public API base: https://site.api.espn.com/apis/site/v2/sports/hockey/nhl
+ESPN Public API bases:
+  NHL: https://site.api.espn.com/apis/site/v2/sports/hockey/nhl
+  NBA: https://site.api.espn.com/apis/site/v2/sports/basketball/nba
 """
 
 import logging
@@ -15,6 +17,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.team import Team, TeamStats
 from app.scrapers.base import BaseScraper
 
@@ -296,4 +299,263 @@ class ESPNScraper(BaseScraper):
 
         await db.flush()
         logger.info("Updated %d teams with ESPN stats", updated)
+        return updated
+
+
+# -----------------------------------------------------------------------
+# ESPN NBA scraper
+# -----------------------------------------------------------------------
+
+# ESPN uses slightly different abbreviations for some NBA teams
+ESPN_NBA_ABBREV_MAP = {
+    "GS": "GSW",
+    "SA": "SAS",
+    "NO": "NOP",
+    "NY": "NYK",
+    "WSH": "WAS",
+    "UTAH": "UTA",
+    "PHX": "PHX",
+}
+
+
+def _normalize_nba_abbrev(espn_abbrev: str) -> str:
+    """Convert ESPN NBA abbreviation to our canonical abbreviation."""
+    return ESPN_NBA_ABBREV_MAP.get(espn_abbrev, espn_abbrev)
+
+
+class ESPNNBAScraper(BaseScraper):
+    """
+    Scraper for ESPN's public NBA API.
+
+    Provides team-level statistics as a free alternative to paid
+    endpoints on other APIs: FG%, 3PT%, FT%, rebounds, assists,
+    turnovers, steals, blocks, pace, and offensive/defensive rating.
+    """
+
+    DEFAULT_CACHE_TTL = 600.0  # 10 minutes
+
+    def __init__(self, **kwargs):
+        super().__init__(
+            base_url="https://site.api.espn.com/apis/site/v2/sports/basketball/nba",
+            rate_limit=0.5,
+            **kwargs,
+        )
+
+    async def fetch_teams(self) -> List[Dict[str, Any]]:
+        """Fetch list of all NBA teams from ESPN."""
+        data = await self.fetch_json("/teams", params={"limit": 50})
+        teams = []
+        for group in data.get("sports", [{}])[0].get("leagues", [{}])[0].get("teams", []):
+            team = group.get("team", {})
+            if team:
+                teams.append({
+                    "espn_id": team.get("id"),
+                    "abbreviation": team.get("abbreviation", ""),
+                    "name": team.get("displayName", ""),
+                })
+        logger.info("Fetched %d NBA teams from ESPN", len(teams))
+        return teams
+
+    async def fetch_team_statistics(self, espn_team_id: str) -> Dict[str, Any]:
+        """Fetch detailed statistics for a specific NBA team."""
+        return await self.fetch_json(f"/teams/{espn_team_id}/statistics")
+
+    def _parse_team_stats(self, data: Dict[str, Any]) -> Optional[Dict[str, float]]:
+        """Parse ESPN NBA team statistics response into a flat dict."""
+        # Build a flat lookup of stat name → value from ESPN's nested format
+        stat_lookup: Dict[str, float] = {}
+
+        results = data.get("results", data)
+        categories = []
+
+        if "stats" in results:
+            categories = results["stats"].get("categories", [])
+        if not categories and "statistics" in results:
+            for split in results.get("statistics", {}).get("splits", []):
+                categories.extend(split.get("categories", []))
+        if not categories:
+            categories = results.get("categories", [])
+
+        for category in categories:
+            for stat_item in category.get("stats", []):
+                name = stat_item.get("name", "").lower()
+                value = stat_item.get("value")
+                if value is not None:
+                    try:
+                        stat_lookup[name] = float(value)
+                    except (ValueError, TypeError):
+                        pass
+
+        if not stat_lookup:
+            return None
+
+        # Map ESPN stat names to our internal field names
+        stat_name_map = {
+            # Shooting percentages
+            "fieldgoalpct": "fg_pct",
+            "fieldgoalpercentage": "fg_pct",
+            "fgpct": "fg_pct",
+            "threepointfieldgoalpct": "three_pt_pct",
+            "threepointfieldgoalpercentage": "three_pt_pct",
+            "3ptpct": "three_pt_pct",
+            "threepointpct": "three_pt_pct",
+            "freethrowpct": "ft_pct",
+            "freethrowpercentage": "ft_pct",
+            "ftpct": "ft_pct",
+            # Per-game averages
+            "reboundspergame": "rebounds_per_game",
+            "avgrebounds": "rebounds_per_game",
+            "assistspergame": "assists_per_game",
+            "avgassists": "assists_per_game",
+            "turnoverspergame": "turnovers_per_game",
+            "avgturnovers": "turnovers_per_game",
+            "stealspergame": "steals_per_game",
+            "avgsteals": "steals_per_game",
+            "blockspergame": "blocks_per_game",
+            "avgblocks": "blocks_per_game",
+            "pointspergame": "points_per_game",
+            "avgpoints": "points_per_game",
+            "threepointfieldgoalsmadepergame": "three_pt_made_per_game",
+            "avg3pointfieldgoalsmade": "three_pt_made_per_game",
+            # Advanced
+            "offensiverating": "offensive_rating",
+            "offrtg": "offensive_rating",
+            "defensiverating": "defensive_rating",
+            "defrtg": "defensive_rating",
+            "pace": "pace",
+            # Scoring
+            "gamesplayed": "games_played",
+            "totalpoints": "total_points",
+            "pointsagainstpergame": "points_against_per_game",
+            "avgpointsagainst": "points_against_per_game",
+            "oppavgpoints": "points_against_per_game",
+        }
+
+        result = {}
+        for espn_name, our_name in stat_name_map.items():
+            val = stat_lookup.get(espn_name)
+            if val is not None:
+                result[our_name] = val
+
+        # Convert percentages if they're in decimal form (0.48 → 48.0)
+        for pct_key in ("fg_pct", "three_pt_pct", "ft_pct"):
+            if pct_key in result and result[pct_key] < 1:
+                result[pct_key] = round(result[pct_key] * 100, 1)
+
+        return result if result else None
+
+    async def fetch_all_team_stats(self) -> Dict[str, Dict[str, float]]:
+        """Fetch stats for all NBA teams, keyed by canonical abbreviation."""
+        teams = await self.fetch_teams()
+        all_stats = {}
+
+        for team_info in teams:
+            espn_id = team_info.get("espn_id")
+            espn_abbrev = team_info.get("abbreviation", "")
+            nba_abbrev = _normalize_nba_abbrev(espn_abbrev)
+
+            if not espn_id:
+                continue
+
+            try:
+                data = await self.fetch_team_statistics(espn_id)
+                stats = self._parse_team_stats(data)
+                if stats:
+                    all_stats[nba_abbrev] = stats
+                    logger.debug("ESPN NBA stats for %s: %s", nba_abbrev, stats)
+            except Exception as exc:
+                logger.warning("Failed to fetch ESPN NBA stats for %s: %s", nba_abbrev, exc)
+                continue
+
+        logger.info("Fetched ESPN NBA stats for %d teams", len(all_stats))
+        return all_stats
+
+    async def sync_team_stats(self, db: AsyncSession) -> int:
+        """Fetch ESPN NBA team stats and update TeamStats records.
+
+        Updates fields that are currently NULL in the database so ESPN
+        fills in what the primary API couldn't provide.
+
+        Returns:
+            Number of teams updated.
+        """
+        all_stats = await self.fetch_all_team_stats()
+        if not all_stats:
+            logger.warning("No ESPN NBA stats fetched, skipping sync")
+            return 0
+
+        sport_cfg = settings.get_sport_config("nba")
+        season = sport_cfg.default_season
+
+        updated = 0
+        for abbrev, espn_stats in all_stats.items():
+            # Find the NBA team
+            result = await db.execute(
+                select(Team).where(
+                    Team.abbreviation == abbrev,
+                    Team.sport == "nba",
+                )
+            )
+            team = result.scalars().first()
+            if not team:
+                logger.debug("No NBA team found for ESPN abbrev %s", abbrev)
+                continue
+
+            # Find or create TeamStats for current season
+            result = await db.execute(
+                select(TeamStats).where(
+                    TeamStats.team_id == team.id,
+                    TeamStats.season == season,
+                )
+            )
+            stats = result.scalar_one_or_none()
+            if not stats:
+                stats = TeamStats(
+                    team_id=team.id,
+                    season=season,
+                    games_played=0,
+                    wins=0,
+                    losses=0,
+                    ot_losses=0,
+                    points=0,
+                    goals_for=0,
+                    goals_against=0,
+                )
+                db.add(stats)
+
+            changed = False
+
+            # NBA shooting stats
+            for field, key in [
+                ("fg_pct", "fg_pct"),
+                ("three_pt_pct", "three_pt_pct"),
+                ("ft_pct", "ft_pct"),
+                ("rebounds_per_game", "rebounds_per_game"),
+                ("assists_per_game", "assists_per_game"),
+                ("turnovers_per_game", "turnovers_per_game"),
+                ("steals_per_game", "steals_per_game"),
+                ("blocks_per_game", "blocks_per_game"),
+                ("three_pt_made_per_game", "three_pt_made_per_game"),
+                ("pace", "pace"),
+                ("offensive_rating", "offensive_rating"),
+                ("defensive_rating", "defensive_rating"),
+            ]:
+                if getattr(stats, field, None) is None and key in espn_stats:
+                    setattr(stats, field, espn_stats[key])
+                    changed = True
+
+            # Also fill in scoring per-game from ESPN if missing
+            if stats.goals_for_per_game is None and "points_per_game" in espn_stats:
+                stats.goals_for_per_game = espn_stats["points_per_game"]
+                changed = True
+            if stats.goals_against_per_game is None and "points_against_per_game" in espn_stats:
+                stats.goals_against_per_game = espn_stats["points_against_per_game"]
+                changed = True
+
+            if changed:
+                stats.date_updated = datetime.now(timezone.utc)
+                updated += 1
+
+        await db.flush()
+        logger.info("Updated %d NBA teams with ESPN stats", updated)
         return updated

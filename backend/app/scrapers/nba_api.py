@@ -853,7 +853,14 @@ class NBAScraper(BaseScraper):
                 cache_ttl=3_600.0,
             )
         except Exception as exc:
-            logger.error("Failed to fetch NBA team season averages: %s", exc)
+            exc_str = str(exc)
+            if "401" in exc_str or "Unauthorized" in exc_str:
+                logger.warning(
+                    "NBA team_season_averages requires paid API tier (401). "
+                    "Falling back to ESPN stats scraper."
+                )
+            else:
+                logger.error("Failed to fetch NBA team season averages: %s", exc)
             return 0
 
         entries = data.get("data", [])
@@ -1375,8 +1382,13 @@ class NBAScraper(BaseScraper):
             target = today + timedelta(days=offset)
             await self.sync_schedule(session, target.isoformat())
 
-        # Team stats from the API (1h cache, 1 call)
-        await self.sync_team_stats_from_api(session)
+        # Team stats from the API (1h cache, 1 call).
+        # Falls back to DB-computed stats if the API endpoint requires
+        # a paid tier (401 Unauthorized).
+        api_synced = await self.sync_team_stats_from_api(session)
+        if api_synced == 0:
+            logger.info("API team stats unavailable, computing from game records")
+            await self.sync_team_stats(session)
 
         # Box scores for recent games only — player-level analytics.
         # Only fetches games missing stats to avoid redundant calls.
@@ -1409,8 +1421,18 @@ class NBAScraper(BaseScraper):
             )
             stats_count = stats_result.scalar() or 0
             if stats_count == 0:
-                await self.sync_game_stats(session, game.external_id)
-                synced_box += 1
+                try:
+                    await self.sync_game_stats(session, game.external_id)
+                    synced_box += 1
+                except Exception as exc:
+                    exc_str = str(exc)
+                    if "401" in exc_str or "Unauthorized" in exc_str:
+                        logger.warning(
+                            "NBA /stats endpoint requires paid API tier (401). "
+                            "Skipping box score sync — ESPN will provide team stats."
+                        )
+                        break
+                    logger.warning("Failed to fetch NBA stats for game %s: %s", game.external_id, exc)
 
         if synced_box:
             logger.info("NBA box scores synced for %d games", synced_box)

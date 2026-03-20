@@ -10,7 +10,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from sqlalchemy import text
+from sqlalchemy import Text, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -19,6 +19,17 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.config import settings
+
+# Register "JSON" as a recognized column type for SQLite reflection.
+# Older migrations added columns with type "JSON" which Python 3.14 /
+# Windows SQLAlchemy can't resolve, causing a NullType CompileError.
+# Mapping it to Text matches our JSONText TypeDecorator (impl = Text).
+try:
+    from sqlalchemy.dialects.sqlite.base import ischema_names as _sqlite_types
+    if "JSON" not in _sqlite_types:
+        _sqlite_types["JSON"] = Text
+except Exception:
+    pass  # Non-SQLite dialects don't need this
 
 logger = logging.getLogger(__name__)
 
@@ -189,9 +200,9 @@ async def _migrate_add_columns() -> None:
         ("game", "pregame_away_spread_price", "FLOAT"),
         ("game", "pregame_over_price", "FLOAT"),
         ("game", "pregame_under_price", "FLOAT"),
-        # All available total/spread lines (JSON)
-        ("game", "all_total_lines", "JSON"),
-        ("game", "all_spread_lines", "JSON"),
+        # All available total/spread lines (stored as TEXT with JSON serialization)
+        ("game", "all_total_lines", "TEXT"),
+        ("game", "all_spread_lines", "TEXT"),
         # TrackedBet lock lifecycle
         ("tracked_bet", "locked_at", "DATETIME"),
         # Prop odds
