@@ -2222,6 +2222,7 @@ def _normalize_moneyline_pair(
 
 def _merge_odds_events(
     all_events: List[List[OddsEvent]],
+    sport: str = "nhl",
 ) -> List[Dict[str, Any]]:
     """
     Merge odds from multiple sources into a single best-odds-per-game dict.
@@ -2247,6 +2248,9 @@ def _merge_odds_events(
     )
 
     merged: List[Dict[str, Any]] = []
+
+    # Use sport-specific O/U line ranges instead of hardcoded NHL defaults
+    ou_line_min, ou_line_max = _SPORT_OU_RANGES.get(sport, (_OU_LINE_MIN, _OU_LINE_MAX))
 
     for key, ev_list in matchup_odds.items():
         # Consensus moneyline: average implied probabilities across all
@@ -2420,7 +2424,7 @@ def _merge_odds_events(
         total_data = [
             (e.total_line, e.over_price, e.under_price)
             for e in ev_list
-            if e.has_total() and _OU_LINE_MIN <= e.total_line <= _OU_LINE_MAX
+            if e.has_total() and ou_line_min <= e.total_line <= ou_line_max
         ]
         best_total = best_over = best_under = None
         if total_data:
@@ -2449,7 +2453,7 @@ def _merge_odds_events(
         all_line_pairs: Dict[float, List[Tuple[float, float, str]]] = {}
         for e in ev_list:
             # Primary line from this source
-            if e.has_total() and _OU_LINE_MIN <= e.total_line <= _OU_LINE_MAX:
+            if e.has_total() and ou_line_min <= e.total_line <= ou_line_max:
                 lv = e.total_line
                 if lv not in all_line_pairs:
                     all_line_pairs[lv] = []
@@ -2457,7 +2461,7 @@ def _merge_odds_events(
             # Alt lines from this source
             for alt in e.alt_totals:
                 lv = alt["line"]
-                if lv < _OU_LINE_MIN or lv > _OU_LINE_MAX:
+                if lv < ou_line_min or lv > ou_line_max:
                     continue
                 op = alt.get("over_price", 0)
                 up = alt.get("under_price", 0)
@@ -2854,7 +2858,7 @@ class MultiSourceOddsScraper:
                 len(primary_names),
             )
             self._log_events(all_events, primary_names)
-            return _merge_odds_events(all_events)
+            return _merge_odds_events(all_events, sport=sport)
 
         # ── Phase 2: Direct scrapers (fallback, NHL-only) ────────────
         if sport != "nhl":
@@ -2898,7 +2902,7 @@ class MultiSourceOddsScraper:
             fallback_event_count, fallback_sources, len(fallback_names),
         )
         self._log_events(all_events, fallback_names)
-        return _merge_odds_events(all_events)
+        return _merge_odds_events(all_events, sport=sport)
 
     def _log_events(
         self,

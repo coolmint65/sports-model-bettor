@@ -360,6 +360,7 @@ class NBABettingModel:
                 f"Model: {home_abbr} {home_xp} - {away_abbr} {away_xp} "
                 f"(spread {spread:+.1f})"
             ),
+            "details": result,
         })
 
         # --- Spread ---
@@ -445,7 +446,171 @@ class NBABettingModel:
                 "reasoning": f"Model total: {total_xp:.1f} vs line {ou_line:.1f}",
             })
 
-        # Sort by confidence descending
-        predictions.sort(key=lambda p: p.get("confidence", 0), reverse=True)
+        # Compute edge for predictions that have implied probability
+        for pred in predictions:
+            if pred.get("edge") is None and pred.get("implied_probability") is not None:
+                pred["edge"] = round(
+                    (pred.get("confidence", 0) or 0) - pred["implied_probability"],
+                    4,
+                )
+
+        # Compute composite edge and bet conviction for each prediction
+        for pred in predictions:
+            composite = self._compute_composite_edge(features, pred, result)
+            pred["composite_edge"] = composite
+            pred["bet_confidence"] = composite.get("bet_confidence", 0.5)
+
+        # Sort by bet confidence descending
+        predictions.sort(key=lambda p: p.get("bet_confidence", 0), reverse=True)
 
         return predictions
+
+    def _compute_composite_edge(
+        self,
+        features: Dict[str, Any],
+        prediction: Dict[str, Any],
+        game_result: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Compute composite edge score for NBA predictions.
+
+        Uses the same conviction framework as NHL but with NBA-relevant
+        component signals.
+        """
+        from app.analytics.conviction import compute_bet_conviction
+
+        pred_team = prediction.get("prediction", "")
+        home_abbr = features.get("home_team_abbr", "")
+        is_home_pick = pred_team == home_abbr
+
+        scores: Dict[str, float] = {}
+
+        # Form: compare L5 win rates
+        home_wr = features.get("home_form_5", {}).get("win_rate", 0.5)
+        away_wr = features.get("away_form_5", {}).get("win_rate", 0.5)
+        if is_home_pick:
+            scores["form"] = min(1.0, max(0.0, (home_wr - away_wr + 1.0) / 2.0))
+        else:
+            scores["form"] = min(1.0, max(0.0, (away_wr - home_wr + 1.0) / 2.0))
+
+        # Offensive efficiency edge
+        home_ortg = features.get("home_season", {}).get("offensive_rating")
+        away_ortg = features.get("away_season", {}).get("offensive_rating")
+        if home_ortg and away_ortg:
+            diff = (home_ortg - away_ortg) if is_home_pick else (away_ortg - home_ortg)
+            scores["offense"] = min(1.0, max(0.0, (diff + 10.0) / 20.0))
+        else:
+            scores["offense"] = 0.5
+
+        # Defensive efficiency edge (lower is better)
+        home_drtg = features.get("home_season", {}).get("defensive_rating")
+        away_drtg = features.get("away_season", {}).get("defensive_rating")
+        if home_drtg and away_drtg:
+            diff = (away_drtg - home_drtg) if is_home_pick else (home_drtg - away_drtg)
+            scores["defense"] = min(1.0, max(0.0, (diff + 10.0) / 20.0))
+        else:
+            scores["defense"] = 0.5
+
+        # Schedule (rest advantage, B2B)
+        my_sched = features.get("home_schedule" if is_home_pick else "away_schedule", {})
+        opp_sched = features.get("away_schedule" if is_home_pick else "home_schedule", {})
+        sched_score = 0.5
+        if opp_sched.get("is_back_to_back", False) and not my_sched.get("is_back_to_back", False):
+            sched_score = 0.8
+        elif my_sched.get("is_back_to_back", False) and not opp_sched.get("is_back_to_back", False):
+            sched_score = 0.2
+        my_rest = my_sched.get("days_rest", 1)
+        opp_rest = opp_sched.get("days_rest", 1)
+        if my_rest > opp_rest:
+            sched_score = min(1.0, sched_score + 0.1)
+        scores["schedule"] = sched_score
+
+        # Injuries
+        opp_injuries = features.get("away_injuries" if is_home_pick else "home_injuries", {})
+        my_injuries = features.get("home_injuries" if is_home_pick else "away_injuries", {})
+        opp_reduction = opp_injuries.get("xg_reduction", 0.0)
+        my_reduction = my_injuries.get("xg_reduction", 0.0)
+        inj_edge = opp_reduction - my_reduction
+        scores["injuries"] = min(1.0, max(0.0, (inj_edge + 0.1) / 0.2 * 0.5 + 0.5))
+
+        # H2H
+        h2h = features.get("h2h", {})
+        if h2h.get("games_found", 0) >= 3:
+            h2h_wr = h2h.get("team1_win_rate", 0.5)
+            scores["h2h"] = h2h_wr if is_home_pick else (1.0 - h2h_wr)
+        else:
+            scores["h2h"] = 0.5
+
+        # Market edge
+        conf = prediction.get("confidence", 0.5) or 0.5
+        implied = prediction.get("implied_probability") or conf
+        edge = conf - implied
+        scores["market_edge"] = min(1.0, max(0.0, (edge + 0.1) / 0.2))
+
+        # Line movement
+        lm = features.get("line_movement", {})
+        sharp = lm.get("sharp_signal", "neutral")
+        lm_score = 0.5
+        if sharp == "sharp_home":
+            lm_score = 0.85 if is_home_pick else 0.15
+        elif sharp == "sharp_away":
+            lm_score = 0.15 if is_home_pick else 0.85
+        scores["line_movement"] = lm_score
+
+        # Three-point shooting edge
+        home_3pct = features.get("home_season", {}).get("three_pt_pct")
+        away_3pct = features.get("away_season", {}).get("three_pt_pct")
+        if home_3pct and away_3pct:
+            diff = (home_3pct - away_3pct) if is_home_pick else (away_3pct - home_3pct)
+            scores["shooting"] = min(1.0, max(0.0, (diff + 5.0) / 10.0))
+        else:
+            scores["shooting"] = 0.5
+
+        # Rebounding edge
+        home_reb = features.get("home_season", {}).get("rebounds_pg")
+        away_reb = features.get("away_season", {}).get("rebounds_pg")
+        if home_reb and away_reb:
+            diff = (home_reb - away_reb) if is_home_pick else (away_reb - home_reb)
+            scores["rebounding"] = min(1.0, max(0.0, (diff + 5.0) / 10.0))
+        else:
+            scores["rebounding"] = 0.5
+
+        # Home court
+        scores["home_court"] = 0.6 if is_home_pick else 0.4
+
+        weights = {
+            "form": 0.15,
+            "offense": 0.12,
+            "defense": 0.12,
+            "schedule": 0.08,
+            "injuries": 0.10,
+            "h2h": 0.05,
+            "market_edge": 0.10,
+            "line_movement": 0.08,
+            "shooting": 0.06,
+            "rebounding": 0.05,
+            "home_court": 0.04,
+        }
+
+        composite = sum(scores.get(k, 0.5) * w for k, w in weights.items())
+        total_weight = sum(weights.values())
+        composite_score = round((composite / total_weight) * 100, 1) if total_weight > 0 else 50.0
+
+        if composite_score >= 71:
+            grade = "very_strong"
+        elif composite_score >= 51:
+            grade = "strong"
+        elif composite_score >= 31:
+            grade = "moderate"
+        else:
+            grade = "weak"
+
+        bet_confidence = compute_bet_conviction(
+            scores, weights, features, prediction, sport="nba"
+        )
+
+        return {
+            "composite_score": composite_score,
+            "composite_grade": grade,
+            "component_scores": {k: round(v, 3) for k, v in scores.items()},
+            "bet_confidence": bet_confidence,
+        }
