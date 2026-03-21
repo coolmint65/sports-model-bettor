@@ -57,10 +57,15 @@ def compute_bet_conviction(
     strongly_favorable = sum(1 for v in component_scores.values() if v > 0.65)
     unfavorable = sum(1 for v in component_scores.values() if v < 0.45)
     strongly_unfavorable = sum(1 for v in component_scores.values() if v < 0.35)
-    total_signals = len(component_scores)
 
-    if total_signals > 0:
-        agreement = (favorable - unfavorable) / total_signals
+    # Only count signals that have an opinion (deviate from neutral).
+    # Neutral signals (0.45–0.55) are uninformative — they shouldn't
+    # dilute the agreement ratio.  With 17 NHL components, ~10 are
+    # often neutral, making the old denominator (total_signals=17)
+    # structurally suppress agreement even when active signals agree.
+    active_signals = favorable + unfavorable
+    if active_signals > 0:
+        agreement = (favorable - unfavorable) / active_signals
     else:
         agreement = 0.0
 
@@ -108,8 +113,15 @@ def compute_bet_conviction(
     )
 
     # --- Combine ---
+    # Data quality is now subtractive, not multiplicative.
+    # Old: base_score * 0.85 = 0.52 * 0.85 = 0.44 (crushed below 0.5)
+    # New: base_score - 0.15 penalty = 0.52 - penalty (proportional, capped)
+    # This prevents data quality from crushing the base score when it's
+    # already near the neutral point.
+    data_penalty = max(0.0, (1.0 - data_quality) * 0.6)  # 0.85 quality → 0.09 penalty
     raw = (
-        base_score * data_quality
+        base_score
+        - data_penalty
         + agreement_bonus
         + unanimity_bonus
         + convergence_bonus
@@ -119,17 +131,12 @@ def compute_bet_conviction(
         - contradiction_penalty
     )
 
-    # --- Sport-aware adjustment ---
-    # Hockey is inherently more random than basketball (rare scoring
-    # events, puck bounces, OT/SO). The conviction formula structurally
-    # caps ~10-15pp lower for NHL because:
-    #   - More component scores default to 0.5 (neutral)
-    #   - Goalie data quality penalties don't exist in NBA
-    #   - xG separation is compressed (2.2 xG effective range)
-    # A modest boost acknowledges that the same quality of edge in
-    # hockey produces lower raw conviction than in basketball.
-    if sport == "nhl":
-        raw += 0.04
+    # Previous versions had an NHL-specific +0.04 boost to compensate
+    # for structural disadvantages (neutral signal dilution, multiplicative
+    # data quality penalty).  Those root causes are now fixed:
+    #   - Agreement uses only active signals (not total)
+    #   - Data quality is subtractive (not multiplicative)
+    # No sport-specific band-aid needed.
 
     # Scale to 0.30–0.92 range
     return round(max(0.30, min(0.92, raw)), 3)
