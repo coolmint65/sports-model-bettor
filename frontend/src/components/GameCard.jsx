@@ -92,7 +92,7 @@ function parseClock(str) {
 
 function getConfidenceBadge(confidence) {
   if (confidence == null) return null;
-  if (confidence >= 70) return { label: 'BET', className: 'badge-good', icon: TrendingUp };
+  if (confidence >= 70) return { label: 'GOOD BET', className: 'badge-good', icon: TrendingUp };
   if (confidence >= 60) return { label: 'LEAN', className: 'badge-borderline', icon: Minus };
   return { label: 'SKIP', className: 'badge-skip', icon: Minus };
 }
