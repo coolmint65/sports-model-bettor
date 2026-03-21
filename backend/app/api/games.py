@@ -529,6 +529,44 @@ async def _get_team_form(team: Team, session: AsyncSession) -> TeamForm:
                         )
                         form.defensive_rating = round(total_pa_fb / possessions * 100, 1)
 
+        # Final fallback: estimate pace/ratings from per-game scoring averages
+        # when GamePlayerStats are unavailable (e.g. box score API requires
+        # paid tier).  Uses the possession estimation formula:
+        #   possessions ≈ FGA - OREB + TOV + 0.44*FTA
+        # We approximate FGA from PPG and FG% when available.
+        if sport == "nba" and form.pace is None and recent_games:
+            ppg = form.goals_for_per_game
+            papg = form.goals_against_per_game
+            fg_pct = form.fg_pct  # e.g. 46.4
+            tov_pg = form.turnovers_per_game
+            reb_pg = form.rebounds_per_game
+            ft_pct = form.ft_pct
+            fg3m_pg = form.three_pt_made_per_game
+
+            if ppg and papg and fg_pct and fg_pct > 0:
+                # Estimate FGA per game from scoring components
+                # PTS = 2*(FGM - FG3M) + 3*FG3M + FTM
+                # FGM = FGA * (FG%/100)
+                # Estimate FTM from PTS: FTM ≈ PTS * 0.18 (league avg ~18% of scoring from FT)
+                ftm_est = ppg * 0.18
+                fg3m_est = fg3m_pg or (ppg * 0.10)  # ~10% of points from 3PM as fallback
+                # PTS = 2*FGA*(FG%/100) - 2*FG3M + 3*FG3M + FTM
+                # PTS = 2*FGA*(FG%/100) + FG3M + FTM
+                # FGA = (PTS - FG3M - FTM) / (2 * FG%/100)
+                fga_est = (ppg - fg3m_est - ftm_est) / (2 * fg_pct / 100)
+
+                # Estimate FTA from FTM and FT%
+                fta_est = (ftm_est / (ft_pct / 100)) if ft_pct and ft_pct > 0 else ftm_est / 0.78
+
+                oreb_est = (reb_pg or 43.0) * 0.25
+                tov_est = tov_pg or 14.0
+                pace_est = fga_est - oreb_est + tov_est + 0.44 * fta_est
+
+                if pace_est > 50:  # sanity check
+                    form.pace = round(pace_est, 1)
+                    form.offensive_rating = round(ppg / pace_est * 100, 1)
+                    form.defensive_rating = round(papg / pace_est * 100, 1)
+
     return form
 
 

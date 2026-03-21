@@ -1943,16 +1943,30 @@ class BettingModel:
                 # Use calibrated probabilities for edge comparison.
                 over_edge = (self.calibrate_probability(over_p, "total") - over_implied) if over_implied else 0
                 under_edge = (self.calibrate_probability(under_p, "total") - under_implied) if under_implied else 0
-                if over_edge >= under_edge:
+                if over_edge > under_edge:
                     order = [
                         ("over", over_p, op_val, over_implied),
                         ("under", under_p, up_val, under_implied),
+                    ]
+                elif under_edge > over_edge:
+                    order = [
+                        ("under", under_p, up_val, under_implied),
+                        ("over", over_p, op_val, over_implied),
                     ]
                 else:
-                    order = [
-                        ("under", under_p, up_val, under_implied),
-                        ("over", over_p, op_val, over_implied),
-                    ]
+                    # Tied edges: prefer side with better juice (lower implied)
+                    o_imp = over_implied or 0.5
+                    u_imp = under_implied or 0.5
+                    if u_imp <= o_imp:
+                        order = [
+                            ("under", under_p, up_val, under_implied),
+                            ("over", over_p, op_val, over_implied),
+                        ]
+                    else:
+                        order = [
+                            ("over", over_p, op_val, over_implied),
+                            ("under", under_p, up_val, under_implied),
+                        ]
                 for d, prob, odds_v, impl in order:
                     predictions.append(
                         _make_total_pred(d, primary_ou_val, prob, odds_v, impl)

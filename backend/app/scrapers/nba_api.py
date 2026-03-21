@@ -1390,18 +1390,12 @@ class NBAScraper(BaseScraper):
             target = today + timedelta(days=offset)
             await self.sync_schedule(session, target.isoformat())
 
-        # Team stats from the API (1h cache, 1 call).
-        # Falls back to DB-computed stats if the API endpoint requires
-        # a paid tier (401 Unauthorized).
-        api_synced = await self.sync_team_stats_from_api(session)
-        if api_synced == 0:
-            logger.info("API team stats unavailable, computing from game records")
-            await self.sync_team_stats(session)
-
         # Box scores for recent games only — player-level analytics.
         # Only fetches games missing stats to avoid redundant calls.
         # Capped at 10 per cycle to stay within rate limits; the rest
         # will be picked up in subsequent sync cycles.
+        # NOTE: Box scores are fetched BEFORE team stats so that
+        # sync_team_stats() can aggregate from GamePlayerStats.
         max_box_scores_per_cycle = 10
 
         result = await session.execute(
@@ -1444,4 +1438,31 @@ class NBAScraper(BaseScraper):
 
         if synced_box:
             logger.info("NBA box scores synced for %d games", synced_box)
+
+        # Team stats from the API (1h cache, 1 call).
+        # Falls back to DB-computed stats if the API endpoint requires
+        # a paid tier (401 Unauthorized).
+        api_synced = await self.sync_team_stats_from_api(session)
+        if api_synced == 0:
+            logger.info("API team stats unavailable, computing from game records")
+            await self.sync_team_stats(session)
+        else:
+            # API may return base stats but not advanced (pace, ratings)
+            # when the advanced endpoint requires a paid tier.  Check if
+            # any teams are still missing pace and fill from box scores.
+            from app.models.team import TeamStats as TS
+            missing = await session.execute(
+                select(func.count(TS.id)).where(
+                    TS.season == str(current_season),
+                    TS.pace.is_(None),
+                )
+            )
+            missing_count = missing.scalar() or 0
+            if missing_count > 0:
+                logger.info(
+                    "%d teams still missing pace/ratings after API sync, "
+                    "computing from game records",
+                    missing_count,
+                )
+                await self.sync_team_stats(session)
         logger.info("NBA full sync completed")

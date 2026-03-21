@@ -422,20 +422,36 @@ class NBABettingModel:
         over_implied = american_odds_to_implied_prob(over_odds) if over_odds else None
         under_implied = american_odds_to_implied_prob(under_odds) if under_odds else None
 
-        # Compute edge for ordering: put the side with more edge first
+        # Compute edge for ordering: put the side with more edge first.
+        # When edges are equal, prefer the side with lower implied prob
+        # (better juice) to avoid systematic over-bias.
         over_edge = (over_prob - over_implied) if over_implied else 0
         under_edge = (under_prob - under_implied) if under_implied else 0
 
-        if over_edge >= under_edge:
+        if over_edge > under_edge:
             order = [
                 ("over", over_prob, over_odds, over_implied),
                 ("under", under_prob, under_odds, under_implied),
+            ]
+        elif under_edge > over_edge:
+            order = [
+                ("under", under_prob, under_odds, under_implied),
+                ("over", over_prob, over_odds, over_implied),
             ]
         else:
-            order = [
-                ("under", under_prob, under_odds, under_implied),
-                ("over", over_prob, over_odds, over_implied),
-            ]
+            # Tied edges: prefer the side with better juice (lower implied)
+            over_imp = over_implied or 0.5
+            under_imp = under_implied or 0.5
+            if under_imp <= over_imp:
+                order = [
+                    ("under", under_prob, under_odds, under_implied),
+                    ("over", over_prob, over_odds, over_implied),
+                ]
+            else:
+                order = [
+                    ("over", over_prob, over_odds, over_implied),
+                    ("under", under_prob, under_odds, under_implied),
+                ]
 
         for direction, prob, odds_val, implied in order:
             predictions.append({
