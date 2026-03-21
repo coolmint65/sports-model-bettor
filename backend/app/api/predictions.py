@@ -398,7 +398,9 @@ async def _try_generate_predictions(
                 implied_prob = pred.get("implied_probability")
                 has_real_odds = implied_prob is not None
                 if has_real_odds:
-                    edge = round(confidence - implied_prob, 4)
+                    edge = confidence - implied_prob
+                    # Cap edge at 15% — anything higher signals model/data issue
+                    edge = round(min(edge, 0.15), 4)
                 else:
                     edge = None
 
@@ -417,6 +419,7 @@ async def _try_generate_predictions(
                             continue
                         # Significant change — update in-place
                         old.confidence = confidence
+                        old.bet_confidence = pred.get("bet_confidence", old.bet_confidence)
                         old.odds_implied_prob = (
                             round(implied_prob, 4) if has_real_odds else None
                         )
@@ -453,6 +456,7 @@ async def _try_generate_predictions(
                     "bet_type": bet_type,
                     "prediction": prediction_value,
                     "confidence": confidence,
+                    "bet_confidence": pred.get("bet_confidence"),
                     "probability": pred.get("probability", confidence),
                     "implied_probability": (
                         round(implied_prob, 4) if has_real_odds else None

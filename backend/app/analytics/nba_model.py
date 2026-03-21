@@ -411,8 +411,10 @@ class NBABettingModel:
         over_prob = 1.0 - norm.cdf((ou_line - total_xp) / total_std)
         under_prob = 1.0 - over_prob
 
-        # Apply shrinkage
-        over_prob = over_prob * (1 - _nba.calibration_shrinkage) + 0.5 * _nba.calibration_shrinkage
+        # Apply total-specific shrinkage (higher than ML because the model
+        # systematically over-predicts totals, producing inflated over edges)
+        total_shrinkage = _nba.calibration_total_shrinkage
+        over_prob = over_prob * (1 - total_shrinkage) + 0.5 * total_shrinkage
         under_prob = 1.0 - over_prob
 
         over_odds = getattr(game, "over_price", None) if game else None

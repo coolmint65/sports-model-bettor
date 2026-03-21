@@ -379,7 +379,9 @@ class NBAModelConfig(BaseModel):
     }
 
     # Calibration
-    calibration_shrinkage: float = 0.15
+    calibration_shrinkage: float = 0.15          # ML shrinkage toward 50%
+    calibration_total_shrinkage: float = 0.30    # Total (O/U) shrinkage — higher because
+                                                  # the model systematically over-predicts totals
     market_prior_weight: float = 0.35
 
     # Feature extraction windows
