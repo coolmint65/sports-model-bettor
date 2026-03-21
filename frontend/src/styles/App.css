@@ -4790,7 +4790,7 @@ a:hover {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .dc-tag {
@@ -4819,6 +4819,7 @@ a:hover {
 
 .dc-tag-confidence {
   margin-left: auto;
+  white-space: nowrap;
 }
 
 .dc-tag-confidence.badge-good {
