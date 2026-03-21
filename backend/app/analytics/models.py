@@ -2477,14 +2477,57 @@ class BettingModel:
         scores["discipline"] = min(1.0, max(0.0, (disc_edge + 0.5) / 1.0))
 
         # Close-game clutch factor
-        my_close = features.get(
+        my_close_rec = features.get(
             "home_close_record" if is_home_pick else "away_close_record", {}
         )
-        opp_close = features.get(
-            "away_close_record" if is_home_pick else "home_close_record", {}
-        )
-        my_close_wr = my_close.get("close_game_win_rate", 0.5)
+        my_close_wr = my_close_rec.get("close_game_win_rate", 0.5)
         scores["clutch"] = min(1.0, max(0.0, my_close_wr))
+
+        # --- NEW FACTORS (tapping already-fetched data) ---
+
+        # Goalie recent form: compare last-5 save% vs season average.
+        # A hot goalie (.930+ L5) vs cold (.890 L5) is a massive edge.
+        my_goalie_data = features.get("home_goalie" if is_home_pick else "away_goalie", {})
+        opp_goalie_data = features.get("away_goalie" if is_home_pick else "home_goalie", {})
+        my_l5_sv = my_goalie_data.get("last5_save_pct", 0.0) or 0.0
+        my_season_sv = my_goalie_data.get("season_save_pct", 0.0) or 0.0
+        opp_l5_sv = opp_goalie_data.get("last5_save_pct", 0.0) or 0.0
+        opp_season_sv = opp_goalie_data.get("season_save_pct", 0.0) or 0.0
+        # Compare relative form: my goalie trending up, opp trending down
+        my_form_delta = my_l5_sv - my_season_sv     # positive = running hot
+        opp_form_delta = opp_l5_sv - opp_season_sv  # positive = they're hot too
+        goalie_form_edge = my_form_delta - opp_form_delta
+        # Also factor in absolute L5 quality differential
+        l5_diff = my_l5_sv - opp_l5_sv  # e.g. .930 - .900 = +0.030
+        # Combine: form trend (scaled) + absolute recent quality
+        goalie_form_raw = goalie_form_edge * 10.0 + l5_diff * 15.0  # normalize to ~-1..+1
+        scores["goalie_form"] = min(1.0, max(0.0, (goalie_form_raw + 1.0) / 2.0))
+
+        # Home ice advantage: teams with strong home records vs away teams
+        my_splits = features.get("home_splits" if is_home_pick else "away_splits", {})
+        opp_splits = features.get("away_splits" if is_home_pick else "home_splits", {})
+        my_venue_wr = my_splits.get("win_rate", 0.5)
+        opp_venue_wr = opp_splits.get("win_rate", 0.5)
+        venue_diff = my_venue_wr - opp_venue_wr
+        scores["home_ice"] = min(1.0, max(0.0, (venue_diff + 0.3) / 0.6))
+
+        # Pace mismatch: high-pace teams score more but also allow more.
+        # Our pick benefits when we're the faster team (more chances to capitalize).
+        my_pace = features.get("home_pace" if is_home_pick else "away_pace", {})
+        opp_pace = features.get("away_pace" if is_home_pick else "home_pace", {})
+        my_shots = my_pace.get("shots_per_game", 30.0) or 30.0
+        opp_shots_allowed = opp_pace.get("shots_allowed_per_game", 30.0) or 30.0
+        # High shot generation vs opponent that allows a lot = good matchup
+        pace_edge = (my_shots - 30.0) / 5.0 + (opp_shots_allowed - 30.0) / 5.0
+        scores["pace"] = min(1.0, max(0.0, (pace_edge + 1.0) / 2.0))
+
+        # Lineup strength: team with more complete lineup has an edge
+        my_lineup = features.get("home_lineup" if is_home_pick else "away_lineup", {})
+        opp_lineup = features.get("away_lineup" if is_home_pick else "home_lineup", {})
+        my_strength = my_lineup.get("lineup_strength", 1.0)
+        opp_strength = opp_lineup.get("lineup_strength", 1.0)
+        strength_diff = my_strength - opp_strength
+        scores["lineup_strength"] = min(1.0, max(0.0, (strength_diff + 0.3) / 0.6))
 
         # Weighted sum
         weights = {
@@ -2499,8 +2542,12 @@ class BettingModel:
             "matchup": _mc.composite_weight_matchup,
             "market_edge": _mc.composite_weight_market_edge,
             "line_movement": _mc.composite_weight_line_movement,
-            "discipline": 0.05,
-            "clutch": 0.06,
+            "discipline": 0.04,
+            "clutch": 0.05,
+            "goalie_form": _mc.composite_weight_goalie_form,
+            "home_ice": _mc.composite_weight_home_ice,
+            "pace": _mc.composite_weight_pace,
+            "lineup_strength": _mc.composite_weight_lineup_strength,
         }
 
         composite = sum(scores.get(k, 0.5) * w for k, w in weights.items())
@@ -2537,17 +2584,18 @@ class BettingModel:
 
         Unlike win probability (capped by hockey randomness at ~60-65%), bet
         confidence measures how strong and well-supported our EDGE is.  It
-        legitimately reaches 0.70-0.80 when multiple independent signals
+        legitimately reaches 0.75-0.90 when multiple independent signals
         align, data quality is high, and the market confirms our direction.
 
         Components:
-        1. Signal strength — weighted composite of all 12+ factors (0-1)
+        1. Signal strength — weighted composite of all 17 factors (0-1)
         2. Signal agreement — bonus when many signals point the same way
-        3. Data quality — penalty for missing starters, low sample sizes
-        4. Market confirmation — bonus when sharp money agrees
-        5. Edge magnitude — larger edges boost confidence
+        3. Strong-signal convergence — extra bonus when 5+ signals are > 0.65
+        4. Data quality — penalty for missing starters, low sample sizes
+        5. Market confirmation — bonus when sharp money agrees
+        6. Edge magnitude — larger edges boost confidence
 
-        Returns a value between 0.0 and 0.95.
+        Returns a value between 0.30 and 0.92.
         """
         # --- 1. Base: weighted composite score (already 0-1 from component_scores) ---
         base_score = (
@@ -2561,6 +2609,7 @@ class BettingModel:
         # Count how many independent signals favor this pick (score > 0.55)
         # and how many oppose it (score < 0.45).
         favorable = sum(1 for v in component_scores.values() if v > 0.55)
+        strongly_favorable = sum(1 for v in component_scores.values() if v > 0.65)
         unfavorable = sum(1 for v in component_scores.values() if v < 0.45)
         total_signals = len(component_scores)
         # Agreement ratio: 1.0 when all signals agree, 0.0 when evenly split
@@ -2568,8 +2617,19 @@ class BettingModel:
             agreement = (favorable - unfavorable) / total_signals
         else:
             agreement = 0.0
-        # Scale: +0.10 max bonus when all signals agree
-        agreement_bonus = max(0.0, agreement) * 0.10
+        # Scale: +0.15 max bonus when all signals agree (was 0.10)
+        agreement_bonus = max(0.0, agreement) * 0.15
+
+        # Strong-signal convergence bonus: when 5+ signals are strongly
+        # favorable (> 0.65), there's real separation — reward it.
+        if strongly_favorable >= 7:
+            convergence_bonus = 0.08
+        elif strongly_favorable >= 5:
+            convergence_bonus = 0.05
+        elif strongly_favorable >= 3:
+            convergence_bonus = 0.02
+        else:
+            convergence_bonus = 0.0
 
         # --- 3. Data quality factor (0.7 to 1.0) ---
         # Penalize when critical data is uncertain or missing.
@@ -2609,25 +2669,33 @@ class BettingModel:
         lm = features.get("line_movement", {})
         sharp = lm.get("sharp_signal", "neutral")
         if is_home_pick and sharp == "sharp_home":
-            market_bonus = 0.08
+            market_bonus = 0.10  # was 0.08
         elif not is_home_pick and sharp == "sharp_away":
-            market_bonus = 0.08
+            market_bonus = 0.10  # was 0.08
 
         # Also: if our edge is positive AND implied prob agrees we're underpriced
         edge = prediction.get("edge") or 0.0
         if edge > 0.03:
-            market_bonus += 0.04  # meaningful edge over market
+            market_bonus += 0.05  # was 0.04 — meaningful edge over market
+        if edge > 0.06:
+            market_bonus += 0.03  # extra bonus for large edge
 
         # --- 5. Edge magnitude bonus ---
         # Larger edges (after calibration) are more convincing signals.
-        edge_bonus = min(0.08, max(0.0, edge) * 1.6)  # 5% edge → +0.08
+        edge_bonus = min(0.12, max(0.0, edge) * 2.0)  # was 0.08/1.6 — 6% edge → +0.12
 
         # --- Combine ---
-        raw = base_score * data_quality + agreement_bonus + market_bonus + edge_bonus
+        raw = (
+            base_score * data_quality
+            + agreement_bonus
+            + convergence_bonus
+            + market_bonus
+            + edge_bonus
+        )
 
-        # Scale to 0.30-0.90 range. A completely neutral game with no data
+        # Scale to 0.30-0.92 range. A completely neutral game with no data
         # issues scores ~0.50. A game with strong signal convergence, good
-        # data, market confirmation, and solid edge reaches 0.78-0.85.
-        bet_conf = max(0.30, min(0.90, raw))
+        # data, market confirmation, and solid edge reaches 0.80-0.90.
+        bet_conf = max(0.30, min(0.92, raw))
 
         return round(bet_conf, 3)
