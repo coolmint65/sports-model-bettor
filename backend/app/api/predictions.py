@@ -555,14 +555,21 @@ async def track_bet(
     if not pred:
         raise HTTPException(status_code=404, detail="Prediction not found")
 
-    # Check for duplicate
+    # Idempotent: if already tracked, return the existing tracked bet
     dup_result = await session.execute(
         select(TrackedBet).where(
             TrackedBet.prediction_id == pred.id,
         )
     )
-    if dup_result.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="Bet already tracked")
+    existing = dup_result.scalar_one_or_none()
+    if existing:
+        game_result = await session.execute(
+            select(Game)
+            .options(selectinload(Game.home_team), selectinload(Game.away_team))
+            .where(Game.id == existing.game_id)
+        )
+        game = game_result.scalar_one_or_none()
+        return _tracked_bet_to_response(existing, game)
 
     # Resolve game info
     game_result = await session.execute(

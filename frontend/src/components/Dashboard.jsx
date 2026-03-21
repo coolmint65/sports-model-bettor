@@ -209,7 +209,7 @@ function Dashboard() {
     (async () => {
       try {
         const resp = await fetchTrackedBets();
-        const bets = resp.data?.tracked_bets ?? resp.data ?? [];
+        const bets = resp.data?.bets ?? resp.data ?? [];
         for (const bet of bets) {
           if (bet.prediction_id) {
             autoTrackedRef.current.add(bet.prediction_id);
