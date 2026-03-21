@@ -119,6 +119,18 @@ def compute_bet_conviction(
         - contradiction_penalty
     )
 
+    # --- Sport-aware adjustment ---
+    # Hockey is inherently more random than basketball (rare scoring
+    # events, puck bounces, OT/SO). The conviction formula structurally
+    # caps ~10-15pp lower for NHL because:
+    #   - More component scores default to 0.5 (neutral)
+    #   - Goalie data quality penalties don't exist in NBA
+    #   - xG separation is compressed (2.2 xG effective range)
+    # A modest boost acknowledges that the same quality of edge in
+    # hockey produces lower raw conviction than in basketball.
+    if sport == "nhl":
+        raw += 0.04
+
     # Scale to 0.30–0.92 range
     return round(max(0.30, min(0.92, raw)), 3)
 
@@ -142,7 +154,10 @@ def _assess_data_quality(
     is_home_pick = pred_team == home_abbr
 
     if sport == "nhl":
-        # Starter confidence: uncertain goalies are a big unknown
+        # Starter confidence: uncertain goalies add risk.
+        # The xG calculation already discounts goalie factors by
+        # starter_confidence, so this penalty should be modest to
+        # avoid double-counting the uncertainty.
         home_goalie = features.get("home_goalie", {})
         away_goalie = features.get("away_goalie", {})
         my_goalie = home_goalie if is_home_pick else away_goalie
@@ -150,9 +165,9 @@ def _assess_data_quality(
             "starter_confidence", _mc.starter_confidence_medium
         )
         if starter_conf < _mc.starter_confidence_high:
-            data_quality -= 0.10
+            data_quality -= 0.05
         if starter_conf < _mc.starter_confidence_medium:
-            data_quality -= 0.10
+            data_quality -= 0.07
 
         # Low sample size for advanced metrics
         my_ev = features.get(
@@ -225,12 +240,14 @@ def _assess_separation(
         if home_xg == 0 and away_xg == 0:
             return 0.0
         xg_gap = abs(home_xg - away_xg)
-        # NHL: 0.5 xG gap is solid, 0.8+ is very clear
-        if xg_gap >= 0.8:
+        # NHL xG range is compressed (1.8–4.0, ~2.2 effective range)
+        # after mean regression, so thresholds must reflect that.
+        # 0.35 xG gap is meaningful, 0.60+ is very clear.
+        if xg_gap >= 0.60:
             return 0.06
-        elif xg_gap >= 0.5:
+        elif xg_gap >= 0.35:
             return 0.03
-        elif xg_gap < 0.15:
+        elif xg_gap < 0.12:
             return -0.03  # coin flip — penalize
     elif sport == "nba":
         home_xp = details.get("home_xp", 0)

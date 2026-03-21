@@ -129,7 +129,7 @@ class ModelConfig(BaseModel):
     goalie_recent_weight: float = 0.60
     h2h_goal_adj_weight: float = 0.05
     defensive_regression: float = 0.60
-    mean_regression: float = 0.15
+    mean_regression: float = 0.10
 
     # Defense factor: blend goals-against with shots-against for stability.
     # 0.0 = pure goals-against, 1.0 = pure shots-against.
@@ -280,8 +280,10 @@ class ModelConfig(BaseModel):
     # Feature #12: Win probability calibration
     calibration_enabled: bool = True            # whether to apply calibration curve
     calibration_shrinkage: float = 0.10         # ML shrinkage toward 50% (0=none, 1=always 50%)
-    calibration_spread_shrinkage: float = 0.22  # spread/total shrinkage (higher because Poisson
-                                                # structurally overestimates margin distributions)
+    calibration_spread_shrinkage: float = 0.17  # spread/total shrinkage (higher because Poisson
+                                                # structurally overestimates margin distributions,
+                                                # but 0.22 was too aggressive — pushing most
+                                                # predictions into SKIP territory)
     calibration_min_predictions: int = 50       # min predictions before calibrating
 
     # Feature #13: Consensus line aggregation
