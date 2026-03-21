@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom';
 import { Calendar, Radio, RefreshCw } from 'lucide-react';
 import { format } from 'date-fns';
 import GameCard from './GameCard';
-import { fetchTodaySchedule, fetchLiveGames, regeneratePredictions, trackBet } from '../utils/api';
+import { fetchTodaySchedule, fetchLiveGames, regeneratePredictions, trackBet, fetchTrackedBets } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import { useWebSocketEvent } from '../hooks/useWebSocket';
 import { isLiveStatus, confidencePct } from '../utils/teams';
@@ -204,7 +204,29 @@ function Dashboard() {
 
   // Auto-track all top picks (prematch only) to the bet tracker.
   const autoTrackedRef = useRef(new Set());
+  const trackedSeededRef = useRef(false);
+
+  // Seed autoTrackedRef with already-tracked prediction IDs on mount.
   useEffect(() => {
+    (async () => {
+      try {
+        const resp = await fetchTrackedBets();
+        const bets = resp.data?.tracked_bets ?? resp.data ?? [];
+        for (const bet of bets) {
+          if (bet.prediction_id) {
+            autoTrackedRef.current.add(bet.prediction_id);
+          }
+        }
+      } catch (_) {
+        // Non-critical — worst case we get a few 409s
+      } finally {
+        trackedSeededRef.current = true;
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!trackedSeededRef.current) return;
     const picks = prematchGames
       .map((g) => g.top_pick)
       .filter((p) => p && p.prediction_id && !autoTrackedRef.current.has(p.prediction_id));

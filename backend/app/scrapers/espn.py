@@ -341,6 +341,10 @@ class ESPNNBAScraper(BaseScraper):
             **kwargs,
         )
 
+    async def sync_all(self, db_session: AsyncSession) -> None:
+        """Run full ESPN NBA data sync."""
+        await self.sync_team_stats(db_session)
+
     async def fetch_teams(self) -> List[Dict[str, Any]]:
         """Fetch list of all NBA teams from ESPN."""
         data = await self.fetch_json("/teams", params={"limit": 50})
