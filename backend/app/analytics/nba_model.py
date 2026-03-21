@@ -414,26 +414,36 @@ class NBABettingModel:
         over_prob = over_prob * (1 - _nba.calibration_shrinkage) + 0.5 * _nba.calibration_shrinkage
         under_prob = 1.0 - over_prob
 
-        if over_prob >= under_prob:
-            total_pick = f"over_{ou_line}"
-            total_conf = over_prob
-            total_odds = getattr(game, "over_price", None) if game else None
+        over_odds = getattr(game, "over_price", None) if game else None
+        under_odds = getattr(game, "under_price", None) if game else None
+        over_implied = american_odds_to_implied_prob(over_odds) if over_odds else None
+        under_implied = american_odds_to_implied_prob(under_odds) if under_odds else None
+
+        # Compute edge for ordering: put the side with more edge first
+        over_edge = (over_prob - over_implied) if over_implied else 0
+        under_edge = (under_prob - under_implied) if under_implied else 0
+
+        if over_edge >= under_edge:
+            order = [
+                ("over", over_prob, over_odds, over_implied),
+                ("under", under_prob, under_odds, under_implied),
+            ]
         else:
-            total_pick = f"under_{ou_line}"
-            total_conf = under_prob
-            total_odds = getattr(game, "under_price", None) if game else None
+            order = [
+                ("under", under_prob, under_odds, under_implied),
+                ("over", over_prob, over_odds, over_implied),
+            ]
 
-        total_implied = american_odds_to_implied_prob(total_odds) if total_odds else None
-
-        predictions.append({
-            "bet_type": "total",
-            "prediction": total_pick,
-            "confidence": round(total_conf, 4),
-            "probability": round(total_conf, 4),
-            "odds": total_odds,
-            "implied_probability": round(total_implied, 4) if total_implied else None,
-            "reasoning": f"Model total: {total_xp:.1f} vs line {ou_line:.1f}",
-        })
+        for direction, prob, odds_val, implied in order:
+            predictions.append({
+                "bet_type": "total",
+                "prediction": f"{direction}_{ou_line}",
+                "confidence": round(prob, 4),
+                "probability": round(prob, 4),
+                "odds": odds_val,
+                "implied_probability": round(implied, 4) if implied else None,
+                "reasoning": f"Model total: {total_xp:.1f} vs line {ou_line:.1f}",
+            })
 
         # Sort by confidence descending
         predictions.sort(key=lambda p: p.get("confidence", 0), reverse=True)

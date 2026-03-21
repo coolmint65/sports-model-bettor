@@ -122,7 +122,7 @@ function PickChips({ mlPick, spreadPick, totalPick, formatMarketPick }) {
     const betConf = pick.bet_confidence != null
       ? confidencePct(pick.bet_confidence)
       : (pick.confidence != null ? confidencePct(pick.confidence) : null);
-    const isBest = bestPick && pick === bestPick && positivePicks.length > 1;
+    const isBest = bestPick && pick === bestPick;
     const hasEdge = pick.edge == null || pick.edge >= 0;
     return { pick, conf: betConf, isBest, hasEdge };
   });
