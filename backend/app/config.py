@@ -129,7 +129,7 @@ class ModelConfig(BaseModel):
     goalie_recent_weight: float = 0.60
     h2h_goal_adj_weight: float = 0.05
     defensive_regression: float = 0.60
-    mean_regression: float = 0.25
+    mean_regression: float = 0.15
 
     # Defense factor: blend goals-against with shots-against for stability.
     # 0.0 = pure goals-against, 1.0 = pure shots-against.
@@ -279,8 +279,8 @@ class ModelConfig(BaseModel):
 
     # Feature #12: Win probability calibration
     calibration_enabled: bool = True            # whether to apply calibration curve
-    calibration_shrinkage: float = 0.18         # ML shrinkage toward 50% (0=none, 1=always 50%)
-    calibration_spread_shrinkage: float = 0.35  # spread/total shrinkage (higher because Poisson
+    calibration_shrinkage: float = 0.10         # ML shrinkage toward 50% (0=none, 1=always 50%)
+    calibration_spread_shrinkage: float = 0.22  # spread/total shrinkage (higher because Poisson
                                                 # structurally overestimates margin distributions)
     calibration_min_predictions: int = 50       # min predictions before calibrating
 
@@ -292,9 +292,9 @@ class ModelConfig(BaseModel):
     convergence_threshold: int = 3             # number of aligned strong signals to trigger
     convergence_amplifier: float = 0.08        # additional xG adjustment when signals converge
 
-    # xG bounds — NHL teams almost never average below 2.0 or above 3.8
-    xg_floor: float = 2.0
-    xg_ceiling: float = 3.8
+    # xG bounds — allow wider range so model signal isn't clipped
+    xg_floor: float = 1.8
+    xg_ceiling: float = 4.0
 
     # Poisson parameters
     poisson_max_goals: int = 12
@@ -326,7 +326,7 @@ class ModelConfig(BaseModel):
     # Sportsbook lines encode sharp information. Using them as a prior
     # reduces variance by anchoring predictions to market consensus.
     market_prior_enabled: bool = True       # whether to blend with market xG
-    market_prior_weight: float = 0.35       # 0=pure model, 1=pure market (0.35 = 65/35 blend)
+    market_prior_weight: float = 0.25       # 0=pure model, 1=pure market (0.25 = 75/25 blend)
 
 
 class NBAModelConfig(BaseModel):

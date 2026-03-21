@@ -836,8 +836,8 @@ class BettingModel:
         hockey has massive randomness (puck bounces, posts, empty nets).
 
         Static shrinkage (fallback) uses different rates by bet type:
-        - ML (moneyline): 0.18 — mild shrinkage, model is reasonable at 50-65%
-        - Spread/total: 0.35 — aggressive shrinkage because Poisson structurally
+        - ML (moneyline): 0.10 — light shrinkage, preserves model signal
+        - Spread/total: 0.22 — moderate shrinkage because Poisson structurally
           overestimates margin distributions (empty-net goals, OT, score effects
           aren't properly modeled)
 
@@ -2617,17 +2617,17 @@ class BettingModel:
             agreement = (favorable - unfavorable) / total_signals
         else:
             agreement = 0.0
-        # Scale: +0.15 max bonus when all signals agree (was 0.10)
-        agreement_bonus = max(0.0, agreement) * 0.15
+        # Scale: +0.20 max bonus when all signals agree
+        agreement_bonus = max(0.0, agreement) * 0.20
 
         # Strong-signal convergence bonus: when 5+ signals are strongly
         # favorable (> 0.65), there's real separation — reward it.
         if strongly_favorable >= 7:
-            convergence_bonus = 0.08
+            convergence_bonus = 0.12
         elif strongly_favorable >= 5:
-            convergence_bonus = 0.05
+            convergence_bonus = 0.08
         elif strongly_favorable >= 3:
-            convergence_bonus = 0.02
+            convergence_bonus = 0.04
         else:
             convergence_bonus = 0.0
 
@@ -2669,20 +2669,20 @@ class BettingModel:
         lm = features.get("line_movement", {})
         sharp = lm.get("sharp_signal", "neutral")
         if is_home_pick and sharp == "sharp_home":
-            market_bonus = 0.10  # was 0.08
+            market_bonus = 0.12
         elif not is_home_pick and sharp == "sharp_away":
-            market_bonus = 0.10  # was 0.08
+            market_bonus = 0.12
 
         # Also: if our edge is positive AND implied prob agrees we're underpriced
         edge = prediction.get("edge") or 0.0
         if edge > 0.03:
-            market_bonus += 0.05  # was 0.04 — meaningful edge over market
+            market_bonus += 0.06  # meaningful edge over market
         if edge > 0.06:
-            market_bonus += 0.03  # extra bonus for large edge
+            market_bonus += 0.04  # extra bonus for large edge
 
         # --- 5. Edge magnitude bonus ---
         # Larger edges (after calibration) are more convincing signals.
-        edge_bonus = min(0.12, max(0.0, edge) * 2.0)  # was 0.08/1.6 — 6% edge → +0.12
+        edge_bonus = min(0.15, max(0.0, edge) * 2.5)  # 6% edge → +0.15
 
         # --- Combine ---
         raw = (
