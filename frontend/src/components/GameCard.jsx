@@ -13,7 +13,6 @@ import {
   teamAbbrev,
   confidencePct,
   formatBetType,
-  formatPredictionValue,
 } from '../utils/teams';
 import { formatAmericanOdds, formatGameDate, formatGameTime } from '../utils/formatting';
 import TeamLogo from './shared/TeamLogo';
@@ -93,70 +92,9 @@ function parseClock(str) {
 
 function getConfidenceBadge(confidence) {
   if (confidence == null) return null;
-  if (confidence >= 80) return { label: 'STRONG BET', className: 'badge-good', icon: TrendingUp };
-  if (confidence >= 70) return { label: 'GOOD BET', className: 'badge-good', icon: TrendingUp };
+  if (confidence >= 70) return { label: 'BET', className: 'badge-good', icon: TrendingUp };
   if (confidence >= 60) return { label: 'LEAN', className: 'badge-borderline', icon: Minus };
-  if (confidence >= 50) return { label: 'SPECULATIVE', className: 'badge-skip', icon: Minus };
-  return { label: 'NO EDGE', className: 'badge-skip', icon: Minus };
-}
-
-function getPickTier(conf, isBest, hasEdge, hasGoodJuice) {
-  const unfaded = conf != null && conf >= 60 && hasGoodJuice;
-  if (isBest) return { tier: 'dc-pick-chip-best', tierLabel: 'BEST' };
-  if (conf != null && conf >= 75 && (hasEdge || unfaded)) return { tier: 'dc-pick-chip-good', tierLabel: 'STRONG' };
-  if (conf != null && conf >= 60 && (hasEdge || unfaded)) return { tier: 'dc-pick-chip-borderline', tierLabel: 'LEAN' };
-  return { tier: 'dc-pick-chip-skip', tierLabel: 'SKIP' };
-}
-
-function PickChips({ mlPick, spreadPick, totalPick, formatMarketPick }) {
-  const picks = [mlPick, spreadPick, totalPick].filter(Boolean);
-  const positivePicks = picks.filter((p) => p.edge == null || p.edge >= 0);
-  const bestPick = positivePicks.length > 0
-    ? positivePicks.reduce((best, p) => {
-        const score = (s) => (s?.composite_score ?? 0) || ((s?.edge ?? 0) * 100 + (s?.confidence ?? 0));
-        return score(p) > score(best) ? p : best;
-      }, positivePicks[0])
-    : null;
-
-  const annotated = picks.map((pick) => {
-    const betConf = pick.bet_confidence != null
-      ? confidencePct(pick.bet_confidence)
-      : (pick.confidence != null ? confidencePct(pick.confidence) : null);
-    const isBest = bestPick && pick === bestPick;
-    const hasEdge = pick.edge == null || pick.edge >= 0;
-    return { pick, conf: betConf, isBest, hasEdge };
-  });
-
-  annotated.sort((a, b) => {
-    if (a.isBest !== b.isBest) return a.isBest ? -1 : 1;
-    if (a.hasEdge !== b.hasEdge) return a.hasEdge ? -1 : 1;
-    return (b.conf ?? 0) - (a.conf ?? 0);
-  });
-
-  return annotated.map(({ pick, conf, isBest, hasEdge }) => {
-    const label = formatMarketPick(pick);
-    const edgeVal = pick.edge != null ? pick.edge * 100 : null;
-    const edgePct = edgeVal != null ? `${edgeVal >= 0 ? '+' : ''}${edgeVal.toFixed(1)}%` : null;
-    const hasGoodJuice = pick.odds_display == null || pick.odds_display > 0 || pick.odds_display >= -170;
-    const { tier, tierLabel } = getPickTier(conf, isBest, hasEdge, hasGoodJuice);
-
-    return (
-      <div key={pick.bet_type} className={`dc-pick-chip ${tier}`}>
-        <Target size={11} />
-        <span className="dc-pick-chip-label">{label}</span>
-        {pick.odds_display != null && (
-          <span className="dc-pick-chip-odds">{formatAmericanOdds(pick.odds_display)}</span>
-        )}
-        {edgePct != null && (
-          <span className={`dc-pick-chip-edge${edgeVal < 0 ? ' dc-pick-chip-edge-neg' : ''}`}>Edge {edgePct}</span>
-        )}
-        {conf != null && (
-          <span className="dc-pick-chip-conf">{Math.round(conf)}%</span>
-        )}
-        <span className="dc-pick-chip-badge">{tierLabel}</span>
-      </div>
-    );
-  });
+  return { label: 'SKIP', className: 'badge-skip', icon: Minus };
 }
 
 const MEDAL_STYLES = {
@@ -270,46 +208,46 @@ function GameCard({ game, section, medal }) {
   const awaySpreadLine = odds?.away_spread_line;
   const ouLine = odds?.over_under_line;
 
-  // Per-market picks (best ML, best Spread, best O/U)
+  // Find the single best pick to display
   const topPicks = game.top_picks || [];
-  const pickByMarket = {};
-  for (const p of topPicks) {
-    pickByMarket[p.bet_type] = p;
+  let bestPick = topPick;
+  if (topPicks.length > 0) {
+    const positivePicks = topPicks.filter((p) => p.edge == null || p.edge >= 0);
+    bestPick = positivePicks.length > 0
+      ? positivePicks.reduce((best, p) => {
+          const score = (s) => (s?.composite_score ?? 0) || ((s?.edge ?? 0) * 100 + (s?.confidence ?? 0));
+          return score(p) > score(best) ? p : best;
+        }, positivePicks[0])
+      : topPicks[0];
   }
-  const mlPick = pickByMarket['ml'] || null;
-  const spreadPick = pickByMarket['spread'] || null;
-  const totalPick = pickByMarket['total'] || null;
 
-  // Determine which side the single top_pick is on (for odds pill highlighting)
-  const pickValue = (topPick?.prediction_value || '').toLowerCase();
-  const pickBetType = (topPick?.bet_type || '').toLowerCase();
+  const pickValue = (bestPick?.prediction_value || '').toLowerCase();
+  const pickBetType = (bestPick?.bet_type || '').toLowerCase();
   const pickIsHome = pickValue === 'home' || pickValue.includes(homeAbbr.toLowerCase());
   const pickIsAway = pickValue === 'away' || pickValue.includes(awayAbbr.toLowerCase());
 
-  // Detect over/under pick
-  const pickIsOver = pickBetType === 'total' && pickValue.includes('over');
-  const pickIsUnder = pickBetType === 'total' && pickValue.includes('under');
-
-  // Helper to format a per-market pick label
-  const formatMarketPick = (pick) => {
-    if (!pick) return null;
-    const val = (pick.prediction_value || '').toLowerCase();
-    const bt = (pick.bet_type || '').toLowerCase();
-    const isHome = val === 'home' || val.includes(homeAbbr.toLowerCase());
-    const isAway = val === 'away' || val.includes(awayAbbr.toLowerCase());
-    const team = isHome ? homeAbbr : isAway ? awayAbbr : '';
-
-    if (bt === 'ml') return `${team} ML`;
-    if (bt === 'spread') {
-      const line = isHome ? spreadLine : awaySpreadLine;
-      return `${team} ${line != null ? (line > 0 ? '+' : '') + line : 'PL'}`;
+  // Format the best pick label
+  const formatPickLabel = () => {
+    if (!bestPick || !pickBetType) return null;
+    const team = pickIsHome ? homeAbbr : pickIsAway ? awayAbbr : '';
+    if (pickBetType === 'ml') return `${team} ML`;
+    if (pickBetType === 'spread') {
+      const line = pickIsHome ? spreadLine : awaySpreadLine;
+      return `${team} ${line != null ? (line > 0 ? '+' : '') + line : 'Spread'}`;
     }
-    if (bt === 'total') {
-      const isOver = val.includes('over');
+    if (pickBetType === 'total') {
+      const isOver = pickValue.includes('over');
       return `${isOver ? 'Over' : 'Under'} ${ouLine || ''}`;
     }
-    return formatBetType(bt, sportKey);
+    return formatBetType(pickBetType, sportKey);
   };
+
+  const bestPickLabel = formatPickLabel();
+  const bestPickEdge = bestPick?.edge != null ? bestPick.edge * 100 : null;
+  const bestPickOdds = bestPick?.odds_display;
+  const bestPickConf = bestPick?.bet_confidence != null
+    ? confidencePct(bestPick.bet_confidence)
+    : (bestPick?.confidence != null ? confidencePct(bestPick.confidence) : null);
 
   return (
     <div className="dc-card" onClick={handleClick} role="button" tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && handleClick()}>
@@ -346,124 +284,45 @@ function GameCard({ game, section, medal }) {
         )}
       </div>
 
-      {/* Team matchup */}
+      {/* Team matchup — abbreviations primary, logos smaller */}
       <div className="dc-matchup">
         <div className="dc-team">
-          <TeamLogo team={game.away_team} size={48} />
-          <div className="dc-team-name">{awayName}</div>
+          <TeamLogo team={game.away_team} size={40} />
+          <div className="dc-team-abbr">{awayAbbr}</div>
           {awayML != null && (
-            <div className={`dc-ml ${pickIsAway && pickBetType === 'ml' ? 'dc-ml-pick' : ''}`}>
-              {formatAmericanOdds(awayML)}
-            </div>
+            <div className="dc-ml-sm">{formatAmericanOdds(awayML)}</div>
           )}
         </div>
 
         <div className="dc-vs-section">
           <span className="dc-vs">VS</span>
-          <span className="dc-status">Scheduled</span>
         </div>
 
         <div className="dc-team">
-          <TeamLogo team={game.home_team} size={48} />
-          <div className="dc-team-name">{homeName}</div>
+          <TeamLogo team={game.home_team} size={40} />
+          <div className="dc-team-abbr">{homeAbbr}</div>
           {homeML != null && (
-            <div className={`dc-ml ${pickIsHome && pickBetType === 'ml' ? 'dc-ml-pick' : ''}`}>
-              {formatAmericanOdds(homeML)}
-            </div>
+            <div className="dc-ml-sm">{formatAmericanOdds(homeML)}</div>
           )}
         </div>
       </div>
 
-      {/* Per-market pick bars (best ML, best Spread, best O/U) */}
-      {topPicks.length > 0 ? (
-        <div className="dc-picks-multi">
-          <PickChips
-            mlPick={mlPick}
-            spreadPick={spreadPick}
-            totalPick={totalPick}
-            formatMarketPick={formatMarketPick}
-          />
-        </div>
-      ) : topPick && pickBetType ? (
-        <div className="dc-pick-bar">
+      {/* Single best pick highlight */}
+      {bestPickLabel && (
+        <div className="dc-best-pick">
           <Target size={13} />
-          <span className="dc-pick-bar-text">
-            <strong>
-              {pickIsHome ? homeAbbr : pickIsAway ? awayAbbr : ''}{' '}
-              {pickBetType === 'ml' ? 'ML' : pickBetType === 'spread' ? 'Spread' : pickBetType === 'total' ? (pickIsOver ? 'Over' : 'Under') + ' ' + (ouLine || '') : formatBetType(pickBetType, sportKey) + (topPick?.prediction_value ? ' ' + formatPredictionValue(topPick.prediction_value, homeAbbr, awayAbbr, pickBetType) : '')}
-            </strong>
-          </span>
-          {confidence != null && (
-            <span className="dc-pick-bar-conf">{Math.round(confidence)}%</span>
+          <span className="dc-best-pick-label">{bestPickLabel}</span>
+          {bestPickOdds != null && (
+            <span className="dc-best-pick-odds">{formatAmericanOdds(bestPickOdds)}</span>
           )}
-        </div>
-      ) : null}
-
-      {/* Odds summary pills - flat horizontal row */}
-      {odds && (
-        <div className="dc-odds-row">
-          {awayML != null && homeML != null && (
-            <div className={`dc-odds-pill ${pickBetType === 'ml' ? 'dc-odds-pill-active' : ''}`}>
-              <span className="dc-odds-label">ML</span>
-              <span className="dc-odds-val">
-                <span className={pickIsAway && pickBetType === 'ml' ? 'dc-pick-highlight' : ''}>{formatAmericanOdds(awayML)}</span>
-                <span className="dc-odds-sep">/</span>
-                <span className={pickIsHome && pickBetType === 'ml' ? 'dc-pick-highlight' : ''}>{formatAmericanOdds(homeML)}</span>
-              </span>
-            </div>
+          {bestPickEdge != null && (
+            <span className={`dc-best-pick-edge${bestPickEdge < 0 ? ' dc-edge-neg' : ''}`}>
+              {bestPickEdge >= 0 ? '+' : ''}{bestPickEdge.toFixed(1)}%
+            </span>
           )}
-          <div className={`dc-odds-pill ${pickBetType === 'spread' ? 'dc-odds-pill-active' : ''}`}>
-            <span className="dc-odds-label">{sportKey === 'nba' ? 'PS' : 'PL'}</span>
-            <span className="dc-odds-val">
-              {spreadLine != null ? (
-                <>
-                  <span className={pickIsAway && pickBetType === 'spread' ? 'dc-pick-highlight' : ''}>{awaySpreadLine != null ? (awaySpreadLine > 0 ? '+' : '') + awaySpreadLine : `-${Math.abs(spreadLine)}`}</span>
-                  <span className="dc-odds-sep">/</span>
-                  <span className={pickIsHome && pickBetType === 'spread' ? 'dc-pick-highlight' : ''}>{spreadLine > 0 ? '+' : ''}{spreadLine}</span>
-                </>
-              ) : (
-                <>
-                  <span className={pickIsAway && pickBetType === 'spread' ? 'dc-pick-highlight' : ''}>+1.5</span>
-                  <span className="dc-odds-sep">/</span>
-                  <span className={pickIsHome && pickBetType === 'spread' ? 'dc-pick-highlight' : ''}>-1.5</span>
-                </>
-              )}
-            </span>
-          </div>
-          {ouLine != null && (
-            <div className={`dc-odds-pill ${pickBetType === 'total' ? 'dc-odds-pill-active' : ''}`}>
-              <span className="dc-odds-label">
-                <span className={pickIsOver ? 'dc-pick-highlight' : ''}>O</span>
-                /
-                <span className={pickIsUnder ? 'dc-pick-highlight' : ''}>U</span>
-              </span>
-              <span className="dc-odds-val">{ouLine}</span>
-            </div>
+          {bestPickConf != null && (
+            <span className="dc-best-pick-conf">{Math.round(bestPickConf)}%</span>
           )}
-        </div>
-      )}
-
-      {/* Starting Goalies — only show when at least one name is available */}
-      {(game.home_starter?.name || game.away_starter?.name) && (
-        <div className="dc-goalies">
-          <div className="dc-goalie-row">
-            <span className="dc-goalie-name">
-              {game.away_starter?.name || '—'}
-            </span>
-            <span className="dc-goalie-label">Goalies</span>
-            <span className="dc-goalie-name">
-              {game.home_starter?.name || '—'}
-            </span>
-          </div>
-          <div className="dc-goalie-row dc-goalie-status-row">
-            <span className={`dc-goalie-status ${game.away_starter?.confirmed ? 'dc-confirmed' : game.away_starter?.status?.toLowerCase() === 'unconfirmed' ? 'dc-unconfirmed' : game.away_starter ? 'dc-likely' : ''}`}>
-              {game.away_starter?.status || (game.away_starter?.confirmed ? 'Confirmed' : game.away_starter ? 'Expected' : '')}
-            </span>
-            <span />
-            <span className={`dc-goalie-status ${game.home_starter?.confirmed ? 'dc-confirmed' : game.home_starter?.status?.toLowerCase() === 'unconfirmed' ? 'dc-unconfirmed' : game.home_starter ? 'dc-likely' : ''}`}>
-              {game.home_starter?.status || (game.home_starter?.confirmed ? 'Confirmed' : game.home_starter ? 'Expected' : '')}
-            </span>
-          </div>
         </div>
       )}
 

@@ -4728,13 +4728,13 @@ a:hover {
   background: var(--bg-card);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-lg);
-  padding: 18px 20px;
+  padding: 14px 16px;
   cursor: pointer;
   transition: all var(--transition-base);
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
   animation: fadeIn 0.3s ease;
 }
 
@@ -4858,7 +4858,7 @@ a:hover {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 8px 0;
+  padding: 4px 0;
 }
 
 .dc-team {
@@ -4885,11 +4885,25 @@ a:hover {
   max-width: 120px;
 }
 
+.dc-team-abbr {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0.5px;
+}
+
 .dc-ml {
   font-size: 1.3rem;
   font-weight: 800;
   font-family: var(--font-mono);
   color: var(--text-primary);
+}
+
+.dc-ml-sm {
+  font-size: 0.82rem;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
 }
 
 .dc-ml-pick {
@@ -4994,6 +5008,55 @@ a:hover {
   color: var(--accent-green);
   font-weight: 700;
   font-family: var(--font-mono);
+}
+
+/* Single best pick highlight */
+.dc-best-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--accent-green);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 255, 136, 0.06);
+  color: var(--accent-green);
+  font-size: 0.8rem;
+}
+
+.dc-best-pick svg {
+  flex-shrink: 0;
+  color: var(--accent-green);
+}
+
+.dc-best-pick-label {
+  font-weight: 700;
+  color: var(--accent-green);
+}
+
+.dc-best-pick-odds {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 0.78rem;
+}
+
+.dc-best-pick-edge {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--accent-green);
+  font-size: 0.75rem;
+}
+
+.dc-edge-neg {
+  color: var(--accent-red);
+}
+
+.dc-best-pick-conf {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--accent-green);
+  font-size: 0.78rem;
 }
 
 /* Multi-pick display (best ML, best Spread, best O/U) */
@@ -5205,7 +5268,7 @@ a:hover {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  padding-top: 8px;
+  padding-top: 6px;
   border-top: 1px solid var(--border-primary);
 }
 

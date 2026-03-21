@@ -6,7 +6,7 @@ import GameCard from './GameCard';
 import { fetchTodaySchedule, fetchLiveGames, regeneratePredictions, trackBet, fetchTrackedBets } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import { useWebSocketEvent } from '../hooks/useWebSocket';
-import { isLiveStatus, confidencePct } from '../utils/teams';
+import { isLiveStatus, confidencePct, parseAsUTC } from '../utils/teams';
 
 const LIVE_POLL_INTERVAL = 30_000;     // 30 seconds when games are live
 const IDLE_POLL_INTERVAL = 120_000;    // 2 minutes when no live games
@@ -164,7 +164,7 @@ function Dashboard() {
     ...extraLiveGames,
   ];
 
-  // Prematch games only (not live, not final) — sorted by bet quality
+  // Prematch games only (not live, not final) — sorted by start time
   const prematchGames = useMemo(() => {
     const prematch = games.filter((g) => {
       const status = (g.status || '').toLowerCase();
@@ -172,14 +172,12 @@ function Dashboard() {
     });
 
     return prematch.sort((a, b) => {
-      const confA = a.top_pick?.confidence != null ? confidencePct(a.top_pick.confidence) : 0;
-      const confB = b.top_pick?.confidence != null ? confidencePct(b.top_pick.confidence) : 0;
-      const edgeA = a.top_pick?.edge || 0;
-      const edgeB = b.top_pick?.edge || 0;
-      // Primary sort: confidence (quality tier). Secondary: edge as tiebreaker.
-      const scoreA = 0.85 * confA + 0.15 * (Math.min(edgeA, 0.25) / 0.25) * 100;
-      const scoreB = 0.85 * confB + 0.15 * (Math.min(edgeB, 0.25) / 0.25) * 100;
-      return scoreB - scoreA;
+      const timeA = parseAsUTC(a.start_time || a.datetime);
+      const timeB = parseAsUTC(b.start_time || b.datetime);
+      if (timeA && timeB) return timeA - timeB;
+      if (timeA) return -1;
+      if (timeB) return 1;
+      return 0;
     });
   }, [games]);
 
@@ -326,7 +324,7 @@ function Dashboard() {
           <div className="section-title-group">
             <h2 className="section-title upcoming-title">Upcoming Games</h2>
             <p className="section-subtitle">
-              Search and explore matchups. Games sorted by bet quality &mdash; GOOD bets shown first.
+              Games sorted by start time. Top picks ranked #1&ndash;#3.
             </p>
           </div>
           <span className="game-count">
