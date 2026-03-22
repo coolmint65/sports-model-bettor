@@ -226,6 +226,7 @@ class PredictionManager:
                     "bet_type": pred["bet_type"],
                     "prediction": pred["prediction"],
                     "confidence": confidence,
+                    "bet_confidence": pred.get("bet_confidence"),
                     "probability": pred.get("probability", confidence),
                     "edge": round(edge, 4) if edge is not None else None,
                     "implied_probability": round(implied_prob, 4) if has_real_odds else None,
