@@ -167,9 +167,11 @@ class ModelConfig(BaseModel):
     shot_quality_factor: float = 0.06         # shooting% deviation adjustment
     advanced_metrics_min_games: int = 8       # min games before advanced metrics apply
 
-    # Unified possession factor — uses best available metric (5v5 EV > close-game > all-situations)
+    # Unified possession factor — uses best available metric (xGF% > 5v5 EV CF% > close-game > all-situations)
     # Only ONE possession adjustment is applied to prevent triple-counting correlated signals.
-    unified_possession_factor: float = 0.12   # single xG multiplier for best CF% metric
+    # Prefer xGF% (expected goals for %) over raw Corsi — not all shots are equal.
+    prefer_xgf_over_corsi: bool = True        # use MoneyPuck xGF% when available
+    unified_possession_factor: float = 0.12   # single xG multiplier for best metric
 
     # 5v5 even-strength possession (from MoneyPuck)
     ev_corsi_factor: float = 0.10             # (legacy, used as fallback) xG multiplier for 5v5 CF%
@@ -273,6 +275,27 @@ class ModelConfig(BaseModel):
     line_stability_factor: float = 0.06        # xG adjustment for line instability
     line_stability_threshold: float = 0.75     # below this = unstable lines
 
+    # Line combination chemistry (on-ice performance of top lines)
+    line_chemistry_factor: float = 0.08        # xG adjustment from top-line xGF%
+    line_chemistry_min_toi: float = 50.0       # minimum TOI (minutes) for line data
+
+    # Score-state adjustments for pre-game totals
+    # Teams that hold leads tend to suppress 2nd-half scoring; teams that
+    # trail frequently inflate it. This adjusts pre-game total expectations.
+    score_state_leading_suppression: float = 0.06  # xG reduction for teams that lead often
+    score_state_trailing_inflation: float = 0.04   # xG boost for teams that trail often
+    score_state_min_games: int = 15                # min games to compute lead/trail rates
+
+    # Goalie platoon modeling (when starter is uncertain)
+    goalie_platoon_enabled: bool = True            # enable probability-weighted goalie modeling
+    goalie_platoon_min_starts: int = 5             # min starts for a goalie to be in platoon
+
+    # Playoff-specific model parameter overrides
+    playoff_xg_reduction: float = 0.15             # reduce xG in playoffs (tighter checking)
+    playoff_home_ice_boost: float = 0.05           # extra home ice advantage in playoffs
+    playoff_goalie_factor_boost: float = 0.05      # goalie matters more in playoffs
+    playoff_special_teams_boost: float = 0.05      # special teams matter more in playoffs
+
     # Feature #11: Recency-weighted H2H
     h2h_recency_decay: float = 0.85            # exponential decay per game
     h2h_recency_factor: float = 0.06           # additional xG adjustment from recency shift
@@ -342,7 +365,9 @@ class NBAModelConfig(BaseModel):
     league_avg_points: float = 112.5
     league_avg_pace: float = 100.0  # possessions per 48 minutes
 
-    # Home court advantage (additive points for home team)
+    # Home court advantage — default fallback (used when team-specific HCA
+    # is unavailable). Team-specific values in NBA_HOME_COURT_ADVANTAGES
+    # override this for known teams.
     home_court_advantage: float = 2.5
 
     # Standard deviation for team scoring (derived from historical variance)
@@ -358,6 +383,22 @@ class NBAModelConfig(BaseModel):
     rest_advantage_per_day: float = 1.5   # points per extra rest day
     rest_advantage_cap: float = 4.0       # max rest advantage in points
     back_to_back_penalty: float = 3.0     # points penalty for B2B
+
+    # Enhanced schedule context
+    four_in_five_penalty: float = 2.0      # points penalty for 4 games in 5 nights
+    altitude_advantage: float = 1.5        # extra points for Denver at home (altitude)
+    west_coast_trip_penalty_per_game: float = 0.5  # points per consecutive west coast road game
+    west_coast_trip_threshold: int = 3     # consecutive west coast road games to trigger
+    travel_fatigue_factor: float = 1.0     # points penalty for cross-country travel
+
+    # Player impact ratings
+    player_impact_weight: float = 0.15     # how much individual player value adjusts xP
+    star_player_threshold: float = 3.0     # BPM threshold for "star" player
+    superstar_threshold: float = 6.0       # BPM threshold for "superstar" player
+
+    # Lineup/rotation depth
+    rotation_depth_factor: float = 0.10    # how much rotation depth affects xP
+    min_rotation_players: int = 7          # minimum healthy rotation players expected
 
     # Expected points bounds
     xp_floor: float = 95.0
@@ -388,6 +429,10 @@ class NBAModelConfig(BaseModel):
     form_window_short: int = 5
     form_window_medium: int = 10
     form_window_long: int = 20
+
+    # Quarter/half prop settings
+    quarter_scoring_std_dev: float = 6.5   # std dev for single-quarter scoring
+    half_scoring_std_dev: float = 8.5      # std dev for half scoring
 
 
 class InjuryConfig(BaseModel):

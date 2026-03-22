@@ -115,8 +115,18 @@ class BettingModel:
         advanced: Dict[str, Any],
         adv_min_games: int,
     ) -> Optional[float]:
-        """Pick best available Corsi For % from 5v5 EV > close-game > all-situations."""
+        """Pick best available possession metric.
+
+        Hierarchy: xGF% (expected goals for %) > 5v5 EV CF% > close-game CF% > all-situations CF%.
+        xGF% is preferred because it accounts for shot quality — not all shots are equal.
+        Raw Corsi treats a muffin from the point the same as a breakaway.
+        """
         if ev.get("games_found", 0) >= _mc.ev_corsi_min_games:
+            # Prefer xGF% when available and configured
+            if _mc.prefer_xgf_over_corsi:
+                xgf = ev.get("ev_xgf_pct")
+                if xgf is not None and xgf > 0:
+                    return xgf
             return ev.get("ev_cf_pct", 50.0)
         if close.get("close_games_found", 0) >= _mc.close_game_min_games:
             return close.get("close_cf_pct", 50.0)
@@ -235,16 +245,26 @@ class BettingModel:
         home_starter_conf = features.get("home_starter_status", {}).get("starter_confidence", 1.0)
         away_starter_conf = features.get("away_starter_status", {}).get("starter_confidence", 1.0)
 
-        # Apply goalie adjustment but scale by starter confidence
-        home_xg_before = home_xg
-        home_xg = self._apply_goalie_adjustment(home_xg, away_goalie)
-        goalie_delta = home_xg - home_xg_before
-        home_xg = home_xg_before + goalie_delta * away_starter_conf
+        # ---- Goalie platoon modeling ----
+        # When starter is uncertain (low confidence), model the probability-
+        # weighted outcome across likely starters rather than betting on one.
+        if _mc.goalie_platoon_enabled:
+            home_xg, away_xg = self._apply_platoon_goalie_adjustment(
+                home_xg, away_xg, features,
+                home_goalie, away_goalie,
+                home_starter_conf, away_starter_conf,
+            )
+        else:
+            # Original single-goalie logic
+            home_xg_before = home_xg
+            home_xg = self._apply_goalie_adjustment(home_xg, away_goalie)
+            goalie_delta = home_xg - home_xg_before
+            home_xg = home_xg_before + goalie_delta * away_starter_conf
 
-        away_xg_before = away_xg
-        away_xg = self._apply_goalie_adjustment(away_xg, home_goalie)
-        goalie_delta = away_xg - away_xg_before
-        away_xg = away_xg_before + goalie_delta * home_starter_conf
+            away_xg_before = away_xg
+            away_xg = self._apply_goalie_adjustment(away_xg, home_goalie)
+            goalie_delta = away_xg - away_xg_before
+            away_xg = away_xg_before + goalie_delta * home_starter_conf
 
         # ---- Goalie tier mismatch ----
         home_tier = home_goalie.get("tier_rank", 2)
@@ -663,6 +683,59 @@ class BettingModel:
                         else:
                             away_xg *= mult
 
+        # ---- Line combination chemistry ----
+        # Top forward line xGF% reflects how well the line produces as a unit.
+        # High chemistry lines outperform their individual talent sum.
+        chem_factor = _mc.line_chemistry_factor
+        if chem_factor > 0:
+            for side_key, xg_attr in [("home_line_chemistry", "home"), ("away_line_chemistry", "away")]:
+                chem = features.get(side_key, {})
+                if chem.get("has_data", False):
+                    top_line_xgf = chem.get("top_line_xgf_pct", 50.0)
+                    # Deviation from 50% — positive = line dominates possession quality
+                    xgf_dev = (top_line_xgf - 50.0) / 100.0
+                    if xg_attr == "home":
+                        home_xg *= 1.0 + xgf_dev * chem_factor
+                    else:
+                        away_xg *= 1.0 + xgf_dev * chem_factor
+
+        # ---- Score-state tendency adjustment ----
+        # Teams that frequently hold leads tend to suppress 2nd/3rd period
+        # scoring (defensive shell). Teams that trail frequently see inflated
+        # totals (desperation offense). Adjusts pre-game total expectations.
+        ss_min = _mc.score_state_min_games
+        for side_key, xg_attr in [("home_score_state", "home"), ("away_score_state", "away")]:
+            ss = features.get(side_key, {})
+            if ss.get("games_found", 0) >= ss_min:
+                leading_rate = ss.get("leading_after_p1_rate", 0.33)
+                trailing_rate = ss.get("trailing_after_p1_rate", 0.33)
+                # Teams that lead often have lower 2nd-half xG (shell)
+                if leading_rate > 0.40:
+                    adj = (leading_rate - 0.33) * _mc.score_state_leading_suppression
+                    if xg_attr == "home":
+                        home_xg -= adj
+                    else:
+                        away_xg -= adj
+                # Teams that trail often have higher 2nd-half xG (desperation)
+                if trailing_rate > 0.40:
+                    adj = (trailing_rate - 0.33) * _mc.score_state_trailing_inflation
+                    if xg_attr == "home":
+                        home_xg += adj
+                    else:
+                        away_xg += adj
+
+        # ---- Playoff-specific overrides ----
+        # Playoff hockey is structurally different: tighter checking, lower
+        # scoring, refs swallow whistles, goalie performance matters more.
+        season_phase = features.get("season_phase")
+        if season_phase and getattr(season_phase, "phase", None) == "playoffs":
+            # Reduce overall xG (tighter games)
+            playoff_reduction = _mc.playoff_xg_reduction
+            home_xg *= (1.0 - playoff_reduction)
+            away_xg *= (1.0 - playoff_reduction)
+            # Boost home ice
+            home_xg += _mc.playoff_home_ice_boost
+
         # ---- Recency-weighted H2H ----
         h2h_recency_factor = _mc.h2h_recency_factor
         if h2h_recency_factor > 0:
@@ -916,6 +989,68 @@ class BettingModel:
 
         # Regress toward 1.0 using the configured regression factor
         return 1.0 + (raw - 1.0) * _mc.defensive_regression
+
+    def _apply_platoon_goalie_adjustment(
+        self,
+        home_xg: float,
+        away_xg: float,
+        features: Dict[str, Any],
+        home_goalie: Dict[str, Any],
+        away_goalie: Dict[str, Any],
+        home_starter_conf: float,
+        away_starter_conf: float,
+    ) -> Tuple[float, float]:
+        """Apply goalie adjustment using platoon modeling when starter is uncertain.
+
+        When starter confidence is high (>= 0.80), use the confirmed starter.
+        When low, blend the xG adjustment across likely starters weighted by
+        their probability of starting, producing a more accurate expected value.
+        """
+        platoon_threshold = 0.80
+
+        # Away goalie affects home xG
+        if away_starter_conf >= platoon_threshold:
+            # High confidence — use single starter
+            home_xg_adj = self._apply_goalie_adjustment(home_xg, away_goalie)
+            delta = home_xg_adj - home_xg
+            home_xg += delta * away_starter_conf
+        else:
+            # Low confidence — platoon model
+            away_backup = features.get("away_goalie_backup", {})
+            if away_backup.get("goalie_id") is not None:
+                # Weighted blend: P(starter) * starter_xg + P(backup) * backup_xg
+                xg_with_starter = self._apply_goalie_adjustment(home_xg, away_goalie)
+                xg_with_backup = self._apply_goalie_adjustment(home_xg, away_backup)
+                home_xg = (
+                    away_starter_conf * xg_with_starter
+                    + (1.0 - away_starter_conf) * xg_with_backup
+                )
+            else:
+                # No backup data — fall back to discounted single starter
+                home_xg_adj = self._apply_goalie_adjustment(home_xg, away_goalie)
+                delta = home_xg_adj - home_xg
+                home_xg += delta * away_starter_conf
+
+        # Home goalie affects away xG
+        if home_starter_conf >= platoon_threshold:
+            away_xg_adj = self._apply_goalie_adjustment(away_xg, home_goalie)
+            delta = away_xg_adj - away_xg
+            away_xg += delta * home_starter_conf
+        else:
+            home_backup = features.get("home_goalie_backup", {})
+            if home_backup.get("goalie_id") is not None:
+                xg_with_starter = self._apply_goalie_adjustment(away_xg, home_goalie)
+                xg_with_backup = self._apply_goalie_adjustment(away_xg, home_backup)
+                away_xg = (
+                    home_starter_conf * xg_with_starter
+                    + (1.0 - home_starter_conf) * xg_with_backup
+                )
+            else:
+                away_xg_adj = self._apply_goalie_adjustment(away_xg, home_goalie)
+                delta = away_xg_adj - away_xg
+                away_xg += delta * home_starter_conf
+
+        return home_xg, away_xg
 
     def _apply_goalie_adjustment(
         self,
