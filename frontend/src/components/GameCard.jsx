@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Clock,
@@ -7,6 +7,8 @@ import {
   Calendar,
   Minus,
   Target,
+  Plus,
+  Check,
 } from 'lucide-react';
 import {
   teamName,
@@ -15,6 +17,7 @@ import {
   formatBetType,
 } from '../utils/teams';
 import { formatAmericanOdds, formatGameDate, formatGameTime } from '../utils/formatting';
+import { trackBet } from '../utils/api';
 import TeamLogo from './shared/TeamLogo';
 
 function getStatusDisplay(game) {
@@ -112,6 +115,8 @@ const SPORT_LABELS = {
 
 function GameCard({ game, section, medal }) {
   const navigate = useNavigate();
+  const [tracked, setTracked] = useState(false);
+  const [tracking, setTracking] = useState(false);
   const gameId = game.game_id || game.id;
   const statusInfo = getStatusDisplay(game);
   const sportKey = (game.sport || 'nhl').toLowerCase();
@@ -378,6 +383,28 @@ function GameCard({ game, section, medal }) {
           )}
           {bestPickConf != null && (
             <span className="dc-best-pick-conf">{Math.round(bestPickConf)}%</span>
+          )}
+          {bestPick?.prediction_id && (
+            <button
+              className={`dc-track-btn ${tracked ? 'dc-track-btn-tracked' : ''}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (tracked || tracking) return;
+                setTracking(true);
+                trackBet(bestPick.prediction_id)
+                  .then(() => { setTracked(true); })
+                  .catch((err) => {
+                    if (err?.response?.status === 409) setTracked(true);
+                    else console.error('Track failed:', err);
+                  })
+                  .finally(() => setTracking(false));
+              }}
+              disabled={tracked || tracking}
+              title={tracked ? 'Already tracked' : 'Track this bet'}
+            >
+              {tracked ? <Check size={12} /> : <Plus size={12} />}
+              {tracked ? 'Tracked' : 'Track'}
+            </button>
           )}
         </div>
       )}

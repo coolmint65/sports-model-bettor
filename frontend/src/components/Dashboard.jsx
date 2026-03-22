@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
-import { Calendar, CheckCircle, Layers, Radio, RefreshCw, Target } from 'lucide-react';
+import { Calendar, CheckCircle, Radio, RefreshCw } from 'lucide-react';
 import { format } from 'date-fns';
 import GameCard from './GameCard';
-import { fetchTodaySchedule, fetchLiveGames, regeneratePredictions, fetchTodayParlays } from '../utils/api';
+import { fetchTodaySchedule, fetchLiveGames, regeneratePredictions } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import { useWebSocketEvent } from '../hooks/useWebSocket';
 import { isLiveStatus, confidencePct, parseAsUTC } from '../utils/teams';
@@ -23,9 +23,6 @@ function Dashboard() {
     error: scheduleError,
     silentRefetch,
   } = useApi(fetchSchedule);
-
-  const fetchParlays = useCallback(() => fetchTodayParlays(currentSport), [currentSport]);
-  const { data: parlayData } = useApi(fetchParlays);
 
   const [liveGames, setLiveGames] = useState([]);
   const [regenerating, setRegenerating] = useState(false);
@@ -266,78 +263,6 @@ function Dashboard() {
           )}
         </div>
       </div>
-
-      {/* Parlays Section */}
-      {(parlayData?.two_leg || parlayData?.three_leg) && (
-        <section className="section parlays-section">
-          <div className="section-header">
-            <h2 className="section-title parlays-title">
-              <Layers size={20} />
-              Top Parlays
-            </h2>
-          </div>
-          <div className="parlays-grid">
-            {parlayData.two_leg && (
-              <div className="parlay-card">
-                <div className="parlay-card-header">
-                  <span className="parlay-legs-badge">2-Leg Parlay</span>
-                  {parlayData.two_leg.combined_odds != null && (
-                    <span className="parlay-combined-odds">
-                      {parlayData.two_leg.combined_odds > 0 ? '+' : ''}{parlayData.two_leg.combined_odds}
-                    </span>
-                  )}
-                </div>
-                <div className="parlay-legs">
-                  {parlayData.two_leg.legs.map((leg, i) => (
-                    <div key={i} className="parlay-leg">
-                      <div className="parlay-leg-top">
-                        <Target size={13} />
-                        <span className="parlay-leg-label">{leg.label}</span>
-                        <span className="parlay-leg-odds">
-                          {leg.odds > 0 ? '+' : ''}{leg.odds}
-                        </span>
-                      </div>
-                      <div className="parlay-leg-meta">
-                        <span className="parlay-leg-matchup">{leg.matchup}</span>
-                        <span className="parlay-leg-conf">{Math.round((leg.confidence > 1 ? leg.confidence : leg.confidence * 100))}%</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            {parlayData.three_leg && (
-              <div className="parlay-card">
-                <div className="parlay-card-header">
-                  <span className="parlay-legs-badge">3-Leg Parlay</span>
-                  {parlayData.three_leg.combined_odds != null && (
-                    <span className="parlay-combined-odds">
-                      {parlayData.three_leg.combined_odds > 0 ? '+' : ''}{parlayData.three_leg.combined_odds}
-                    </span>
-                  )}
-                </div>
-                <div className="parlay-legs">
-                  {parlayData.three_leg.legs.map((leg, i) => (
-                    <div key={i} className="parlay-leg">
-                      <div className="parlay-leg-top">
-                        <Target size={13} />
-                        <span className="parlay-leg-label">{leg.label}</span>
-                        <span className="parlay-leg-odds">
-                          {leg.odds > 0 ? '+' : ''}{leg.odds}
-                        </span>
-                      </div>
-                      <div className="parlay-leg-meta">
-                        <span className="parlay-leg-matchup">{leg.matchup}</span>
-                        <span className="parlay-leg-conf">{Math.round((leg.confidence > 1 ? leg.confidence : leg.confidence * 100))}%</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        </section>
-      )}
 
       {/* Live Games Section */}
       {allLive.length > 0 && (

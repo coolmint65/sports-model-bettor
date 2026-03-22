@@ -23,6 +23,8 @@ Supported markets:
   - player_points: compare avg points vs line
   - player_assists: compare avg assists vs line
   - player_total_saves: compare avg saves vs line
+  - player_rebounds (REB): compare avg rebounds vs line (NBA)
+  - player_threes (3PM): compare avg 3-pointers made vs line (NBA)
 """
 
 import logging
@@ -498,6 +500,12 @@ async def _get_opponent_defensive_factor(
     )
     ts = result.scalar_one_or_none()
 
+    # NBA league averages for opponent quality
+    NBA_AVG_REB_PG = 44.0
+    NBA_AVG_3PM_PG = 13.0
+    NBA_AVG_PTS_PG = 114.0
+    NBA_AVG_AST_PG = 26.0
+
     factor = 1.0
     if ts:
         if market == "player_shots_on_goal" and ts.shots_against_per_game:
@@ -506,8 +514,20 @@ async def _get_opponent_defensive_factor(
         elif market == "player_total_saves" and ts.shots_for_per_game:
             # More shots by opponent = more saves needed
             factor = ts.shots_for_per_game / LEAGUE_AVG_SA_PG
+        elif market == "player_rebounds" and getattr(ts, "rebounds_per_game", None):
+            # NBA rebounds: opponent rebounds allowed as quality signal
+            factor = ts.rebounds_per_game / NBA_AVG_REB_PG
+        elif market == "player_threes" and getattr(ts, "opp_three_pt_pct", None):
+            # NBA threes: opponent 3PT% allowed
+            # Higher opp_three_pt_pct = weaker perimeter defense
+            factor = ts.opp_three_pt_pct / 0.36 if ts.opp_three_pt_pct else 1.0
+        elif market == "player_points" and getattr(ts, "defensive_rating", None):
+            # NBA points: use defensive rating if available (higher = worse defense)
+            factor = ts.defensive_rating / 112.0 if ts.defensive_rating else 1.0
+        elif market == "player_assists" and getattr(ts, "assists_per_game", None):
+            factor = ts.assists_per_game / NBA_AVG_AST_PG
         elif ts.goals_against_per_game:
-            # Scoring props: goals, points, assists
+            # Scoring props: goals, points, assists (NHL fallback)
             factor = ts.goals_against_per_game / LEAGUE_AVG_GA_PG
 
         # Cap the adjustment
@@ -875,6 +895,7 @@ def _build_supplementary_reasoning(
     """Build extra reasoning from underused stat fields.
 
     Adds context about PP production, physical play, etc.
+    Handles both NHL and NBA stat fields safely.
     """
     if not game_stats:
         return ""
@@ -882,25 +903,48 @@ def _build_supplementary_reasoning(
     games = len(game_stats)
     parts = []
 
-    # Power play production
-    total_pp_goals = sum(g.pp_goals for g in game_stats)
-    if total_pp_goals > 0:
-        pp_rate = total_pp_goals / games
-        parts.append(f"PP goals: {pp_rate:.2f}/game")
+    # NBA-specific supplementary reasoning
+    if market in ("player_rebounds", "player_threes"):
+        if market == "player_rebounds":
+            steals = [g.steals for g in game_stats if g.steals is not None]
+            if steals:
+                stl_rate = sum(steals) / len(steals)
+                if stl_rate >= 1.0:
+                    parts.append(f"active hands ({stl_rate:.1f} steals/game)")
+        elif market == "player_threes":
+            pts = [g.points for g in game_stats if g.points is not None]
+            if pts:
+                pts_rate = sum(pts) / len(pts)
+                parts.append(f"{pts_rate:.1f} pts/game")
+        if not parts:
+            return ""
+        return " | " + ", ".join(parts)
 
-    # For scoring/shooting props, hits and blocks show engagement
+    # Power play production (NHL)
+    pp_goals_values = [g.pp_goals for g in game_stats if getattr(g, "pp_goals", None) is not None]
+    if pp_goals_values:
+        total_pp_goals = sum(pp_goals_values)
+        if total_pp_goals > 0:
+            pp_rate = total_pp_goals / games
+            parts.append(f"PP goals: {pp_rate:.2f}/game")
+
+    # For scoring/shooting props, hits and blocks show engagement (NHL)
     if market in ("player_shots_on_goal", "player_points", "player_goal_scorer_anytime"):
-        total_hits = sum(g.hits for g in game_stats)
-        if total_hits > 0:
-            hit_rate = total_hits / games
-            if hit_rate >= 2.0:
-                parts.append(f"physical ({hit_rate:.1f} hits/game)")
+        hits_values = [g.hits for g in game_stats if getattr(g, "hits", None) is not None]
+        if hits_values:
+            total_hits = sum(hits_values)
+            if total_hits > 0:
+                hit_rate = total_hits / games
+                if hit_rate >= 2.0:
+                    parts.append(f"physical ({hit_rate:.1f} hits/game)")
 
-        total_blocks = sum(g.blocked_shots for g in game_stats)
-        if total_blocks > 0:
-            block_rate = total_blocks / games
-            if block_rate >= 1.5:
-                parts.append(f"active defensively ({block_rate:.1f} blocks/game)")
+        blocks_values = [g.blocked_shots for g in game_stats if getattr(g, "blocked_shots", None) is not None]
+        if blocks_values:
+            total_blocks = sum(blocks_values)
+            if total_blocks > 0:
+                block_rate = total_blocks / games
+                if block_rate >= 1.5:
+                    parts.append(f"active defensively ({block_rate:.1f} blocks/game)")
 
     if not parts:
         return ""
@@ -1187,6 +1231,8 @@ def _analyze_over_under(
         "player_points": "points",
         "player_assists": "assists",
         "player_total_saves": "saves",
+        "player_rebounds": "rebounds",
+        "player_threes": "3PM",
     }.get(market, "stat")
 
     # Build reasoning with all factors
@@ -1248,6 +1294,8 @@ def _analyze_over_under(
 # Position groups for player disambiguation
 _FORWARD_POSITIONS = {"C", "LW", "RW", "F"}
 _SKATER_POSITIONS = {"C", "LW", "RW", "F", "D"}
+# NBA positions
+_NBA_POSITIONS = {"PG", "SG", "SF", "PF", "C", "G", "F"}
 
 
 def _disambiguate_player(candidates: List[Player], market: str) -> Player:
@@ -1267,6 +1315,18 @@ def _disambiguate_player(candidates: List[Player], market: str) -> Player:
         goalies = [p for p in candidates if (p.position or "").upper() == "G"]
         if goalies:
             return goalies[0]
+
+    # NBA markets — prefer any NBA position
+    if market in (
+        "player_rebounds",
+        "player_threes",
+    ):
+        nba_players = [
+            p for p in candidates
+            if (p.position or "").upper() in _NBA_POSITIONS
+        ]
+        if nba_players:
+            return nba_players[0]
 
     # Scoring / shooting props — prefer forwards over D
     if market in (
@@ -1556,6 +1616,90 @@ async def generate_prop_picks(
             pick = _analyze_over_under(
                 prop.player_name, player.id, prop, stats, market,
                 lambda g: g.assists, matchup,
+                ctx=game_ctx, injury_status=player_injury,
+                player_team_id=player_team_id,
+            )
+            if pick:
+                picks.append(pick)
+
+        elif market == "player_rebounds":
+            # NBA rebounds prop
+            if player.id not in skater_stats_cache:
+                skater_stats_cache[player.id] = await _get_skater_game_stats(
+                    session, player.id, player_team_id,
+                    exclude_game_id=game_id,
+                )
+            stats = skater_stats_cache[player.id]
+            # Filter to stats that have rebounds data (NBA games only)
+            stats = [s for s in stats if s.rebounds is not None]
+
+            days_rest = _compute_rest_days(stats, game.date) if stats else None
+            game_ctx = GameContext(
+                is_home=is_home,
+                days_rest=days_rest,
+                is_back_to_back=(days_rest is not None and days_rest <= 1),
+                opp_defensive_factor=opp_factor,
+                opp_abbrev=opponent_abbrev,
+            )
+
+            matchup = None
+            if opponent_team_id and stats:
+                vs_stats = await _get_skater_vs_opponent_stats(
+                    session, player.id, player_team_id, opponent_team_id,
+                )
+                vs_stats = [s for s in vs_stats if s.rebounds is not None]
+                if len(vs_stats) >= MIN_MATCHUP_GAMES:
+                    overall_rate = sum(s.rebounds for s in stats) / len(stats)
+                    matchup = _compute_matchup_adjustment(
+                        overall_rate, vs_stats, lambda g: g.rebounds,
+                        opponent_team_id, opponent_abbrev,
+                    )
+
+            pick = _analyze_over_under(
+                prop.player_name, player.id, prop, stats, market,
+                lambda g: g.rebounds, matchup,
+                ctx=game_ctx, injury_status=player_injury,
+                player_team_id=player_team_id,
+            )
+            if pick:
+                picks.append(pick)
+
+        elif market == "player_threes":
+            # NBA three-pointers made prop
+            if player.id not in skater_stats_cache:
+                skater_stats_cache[player.id] = await _get_skater_game_stats(
+                    session, player.id, player_team_id,
+                    exclude_game_id=game_id,
+                )
+            stats = skater_stats_cache[player.id]
+            # Filter to stats that have three-pointer data (NBA games only)
+            stats = [s for s in stats if s.three_pointers_made is not None]
+
+            days_rest = _compute_rest_days(stats, game.date) if stats else None
+            game_ctx = GameContext(
+                is_home=is_home,
+                days_rest=days_rest,
+                is_back_to_back=(days_rest is not None and days_rest <= 1),
+                opp_defensive_factor=opp_factor,
+                opp_abbrev=opponent_abbrev,
+            )
+
+            matchup = None
+            if opponent_team_id and stats:
+                vs_stats = await _get_skater_vs_opponent_stats(
+                    session, player.id, player_team_id, opponent_team_id,
+                )
+                vs_stats = [s for s in vs_stats if s.three_pointers_made is not None]
+                if len(vs_stats) >= MIN_MATCHUP_GAMES:
+                    overall_rate = sum(s.three_pointers_made for s in stats) / len(stats)
+                    matchup = _compute_matchup_adjustment(
+                        overall_rate, vs_stats, lambda g: g.three_pointers_made,
+                        opponent_team_id, opponent_abbrev,
+                    )
+
+            pick = _analyze_over_under(
+                prop.player_name, player.id, prop, stats, market,
+                lambda g: g.three_pointers_made, matchup,
                 ctx=game_ctx, injury_status=player_injury,
                 player_team_id=player_team_id,
             )

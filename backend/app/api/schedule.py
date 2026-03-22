@@ -186,6 +186,36 @@ def _build_team_brief(team: Team, stats: Optional[TeamStats] = None) -> TeamBrie
 def _build_game_odds(game: Game) -> Optional[GameOdds]:
     if game.home_moneyline is None and game.away_moneyline is None:
         return None
+
+    hsp = game.home_spread_price
+    asp = game.away_spread_price
+    hsl = game.home_spread_line
+
+    # Fall back to all_spread_lines data when primary spread prices are missing
+    if (hsp is None or asp is None) and game.all_spread_lines:
+        try:
+            alt_lines = game.all_spread_lines if isinstance(game.all_spread_lines, list) else []
+            target_line = abs(hsl) if hsl is not None else 1.5
+            for alt in alt_lines:
+                alt_line = abs(alt.get("line", alt.get("home_spread", 0)))
+                if abs(alt_line - target_line) < 0.01:
+                    if hsp is None and alt.get("home_price") is not None:
+                        hsp = alt["home_price"]
+                    if asp is None and alt.get("away_price") is not None:
+                        asp = alt["away_price"]
+                    break
+        except Exception:
+            pass
+
+    # Sanity check: ensure spread prices match spread direction.
+    # Negative spread (favorite) → positive price; positive spread (underdog) → negative price.
+    # If swapped, correct them in the API response.
+    if hsl is not None and hsp is not None and asp is not None:
+        if hsl < 0 and hsp < 0 and asp > 0:
+            hsp, asp = asp, hsp
+        elif hsl > 0 and hsp > 0 and asp < 0:
+            hsp, asp = asp, hsp
+
     return GameOdds(
         home_moneyline=game.home_moneyline,
         away_moneyline=game.away_moneyline,
@@ -194,8 +224,8 @@ def _build_game_odds(game: Game) -> Optional[GameOdds]:
         under_price=game.under_price,
         home_spread_line=game.home_spread_line,
         away_spread_line=game.away_spread_line,
-        home_spread_price=game.home_spread_price,
-        away_spread_price=game.away_spread_price,
+        home_spread_price=hsp,
+        away_spread_price=asp,
         odds_updated_at=serialize_utc_datetime(game.odds_updated_at),
     )
 
@@ -263,7 +293,13 @@ def _build_schedule_game(
 
 
 def _pick_odds_display(pred: Prediction, game: Optional[Game]) -> Optional[float]:
-    """Extract the American odds for the specific pick from the game's odds."""
+    """Extract the American odds for the specific pick from the game's odds.
+
+    For spreads, validates that the price matches the spread direction:
+    - Negative spread (favorite, e.g. -1.5) → positive price (hard to cover)
+    - Positive spread (underdog, e.g. +1.5) → negative price (easy to cover)
+    If the prices are swapped, returns the opposite side's price.
+    """
     if game is None:
         return None
     bt = pred.bet_type
@@ -287,10 +323,31 @@ def _pick_odds_display(pred: Prediction, game: Optional[Game]) -> Optional[float
         if "under" in val:
             return game.under_price
     elif bt == "spread":
-        if val.startswith("home") or (home_abbr and val.startswith(home_abbr)):
-            return game.home_spread_price
-        if val.startswith("away") or (away_abbr and val.startswith(away_abbr)):
-            return game.away_spread_price
+        is_home_pick = val.startswith("home") or (home_abbr and val.startswith(home_abbr))
+        if is_home_pick:
+            price = game.home_spread_price
+            alt_price = game.away_spread_price
+            line = game.home_spread_line
+        elif val.startswith("away") or (away_abbr and val.startswith(away_abbr)):
+            price = game.away_spread_price
+            alt_price = game.home_spread_price
+            line = game.away_spread_line
+        else:
+            return None
+
+        # Sanity check: spread direction must match price sign.
+        # Negative spread (favorite) should have positive price;
+        # Positive spread (underdog) should have negative price.
+        if (
+            line is not None
+            and price is not None
+            and alt_price is not None
+        ):
+            if line < 0 and price < 0 and alt_price > 0:
+                return alt_price
+            if line > 0 and price > 0 and alt_price < 0:
+                return alt_price
+        return price
     return None
 
 
