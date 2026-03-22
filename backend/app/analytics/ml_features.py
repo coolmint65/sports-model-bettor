@@ -182,6 +182,10 @@ def _extract_ot(features: Dict[str, Any], prefix: str) -> Dict[str, float]:
     return {
         f"{tag}_pct": _safe_float(ot.get("ot_pct")),
         f"{tag}_win_rate": _safe_float(ot.get("ot_win_rate")),
+        f"{tag}_so_pct": _safe_float(ot.get("so_pct")),
+        f"{tag}_ot_only_win_rate": _safe_float(ot.get("ot_only_win_rate")),
+        f"{tag}_so_win_rate": _safe_float(ot.get("so_win_rate")),
+        f"{tag}_one_goal_pct": _safe_float(ot.get("one_goal_pct")),
     }
 
 

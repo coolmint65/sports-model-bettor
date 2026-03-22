@@ -1096,19 +1096,35 @@ class BettingModel:
             if 4.0 <= alt_line <= 9.0:
                 eval_lines.add(self._normalize_total_line(alt_line))
 
+        # OT scoring adjustment.
+        # The score matrix models regulation only. When a game ties in
+        # regulation (~23% of NHL games), OT/SO adds exactly 1 goal to
+        # the total. We split the tie probability mass: for each tied
+        # score (i, i), the total becomes 2i+1 instead of 2i.
+        p_reg_tie = sum(matrix[i][i] for i in range(max_g + 1))
+
         lines = {}
         for line in sorted(eval_lines):
             over_prob = 0.0
             under_prob = 0.0
-            # For .5 lines: int(5.5)=5, over means total>5 i.e. >=6. Correct.
             threshold = int(line)
             for i in range(max_g + 1):
                 for j in range(max_g + 1):
-                    total = i + j
-                    if total > threshold:
-                        over_prob += matrix[i][j]
+                    p = matrix[i][j]
+                    if i == j:
+                        # Regulation tie: game goes to OT/SO, adding 1 goal.
+                        # Regulation total = 2i, final total = 2i + 1.
+                        ot_total = i + j + 1
+                        if ot_total > threshold:
+                            over_prob += p
+                        else:
+                            under_prob += p
                     else:
-                        under_prob += matrix[i][j]
+                        total = i + j
+                        if total > threshold:
+                            over_prob += p
+                        else:
+                            under_prob += p
 
             lines[f"over_{line}"] = round(over_prob, 4)
             lines[f"under_{line}"] = round(under_prob, 4)
@@ -1235,6 +1251,13 @@ class BettingModel:
             if line_val < 2.5:
                 eval_spread_lines.add(line_val)
 
+        # OT/SO-aware spread adjustment.
+        # OT/SO games always end with a 1-goal margin, so:
+        # - A team at -1.5 can NEVER cover in OT (must win in regulation by 2+)
+        # - A team at +1.5 ALWAYS covers in OT (loser loses by exactly 1)
+        # We compute P(regulation tie) and redistribute it accordingly.
+        p_reg_tie = sum(matrix[i][i] for i in range(max_g + 1))
+
         # Calculate spread probabilities for each line
         spreads = {}
         for spread_val in sorted(eval_spread_lines):
@@ -1242,11 +1265,32 @@ class BettingModel:
             away_minus = 0.0  # P(away wins by spread_val+): margin < -spread_val
             for i in range(max_g + 1):
                 for j in range(max_g + 1):
+                    if i == j:
+                        continue  # handle ties separately via OT logic
                     m = i - j
                     if m > spread_val:
                         home_minus += matrix[i][j]
                     if m < -spread_val:
                         away_minus += matrix[i][j]
+
+            # For half-goal spreads (e.g. 1.5), OT games (1-goal margin)
+            # never cover the minus side but always cover the plus side.
+            if spread_val >= 1.5:
+                # OT winner wins by exactly 1 → doesn't cover -1.5
+                # OT loser loses by exactly 1 → covers +1.5
+                # No adjustment to home_minus/away_minus needed (ties excluded above)
+                pass
+            else:
+                # For spread_val < 1.5 (e.g. 0.5 alternate puck line),
+                # OT winners DO cover, so add their share of the tie prob.
+                home_ot = features.get("home_ot", {})
+                away_ot = features.get("away_ot", {})
+                home_ot_wr = home_ot.get("ot_win_rate", 0.52)
+                away_ot_wr = away_ot.get("ot_win_rate", 0.48)
+                ot_total = home_ot_wr + away_ot_wr
+                home_ot_share = home_ot_wr / ot_total if ot_total > 0 else 0.52
+                home_minus += p_reg_tie * home_ot_share
+                away_minus += p_reg_tie * (1.0 - home_ot_share)
 
             spreads[f"home_-{spread_val}"] = round(home_minus, 4)
             spreads[f"home_+{spread_val}"] = round(1.0 - away_minus, 4)

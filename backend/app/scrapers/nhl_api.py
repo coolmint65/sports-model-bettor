@@ -816,6 +816,8 @@ class NHLScraper(BaseScraper):
                     period_num is not None and period_num > 3
                 ):
                     game.went_to_overtime = True
+                    if period_type == "SO":
+                        game.ended_in_shootout = True
                     logger.info(
                         "Inferred OT=True for game %s from schedule "
                         "(period=%s, type=%s)",
@@ -823,6 +825,7 @@ class NHLScraper(BaseScraper):
                     )
                 elif period_num is not None and period_num <= 3:
                     game.went_to_overtime = False
+                    game.ended_in_shootout = False
 
             games.append(game)
 
@@ -919,6 +922,7 @@ class NHLScraper(BaseScraper):
         ot_home_total = 0
         ot_away_total = 0
         went_to_ot = False
+        ended_in_so = False
 
         # Only reset period columns when the API actually provides
         # period data.  Without this guard, games whose boxscore
@@ -951,6 +955,8 @@ class NHLScraper(BaseScraper):
                 ot_home_total += home_p
                 ot_away_total += away_p
                 went_to_ot = True
+                if period_type == "SO":
+                    ended_in_so = True
             elif period_num == 1:
                 game.home_score_p1 = home_p
                 game.away_score_p1 = away_p
@@ -972,8 +978,11 @@ class NHLScraper(BaseScraper):
             ).upper()
             if last_period_type in ("OT", "SO"):
                 went_to_ot = True
+                if last_period_type == "SO":
+                    ended_in_so = True
 
         game.went_to_overtime = went_to_ot
+        game.ended_in_shootout = ended_in_so
 
         # -- Shots on goal --
         home_shots = self.safe_get(boxscore, "homeTeam", "sog")

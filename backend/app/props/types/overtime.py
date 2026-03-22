@@ -24,6 +24,9 @@ class OvertimeProp(BaseProp):
     MATRIX_WEIGHT = 0.7
     HISTORY_WEIGHT = 0.3
 
+    # Additional weight for close-game tendency signal
+    CLOSE_GAME_WEIGHT = 0.15
+
     def predict(
         self,
         features: Dict[str, Any],
@@ -35,11 +38,13 @@ class OvertimeProp(BaseProp):
         # P(regulation tie) from score matrix = diagonal sum
         p_tie_matrix = sum(matrix[i][i] for i in range(n))
 
-        # Blend with historical OT tendency
+        # Blend with historical OT tendency and close-game tendency
         home_ot = features.get("home_ot", {})
         away_ot = features.get("away_ot", {})
         home_ot_pct = home_ot.get("ot_pct", 0.0)
         away_ot_pct = away_ot.get("ot_pct", 0.0)
+        home_close = home_ot.get("one_goal_pct", 0.0)
+        away_close = away_ot.get("one_goal_pct", 0.0)
 
         has_history = (
             home_ot.get("games_found", 0) >= 5
@@ -48,9 +53,15 @@ class OvertimeProp(BaseProp):
 
         if has_history:
             avg_ot_pct = (home_ot_pct + away_ot_pct) / 2
+            avg_close = (home_close + away_close) / 2
+            # Close-game % correlates with OT likelihood — teams that play
+            # tight games reach OT more often. Use it as a third signal.
+            matrix_w = self.MATRIX_WEIGHT - self.CLOSE_GAME_WEIGHT / 2
+            history_w = self.HISTORY_WEIGHT - self.CLOSE_GAME_WEIGHT / 2
             p_ot = (
-                self.MATRIX_WEIGHT * p_tie_matrix
-                + self.HISTORY_WEIGHT * avg_ot_pct
+                matrix_w * p_tie_matrix
+                + history_w * avg_ot_pct
+                + self.CLOSE_GAME_WEIGHT * avg_close
             )
         else:
             p_ot = p_tie_matrix
@@ -62,6 +73,7 @@ class OvertimeProp(BaseProp):
         if has_history:
             reasoning_parts.append(
                 f", team OT rates: {home_ot_pct:.1%}/{away_ot_pct:.1%}"
+                f", close-game: {avg_close:.1%}"
             )
         reasoning_parts.append(
             f"). xG {home_xg:.2f}-{away_xg:.2f} for "
@@ -87,13 +99,8 @@ class OvertimeProp(BaseProp):
         odds_data: Dict[str, Any],
     ) -> List[Dict[str, Any]]:
         for c in candidates:
-            price = odds_data.get("ot_yes_price")
-            if price is not None:
-                c["odds"] = price
-                c["implied_probability"] = round(self._american_to_prob(price), 4)
-            else:
-                c["odds"] = None
-                c["implied_probability"] = None
+            c["odds"] = None
+            c["implied_probability"] = None
         return candidates
 
     def grade(

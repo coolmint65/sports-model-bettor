@@ -112,6 +112,9 @@ class Game(TimestampMixin, Base):
     went_to_overtime: Mapped[Optional[bool]] = mapped_column(
         Boolean, nullable=True, default=False
     )
+    ended_in_shootout: Mapped[Optional[bool]] = mapped_column(
+        Boolean, nullable=True, default=False
+    )
     first_goal_team_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("team.id"), nullable=True
     )

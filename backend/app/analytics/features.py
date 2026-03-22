@@ -656,10 +656,21 @@ class FeatureEngine:
         last_n: int = 30,
     ) -> Dict[str, Any]:
         """
-        Calculate how often a team's games go to overtime and their OT win rate.
+        Calculate detailed overtime and shootout tendencies for a team.
+
+        Tracks OT frequency, OT-vs-SO breakdown, win rates in each format,
+        and how often the team plays close (1-goal) games that are OT-prone.
 
         Returns:
-            dict with keys: ot_pct, ot_win_rate, games_found.
+            dict with keys:
+              ot_pct          – fraction of games reaching OT/SO
+              ot_win_rate     – overall win rate in OT/SO games
+              so_pct          – fraction of OT games that went to shootout
+              ot_only_win_rate – win rate in 5-on-5 overtime (excl. SO)
+              so_win_rate     – win rate in shootout games
+              one_goal_pct    – fraction of games decided by 0-1 goals in
+                                regulation (proxy for "close game" tendency)
+              games_found     – sample size
         """
         cached = get_cached_feature("overtime_tendency", team_id, last_n)
         if cached is not None:
@@ -668,27 +679,69 @@ class FeatureEngine:
         games = await self._get_recent_games(db, team_id, last_n)
 
         if not games:
-            return {"ot_pct": 0.0, "ot_win_rate": 0.5, "games_found": 0}
+            return {
+                "ot_pct": 0.0,
+                "ot_win_rate": 0.5,
+                "so_pct": 0.0,
+                "ot_only_win_rate": 0.5,
+                "so_win_rate": 0.5,
+                "one_goal_pct": 0.0,
+                "games_found": 0,
+            }
 
         total = len(games)
         ot_games = 0
         ot_wins = 0
+        so_games = 0
+        so_wins = 0
+        ot_only_games = 0
+        ot_only_wins = 0
+        one_goal_games = 0
 
         for game in games:
+            is_home = game.home_team_id == team_id
+            gf = game.home_score if is_home else game.away_score
+            ga = game.away_score if is_home else game.home_score
+            won = gf is not None and ga is not None and gf > ga
+
+            # Close-game tendency: regulation margin of 0 or 1 goal.
+            # For OT games the regulation score was tied (margin=0).
+            # For regulation wins/losses, check if margin was exactly 1.
+            if game.went_to_overtime:
+                one_goal_games += 1  # tied in regulation → 0-goal margin
+            elif gf is not None and ga is not None and abs(gf - ga) == 1:
+                one_goal_games += 1
+
             if game.went_to_overtime:
                 ot_games += 1
-                is_home = game.home_team_id == team_id
-                gf = game.home_score if is_home else game.away_score
-                ga = game.away_score if is_home else game.home_score
-                if gf is not None and ga is not None and gf > ga:
+                if won:
                     ot_wins += 1
+
+                if getattr(game, "ended_in_shootout", None):
+                    so_games += 1
+                    if won:
+                        so_wins += 1
+                else:
+                    ot_only_games += 1
+                    if won:
+                        ot_only_wins += 1
 
         ot_pct = round(ot_games / total, 4) if total > 0 else 0.0
         ot_win_rate = round(ot_wins / ot_games, 4) if ot_games > 0 else 0.5
+        so_pct = round(so_games / ot_games, 4) if ot_games > 0 else 0.0
+        ot_only_win_rate = (
+            round(ot_only_wins / ot_only_games, 4) if ot_only_games > 0 else 0.5
+        )
+        so_win_rate = round(so_wins / so_games, 4) if so_games > 0 else 0.5
+        one_goal_pct = round(one_goal_games / total, 4) if total > 0 else 0.0
 
         result = {
             "ot_pct": ot_pct,
             "ot_win_rate": ot_win_rate,
+            "so_pct": so_pct,
+            "ot_only_win_rate": ot_only_win_rate,
+            "so_win_rate": so_win_rate,
+            "one_goal_pct": one_goal_pct,
             "games_found": total,
         }
         set_cached_feature("overtime_tendency", team_id, last_n, data=result)
@@ -3401,8 +3454,6 @@ class FeatureEngine:
                 "btts_no_price": getattr(game, "btts_no_price", None),
                 "first_goal_home_price": getattr(game, "first_goal_home_price", None),
                 "first_goal_away_price": getattr(game, "first_goal_away_price", None),
-                "ot_yes_price": getattr(game, "overtime_yes_price", None),
-                "ot_no_price": getattr(game, "overtime_no_price", None),
                 "reg_home_price": getattr(game, "reg_home_price", None),
                 "reg_away_price": getattr(game, "reg_away_price", None),
                 "reg_draw_price": getattr(game, "reg_draw_price", None),
