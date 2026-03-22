@@ -608,13 +608,13 @@ class SignalGenerator:
                 signals.append(_signal(
                     "matchup",
                     f"H2H games average {h2h_avg_total:.1f} goals | high-scoring matchup",
-                    "neutral", "", 0.35,
+                    "over", "", 0.35,
                 ))
             elif h2h_avg_total <= 4.5:
                 signals.append(_signal(
                     "matchup",
                     f"H2H games average {h2h_avg_total:.1f} goals | low-scoring matchup",
-                    "neutral", "", 0.35,
+                    "under", "", 0.35,
                 ))
 
         # PDO regression
@@ -1073,7 +1073,7 @@ class SignalGenerator:
             signals.append(_signal(
                 "pace",
                 f"High-tempo matchup: both teams play fast ({home_p:.0f} + {away_p:.0f} shots/game)",
-                "neutral", "",
+                "over", "",
                 0.55,
                 icon="fire",
                 tooltip="Both teams generate and allow high shot volume. When two fast-paced teams meet, total goals tend to exceed individual averages.",
@@ -1083,7 +1083,7 @@ class SignalGenerator:
             signals.append(_signal(
                 "pace",
                 f"Low-tempo matchup: both teams play slow ({home_p:.0f} + {away_p:.0f} shots/game)",
-                "neutral", "",
+                "under", "",
                 0.50,
                 icon="chart",
                 tooltip="Both teams suppress shot volume. When two defensive-minded teams meet, total goals tend to come in under individual averages.",
@@ -1729,7 +1729,7 @@ class SignalGenerator:
             signals.append(_signal(
                 "market",
                 ou_text,
-                "neutral", home_abbr,
+                ou_impact, "",
                 min(0.65, 0.30 + abs(ou_movement) * 0.3),
                 icon="activity",
                 tooltip=f"Over/under shifted {ou_movement:+.1f} goals from opening",
@@ -2049,14 +2049,14 @@ class SignalGenerator:
             signals.append(_signal(
                 "pace",
                 f"Fast-paced matchup (avg {matchup_pace:.0f} poss/game) favors the Over",
-                "positive", "", 0.55, icon="zap",
+                "over", "", 0.55, icon="zap",
                 tooltip=f"{home_name}: {home_pace:.0f} pace, {away_name}: {away_pace:.0f} pace, Lg avg: {league_pace:.0f}",
             ))
         elif pace_diff < -3:
             signals.append(_signal(
                 "pace",
                 f"Slow-paced matchup (avg {matchup_pace:.0f} poss/game) favors the Under",
-                "negative", "", 0.55, icon="timer",
+                "under", "", 0.55, icon="timer",
                 tooltip=f"{home_name}: {home_pace:.0f} pace, {away_name}: {away_pace:.0f} pace, Lg avg: {league_pace:.0f}",
             ))
 
@@ -2200,8 +2200,8 @@ class SignalGenerator:
                 signals.append(_signal(
                     "shooting",
                     f"Heavy 3PT volume matchup ({combined:.0f} combined 3PM/game)",
-                    "neutral", "", 0.40, icon="target",
-                    tooltip="High 3PT volume increases scoring variance",
+                    "over", "", 0.40, icon="target",
+                    tooltip="High 3PT volume increases scoring variance and favors the Over",
                 ))
 
         # FG% advantage

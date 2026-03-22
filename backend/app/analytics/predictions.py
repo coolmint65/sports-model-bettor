@@ -648,8 +648,23 @@ class PredictionManager:
         away_abbr_lower = features.get("away_team_abbr", "").lower()
 
         for pred in predictions:
-            pick_val = (pred.get("prediction") or "").lower()
+            pick_raw = (pred.get("prediction") or "").lower()
             bt = pred.get("bet_type", "")
+
+            # Extract the team abbreviation from the prediction value.
+            # ML predictions are just the abbr (e.g. "den") or "den (reg)".
+            # Spread predictions are "abbr_spread" (e.g. "den_-5.5").
+            # Totals are "over_line" / "under_line" (no team).
+            if bt == "spread":
+                pick_val = pick_raw.split("_")[0] if "_" in pick_raw else pick_raw
+            elif bt == "total":
+                pick_val = ""
+            elif bt == "ml":
+                # Handle "DEN (REG)" format — extract just the abbreviation
+                pick_val = pick_raw.split()[0] if pick_raw else pick_raw
+            else:
+                pick_val = pick_raw
+
             # Determine opponent for this pick
             if pick_val == home_abbr_lower:
                 opp_val = away_abbr_lower
@@ -660,6 +675,15 @@ class PredictionManager:
 
             # Collect signals relevant to this prediction
             relevant = []
+            # For totals, determine direction from prediction (e.g. "over_5.5")
+            totals_direction = ""
+            if bt == "total":
+                pred_str = (pred.get("prediction") or "").lower()
+                if pred_str.startswith("over"):
+                    totals_direction = "over"
+                elif pred_str.startswith("under"):
+                    totals_direction = "under"
+
             for sig in signals:
                 sig_team = (sig.get("team") or "").lower()
                 impact = sig.get("impact", "")
@@ -672,6 +696,14 @@ class PredictionManager:
                     elif sig_team == opp_val and impact == "negative":
                         include = True
                     elif sig_team == "":
+                        include = True
+                elif bt == "total":
+                    # For totals, only include direction-matched signals:
+                    # 1) "over"/"under" impact that matches our direction
+                    if impact == totals_direction:
+                        include = True
+                    # 2) Game-level neutral signals (H2H averages, etc.)
+                    elif impact == "neutral" and sig_team == "":
                         include = True
                 else:
                     include = True
