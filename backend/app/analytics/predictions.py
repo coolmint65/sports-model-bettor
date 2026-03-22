@@ -16,7 +16,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analytics.calibration import RollingCalibrator
 from app.analytics.features import FeatureEngine
+from app.analytics.kelly import (
+    check_drawdown_breaker,
+    check_streak_gate,
+    compute_recommended_units,
+    compute_expected_value,
+    get_current_exposure,
+)
 from app.analytics.models import BettingModel
+from app.analytics.season_phase import apply_season_thresholds, get_season_phase
 from app.analytics.signals import SignalGenerator
 from app.config import settings
 from app.constants import GAME_PREDICTABLE_STATUSES, MARKET_BET_TYPES, composite_pick_score
@@ -306,6 +314,90 @@ class PredictionManager:
                     removed,
                     ", ".join(sorted(gated_bet_types)),
                 )
+
+        # ---- Season phase adaptive thresholds ----
+        # Early-season data is noisier — require higher edge to bet.
+        try:
+            game_date = self._parse_date(target_date)
+            # Detect sport from first prediction (all games on a date are same sport)
+            sport = "nhl"
+            if all_predictions:
+                first_game_id = all_predictions[0].get("game_id")
+                if first_game_id:
+                    game_obj = await db.get(Game, first_game_id)
+                    if game_obj:
+                        sport = game_obj.sport or "nhl"
+
+            phase = get_season_phase(sport, game_date)
+            adjusted = apply_season_thresholds(
+                settings.min_edge, settings.min_confidence, phase
+            )
+            phase_min_edge = adjusted["min_edge"]
+            phase_min_conf = adjusted["min_confidence"]
+
+            # Re-filter candidates by season-adjusted thresholds
+            pre_phase_count = len(candidates)
+            candidates = [
+                c for c in candidates
+                if c["edge"] >= phase_min_edge and c["confidence"] >= phase_min_conf
+            ]
+            phase_removed = pre_phase_count - len(candidates)
+            if phase_removed > 0:
+                logger.info(
+                    "Season phase '%s' removed %d candidates "
+                    "(adjusted edge=%.3f, conf=%.3f)",
+                    phase.phase, phase_removed, phase_min_edge, phase_min_conf,
+                )
+        except Exception as phase_exc:
+            logger.warning("Season phase adjustment failed: %s", phase_exc)
+
+        # ---- Kelly sizing + bankroll management ----
+        try:
+            drawdown_active = await check_drawdown_breaker(db)
+            streak_active = await check_streak_gate(db)
+            current_exposure = await get_current_exposure(db)
+
+            for candidate in candidates:
+                odds = candidate.get("odds") or 0
+                if odds != 0 and candidate.get("confidence") and candidate.get("edge"):
+                    sizing = compute_recommended_units(
+                        confidence=candidate["confidence"],
+                        edge=candidate["edge"],
+                        odds=odds,
+                        bet_confidence=candidate.get("bet_confidence"),
+                        current_exposure=current_exposure,
+                        drawdown_active=drawdown_active,
+                        streak_active=streak_active,
+                    )
+                    candidate["recommended_units"] = sizing["recommended_units"]
+                    candidate["kelly_units"] = sizing["kelly_units"]
+                    candidate["sizing_method"] = sizing["sizing_method"]
+                    candidate["sizing_limiters"] = sizing["limiters"]
+
+                    # Compute EV for logging
+                    ev = compute_expected_value(
+                        candidate["confidence"], odds, sizing["recommended_units"]
+                    )
+                    candidate["expected_value"] = ev
+
+                    # Update exposure for next candidate
+                    current_exposure += sizing["recommended_units"]
+                else:
+                    candidate["recommended_units"] = 1.0
+                    candidate["kelly_units"] = 0.0
+                    candidate["sizing_method"] = "flat"
+                    candidate["sizing_limiters"] = []
+                    candidate["expected_value"] = 0.0
+
+            if drawdown_active:
+                logger.warning("Drawdown circuit breaker active — unit sizes reduced")
+            if streak_active:
+                logger.warning("Losing streak gate active — unit sizes reduced")
+        except Exception as kelly_exc:
+            logger.warning("Kelly sizing failed, using flat 1u: %s", kelly_exc)
+            for candidate in candidates:
+                candidate["recommended_units"] = 1.0
+                candidate["sizing_method"] = "flat_fallback"
 
         # Sort by composite score (confidence + edge + juice quality)
         candidates.sort(
@@ -719,6 +811,34 @@ class PredictionManager:
             if relevant:
                 pred["reasoning"] = "; ".join(relevant[:8])
 
+        # ---- Goalie sensitivity analysis (NHL only) ----
+        goalie_sensitivity = {}
+        if game.sport != "nba":
+            try:
+                from app.analytics.goalie_impact import analyze_goalie_sensitivity
+                goalie_sensitivity = analyze_goalie_sensitivity(
+                    features, self.model, sport=game.sport or "nhl"
+                )
+            except Exception as gs_exc:
+                logger.debug("Goalie sensitivity analysis failed: %s", gs_exc)
+
+        # ---- Data freshness check ----
+        data_freshness = {}
+        try:
+            from app.analytics.data_quality import check_data_freshness
+            data_freshness = check_data_freshness(
+                features, game_start_time=game.start_time
+            )
+            # If data is critically stale, add a note to reasoning
+            if data_freshness.get("recommendation") == "skip":
+                for pred in predictions:
+                    existing_reasoning = pred.get("reasoning", "")
+                    stale_note = "DATA STALE — predictions may be unreliable"
+                    if stale_note not in existing_reasoning:
+                        pred["reasoning"] = f"{stale_note}; {existing_reasoning}" if existing_reasoning else stale_note
+        except Exception as df_exc:
+            logger.debug("Data freshness check failed: %s", df_exc)
+
         # Build features summary — sport-aware
         fs = {
             "home_form_5_wr": features["home_form_5"]["win_rate"],
@@ -788,6 +908,8 @@ class PredictionManager:
             "top_pick": top_pick,
             "signals": signals,
             "features_summary": fs,
+            "goalie_sensitivity": goalie_sensitivity,
+            "data_freshness": data_freshness,
         }
 
     # ------------------------------------------------------------------ #

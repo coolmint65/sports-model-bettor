@@ -430,11 +430,24 @@ class BettingModel:
         adv_min_games = _mc.advanced_metrics_min_games
         possession_factor = _mc.unified_possession_factor
 
-        for cf_used, is_home in [
-            (self._get_best_cf(home_ev, home_close, home_advanced, adv_min_games), True),
-            (self._get_best_cf(away_ev, away_close, away_advanced, adv_min_games), False),
+        # Use opponent-adjusted CF% to account for schedule strength.
+        # Raw CF% is inflated against weak possession teams and deflated
+        # against strong ones. Adjusting for opponent quality reduces this noise.
+        from app.analytics.data_quality import compute_opponent_adjusted_cf
+
+        home_cf = self._get_best_cf(home_ev, home_close, home_advanced, adv_min_games)
+        away_cf = self._get_best_cf(away_ev, away_close, away_advanced, adv_min_games)
+
+        for cf_raw, opp_cf_raw, is_home in [
+            (home_cf, away_cf, True),
+            (away_cf, home_cf, False),
         ]:
-            if cf_used is not None:
+            if cf_raw is not None:
+                # Adjust for opponent quality when both are available
+                if opp_cf_raw is not None:
+                    cf_used = compute_opponent_adjusted_cf(cf_raw, opp_cf_raw)
+                else:
+                    cf_used = cf_raw
                 cf_deviation = (cf_used - 50.0) / 100.0
                 if is_home:
                     home_xg *= 1.0 + cf_deviation * possession_factor

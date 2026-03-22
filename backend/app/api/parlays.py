@@ -163,15 +163,18 @@ def _leg_from_prop(pick: Dict) -> Optional[Dict]:
 
 
 def _build_best_parlays(
-    all_legs: List[Dict], num_legs: int
+    all_legs: List[Dict], num_legs: int, sport: str = "nhl"
 ) -> Optional[Dict]:
     """Pick the single best N-leg parlay from available legs.
 
     Selection criteria:
     1. All legs must be from different games
-    2. Maximize minimum confidence across legs (weakest link)
-    3. Break ties by total composite score
+    2. Avoid highly correlated legs (e.g., ML + spread from same game)
+    3. Maximize minimum confidence across legs (weakest link)
+    4. Break ties by total composite score
     """
+    from app.analytics.correlation import adjust_parlay_probability, get_correlation
+
     if len(all_legs) < num_legs:
         return None
 
@@ -184,6 +187,27 @@ def _build_best_parlays(
         # All legs must be from different games
         game_ids = set(l["game_id"] for l in legs)
         if len(game_ids) < num_legs:
+            continue
+
+        # Skip parlays with highly correlated legs
+        has_high_corr = False
+        for i in range(len(legs)):
+            for j in range(i + 1, len(legs)):
+                same_game = legs[i]["game_id"] == legs[j]["game_id"]
+                corr = get_correlation(
+                    legs[i].get("bet_type", ""),
+                    legs[i].get("label", ""),
+                    legs[j].get("bet_type", ""),
+                    legs[j].get("label", ""),
+                    same_game=same_game,
+                    sport=sport,
+                )
+                if abs(corr) > 0.70:
+                    has_high_corr = True
+                    break
+            if has_high_corr:
+                break
+        if has_high_corr:
             continue
 
         min_conf = min(l["confidence"] for l in legs)
@@ -200,12 +224,25 @@ def _build_best_parlays(
         return None
 
     parlay_odds = _parlay_odds(best_parlay)
-    return {
+
+    # Run correlation analysis on the selected parlay
+    correlation_data = adjust_parlay_probability(best_parlay, sport=sport)
+
+    result = {
         "legs": best_parlay,
         "combined_odds": parlay_odds,
         "min_confidence": best_min_conf,
         "avg_confidence": sum(l["confidence"] for l in best_parlay) / len(best_parlay),
+        "correlation_analysis": {
+            "independent_prob": correlation_data["independent_prob"],
+            "correlated_prob": correlation_data["correlated_prob"],
+            "correlation_adjustment": correlation_data["correlation_adjustment"],
+            "has_high_correlation": correlation_data["has_high_correlation"],
+            "recommendation": correlation_data["recommendation"],
+            "pair_details": correlation_data["pair_correlations"],
+        },
     }
+    return result
 
 
 @router.get("/today")
@@ -321,8 +358,8 @@ async def get_todays_parlays(
     # Take top legs only (limit search space)
     top_legs = all_legs[:12]
 
-    two_leg = _build_best_parlays(top_legs, 2)
-    three_leg = _build_best_parlays(top_legs, 3)
+    two_leg = _build_best_parlays(top_legs, 2, sport=sport)
+    three_leg = _build_best_parlays(top_legs, 3, sport=sport)
 
     return {
         "two_leg": two_leg,
