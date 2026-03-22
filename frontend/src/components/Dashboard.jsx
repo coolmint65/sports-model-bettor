@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import { Calendar, CheckCircle, Radio, RefreshCw } from 'lucide-react';
 import { format } from 'date-fns';
 import GameCard from './GameCard';
+import ParlaysSection from './ParlaysSidebar';
 import { fetchTodaySchedule, fetchLiveGames, regeneratePredictions } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import { useWebSocketEvent } from '../hooks/useWebSocket';
@@ -326,6 +327,9 @@ function Dashboard() {
           </div>
         )}
       </section>
+
+      {/* Top Parlays — inline after prematch games */}
+      <ParlaysSection />
 
       {/* Final/Completed Games */}
       {finalGames.length > 0 && (

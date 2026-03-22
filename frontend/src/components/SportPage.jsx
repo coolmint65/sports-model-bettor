@@ -4,7 +4,6 @@ import { BarChart3, Clock as ClockIcon, Users } from 'lucide-react';
 import Dashboard from './Dashboard';
 import PlayerProps from './PlayerProps';
 import History from './History';
-import ParlaysSidebar from './ParlaysSidebar';
 
 const ALL_TABS = [
   { key: 'dashboard', label: 'Dashboard', icon: BarChart3 },
@@ -49,13 +48,10 @@ function SportPage() {
         })}
       </div>
 
-      <div className="sport-page-body">
-        <div className="sport-page-content">
-          {activeTab === 'dashboard' && <Dashboard />}
-          {activeTab === 'props' && <PlayerProps />}
-          {activeTab === 'history' && <History />}
-        </div>
-        <ParlaysSidebar />
+      <div className="sport-page-content">
+        {activeTab === 'dashboard' && <Dashboard />}
+        {activeTab === 'props' && <PlayerProps />}
+        {activeTab === 'history' && <History />}
       </div>
     </div>
   );

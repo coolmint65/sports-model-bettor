@@ -22,6 +22,7 @@ from app.config import settings
 from app.constants import GAME_FINAL_STATUSES, MARKET_BET_TYPES, composite_pick_score
 from app.database import get_session
 from app.models.game import Game
+from app.models.player import Player
 from app.models.prediction import Prediction
 from app.services.odds import american_to_implied, implied_to_american
 
@@ -148,6 +149,16 @@ def _leg_from_prop(pick: Dict) -> Optional[Dict]:
         "confidence": conf,
         "edge": edge,
         "score": score,
+        # Extra fields for player-prop card rendering
+        "player_name": player,
+        "market": market,
+        "pick_side": side,
+        "line": line,
+        "player_ext_id": pick.get("player_ext_id"),
+        "jersey_number": pick.get("jersey_number"),
+        "team_abbrev": pick.get("team_abbrev"),
+        "sport": pick.get("sport"),
+        "reasoning": pick.get("reasoning"),
     }
 
 
@@ -254,7 +265,9 @@ async def get_todays_parlays(
         from app.models.prop_pick_snapshot import PropPickSnapshot
 
         snaps_result = await session.execute(
-            select(PropPickSnapshot).where(
+            select(PropPickSnapshot)
+            .options(selectinload(PropPickSnapshot.player).selectinload(Player.team))
+            .where(
                 PropPickSnapshot.game_id.in_([g.id for g in games]),
                 PropPickSnapshot.edge >= 0.03,
                 PropPickSnapshot.confidence >= 0.55,
@@ -268,6 +281,17 @@ async def get_todays_parlays(
                 continue
             home_abbr = game.home_team.abbreviation if game.home_team else ""
             away_abbr = game.away_team.abbreviation if game.away_team else ""
+
+            # Pull player details for card rendering
+            player_ext_id = None
+            jersey_number = None
+            team_abbrev = None
+            if snap.player:
+                player_ext_id = snap.player.external_id
+                jersey_number = snap.player.jersey_number
+                if snap.player.team:
+                    team_abbrev = snap.player.team.abbreviation
+
             pick_dict = {
                 "game_id": snap.game_id,
                 "matchup": f"{away_abbr} @ {home_abbr}",
@@ -278,6 +302,11 @@ async def get_todays_parlays(
                 "odds": snap.odds,
                 "confidence": snap.confidence,
                 "edge": snap.edge,
+                "player_ext_id": player_ext_id,
+                "jersey_number": jersey_number,
+                "team_abbrev": team_abbrev or "",
+                "sport": sport,
+                "reasoning": snap.reasoning,
             }
             leg = _leg_from_prop(pick_dict)
             if leg:

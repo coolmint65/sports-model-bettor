@@ -536,7 +536,40 @@ a:hover {
   margin-bottom: 12px;
 }
 
-.parlay-legs-badge {
+/* ─── Inline Parlays Section ────────────────────────────── */
+.parlays-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent-green);
+}
+
+.parlays-inline-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+
+.parlay-inline-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  transition: border-color var(--transition-fast);
+}
+
+.parlay-inline-card:hover {
+  border-color: var(--accent-green-dim);
+}
+
+.parlay-inline-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.parlay-inline-legs-badge {
   font-size: 0.75rem;
   font-weight: 700;
   color: var(--accent-green);
@@ -546,132 +579,20 @@ a:hover {
   letter-spacing: 0.3px;
 }
 
-.parlay-combined-odds {
+.parlay-inline-combined-odds {
   font-size: 1rem;
   font-weight: 700;
   color: var(--accent-green);
   font-family: var(--font-mono);
 }
 
-.parlay-legs {
+.parlay-inline-legs {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 2px;
 }
 
-.parlay-leg {
-  background: var(--bg-elevated);
-  border-radius: var(--radius-sm);
-  padding: 10px 12px;
-  border-left: 3px solid var(--accent-green-dim);
-}
-
-.parlay-leg-top {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--text-primary);
-  font-weight: 600;
-  font-size: 0.85rem;
-}
-
-.parlay-leg-label {
-  flex: 1;
-}
-
-.parlay-leg-odds {
-  font-family: var(--font-mono);
-  font-weight: 700;
-  color: var(--accent-green);
-  font-size: 0.8rem;
-}
-
-.parlay-leg-meta {
-  display: flex;
-  justify-content: space-between;
-  margin-top: 4px;
-  font-size: 0.72rem;
-  color: var(--text-muted);
-}
-
-.parlay-leg-conf {
-  color: var(--accent-green-dim);
-  font-weight: 600;
-}
-
-/* ─── Parlays Sidebar ───────────────────────────────────────── */
-
-.parlays-sidebar {
-  width: 320px;
-  flex-shrink: 0;
-  position: sticky;
-  top: 80px;
-}
-
-.parlays-sidebar-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--accent-green);
-  margin-bottom: 14px;
-}
-
-.parlays-sidebar-title {
-  font-size: 1rem;
-  font-weight: 700;
-  color: var(--accent-green);
-  margin: 0;
-}
-
-.parlays-sidebar-content {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.parlay-sidebar-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border-primary);
-  border-radius: var(--radius-md);
-  padding: 14px;
-  transition: border-color var(--transition-fast);
-}
-
-.parlay-sidebar-card:hover {
-  border-color: var(--accent-green-dim);
-}
-
-.parlay-sidebar-card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 10px;
-}
-
-.parlay-sidebar-legs-badge {
-  font-size: 0.72rem;
-  font-weight: 700;
-  color: var(--accent-green);
-  background: rgba(0, 255, 136, 0.1);
-  padding: 2px 8px;
-  border-radius: 20px;
-  letter-spacing: 0.3px;
-}
-
-.parlay-sidebar-combined-odds {
-  font-size: 0.95rem;
-  font-weight: 700;
-  color: var(--accent-green);
-  font-family: var(--font-mono);
-}
-
-.parlay-sidebar-legs {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-/* Parlay leg cards styled like player prop cards */
+/* Game-line legs (ML, spread, total) inside inline parlays */
 .parlay-leg-card {
   background: var(--bg-elevated);
   border-radius: var(--radius-sm);
@@ -684,30 +605,18 @@ a:hover {
   border-left-color: var(--accent-green);
 }
 
-.parlay-leg-prop {
-  border-left-color: var(--accent-blue, #4fc3f7);
-}
-
-.parlay-leg-prop:hover {
-  border-left-color: #4fc3f7;
-}
-
 .parlay-leg-card-header {
   display: flex;
   align-items: center;
   gap: 6px;
   color: var(--text-primary);
   font-weight: 600;
-  font-size: 0.82rem;
+  font-size: 0.85rem;
 }
 
 .parlay-leg-card-header svg {
   color: var(--accent-green);
   flex-shrink: 0;
-}
-
-.parlay-leg-prop .parlay-leg-card-header svg {
-  color: var(--accent-blue, #4fc3f7);
 }
 
 .parlay-leg-card-label {
@@ -721,7 +630,7 @@ a:hover {
   font-family: var(--font-mono);
   font-weight: 700;
   color: var(--accent-green);
-  font-size: 0.78rem;
+  font-size: 0.82rem;
   flex-shrink: 0;
 }
 
@@ -729,7 +638,7 @@ a:hover {
   display: flex;
   justify-content: space-between;
   margin-top: 4px;
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   color: var(--text-muted);
 }
 
@@ -738,22 +647,17 @@ a:hover {
   font-weight: 600;
 }
 
-/* Responsive: collapse sidebar below medium screens */
-@media (max-width: 1100px) {
-  .sport-page-body {
-    flex-direction: column;
-  }
-  .parlays-sidebar {
-    width: 100%;
-    position: static;
-  }
-  .parlays-sidebar-content {
-    flex-direction: row;
-    flex-wrap: wrap;
-  }
-  .parlay-sidebar-card {
-    flex: 1;
-    min-width: 280px;
+/* Prop legs inside parlays — uses prop-pick-card classes plus this for matchup line */
+.parlay-prop-leg-matchup {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* Responsive */
+@media (max-width: 900px) {
+  .parlays-inline-grid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -3070,14 +2974,7 @@ a:hover {
   color: var(--accent-green);
 }
 
-.sport-page-body {
-  display: flex;
-  gap: 20px;
-  align-items: flex-start;
-}
-
 .sport-page-content {
-  flex: 1;
   min-width: 0;
 }
 
@@ -4954,14 +4851,7 @@ a:hover {
   color: var(--accent-green);
 }
 
-.sport-page-body {
-  display: flex;
-  gap: 20px;
-  align-items: flex-start;
-}
-
 .sport-page-content {
-  flex: 1;
   min-width: 0;
 }
 
