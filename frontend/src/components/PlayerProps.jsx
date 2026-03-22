@@ -1,10 +1,12 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
+import { useParams } from 'react-router-dom';
 import { Users, Target, Crosshair, Star, Shield, Award, Zap, Check, X } from 'lucide-react';
 import { fetchTodayPropPicks } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import { formatAmericanOdds } from '../utils/formatting';
 
 const MARKET_CONFIG = {
+  // NHL markets
   player_goal_scorer_anytime: {
     label: 'Anytime Goal Scorer',
     shortLabel: 'ATG',
@@ -17,6 +19,13 @@ const MARKET_CONFIG = {
     icon: Crosshair,
     color: '#4fc3f7',
   },
+  player_total_saves: {
+    label: 'Goalie Saves',
+    shortLabel: 'SVS',
+    icon: Shield,
+    color: '#e040fb',
+  },
+  // Shared markets (NHL + NBA)
   player_points: {
     label: 'Points',
     shortLabel: 'PTS',
@@ -29,20 +38,32 @@ const MARKET_CONFIG = {
     icon: Award,
     color: '#ff9800',
   },
-  player_total_saves: {
-    label: 'Goalie Saves',
-    shortLabel: 'SVS',
+  // NBA-specific markets
+  player_rebounds: {
+    label: 'Rebounds',
+    shortLabel: 'REB',
     icon: Shield,
-    color: '#e040fb',
+    color: '#4fc3f7',
+  },
+  player_threes: {
+    label: '3-Pointers Made',
+    shortLabel: '3PM',
+    icon: Zap,
+    color: '#bb86fc',
   },
 };
 
 const MARKET_ORDER = [
+  // NHL
   'player_goal_scorer_anytime',
   'player_shots_on_goal',
+  'player_total_saves',
+  // Shared
   'player_points',
   'player_assists',
-  'player_total_saves',
+  // NBA
+  'player_rebounds',
+  'player_threes',
 ];
 
 /**
@@ -121,10 +142,16 @@ function getNhlSeason() {
   return `${year}${year + 1}`;
 }
 
-function PlayerHeadshot({ playerExtId, playerName, teamAbbrev }) {
-  if (!playerExtId || !teamAbbrev) return null;
-  const season = getNhlSeason();
-  const headshotUrl = `https://assets.nhle.com/mugs/nhl/${season}/${teamAbbrev}/${playerExtId}.png`;
+function PlayerHeadshot({ playerExtId, playerName, teamAbbrev, sport }) {
+  if (!playerExtId) return null;
+  let headshotUrl;
+  if (sport === 'nba') {
+    headshotUrl = `https://cdn.nba.com/headshots/nba/latest/260x190/${playerExtId}.png`;
+  } else {
+    if (!teamAbbrev) return null;
+    const season = getNhlSeason();
+    headshotUrl = `https://assets.nhle.com/mugs/nhl/${season}/${teamAbbrev}/${playerExtId}.png`;
+  }
   return (
     <img
       className="prop-pick-headshot"
@@ -152,7 +179,7 @@ function PropPickCard({ pick, rank }) {
 
   return (
     <div className={`prop-pick-card ${outcomeClass}`}>
-      <PlayerHeadshot playerExtId={pick.player_ext_id} playerName={pick.player_name} teamAbbrev={pick.team_abbrev} />
+      <PlayerHeadshot playerExtId={pick.player_ext_id} playerName={pick.player_name} teamAbbrev={pick.team_abbrev} sport={pick.sport} />
       <div className="prop-pick-content">
         <div className="prop-pick-header">
           <div className="prop-pick-player">
@@ -190,11 +217,14 @@ function PropPickCard({ pick, rank }) {
 }
 
 function PlayerProps() {
+  const { sport } = useParams();
+  const currentSport = sport || 'nhl';
+  const fetchPicks = useCallback(() => fetchTodayPropPicks(currentSport), [currentSport]);
   const {
     data: picksData,
     loading: picksLoading,
     error: picksError,
-  } = useApi(fetchTodayPropPicks);
+  } = useApi(fetchPicks);
 
   const [activeMarket, setActiveMarket] = useState('all');
 

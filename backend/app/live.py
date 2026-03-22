@@ -795,8 +795,8 @@ async def _scheduler_loop():
                 await _regenerate_predictions()
                 last_pred_regen = now
 
-            # Auto-settle bets for any games that just went final.
-            # Runs every cycle (lightweight — only queries for unsettled).
+            # Settle predictions (grading only) for any games that just went final.
+            # TrackedBets are settled too so the History page updates automatically.
             await _settle_bets()
 
             # Auto-retrain ML model check — runs daily (or after enough

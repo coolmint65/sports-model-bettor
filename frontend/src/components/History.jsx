@@ -195,7 +195,7 @@ function History() {
             <BarChart3 size={28} />
             Bet Tracker
           </h1>
-          <p className="history-subtitle">Your picks are automatically tracked and settled when games finish</p>
+          <p className="history-subtitle">Track your picks manually and view results when games finish</p>
         </div>
         <div className="history-actions">
           {totalBets > 0 && (
@@ -353,7 +353,7 @@ function History() {
             {filteredBets.length === 0 ? (
               <div className="empty-state">
                 <BarChart3 size={48} />
-                <p>No tracked bets yet. Top picks are automatically tracked and settled when games finish.</p>
+                <p>No tracked bets yet. Use the Track button on Best Bets to add picks here.</p>
               </div>
             ) : (
               <div className="history-table">

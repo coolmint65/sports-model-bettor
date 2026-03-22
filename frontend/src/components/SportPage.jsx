@@ -12,7 +12,7 @@ const ALL_TABS = [
 ];
 
 // Sports that don't have player props yet
-const NO_PROPS_SPORTS = new Set(['nba']);
+const NO_PROPS_SPORTS = new Set([]);
 
 function SportPage() {
   const { sport } = useParams();

@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
-import { Calendar, Radio, RefreshCw } from 'lucide-react';
+import { Calendar, CheckCircle, Layers, Radio, RefreshCw, Target } from 'lucide-react';
 import { format } from 'date-fns';
 import GameCard from './GameCard';
-import { fetchTodaySchedule, fetchLiveGames, regeneratePredictions, trackBet, fetchTrackedBets } from '../utils/api';
+import { fetchTodaySchedule, fetchLiveGames, regeneratePredictions, fetchTodayParlays } from '../utils/api';
 import { useApi } from '../hooks/useApi';
 import { useWebSocketEvent } from '../hooks/useWebSocket';
 import { isLiveStatus, confidencePct, parseAsUTC } from '../utils/teams';
@@ -23,6 +23,9 @@ function Dashboard() {
     error: scheduleError,
     silentRefetch,
   } = useApi(fetchSchedule);
+
+  const fetchParlays = useCallback(() => fetchTodayParlays(currentSport), [currentSport]);
+  const { data: parlayData } = useApi(fetchParlays);
 
   const [liveGames, setLiveGames] = useState([]);
   const [regenerating, setRegenerating] = useState(false);
@@ -181,10 +184,20 @@ function Dashboard() {
     });
   }, [games]);
 
-  // Compute medal rankings
+  // Final/completed games
+  const finalGames = useMemo(() => {
+    return games.filter((g) => {
+      const status = (g.status || '').toLowerCase();
+      return status === 'final' || status === 'completed' || status === 'off';
+    });
+  }, [games]);
+
+  // Compute medal rankings from ALL games (not just prematch) so badges
+  // persist when a game transitions to live or final.  Once assigned, a
+  // game's badge never changes for the rest of the session.
+  const medalCacheRef = useRef(new Map());
   const medalMap = useMemo(() => {
-    const map = new Map();
-    const scored = prematchGames
+    const scored = games
       .filter((g) => g.top_pick?.confidence != null)
       .map((g) => {
         const conf = confidencePct(g.top_pick.confidence);
@@ -194,58 +207,14 @@ function Dashboard() {
       })
       .sort((a, b) => b.score - a.score);
     const medals = ['gold', 'silver', 'bronze'];
+    // Only assign medals if not already cached
     scored.forEach((item, i) => {
-      if (i < 3) map.set(item.gameId, medals[i]);
+      if (i < 3 && !medalCacheRef.current.has(item.gameId)) {
+        medalCacheRef.current.set(item.gameId, medals[i]);
+      }
     });
-    return map;
-  }, [prematchGames]);
-
-  // Auto-track all top picks (prematch only) to the bet tracker.
-  const autoTrackedRef = useRef(new Set());
-  const trackedSeededRef = useRef(false);
-
-  // Seed autoTrackedRef with already-tracked prediction IDs on mount.
-  useEffect(() => {
-    (async () => {
-      try {
-        const resp = await fetchTrackedBets();
-        const bets = resp.data?.bets ?? resp.data ?? [];
-        for (const bet of bets) {
-          if (bet.prediction_id) {
-            autoTrackedRef.current.add(bet.prediction_id);
-          }
-        }
-      } catch (_) {
-        // Non-critical — worst case we get a few 409s
-      } finally {
-        trackedSeededRef.current = true;
-      }
-    })();
-  }, []);
-
-  useEffect(() => {
-    if (!trackedSeededRef.current) return;
-    const picks = prematchGames
-      .map((g) => g.top_pick)
-      .filter((p) => p && p.prediction_id && !autoTrackedRef.current.has(p.prediction_id));
-    if (!picks.length) return;
-
-    for (const pick of picks) {
-      autoTrackedRef.current.add(pick.prediction_id);
-    }
-
-    (async () => {
-      for (const pick of picks) {
-        try {
-          await trackBet(pick.prediction_id);
-        } catch (err) {
-          if (err?.response?.status !== 409) {
-            console.error(`Failed to auto-track prediction ${pick.prediction_id}:`, err);
-          }
-        }
-      }
-    })();
-  }, [prematchGames]);
+    return medalCacheRef.current;
+  }, [games]);
 
   const handleRegenerate = useCallback(async () => {
     if (regeneratingRef.current) return;
@@ -298,6 +267,78 @@ function Dashboard() {
         </div>
       </div>
 
+      {/* Parlays Section */}
+      {(parlayData?.two_leg || parlayData?.three_leg) && (
+        <section className="section parlays-section">
+          <div className="section-header">
+            <h2 className="section-title parlays-title">
+              <Layers size={20} />
+              Top Parlays
+            </h2>
+          </div>
+          <div className="parlays-grid">
+            {parlayData.two_leg && (
+              <div className="parlay-card">
+                <div className="parlay-card-header">
+                  <span className="parlay-legs-badge">2-Leg Parlay</span>
+                  {parlayData.two_leg.combined_odds != null && (
+                    <span className="parlay-combined-odds">
+                      {parlayData.two_leg.combined_odds > 0 ? '+' : ''}{parlayData.two_leg.combined_odds}
+                    </span>
+                  )}
+                </div>
+                <div className="parlay-legs">
+                  {parlayData.two_leg.legs.map((leg, i) => (
+                    <div key={i} className="parlay-leg">
+                      <div className="parlay-leg-top">
+                        <Target size={13} />
+                        <span className="parlay-leg-label">{leg.label}</span>
+                        <span className="parlay-leg-odds">
+                          {leg.odds > 0 ? '+' : ''}{leg.odds}
+                        </span>
+                      </div>
+                      <div className="parlay-leg-meta">
+                        <span className="parlay-leg-matchup">{leg.matchup}</span>
+                        <span className="parlay-leg-conf">{Math.round((leg.confidence > 1 ? leg.confidence : leg.confidence * 100))}%</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {parlayData.three_leg && (
+              <div className="parlay-card">
+                <div className="parlay-card-header">
+                  <span className="parlay-legs-badge">3-Leg Parlay</span>
+                  {parlayData.three_leg.combined_odds != null && (
+                    <span className="parlay-combined-odds">
+                      {parlayData.three_leg.combined_odds > 0 ? '+' : ''}{parlayData.three_leg.combined_odds}
+                    </span>
+                  )}
+                </div>
+                <div className="parlay-legs">
+                  {parlayData.three_leg.legs.map((leg, i) => (
+                    <div key={i} className="parlay-leg">
+                      <div className="parlay-leg-top">
+                        <Target size={13} />
+                        <span className="parlay-leg-label">{leg.label}</span>
+                        <span className="parlay-leg-odds">
+                          {leg.odds > 0 ? '+' : ''}{leg.odds}
+                        </span>
+                      </div>
+                      <div className="parlay-leg-meta">
+                        <span className="parlay-leg-matchup">{leg.matchup}</span>
+                        <span className="parlay-leg-conf">{Math.round((leg.confidence > 1 ? leg.confidence : leg.confidence * 100))}%</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
       {/* Live Games Section */}
       {allLive.length > 0 && (
         <section className="section live-section">
@@ -312,7 +353,7 @@ function Dashboard() {
           </div>
           <div className="games-grid">
             {allLive.map((game) => (
-              <GameCard key={game.game_id || game.id} game={game} section="live" />
+              <GameCard key={game.game_id || game.id} game={game} section="live" medal={medalMap.get(game.id || game.game_id)} />
             ))}
           </div>
         </section>
@@ -360,6 +401,26 @@ function Dashboard() {
           </div>
         )}
       </section>
+
+      {/* Final/Completed Games */}
+      {finalGames.length > 0 && (
+        <section className="section final-section">
+          <div className="section-header">
+            <h2 className="section-title final-section-title">
+              <CheckCircle size={20} />
+              Final
+            </h2>
+            <span className="game-count">
+              {finalGames.length} {finalGames.length === 1 ? 'Game' : 'Games'}
+            </span>
+          </div>
+          <div className="games-grid">
+            {finalGames.map((game) => (
+              <GameCard key={game.game_id || game.id} game={game} section="final" medal={medalMap.get(game.id || game.game_id)} />
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   );
 }

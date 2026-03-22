@@ -34,8 +34,13 @@ export const fetchTodayProps = (market) =>
   api.get('/props/today', { params: market ? { market } : {} });
 export const fetchGameProps = (gameId, market) =>
   api.get(`/props/game/${gameId}`, { params: market ? { market } : {} });
-export const fetchTodayPropPicks = () => api.get('/props/picks/today', { timeout: 120000 });
+export const fetchTodayPropPicks = (sport) =>
+  api.get('/props/picks/today', { params: sport ? { sport } : {}, timeout: 120000 });
 export const fetchGamePropPicks = (gameId) => api.get(`/props/picks/game/${gameId}`, { timeout: 120000 });
+
+// Parlays endpoints
+export const fetchTodayParlays = (sport) =>
+  api.get('/parlays/today', { params: sport ? { sport } : {} });
 
 // Tracked bets endpoints
 export const trackBet = (predictionId) =>

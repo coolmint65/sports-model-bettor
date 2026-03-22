@@ -7,16 +7,22 @@ import { teamLogo } from '../../utils/teams';
 function TeamLogo({ team, size = 36, className = 'team-logo' }) {
   const logo = teamLogo(team);
   if (!logo) return null;
+  const padSize = size + 8;
   return (
-    <img
-      className={className}
-      src={logo}
-      alt=""
-      width={size}
-      height={size}
-      loading="lazy"
-      onError={(e) => { e.target.style.display = 'none'; }}
-    />
+    <span
+      className={`team-logo-bg ${className}-bg`}
+      style={{ width: padSize, height: padSize }}
+    >
+      <img
+        className={className}
+        src={logo}
+        alt=""
+        width={size}
+        height={size}
+        loading="lazy"
+        onError={(e) => { e.target.parentElement.style.display = 'none'; }}
+      />
+    </span>
   );
 }
 

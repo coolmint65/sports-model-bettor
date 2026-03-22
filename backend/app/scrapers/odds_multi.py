@@ -2419,6 +2419,43 @@ def _merge_odds_events(
             if consensus_away_books:
                 best_away_spread_price = _mean_odds([s[1] for s in consensus_away_books])
 
+        # Post-merge sanity check: ensure spread prices match the correct
+        # direction.  The team with the NEGATIVE spread (favorite) should
+        # have POSITIVE odds (they need to cover a deficit), and the team
+        # with the POSITIVE spread (underdog) should have NEGATIVE odds.
+        # If both prices are on the wrong side, swap them.
+        if (
+            best_home_spread is not None
+            and best_home_spread_price is not None
+            and best_away_spread_price is not None
+        ):
+            # Home has negative spread → home is favorite → home price should be positive
+            if best_home_spread < 0:
+                if best_home_spread_price < 0 and best_away_spread_price > 0:
+                    logger.warning(
+                        "Spread price sanity fix %s@%s: swapping prices "
+                        "(home %+.1f was %+.0f, away %+.1f was %+.0f)",
+                        ev_list[0].away_abbr, ev_list[0].home_abbr,
+                        best_home_spread, best_home_spread_price,
+                        best_away_spread, best_away_spread_price,
+                    )
+                    best_home_spread_price, best_away_spread_price = (
+                        best_away_spread_price, best_home_spread_price,
+                    )
+            # Home has positive spread → home is underdog → home price should be negative
+            elif best_home_spread > 0:
+                if best_home_spread_price > 0 and best_away_spread_price < 0:
+                    logger.warning(
+                        "Spread price sanity fix %s@%s: swapping prices "
+                        "(home %+.1f was %+.0f, away %+.1f was %+.0f)",
+                        ev_list[0].away_abbr, ev_list[0].home_abbr,
+                        best_home_spread, best_home_spread_price,
+                        best_away_spread, best_away_spread_price,
+                    )
+                    best_home_spread_price, best_away_spread_price = (
+                        best_away_spread_price, best_home_spread_price,
+                    )
+
         # Consensus total — filter out implausible lines first.
         # Filter implausible O/U lines (pregame ~4.5-8.5, live can go higher).
         total_data = [
@@ -3166,14 +3203,13 @@ class MultiSourceOddsScraper:
             if aws is not None:
                 game.away_spread_line = _normalize_spread_line(float(aws), sport=self.sport)
             if hsp is not None and asp is not None:
-                if validate_spread_pair(hsp, asp):
-                    game.home_spread_price = hsp
-                    game.away_spread_price = asp
-                else:
+                if not validate_spread_pair(hsp, asp):
                     logger.warning(
-                        "DB sync %s: spread prices failed vig check (H=%s A=%s) — keeping existing",
+                        "DB sync %s: spread prices failed vig check (H=%s A=%s) — storing anyway",
                         sync_label, hsp, asp,
                     )
+                game.home_spread_price = hsp
+                game.away_spread_price = asp
             else:
                 if hsp is not None:
                     game.home_spread_price = hsp

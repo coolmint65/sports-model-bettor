@@ -22,12 +22,12 @@ function getStatusDisplay(game) {
   const statusLower = status.toLowerCase();
 
   if (statusLower === 'final' || statusLower === 'completed' || statusLower === 'off') {
-    return { label: 'Final', className: 'status-final', showScore: true, isLive: false };
+    return { label: 'Final', className: 'status-final', showScore: true, isLive: false, isFinal: true };
   }
   if (statusLower === 'live' || statusLower === 'in_progress' || statusLower === 'active') {
-    return { label: 'LIVE', className: 'status-live', showScore: true, isLive: true };
+    return { label: 'LIVE', className: 'status-live', showScore: true, isLive: true, isFinal: false };
   }
-  return { label: null, className: 'status-scheduled', showScore: false, isLive: false };
+  return { label: null, className: 'status-scheduled', showScore: false, isLive: false, isFinal: false };
 }
 
 function formatPeriod(game) {
@@ -135,6 +135,7 @@ function GameCard({ game, section, medal }) {
   };
 
   // For live games, keep compact card style
+  const medalStyle = medal ? MEDAL_STYLES[medal] : null;
   if (statusInfo.isLive) {
     return (
       <div
@@ -144,6 +145,9 @@ function GameCard({ game, section, medal }) {
         tabIndex={0}
         onKeyDown={(e) => e.key === 'Enter' && handleClick()}
       >
+        {medalStyle && (
+          <div className={`dc-rank ${medalStyle.className}`}>{medalStyle.label}</div>
+        )}
         <div className="game-status-badge status-live">
           <span className="live-dot"></span>
           LIVE
@@ -196,9 +200,61 @@ function GameCard({ game, section, medal }) {
     );
   }
 
+  // Final/completed game card — similar to live but with "Final" badge
+  if (statusInfo.isFinal) {
+    const otLabel = game.went_to_overtime ? (game.period_type === 'SO' ? 'SO' : 'OT') : null;
+    return (
+      <div
+        className={`game-card ${statusInfo.className}`}
+        onClick={handleClick}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => e.key === 'Enter' && handleClick()}
+      >
+        {medalStyle && (
+          <div className={`dc-rank ${medalStyle.className}`}>{medalStyle.label}</div>
+        )}
+        <div className="game-status-badge status-final-badge">
+          Final{otLabel ? ` (${otLabel})` : ''}
+        </div>
+
+        <div className="game-card-body has-badge">
+          <div className="game-team">
+            <TeamLogo team={game.away_team} size={36} />
+            <div className="team-abbrev">{awayAbbr}</div>
+            <div className="team-name">{awayName}</div>
+            {awayScore !== null && (
+              <div className={`team-score ${awayScore > homeScore ? 'score-winning' : ''}`}>
+                {awayScore}
+              </div>
+            )}
+          </div>
+
+          <div className="game-divider">
+            <span className="vs-label">Final</span>
+          </div>
+
+          <div className="game-team">
+            <TeamLogo team={game.home_team} size={36} />
+            <div className="team-abbrev">{homeAbbr}</div>
+            <div className="team-name">{homeName}</div>
+            {homeScore !== null && (
+              <div className={`team-score ${homeScore > awayScore ? 'score-winning' : ''}`}>
+                {homeScore}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="game-card-arrow">
+          <ChevronRight size={18} />
+        </div>
+      </div>
+    );
+  }
+
   // New dashboard card design for scheduled/prematch games
   const badge = getConfidenceBadge(confidence);
-  const medalStyle = medal ? MEDAL_STYLES[medal] : null;
   const gameDate = formatGameDate(game);
   const gameTime = formatGameTime(game);
 
