@@ -742,7 +742,7 @@ a:hover {
 
 /* Push content down so the absolute-positioned status badge doesn't overlap */
 .game-card-body.has-badge {
-  padding-top: 14px;
+  padding-top: 22px;
 }
 
 .game-team {
