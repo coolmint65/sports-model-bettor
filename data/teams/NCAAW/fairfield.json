@@ -1,0 +1,17 @@
+{
+  "name": "Fairfield Stags",
+  "abbreviation": "FAIR",
+  "city": "Fairfield",
+  "short_name": "Fairfield",
+  "record": "24-8",
+  "stats": {
+    "ppg": 67.4,
+    "opp_ppg": 59.1,
+    "pace": 65.3,
+    "off_rtg": 103.2,
+    "def_rtg": 90.5,
+    "reb_pg": 36.1,
+    "fg_pct": 0.424,
+    "three_pct": 0.327
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "North Texas Mean Green",
+  "abbreviation": "UNT",
+  "city": "Denton",
+  "short_name": "North Texas",
+  "record": "6-6",
+  "stats": {
+    "ppg": 25.8,
+    "opp_ppg": 26.2,
+    "yards_per_game": 368.5,
+    "opp_yards_per_game": 360.4,
+    "rush_ypg": 152.3,
+    "pass_ypg": 216.2,
+    "turnover_diff": 1
+  }
+}

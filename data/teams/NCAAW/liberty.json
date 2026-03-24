@@ -1,0 +1,17 @@
+{
+  "name": "Liberty Flames",
+  "abbreviation": "LIB",
+  "city": "Lynchburg",
+  "short_name": "Liberty",
+  "record": "25-7",
+  "stats": {
+    "ppg": 69.8,
+    "opp_ppg": 57.3,
+    "pace": 65.6,
+    "off_rtg": 106.4,
+    "def_rtg": 87.3,
+    "reb_pg": 37.8,
+    "fg_pct": 0.438,
+    "three_pct": 0.344
+  }
+}

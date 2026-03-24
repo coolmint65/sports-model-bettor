@@ -1,0 +1,17 @@
+{
+  "name": "Fairleigh Dickinson Knights",
+  "abbreviation": "FDU",
+  "city": "Teaneck",
+  "short_name": "Fairleigh Dickinson",
+  "record": "10-22",
+  "stats": {
+    "ppg": 64.2,
+    "opp_ppg": 74.8,
+    "pace": 67.5,
+    "off_rtg": 95.8,
+    "def_rtg": 111.5,
+    "reb_pg": 30.5,
+    "fg_pct": 0.398,
+    "three_pct": 0.298
+  }
+}

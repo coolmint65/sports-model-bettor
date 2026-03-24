@@ -1,0 +1,16 @@
+{
+  "name": "Florida Atlantic Owls",
+  "abbreviation": "FAU",
+  "city": "Boca Raton",
+  "short_name": "FAU",
+  "record": "3-9",
+  "stats": {
+    "ppg": 18.5,
+    "opp_ppg": 30.1,
+    "yards_per_game": 312.8,
+    "opp_yards_per_game": 392.4,
+    "rush_ypg": 120.3,
+    "pass_ypg": 192.5,
+    "turnover_diff": -5
+  }
+}

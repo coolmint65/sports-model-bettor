@@ -1,0 +1,17 @@
+{
+  "name": "Loyola Chicago Ramblers",
+  "abbreviation": "LUC",
+  "city": "Chicago",
+  "short_name": "Loyola Chicago",
+  "record": "21-12",
+  "stats": {
+    "ppg": 70.6,
+    "opp_ppg": 65.2,
+    "pace": 63.8,
+    "off_rtg": 110.5,
+    "def_rtg": 102.1,
+    "reb_pg": 34.2,
+    "fg_pct": 0.451,
+    "three_pct": 0.346
+  }
+}

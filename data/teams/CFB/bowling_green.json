@@ -1,0 +1,16 @@
+{
+  "name": "Bowling Green Falcons",
+  "abbreviation": "BGSU",
+  "city": "Bowling Green",
+  "short_name": "Bowling Green",
+  "record": "5-7",
+  "stats": {
+    "ppg": 23.1,
+    "opp_ppg": 27.9,
+    "yards_per_game": 348.7,
+    "opp_yards_per_game": 372.4,
+    "rush_ypg": 145.3,
+    "pass_ypg": 203.4,
+    "turnover_diff": -2
+  }
+}

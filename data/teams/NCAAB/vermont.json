@@ -1,0 +1,17 @@
+{
+  "name": "Vermont Catamounts",
+  "abbreviation": "UVM",
+  "city": "Burlington",
+  "short_name": "Vermont",
+  "record": "22-10",
+  "stats": {
+    "ppg": 72.8,
+    "opp_ppg": 65.4,
+    "pace": 64.5,
+    "off_rtg": 112.2,
+    "def_rtg": 101.5,
+    "reb_pg": 34.8,
+    "fg_pct": 0.458,
+    "three_pct": 0.358
+  }
+}

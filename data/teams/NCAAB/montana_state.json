@@ -1,0 +1,17 @@
+{
+  "name": "Montana State Bobcats",
+  "abbreviation": "MTST",
+  "city": "Bozeman",
+  "short_name": "Montana State",
+  "record": "17-15",
+  "stats": {
+    "ppg": 72.0,
+    "opp_ppg": 71.5,
+    "pace": 67.0,
+    "off_rtg": 106.8,
+    "def_rtg": 106.2,
+    "reb_pg": 33.8,
+    "fg_pct": 0.436,
+    "three_pct": 0.335
+  }
+}

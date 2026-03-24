@@ -1,0 +1,16 @@
+{
+  "name": "Northern Illinois Huskies",
+  "abbreviation": "NIU",
+  "city": "DeKalb",
+  "short_name": "NIU",
+  "record": "7-5",
+  "stats": {
+    "ppg": 26.3,
+    "opp_ppg": 24.1,
+    "yards_per_game": 378.5,
+    "opp_yards_per_game": 350.2,
+    "rush_ypg": 168.4,
+    "pass_ypg": 210.1,
+    "turnover_diff": 3
+  }
+}

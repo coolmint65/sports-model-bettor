@@ -1,0 +1,17 @@
+{
+  "name": "VCU Rams",
+  "abbreviation": "VCU",
+  "city": "Richmond",
+  "short_name": "VCU",
+  "record": "21-12",
+  "stats": {
+    "ppg": 73.8,
+    "opp_ppg": 68.4,
+    "pace": 69.1,
+    "off_rtg": 109.2,
+    "def_rtg": 101.8,
+    "reb_pg": 34.5,
+    "fg_pct": 0.442,
+    "three_pct": 0.334
+  }
+}

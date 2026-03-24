@@ -1,0 +1,17 @@
+{
+  "name": "Northern Iowa Panthers",
+  "abbreviation": "UNI",
+  "city": "Cedar Falls",
+  "short_name": "Northern Iowa",
+  "record": "18-14",
+  "stats": {
+    "ppg": 69.8,
+    "opp_ppg": 67.5,
+    "pace": 63.8,
+    "off_rtg": 108.5,
+    "def_rtg": 105.2,
+    "reb_pg": 33.5,
+    "fg_pct": 0.445,
+    "three_pct": 0.340
+  }
+}

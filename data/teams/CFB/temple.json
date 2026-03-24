@@ -1,0 +1,16 @@
+{
+  "name": "Temple Owls",
+  "abbreviation": "TEM",
+  "city": "Philadelphia",
+  "short_name": "Temple",
+  "record": "3-9",
+  "stats": {
+    "ppg": 17.5,
+    "opp_ppg": 31.2,
+    "yards_per_game": 302.1,
+    "opp_yards_per_game": 398.5,
+    "rush_ypg": 115.8,
+    "pass_ypg": 186.3,
+    "turnover_diff": -7
+  }
+}

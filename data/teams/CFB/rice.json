@@ -1,0 +1,16 @@
+{
+  "name": "Rice Owls",
+  "abbreviation": "RICE",
+  "city": "Houston",
+  "short_name": "Rice",
+  "record": "4-8",
+  "stats": {
+    "ppg": 21.2,
+    "opp_ppg": 28.8,
+    "yards_per_game": 335.4,
+    "opp_yards_per_game": 378.5,
+    "rush_ypg": 130.1,
+    "pass_ypg": 205.3,
+    "turnover_diff": -3
+  }
+}

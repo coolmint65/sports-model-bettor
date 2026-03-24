@@ -1,0 +1,16 @@
+{
+  "name": "Ball State Cardinals",
+  "abbreviation": "BALL",
+  "city": "Muncie",
+  "short_name": "Ball State",
+  "record": "3-9",
+  "stats": {
+    "ppg": 18.2,
+    "opp_ppg": 31.4,
+    "yards_per_game": 305.8,
+    "opp_yards_per_game": 400.5,
+    "rush_ypg": 118.3,
+    "pass_ypg": 187.5,
+    "turnover_diff": -7
+  }
+}

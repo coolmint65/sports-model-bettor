@@ -1,0 +1,17 @@
+{
+  "name": "Green Bay Phoenix",
+  "abbreviation": "GB",
+  "city": "Green Bay",
+  "short_name": "Green Bay",
+  "record": "23-9",
+  "stats": {
+    "ppg": 67.6,
+    "opp_ppg": 60.1,
+    "pace": 66.0,
+    "off_rtg": 102.4,
+    "def_rtg": 91.1,
+    "reb_pg": 36.5,
+    "fg_pct": 0.425,
+    "three_pct": 0.331
+  }
+}

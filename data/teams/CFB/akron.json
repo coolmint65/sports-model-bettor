@@ -1,0 +1,16 @@
+{
+  "name": "Akron Zips",
+  "abbreviation": "AKR",
+  "city": "Akron",
+  "short_name": "Akron",
+  "record": "2-10",
+  "stats": {
+    "ppg": 15.4,
+    "opp_ppg": 34.2,
+    "yards_per_game": 278.5,
+    "opp_yards_per_game": 420.8,
+    "rush_ypg": 105.2,
+    "pass_ypg": 173.3,
+    "turnover_diff": -11
+  }
+}

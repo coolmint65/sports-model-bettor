@@ -1,0 +1,16 @@
+{
+  "name": "Miami (OH) RedHawks",
+  "abbreviation": "M-OH",
+  "city": "Oxford",
+  "short_name": "Miami (OH)",
+  "record": "6-6",
+  "stats": {
+    "ppg": 24.2,
+    "opp_ppg": 25.5,
+    "yards_per_game": 355.8,
+    "opp_yards_per_game": 352.3,
+    "rush_ypg": 148.6,
+    "pass_ypg": 207.2,
+    "turnover_diff": 2
+  }
+}

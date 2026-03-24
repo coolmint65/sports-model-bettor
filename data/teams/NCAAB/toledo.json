@@ -1,0 +1,17 @@
+{
+  "name": "Toledo Rockets",
+  "abbreviation": "TOL",
+  "city": "Toledo",
+  "short_name": "Toledo",
+  "record": "21-11",
+  "stats": {
+    "ppg": 76.2,
+    "opp_ppg": 70.5,
+    "pace": 68.8,
+    "off_rtg": 110.8,
+    "def_rtg": 103.2,
+    "reb_pg": 35.0,
+    "fg_pct": 0.454,
+    "three_pct": 0.352
+  }
+}

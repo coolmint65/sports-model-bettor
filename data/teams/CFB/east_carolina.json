@@ -1,0 +1,16 @@
+{
+  "name": "East Carolina Pirates",
+  "abbreviation": "ECU",
+  "city": "Greenville",
+  "short_name": "East Carolina",
+  "record": "5-7",
+  "stats": {
+    "ppg": 23.5,
+    "opp_ppg": 27.1,
+    "yards_per_game": 352.8,
+    "opp_yards_per_game": 368.5,
+    "rush_ypg": 135.2,
+    "pass_ypg": 217.6,
+    "turnover_diff": -2
+  }
+}

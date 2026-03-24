@@ -1,0 +1,16 @@
+{
+  "name": "Tulsa Golden Hurricane",
+  "abbreviation": "TLSA",
+  "city": "Tulsa",
+  "short_name": "Tulsa",
+  "record": "3-9",
+  "stats": {
+    "ppg": 18.8,
+    "opp_ppg": 32.5,
+    "yards_per_game": 310.4,
+    "opp_yards_per_game": 405.2,
+    "rush_ypg": 118.2,
+    "pass_ypg": 192.2,
+    "turnover_diff": -6
+  }
+}

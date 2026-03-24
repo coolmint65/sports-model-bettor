@@ -1,0 +1,16 @@
+{
+  "name": "FIU Panthers",
+  "abbreviation": "FIU",
+  "city": "Miami",
+  "short_name": "FIU",
+  "record": "2-10",
+  "stats": {
+    "ppg": 16.2,
+    "opp_ppg": 33.8,
+    "yards_per_game": 285.3,
+    "opp_yards_per_game": 415.2,
+    "rush_ypg": 108.5,
+    "pass_ypg": 176.8,
+    "turnover_diff": -9
+  }
+}

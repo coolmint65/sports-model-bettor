@@ -1,0 +1,17 @@
+{
+  "name": "Portland Pilots",
+  "abbreviation": "PORT",
+  "city": "Portland",
+  "short_name": "Portland",
+  "record": "20-12",
+  "stats": {
+    "ppg": 68.9,
+    "opp_ppg": 64.2,
+    "pace": 67.4,
+    "off_rtg": 102.2,
+    "def_rtg": 95.3,
+    "reb_pg": 36.3,
+    "fg_pct": 0.419,
+    "three_pct": 0.326
+  }
+}

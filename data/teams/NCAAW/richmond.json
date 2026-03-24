@@ -1,0 +1,17 @@
+{
+  "name": "Richmond Spiders",
+  "abbreviation": "RICH",
+  "city": "Richmond",
+  "short_name": "Richmond",
+  "record": "20-11",
+  "stats": {
+    "ppg": 65.9,
+    "opp_ppg": 61.7,
+    "pace": 65.4,
+    "off_rtg": 100.8,
+    "def_rtg": 94.3,
+    "reb_pg": 35.3,
+    "fg_pct": 0.413,
+    "three_pct": 0.319
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Iona Gaels",
+  "abbreviation": "IONA",
+  "city": "New Rochelle",
+  "short_name": "Iona",
+  "record": "17-15",
+  "stats": {
+    "ppg": 71.8,
+    "opp_ppg": 71.2,
+    "pace": 68.5,
+    "off_rtg": 106.2,
+    "def_rtg": 105.3,
+    "reb_pg": 32.5,
+    "fg_pct": 0.433,
+    "three_pct": 0.332
+  }
+}

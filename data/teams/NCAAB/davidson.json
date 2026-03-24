@@ -1,0 +1,17 @@
+{
+  "name": "Davidson Wildcats",
+  "abbreviation": "DAV",
+  "city": "Davidson",
+  "short_name": "Davidson",
+  "record": "19-13",
+  "stats": {
+    "ppg": 73.5,
+    "opp_ppg": 70.2,
+    "pace": 66.8,
+    "off_rtg": 110.0,
+    "def_rtg": 105.2,
+    "reb_pg": 33.2,
+    "fg_pct": 0.448,
+    "three_pct": 0.365
+  }
+}

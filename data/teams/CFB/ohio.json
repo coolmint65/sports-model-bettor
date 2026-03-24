@@ -1,0 +1,16 @@
+{
+  "name": "Ohio Bobcats",
+  "abbreviation": "OHIO",
+  "city": "Athens",
+  "short_name": "Ohio",
+  "record": "6-6",
+  "stats": {
+    "ppg": 24.5,
+    "opp_ppg": 25.8,
+    "yards_per_game": 360.3,
+    "opp_yards_per_game": 355.1,
+    "rush_ypg": 155.2,
+    "pass_ypg": 205.1,
+    "turnover_diff": 1
+  }
+}

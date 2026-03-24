@@ -1,0 +1,16 @@
+{
+  "name": "Charlotte 49ers",
+  "abbreviation": "CLT",
+  "city": "Charlotte",
+  "short_name": "Charlotte",
+  "record": "4-8",
+  "stats": {
+    "ppg": 20.5,
+    "opp_ppg": 29.3,
+    "yards_per_game": 330.2,
+    "opp_yards_per_game": 385.1,
+    "rush_ypg": 128.4,
+    "pass_ypg": 201.8,
+    "turnover_diff": -5
+  }
+}

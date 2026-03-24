@@ -1,0 +1,16 @@
+{
+  "name": "Buffalo Bulls",
+  "abbreviation": "BUFF",
+  "city": "Buffalo",
+  "short_name": "Buffalo",
+  "record": "4-8",
+  "stats": {
+    "ppg": 19.8,
+    "opp_ppg": 29.5,
+    "yards_per_game": 318.2,
+    "opp_yards_per_game": 388.7,
+    "rush_ypg": 125.0,
+    "pass_ypg": 193.2,
+    "turnover_diff": -6
+  }
+}

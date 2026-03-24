@@ -1,0 +1,16 @@
+{
+  "name": "Western Michigan Broncos",
+  "abbreviation": "WMU",
+  "city": "Kalamazoo",
+  "short_name": "Western Michigan",
+  "record": "5-7",
+  "stats": {
+    "ppg": 22.8,
+    "opp_ppg": 27.3,
+    "yards_per_game": 345.2,
+    "opp_yards_per_game": 370.8,
+    "rush_ypg": 140.5,
+    "pass_ypg": 204.7,
+    "turnover_diff": -3
+  }
+}

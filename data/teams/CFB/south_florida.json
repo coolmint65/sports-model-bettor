@@ -1,0 +1,16 @@
+{
+  "name": "South Florida Bulls",
+  "abbreviation": "USF",
+  "city": "Tampa",
+  "short_name": "South Florida",
+  "record": "5-7",
+  "stats": {
+    "ppg": 23.8,
+    "opp_ppg": 27.5,
+    "yards_per_game": 355.2,
+    "opp_yards_per_game": 370.1,
+    "rush_ypg": 145.8,
+    "pass_ypg": 209.4,
+    "turnover_diff": -2
+  }
+}

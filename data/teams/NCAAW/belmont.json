@@ -1,0 +1,17 @@
+{
+  "name": "Belmont Bruins",
+  "abbreviation": "BEL",
+  "city": "Nashville",
+  "short_name": "Belmont",
+  "record": "22-10",
+  "stats": {
+    "ppg": 70.1,
+    "opp_ppg": 62.4,
+    "pace": 68.3,
+    "off_rtg": 102.6,
+    "def_rtg": 91.4,
+    "reb_pg": 35.7,
+    "fg_pct": 0.430,
+    "three_pct": 0.339
+  }
+}

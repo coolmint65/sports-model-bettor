@@ -1,0 +1,16 @@
+{
+  "name": "Central Michigan Chippewas",
+  "abbreviation": "CMU",
+  "city": "Mount Pleasant",
+  "short_name": "Central Michigan",
+  "record": "4-8",
+  "stats": {
+    "ppg": 20.1,
+    "opp_ppg": 28.7,
+    "yards_per_game": 328.4,
+    "opp_yards_per_game": 382.1,
+    "rush_ypg": 132.0,
+    "pass_ypg": 196.4,
+    "turnover_diff": -4
+  }
+}
