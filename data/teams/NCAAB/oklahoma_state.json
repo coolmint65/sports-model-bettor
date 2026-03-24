@@ -1,0 +1,17 @@
+{
+  "name": "Oklahoma State Cowboys",
+  "abbreviation": "OKST",
+  "city": "Stillwater",
+  "short_name": "Oklahoma St",
+  "record": "16-16",
+  "stats": {
+    "ppg": 71.2,
+    "opp_ppg": 72.8,
+    "pace": 67.9,
+    "off_rtg": 104.8,
+    "def_rtg": 107.1,
+    "reb_pg": 33.5,
+    "fg_pct": 0.428,
+    "three_pct": 0.322
+  }
+}

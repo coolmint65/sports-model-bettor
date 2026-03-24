@@ -1,0 +1,16 @@
+{
+  "name": "Syracuse Orange",
+  "abbreviation": "SYR",
+  "city": "Syracuse",
+  "short_name": "Syracuse",
+  "record": "9-3",
+  "stats": {
+    "ppg": 31.5,
+    "opp_ppg": 22.8,
+    "yards_per_game": 418.2,
+    "opp_yards_per_game": 340.5,
+    "rush_ypg": 170.8,
+    "pass_ypg": 247.4,
+    "turnover_diff": 6
+  }
+}

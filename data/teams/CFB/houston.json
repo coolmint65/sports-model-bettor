@@ -1,0 +1,16 @@
+{
+  "name": "Houston Cougars",
+  "abbreviation": "HOU",
+  "city": "Houston",
+  "short_name": "Houston",
+  "record": "4-8",
+  "stats": {
+    "ppg": 21.5,
+    "opp_ppg": 29.2,
+    "yards_per_game": 348.6,
+    "opp_yards_per_game": 392.8,
+    "rush_ypg": 128.4,
+    "pass_ypg": 220.2,
+    "turnover_diff": -6
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Providence Friars",
+  "abbreviation": "PROV",
+  "city": "Providence",
+  "short_name": "Providence",
+  "record": "14-17",
+  "stats": {
+    "ppg": 62.4,
+    "opp_ppg": 66.7,
+    "pace": 65.8,
+    "off_rtg": 94.8,
+    "def_rtg": 101.4,
+    "reb_pg": 34.6,
+    "fg_pct": 0.392,
+    "three_pct": 0.291
+  }
+}

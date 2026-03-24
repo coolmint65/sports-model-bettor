@@ -1,0 +1,16 @@
+{
+  "name": "Kennesaw State Owls",
+  "abbreviation": "KENN",
+  "city": "Kennesaw",
+  "short_name": "Kennesaw St",
+  "record": "3-9",
+  "stats": {
+    "ppg": 16.8,
+    "opp_ppg": 33.2,
+    "yards_per_game": 290.5,
+    "opp_yards_per_game": 410.3,
+    "rush_ypg": 120.4,
+    "pass_ypg": 170.1,
+    "turnover_diff": -9
+  }
+}

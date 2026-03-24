@@ -1,0 +1,17 @@
+{
+  "name": "Columbia Lions",
+  "abbreviation": "CLMB",
+  "city": "New York",
+  "short_name": "Columbia",
+  "record": "21-9",
+  "stats": {
+    "ppg": 65.1,
+    "opp_ppg": 58.3,
+    "pace": 64.2,
+    "off_rtg": 101.4,
+    "def_rtg": 90.8,
+    "reb_pg": 35.8,
+    "fg_pct": 0.415,
+    "three_pct": 0.321
+  }
+}

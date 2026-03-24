@@ -1,0 +1,17 @@
+{
+  "name": "Xavier Musketeers",
+  "abbreviation": "XAV",
+  "city": "Cincinnati",
+  "short_name": "Xavier",
+  "record": "17-15",
+  "stats": {
+    "ppg": 68.6,
+    "opp_ppg": 67.1,
+    "pace": 66.9,
+    "off_rtg": 102.5,
+    "def_rtg": 100.3,
+    "reb_pg": 36.0,
+    "fg_pct": 0.416,
+    "three_pct": 0.310
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "UNLV Rebels",
+  "abbreviation": "UNLV",
+  "city": "Las Vegas",
+  "short_name": "UNLV",
+  "record": "19-13",
+  "stats": {
+    "ppg": 74.2,
+    "opp_ppg": 70.5,
+    "pace": 67.8,
+    "off_rtg": 109.5,
+    "def_rtg": 104.8,
+    "reb_pg": 34.8,
+    "fg_pct": 0.447,
+    "three_pct": 0.340
+  }
+}

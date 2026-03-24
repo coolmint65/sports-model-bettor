@@ -1,0 +1,17 @@
+{
+  "name": "Tennessee Lady Volunteers",
+  "abbreviation": "TENN",
+  "city": "Knoxville",
+  "short_name": "Tennessee",
+  "record": "24-9",
+  "stats": {
+    "ppg": 75.8,
+    "opp_ppg": 62.1,
+    "pace": 68.9,
+    "off_rtg": 110.0,
+    "def_rtg": 90.1,
+    "reb_pg": 40.2,
+    "fg_pct": 0.451,
+    "three_pct": 0.335
+  }
+}

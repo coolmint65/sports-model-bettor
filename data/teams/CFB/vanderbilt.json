@@ -1,0 +1,16 @@
+{
+  "name": "Vanderbilt Commodores",
+  "abbreviation": "VAN",
+  "city": "Nashville",
+  "short_name": "Vanderbilt",
+  "record": "6-6",
+  "stats": {
+    "ppg": 25.3,
+    "opp_ppg": 27.5,
+    "yards_per_game": 375.8,
+    "opp_yards_per_game": 372.1,
+    "rush_ypg": 138.2,
+    "pass_ypg": 237.6,
+    "turnover_diff": -2
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Arizona State Sun Devils",
+  "abbreviation": "ASU",
+  "city": "Tempe",
+  "short_name": "Arizona St",
+  "record": "16-16",
+  "stats": {
+    "ppg": 67.4,
+    "opp_ppg": 67.8,
+    "pace": 67.1,
+    "off_rtg": 100.4,
+    "def_rtg": 101.0,
+    "reb_pg": 35.6,
+    "fg_pct": 0.410,
+    "three_pct": 0.300
+  }
+}

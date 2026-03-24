@@ -1,0 +1,17 @@
+{
+  "name": "South Dakota State Jackrabbits",
+  "abbreviation": "SDSU",
+  "city": "Brookings",
+  "short_name": "SD State",
+  "record": "28-5",
+  "stats": {
+    "ppg": 73.6,
+    "opp_ppg": 58.4,
+    "pace": 67.1,
+    "off_rtg": 109.7,
+    "def_rtg": 87.0,
+    "reb_pg": 38.9,
+    "fg_pct": 0.451,
+    "three_pct": 0.348
+  }
+}

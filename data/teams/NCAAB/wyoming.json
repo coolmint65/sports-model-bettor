@@ -1,0 +1,17 @@
+{
+  "name": "Wyoming Cowboys",
+  "abbreviation": "WYO",
+  "city": "Laramie",
+  "short_name": "Wyoming",
+  "record": "15-17",
+  "stats": {
+    "ppg": 69.4,
+    "opp_ppg": 71.2,
+    "pace": 64.8,
+    "off_rtg": 105.2,
+    "def_rtg": 108.0,
+    "reb_pg": 33.5,
+    "fg_pct": 0.430,
+    "three_pct": 0.322
+  }
+}

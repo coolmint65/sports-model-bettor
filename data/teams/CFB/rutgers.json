@@ -1,0 +1,16 @@
+{
+  "name": "Rutgers Scarlet Knights",
+  "abbreviation": "RUT",
+  "city": "Piscataway",
+  "short_name": "Rutgers",
+  "record": "7-5",
+  "stats": {
+    "ppg": 25.2,
+    "opp_ppg": 22.6,
+    "yards_per_game": 368.7,
+    "opp_yards_per_game": 338.5,
+    "rush_ypg": 158.4,
+    "pass_ypg": 210.3,
+    "turnover_diff": 3
+  }
+}

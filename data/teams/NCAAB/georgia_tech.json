@@ -1,0 +1,17 @@
+{
+  "name": "Georgia Tech Yellow Jackets",
+  "abbreviation": "GT",
+  "city": "Atlanta",
+  "short_name": "Georgia Tech",
+  "record": "15-17",
+  "stats": {
+    "ppg": 70.8,
+    "opp_ppg": 73.1,
+    "pace": 67.2,
+    "off_rtg": 104.0,
+    "def_rtg": 107.5,
+    "reb_pg": 33.1,
+    "fg_pct": 0.421,
+    "three_pct": 0.314
+  }
+}

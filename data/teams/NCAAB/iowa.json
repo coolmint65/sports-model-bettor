@@ -1,0 +1,17 @@
+{
+  "name": "Iowa Hawkeyes",
+  "abbreviation": "IOWA",
+  "city": "Iowa City",
+  "short_name": "Iowa",
+  "record": "19-13",
+  "stats": {
+    "ppg": 76.5,
+    "opp_ppg": 73.2,
+    "pace": 70.1,
+    "off_rtg": 109.8,
+    "def_rtg": 105.1,
+    "reb_pg": 34.5,
+    "fg_pct": 0.447,
+    "three_pct": 0.342
+  }
+}

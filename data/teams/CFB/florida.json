@@ -1,0 +1,16 @@
+{
+  "name": "Florida Gators",
+  "abbreviation": "FLA",
+  "city": "Gainesville",
+  "short_name": "Florida",
+  "record": "7-5",
+  "stats": {
+    "ppg": 29.1,
+    "opp_ppg": 24.8,
+    "yards_per_game": 405.3,
+    "opp_yards_per_game": 348.7,
+    "rush_ypg": 155.2,
+    "pass_ypg": 250.1,
+    "turnover_diff": 1
+  }
+}

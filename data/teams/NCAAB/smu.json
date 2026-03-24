@@ -1,0 +1,17 @@
+{
+  "name": "SMU Mustangs",
+  "abbreviation": "SMU",
+  "city": "Dallas",
+  "short_name": "SMU",
+  "record": "20-12",
+  "stats": {
+    "ppg": 74.8,
+    "opp_ppg": 70.5,
+    "pace": 67.6,
+    "off_rtg": 110.0,
+    "def_rtg": 103.8,
+    "reb_pg": 35.0,
+    "fg_pct": 0.448,
+    "three_pct": 0.341
+  }
+}

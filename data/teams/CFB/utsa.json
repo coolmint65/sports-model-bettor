@@ -1,0 +1,16 @@
+{
+  "name": "UTSA Roadrunners",
+  "abbreviation": "UTSA",
+  "city": "San Antonio",
+  "short_name": "UTSA",
+  "record": "5-7",
+  "stats": {
+    "ppg": 23.8,
+    "opp_ppg": 27.2,
+    "yards_per_game": 358.4,
+    "opp_yards_per_game": 378.5,
+    "rush_ypg": 138.2,
+    "pass_ypg": 220.2,
+    "turnover_diff": -3
+  }
+}

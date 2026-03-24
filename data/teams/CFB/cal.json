@@ -1,0 +1,16 @@
+{
+  "name": "California Golden Bears",
+  "abbreviation": "CAL",
+  "city": "Berkeley",
+  "short_name": "Cal",
+  "record": "6-6",
+  "stats": {
+    "ppg": 25.8,
+    "opp_ppg": 26.2,
+    "yards_per_game": 378.4,
+    "opp_yards_per_game": 368.5,
+    "rush_ypg": 142.1,
+    "pass_ypg": 236.3,
+    "turnover_diff": -1
+  }
+}

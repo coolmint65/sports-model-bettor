@@ -1,0 +1,16 @@
+{
+  "name": "Arizona State Sun Devils",
+  "abbreviation": "ASU",
+  "city": "Tempe",
+  "short_name": "Arizona State",
+  "record": "11-2",
+  "stats": {
+    "ppg": 32.8,
+    "opp_ppg": 20.1,
+    "yards_per_game": 425.3,
+    "opp_yards_per_game": 318.5,
+    "rush_ypg": 188.2,
+    "pass_ypg": 237.1,
+    "turnover_diff": 8
+  }
+}

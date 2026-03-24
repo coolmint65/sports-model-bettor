@@ -1,0 +1,17 @@
+{
+  "name": "St. John's Red Storm",
+  "abbreviation": "SJU",
+  "city": "Queens",
+  "short_name": "St. John's",
+  "record": "25-8",
+  "stats": {
+    "ppg": 77.2,
+    "opp_ppg": 67.8,
+    "pace": 68.5,
+    "off_rtg": 114.2,
+    "def_rtg": 100.1,
+    "reb_pg": 36.4,
+    "fg_pct": 0.462,
+    "three_pct": 0.349
+  }
+}

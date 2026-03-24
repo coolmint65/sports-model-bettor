@@ -1,0 +1,17 @@
+{
+  "name": "Cincinnati Bearcats",
+  "abbreviation": "CIN",
+  "city": "Cincinnati",
+  "short_name": "Cincinnati",
+  "record": "22-13",
+  "stats": {
+    "ppg": 74.8,
+    "opp_ppg": 70.1,
+    "pace": 67.5,
+    "off_rtg": 110.2,
+    "def_rtg": 103.4,
+    "reb_pg": 35.2,
+    "fg_pct": 0.448,
+    "three_pct": 0.338
+  }
+}

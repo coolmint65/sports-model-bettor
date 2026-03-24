@@ -1,0 +1,17 @@
+{
+  "name": "Auburn Tigers",
+  "abbreviation": "AUB",
+  "city": "Auburn",
+  "short_name": "Auburn",
+  "record": "20-12",
+  "stats": {
+    "ppg": 68.9,
+    "opp_ppg": 64.1,
+    "pace": 66.8,
+    "off_rtg": 103.1,
+    "def_rtg": 95.9,
+    "reb_pg": 37.1,
+    "fg_pct": 0.418,
+    "three_pct": 0.310
+  }
+}

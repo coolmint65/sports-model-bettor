@@ -1,0 +1,16 @@
+{
+  "name": "Virginia Tech Hokies",
+  "abbreviation": "VT",
+  "city": "Blacksburg",
+  "short_name": "Virginia Tech",
+  "record": "6-6",
+  "stats": {
+    "ppg": 25.8,
+    "opp_ppg": 25.2,
+    "yards_per_game": 378.5,
+    "opp_yards_per_game": 362.8,
+    "rush_ypg": 158.4,
+    "pass_ypg": 220.1,
+    "turnover_diff": 0
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Mississippi State Bulldogs",
+  "abbreviation": "MSST",
+  "city": "Starkville",
+  "short_name": "Mississippi St",
+  "record": "17-15",
+  "stats": {
+    "ppg": 67.3,
+    "opp_ppg": 65.8,
+    "pace": 66.1,
+    "off_rtg": 101.8,
+    "def_rtg": 99.6,
+    "reb_pg": 36.9,
+    "fg_pct": 0.412,
+    "three_pct": 0.298
+  }
+}

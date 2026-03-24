@@ -1,0 +1,17 @@
+{
+  "name": "Minnesota Golden Gophers",
+  "abbreviation": "MINN",
+  "city": "Minneapolis",
+  "short_name": "Minnesota",
+  "record": "15-17",
+  "stats": {
+    "ppg": 70.4,
+    "opp_ppg": 72.9,
+    "pace": 66.8,
+    "off_rtg": 104.2,
+    "def_rtg": 107.9,
+    "reb_pg": 33.2,
+    "fg_pct": 0.422,
+    "three_pct": 0.315
+  }
+}

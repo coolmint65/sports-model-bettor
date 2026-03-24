@@ -1,0 +1,16 @@
+{
+  "name": "Jacksonville State Gamecocks",
+  "abbreviation": "JVST",
+  "city": "Jacksonville",
+  "short_name": "Jacksonville St",
+  "record": "5-7",
+  "stats": {
+    "ppg": 21.4,
+    "opp_ppg": 27.8,
+    "yards_per_game": 332.5,
+    "opp_yards_per_game": 378.2,
+    "rush_ypg": 138.0,
+    "pass_ypg": 194.5,
+    "turnover_diff": -4
+  }
+}

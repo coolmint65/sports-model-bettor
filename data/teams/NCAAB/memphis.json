@@ -1,0 +1,17 @@
+{
+  "name": "Memphis Tigers",
+  "abbreviation": "MEM",
+  "city": "Memphis",
+  "short_name": "Memphis",
+  "record": "22-11",
+  "stats": {
+    "ppg": 78.3,
+    "opp_ppg": 72.1,
+    "pace": 70.5,
+    "off_rtg": 111.8,
+    "def_rtg": 103.2,
+    "reb_pg": 36.2,
+    "fg_pct": 0.457,
+    "three_pct": 0.338
+  }
+}

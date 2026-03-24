@@ -1,0 +1,17 @@
+{
+  "name": "Saint Mary's Gaels",
+  "abbreviation": "SMC",
+  "city": "Moraga",
+  "short_name": "Saint Mary's",
+  "record": "24-9",
+  "stats": {
+    "ppg": 73.8,
+    "opp_ppg": 65.2,
+    "pace": 63.5,
+    "off_rtg": 114.8,
+    "def_rtg": 101.2,
+    "reb_pg": 35.8,
+    "fg_pct": 0.468,
+    "three_pct": 0.362
+  }
+}

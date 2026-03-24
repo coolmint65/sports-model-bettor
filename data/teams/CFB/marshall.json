@@ -1,0 +1,16 @@
+{
+  "name": "Marshall Thundering Herd",
+  "abbreviation": "MRSH",
+  "city": "Huntington",
+  "short_name": "Marshall",
+  "record": "5-7",
+  "stats": {
+    "ppg": 24.1,
+    "opp_ppg": 27.5,
+    "yards_per_game": 362.8,
+    "opp_yards_per_game": 382.4,
+    "rush_ypg": 145.2,
+    "pass_ypg": 217.6,
+    "turnover_diff": -2
+  }
+}

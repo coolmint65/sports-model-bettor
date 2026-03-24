@@ -1,0 +1,17 @@
+{
+  "name": "Middle Tennessee Blue Raiders",
+  "abbreviation": "MTSU",
+  "city": "Murfreesboro",
+  "short_name": "Mid Tennessee",
+  "record": "23-9",
+  "stats": {
+    "ppg": 68.2,
+    "opp_ppg": 60.8,
+    "pace": 66.5,
+    "off_rtg": 102.6,
+    "def_rtg": 91.4,
+    "reb_pg": 37.2,
+    "fg_pct": 0.421,
+    "three_pct": 0.318
+  }
+}

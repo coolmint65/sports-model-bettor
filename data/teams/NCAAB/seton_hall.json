@@ -1,0 +1,17 @@
+{
+  "name": "Seton Hall Pirates",
+  "abbreviation": "SH",
+  "city": "South Orange",
+  "short_name": "Seton Hall",
+  "record": "14-18",
+  "stats": {
+    "ppg": 69.8,
+    "opp_ppg": 73.4,
+    "pace": 66.5,
+    "off_rtg": 103.2,
+    "def_rtg": 108.6,
+    "reb_pg": 32.6,
+    "fg_pct": 0.416,
+    "three_pct": 0.308
+  }
+}

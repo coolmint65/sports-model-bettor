@@ -1,0 +1,17 @@
+{
+  "name": "Houston Cougars",
+  "abbreviation": "HOU",
+  "city": "Houston",
+  "short_name": "Houston",
+  "record": "19-13",
+  "stats": {
+    "ppg": 70.1,
+    "opp_ppg": 65.8,
+    "pace": 67.2,
+    "off_rtg": 104.3,
+    "def_rtg": 97.9,
+    "reb_pg": 36.7,
+    "fg_pct": 0.422,
+    "three_pct": 0.316
+  }
+}

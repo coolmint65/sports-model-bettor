@@ -1,0 +1,16 @@
+{
+  "name": "Fresno State Bulldogs",
+  "abbreviation": "FRES",
+  "city": "Fresno",
+  "short_name": "Fresno State",
+  "record": "6-6",
+  "stats": {
+    "ppg": 25.2,
+    "opp_ppg": 24.8,
+    "yards_per_game": 372.5,
+    "opp_yards_per_game": 358.4,
+    "rush_ypg": 148.2,
+    "pass_ypg": 224.3,
+    "turnover_diff": 1
+  }
+}

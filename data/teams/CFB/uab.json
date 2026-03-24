@@ -1,0 +1,16 @@
+{
+  "name": "UAB Blazers",
+  "abbreviation": "UAB",
+  "city": "Birmingham",
+  "short_name": "UAB",
+  "record": "4-8",
+  "stats": {
+    "ppg": 20.3,
+    "opp_ppg": 28.1,
+    "yards_per_game": 325.0,
+    "opp_yards_per_game": 375.4,
+    "rush_ypg": 130.5,
+    "pass_ypg": 194.5,
+    "turnover_diff": -3
+  }
+}

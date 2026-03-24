@@ -1,0 +1,16 @@
+{
+  "name": "Indiana Hoosiers",
+  "abbreviation": "IND",
+  "city": "Bloomington",
+  "short_name": "Indiana",
+  "record": "11-1",
+  "stats": {
+    "ppg": 34.2,
+    "opp_ppg": 17.5,
+    "yards_per_game": 430.8,
+    "opp_yards_per_game": 298.3,
+    "rush_ypg": 182.4,
+    "pass_ypg": 248.4,
+    "turnover_diff": 10
+  }
+}

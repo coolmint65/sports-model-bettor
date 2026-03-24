@@ -1,0 +1,16 @@
+{
+  "name": "North Carolina Tar Heels",
+  "abbreviation": "UNC",
+  "city": "Chapel Hill",
+  "short_name": "North Carolina",
+  "record": "6-6",
+  "stats": {
+    "ppg": 27.5,
+    "opp_ppg": 27.8,
+    "yards_per_game": 398.2,
+    "opp_yards_per_game": 382.5,
+    "rush_ypg": 148.3,
+    "pass_ypg": 249.9,
+    "turnover_diff": -2
+  }
+}

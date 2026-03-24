@@ -1,0 +1,17 @@
+{
+  "name": "California Golden Bears",
+  "abbreviation": "CAL",
+  "city": "Berkeley",
+  "short_name": "Cal",
+  "record": "15-17",
+  "stats": {
+    "ppg": 70.2,
+    "opp_ppg": 73.0,
+    "pace": 66.8,
+    "off_rtg": 103.8,
+    "def_rtg": 107.9,
+    "reb_pg": 33.0,
+    "fg_pct": 0.420,
+    "three_pct": 0.312
+  }
+}

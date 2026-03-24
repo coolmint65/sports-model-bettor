@@ -1,0 +1,17 @@
+{
+  "name": "Georgia Bulldogs",
+  "abbreviation": "UGA",
+  "city": "Athens",
+  "short_name": "Georgia",
+  "record": "16-16",
+  "stats": {
+    "ppg": 71.4,
+    "opp_ppg": 73.2,
+    "pace": 67.5,
+    "off_rtg": 104.5,
+    "def_rtg": 107.8,
+    "reb_pg": 33.6,
+    "fg_pct": 0.425,
+    "three_pct": 0.318
+  }
+}

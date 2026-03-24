@@ -1,0 +1,17 @@
+{
+  "name": "Missouri Tigers",
+  "abbreviation": "MIZ",
+  "city": "Columbia",
+  "short_name": "Missouri",
+  "record": "18-15",
+  "stats": {
+    "ppg": 72.9,
+    "opp_ppg": 72.1,
+    "pace": 68.3,
+    "off_rtg": 106.8,
+    "def_rtg": 105.6,
+    "reb_pg": 34.0,
+    "fg_pct": 0.433,
+    "three_pct": 0.327
+  }
+}

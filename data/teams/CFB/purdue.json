@@ -1,0 +1,16 @@
+{
+  "name": "Purdue Boilermakers",
+  "abbreviation": "PUR",
+  "city": "West Lafayette",
+  "short_name": "Purdue",
+  "record": "1-11",
+  "stats": {
+    "ppg": 15.8,
+    "opp_ppg": 33.5,
+    "yards_per_game": 298.4,
+    "opp_yards_per_game": 425.7,
+    "rush_ypg": 105.2,
+    "pass_ypg": 193.2,
+    "turnover_diff": -12
+  }
+}

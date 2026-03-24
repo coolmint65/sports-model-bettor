@@ -1,0 +1,17 @@
+{
+  "name": "Florida Gators",
+  "abbreviation": "FLA",
+  "city": "Gainesville",
+  "short_name": "Florida",
+  "record": "21-12",
+  "stats": {
+    "ppg": 72.8,
+    "opp_ppg": 65.9,
+    "pace": 68.4,
+    "off_rtg": 106.4,
+    "def_rtg": 96.3,
+    "reb_pg": 37.5,
+    "fg_pct": 0.435,
+    "three_pct": 0.328
+  }
+}

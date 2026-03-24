@@ -1,0 +1,17 @@
+{
+  "name": "Wichita State Shockers",
+  "abbreviation": "WICH",
+  "city": "Wichita",
+  "short_name": "Wichita St",
+  "record": "16-16",
+  "stats": {
+    "ppg": 71.4,
+    "opp_ppg": 72.0,
+    "pace": 67.1,
+    "off_rtg": 105.8,
+    "def_rtg": 107.2,
+    "reb_pg": 34.0,
+    "fg_pct": 0.438,
+    "three_pct": 0.330
+  }
+}

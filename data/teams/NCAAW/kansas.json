@@ -1,0 +1,17 @@
+{
+  "name": "Kansas Jayhawks",
+  "abbreviation": "KU",
+  "city": "Lawrence",
+  "short_name": "Kansas",
+  "record": "20-12",
+  "stats": {
+    "ppg": 71.8,
+    "opp_ppg": 65.4,
+    "pace": 68.2,
+    "off_rtg": 105.3,
+    "def_rtg": 95.9,
+    "reb_pg": 37.3,
+    "fg_pct": 0.431,
+    "three_pct": 0.324
+  }
+}

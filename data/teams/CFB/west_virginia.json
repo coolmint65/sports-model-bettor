@@ -1,0 +1,16 @@
+{
+  "name": "West Virginia Mountaineers",
+  "abbreviation": "WVU",
+  "city": "Morgantown",
+  "short_name": "West Virginia",
+  "record": "6-6",
+  "stats": {
+    "ppg": 26.5,
+    "opp_ppg": 26.8,
+    "yards_per_game": 385.1,
+    "opp_yards_per_game": 372.5,
+    "rush_ypg": 155.2,
+    "pass_ypg": 229.9,
+    "turnover_diff": -1
+  }
+}

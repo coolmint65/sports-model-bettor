@@ -1,0 +1,17 @@
+{
+  "name": "DePaul Blue Demons",
+  "abbreviation": "DEP",
+  "city": "Chicago",
+  "short_name": "DePaul",
+  "record": "12-20",
+  "stats": {
+    "ppg": 68.2,
+    "opp_ppg": 74.5,
+    "pace": 67.5,
+    "off_rtg": 100.8,
+    "def_rtg": 110.2,
+    "reb_pg": 31.8,
+    "fg_pct": 0.408,
+    "three_pct": 0.298
+  }
+}

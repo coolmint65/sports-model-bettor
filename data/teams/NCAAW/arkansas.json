@@ -1,0 +1,17 @@
+{
+  "name": "Arkansas Razorbacks",
+  "abbreviation": "ARK",
+  "city": "Fayetteville",
+  "short_name": "Arkansas",
+  "record": "22-11",
+  "stats": {
+    "ppg": 74.5,
+    "opp_ppg": 65.3,
+    "pace": 71.2,
+    "off_rtg": 104.7,
+    "def_rtg": 91.8,
+    "reb_pg": 37.8,
+    "fg_pct": 0.432,
+    "three_pct": 0.325
+  }
+}

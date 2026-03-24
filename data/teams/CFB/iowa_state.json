@@ -1,0 +1,16 @@
+{
+  "name": "Iowa State Cyclones",
+  "abbreviation": "ISU",
+  "city": "Ames",
+  "short_name": "Iowa State",
+  "record": "10-3",
+  "stats": {
+    "ppg": 29.5,
+    "opp_ppg": 19.2,
+    "yards_per_game": 395.8,
+    "opp_yards_per_game": 310.4,
+    "rush_ypg": 158.6,
+    "pass_ypg": 237.2,
+    "turnover_diff": 8
+  }
+}

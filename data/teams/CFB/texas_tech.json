@@ -1,0 +1,16 @@
+{
+  "name": "Texas Tech Red Raiders",
+  "abbreviation": "TTU",
+  "city": "Lubbock",
+  "short_name": "Texas Tech",
+  "record": "7-5",
+  "stats": {
+    "ppg": 30.8,
+    "opp_ppg": 27.1,
+    "yards_per_game": 425.6,
+    "opp_yards_per_game": 370.2,
+    "rush_ypg": 145.8,
+    "pass_ypg": 279.8,
+    "turnover_diff": 1
+  }
+}

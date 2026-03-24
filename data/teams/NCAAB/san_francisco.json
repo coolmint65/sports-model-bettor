@@ -1,0 +1,17 @@
+{
+  "name": "San Francisco Dons",
+  "abbreviation": "USF",
+  "city": "San Francisco",
+  "short_name": "San Francisco",
+  "record": "20-13",
+  "stats": {
+    "ppg": 72.8,
+    "opp_ppg": 69.5,
+    "pace": 66.2,
+    "off_rtg": 110.1,
+    "def_rtg": 105.0,
+    "reb_pg": 33.8,
+    "fg_pct": 0.448,
+    "three_pct": 0.341
+  }
+}

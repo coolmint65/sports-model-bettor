@@ -1,0 +1,17 @@
+{
+  "name": "TCU Horned Frogs",
+  "abbreviation": "TCU",
+  "city": "Fort Worth",
+  "short_name": "TCU",
+  "record": "20-14",
+  "stats": {
+    "ppg": 74.1,
+    "opp_ppg": 71.5,
+    "pace": 67.8,
+    "off_rtg": 109.1,
+    "def_rtg": 105.0,
+    "reb_pg": 34.9,
+    "fg_pct": 0.443,
+    "three_pct": 0.336
+  }
+}

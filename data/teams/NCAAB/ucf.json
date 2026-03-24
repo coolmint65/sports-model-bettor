@@ -1,0 +1,17 @@
+{
+  "name": "UCF Knights",
+  "abbreviation": "UCF",
+  "city": "Orlando",
+  "short_name": "UCF",
+  "record": "19-14",
+  "stats": {
+    "ppg": 72.5,
+    "opp_ppg": 71.3,
+    "pace": 67.2,
+    "off_rtg": 107.1,
+    "def_rtg": 105.2,
+    "reb_pg": 34.1,
+    "fg_pct": 0.438,
+    "three_pct": 0.328
+  }
+}

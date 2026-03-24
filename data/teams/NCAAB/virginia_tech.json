@@ -1,0 +1,17 @@
+{
+  "name": "Virginia Tech Hokies",
+  "abbreviation": "VT",
+  "city": "Blacksburg",
+  "short_name": "Virginia Tech",
+  "record": "17-16",
+  "stats": {
+    "ppg": 72.8,
+    "opp_ppg": 72.5,
+    "pace": 67.4,
+    "off_rtg": 106.5,
+    "def_rtg": 106.1,
+    "reb_pg": 33.9,
+    "fg_pct": 0.433,
+    "three_pct": 0.326
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "Michigan State Spartans",
+  "abbreviation": "MSU",
+  "city": "East Lansing",
+  "short_name": "Michigan State",
+  "record": "5-7",
+  "stats": {
+    "ppg": 24.5,
+    "opp_ppg": 27.2,
+    "yards_per_game": 370.3,
+    "opp_yards_per_game": 378.5,
+    "rush_ypg": 148.1,
+    "pass_ypg": 222.2,
+    "turnover_diff": -3
+  }
+}

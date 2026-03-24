@@ -1,0 +1,17 @@
+{
+  "name": "Texas Tech Lady Raiders",
+  "abbreviation": "TTU",
+  "city": "Lubbock",
+  "short_name": "Texas Tech",
+  "record": "20-13",
+  "stats": {
+    "ppg": 70.5,
+    "opp_ppg": 65.6,
+    "pace": 67.5,
+    "off_rtg": 104.4,
+    "def_rtg": 97.2,
+    "reb_pg": 37.1,
+    "fg_pct": 0.426,
+    "three_pct": 0.320
+  }
+}

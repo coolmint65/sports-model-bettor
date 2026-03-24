@@ -1,0 +1,16 @@
+{
+  "name": "Navy Midshipmen",
+  "abbreviation": "NAVY",
+  "city": "Annapolis",
+  "short_name": "Navy",
+  "record": "8-4",
+  "stats": {
+    "ppg": 28.8,
+    "opp_ppg": 22.5,
+    "yards_per_game": 385.2,
+    "opp_yards_per_game": 338.6,
+    "rush_ypg": 248.4,
+    "pass_ypg": 136.8,
+    "turnover_diff": 4
+  }
+}

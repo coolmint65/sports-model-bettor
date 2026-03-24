@@ -1,0 +1,17 @@
+{
+  "name": "Miami Hurricanes",
+  "abbreviation": "MIA",
+  "city": "Coral Gables",
+  "short_name": "Miami",
+  "record": "20-12",
+  "stats": {
+    "ppg": 72.1,
+    "opp_ppg": 65.5,
+    "pace": 68.3,
+    "off_rtg": 105.6,
+    "def_rtg": 95.9,
+    "reb_pg": 37.2,
+    "fg_pct": 0.433,
+    "three_pct": 0.328
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "Boston College Eagles",
+  "abbreviation": "BC",
+  "city": "Chestnut Hill",
+  "short_name": "Boston College",
+  "record": "7-5",
+  "stats": {
+    "ppg": 27.2,
+    "opp_ppg": 24.1,
+    "yards_per_game": 388.5,
+    "opp_yards_per_game": 348.3,
+    "rush_ypg": 165.8,
+    "pass_ypg": 222.7,
+    "turnover_diff": 3
+  }
+}

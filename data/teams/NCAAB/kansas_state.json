@@ -1,0 +1,17 @@
+{
+  "name": "Kansas State Wildcats",
+  "abbreviation": "KSU",
+  "city": "Manhattan",
+  "short_name": "Kansas St",
+  "record": "19-14",
+  "stats": {
+    "ppg": 73.5,
+    "opp_ppg": 71.9,
+    "pace": 67.3,
+    "off_rtg": 108.2,
+    "def_rtg": 105.8,
+    "reb_pg": 34.6,
+    "fg_pct": 0.440,
+    "three_pct": 0.334
+  }
+}

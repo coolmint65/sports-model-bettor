@@ -1,0 +1,17 @@
+{
+  "name": "Illinois Fighting Illini",
+  "abbreviation": "ILL",
+  "city": "Champaign",
+  "short_name": "Illinois",
+  "record": "18-14",
+  "stats": {
+    "ppg": 69.8,
+    "opp_ppg": 66.4,
+    "pace": 67.3,
+    "off_rtg": 103.7,
+    "def_rtg": 98.7,
+    "reb_pg": 36.1,
+    "fg_pct": 0.420,
+    "three_pct": 0.315
+  }
+}

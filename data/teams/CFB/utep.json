@@ -1,0 +1,16 @@
+{
+  "name": "UTEP Miners",
+  "abbreviation": "UTEP",
+  "city": "El Paso",
+  "short_name": "UTEP",
+  "record": "3-9",
+  "stats": {
+    "ppg": 18.5,
+    "opp_ppg": 30.8,
+    "yards_per_game": 310.2,
+    "opp_yards_per_game": 405.6,
+    "rush_ypg": 125.8,
+    "pass_ypg": 184.4,
+    "turnover_diff": -8
+  }
+}

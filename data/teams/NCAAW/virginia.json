@@ -1,0 +1,17 @@
+{
+  "name": "Virginia Cavaliers",
+  "abbreviation": "UVA",
+  "city": "Charlottesville",
+  "short_name": "Virginia",
+  "record": "15-17",
+  "stats": {
+    "ppg": 64.8,
+    "opp_ppg": 66.5,
+    "pace": 63.9,
+    "off_rtg": 101.4,
+    "def_rtg": 104.1,
+    "reb_pg": 35.1,
+    "fg_pct": 0.403,
+    "three_pct": 0.292
+  }
+}

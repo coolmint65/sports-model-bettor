@@ -1,0 +1,16 @@
+{
+  "name": "Army Black Knights",
+  "abbreviation": "ARMY",
+  "city": "West Point",
+  "short_name": "Army",
+  "record": "11-2",
+  "stats": {
+    "ppg": 33.5,
+    "opp_ppg": 18.2,
+    "yards_per_game": 405.8,
+    "opp_yards_per_game": 302.4,
+    "rush_ypg": 282.5,
+    "pass_ypg": 123.3,
+    "turnover_diff": 9
+  }
+}

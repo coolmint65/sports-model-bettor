@@ -1,0 +1,17 @@
+{
+  "name": "Santa Clara Broncos",
+  "abbreviation": "SCU",
+  "city": "Santa Clara",
+  "short_name": "Santa Clara",
+  "record": "20-12",
+  "stats": {
+    "ppg": 74.1,
+    "opp_ppg": 69.8,
+    "pace": 66.8,
+    "off_rtg": 110.2,
+    "def_rtg": 103.8,
+    "reb_pg": 34.2,
+    "fg_pct": 0.445,
+    "three_pct": 0.348
+  }
+}

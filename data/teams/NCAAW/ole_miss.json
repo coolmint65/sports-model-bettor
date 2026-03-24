@@ -1,0 +1,17 @@
+{
+  "name": "Ole Miss Rebels",
+  "abbreviation": "MISS",
+  "city": "Oxford",
+  "short_name": "Ole Miss",
+  "record": "24-8",
+  "stats": {
+    "ppg": 76.2,
+    "opp_ppg": 62.4,
+    "pace": 69.3,
+    "off_rtg": 109.9,
+    "def_rtg": 90.1,
+    "reb_pg": 39.1,
+    "fg_pct": 0.448,
+    "three_pct": 0.341
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Maryland Terrapins",
+  "abbreviation": "MD",
+  "city": "College Park",
+  "short_name": "Maryland",
+  "record": "18-14",
+  "stats": {
+    "ppg": 73.8,
+    "opp_ppg": 72.5,
+    "pace": 67.6,
+    "off_rtg": 107.9,
+    "def_rtg": 106.0,
+    "reb_pg": 34.4,
+    "fg_pct": 0.438,
+    "three_pct": 0.330
+  }
+}

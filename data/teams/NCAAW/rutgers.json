@@ -1,0 +1,17 @@
+{
+  "name": "Rutgers Scarlet Knights",
+  "abbreviation": "RUT",
+  "city": "Piscataway",
+  "short_name": "Rutgers",
+  "record": "18-14",
+  "stats": {
+    "ppg": 67.9,
+    "opp_ppg": 65.3,
+    "pace": 65.8,
+    "off_rtg": 103.2,
+    "def_rtg": 99.2,
+    "reb_pg": 37.0,
+    "fg_pct": 0.414,
+    "three_pct": 0.302
+  }
+}

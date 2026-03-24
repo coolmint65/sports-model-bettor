@@ -1,0 +1,16 @@
+{
+  "name": "TCU Horned Frogs",
+  "abbreviation": "TCU",
+  "city": "Fort Worth",
+  "short_name": "TCU",
+  "record": "8-4",
+  "stats": {
+    "ppg": 30.2,
+    "opp_ppg": 24.5,
+    "yards_per_game": 412.8,
+    "opp_yards_per_game": 352.6,
+    "rush_ypg": 160.4,
+    "pass_ypg": 252.4,
+    "turnover_diff": 3
+  }
+}

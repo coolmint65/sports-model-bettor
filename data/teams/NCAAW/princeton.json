@@ -1,0 +1,17 @@
+{
+  "name": "Princeton Tigers",
+  "abbreviation": "PRIN",
+  "city": "Princeton",
+  "short_name": "Princeton",
+  "record": "19-10",
+  "stats": {
+    "ppg": 63.8,
+    "opp_ppg": 57.9,
+    "pace": 63.5,
+    "off_rtg": 100.5,
+    "def_rtg": 91.2,
+    "reb_pg": 34.9,
+    "fg_pct": 0.418,
+    "three_pct": 0.335
+  }
+}

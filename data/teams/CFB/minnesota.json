@@ -1,0 +1,16 @@
+{
+  "name": "Minnesota Golden Gophers",
+  "abbreviation": "MINN",
+  "city": "Minneapolis",
+  "short_name": "Minnesota",
+  "record": "7-5",
+  "stats": {
+    "ppg": 26.8,
+    "opp_ppg": 23.4,
+    "yards_per_game": 382.1,
+    "opp_yards_per_game": 342.8,
+    "rush_ypg": 175.6,
+    "pass_ypg": 206.5,
+    "turnover_diff": 2
+  }
+}

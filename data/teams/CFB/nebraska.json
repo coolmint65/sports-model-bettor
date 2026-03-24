@@ -1,0 +1,16 @@
+{
+  "name": "Nebraska Cornhuskers",
+  "abbreviation": "NEB",
+  "city": "Lincoln",
+  "short_name": "Nebraska",
+  "record": "6-6",
+  "stats": {
+    "ppg": 25.9,
+    "opp_ppg": 24.8,
+    "yards_per_game": 378.4,
+    "opp_yards_per_game": 358.2,
+    "rush_ypg": 162.3,
+    "pass_ypg": 216.1,
+    "turnover_diff": 0
+  }
+}

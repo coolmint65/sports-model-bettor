@@ -1,0 +1,17 @@
+{
+  "name": "Michigan Wolverines",
+  "abbreviation": "MICH",
+  "city": "Ann Arbor",
+  "short_name": "Michigan",
+  "record": "18-15",
+  "stats": {
+    "ppg": 73.4,
+    "opp_ppg": 72.0,
+    "pace": 66.9,
+    "off_rtg": 108.1,
+    "def_rtg": 106.0,
+    "reb_pg": 34.8,
+    "fg_pct": 0.440,
+    "three_pct": 0.333
+  }
+}

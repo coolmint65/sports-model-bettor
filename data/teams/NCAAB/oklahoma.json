@@ -1,0 +1,17 @@
+{
+  "name": "Oklahoma Sooners",
+  "abbreviation": "OU",
+  "city": "Norman",
+  "short_name": "Oklahoma",
+  "record": "18-14",
+  "stats": {
+    "ppg": 73.6,
+    "opp_ppg": 72.4,
+    "pace": 68.0,
+    "off_rtg": 107.5,
+    "def_rtg": 105.8,
+    "reb_pg": 34.2,
+    "fg_pct": 0.436,
+    "three_pct": 0.329
+  }
+}

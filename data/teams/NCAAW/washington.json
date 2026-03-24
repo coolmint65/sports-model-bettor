@@ -1,0 +1,17 @@
+{
+  "name": "Washington Huskies",
+  "abbreviation": "UW",
+  "city": "Seattle",
+  "short_name": "Washington",
+  "record": "15-17",
+  "stats": {
+    "ppg": 66.8,
+    "opp_ppg": 68.4,
+    "pace": 66.2,
+    "off_rtg": 100.9,
+    "def_rtg": 103.3,
+    "reb_pg": 35.4,
+    "fg_pct": 0.408,
+    "three_pct": 0.298
+  }
+}

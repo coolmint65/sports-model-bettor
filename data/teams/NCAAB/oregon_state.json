@@ -1,0 +1,17 @@
+{
+  "name": "Oregon State Beavers",
+  "abbreviation": "ORST",
+  "city": "Corvallis",
+  "short_name": "Oregon St",
+  "record": "14-18",
+  "stats": {
+    "ppg": 69.5,
+    "opp_ppg": 73.8,
+    "pace": 66.2,
+    "off_rtg": 102.8,
+    "def_rtg": 109.2,
+    "reb_pg": 32.8,
+    "fg_pct": 0.418,
+    "three_pct": 0.308
+  }
+}

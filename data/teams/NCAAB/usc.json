@@ -1,0 +1,17 @@
+{
+  "name": "USC Trojans",
+  "abbreviation": "USC",
+  "city": "Los Angeles",
+  "short_name": "USC",
+  "record": "17-16",
+  "stats": {
+    "ppg": 72.1,
+    "opp_ppg": 72.8,
+    "pace": 67.2,
+    "off_rtg": 105.9,
+    "def_rtg": 107.0,
+    "reb_pg": 33.8,
+    "fg_pct": 0.430,
+    "three_pct": 0.321
+  }
+}

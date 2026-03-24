@@ -1,0 +1,16 @@
+{
+  "name": "Mississippi State Bulldogs",
+  "abbreviation": "MSST",
+  "city": "Starkville",
+  "short_name": "Mississippi State",
+  "record": "5-7",
+  "stats": {
+    "ppg": 24.2,
+    "opp_ppg": 27.8,
+    "yards_per_game": 372.4,
+    "opp_yards_per_game": 375.6,
+    "rush_ypg": 140.3,
+    "pass_ypg": 232.1,
+    "turnover_diff": -3
+  }
+}

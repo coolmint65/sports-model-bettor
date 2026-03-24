@@ -1,0 +1,17 @@
+{
+  "name": "Purdue Boilermakers",
+  "abbreviation": "PUR",
+  "city": "West Lafayette",
+  "short_name": "Purdue",
+  "record": "17-14",
+  "stats": {
+    "ppg": 69.3,
+    "opp_ppg": 66.8,
+    "pace": 66.9,
+    "off_rtg": 103.6,
+    "def_rtg": 99.8,
+    "reb_pg": 36.2,
+    "fg_pct": 0.418,
+    "three_pct": 0.310
+  }
+}

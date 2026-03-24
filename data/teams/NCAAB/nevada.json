@@ -1,0 +1,17 @@
+{
+  "name": "Nevada Wolf Pack",
+  "abbreviation": "NEV",
+  "city": "Reno",
+  "short_name": "Nevada",
+  "record": "18-15",
+  "stats": {
+    "ppg": 72.5,
+    "opp_ppg": 71.0,
+    "pace": 67.2,
+    "off_rtg": 107.8,
+    "def_rtg": 106.1,
+    "reb_pg": 34.1,
+    "fg_pct": 0.441,
+    "three_pct": 0.335
+  }
+}

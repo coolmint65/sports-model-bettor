@@ -1,0 +1,16 @@
+{
+  "name": "San Jose State Spartans",
+  "abbreviation": "SJSU",
+  "city": "San Jose",
+  "short_name": "San Jose State",
+  "record": "7-5",
+  "stats": {
+    "ppg": 26.4,
+    "opp_ppg": 24.2,
+    "yards_per_game": 378.8,
+    "opp_yards_per_game": 352.1,
+    "rush_ypg": 142.5,
+    "pass_ypg": 236.3,
+    "turnover_diff": 2
+  }
+}

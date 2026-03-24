@@ -1,0 +1,16 @@
+{
+  "name": "Sam Houston Bearkats",
+  "abbreviation": "SHSU",
+  "city": "Huntsville",
+  "short_name": "Sam Houston",
+  "record": "5-7",
+  "stats": {
+    "ppg": 22.1,
+    "opp_ppg": 28.5,
+    "yards_per_game": 340.8,
+    "opp_yards_per_game": 385.0,
+    "rush_ypg": 142.3,
+    "pass_ypg": 198.5,
+    "turnover_diff": -5
+  }
+}

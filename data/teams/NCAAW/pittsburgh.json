@@ -1,0 +1,17 @@
+{
+  "name": "Pittsburgh Panthers",
+  "abbreviation": "PITT",
+  "city": "Pittsburgh",
+  "short_name": "Pittsburgh",
+  "record": "16-16",
+  "stats": {
+    "ppg": 67.5,
+    "opp_ppg": 67.2,
+    "pace": 66.3,
+    "off_rtg": 101.8,
+    "def_rtg": 101.4,
+    "reb_pg": 35.7,
+    "fg_pct": 0.411,
+    "three_pct": 0.302
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "Virginia Cavaliers",
+  "abbreviation": "UVA",
+  "city": "Charlottesville",
+  "short_name": "Virginia",
+  "record": "5-7",
+  "stats": {
+    "ppg": 23.4,
+    "opp_ppg": 27.1,
+    "yards_per_game": 362.8,
+    "opp_yards_per_game": 378.4,
+    "rush_ypg": 135.2,
+    "pass_ypg": 227.6,
+    "turnover_diff": -4
+  }
+}

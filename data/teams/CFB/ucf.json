@@ -1,0 +1,16 @@
+{
+  "name": "UCF Knights",
+  "abbreviation": "UCF",
+  "city": "Orlando",
+  "short_name": "UCF",
+  "record": "5-7",
+  "stats": {
+    "ppg": 26.1,
+    "opp_ppg": 28.5,
+    "yards_per_game": 388.2,
+    "opp_yards_per_game": 390.4,
+    "rush_ypg": 148.5,
+    "pass_ypg": 239.7,
+    "turnover_diff": -2
+  }
+}

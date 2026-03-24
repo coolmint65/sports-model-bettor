@@ -1,0 +1,17 @@
+{
+  "name": "Texas Longhorns",
+  "abbreviation": "TEX",
+  "city": "Austin",
+  "short_name": "Texas",
+  "record": "22-11",
+  "stats": {
+    "ppg": 76.8,
+    "opp_ppg": 69.5,
+    "pace": 67.9,
+    "off_rtg": 112.8,
+    "def_rtg": 101.5,
+    "reb_pg": 36.1,
+    "fg_pct": 0.458,
+    "three_pct": 0.348
+  }
+}

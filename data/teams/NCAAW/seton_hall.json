@@ -1,0 +1,17 @@
+{
+  "name": "Seton Hall Pirates",
+  "abbreviation": "SHU",
+  "city": "South Orange",
+  "short_name": "Seton Hall",
+  "record": "15-16",
+  "stats": {
+    "ppg": 63.8,
+    "opp_ppg": 65.2,
+    "pace": 66.4,
+    "off_rtg": 96.1,
+    "def_rtg": 98.2,
+    "reb_pg": 35.1,
+    "fg_pct": 0.398,
+    "three_pct": 0.298
+  }
+}

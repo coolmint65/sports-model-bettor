@@ -1,0 +1,17 @@
+{
+  "name": "Ohio State Buckeyes",
+  "abbreviation": "OSU",
+  "city": "Columbus",
+  "short_name": "Ohio State",
+  "record": "19-14",
+  "stats": {
+    "ppg": 74.2,
+    "opp_ppg": 71.6,
+    "pace": 67.4,
+    "off_rtg": 109.0,
+    "def_rtg": 105.2,
+    "reb_pg": 35.0,
+    "fg_pct": 0.444,
+    "three_pct": 0.336
+  }
+}

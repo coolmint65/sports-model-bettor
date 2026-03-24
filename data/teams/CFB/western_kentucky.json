@@ -1,0 +1,16 @@
+{
+  "name": "Western Kentucky Hilltoppers",
+  "abbreviation": "WKU",
+  "city": "Bowling Green",
+  "short_name": "Western Kentucky",
+  "record": "7-5",
+  "stats": {
+    "ppg": 28.5,
+    "opp_ppg": 25.8,
+    "yards_per_game": 398.2,
+    "opp_yards_per_game": 368.5,
+    "rush_ypg": 142.1,
+    "pass_ypg": 256.1,
+    "turnover_diff": 1
+  }
+}

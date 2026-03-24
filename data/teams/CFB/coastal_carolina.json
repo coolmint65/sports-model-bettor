@@ -1,0 +1,16 @@
+{
+  "name": "Coastal Carolina Chanticleers",
+  "abbreviation": "CCU",
+  "city": "Conway",
+  "short_name": "Coastal Carolina",
+  "record": "6-6",
+  "stats": {
+    "ppg": 25.8,
+    "opp_ppg": 26.4,
+    "yards_per_game": 375.4,
+    "opp_yards_per_game": 372.8,
+    "rush_ypg": 155.2,
+    "pass_ypg": 220.2,
+    "turnover_diff": -1
+  }
+}

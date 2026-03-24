@@ -1,0 +1,17 @@
+{
+  "name": "Wake Forest Demon Deacons",
+  "abbreviation": "WAKE",
+  "city": "Winston-Salem",
+  "short_name": "Wake Forest",
+  "record": "14-18",
+  "stats": {
+    "ppg": 65.3,
+    "opp_ppg": 68.4,
+    "pace": 65.5,
+    "off_rtg": 99.7,
+    "def_rtg": 104.4,
+    "reb_pg": 34.6,
+    "fg_pct": 0.399,
+    "three_pct": 0.288
+  }
+}

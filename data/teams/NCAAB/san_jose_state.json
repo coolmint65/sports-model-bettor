@@ -1,0 +1,17 @@
+{
+  "name": "San Jose State Spartans",
+  "abbreviation": "SJSU",
+  "city": "San Jose",
+  "short_name": "San Jose St",
+  "record": "12-20",
+  "stats": {
+    "ppg": 66.8,
+    "opp_ppg": 73.5,
+    "pace": 66.4,
+    "off_rtg": 99.8,
+    "def_rtg": 110.2,
+    "reb_pg": 31.5,
+    "fg_pct": 0.415,
+    "three_pct": 0.308
+  }
+}

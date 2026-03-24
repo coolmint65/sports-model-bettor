@@ -1,0 +1,16 @@
+{
+  "name": "Maryland Terrapins",
+  "abbreviation": "MD",
+  "city": "College Park",
+  "short_name": "Maryland",
+  "record": "4-8",
+  "stats": {
+    "ppg": 23.1,
+    "opp_ppg": 28.4,
+    "yards_per_game": 368.5,
+    "opp_yards_per_game": 385.2,
+    "rush_ypg": 135.6,
+    "pass_ypg": 232.9,
+    "turnover_diff": -5
+  }
+}

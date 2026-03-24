@@ -1,0 +1,17 @@
+{
+  "name": "Boise State Broncos",
+  "abbreviation": "BSU",
+  "city": "Boise",
+  "short_name": "Boise State",
+  "record": "19-14",
+  "stats": {
+    "ppg": 73.1,
+    "opp_ppg": 70.8,
+    "pace": 66.5,
+    "off_rtg": 108.9,
+    "def_rtg": 105.8,
+    "reb_pg": 34.3,
+    "fg_pct": 0.443,
+    "three_pct": 0.339
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "Northwestern Wildcats",
+  "abbreviation": "NW",
+  "city": "Evanston",
+  "short_name": "Northwestern",
+  "record": "4-8",
+  "stats": {
+    "ppg": 20.5,
+    "opp_ppg": 26.8,
+    "yards_per_game": 342.1,
+    "opp_yards_per_game": 375.4,
+    "rush_ypg": 132.8,
+    "pass_ypg": 209.3,
+    "turnover_diff": -4
+  }
+}

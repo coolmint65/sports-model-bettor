@@ -1,0 +1,17 @@
+{
+  "name": "Alabama Crimson Tide",
+  "abbreviation": "ALA",
+  "city": "Tuscaloosa",
+  "short_name": "Alabama",
+  "record": "19-13",
+  "stats": {
+    "ppg": 71.2,
+    "opp_ppg": 66.8,
+    "pace": 69.5,
+    "off_rtg": 102.4,
+    "def_rtg": 96.1,
+    "reb_pg": 36.2,
+    "fg_pct": 0.421,
+    "three_pct": 0.318
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "Cincinnati Bearcats",
+  "abbreviation": "CIN",
+  "city": "Cincinnati",
+  "short_name": "Cincinnati",
+  "record": "6-6",
+  "stats": {
+    "ppg": 25.4,
+    "opp_ppg": 25.8,
+    "yards_per_game": 378.5,
+    "opp_yards_per_game": 365.2,
+    "rush_ypg": 152.3,
+    "pass_ypg": 226.2,
+    "turnover_diff": -1
+  }
+}

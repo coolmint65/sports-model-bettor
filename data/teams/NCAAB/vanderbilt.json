@@ -1,0 +1,17 @@
+{
+  "name": "Vanderbilt Commodores",
+  "abbreviation": "VAN",
+  "city": "Nashville",
+  "short_name": "Vanderbilt",
+  "record": "20-14",
+  "stats": {
+    "ppg": 74.5,
+    "opp_ppg": 71.8,
+    "pace": 68.2,
+    "off_rtg": 109.3,
+    "def_rtg": 105.3,
+    "reb_pg": 34.3,
+    "fg_pct": 0.441,
+    "three_pct": 0.335
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Villanova Wildcats",
+  "abbreviation": "VILL",
+  "city": "Villanova",
+  "short_name": "Villanova",
+  "record": "18-15",
+  "stats": {
+    "ppg": 72.9,
+    "opp_ppg": 71.8,
+    "pace": 66.5,
+    "off_rtg": 107.5,
+    "def_rtg": 106.0,
+    "reb_pg": 33.8,
+    "fg_pct": 0.436,
+    "three_pct": 0.342
+  }
+}

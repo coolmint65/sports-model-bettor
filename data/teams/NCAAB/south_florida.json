@@ -1,0 +1,17 @@
+{
+  "name": "South Florida Bulls",
+  "abbreviation": "USF",
+  "city": "Tampa",
+  "short_name": "South Florida",
+  "record": "14-18",
+  "stats": {
+    "ppg": 68.5,
+    "opp_ppg": 72.3,
+    "pace": 66.9,
+    "off_rtg": 102.1,
+    "def_rtg": 108.5,
+    "reb_pg": 32.8,
+    "fg_pct": 0.425,
+    "three_pct": 0.318
+  }
+}

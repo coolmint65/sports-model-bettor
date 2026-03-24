@@ -1,0 +1,17 @@
+{
+  "name": "Arizona Wildcats",
+  "abbreviation": "ARIZ",
+  "city": "Tucson",
+  "short_name": "Arizona",
+  "record": "20-12",
+  "stats": {
+    "ppg": 71.6,
+    "opp_ppg": 65.2,
+    "pace": 68.5,
+    "off_rtg": 104.5,
+    "def_rtg": 95.2,
+    "reb_pg": 37.4,
+    "fg_pct": 0.430,
+    "three_pct": 0.322
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Penn State Nittany Lions",
+  "abbreviation": "PSU",
+  "city": "University Park",
+  "short_name": "Penn State",
+  "record": "19-13",
+  "stats": {
+    "ppg": 70.2,
+    "opp_ppg": 66.5,
+    "pace": 67.4,
+    "off_rtg": 104.2,
+    "def_rtg": 98.7,
+    "reb_pg": 36.5,
+    "fg_pct": 0.423,
+    "three_pct": 0.318
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "Wake Forest Demon Deacons",
+  "abbreviation": "WAKE",
+  "city": "Winston-Salem",
+  "short_name": "Wake Forest",
+  "record": "4-8",
+  "stats": {
+    "ppg": 22.1,
+    "opp_ppg": 28.5,
+    "yards_per_game": 352.4,
+    "opp_yards_per_game": 388.2,
+    "rush_ypg": 130.5,
+    "pass_ypg": 221.9,
+    "turnover_diff": -5
+  }
+}

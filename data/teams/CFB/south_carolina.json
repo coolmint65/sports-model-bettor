@@ -1,0 +1,16 @@
+{
+  "name": "South Carolina Gamecocks",
+  "abbreviation": "SC",
+  "city": "Columbia",
+  "short_name": "South Carolina",
+  "record": "7-5",
+  "stats": {
+    "ppg": 27.5,
+    "opp_ppg": 23.9,
+    "yards_per_game": 390.2,
+    "opp_yards_per_game": 345.8,
+    "rush_ypg": 165.1,
+    "pass_ypg": 225.1,
+    "turnover_diff": 4
+  }
+}

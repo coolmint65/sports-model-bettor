@@ -1,0 +1,16 @@
+{
+  "name": "Georgia Tech Yellow Jackets",
+  "abbreviation": "GT",
+  "city": "Atlanta",
+  "short_name": "Georgia Tech",
+  "record": "7-5",
+  "stats": {
+    "ppg": 28.9,
+    "opp_ppg": 24.5,
+    "yards_per_game": 402.1,
+    "opp_yards_per_game": 350.3,
+    "rush_ypg": 178.4,
+    "pass_ypg": 223.7,
+    "turnover_diff": 3
+  }
+}

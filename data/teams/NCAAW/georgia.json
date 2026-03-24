@@ -1,0 +1,17 @@
+{
+  "name": "Georgia Lady Bulldogs",
+  "abbreviation": "UGA",
+  "city": "Athens",
+  "short_name": "Georgia",
+  "record": "20-13",
+  "stats": {
+    "ppg": 70.4,
+    "opp_ppg": 66.2,
+    "pace": 67.9,
+    "off_rtg": 103.6,
+    "def_rtg": 97.5,
+    "reb_pg": 36.8,
+    "fg_pct": 0.425,
+    "three_pct": 0.312
+  }
+}

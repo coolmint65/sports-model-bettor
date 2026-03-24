@@ -1,0 +1,17 @@
+{
+  "name": "Stanford Cardinal",
+  "abbreviation": "STAN",
+  "city": "Stanford",
+  "short_name": "Stanford",
+  "record": "16-16",
+  "stats": {
+    "ppg": 71.4,
+    "opp_ppg": 72.0,
+    "pace": 66.5,
+    "off_rtg": 105.8,
+    "def_rtg": 106.7,
+    "reb_pg": 33.5,
+    "fg_pct": 0.430,
+    "three_pct": 0.322
+  }
+}

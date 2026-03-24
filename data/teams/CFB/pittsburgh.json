@@ -1,0 +1,16 @@
+{
+  "name": "Pittsburgh Panthers",
+  "abbreviation": "PITT",
+  "city": "Pittsburgh",
+  "short_name": "Pittsburgh",
+  "record": "7-5",
+  "stats": {
+    "ppg": 28.4,
+    "opp_ppg": 24.8,
+    "yards_per_game": 395.8,
+    "opp_yards_per_game": 352.1,
+    "rush_ypg": 155.6,
+    "pass_ypg": 240.2,
+    "turnover_diff": 2
+  }
+}

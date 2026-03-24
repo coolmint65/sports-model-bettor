@@ -1,0 +1,16 @@
+{
+  "name": "Auburn Tigers",
+  "abbreviation": "AUB",
+  "city": "Auburn",
+  "short_name": "Auburn",
+  "record": "6-6",
+  "stats": {
+    "ppg": 26.8,
+    "opp_ppg": 25.3,
+    "yards_per_game": 388.5,
+    "opp_yards_per_game": 358.1,
+    "rush_ypg": 162.7,
+    "pass_ypg": 225.8,
+    "turnover_diff": -1
+  }
+}

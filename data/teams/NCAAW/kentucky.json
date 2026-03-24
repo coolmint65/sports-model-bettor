@@ -1,0 +1,17 @@
+{
+  "name": "Kentucky Wildcats",
+  "abbreviation": "UK",
+  "city": "Lexington",
+  "short_name": "Kentucky",
+  "record": "18-14",
+  "stats": {
+    "ppg": 69.5,
+    "opp_ppg": 66.7,
+    "pace": 67.2,
+    "off_rtg": 103.4,
+    "def_rtg": 99.3,
+    "reb_pg": 36.4,
+    "fg_pct": 0.419,
+    "three_pct": 0.305
+  }
+}

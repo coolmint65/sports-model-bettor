@@ -1,0 +1,17 @@
+{
+  "name": "Georgetown Hoyas",
+  "abbreviation": "GTWN",
+  "city": "Washington",
+  "short_name": "Georgetown",
+  "record": "13-19",
+  "stats": {
+    "ppg": 63.8,
+    "opp_ppg": 68.5,
+    "pace": 65.2,
+    "off_rtg": 97.9,
+    "def_rtg": 105.1,
+    "reb_pg": 34.2,
+    "fg_pct": 0.396,
+    "three_pct": 0.285
+  }
+}

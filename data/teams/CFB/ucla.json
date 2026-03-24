@@ -1,0 +1,16 @@
+{
+  "name": "UCLA Bruins",
+  "abbreviation": "UCLA",
+  "city": "Los Angeles",
+  "short_name": "UCLA",
+  "record": "5-7",
+  "stats": {
+    "ppg": 24.8,
+    "opp_ppg": 27.5,
+    "yards_per_game": 375.2,
+    "opp_yards_per_game": 382.1,
+    "rush_ypg": 140.5,
+    "pass_ypg": 234.7,
+    "turnover_diff": -3
+  }
+}
