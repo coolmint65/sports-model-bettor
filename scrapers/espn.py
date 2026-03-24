@@ -10,8 +10,10 @@ Usage:
 """
 
 import json
+import re
 import time
 import logging
+import unicodedata
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -77,13 +79,13 @@ def _safe_float(val, default=0.0) -> float:
 def _team_key_from_name(name: str) -> str:
     """Convert team name to a filesystem-safe key."""
     key = name.lower().strip()
-    # Common replacements
-    key = key.replace("é", "e").replace("ñ", "n").replace("ü", "u")
-    key = key.replace(".", "").replace("'", "").replace("&", "and")
-    key = key.replace(" - ", "_").replace("-", "_").replace(" ", "_")
-    # Remove consecutive underscores
-    while "__" in key:
-        key = key.replace("__", "_")
+    # Normalize unicode: decompose accented chars, strip combining marks
+    key = unicodedata.normalize("NFKD", key)
+    key = "".join(c for c in key if not unicodedata.combining(c))
+    # Replace & with 'and' before stripping
+    key = key.replace("&", "and")
+    # Replace any non-alphanumeric char with underscore
+    key = re.sub(r"[^a-z0-9]+", "_", key)
     return key.strip("_")
 
 
@@ -217,8 +219,19 @@ def _fetch_standings(espn_sport: str, espn_league: str) -> dict:
 
     standings = {}
     try:
+        # Collect all groups that have standings - some sports (MLB) nest
+        # children inside children (league > division)
+        groups = []
         for child in data.get("children", []):
-            for entry in child.get("standings", {}).get("entries", []):
+            if "standings" in child:
+                groups.append(child)
+            # Check for nested children (e.g. MLB divisions)
+            for subchild in child.get("children", []):
+                if "standings" in subchild:
+                    groups.append(subchild)
+
+        for group in groups:
+            for entry in group.get("standings", {}).get("entries", []):
                 team = entry.get("team", {})
                 team_id = team.get("id", "")
                 stats_map = {}
@@ -288,7 +301,10 @@ def _fetch_team_stats(espn_sport: str, espn_league: str, team_id: str,
     if team_data:
         try:
             team_info = team_data.get("team", {})
-            for rec in team_info.get("record", {}).get("items", []):
+            record = team_info.get("record", {})
+            # ESPN returns record as list for some sports (MLB), dict with items for others
+            record_items = record if isinstance(record, list) else record.get("items", [])
+            for rec in record_items:
                 rec_type = rec.get("type", "")
                 if rec_type == "total":
                     for s in rec.get("stats", []):
