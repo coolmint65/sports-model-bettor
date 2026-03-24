@@ -146,6 +146,38 @@ export default function PredictionResults({ data }) {
         </div>
       )}
 
+      {/* Form & Splits */}
+      {d.form && (d.form.home?.recent_games > 0 || d.form.away?.recent_games > 0) && (
+        <div className="result-card">
+          <h2>Recent Form & Splits</h2>
+          {[
+            { label: home.name + ' (Home)', form: d.form?.home, splits: d.splits?.home, isHome: true },
+            { label: away.name + ' (Away)', form: d.form?.away, splits: d.splits?.away, isHome: false },
+          ].map(({ label, form, splits, isHome }) => (
+            form?.recent_games > 0 && (
+              <div key={label} style={{ marginBottom: 12 }}>
+                <div style={{ fontWeight: 600, fontSize: '0.9rem', marginBottom: 6 }}>{label}</div>
+                <div className="stat-row">
+                  <span className="stat-label">Last {form.recent_games} games</span>
+                  <span className={`stat-value ${form.recent_wins > form.recent_losses ? 'positive' : form.recent_wins < form.recent_losses ? 'negative' : ''}`}>
+                    {form.recent_wins}-{form.recent_losses} ({form.avg_margin > 0 ? '+' : ''}{form.avg_margin} avg margin)
+                  </span>
+                </div>
+                {splits && (isHome ? splits.home_games > 0 : splits.away_games > 0) && (
+                  <div className="stat-row">
+                    <span className="stat-label">{isHome ? 'Home' : 'Away'} scoring</span>
+                    <span className="stat-value">
+                      {isHome ? splits.home_ppg : splits.away_ppg} PPG
+                      ({isHome ? splits.home_wins : splits.away_wins}-{isHome ? splits.home_games - splits.home_wins : splits.away_games - splits.away_wins})
+                    </span>
+                  </div>
+                )}
+              </div>
+            )
+          ))}
+        </div>
+      )}
+
       {/* Correct Scores */}
       {d.correct_scores && d.correct_scores.length > 0 && (
         <div className="result-card">

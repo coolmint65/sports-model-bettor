@@ -6,6 +6,9 @@ Takes two teams + league config, outputs a full matchup prediction:
 - Win probabilities (home / away / draw for soccer)
 - Period/quarter/half/inning breakdowns
 - Spread and total projections
+- Home/away splits analysis
+- Recent form factor
+- Strength of schedule adjustment
 - Key edges and reasoning
 """
 
@@ -39,6 +42,60 @@ def _expected_goals(team_off: float, opp_def: float, league_avg: float) -> float
     return (team_off * opp_def) / league_avg
 
 
+def _form_factor(team: dict) -> float:
+    """
+    Calculate recent form adjustment (-0.15 to +0.15 multiplier).
+    Based on recent win rate and margin trend.
+    """
+    sos = team.get("strength_of_schedule", {})
+    recent_games = sos.get("recent_games", 0)
+    if recent_games < 3:
+        return 0.0
+
+    recent_wins = sos.get("recent_wins", 0)
+    win_rate = recent_wins / recent_games
+    avg_margin = sos.get("avg_margin", 0)
+
+    # Win rate component: 0.5 = neutral, scale to +/-0.10
+    win_adj = (win_rate - 0.5) * 0.20
+
+    # Margin component: scale down, cap at +/-0.05
+    margin_adj = max(-0.05, min(0.05, avg_margin * 0.003))
+
+    return max(-0.15, min(0.15, win_adj + margin_adj))
+
+
+def _home_away_adjustment(team: dict, is_home: bool) -> float:
+    """
+    Adjust scoring based on home/away splits.
+    Returns multiplier (e.g. 1.05 = 5% boost).
+    """
+    splits = team.get("home_away_splits", {})
+    if not splits:
+        return 1.0
+
+    if is_home:
+        home_ppg = splits.get("home_ppg", 0)
+        if home_ppg <= 0:
+            return 1.0
+        overall_ppg = team.get("stats", {}).get("ppg",
+                      team.get("stats", {}).get("goals_for_avg",
+                      team.get("stats", {}).get("runs_per_game", 0)))
+        if overall_ppg <= 0:
+            return 1.0
+        return max(0.85, min(1.15, home_ppg / overall_ppg))
+    else:
+        away_ppg = splits.get("away_ppg", 0)
+        if away_ppg <= 0:
+            return 1.0
+        overall_ppg = team.get("stats", {}).get("ppg",
+                      team.get("stats", {}).get("goals_for_avg",
+                      team.get("stats", {}).get("runs_per_game", 0)))
+        if overall_ppg <= 0:
+            return 1.0
+        return max(0.85, min(1.15, away_ppg / overall_ppg))
+
+
 def predict_matchup(league_key: str, home_key: str, away_key: str) -> dict:
     """
     Run a full matchup prediction.
@@ -50,6 +107,8 @@ def predict_matchup(league_key: str, home_key: str, away_key: str) -> dict:
       - spread, total
       - periods[] with expected scores per period
       - halves[] with expected scores per half
+      - form (recent form data)
+      - splits (home/away split data)
       - reasoning[]
     """
     league = get_league(league_key)
@@ -90,6 +149,16 @@ def predict_matchup(league_key: str, home_key: str, away_key: str) -> dict:
     result["home"] = {"key": home_key, "name": home.get("name", home_key), "record": home.get("record", "")}
     result["away"] = {"key": away_key, "name": away.get("name", away_key), "record": away.get("record", "")}
 
+    # ── Enrichment: form + splits ──
+    result["form"] = {
+        "home": home.get("strength_of_schedule", {}),
+        "away": away.get("strength_of_schedule", {}),
+    }
+    result["splits"] = {
+        "home": home.get("home_away_splits", {}),
+        "away": away.get("home_away_splits", {}),
+    }
+
     return result
 
 
@@ -109,6 +178,13 @@ def _predict_soccer(league, home, away, hs, as_, la):
 
     home_xg = _expected_goals(home_att, away_def, avg_conceded) + home_edge / 2
     away_xg = _expected_goals(away_att, home_def, avg_conceded) - home_edge / 2
+
+    # Apply form and splits
+    home_xg *= (1 + _form_factor(home))
+    away_xg *= (1 + _form_factor(away))
+    home_xg *= _home_away_adjustment(home, is_home=True)
+    away_xg *= _home_away_adjustment(away, is_home=False)
+
     home_xg = max(home_xg, 0.3)
     away_xg = max(away_xg, 0.3)
 
@@ -141,6 +217,7 @@ def _predict_soccer(league, home, away, hs, as_, la):
     correct_scores = _top_correct_scores(matrix, 5)
 
     reasoning = _build_reasoning_soccer(home, away, hs, as_, home_xg, away_xg, p_home, p_draw, p_away)
+    reasoning += _build_form_reasoning(home, away)
 
     return {
         "expected_score": {"home": round(home_xg, 2), "away": round(away_xg, 2)},
@@ -168,6 +245,23 @@ def _predict_hockey(league, home, away, hs, as_, la):
 
     home_xg = _expected_goals(home_att, away_def, avg_conceded) + home_edge / 2
     away_xg = _expected_goals(away_att, home_def, avg_conceded) - home_edge / 2
+
+    # Apply form and splits
+    home_xg *= (1 + _form_factor(home))
+    away_xg *= (1 + _form_factor(away))
+    home_xg *= _home_away_adjustment(home, is_home=True)
+    away_xg *= _home_away_adjustment(away, is_home=False)
+
+    # Special teams adjustment: PP% and PK% relative to league average
+    league_pp = la.get("pp_pct", 0.20)
+    league_pk = la.get("pk_pct", 0.80)
+    if league_pp > 0 and hs.get("pp_pct") and as_.get("pk_pct"):
+        pp_edge = (hs["pp_pct"] - league_pp) + (league_pk - as_["pk_pct"])
+        home_xg += pp_edge * 2  # ~2 PP opportunities per game
+    if league_pp > 0 and as_.get("pp_pct") and hs.get("pk_pct"):
+        pp_edge = (as_["pp_pct"] - league_pp) + (league_pk - hs["pk_pct"])
+        away_xg += pp_edge * 2
+
     home_xg = max(home_xg, 0.5)
     away_xg = max(away_xg, 0.5)
 
@@ -197,6 +291,7 @@ def _predict_hockey(league, home, away, hs, as_, la):
 
     correct_scores = _top_correct_scores(matrix, 5)
     reasoning = _build_reasoning_default(home, away, hs, as_, home_xg, away_xg, "goals")
+    reasoning += _build_form_reasoning(home, away)
 
     return {
         "expected_score": {"home": round(home_xg, 2), "away": round(away_xg, 2)},
@@ -229,6 +324,25 @@ def _predict_baseball(league, home, away, hs, as_, la):
     # Runs = offense_rate * (opp_era / league_era)
     home_xr = home_off * (away_era / league_era) + home_edge / 2
     away_xr = away_off * (home_era / league_era) - home_edge / 2
+
+    # Apply form and splits
+    home_xr *= (1 + _form_factor(home))
+    away_xr *= (1 + _form_factor(away))
+    home_xr *= _home_away_adjustment(home, is_home=True)
+    away_xr *= _home_away_adjustment(away, is_home=False)
+
+    # OBP/WHIP fine-tuning
+    league_obp = la.get("obp", 0.320)
+    league_whip = la.get("whip", 1.30)
+    if hs.get("obp") and as_.get("whip") and league_obp > 0:
+        obp_edge = (hs["obp"] - league_obp) / league_obp
+        whip_edge = (league_whip - as_["whip"]) / league_whip
+        home_xr *= (1 + (obp_edge + whip_edge) * 0.15)
+    if as_.get("obp") and hs.get("whip") and league_obp > 0:
+        obp_edge = (as_["obp"] - league_obp) / league_obp
+        whip_edge = (league_whip - hs["whip"]) / league_whip
+        away_xr *= (1 + (obp_edge + whip_edge) * 0.15)
+
     home_xr = max(home_xr, 1.0)
     away_xr = max(away_xr, 1.0)
 
@@ -261,6 +375,7 @@ def _predict_baseball(league, home, away, hs, as_, la):
     ]
 
     reasoning = _build_reasoning_baseball(home, away, hs, as_, home_xr, away_xr)
+    reasoning += _build_form_reasoning(home, away)
 
     return {
         "expected_score": {"home": round(home_xr, 2), "away": round(away_xr, 2)},
@@ -292,6 +407,25 @@ def _predict_basketball(league, home, away, hs, as_, la):
     else:
         home_xp = home_off + home_edge / 2
         away_xp = away_off - home_edge / 2
+
+    # Apply form adjustment
+    home_form = _form_factor(home)
+    away_form = _form_factor(away)
+    home_xp *= (1 + home_form)
+    away_xp *= (1 + away_form)
+
+    # Apply home/away split adjustment
+    home_xp *= _home_away_adjustment(home, is_home=True)
+    away_xp *= _home_away_adjustment(away, is_home=False)
+
+    # Pace adjustment: if both teams have pace data, adjust total
+    pace_h = hs.get("pace")
+    pace_a = as_.get("pace")
+    league_pace = la.get("pace", 0)
+    if pace_h and pace_a and league_pace > 0:
+        pace_factor = ((pace_h + pace_a) / 2) / league_pace
+        home_xp *= pace_factor
+        away_xp *= pace_factor
 
     total = home_xp + away_xp
     spread = away_xp - home_xp
@@ -330,6 +464,7 @@ def _predict_basketball(league, home, away, hs, as_, la):
         })
 
     reasoning = _build_reasoning_basketball(home, away, hs, as_, home_xp, away_xp, league)
+    reasoning += _build_form_reasoning(home, away)
 
     return {
         "expected_score": {"home": round(home_xp, 1), "away": round(away_xp, 1)},
@@ -360,6 +495,19 @@ def _predict_football(league, home, away, hs, as_, la):
     else:
         home_xp = home_off + home_edge / 2
         away_xp = away_off - home_edge / 2
+
+    # Apply form and splits
+    home_xp *= (1 + _form_factor(home))
+    away_xp *= (1 + _form_factor(away))
+    home_xp *= _home_away_adjustment(home, is_home=True)
+    away_xp *= _home_away_adjustment(away, is_home=False)
+
+    # Turnover adjustment: each turnover diff ~ 3 pts
+    to_h = hs.get("turnover_diff", 0)
+    to_a = as_.get("turnover_diff", 0)
+    games_played = 17 if league["name"] == "NFL" else 12
+    home_xp += (to_h / games_played) * 1.5
+    away_xp += (to_a / games_played) * 1.5
 
     total = home_xp + away_xp
     spread = away_xp - home_xp
@@ -398,6 +546,7 @@ def _predict_football(league, home, away, hs, as_, la):
         })
 
     reasoning = _build_reasoning_football(home, away, hs, as_, home_xp, away_xp, league)
+    reasoning += _build_form_reasoning(home, away)
 
     return {
         "expected_score": {"home": round(home_xp, 1), "away": round(away_xp, 1)},
@@ -538,5 +687,39 @@ def _build_reasoning_football(home, away, hs, as_, hx, ax, league):
         reasons.append(f"Opp PPG allowed: {hn} {hs['opp_ppg']:.1f} | {an} {as_['opp_ppg']:.1f}")
     if hs.get("yards_per_game") and as_.get("yards_per_game"):
         reasons.append(f"YPG: {hn} {hs['yards_per_game']:.0f} | {an} {as_['yards_per_game']:.0f}")
+
+    return reasons
+
+
+def _build_form_reasoning(home, away):
+    """Add reasoning lines for recent form and splits."""
+    reasons = []
+    hn, an = home.get("name", "Home"), away.get("name", "Away")
+
+    # Recent form
+    h_sos = home.get("strength_of_schedule", {})
+    a_sos = away.get("strength_of_schedule", {})
+    if h_sos.get("recent_games", 0) >= 3:
+        w, g = h_sos["recent_wins"], h_sos["recent_games"]
+        margin = h_sos.get("avg_margin", 0)
+        reasons.append(f"Recent form: {hn} {w}-{g-w} L{g} (avg margin {margin:+.1f})")
+    if a_sos.get("recent_games", 0) >= 3:
+        w, g = a_sos["recent_wins"], a_sos["recent_games"]
+        margin = a_sos.get("avg_margin", 0)
+        reasons.append(f"Recent form: {an} {w}-{g-w} L{g} (avg margin {margin:+.1f})")
+
+    # Home/away splits
+    h_splits = home.get("home_away_splits", {})
+    a_splits = away.get("home_away_splits", {})
+    if h_splits.get("home_ppg") and h_splits.get("home_games", 0) >= 3:
+        reasons.append(
+            f"{hn} at home: {h_splits['home_ppg']:.1f} PPG, "
+            f"{h_splits['home_wins']}-{h_splits['home_games'] - h_splits['home_wins']} record"
+        )
+    if a_splits.get("away_ppg") and a_splits.get("away_games", 0) >= 3:
+        reasons.append(
+            f"{an} on road: {a_splits['away_ppg']:.1f} PPG, "
+            f"{a_splits['away_wins']}-{a_splits['away_games'] - a_splits['away_wins']} record"
+        )
 
     return reasons
