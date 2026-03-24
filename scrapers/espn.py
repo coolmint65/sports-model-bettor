@@ -33,18 +33,37 @@ REQUEST_DELAY = 1.0
 REQUEST_TIMEOUT = 15
 
 
-def _fetch_json(url: str) -> dict | None:
-    """Fetch JSON from a URL. Returns None on failure."""
-    try:
-        req = urllib.request.Request(url, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json",
-        })
-        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
-            return json.loads(resp.read().decode())
-    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, Exception) as e:
-        logger.warning(f"Failed to fetch {url}: {e}")
-        return None
+def _fetch_json(url: str, retries: int = 2) -> dict | None:
+    """Fetch JSON from a URL with retry. Returns None on failure."""
+    for attempt in range(retries + 1):
+        try:
+            logger.debug(f"Fetching: {url}")
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "application/json",
+            })
+            with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+                data = json.loads(resp.read().decode())
+                if data:
+                    return data
+                logger.warning(f"Empty response from {url}")
+                return None
+        except urllib.error.HTTPError as e:
+            logger.warning(f"HTTP {e.code} from {url}: {e.reason}")
+            if e.code == 429 and attempt < retries:
+                time.sleep(3 * (attempt + 1))
+                continue
+            return None
+        except (urllib.error.URLError, json.JSONDecodeError) as e:
+            logger.warning(f"Failed to fetch {url}: {e}")
+            if attempt < retries:
+                time.sleep(2 * (attempt + 1))
+                continue
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error fetching {url}: {type(e).__name__}: {e}")
+            return None
+    return None
 
 
 def _safe_float(val, default=0.0) -> float:
@@ -150,17 +169,34 @@ def scrape_league(espn_sport: str, espn_league: str, our_league: str) -> list[st
 def _extract_teams(data: dict) -> list[dict]:
     """Extract team list from ESPN teams endpoint response."""
     teams = []
+    logger.debug(f"Teams response top-level keys: {list(data.keys())}")
+
     # ESPN wraps teams in sports[0].leagues[0].teams[]
     try:
+        raw_teams = []
+
+        # Format 1: sports[].leagues[].teams[]
         sports = data.get("sports", [])
         for sport in sports:
             for league in sport.get("leagues", []):
-                for team_entry in league.get("teams", []):
-                    t = team_entry.get("team", team_entry)
-                    teams.append({
-                        "id": t["id"],
-                        "name": t.get("displayName", t.get("name", "")),
-                        "abbreviation": t.get("abbreviation", ""),
+                raw_teams.extend(league.get("teams", []))
+
+        # Format 2: flat teams[] at top level
+        if not raw_teams and "teams" in data:
+            raw_teams = data["teams"]
+
+        # Format 3: under league key
+        if not raw_teams and "league" in data:
+            raw_teams = data["league"].get("teams", [])
+
+        logger.debug(f"Found {len(raw_teams)} raw team entries")
+
+        for team_entry in raw_teams:
+            t = team_entry.get("team", team_entry)
+            teams.append({
+                "id": t["id"],
+                "name": t.get("displayName", t.get("name", "")),
+                "abbreviation": t.get("abbreviation", ""),
                         "city": t.get("location", ""),
                         "short_name": t.get("shortDisplayName", t.get("name", "")),
                         "key": _team_key_from_name(
@@ -294,8 +330,12 @@ def _fetch_recent_results(espn_sport: str, espn_league: str, team_id: str,
                     team = c.get("team", {})
                     is_home = c.get("homeAway", "") == "home"
                     is_us = str(team.get("id", "")) == str(team_id)
-                    score = _safe_float(c.get("score", {}).get("value",
-                                        c.get("score", c.get("score", 0))), 0)
+                    # ESPN returns score as string "114" or object {"value": 114}
+                    raw_score = c.get("score", 0)
+                    if isinstance(raw_score, dict):
+                        score = _safe_float(raw_score.get("value", 0))
+                    else:
+                        score = _safe_float(raw_score)
 
                     if is_us:
                         game["our_score"] = score

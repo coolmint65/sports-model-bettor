@@ -42,18 +42,27 @@ COLLEGE_KEYS = {"CFB", "NCAAB", "NCAAW"}
 def main():
     args = [a.upper() for a in sys.argv[1:]]
 
+    # --debug flag enables verbose logging
+    if "--DEBUG" in args:
+        args.remove("--DEBUG")
+        logging.getLogger().setLevel(logging.DEBUG)
+        logger.debug("Debug logging enabled")
+
     # Expand group flags
-    target_leagues = set()
-    for arg in args:
-        if arg == "--SOCCER":
-            target_leagues |= SOCCER_KEYS
-        elif arg == "--COLLEGE":
-            target_leagues |= COLLEGE_KEYS
-        elif arg == "--ALL" or not args:
-            target_leagues = None  # Run everything
-            break
-        else:
-            target_leagues.add(arg)
+    if not args:
+        target_leagues = None  # Run everything
+    else:
+        target_leagues = set()
+        for arg in args:
+            if arg == "--SOCCER":
+                target_leagues |= SOCCER_KEYS
+            elif arg == "--COLLEGE":
+                target_leagues |= COLLEGE_KEYS
+            elif arg == "--ALL":
+                target_leagues = None
+                break
+            else:
+                target_leagues.add(arg)
 
     start = time.time()
     total_updated = 0
