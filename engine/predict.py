@@ -12,9 +12,12 @@ Takes two teams + league config, outputs a full matchup prediction:
 - Key edges and reasoning
 """
 
+import logging
 import math
 from .leagues import get_league
 from .data import load_team, get_league_averages
+
+logger = logging.getLogger(__name__)
 
 
 def poisson_prob(lam: float, k: int) -> float:
@@ -395,6 +398,19 @@ def _predict_basketball(league, home, away, hs, as_, la):
     avg_opp = la.get("opp_ppg", league["avg_total"] / 2)
     home_edge = league["avg_home_edge"]
 
+    # Sanity check: league averages should be in a reasonable range for basketball.
+    # If scraped data mixed season totals with per-game stats, averages can be
+    # wildly inflated.  Fall back to the configured league average in that case.
+    expected_avg = league["avg_total"] / 2
+    if avg_ppg > expected_avg * 2 or avg_ppg < expected_avg * 0.3:
+        logger.warning("League avg PPG %.1f looks wrong (expected ~%.1f), using default",
+                        avg_ppg, expected_avg)
+        avg_ppg = expected_avg
+    if avg_opp > expected_avg * 2 or avg_opp < expected_avg * 0.3:
+        logger.warning("League avg OPP_PPG %.1f looks wrong (expected ~%.1f), using default",
+                        avg_opp, expected_avg)
+        avg_opp = expected_avg
+
     home_off = hs.get("ppg", avg_ppg)
     home_def = hs.get("opp_ppg", avg_opp)
     away_off = as_.get("ppg", avg_ppg)
@@ -483,6 +499,16 @@ def _predict_football(league, home, away, hs, as_, la):
     avg_ppg = la.get("ppg", league["avg_total"] / 2)
     avg_opp = la.get("opp_ppg", league["avg_total"] / 2)
     home_edge = league["avg_home_edge"]
+
+    expected_avg = league["avg_total"] / 2
+    if avg_ppg > expected_avg * 2 or avg_ppg < expected_avg * 0.3:
+        logger.warning("League avg PPG %.1f looks wrong (expected ~%.1f), using default",
+                        avg_ppg, expected_avg)
+        avg_ppg = expected_avg
+    if avg_opp > expected_avg * 2 or avg_opp < expected_avg * 0.3:
+        logger.warning("League avg OPP_PPG %.1f looks wrong (expected ~%.1f), using default",
+                        avg_opp, expected_avg)
+        avg_opp = expected_avg
 
     home_off = hs.get("ppg", avg_ppg)
     home_def = hs.get("opp_ppg", avg_opp)

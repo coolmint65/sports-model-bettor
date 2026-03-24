@@ -363,16 +363,35 @@ def _fetch_team_stats(espn_sport: str, espn_league: str, team_id: str,
                             continue
                         name = s.get("name", "").lower()
                         val = s.get("value", 0)
-                        if name == "pointsfor":
-                            stats["ppg"] = round(_safe_float(val), 1)
-                        elif name == "pointsagainst":
-                            stats["opp_ppg"] = round(_safe_float(val), 1)
-                        elif name == "avgpointsfor":
+                        if name == "avgpointsfor":
                             stats["ppg"] = round(_safe_float(val), 1)
                         elif name == "avgpointsagainst":
                             stats["opp_ppg"] = round(_safe_float(val), 1)
+                        elif name == "pointsfor":
+                            # Total season points — only use as ppg fallback
+                            if "ppg" not in stats:
+                                stats["total_points_for"] = round(_safe_float(val), 1)
+                        elif name == "pointsagainst":
+                            # Total season points against — only use as opp_ppg fallback
+                            if "opp_ppg" not in stats:
+                                stats["total_points_against"] = round(_safe_float(val), 1)
         except (KeyError, TypeError, AttributeError):
             pass
+
+    # If we only got season totals (pointsfor/against) but no per-game avg,
+    # try to derive ppg from total / games_played
+    if "ppg" not in stats and "total_points_for" in stats:
+        gp = stats.get("gamesplayed", stats.get("games", 0))
+        if gp > 0:
+            stats["ppg"] = round(stats["total_points_for"] / gp, 1)
+    if "opp_ppg" not in stats and "total_points_against" in stats:
+        gp = stats.get("gamesplayed", stats.get("games", 0))
+        if gp > 0:
+            stats["opp_ppg"] = round(stats["total_points_against"] / gp, 1)
+
+    # Clean up intermediate keys
+    stats.pop("total_points_for", None)
+    stats.pop("total_points_against", None)
 
     return stats
 
