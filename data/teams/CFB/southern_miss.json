@@ -1,0 +1,16 @@
+{
+  "name": "Southern Miss Golden Eagles",
+  "abbreviation": "USM",
+  "city": "Hattiesburg",
+  "short_name": "Southern Miss",
+  "record": "4-8",
+  "stats": {
+    "ppg": 20.8,
+    "opp_ppg": 28.5,
+    "yards_per_game": 328.1,
+    "opp_yards_per_game": 380.4,
+    "rush_ypg": 132.5,
+    "pass_ypg": 195.6,
+    "turnover_diff": -4
+  }
+}

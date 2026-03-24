@@ -1,0 +1,16 @@
+{
+  "name": "New Mexico State Aggies",
+  "abbreviation": "NMSU",
+  "city": "Las Cruces",
+  "short_name": "New Mexico St",
+  "record": "3-9",
+  "stats": {
+    "ppg": 17.8,
+    "opp_ppg": 32.5,
+    "yards_per_game": 300.5,
+    "opp_yards_per_game": 405.8,
+    "rush_ypg": 115.4,
+    "pass_ypg": 185.1,
+    "turnover_diff": -8
+  }
+}

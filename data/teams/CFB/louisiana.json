@@ -1,0 +1,16 @@
+{
+  "name": "Louisiana Ragin' Cajuns",
+  "abbreviation": "ULL",
+  "city": "Lafayette",
+  "short_name": "Louisiana",
+  "record": "7-5",
+  "stats": {
+    "ppg": 27.2,
+    "opp_ppg": 24.8,
+    "yards_per_game": 382.5,
+    "opp_yards_per_game": 348.2,
+    "rush_ypg": 165.3,
+    "pass_ypg": 217.2,
+    "turnover_diff": 4
+  }
+}

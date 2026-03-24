@@ -1,0 +1,16 @@
+{
+  "name": "Arkansas State Red Wolves",
+  "abbreviation": "ARST",
+  "city": "Jonesboro",
+  "short_name": "Arkansas State",
+  "record": "5-7",
+  "stats": {
+    "ppg": 23.4,
+    "opp_ppg": 27.8,
+    "yards_per_game": 350.2,
+    "opp_yards_per_game": 372.1,
+    "rush_ypg": 140.8,
+    "pass_ypg": 209.4,
+    "turnover_diff": -3
+  }
+}

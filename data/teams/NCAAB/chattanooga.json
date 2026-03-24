@@ -1,0 +1,17 @@
+{
+  "name": "Chattanooga Mocs",
+  "abbreviation": "CHAT",
+  "city": "Chattanooga",
+  "short_name": "Chattanooga",
+  "record": "20-12",
+  "stats": {
+    "ppg": 74.5,
+    "opp_ppg": 69.2,
+    "pace": 68.0,
+    "off_rtg": 109.5,
+    "def_rtg": 102.8,
+    "reb_pg": 34.0,
+    "fg_pct": 0.448,
+    "three_pct": 0.345
+  }
+}

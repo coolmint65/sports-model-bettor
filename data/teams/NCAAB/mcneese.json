@@ -1,0 +1,17 @@
+{
+  "name": "McNeese Cowboys",
+  "abbreviation": "MCN",
+  "city": "Lake Charles",
+  "short_name": "McNeese",
+  "record": "23-9",
+  "stats": {
+    "ppg": 77.8,
+    "opp_ppg": 69.5,
+    "pace": 69.5,
+    "off_rtg": 112.5,
+    "def_rtg": 101.2,
+    "reb_pg": 35.2,
+    "fg_pct": 0.458,
+    "three_pct": 0.355
+  }
+}
