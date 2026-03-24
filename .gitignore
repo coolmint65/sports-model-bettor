@@ -25,6 +25,9 @@ env/
 .env
 .env.local
 
+# Node
+node_modules/
+
 # OS
 .DS_Store
 Thumbs.db
