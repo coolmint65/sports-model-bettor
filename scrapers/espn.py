@@ -221,28 +221,47 @@ def _extract_teams(data: dict) -> list[dict]:
 def _fetch_standings(espn_sport: str, espn_league: str) -> dict:
     """Fetch standings, return {team_id: {record, wins, losses, ...}}."""
     data = _fetch_json(espn_standings_url(espn_sport, espn_league))
-    if not data:
+    if not data or not isinstance(data, dict):
         return {}
 
     standings = {}
     try:
         # Collect all groups that have standings - some sports (MLB) nest
-        # children inside children (league > division)
+        # children inside children (league > division).
+        # Some responses wrap in "standings" at top level.
         groups = []
+
+        # If standings data is at top level
+        if "standings" in data and "children" not in data:
+            groups.append(data)
+
         for child in data.get("children", []):
+            if not isinstance(child, dict):
+                continue
             if "standings" in child:
                 groups.append(child)
             # Check for nested children (e.g. MLB divisions)
             for subchild in child.get("children", []):
+                if not isinstance(subchild, dict):
+                    continue
                 if "standings" in subchild:
                     groups.append(subchild)
 
         for group in groups:
-            for entry in group.get("standings", {}).get("entries", []):
+            standings_data = group.get("standings", {})
+            if not isinstance(standings_data, dict):
+                continue
+            for entry in standings_data.get("entries", []):
+                if not isinstance(entry, dict):
+                    continue
                 team = entry.get("team", {})
+                if not isinstance(team, dict):
+                    team = {}
                 team_id = team.get("id", "")
                 stats_map = {}
                 for s in entry.get("stats", []):
+                    if not isinstance(s, dict):
+                        continue
                     stats_map[s.get("name", "")] = s.get("value", s.get("displayValue", ""))
 
                 record_str = stats_map.get("overall", "")
@@ -264,7 +283,7 @@ def _fetch_standings(espn_sport: str, espn_league: str) -> dict:
                 }
                 if team_id:
                     standings[team_id] = standings[team_id]
-    except (KeyError, TypeError) as e:
+    except (KeyError, TypeError, AttributeError) as e:
         logger.warning(f"Error parsing standings: {e}")
 
     return standings
@@ -280,26 +299,47 @@ def _fetch_team_stats(espn_sport: str, espn_league: str, team_id: str,
 
     stats = {}
     try:
-        # ESPN returns stats in categories
+        # ESPN returns stats in categories - structure varies by sport
         results = data.get("results", data)
         splits = results.get("splits", {}) if isinstance(results, dict) else {}
-        categories = splits.get("categories", [])
+        categories = splits.get("categories", []) if isinstance(splits, dict) else []
+
+        # If results is a list (e.g. MLB), look for splits/categories inside each element
+        if not categories and isinstance(results, list):
+            for result_item in results:
+                if isinstance(result_item, dict):
+                    item_splits = result_item.get("splits", {})
+                    if isinstance(item_splits, dict):
+                        categories.extend(item_splits.get("categories", []))
 
         if not categories:
-            # Try alternate structure
-            for stat_block in data.get("statistics", data.get("stats", [])):
-                if isinstance(stat_block, dict):
-                    categories.extend(stat_block.get("categories", []))
+            # Try alternate structure: data.statistics or data.stats
+            stat_source = data.get("statistics", data.get("stats", []))
+            # Normalize to list: ESPN may return a dict or a list
+            if isinstance(stat_source, dict):
+                stat_source = [stat_source]
+            if isinstance(stat_source, list):
+                for stat_block in stat_source:
+                    if isinstance(stat_block, dict):
+                        categories.extend(stat_block.get("categories", []))
+                        # Also check for splits inside each stat block
+                        block_splits = stat_block.get("splits", {})
+                        if isinstance(block_splits, dict):
+                            categories.extend(block_splits.get("categories", []))
 
         for cat in categories:
+            if not isinstance(cat, dict):
+                continue
             cat_name = cat.get("name", cat.get("displayName", "")).lower()
             for stat in cat.get("stats", []):
+                if not isinstance(stat, dict):
+                    continue
                 name = stat.get("name", stat.get("abbreviation", "")).lower()
                 value = stat.get("value", stat.get("displayValue", 0))
                 if name and value is not None:
                     stats[name] = _safe_float(value, value)
 
-    except (KeyError, TypeError) as e:
+    except (KeyError, TypeError, AttributeError) as e:
         logger.warning(f"Error parsing stats for team {team_id}: {e}")
 
     # Also try the team endpoint for record-level stats
@@ -308,13 +348,19 @@ def _fetch_team_stats(espn_sport: str, espn_league: str, team_id: str,
     if team_data:
         try:
             team_info = team_data.get("team", {})
+            if not isinstance(team_info, dict):
+                team_info = {}
             record = team_info.get("record", {})
             # ESPN returns record as list for some sports (MLB), dict with items for others
             record_items = record if isinstance(record, list) else record.get("items", [])
             for rec in record_items:
+                if not isinstance(rec, dict):
+                    continue
                 rec_type = rec.get("type", "")
                 if rec_type == "total":
                     for s in rec.get("stats", []):
+                        if not isinstance(s, dict):
+                            continue
                         name = s.get("name", "").lower()
                         val = s.get("value", 0)
                         if name == "pointsfor":
@@ -325,7 +371,7 @@ def _fetch_team_stats(espn_sport: str, espn_league: str, team_id: str,
                             stats["ppg"] = round(_safe_float(val), 1)
                         elif name == "avgpointsagainst":
                             stats["opp_ppg"] = round(_safe_float(val), 1)
-        except (KeyError, TypeError):
+        except (KeyError, TypeError, AttributeError):
             pass
 
     return stats
@@ -375,7 +421,7 @@ def _fetch_recent_results(espn_sport: str, espn_league: str, team_id: str,
 
                 if len(results) >= limit:
                     break
-    except (KeyError, IndexError, TypeError) as e:
+    except (KeyError, IndexError, TypeError, AttributeError) as e:
         logger.warning(f"Error parsing schedule for team {team_id}: {e}")
 
     return results

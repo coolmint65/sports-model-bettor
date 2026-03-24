@@ -70,7 +70,25 @@ def espn_team_stats_url(sport: str, league: str, team_id: str) -> str:
 
 
 def espn_standings_url(sport: str, league: str) -> str:
-    return f"{ESPN_BASE}/{sport}/{league}/standings"
+    """Standings URL with auto-detected season year.
+
+    ESPN often returns empty standings without a season param.
+    Season year = the year the season started:
+      - Fall sports (football, basketball, hockey, soccer): current year if Aug+, else last year
+      - Spring sports (baseball): current calendar year
+    """
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    month, year = now.month, now.year
+
+    if sport == "baseball":
+        # MLB season runs within a calendar year
+        season = year
+    else:
+        # Fall-start leagues: season started in Aug-Oct of prior year if we're in Jan-Jul
+        season = year if month >= 8 else year - 1
+
+    return f"{ESPN_BASE}/{sport}/{league}/standings?season={season}"
 
 
 def espn_scoreboard_url(sport: str, league: str) -> str:
