@@ -1,0 +1,16 @@
+{
+  "name": "Hawaii Rainbow Warriors",
+  "abbreviation": "HAW",
+  "city": "Honolulu",
+  "short_name": "Hawaii",
+  "record": "4-8",
+  "stats": {
+    "ppg": 21.5,
+    "opp_ppg": 29.8,
+    "yards_per_game": 338.2,
+    "opp_yards_per_game": 388.5,
+    "rush_ypg": 118.4,
+    "pass_ypg": 219.8,
+    "turnover_diff": -4
+  }
+}

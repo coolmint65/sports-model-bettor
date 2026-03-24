@@ -1,0 +1,16 @@
+{
+  "name": "Wyoming Cowboys",
+  "abbreviation": "WYO",
+  "city": "Laramie",
+  "short_name": "Wyoming",
+  "record": "4-8",
+  "stats": {
+    "ppg": 19.5,
+    "opp_ppg": 28.2,
+    "yards_per_game": 315.4,
+    "opp_yards_per_game": 378.5,
+    "rush_ypg": 138.2,
+    "pass_ypg": 177.2,
+    "turnover_diff": -5
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "Nevada Wolf Pack",
+  "abbreviation": "NEV",
+  "city": "Reno",
+  "short_name": "Nevada",
+  "record": "3-9",
+  "stats": {
+    "ppg": 18.2,
+    "opp_ppg": 30.5,
+    "yards_per_game": 305.8,
+    "opp_yards_per_game": 392.1,
+    "rush_ypg": 118.5,
+    "pass_ypg": 187.3,
+    "turnover_diff": -6
+  }
+}

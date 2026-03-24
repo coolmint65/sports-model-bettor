@@ -1,0 +1,16 @@
+{
+  "name": "Utah State Aggies",
+  "abbreviation": "USU",
+  "city": "Logan",
+  "short_name": "Utah State",
+  "record": "3-9",
+  "stats": {
+    "ppg": 18.5,
+    "opp_ppg": 31.8,
+    "yards_per_game": 308.2,
+    "opp_yards_per_game": 398.5,
+    "rush_ypg": 120.5,
+    "pass_ypg": 187.7,
+    "turnover_diff": -7
+  }
+}

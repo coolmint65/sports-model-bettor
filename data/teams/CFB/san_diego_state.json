@@ -1,0 +1,16 @@
+{
+  "name": "San Diego State Aztecs",
+  "abbreviation": "SDSU",
+  "city": "San Diego",
+  "short_name": "San Diego St",
+  "record": "5-7",
+  "stats": {
+    "ppg": 22.4,
+    "opp_ppg": 26.8,
+    "yards_per_game": 342.5,
+    "opp_yards_per_game": 365.2,
+    "rush_ypg": 148.5,
+    "pass_ypg": 194.0,
+    "turnover_diff": -1
+  }
+}

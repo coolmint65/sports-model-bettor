@@ -1,0 +1,16 @@
+{
+  "name": "Connecticut Huskies",
+  "abbreviation": "CONN",
+  "city": "East Hartford",
+  "short_name": "UConn",
+  "record": "6-6",
+  "stats": {
+    "ppg": 24.8,
+    "opp_ppg": 25.2,
+    "yards_per_game": 358.5,
+    "opp_yards_per_game": 355.8,
+    "rush_ypg": 150.2,
+    "pass_ypg": 208.3,
+    "turnover_diff": 2
+  }
+}

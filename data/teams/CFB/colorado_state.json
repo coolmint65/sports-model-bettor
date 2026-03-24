@@ -1,0 +1,16 @@
+{
+  "name": "Colorado State Rams",
+  "abbreviation": "CSU",
+  "city": "Fort Collins",
+  "short_name": "Colorado St",
+  "record": "5-7",
+  "stats": {
+    "ppg": 23.2,
+    "opp_ppg": 27.5,
+    "yards_per_game": 350.8,
+    "opp_yards_per_game": 372.3,
+    "rush_ypg": 142.1,
+    "pass_ypg": 208.7,
+    "turnover_diff": -2
+  }
+}
