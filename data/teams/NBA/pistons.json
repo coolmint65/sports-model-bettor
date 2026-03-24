@@ -1,0 +1,18 @@
+{
+  "name": "Detroit Pistons",
+  "abbreviation": "DET",
+  "city": "Detroit",
+  "short_name": "Pistons",
+  "record": "42-40",
+  "stats": {
+    "ppg": 112.4,
+    "opp_ppg": 112.8,
+    "pace": 99.1,
+    "off_rtg": 114.8,
+    "def_rtg": 115.2,
+    "reb_pg": 43.9,
+    "ast_pg": 26.1,
+    "fg_pct": 0.468,
+    "three_pct": 0.348
+  }
+}

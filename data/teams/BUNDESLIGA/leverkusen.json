@@ -1,0 +1,17 @@
+{
+  "name": "Bayer Leverkusen",
+  "abbreviation": "LEV",
+  "city": "Leverkusen",
+  "short_name": "Leverkusen",
+  "record": "24W-6D-4L",
+  "stats": {
+    "goals_for_avg": 2.62,
+    "goals_against_avg": 0.82,
+    "xg_for": 2.48,
+    "xg_against": 0.88,
+    "possession_avg": 60.5,
+    "shots_pg": 15.8,
+    "shots_against_pg": 9.0,
+    "clean_sheet_pct": 0.44
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Oregon Ducks",
+  "abbreviation": "ORE",
+  "city": "Eugene",
+  "short_name": "Oregon",
+  "record": "23-11",
+  "stats": {
+    "ppg": 78.3,
+    "opp_ppg": 70.8,
+    "pace": 69.2,
+    "off_rtg": 114.6,
+    "def_rtg": 101.5,
+    "reb_pg": 35.9,
+    "fg_pct": 0.464,
+    "three_pct": 0.348
+  }
+}

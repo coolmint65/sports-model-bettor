@@ -1,0 +1,17 @@
+{
+  "name": "New York Red Bulls",
+  "abbreviation": "NYRB",
+  "city": "Harrison",
+  "short_name": "Red Bulls",
+  "record": "15W-8D-11L",
+  "stats": {
+    "goals_for_avg": 1.53,
+    "goals_against_avg": 1.24,
+    "xg_for": 1.48,
+    "xg_against": 1.20,
+    "possession_avg": 48.9,
+    "shots_pg": 13.1,
+    "shots_against_pg": 11.8,
+    "clean_sheet_pct": 0.27
+  }
+}

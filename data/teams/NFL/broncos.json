@@ -1,0 +1,16 @@
+{
+  "name": "Denver Broncos",
+  "abbreviation": "DEN",
+  "city": "Denver",
+  "short_name": "Broncos",
+  "record": "10-7",
+  "stats": {
+    "ppg": 23.5,
+    "opp_ppg": 20.2,
+    "yards_per_game": 338.4,
+    "opp_yards_per_game": 308.6,
+    "rush_ypg": 118.7,
+    "pass_ypg": 219.7,
+    "turnover_diff": 6
+  }
+}

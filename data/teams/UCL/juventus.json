@@ -1,0 +1,17 @@
+{
+  "name": "Juventus",
+  "abbreviation": "JUV",
+  "city": "Turin",
+  "short_name": "Juventus",
+  "record": "16W-14D-4L",
+  "stats": {
+    "goals_for_avg": 1.50,
+    "goals_against_avg": 0.76,
+    "xg_for": 1.55,
+    "xg_against": 0.85,
+    "possession_avg": 55.0,
+    "shots_pg": 13.6,
+    "shots_against_pg": 10.4,
+    "clean_sheet_pct": 0.41
+  }
+}

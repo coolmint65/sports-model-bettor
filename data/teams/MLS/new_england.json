@@ -1,0 +1,17 @@
+{
+  "name": "New England Revolution",
+  "abbreviation": "NE",
+  "city": "Foxborough",
+  "short_name": "New England",
+  "record": "8W-7D-19L",
+  "stats": {
+    "goals_for_avg": 1.03,
+    "goals_against_avg": 1.68,
+    "xg_for": 1.10,
+    "xg_against": 1.60,
+    "possession_avg": 45.8,
+    "shots_pg": 10.5,
+    "shots_against_pg": 14.3,
+    "clean_sheet_pct": 0.13
+  }
+}

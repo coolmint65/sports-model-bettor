@@ -1,0 +1,18 @@
+{
+  "name": "San Antonio Spurs",
+  "abbreviation": "SAS",
+  "city": "San Antonio",
+  "short_name": "Spurs",
+  "record": "38-44",
+  "stats": {
+    "ppg": 112.8,
+    "opp_ppg": 114.5,
+    "pace": 99.9,
+    "off_rtg": 114.3,
+    "def_rtg": 116.0,
+    "reb_pg": 44.7,
+    "ast_pg": 26.2,
+    "fg_pct": 0.470,
+    "three_pct": 0.346
+  }
+}

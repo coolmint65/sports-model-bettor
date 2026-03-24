@@ -1,0 +1,17 @@
+{
+  "name": "CF Montréal",
+  "abbreviation": "MTL",
+  "city": "Montreal",
+  "short_name": "Montreal",
+  "record": "10W-8D-16L",
+  "stats": {
+    "goals_for_avg": 1.15,
+    "goals_against_avg": 1.50,
+    "xg_for": 1.20,
+    "xg_against": 1.45,
+    "possession_avg": 47.2,
+    "shots_pg": 11.1,
+    "shots_against_pg": 13.5,
+    "clean_sheet_pct": 0.17
+  }
+}

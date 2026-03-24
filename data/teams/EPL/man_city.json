@@ -1,0 +1,17 @@
+{
+  "name": "Manchester City",
+  "abbreviation": "MCI",
+  "city": "Manchester",
+  "short_name": "Man City",
+  "record": "22W-8D-8L",
+  "stats": {
+    "goals_for_avg": 2.08,
+    "goals_against_avg": 0.95,
+    "xg_for": 2.15,
+    "xg_against": 0.92,
+    "possession_avg": 63.8,
+    "shots_pg": 16.0,
+    "shots_against_pg": 9.4,
+    "clean_sheet_pct": 0.39
+  }
+}

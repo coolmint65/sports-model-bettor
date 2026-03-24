@@ -1,0 +1,17 @@
+{
+  "name": "Orlando City SC",
+  "abbreviation": "ORL",
+  "city": "Orlando",
+  "short_name": "Orlando",
+  "record": "14W-8D-12L",
+  "stats": {
+    "goals_for_avg": 1.44,
+    "goals_against_avg": 1.29,
+    "xg_for": 1.40,
+    "xg_against": 1.32,
+    "possession_avg": 51.7,
+    "shots_pg": 13.0,
+    "shots_against_pg": 11.9,
+    "clean_sheet_pct": 0.25
+  }
+}

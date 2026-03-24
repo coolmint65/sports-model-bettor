@@ -1,0 +1,17 @@
+{
+  "name": "Vancouver Canucks",
+  "abbreviation": "VAN",
+  "city": "Vancouver",
+  "short_name": "Canucks",
+  "record": "42-29-11",
+  "stats": {
+    "goals_for_avg": 3.08,
+    "goals_against_avg": 2.85,
+    "pp_pct": 0.220,
+    "pk_pct": 0.810,
+    "shots_per_game": 31.2,
+    "shots_against_per_game": 29.8,
+    "faceoff_pct": 0.508,
+    "save_pct": 0.908
+  }
+}

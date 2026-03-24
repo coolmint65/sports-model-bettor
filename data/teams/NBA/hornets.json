@@ -1,0 +1,18 @@
+{
+  "name": "Charlotte Hornets",
+  "abbreviation": "CHA",
+  "city": "Charlotte",
+  "short_name": "Hornets",
+  "record": "21-61",
+  "stats": {
+    "ppg": 107.3,
+    "opp_ppg": 117.2,
+    "pace": 100.2,
+    "off_rtg": 108.5,
+    "def_rtg": 118.5,
+    "reb_pg": 41.8,
+    "ast_pg": 25.4,
+    "fg_pct": 0.454,
+    "three_pct": 0.338
+  }
+}

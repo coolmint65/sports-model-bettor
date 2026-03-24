@@ -1,0 +1,17 @@
+{
+  "name": "Winnipeg Jets",
+  "abbreviation": "WPG",
+  "city": "Winnipeg",
+  "short_name": "Jets",
+  "record": "54-21-7",
+  "stats": {
+    "goals_for_avg": 3.38,
+    "goals_against_avg": 2.55,
+    "pp_pct": 0.232,
+    "pk_pct": 0.842,
+    "shots_per_game": 31.8,
+    "shots_against_per_game": 27.9,
+    "faceoff_pct": 0.518,
+    "save_pct": 0.916
+  }
+}

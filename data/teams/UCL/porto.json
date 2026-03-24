@@ -1,0 +1,17 @@
+{
+  "name": "FC Porto",
+  "abbreviation": "POR",
+  "city": "Porto",
+  "short_name": "Porto",
+  "record": "20W-5D-9L",
+  "stats": {
+    "goals_for_avg": 1.91,
+    "goals_against_avg": 1.00,
+    "xg_for": 1.82,
+    "xg_against": 1.08,
+    "possession_avg": 55.8,
+    "shots_pg": 14.2,
+    "shots_against_pg": 11.0,
+    "clean_sheet_pct": 0.35
+  }
+}

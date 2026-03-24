@@ -1,0 +1,17 @@
+{
+  "name": "Queretaro FC",
+  "abbreviation": "QRO",
+  "city": "Santiago de Queretaro",
+  "short_name": "Queretaro",
+  "record": "4W-6D-7L",
+  "stats": {
+    "goals_for_avg": 0.94,
+    "goals_against_avg": 1.41,
+    "xg_for": 1.02,
+    "xg_against": 1.38,
+    "possession_avg": 44.8,
+    "shots_pg": 10.2,
+    "shots_against_pg": 13.6,
+    "clean_sheet_pct": 0.18
+  }
+}

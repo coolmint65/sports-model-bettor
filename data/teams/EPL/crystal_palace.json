@@ -1,0 +1,17 @@
+{
+  "name": "Crystal Palace",
+  "abbreviation": "CRY",
+  "city": "London",
+  "short_name": "C. Palace",
+  "record": "12W-10D-16L",
+  "stats": {
+    "goals_for_avg": 1.21,
+    "goals_against_avg": 1.32,
+    "xg_for": 1.18,
+    "xg_against": 1.35,
+    "possession_avg": 46.8,
+    "shots_pg": 11.5,
+    "shots_against_pg": 13.2,
+    "clean_sheet_pct": 0.24
+  }
+}

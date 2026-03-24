@@ -1,0 +1,16 @@
+{
+  "name": "Chicago Bears",
+  "abbreviation": "CHI",
+  "city": "Chicago",
+  "short_name": "Bears",
+  "record": "6-11",
+  "stats": {
+    "ppg": 19.8,
+    "opp_ppg": 24.2,
+    "yards_per_game": 315.6,
+    "opp_yards_per_game": 342.8,
+    "rush_ypg": 118.4,
+    "pass_ypg": 197.2,
+    "turnover_diff": -7
+  }
+}

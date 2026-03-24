@@ -1,0 +1,17 @@
+{
+  "name": "Colorado Rapids",
+  "abbreviation": "COL",
+  "city": "Commerce City",
+  "short_name": "Colorado",
+  "record": "12W-6D-16L",
+  "stats": {
+    "goals_for_avg": 1.29,
+    "goals_against_avg": 1.44,
+    "xg_for": 1.25,
+    "xg_against": 1.40,
+    "possession_avg": 47.8,
+    "shots_pg": 11.6,
+    "shots_against_pg": 13.2,
+    "clean_sheet_pct": 0.21
+  }
+}

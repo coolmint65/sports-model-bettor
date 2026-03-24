@@ -1,0 +1,16 @@
+{
+  "name": "Iowa Hawkeyes",
+  "abbreviation": "IOWA",
+  "city": "Iowa City",
+  "short_name": "Iowa",
+  "record": "10-4",
+  "stats": {
+    "ppg": 22.8,
+    "opp_ppg": 14.2,
+    "yards_per_game": 310.0,
+    "opp_yards_per_game": 265.0,
+    "rush_ypg": 170.0,
+    "pass_ypg": 140.0,
+    "turnover_diff": 12
+  }
+}

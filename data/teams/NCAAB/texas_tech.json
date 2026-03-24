@@ -1,0 +1,17 @@
+{
+  "name": "Texas Tech Red Raiders",
+  "abbreviation": "TTU",
+  "city": "Lubbock",
+  "short_name": "Texas Tech",
+  "record": "23-10",
+  "stats": {
+    "ppg": 73.5,
+    "opp_ppg": 63.2,
+    "pace": 64.8,
+    "off_rtg": 113.6,
+    "def_rtg": 93.8,
+    "reb_pg": 36.4,
+    "fg_pct": 0.451,
+    "three_pct": 0.336
+  }
+}

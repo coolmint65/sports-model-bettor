@@ -1,0 +1,17 @@
+{
+  "name": "Seattle Kraken",
+  "abbreviation": "SEA",
+  "city": "Seattle",
+  "short_name": "Kraken",
+  "record": "34-35-13",
+  "stats": {
+    "goals_for_avg": 2.82,
+    "goals_against_avg": 3.08,
+    "pp_pct": 0.202,
+    "pk_pct": 0.795,
+    "shots_per_game": 30.5,
+    "shots_against_per_game": 31.2,
+    "faceoff_pct": 0.496,
+    "save_pct": 0.898
+  }
+}

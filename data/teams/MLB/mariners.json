@@ -1,0 +1,19 @@
+{
+  "name": "Seattle Mariners",
+  "abbreviation": "SEA",
+  "city": "Seattle",
+  "short_name": "Mariners",
+  "record": "82-80",
+  "stats": {
+    "runs_per_game": 4.22,
+    "era": 3.62,
+    "batting_avg": 0.237,
+    "obp": 0.312,
+    "slg": 0.395,
+    "ops": 0.707,
+    "hr_per_game": 1.25,
+    "whip": 1.18,
+    "k_per_9": 9.30,
+    "bb_per_9": 2.92
+  }
+}

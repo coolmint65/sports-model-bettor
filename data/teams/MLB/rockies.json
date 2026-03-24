@@ -1,0 +1,19 @@
+{
+  "name": "Colorado Rockies",
+  "abbreviation": "COL",
+  "city": "Denver",
+  "short_name": "Rockies",
+  "record": "64-98",
+  "stats": {
+    "runs_per_game": 4.38,
+    "era": 5.12,
+    "batting_avg": 0.252,
+    "obp": 0.315,
+    "slg": 0.415,
+    "ops": 0.730,
+    "hr_per_game": 1.30,
+    "whip": 1.45,
+    "k_per_9": 7.85,
+    "bb_per_9": 3.58
+  }
+}

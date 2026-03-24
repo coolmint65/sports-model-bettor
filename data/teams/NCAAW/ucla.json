@@ -1,0 +1,17 @@
+{
+  "name": "UCLA Bruins",
+  "abbreviation": "UCLA",
+  "city": "Los Angeles",
+  "short_name": "UCLA",
+  "record": "25-9",
+  "stats": {
+    "ppg": 74.2,
+    "opp_ppg": 63.5,
+    "pace": 69.8,
+    "off_rtg": 110.1,
+    "def_rtg": 92.8,
+    "reb_pg": 37.8,
+    "fg_pct": 0.455,
+    "three_pct": 0.332
+  }
+}

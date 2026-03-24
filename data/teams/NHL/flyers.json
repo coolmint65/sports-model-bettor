@@ -1,0 +1,17 @@
+{
+  "name": "Philadelphia Flyers",
+  "abbreviation": "PHI",
+  "city": "Philadelphia",
+  "short_name": "Flyers",
+  "record": "37-33-12",
+  "stats": {
+    "goals_for_avg": 2.88,
+    "goals_against_avg": 3.08,
+    "pp_pct": 0.198,
+    "pk_pct": 0.785,
+    "shots_per_game": 30.0,
+    "shots_against_per_game": 31.5,
+    "faceoff_pct": 0.498,
+    "save_pct": 0.898
+  }
+}

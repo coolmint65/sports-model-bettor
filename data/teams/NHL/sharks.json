@@ -1,0 +1,17 @@
+{
+  "name": "San Jose Sharks",
+  "abbreviation": "SJS",
+  "city": "San Jose",
+  "short_name": "Sharks",
+  "record": "28-42-12",
+  "stats": {
+    "goals_for_avg": 2.55,
+    "goals_against_avg": 3.42,
+    "pp_pct": 0.182,
+    "pk_pct": 0.765,
+    "shots_per_game": 28.5,
+    "shots_against_per_game": 33.0,
+    "faceoff_pct": 0.485,
+    "save_pct": 0.885
+  }
+}

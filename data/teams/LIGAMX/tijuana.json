@@ -1,0 +1,17 @@
+{
+  "name": "Club Tijuana",
+  "abbreviation": "TIJ",
+  "city": "Tijuana",
+  "short_name": "Tijuana",
+  "record": "6W-4D-7L",
+  "stats": {
+    "goals_for_avg": 1.12,
+    "goals_against_avg": 1.29,
+    "xg_for": 1.08,
+    "xg_against": 1.25,
+    "possession_avg": 47.5,
+    "shots_pg": 11.0,
+    "shots_against_pg": 12.8,
+    "clean_sheet_pct": 0.24
+  }
+}

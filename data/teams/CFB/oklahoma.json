@@ -1,0 +1,16 @@
+{
+  "name": "Oklahoma Sooners",
+  "abbreviation": "OU",
+  "city": "Norman",
+  "short_name": "Oklahoma",
+  "record": "10-3",
+  "stats": {
+    "ppg": 31.5,
+    "opp_ppg": 19.7,
+    "yards_per_game": 410.0,
+    "opp_yards_per_game": 315.0,
+    "rush_ypg": 175.0,
+    "pass_ypg": 235.0,
+    "turnover_diff": 6
+  }
+}

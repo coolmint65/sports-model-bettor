@@ -1,0 +1,18 @@
+{
+  "name": "New Orleans Pelicans",
+  "abbreviation": "NOP",
+  "city": "New Orleans",
+  "short_name": "Pelicans",
+  "record": "25-57",
+  "stats": {
+    "ppg": 108.9,
+    "opp_ppg": 116.5,
+    "pace": 98.8,
+    "off_rtg": 111.6,
+    "def_rtg": 119.4,
+    "reb_pg": 43.3,
+    "ast_pg": 24.6,
+    "fg_pct": 0.457,
+    "three_pct": 0.341
+  }
+}

@@ -14,11 +14,6 @@ venv/
 .venv/
 env/
 
-# Database
-*.db
-*.sqlite3
-backend/data/
-
 # IDE
 .vscode/
 .idea/
@@ -29,13 +24,6 @@ backend/data/
 # Environment
 .env
 .env.local
-.env.production
-
-# Node
-node_modules/
-frontend/node_modules/
-frontend/dist/
-frontend/build/
 
 # OS
 .DS_Store
@@ -43,6 +31,3 @@ Thumbs.db
 
 # Logs
 *.log
-
-# Model artifacts
-backend/app/ml/artifacts/*.joblib

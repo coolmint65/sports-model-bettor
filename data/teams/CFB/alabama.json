@@ -1,0 +1,16 @@
+{
+  "name": "Alabama Crimson Tide",
+  "abbreviation": "ALA",
+  "city": "Tuscaloosa",
+  "short_name": "Alabama",
+  "record": "12-2",
+  "stats": {
+    "ppg": 35.5,
+    "opp_ppg": 18.2,
+    "yards_per_game": 438.5,
+    "opp_yards_per_game": 302.8,
+    "rush_ypg": 172.5,
+    "pass_ypg": 266.0,
+    "turnover_diff": 6
+  }
+}

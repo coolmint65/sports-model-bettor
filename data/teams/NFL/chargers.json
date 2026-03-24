@@ -1,0 +1,16 @@
+{
+  "name": "Los Angeles Chargers",
+  "abbreviation": "LAC",
+  "city": "Los Angeles",
+  "short_name": "Chargers",
+  "record": "11-6",
+  "stats": {
+    "ppg": 25.1,
+    "opp_ppg": 19.4,
+    "yards_per_game": 345.8,
+    "opp_yards_per_game": 298.5,
+    "rush_ypg": 128.3,
+    "pass_ypg": 217.5,
+    "turnover_diff": 9
+  }
+}

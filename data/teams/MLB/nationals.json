@@ -1,0 +1,19 @@
+{
+  "name": "Washington Nationals",
+  "abbreviation": "WSH",
+  "city": "Washington",
+  "short_name": "Nationals",
+  "record": "71-91",
+  "stats": {
+    "runs_per_game": 4.15,
+    "era": 4.38,
+    "batting_avg": 0.242,
+    "obp": 0.310,
+    "slg": 0.392,
+    "ops": 0.702,
+    "hr_per_game": 1.18,
+    "whip": 1.33,
+    "k_per_9": 8.45,
+    "bb_per_9": 3.40
+  }
+}

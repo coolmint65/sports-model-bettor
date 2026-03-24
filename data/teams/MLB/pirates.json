@@ -1,0 +1,19 @@
+{
+  "name": "Pittsburgh Pirates",
+  "abbreviation": "PIT",
+  "city": "Pittsburgh",
+  "short_name": "Pirates",
+  "record": "73-89",
+  "stats": {
+    "runs_per_game": 4.12,
+    "era": 4.28,
+    "batting_avg": 0.241,
+    "obp": 0.308,
+    "slg": 0.390,
+    "ops": 0.698,
+    "hr_per_game": 1.15,
+    "whip": 1.32,
+    "k_per_9": 8.50,
+    "bb_per_9": 3.35
+  }
+}

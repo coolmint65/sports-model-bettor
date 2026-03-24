@@ -1,0 +1,17 @@
+{
+  "name": "Aston Villa",
+  "abbreviation": "AVL",
+  "city": "Birmingham",
+  "short_name": "Villa",
+  "record": "20W-8D-10L",
+  "stats": {
+    "goals_for_avg": 1.97,
+    "goals_against_avg": 1.08,
+    "xg_for": 1.85,
+    "xg_against": 1.12,
+    "possession_avg": 53.2,
+    "shots_pg": 13.6,
+    "shots_against_pg": 11.4,
+    "clean_sheet_pct": 0.32
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Ipswich Town",
+  "abbreviation": "IPS",
+  "city": "Ipswich",
+  "short_name": "Ipswich",
+  "record": "5W-10D-23L",
+  "stats": {
+    "goals_for_avg": 0.82,
+    "goals_against_avg": 1.68,
+    "xg_for": 0.92,
+    "xg_against": 1.60,
+    "possession_avg": 44.8,
+    "shots_pg": 10.2,
+    "shots_against_pg": 14.5,
+    "clean_sheet_pct": 0.13
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "VfL Bochum",
+  "abbreviation": "BOC",
+  "city": "Bochum",
+  "short_name": "Bochum",
+  "record": "4W-7D-23L",
+  "stats": {
+    "goals_for_avg": 0.74,
+    "goals_against_avg": 1.82,
+    "xg_for": 0.80,
+    "xg_against": 1.75,
+    "possession_avg": 42.5,
+    "shots_pg": 9.5,
+    "shots_against_pg": 15.0,
+    "clean_sheet_pct": 0.09
+  }
+}

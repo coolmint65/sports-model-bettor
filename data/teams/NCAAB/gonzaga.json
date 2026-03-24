@@ -1,0 +1,17 @@
+{
+  "name": "Gonzaga Bulldogs",
+  "abbreviation": "GONZ",
+  "city": "Spokane",
+  "short_name": "Gonzaga",
+  "record": "26-7",
+  "stats": {
+    "ppg": 83.5,
+    "opp_ppg": 70.1,
+    "pace": 72.1,
+    "off_rtg": 119.2,
+    "def_rtg": 100.4,
+    "reb_pg": 36.8,
+    "fg_pct": 0.492,
+    "three_pct": 0.358
+  }
+}

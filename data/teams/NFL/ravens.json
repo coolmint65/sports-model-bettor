@@ -1,0 +1,16 @@
+{
+  "name": "Baltimore Ravens",
+  "abbreviation": "BAL",
+  "city": "Baltimore",
+  "short_name": "Ravens",
+  "record": "13-4",
+  "stats": {
+    "ppg": 30.1,
+    "opp_ppg": 20.8,
+    "yards_per_game": 395.3,
+    "opp_yards_per_game": 315.6,
+    "rush_ypg": 168.2,
+    "pass_ypg": 227.1,
+    "turnover_diff": 10
+  }
+}

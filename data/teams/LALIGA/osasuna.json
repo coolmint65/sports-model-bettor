@@ -1,0 +1,17 @@
+{
+  "name": "CA Osasuna",
+  "abbreviation": "OSA",
+  "city": "Pamplona",
+  "short_name": "Osasuna",
+  "record": "14W-9D-15L",
+  "stats": {
+    "goals_for_avg": 1.24,
+    "goals_against_avg": 1.18,
+    "xg_for": 1.18,
+    "xg_against": 1.22,
+    "possession_avg": 47.4,
+    "shots_pg": 11.4,
+    "shots_against_pg": 12.6,
+    "clean_sheet_pct": 0.26
+  }
+}

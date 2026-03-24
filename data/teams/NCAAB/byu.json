@@ -1,0 +1,17 @@
+{
+  "name": "BYU Cougars",
+  "abbreviation": "BYU",
+  "city": "Provo",
+  "short_name": "BYU",
+  "record": "25-9",
+  "stats": {
+    "ppg": 76.4,
+    "opp_ppg": 67.1,
+    "pace": 66.5,
+    "off_rtg": 115.2,
+    "def_rtg": 98.4,
+    "reb_pg": 35.3,
+    "fg_pct": 0.463,
+    "three_pct": 0.354
+  }
+}

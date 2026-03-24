@@ -1,0 +1,17 @@
+{
+  "name": "CF Monterrey",
+  "abbreviation": "MTY",
+  "city": "Monterrey",
+  "short_name": "Monterrey",
+  "record": "9W-4D-4L",
+  "stats": {
+    "goals_for_avg": 1.53,
+    "goals_against_avg": 0.88,
+    "xg_for": 1.48,
+    "xg_against": 0.92,
+    "possession_avg": 53.5,
+    "shots_pg": 13.5,
+    "shots_against_pg": 10.5,
+    "clean_sheet_pct": 0.35
+  }
+}

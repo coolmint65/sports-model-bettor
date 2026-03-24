@@ -1,0 +1,19 @@
+{
+  "name": "Texas Rangers",
+  "abbreviation": "TEX",
+  "city": "Arlington",
+  "short_name": "Rangers",
+  "record": "78-84",
+  "stats": {
+    "runs_per_game": 4.48,
+    "era": 4.12,
+    "batting_avg": 0.249,
+    "obp": 0.319,
+    "slg": 0.415,
+    "ops": 0.734,
+    "hr_per_game": 1.32,
+    "whip": 1.30,
+    "k_per_9": 8.50,
+    "bb_per_9": 3.28
+  }
+}

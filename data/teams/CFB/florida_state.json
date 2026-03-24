@@ -1,0 +1,16 @@
+{
+  "name": "Florida State Seminoles",
+  "abbreviation": "FSU",
+  "city": "Tallahassee",
+  "short_name": "Florida State",
+  "record": "13-1",
+  "stats": {
+    "ppg": 35.8,
+    "opp_ppg": 18.8,
+    "yards_per_game": 432.5,
+    "opp_yards_per_game": 310.2,
+    "rush_ypg": 168.2,
+    "pass_ypg": 264.3,
+    "turnover_diff": 10
+  }
+}

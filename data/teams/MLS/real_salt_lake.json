@@ -1,0 +1,17 @@
+{
+  "name": "Real Salt Lake",
+  "abbreviation": "RSL",
+  "city": "Sandy",
+  "short_name": "Salt Lake",
+  "record": "16W-8D-10L",
+  "stats": {
+    "goals_for_avg": 1.62,
+    "goals_against_avg": 1.21,
+    "xg_for": 1.58,
+    "xg_against": 1.25,
+    "possession_avg": 52.3,
+    "shots_pg": 13.6,
+    "shots_against_pg": 11.3,
+    "clean_sheet_pct": 0.29
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "West Virginia Mountaineers",
+  "abbreviation": "WVU",
+  "city": "Morgantown",
+  "short_name": "West Virginia",
+  "record": "23-9",
+  "stats": {
+    "ppg": 72.5,
+    "opp_ppg": 64.8,
+    "pace": 68.5,
+    "off_rtg": 108.2,
+    "def_rtg": 95.5,
+    "reb_pg": 38.8,
+    "fg_pct": 0.445,
+    "three_pct": 0.312
+  }
+}

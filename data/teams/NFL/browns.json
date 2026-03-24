@@ -1,0 +1,16 @@
+{
+  "name": "Cleveland Browns",
+  "abbreviation": "CLE",
+  "city": "Cleveland",
+  "short_name": "Browns",
+  "record": "4-13",
+  "stats": {
+    "ppg": 16.8,
+    "opp_ppg": 26.1,
+    "yards_per_game": 290.5,
+    "opp_yards_per_game": 360.3,
+    "rush_ypg": 110.2,
+    "pass_ypg": 180.3,
+    "turnover_diff": -15
+  }
+}

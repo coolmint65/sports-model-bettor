@@ -1,0 +1,17 @@
+{
+  "name": "RCD Mallorca",
+  "abbreviation": "MLL",
+  "city": "Palma",
+  "short_name": "Mallorca",
+  "record": "13W-11D-14L",
+  "stats": {
+    "goals_for_avg": 1.05,
+    "goals_against_avg": 1.08,
+    "xg_for": 1.00,
+    "xg_against": 1.15,
+    "possession_avg": 44.6,
+    "shots_pg": 10.6,
+    "shots_against_pg": 13.0,
+    "clean_sheet_pct": 0.32
+  }
+}

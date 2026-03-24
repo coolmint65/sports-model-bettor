@@ -1,0 +1,17 @@
+{
+  "name": "Columbus Blue Jackets",
+  "abbreviation": "CBJ",
+  "city": "Columbus",
+  "short_name": "Blue Jackets",
+  "record": "31-39-12",
+  "stats": {
+    "goals_for_avg": 2.75,
+    "goals_against_avg": 3.25,
+    "pp_pct": 0.195,
+    "pk_pct": 0.775,
+    "shots_per_game": 29.8,
+    "shots_against_per_game": 32.2,
+    "faceoff_pct": 0.492,
+    "save_pct": 0.892
+  }
+}

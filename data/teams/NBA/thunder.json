@@ -1,0 +1,18 @@
+{
+  "name": "Oklahoma City Thunder",
+  "abbreviation": "OKC",
+  "city": "Oklahoma City",
+  "short_name": "Thunder",
+  "record": "68-14",
+  "stats": {
+    "ppg": 119.3,
+    "opp_ppg": 107.8,
+    "pace": 99.8,
+    "off_rtg": 121.5,
+    "def_rtg": 109.7,
+    "reb_pg": 44.8,
+    "ast_pg": 26.5,
+    "fg_pct": 0.484,
+    "three_pct": 0.369
+  }
+}

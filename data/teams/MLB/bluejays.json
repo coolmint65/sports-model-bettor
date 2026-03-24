@@ -1,0 +1,19 @@
+{
+  "name": "Toronto Blue Jays",
+  "abbreviation": "TOR",
+  "city": "Toronto",
+  "short_name": "Blue Jays",
+  "record": "76-86",
+  "stats": {
+    "runs_per_game": 4.28,
+    "era": 4.18,
+    "batting_avg": 0.245,
+    "obp": 0.318,
+    "slg": 0.405,
+    "ops": 0.723,
+    "hr_per_game": 1.25,
+    "whip": 1.30,
+    "k_per_9": 8.65,
+    "bb_per_9": 3.30
+  }
+}

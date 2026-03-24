@@ -1,0 +1,16 @@
+{
+  "name": "Clemson Tigers",
+  "abbreviation": "CLEM",
+  "city": "Clemson",
+  "short_name": "Clemson",
+  "record": "9-4",
+  "stats": {
+    "ppg": 28.6,
+    "opp_ppg": 19.2,
+    "yards_per_game": 375.0,
+    "opp_yards_per_game": 305.0,
+    "rush_ypg": 170.0,
+    "pass_ypg": 205.0,
+    "turnover_diff": 4
+  }
+}

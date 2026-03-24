@@ -1,0 +1,17 @@
+{
+  "name": "Buffalo Sabres",
+  "abbreviation": "BUF",
+  "city": "Buffalo",
+  "short_name": "Sabres",
+  "record": "33-37-12",
+  "stats": {
+    "goals_for_avg": 2.85,
+    "goals_against_avg": 3.18,
+    "pp_pct": 0.208,
+    "pk_pct": 0.778,
+    "shots_per_game": 31.0,
+    "shots_against_per_game": 32.0,
+    "faceoff_pct": 0.490,
+    "save_pct": 0.892
+  }
+}

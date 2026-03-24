@@ -1,0 +1,17 @@
+{
+  "name": "RB Leipzig",
+  "abbreviation": "RBL",
+  "city": "Leipzig",
+  "short_name": "Leipzig",
+  "record": "17W-6D-11L",
+  "stats": {
+    "goals_for_avg": 1.88,
+    "goals_against_avg": 1.15,
+    "xg_for": 1.82,
+    "xg_against": 1.12,
+    "possession_avg": 55.5,
+    "shots_pg": 14.2,
+    "shots_against_pg": 10.5,
+    "clean_sheet_pct": 0.30
+  }
+}

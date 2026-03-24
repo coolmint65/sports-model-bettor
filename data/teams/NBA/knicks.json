@@ -1,0 +1,18 @@
+{
+  "name": "New York Knicks",
+  "abbreviation": "NYK",
+  "city": "New York",
+  "short_name": "Knicks",
+  "record": "52-30",
+  "stats": {
+    "ppg": 116.4,
+    "opp_ppg": 111.3,
+    "pace": 99.2,
+    "off_rtg": 118.6,
+    "def_rtg": 113.2,
+    "reb_pg": 46.1,
+    "ast_pg": 26.8,
+    "fg_pct": 0.479,
+    "three_pct": 0.362
+  }
+}

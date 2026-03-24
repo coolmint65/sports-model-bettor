@@ -1,0 +1,17 @@
+{
+  "name": "Austin FC",
+  "abbreviation": "ATX",
+  "city": "Austin",
+  "short_name": "Austin",
+  "record": "12W-8D-14L",
+  "stats": {
+    "goals_for_avg": 1.32,
+    "goals_against_avg": 1.38,
+    "xg_for": 1.28,
+    "xg_against": 1.35,
+    "possession_avg": 51.5,
+    "shots_pg": 12.8,
+    "shots_against_pg": 12.5,
+    "clean_sheet_pct": 0.21
+  }
+}

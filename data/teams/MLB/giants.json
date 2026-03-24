@@ -1,0 +1,19 @@
+{
+  "name": "San Francisco Giants",
+  "abbreviation": "SF",
+  "city": "San Francisco",
+  "short_name": "Giants",
+  "record": "77-85",
+  "stats": {
+    "runs_per_game": 4.30,
+    "era": 4.05,
+    "batting_avg": 0.243,
+    "obp": 0.318,
+    "slg": 0.402,
+    "ops": 0.720,
+    "hr_per_game": 1.28,
+    "whip": 1.27,
+    "k_per_9": 8.70,
+    "bb_per_9": 3.15
+  }
+}

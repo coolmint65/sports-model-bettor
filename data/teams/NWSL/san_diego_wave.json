@@ -1,0 +1,17 @@
+{
+  "name": "San Diego Wave FC",
+  "abbreviation": "SD",
+  "city": "San Diego",
+  "short_name": "Wave",
+  "record": "10W-5D-11L",
+  "stats": {
+    "goals_for_avg": 1.23,
+    "goals_against_avg": 1.19,
+    "xg_for": 1.20,
+    "xg_against": 1.22,
+    "possession_avg": 51.5,
+    "shots_pg": 12.5,
+    "shots_against_pg": 11.8,
+    "clean_sheet_pct": 0.27
+  }
+}

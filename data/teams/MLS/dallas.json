@@ -1,0 +1,17 @@
+{
+  "name": "FC Dallas",
+  "abbreviation": "DAL",
+  "city": "Frisco",
+  "short_name": "Dallas",
+  "record": "10W-9D-15L",
+  "stats": {
+    "goals_for_avg": 1.18,
+    "goals_against_avg": 1.47,
+    "xg_for": 1.22,
+    "xg_against": 1.42,
+    "possession_avg": 49.5,
+    "shots_pg": 11.8,
+    "shots_against_pg": 12.9,
+    "clean_sheet_pct": 0.19
+  }
+}

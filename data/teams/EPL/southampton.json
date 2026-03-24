@@ -1,0 +1,17 @@
+{
+  "name": "Southampton",
+  "abbreviation": "SOU",
+  "city": "Southampton",
+  "short_name": "Southampton",
+  "record": "3W-7D-28L",
+  "stats": {
+    "goals_for_avg": 0.63,
+    "goals_against_avg": 2.00,
+    "xg_for": 0.78,
+    "xg_against": 1.88,
+    "possession_avg": 43.0,
+    "shots_pg": 9.6,
+    "shots_against_pg": 15.4,
+    "clean_sheet_pct": 0.08
+  }
+}

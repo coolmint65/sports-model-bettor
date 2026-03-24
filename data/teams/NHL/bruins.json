@@ -1,0 +1,17 @@
+{
+  "name": "Boston Bruins",
+  "abbreviation": "BOS",
+  "city": "Boston",
+  "short_name": "Bruins",
+  "record": "46-26-10",
+  "stats": {
+    "goals_for_avg": 3.10,
+    "goals_against_avg": 2.75,
+    "pp_pct": 0.225,
+    "pk_pct": 0.825,
+    "shots_per_game": 31.5,
+    "shots_against_per_game": 28.8,
+    "faceoff_pct": 0.518,
+    "save_pct": 0.910
+  }
+}

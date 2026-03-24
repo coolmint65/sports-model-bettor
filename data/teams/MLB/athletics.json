@@ -1,0 +1,19 @@
+{
+  "name": "Oakland Athletics",
+  "abbreviation": "OAK",
+  "city": "Sacramento",
+  "short_name": "Athletics",
+  "record": "61-101",
+  "stats": {
+    "runs_per_game": 3.82,
+    "era": 4.68,
+    "batting_avg": 0.232,
+    "obp": 0.302,
+    "slg": 0.378,
+    "ops": 0.680,
+    "hr_per_game": 1.08,
+    "whip": 1.40,
+    "k_per_9": 8.25,
+    "bb_per_9": 3.55
+  }
+}

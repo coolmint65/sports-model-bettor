@@ -1,0 +1,16 @@
+{
+  "name": "Colorado Buffaloes",
+  "abbreviation": "COL",
+  "city": "Boulder",
+  "short_name": "Colorado",
+  "record": "4-8",
+  "stats": {
+    "ppg": 24.1,
+    "opp_ppg": 28.3,
+    "yards_per_game": 365.0,
+    "opp_yards_per_game": 380.0,
+    "rush_ypg": 120.0,
+    "pass_ypg": 245.0,
+    "turnover_diff": -5
+  }
+}

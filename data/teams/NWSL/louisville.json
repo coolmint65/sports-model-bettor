@@ -1,0 +1,17 @@
+{
+  "name": "Racing Louisville FC",
+  "abbreviation": "LOU",
+  "city": "Louisville",
+  "short_name": "Louisville",
+  "record": "8W-7D-11L",
+  "stats": {
+    "goals_for_avg": 1.04,
+    "goals_against_avg": 1.23,
+    "xg_for": 1.08,
+    "xg_against": 1.20,
+    "possession_avg": 48.0,
+    "shots_pg": 11.2,
+    "shots_against_pg": 12.2,
+    "clean_sheet_pct": 0.23
+  }
+}

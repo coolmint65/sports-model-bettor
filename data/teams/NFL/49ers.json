@@ -1,0 +1,16 @@
+{
+  "name": "San Francisco 49ers",
+  "abbreviation": "SF",
+  "city": "San Francisco",
+  "short_name": "49ers",
+  "record": "11-6",
+  "stats": {
+    "ppg": 25.4,
+    "opp_ppg": 19.8,
+    "yards_per_game": 355.6,
+    "opp_yards_per_game": 300.2,
+    "rush_ypg": 125.8,
+    "pass_ypg": 229.8,
+    "turnover_diff": 6
+  }
+}

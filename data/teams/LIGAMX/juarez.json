@@ -1,0 +1,17 @@
+{
+  "name": "FC Juarez",
+  "abbreviation": "JUA",
+  "city": "Ciudad Juarez",
+  "short_name": "Juarez",
+  "record": "3W-5D-9L",
+  "stats": {
+    "goals_for_avg": 0.82,
+    "goals_against_avg": 1.41,
+    "xg_for": 0.88,
+    "xg_against": 1.35,
+    "possession_avg": 44.5,
+    "shots_pg": 9.8,
+    "shots_against_pg": 13.5,
+    "clean_sheet_pct": 0.12
+  }
+}

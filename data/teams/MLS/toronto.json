@@ -1,0 +1,17 @@
+{
+  "name": "Toronto FC",
+  "abbreviation": "TOR",
+  "city": "Toronto",
+  "short_name": "Toronto",
+  "record": "11W-6D-17L",
+  "stats": {
+    "goals_for_avg": 1.24,
+    "goals_against_avg": 1.53,
+    "xg_for": 1.28,
+    "xg_against": 1.48,
+    "possession_avg": 48.1,
+    "shots_pg": 11.7,
+    "shots_against_pg": 13.4,
+    "clean_sheet_pct": 0.17
+  }
+}

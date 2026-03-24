@@ -1,0 +1,17 @@
+{
+  "name": "Borussia Monchengladbach",
+  "abbreviation": "BMG",
+  "city": "Monchengladbach",
+  "short_name": "Gladbach",
+  "record": "9W-9D-16L",
+  "stats": {
+    "goals_for_avg": 1.18,
+    "goals_against_avg": 1.47,
+    "xg_for": 1.22,
+    "xg_against": 1.42,
+    "possession_avg": 49.8,
+    "shots_pg": 11.5,
+    "shots_against_pg": 12.8,
+    "clean_sheet_pct": 0.18
+  }
+}

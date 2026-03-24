@@ -1,0 +1,18 @@
+{
+  "name": "Philadelphia 76ers",
+  "abbreviation": "PHI",
+  "city": "Philadelphia",
+  "short_name": "76ers",
+  "record": "27-55",
+  "stats": {
+    "ppg": 108.4,
+    "opp_ppg": 114.6,
+    "pace": 98.6,
+    "off_rtg": 111.2,
+    "def_rtg": 117.6,
+    "reb_pg": 42.8,
+    "ast_pg": 25.3,
+    "fg_pct": 0.461,
+    "three_pct": 0.349
+  }
+}

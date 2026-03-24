@@ -1,0 +1,18 @@
+{
+  "name": "Houston Rockets",
+  "abbreviation": "HOU",
+  "city": "Houston",
+  "short_name": "Rockets",
+  "record": "52-30",
+  "stats": {
+    "ppg": 113.6,
+    "opp_ppg": 108.9,
+    "pace": 98.2,
+    "off_rtg": 117.2,
+    "def_rtg": 112.4,
+    "reb_pg": 47.2,
+    "ast_pg": 25.1,
+    "fg_pct": 0.470,
+    "three_pct": 0.348
+  }
+}

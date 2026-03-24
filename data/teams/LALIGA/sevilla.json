@@ -1,0 +1,17 @@
+{
+  "name": "Sevilla FC",
+  "abbreviation": "SEV",
+  "city": "Seville",
+  "short_name": "Sevilla",
+  "record": "13W-10D-15L",
+  "stats": {
+    "goals_for_avg": 1.26,
+    "goals_against_avg": 1.24,
+    "xg_for": 1.22,
+    "xg_against": 1.28,
+    "possession_avg": 51.8,
+    "shots_pg": 12.4,
+    "shots_against_pg": 12.0,
+    "clean_sheet_pct": 0.24
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Florida Panthers",
+  "abbreviation": "FLA",
+  "city": "Sunrise",
+  "short_name": "Panthers",
+  "record": "55-20-7",
+  "stats": {
+    "goals_for_avg": 3.52,
+    "goals_against_avg": 2.62,
+    "pp_pct": 0.248,
+    "pk_pct": 0.835,
+    "shots_per_game": 33.1,
+    "shots_against_per_game": 28.4,
+    "faceoff_pct": 0.524,
+    "save_pct": 0.912
+  }
+}

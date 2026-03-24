@@ -1,0 +1,16 @@
+{
+  "name": "Pittsburgh Steelers",
+  "abbreviation": "PIT",
+  "city": "Pittsburgh",
+  "short_name": "Steelers",
+  "record": "10-7",
+  "stats": {
+    "ppg": 22.8,
+    "opp_ppg": 20.5,
+    "yards_per_game": 330.6,
+    "opp_yards_per_game": 310.8,
+    "rush_ypg": 122.4,
+    "pass_ypg": 208.2,
+    "turnover_diff": 5
+  }
+}

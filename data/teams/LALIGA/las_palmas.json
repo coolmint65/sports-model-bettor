@@ -1,0 +1,17 @@
+{
+  "name": "Las Palmas",
+  "abbreviation": "LPA",
+  "city": "Las Palmas",
+  "short_name": "Las Palmas",
+  "record": "8W-11D-19L",
+  "stats": {
+    "goals_for_avg": 0.92,
+    "goals_against_avg": 1.47,
+    "xg_for": 0.98,
+    "xg_against": 1.42,
+    "possession_avg": 49.2,
+    "shots_pg": 10.8,
+    "shots_against_pg": 13.5,
+    "clean_sheet_pct": 0.18
+  }
+}

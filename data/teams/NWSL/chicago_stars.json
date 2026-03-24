@@ -1,0 +1,17 @@
+{
+  "name": "Chicago Stars",
+  "abbreviation": "CHI",
+  "city": "Chicago",
+  "short_name": "Chicago Stars",
+  "record": "9W-6D-11L",
+  "stats": {
+    "goals_for_avg": 1.15,
+    "goals_against_avg": 1.23,
+    "xg_for": 1.18,
+    "xg_against": 1.25,
+    "possession_avg": 49.8,
+    "shots_pg": 11.5,
+    "shots_against_pg": 12.0,
+    "clean_sheet_pct": 0.23
+  }
+}

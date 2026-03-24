@@ -1,0 +1,17 @@
+{
+  "name": "New York Islanders",
+  "abbreviation": "NYI",
+  "city": "Elmont",
+  "short_name": "Islanders",
+  "record": "36-34-12",
+  "stats": {
+    "goals_for_avg": 2.78,
+    "goals_against_avg": 2.92,
+    "pp_pct": 0.192,
+    "pk_pct": 0.818,
+    "shots_per_game": 29.5,
+    "shots_against_per_game": 29.8,
+    "faceoff_pct": 0.510,
+    "save_pct": 0.904
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Fulham",
+  "abbreviation": "FUL",
+  "city": "London",
+  "short_name": "Fulham",
+  "record": "15W-8D-15L",
+  "stats": {
+    "goals_for_avg": 1.42,
+    "goals_against_avg": 1.26,
+    "xg_for": 1.38,
+    "xg_against": 1.30,
+    "possession_avg": 50.4,
+    "shots_pg": 12.5,
+    "shots_against_pg": 12.2,
+    "clean_sheet_pct": 0.26
+  }
+}

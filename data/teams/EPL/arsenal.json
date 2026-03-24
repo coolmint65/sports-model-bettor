@@ -1,0 +1,17 @@
+{
+  "name": "Arsenal",
+  "abbreviation": "ARS",
+  "city": "London",
+  "short_name": "Arsenal",
+  "record": "26W-8D-4L",
+  "stats": {
+    "goals_for_avg": 2.29,
+    "goals_against_avg": 0.71,
+    "xg_for": 2.18,
+    "xg_against": 0.82,
+    "possession_avg": 59.8,
+    "shots_pg": 15.8,
+    "shots_against_pg": 9.2,
+    "clean_sheet_pct": 0.47
+  }
+}

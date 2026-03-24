@@ -1,0 +1,16 @@
+{
+  "name": "Tennessee Titans",
+  "abbreviation": "TEN",
+  "city": "Nashville",
+  "short_name": "Titans",
+  "record": "5-12",
+  "stats": {
+    "ppg": 18.2,
+    "opp_ppg": 25.4,
+    "yards_per_game": 302.8,
+    "opp_yards_per_game": 348.6,
+    "rush_ypg": 112.5,
+    "pass_ypg": 190.3,
+    "turnover_diff": -10
+  }
+}

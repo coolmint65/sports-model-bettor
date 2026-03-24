@@ -1,0 +1,19 @@
+{
+  "name": "Miami Marlins",
+  "abbreviation": "MIA",
+  "city": "Miami",
+  "short_name": "Marlins",
+  "record": "62-100",
+  "stats": {
+    "runs_per_game": 3.78,
+    "era": 4.55,
+    "batting_avg": 0.234,
+    "obp": 0.300,
+    "slg": 0.370,
+    "ops": 0.670,
+    "hr_per_game": 1.02,
+    "whip": 1.38,
+    "k_per_9": 8.30,
+    "bb_per_9": 3.48
+  }
+}

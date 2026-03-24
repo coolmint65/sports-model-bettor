@@ -1,0 +1,16 @@
+{
+  "name": "Green Bay Packers",
+  "abbreviation": "GB",
+  "city": "Green Bay",
+  "short_name": "Packers",
+  "record": "12-5",
+  "stats": {
+    "ppg": 27.1,
+    "opp_ppg": 21.3,
+    "yards_per_game": 368.4,
+    "opp_yards_per_game": 322.1,
+    "rush_ypg": 128.9,
+    "pass_ypg": 239.5,
+    "turnover_diff": 8
+  }
+}

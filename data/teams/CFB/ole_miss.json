@@ -1,0 +1,16 @@
+{
+  "name": "Ole Miss Rebels",
+  "abbreviation": "MISS",
+  "city": "Oxford",
+  "short_name": "Ole Miss",
+  "record": "11-2",
+  "stats": {
+    "ppg": 38.5,
+    "opp_ppg": 21.2,
+    "yards_per_game": 462.8,
+    "opp_yards_per_game": 328.5,
+    "rush_ypg": 175.8,
+    "pass_ypg": 287.0,
+    "turnover_diff": 5
+  }
+}

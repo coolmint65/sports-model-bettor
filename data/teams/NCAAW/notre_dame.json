@@ -1,0 +1,17 @@
+{
+  "name": "Notre Dame Fighting Irish",
+  "abbreviation": "ND",
+  "city": "Notre Dame",
+  "short_name": "Notre Dame",
+  "record": "27-6",
+  "stats": {
+    "ppg": 76.8,
+    "opp_ppg": 64.2,
+    "pace": 70.5,
+    "off_rtg": 112.8,
+    "def_rtg": 93.1,
+    "reb_pg": 38.5,
+    "fg_pct": 0.465,
+    "three_pct": 0.345
+  }
+}

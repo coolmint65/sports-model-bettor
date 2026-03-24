@@ -1,0 +1,17 @@
+{
+  "name": "Getafe CF",
+  "abbreviation": "GET",
+  "city": "Getafe",
+  "short_name": "Getafe",
+  "record": "12W-12D-14L",
+  "stats": {
+    "goals_for_avg": 1.00,
+    "goals_against_avg": 1.08,
+    "xg_for": 0.95,
+    "xg_against": 1.15,
+    "possession_avg": 42.6,
+    "shots_pg": 10.2,
+    "shots_against_pg": 13.4,
+    "clean_sheet_pct": 0.29
+  }
+}

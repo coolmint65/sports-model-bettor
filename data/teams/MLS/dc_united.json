@@ -1,0 +1,17 @@
+{
+  "name": "D.C. United",
+  "abbreviation": "DCU",
+  "city": "Washington",
+  "short_name": "DC United",
+  "record": "9W-7D-18L",
+  "stats": {
+    "goals_for_avg": 1.09,
+    "goals_against_avg": 1.62,
+    "xg_for": 1.14,
+    "xg_against": 1.55,
+    "possession_avg": 46.3,
+    "shots_pg": 10.9,
+    "shots_against_pg": 14.1,
+    "clean_sheet_pct": 0.15
+  }
+}

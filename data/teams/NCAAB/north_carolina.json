@@ -1,0 +1,17 @@
+{
+  "name": "North Carolina Tar Heels",
+  "abbreviation": "UNC",
+  "city": "Chapel Hill",
+  "short_name": "North Carolina",
+  "record": "29-8",
+  "stats": {
+    "ppg": 81.4,
+    "opp_ppg": 71.2,
+    "pace": 71.3,
+    "off_rtg": 116.5,
+    "def_rtg": 100.8,
+    "reb_pg": 39.6,
+    "fg_pct": 0.472,
+    "three_pct": 0.348
+  }
+}

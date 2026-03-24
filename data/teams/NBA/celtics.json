@@ -1,0 +1,18 @@
+{
+  "name": "Boston Celtics",
+  "abbreviation": "BOS",
+  "city": "Boston",
+  "short_name": "Celtics",
+  "record": "64-18",
+  "stats": {
+    "ppg": 120.6,
+    "opp_ppg": 109.2,
+    "pace": 100.5,
+    "off_rtg": 122.2,
+    "def_rtg": 110.6,
+    "reb_pg": 45.2,
+    "ast_pg": 27.1,
+    "fg_pct": 0.488,
+    "three_pct": 0.382
+  }
+}

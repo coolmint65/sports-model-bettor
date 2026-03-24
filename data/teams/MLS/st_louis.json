@@ -1,0 +1,17 @@
+{
+  "name": "St. Louis City SC",
+  "abbreviation": "STL",
+  "city": "St. Louis",
+  "short_name": "St. Louis",
+  "record": "12W-8D-14L",
+  "stats": {
+    "goals_for_avg": 1.32,
+    "goals_against_avg": 1.41,
+    "xg_for": 1.35,
+    "xg_against": 1.38,
+    "possession_avg": 50.2,
+    "shots_pg": 12.6,
+    "shots_against_pg": 12.3,
+    "clean_sheet_pct": 0.20
+  }
+}

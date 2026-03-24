@@ -1,0 +1,18 @@
+{
+  "name": "Cleveland Cavaliers",
+  "abbreviation": "CLE",
+  "city": "Cleveland",
+  "short_name": "Cavaliers",
+  "record": "64-18",
+  "stats": {
+    "ppg": 118.2,
+    "opp_ppg": 109.8,
+    "pace": 98.7,
+    "off_rtg": 121.8,
+    "def_rtg": 113.0,
+    "reb_pg": 43.5,
+    "ast_pg": 28.3,
+    "fg_pct": 0.494,
+    "three_pct": 0.375
+  }
+}

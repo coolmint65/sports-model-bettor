@@ -1,0 +1,17 @@
+{
+  "name": "Northwestern Wildcats",
+  "abbreviation": "NW",
+  "city": "Evanston",
+  "short_name": "Northwestern",
+  "record": "23-10",
+  "stats": {
+    "ppg": 72.5,
+    "opp_ppg": 65.8,
+    "pace": 64.6,
+    "off_rtg": 112.8,
+    "def_rtg": 97.6,
+    "reb_pg": 33.9,
+    "fg_pct": 0.449,
+    "three_pct": 0.355
+  }
+}

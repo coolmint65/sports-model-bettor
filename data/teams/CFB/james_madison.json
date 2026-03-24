@@ -1,0 +1,16 @@
+{
+  "name": "James Madison Dukes",
+  "abbreviation": "JMU",
+  "city": "Harrisonburg",
+  "short_name": "James Madison",
+  "record": "11-2",
+  "stats": {
+    "ppg": 32.4,
+    "opp_ppg": 19.1,
+    "yards_per_game": 410.0,
+    "opp_yards_per_game": 300.0,
+    "rush_ypg": 195.0,
+    "pass_ypg": 215.0,
+    "turnover_diff": 8
+  }
+}

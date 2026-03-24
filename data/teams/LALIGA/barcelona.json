@@ -1,0 +1,17 @@
+{
+  "name": "FC Barcelona",
+  "abbreviation": "BAR",
+  "city": "Barcelona",
+  "short_name": "Barcelona",
+  "record": "25W-6D-7L",
+  "stats": {
+    "goals_for_avg": 2.42,
+    "goals_against_avg": 0.84,
+    "xg_for": 2.28,
+    "xg_against": 0.92,
+    "possession_avg": 63.0,
+    "shots_pg": 16.2,
+    "shots_against_pg": 9.6,
+    "clean_sheet_pct": 0.42
+  }
+}

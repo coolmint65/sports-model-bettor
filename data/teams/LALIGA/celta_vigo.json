@@ -1,0 +1,17 @@
+{
+  "name": "RC Celta de Vigo",
+  "abbreviation": "CEL",
+  "city": "Vigo",
+  "short_name": "Celta Vigo",
+  "record": "12W-10D-16L",
+  "stats": {
+    "goals_for_avg": 1.29,
+    "goals_against_avg": 1.42,
+    "xg_for": 1.25,
+    "xg_against": 1.38,
+    "possession_avg": 50.2,
+    "shots_pg": 12.2,
+    "shots_against_pg": 12.8,
+    "clean_sheet_pct": 0.18
+  }
+}

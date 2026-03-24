@@ -1,0 +1,17 @@
+{
+  "name": "Indiana Hoosiers",
+  "abbreviation": "IND",
+  "city": "Bloomington",
+  "short_name": "Indiana",
+  "record": "23-11",
+  "stats": {
+    "ppg": 76.8,
+    "opp_ppg": 69.2,
+    "pace": 67.8,
+    "off_rtg": 114.1,
+    "def_rtg": 99.8,
+    "reb_pg": 36.7,
+    "fg_pct": 0.461,
+    "three_pct": 0.343
+  }
+}

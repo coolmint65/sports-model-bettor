@@ -1,0 +1,17 @@
+{
+  "name": "Mainz 05",
+  "abbreviation": "M05",
+  "city": "Mainz",
+  "short_name": "Mainz",
+  "record": "10W-7D-17L",
+  "stats": {
+    "goals_for_avg": 1.21,
+    "goals_against_avg": 1.44,
+    "xg_for": 1.18,
+    "xg_against": 1.40,
+    "possession_avg": 46.0,
+    "shots_pg": 11.0,
+    "shots_against_pg": 13.2,
+    "clean_sheet_pct": 0.21
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "SSC Napoli",
+  "abbreviation": "NAP",
+  "city": "Naples",
+  "short_name": "Napoli",
+  "record": "22W-7D-5L",
+  "stats": {
+    "goals_for_avg": 2.06,
+    "goals_against_avg": 0.79,
+    "xg_for": 1.95,
+    "xg_against": 0.88,
+    "possession_avg": 56.2,
+    "shots_pg": 14.4,
+    "shots_against_pg": 10.2,
+    "clean_sheet_pct": 0.44
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "VfB Stuttgart",
+  "abbreviation": "STU",
+  "city": "Stuttgart",
+  "short_name": "Stuttgart",
+  "record": "20W-5D-9L",
+  "stats": {
+    "goals_for_avg": 2.24,
+    "goals_against_avg": 1.15,
+    "xg_for": 2.10,
+    "xg_against": 1.20,
+    "possession_avg": 56.8,
+    "shots_pg": 14.8,
+    "shots_against_pg": 11.0,
+    "clean_sheet_pct": 0.32
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "Arizona Wildcats",
+  "abbreviation": "ARIZ",
+  "city": "Tucson",
+  "short_name": "Arizona",
+  "record": "10-3",
+  "stats": {
+    "ppg": 34.5,
+    "opp_ppg": 23.7,
+    "yards_per_game": 445.0,
+    "opp_yards_per_game": 345.0,
+    "rush_ypg": 165.0,
+    "pass_ypg": 280.0,
+    "turnover_diff": 5
+  }
+}

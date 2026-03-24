@@ -1,0 +1,17 @@
+{
+  "name": "Inter Milan",
+  "abbreviation": "INT",
+  "city": "Milan",
+  "short_name": "Inter",
+  "record": "25W-6D-3L",
+  "stats": {
+    "goals_for_avg": 2.26,
+    "goals_against_avg": 0.68,
+    "xg_for": 2.10,
+    "xg_against": 0.78,
+    "possession_avg": 56.8,
+    "shots_pg": 14.4,
+    "shots_against_pg": 10.0,
+    "clean_sheet_pct": 0.50
+  }
+}

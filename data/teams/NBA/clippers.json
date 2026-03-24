@@ -1,0 +1,18 @@
+{
+  "name": "Los Angeles Clippers",
+  "abbreviation": "LAC",
+  "city": "Los Angeles",
+  "short_name": "Clippers",
+  "record": "37-45",
+  "stats": {
+    "ppg": 109.6,
+    "opp_ppg": 111.4,
+    "pace": 97.8,
+    "off_rtg": 113.4,
+    "def_rtg": 115.3,
+    "reb_pg": 43.7,
+    "ast_pg": 25.2,
+    "fg_pct": 0.466,
+    "three_pct": 0.352
+  }
+}

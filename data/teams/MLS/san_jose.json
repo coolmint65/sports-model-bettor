@@ -1,0 +1,17 @@
+{
+  "name": "San Jose Earthquakes",
+  "abbreviation": "SJ",
+  "city": "San Jose",
+  "short_name": "San Jose",
+  "record": "7W-6D-21L",
+  "stats": {
+    "goals_for_avg": 0.97,
+    "goals_against_avg": 1.79,
+    "xg_for": 1.05,
+    "xg_against": 1.72,
+    "possession_avg": 44.6,
+    "shots_pg": 10.1,
+    "shots_against_pg": 15.0,
+    "clean_sheet_pct": 0.11
+  }
+}

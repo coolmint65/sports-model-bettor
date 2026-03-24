@@ -1,0 +1,17 @@
+{
+  "name": "Real Sociedad",
+  "abbreviation": "RSO",
+  "city": "San Sebastian",
+  "short_name": "R. Sociedad",
+  "record": "14W-12D-12L",
+  "stats": {
+    "goals_for_avg": 1.29,
+    "goals_against_avg": 1.08,
+    "xg_for": 1.35,
+    "xg_against": 1.12,
+    "possession_avg": 54.2,
+    "shots_pg": 13.4,
+    "shots_against_pg": 11.2,
+    "clean_sheet_pct": 0.29
+  }
+}

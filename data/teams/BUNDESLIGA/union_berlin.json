@@ -1,0 +1,17 @@
+{
+  "name": "Union Berlin",
+  "abbreviation": "FCU",
+  "city": "Berlin",
+  "short_name": "Union Berlin",
+  "record": "9W-7D-18L",
+  "stats": {
+    "goals_for_avg": 1.06,
+    "goals_against_avg": 1.47,
+    "xg_for": 1.10,
+    "xg_against": 1.40,
+    "possession_avg": 43.5,
+    "shots_pg": 10.2,
+    "shots_against_pg": 13.5,
+    "clean_sheet_pct": 0.21
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "Golden State Warriors",
+  "abbreviation": "GSW",
+  "city": "San Francisco",
+  "short_name": "Warriors",
+  "record": "46-36",
+  "stats": {
+    "ppg": 114.8,
+    "opp_ppg": 112.6,
+    "pace": 100.3,
+    "off_rtg": 116.1,
+    "def_rtg": 113.9,
+    "reb_pg": 43.8,
+    "ast_pg": 28.9,
+    "fg_pct": 0.474,
+    "three_pct": 0.371
+  }
+}

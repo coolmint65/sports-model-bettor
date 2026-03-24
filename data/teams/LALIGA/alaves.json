@@ -1,0 +1,17 @@
+{
+  "name": "Deportivo Alaves",
+  "abbreviation": "ALA",
+  "city": "Vitoria-Gasteiz",
+  "short_name": "Alaves",
+  "record": "7W-11D-20L",
+  "stats": {
+    "goals_for_avg": 0.82,
+    "goals_against_avg": 1.50,
+    "xg_for": 0.88,
+    "xg_against": 1.48,
+    "possession_avg": 43.5,
+    "shots_pg": 9.6,
+    "shots_against_pg": 14.0,
+    "clean_sheet_pct": 0.18
+  }
+}

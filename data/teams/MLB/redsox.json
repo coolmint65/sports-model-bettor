@@ -1,0 +1,19 @@
+{
+  "name": "Boston Red Sox",
+  "abbreviation": "BOS",
+  "city": "Boston",
+  "short_name": "Red Sox",
+  "record": "83-79",
+  "stats": {
+    "runs_per_game": 4.72,
+    "era": 4.05,
+    "batting_avg": 0.255,
+    "obp": 0.328,
+    "slg": 0.420,
+    "ops": 0.748,
+    "hr_per_game": 1.30,
+    "whip": 1.28,
+    "k_per_9": 8.55,
+    "bb_per_9": 3.25
+  }
+}

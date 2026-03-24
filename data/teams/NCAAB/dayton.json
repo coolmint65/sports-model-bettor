@@ -1,0 +1,17 @@
+{
+  "name": "Dayton Flyers",
+  "abbreviation": "DAY",
+  "city": "Dayton",
+  "short_name": "Dayton",
+  "record": "25-7",
+  "stats": {
+    "ppg": 76.1,
+    "opp_ppg": 66.5,
+    "pace": 66.2,
+    "off_rtg": 115.8,
+    "def_rtg": 97.4,
+    "reb_pg": 35.5,
+    "fg_pct": 0.468,
+    "three_pct": 0.359
+  }
+}

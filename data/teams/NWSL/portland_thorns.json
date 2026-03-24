@@ -1,0 +1,17 @@
+{
+  "name": "Portland Thorns FC",
+  "abbreviation": "POR",
+  "city": "Portland",
+  "short_name": "Thorns",
+  "record": "12W-6D-8L",
+  "stats": {
+    "goals_for_avg": 1.42,
+    "goals_against_avg": 1.08,
+    "xg_for": 1.38,
+    "xg_against": 1.10,
+    "possession_avg": 53.2,
+    "shots_pg": 13.0,
+    "shots_against_pg": 11.0,
+    "clean_sheet_pct": 0.31
+  }
+}

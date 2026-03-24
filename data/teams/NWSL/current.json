@@ -1,0 +1,17 @@
+{
+  "name": "Kansas City Current",
+  "abbreviation": "KC",
+  "city": "Kansas City",
+  "short_name": "Current",
+  "record": "14W-5D-7L",
+  "stats": {
+    "goals_for_avg": 1.58,
+    "goals_against_avg": 0.92,
+    "xg_for": 1.52,
+    "xg_against": 0.98,
+    "possession_avg": 54.5,
+    "shots_pg": 13.8,
+    "shots_against_pg": 10.5,
+    "clean_sheet_pct": 0.38
+  }
+}

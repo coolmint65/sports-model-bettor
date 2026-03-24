@@ -1,0 +1,17 @@
+{
+  "name": "Iowa State Cyclones",
+  "abbreviation": "ISU",
+  "city": "Ames",
+  "short_name": "Iowa State",
+  "record": "29-5",
+  "stats": {
+    "ppg": 75.3,
+    "opp_ppg": 61.8,
+    "pace": 64.2,
+    "off_rtg": 116.9,
+    "def_rtg": 91.5,
+    "reb_pg": 35.4,
+    "fg_pct": 0.458,
+    "three_pct": 0.349
+  }
+}

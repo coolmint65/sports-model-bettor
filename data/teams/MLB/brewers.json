@@ -1,0 +1,19 @@
+{
+  "name": "Milwaukee Brewers",
+  "abbreviation": "MIL",
+  "city": "Milwaukee",
+  "short_name": "Brewers",
+  "record": "90-72",
+  "stats": {
+    "runs_per_game": 4.78,
+    "era": 3.68,
+    "batting_avg": 0.247,
+    "obp": 0.325,
+    "slg": 0.422,
+    "ops": 0.747,
+    "hr_per_game": 1.38,
+    "whip": 1.21,
+    "k_per_9": 9.05,
+    "bb_per_9": 3.08
+  }
+}

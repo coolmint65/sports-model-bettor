@@ -1,0 +1,17 @@
+{
+  "name": "New York City FC",
+  "abbreviation": "NYC",
+  "city": "New York",
+  "short_name": "NYCFC",
+  "record": "15W-7D-12L",
+  "stats": {
+    "goals_for_avg": 1.56,
+    "goals_against_avg": 1.32,
+    "xg_for": 1.52,
+    "xg_against": 1.28,
+    "possession_avg": 54.0,
+    "shots_pg": 13.8,
+    "shots_against_pg": 11.0,
+    "clean_sheet_pct": 0.26
+  }
+}

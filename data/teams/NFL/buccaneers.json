@@ -1,0 +1,16 @@
+{
+  "name": "Tampa Bay Buccaneers",
+  "abbreviation": "TB",
+  "city": "Tampa Bay",
+  "short_name": "Buccaneers",
+  "record": "10-7",
+  "stats": {
+    "ppg": 24.8,
+    "opp_ppg": 21.4,
+    "yards_per_game": 350.6,
+    "opp_yards_per_game": 322.3,
+    "rush_ypg": 105.2,
+    "pass_ypg": 245.4,
+    "turnover_diff": 6
+  }
+}

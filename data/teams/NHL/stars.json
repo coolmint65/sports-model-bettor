@@ -1,0 +1,17 @@
+{
+  "name": "Dallas Stars",
+  "abbreviation": "DAL",
+  "city": "Dallas",
+  "short_name": "Stars",
+  "record": "50-22-10",
+  "stats": {
+    "goals_for_avg": 3.18,
+    "goals_against_avg": 2.58,
+    "pp_pct": 0.238,
+    "pk_pct": 0.828,
+    "shots_per_game": 32.4,
+    "shots_against_per_game": 28.1,
+    "faceoff_pct": 0.515,
+    "save_pct": 0.914
+  }
+}

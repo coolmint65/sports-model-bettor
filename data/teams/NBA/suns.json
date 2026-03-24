@@ -1,0 +1,18 @@
+{
+  "name": "Phoenix Suns",
+  "abbreviation": "PHX",
+  "city": "Phoenix",
+  "short_name": "Suns",
+  "record": "36-46",
+  "stats": {
+    "ppg": 113.2,
+    "opp_ppg": 114.8,
+    "pace": 99.0,
+    "off_rtg": 115.8,
+    "def_rtg": 117.5,
+    "reb_pg": 42.6,
+    "ast_pg": 27.4,
+    "fg_pct": 0.478,
+    "three_pct": 0.363
+  }
+}

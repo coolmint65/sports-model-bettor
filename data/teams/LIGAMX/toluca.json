@@ -1,0 +1,17 @@
+{
+  "name": "Deportivo Toluca",
+  "abbreviation": "TOL",
+  "city": "Toluca",
+  "short_name": "Toluca",
+  "record": "10W-3D-4L",
+  "stats": {
+    "goals_for_avg": 1.65,
+    "goals_against_avg": 1.00,
+    "xg_for": 1.58,
+    "xg_against": 1.05,
+    "possession_avg": 52.1,
+    "shots_pg": 13.4,
+    "shots_against_pg": 11.0,
+    "clean_sheet_pct": 0.35
+  }
+}

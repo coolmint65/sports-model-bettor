@@ -1,0 +1,17 @@
+{
+  "name": "Athletic Bilbao",
+  "abbreviation": "ATH",
+  "city": "Bilbao",
+  "short_name": "Ath Bilbao",
+  "record": "19W-10D-9L",
+  "stats": {
+    "goals_for_avg": 1.63,
+    "goals_against_avg": 0.92,
+    "xg_for": 1.55,
+    "xg_against": 0.98,
+    "possession_avg": 52.8,
+    "shots_pg": 13.0,
+    "shots_against_pg": 10.8,
+    "clean_sheet_pct": 0.37
+  }
+}

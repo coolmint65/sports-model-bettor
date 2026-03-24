@@ -1,0 +1,17 @@
+{
+  "name": "Wisconsin Badgers",
+  "abbreviation": "WIS",
+  "city": "Madison",
+  "short_name": "Wisconsin",
+  "record": "24-11",
+  "stats": {
+    "ppg": 72.8,
+    "opp_ppg": 64.3,
+    "pace": 63.1,
+    "off_rtg": 114.2,
+    "def_rtg": 96.8,
+    "reb_pg": 34.6,
+    "fg_pct": 0.456,
+    "three_pct": 0.361
+  }
+}

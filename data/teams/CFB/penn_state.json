@@ -1,0 +1,16 @@
+{
+  "name": "Penn State Nittany Lions",
+  "abbreviation": "PSU",
+  "city": "University Park",
+  "short_name": "Penn State",
+  "record": "11-2",
+  "stats": {
+    "ppg": 32.8,
+    "opp_ppg": 16.2,
+    "yards_per_game": 418.5,
+    "opp_yards_per_game": 285.8,
+    "rush_ypg": 192.5,
+    "pass_ypg": 226.0,
+    "turnover_diff": 8
+  }
+}

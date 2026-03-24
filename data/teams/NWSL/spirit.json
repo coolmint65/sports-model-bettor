@@ -1,0 +1,17 @@
+{
+  "name": "Washington Spirit",
+  "abbreviation": "WAS",
+  "city": "Washington",
+  "short_name": "Spirit",
+  "record": "11W-7D-8L",
+  "stats": {
+    "goals_for_avg": 1.35,
+    "goals_against_avg": 1.04,
+    "xg_for": 1.30,
+    "xg_against": 1.08,
+    "possession_avg": 52.5,
+    "shots_pg": 12.8,
+    "shots_against_pg": 11.2,
+    "clean_sheet_pct": 0.31
+  }
+}

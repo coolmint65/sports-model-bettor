@@ -1,0 +1,17 @@
+{
+  "name": "CD Guadalajara",
+  "abbreviation": "GDL",
+  "city": "Guadalajara",
+  "short_name": "Chivas",
+  "record": "7W-4D-6L",
+  "stats": {
+    "goals_for_avg": 1.24,
+    "goals_against_avg": 1.12,
+    "xg_for": 1.20,
+    "xg_against": 1.15,
+    "possession_avg": 51.5,
+    "shots_pg": 12.2,
+    "shots_against_pg": 11.5,
+    "clean_sheet_pct": 0.29
+  }
+}

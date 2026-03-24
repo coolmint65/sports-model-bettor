@@ -1,0 +1,16 @@
+{
+  "name": "Las Vegas Raiders",
+  "abbreviation": "LV",
+  "city": "Las Vegas",
+  "short_name": "Raiders",
+  "record": "4-13",
+  "stats": {
+    "ppg": 17.5,
+    "opp_ppg": 25.3,
+    "yards_per_game": 298.6,
+    "opp_yards_per_game": 352.1,
+    "rush_ypg": 95.8,
+    "pass_ypg": 202.8,
+    "turnover_diff": -11
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Villarreal CF",
+  "abbreviation": "VIL",
+  "city": "Villarreal",
+  "short_name": "Villarreal",
+  "record": "17W-7D-14L",
+  "stats": {
+    "goals_for_avg": 1.66,
+    "goals_against_avg": 1.21,
+    "xg_for": 1.60,
+    "xg_against": 1.18,
+    "possession_avg": 55.0,
+    "shots_pg": 13.8,
+    "shots_against_pg": 11.6,
+    "clean_sheet_pct": 0.26
+  }
+}

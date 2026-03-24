@@ -1,0 +1,17 @@
+{
+  "name": "Bay FC",
+  "abbreviation": "BAY",
+  "city": "San Francisco",
+  "short_name": "Bay FC",
+  "record": "7W-4D-15L",
+  "stats": {
+    "goals_for_avg": 0.96,
+    "goals_against_avg": 1.46,
+    "xg_for": 1.02,
+    "xg_against": 1.42,
+    "possession_avg": 48.5,
+    "shots_pg": 11.0,
+    "shots_against_pg": 12.8,
+    "clean_sheet_pct": 0.15
+  }
+}

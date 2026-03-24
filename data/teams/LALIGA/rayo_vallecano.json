@@ -1,0 +1,17 @@
+{
+  "name": "Rayo Vallecano",
+  "abbreviation": "RAY",
+  "city": "Madrid",
+  "short_name": "Rayo",
+  "record": "12W-10D-16L",
+  "stats": {
+    "goals_for_avg": 1.08,
+    "goals_against_avg": 1.29,
+    "xg_for": 1.12,
+    "xg_against": 1.35,
+    "possession_avg": 44.8,
+    "shots_pg": 10.5,
+    "shots_against_pg": 13.1,
+    "clean_sheet_pct": 0.26
+  }
+}

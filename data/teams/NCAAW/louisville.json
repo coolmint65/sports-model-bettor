@@ -1,0 +1,17 @@
+{
+  "name": "Louisville Cardinals",
+  "abbreviation": "LOU",
+  "city": "Louisville",
+  "short_name": "Louisville",
+  "record": "24-9",
+  "stats": {
+    "ppg": 73.8,
+    "opp_ppg": 64.5,
+    "pace": 68.5,
+    "off_rtg": 109.5,
+    "def_rtg": 94.2,
+    "reb_pg": 37.5,
+    "fg_pct": 0.448,
+    "three_pct": 0.325
+  }
+}

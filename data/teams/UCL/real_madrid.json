@@ -1,0 +1,17 @@
+{
+  "name": "Real Madrid",
+  "abbreviation": "RMA",
+  "city": "Madrid",
+  "short_name": "Real Madrid",
+  "record": "22W-7D-5L",
+  "stats": {
+    "goals_for_avg": 2.18,
+    "goals_against_avg": 0.88,
+    "xg_for": 2.05,
+    "xg_against": 0.95,
+    "possession_avg": 58.2,
+    "shots_pg": 14.8,
+    "shots_against_pg": 10.2,
+    "clean_sheet_pct": 0.41
+  }
+}

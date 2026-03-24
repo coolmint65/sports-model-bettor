@@ -1,0 +1,17 @@
+{
+  "name": "Ohio State Buckeyes",
+  "abbreviation": "OSU",
+  "city": "Columbus",
+  "short_name": "Ohio State",
+  "record": "25-8",
+  "stats": {
+    "ppg": 76.2,
+    "opp_ppg": 65.5,
+    "pace": 69.8,
+    "off_rtg": 111.2,
+    "def_rtg": 94.8,
+    "reb_pg": 38.8,
+    "fg_pct": 0.455,
+    "three_pct": 0.332
+  }
+}

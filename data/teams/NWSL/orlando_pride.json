@@ -1,0 +1,17 @@
+{
+  "name": "Orlando Pride",
+  "abbreviation": "ORL",
+  "city": "Orlando",
+  "short_name": "Orlando Pride",
+  "record": "16W-5D-5L",
+  "stats": {
+    "goals_for_avg": 1.69,
+    "goals_against_avg": 0.77,
+    "xg_for": 1.62,
+    "xg_against": 0.82,
+    "possession_avg": 55.8,
+    "shots_pg": 14.2,
+    "shots_against_pg": 9.8,
+    "clean_sheet_pct": 0.46
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "New York Giants",
+  "abbreviation": "NYG",
+  "city": "East Rutherford",
+  "short_name": "Giants",
+  "record": "3-14",
+  "stats": {
+    "ppg": 15.8,
+    "opp_ppg": 27.5,
+    "yards_per_game": 280.6,
+    "opp_yards_per_game": 370.2,
+    "rush_ypg": 96.4,
+    "pass_ypg": 184.2,
+    "turnover_diff": -17
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "Houston Astros",
+  "abbreviation": "HOU",
+  "city": "Houston",
+  "short_name": "Astros",
+  "record": "90-72",
+  "stats": {
+    "runs_per_game": 4.95,
+    "era": 3.68,
+    "batting_avg": 0.260,
+    "obp": 0.330,
+    "slg": 0.425,
+    "ops": 0.755,
+    "hr_per_game": 1.32,
+    "whip": 1.22,
+    "k_per_9": 8.85,
+    "bb_per_9": 3.05
+  }
+}

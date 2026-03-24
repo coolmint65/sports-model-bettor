@@ -1,0 +1,19 @@
+{
+  "name": "Chicago White Sox",
+  "abbreviation": "CWS",
+  "city": "Chicago",
+  "short_name": "White Sox",
+  "record": "58-104",
+  "stats": {
+    "runs_per_game": 3.72,
+    "era": 4.85,
+    "batting_avg": 0.230,
+    "obp": 0.298,
+    "slg": 0.372,
+    "ops": 0.670,
+    "hr_per_game": 1.05,
+    "whip": 1.42,
+    "k_per_9": 8.10,
+    "bb_per_9": 3.65
+  }
+}

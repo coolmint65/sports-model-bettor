@@ -1,0 +1,17 @@
+{
+  "name": "UD Almeria",
+  "abbreviation": "ALM",
+  "city": "Almeria",
+  "short_name": "Almeria",
+  "record": "3W-8D-27L",
+  "stats": {
+    "goals_for_avg": 0.58,
+    "goals_against_avg": 1.89,
+    "xg_for": 0.65,
+    "xg_against": 1.82,
+    "possession_avg": 43.0,
+    "shots_pg": 9.2,
+    "shots_against_pg": 15.8,
+    "clean_sheet_pct": 0.08
+  }
+}

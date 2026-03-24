@@ -1,0 +1,16 @@
+{
+  "name": "New York Jets",
+  "abbreviation": "NYJ",
+  "city": "New York",
+  "short_name": "Jets",
+  "record": "4-13",
+  "stats": {
+    "ppg": 17.2,
+    "opp_ppg": 24.6,
+    "yards_per_game": 295.8,
+    "opp_yards_per_game": 340.2,
+    "rush_ypg": 105.4,
+    "pass_ypg": 190.4,
+    "turnover_diff": -14
+  }
+}

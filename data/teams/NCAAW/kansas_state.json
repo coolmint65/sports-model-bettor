@@ -1,0 +1,17 @@
+{
+  "name": "Kansas State Wildcats",
+  "abbreviation": "KSU",
+  "city": "Manhattan",
+  "short_name": "Kansas State",
+  "record": "24-8",
+  "stats": {
+    "ppg": 73.5,
+    "opp_ppg": 63.8,
+    "pace": 68.2,
+    "off_rtg": 109.8,
+    "def_rtg": 93.5,
+    "reb_pg": 38.5,
+    "fg_pct": 0.448,
+    "three_pct": 0.322
+  }
+}

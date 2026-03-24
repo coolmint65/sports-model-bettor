@@ -1,0 +1,17 @@
+{
+  "name": "Club America",
+  "abbreviation": "AME",
+  "city": "Mexico City",
+  "short_name": "America",
+  "record": "12W-3D-2L",
+  "stats": {
+    "goals_for_avg": 1.82,
+    "goals_against_avg": 0.76,
+    "xg_for": 1.75,
+    "xg_against": 0.82,
+    "possession_avg": 56.5,
+    "shots_pg": 14.5,
+    "shots_against_pg": 9.8,
+    "clean_sheet_pct": 0.41
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Wolverhampton Wanderers",
+  "abbreviation": "WOL",
+  "city": "Wolverhampton",
+  "short_name": "Wolves",
+  "record": "9W-8D-21L",
+  "stats": {
+    "goals_for_avg": 1.03,
+    "goals_against_avg": 1.55,
+    "xg_for": 1.10,
+    "xg_against": 1.48,
+    "possession_avg": 45.2,
+    "shots_pg": 10.8,
+    "shots_against_pg": 13.6,
+    "clean_sheet_pct": 0.16
+  }
+}

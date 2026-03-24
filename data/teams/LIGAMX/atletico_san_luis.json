@@ -1,0 +1,17 @@
+{
+  "name": "Atletico de San Luis",
+  "abbreviation": "ASL",
+  "city": "San Luis Potosi",
+  "short_name": "San Luis",
+  "record": "5W-6D-6L",
+  "stats": {
+    "goals_for_avg": 1.00,
+    "goals_against_avg": 1.18,
+    "xg_for": 1.05,
+    "xg_against": 1.15,
+    "possession_avg": 47.2,
+    "shots_pg": 10.8,
+    "shots_against_pg": 12.2,
+    "clean_sheet_pct": 0.24
+  }
+}

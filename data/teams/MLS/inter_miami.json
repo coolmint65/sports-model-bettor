@@ -1,0 +1,17 @@
+{
+  "name": "Inter Miami CF",
+  "abbreviation": "MIA",
+  "city": "Fort Lauderdale",
+  "short_name": "Miami",
+  "record": "19W-5D-10L",
+  "stats": {
+    "goals_for_avg": 1.91,
+    "goals_against_avg": 1.18,
+    "xg_for": 1.85,
+    "xg_against": 1.22,
+    "possession_avg": 54.7,
+    "shots_pg": 15.1,
+    "shots_against_pg": 10.6,
+    "clean_sheet_pct": 0.33
+  }
+}

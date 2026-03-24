@@ -1,0 +1,17 @@
+{
+  "name": "1. FC Heidenheim",
+  "abbreviation": "HDH",
+  "city": "Heidenheim",
+  "short_name": "Heidenheim",
+  "record": "8W-7D-19L",
+  "stats": {
+    "goals_for_avg": 1.09,
+    "goals_against_avg": 1.53,
+    "xg_for": 1.05,
+    "xg_against": 1.48,
+    "possession_avg": 45.2,
+    "shots_pg": 10.8,
+    "shots_against_pg": 13.5,
+    "clean_sheet_pct": 0.18
+  }
+}

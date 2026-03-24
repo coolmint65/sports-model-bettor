@@ -1,0 +1,17 @@
+{
+  "name": "Club Puebla",
+  "abbreviation": "PUE",
+  "city": "Puebla",
+  "short_name": "Puebla",
+  "record": "4W-6D-7L",
+  "stats": {
+    "goals_for_avg": 0.94,
+    "goals_against_avg": 1.24,
+    "xg_for": 0.98,
+    "xg_against": 1.20,
+    "possession_avg": 46.5,
+    "shots_pg": 10.5,
+    "shots_against_pg": 12.5,
+    "clean_sheet_pct": 0.18
+  }
+}

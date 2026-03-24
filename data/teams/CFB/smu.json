@@ -1,0 +1,16 @@
+{
+  "name": "SMU Mustangs",
+  "abbreviation": "SMU",
+  "city": "Dallas",
+  "short_name": "SMU",
+  "record": "11-3",
+  "stats": {
+    "ppg": 34.1,
+    "opp_ppg": 22.6,
+    "yards_per_game": 440.0,
+    "opp_yards_per_game": 335.0,
+    "rush_ypg": 155.0,
+    "pass_ypg": 285.0,
+    "turnover_diff": 6
+  }
+}

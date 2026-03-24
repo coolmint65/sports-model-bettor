@@ -1,0 +1,16 @@
+{
+  "name": "Boise State Broncos",
+  "abbreviation": "BSU",
+  "city": "Boise",
+  "short_name": "Boise State",
+  "record": "8-5",
+  "stats": {
+    "ppg": 29.7,
+    "opp_ppg": 22.3,
+    "yards_per_game": 390.0,
+    "opp_yards_per_game": 330.0,
+    "rush_ypg": 170.0,
+    "pass_ypg": 220.0,
+    "turnover_diff": 4
+  }
+}

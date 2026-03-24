@@ -1,0 +1,17 @@
+{
+  "name": "Vancouver Whitecaps",
+  "abbreviation": "VAN",
+  "city": "Vancouver",
+  "short_name": "Vancouver",
+  "record": "13W-7D-14L",
+  "stats": {
+    "goals_for_avg": 1.38,
+    "goals_against_avg": 1.41,
+    "xg_for": 1.35,
+    "xg_against": 1.38,
+    "possession_avg": 48.7,
+    "shots_pg": 12.2,
+    "shots_against_pg": 12.8,
+    "clean_sheet_pct": 0.21
+  }
+}

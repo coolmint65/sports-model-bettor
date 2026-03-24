@@ -1,0 +1,17 @@
+{
+  "name": "Ottawa Senators",
+  "abbreviation": "OTT",
+  "city": "Ottawa",
+  "short_name": "Senators",
+  "record": "43-30-9",
+  "stats": {
+    "goals_for_avg": 3.12,
+    "goals_against_avg": 2.95,
+    "pp_pct": 0.230,
+    "pk_pct": 0.795,
+    "shots_per_game": 31.8,
+    "shots_against_per_game": 30.2,
+    "faceoff_pct": 0.504,
+    "save_pct": 0.904
+  }
+}

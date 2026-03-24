@@ -1,0 +1,17 @@
+{
+  "name": "Pumas UNAM",
+  "abbreviation": "PUM",
+  "city": "Mexico City",
+  "short_name": "Pumas",
+  "record": "8W-4D-5L",
+  "stats": {
+    "goals_for_avg": 1.29,
+    "goals_against_avg": 1.00,
+    "xg_for": 1.25,
+    "xg_against": 1.05,
+    "possession_avg": 51.2,
+    "shots_pg": 12.2,
+    "shots_against_pg": 11.5,
+    "clean_sheet_pct": 0.29
+  }
+}

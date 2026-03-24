@@ -1,0 +1,17 @@
+{
+  "name": "New Mexico Lobos",
+  "abbreviation": "UNM",
+  "city": "Albuquerque",
+  "short_name": "New Mexico",
+  "record": "27-6",
+  "stats": {
+    "ppg": 82.4,
+    "opp_ppg": 71.3,
+    "pace": 70.8,
+    "off_rtg": 116.2,
+    "def_rtg": 99.5,
+    "reb_pg": 36.3,
+    "fg_pct": 0.475,
+    "three_pct": 0.342
+  }
+}

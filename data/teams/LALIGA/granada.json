@@ -1,0 +1,17 @@
+{
+  "name": "Granada CF",
+  "abbreviation": "GRA",
+  "city": "Granada",
+  "short_name": "Granada",
+  "record": "4W-10D-24L",
+  "stats": {
+    "goals_for_avg": 0.68,
+    "goals_against_avg": 1.76,
+    "xg_for": 0.75,
+    "xg_against": 1.68,
+    "possession_avg": 41.8,
+    "shots_pg": 8.8,
+    "shots_against_pg": 15.2,
+    "clean_sheet_pct": 0.11
+  }
+}

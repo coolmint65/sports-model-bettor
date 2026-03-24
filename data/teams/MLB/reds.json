@@ -1,0 +1,19 @@
+{
+  "name": "Cincinnati Reds",
+  "abbreviation": "CIN",
+  "city": "Cincinnati",
+  "short_name": "Reds",
+  "record": "80-82",
+  "stats": {
+    "runs_per_game": 4.55,
+    "era": 4.10,
+    "batting_avg": 0.250,
+    "obp": 0.320,
+    "slg": 0.422,
+    "ops": 0.742,
+    "hr_per_game": 1.40,
+    "whip": 1.28,
+    "k_per_9": 8.65,
+    "bb_per_9": 3.22
+  }
+}

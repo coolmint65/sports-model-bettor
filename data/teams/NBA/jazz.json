@@ -1,0 +1,18 @@
+{
+  "name": "Utah Jazz",
+  "abbreviation": "UTA",
+  "city": "Salt Lake City",
+  "short_name": "Jazz",
+  "record": "24-58",
+  "stats": {
+    "ppg": 109.2,
+    "opp_ppg": 116.1,
+    "pace": 100.0,
+    "off_rtg": 110.6,
+    "def_rtg": 117.6,
+    "reb_pg": 43.5,
+    "ast_pg": 26.3,
+    "fg_pct": 0.460,
+    "three_pct": 0.350
+  }
+}

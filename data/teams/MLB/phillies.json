@@ -1,0 +1,19 @@
+{
+  "name": "Philadelphia Phillies",
+  "abbreviation": "PHI",
+  "city": "Philadelphia",
+  "short_name": "Phillies",
+  "record": "93-69",
+  "stats": {
+    "runs_per_game": 5.10,
+    "era": 3.55,
+    "batting_avg": 0.256,
+    "obp": 0.331,
+    "slg": 0.440,
+    "ops": 0.771,
+    "hr_per_game": 1.46,
+    "whip": 1.19,
+    "k_per_9": 9.20,
+    "bb_per_9": 3.00
+  }
+}

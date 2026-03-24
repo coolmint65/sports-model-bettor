@@ -1,0 +1,18 @@
+{
+  "name": "Memphis Grizzlies",
+  "abbreviation": "MEM",
+  "city": "Memphis",
+  "short_name": "Grizzlies",
+  "record": "50-32",
+  "stats": {
+    "ppg": 116.1,
+    "opp_ppg": 111.6,
+    "pace": 101.2,
+    "off_rtg": 116.4,
+    "def_rtg": 111.9,
+    "reb_pg": 46.5,
+    "ast_pg": 26.7,
+    "fg_pct": 0.472,
+    "three_pct": 0.345
+  }
+}

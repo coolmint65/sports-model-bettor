@@ -1,0 +1,16 @@
+{
+  "name": "Kansas City Chiefs",
+  "abbreviation": "KC",
+  "city": "Kansas City",
+  "short_name": "Chiefs",
+  "record": "15-2",
+  "stats": {
+    "ppg": 28.2,
+    "opp_ppg": 19.5,
+    "yards_per_game": 365.0,
+    "opp_yards_per_game": 310.0,
+    "rush_ypg": 120.0,
+    "pass_ypg": 245.0,
+    "turnover_diff": 12
+  }
+}

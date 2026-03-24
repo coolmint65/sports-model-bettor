@@ -1,0 +1,17 @@
+{
+  "name": "South Carolina Gamecocks",
+  "abbreviation": "SCAR",
+  "city": "Columbia",
+  "short_name": "South Carolina",
+  "record": "35-1",
+  "stats": {
+    "ppg": 79.8,
+    "opp_ppg": 55.2,
+    "pace": 68.4,
+    "off_rtg": 118.5,
+    "def_rtg": 82.1,
+    "reb_pg": 43.5,
+    "fg_pct": 0.492,
+    "three_pct": 0.325
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "Texas Longhorns",
+  "abbreviation": "TEX",
+  "city": "Austin",
+  "short_name": "Texas",
+  "record": "12-2",
+  "stats": {
+    "ppg": 36.8,
+    "opp_ppg": 17.5,
+    "yards_per_game": 442.1,
+    "opp_yards_per_game": 295.2,
+    "rush_ypg": 178.5,
+    "pass_ypg": 263.6,
+    "turnover_diff": 9
+  }
+}

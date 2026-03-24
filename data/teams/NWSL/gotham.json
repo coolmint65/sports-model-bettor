@@ -1,0 +1,17 @@
+{
+  "name": "NJ/NY Gotham FC",
+  "abbreviation": "GOT",
+  "city": "Harrison",
+  "short_name": "Gotham",
+  "record": "13W-6D-7L",
+  "stats": {
+    "goals_for_avg": 1.46,
+    "goals_against_avg": 0.96,
+    "xg_for": 1.40,
+    "xg_against": 1.00,
+    "possession_avg": 53.8,
+    "shots_pg": 13.2,
+    "shots_against_pg": 10.8,
+    "clean_sheet_pct": 0.35
+  }
+}

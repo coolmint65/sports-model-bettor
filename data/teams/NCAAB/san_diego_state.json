@@ -1,0 +1,17 @@
+{
+  "name": "San Diego State Aztecs",
+  "abbreviation": "SDSU",
+  "city": "San Diego",
+  "short_name": "San Diego State",
+  "record": "26-8",
+  "stats": {
+    "ppg": 71.2,
+    "opp_ppg": 62.5,
+    "pace": 63.8,
+    "off_rtg": 112.4,
+    "def_rtg": 94.6,
+    "reb_pg": 35.1,
+    "fg_pct": 0.448,
+    "three_pct": 0.332
+  }
+}

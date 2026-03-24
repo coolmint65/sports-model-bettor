@@ -1,0 +1,17 @@
+{
+  "name": "Toronto Maple Leafs",
+  "abbreviation": "TOR",
+  "city": "Toronto",
+  "short_name": "Maple Leafs",
+  "record": "48-26-8",
+  "stats": {
+    "goals_for_avg": 3.30,
+    "goals_against_avg": 2.88,
+    "pp_pct": 0.258,
+    "pk_pct": 0.805,
+    "shots_per_game": 32.8,
+    "shots_against_per_game": 30.0,
+    "faceoff_pct": 0.516,
+    "save_pct": 0.906
+  }
+}

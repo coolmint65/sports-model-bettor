@@ -1,0 +1,17 @@
+{
+  "name": "Grand Canyon Antelopes",
+  "abbreviation": "GCU",
+  "city": "Phoenix",
+  "short_name": "Grand Canyon",
+  "record": "27-5",
+  "stats": {
+    "ppg": 76.8,
+    "opp_ppg": 64.2,
+    "pace": 65.1,
+    "off_rtg": 117.1,
+    "def_rtg": 95.8,
+    "reb_pg": 35.8,
+    "fg_pct": 0.469,
+    "three_pct": 0.345
+  }
+}

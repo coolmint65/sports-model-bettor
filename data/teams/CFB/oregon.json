@@ -1,0 +1,16 @@
+{
+  "name": "Oregon Ducks",
+  "abbreviation": "ORE",
+  "city": "Eugene",
+  "short_name": "Oregon",
+  "record": "12-2",
+  "stats": {
+    "ppg": 38.2,
+    "opp_ppg": 20.8,
+    "yards_per_game": 455.8,
+    "opp_yards_per_game": 325.1,
+    "rush_ypg": 188.2,
+    "pass_ypg": 267.6,
+    "turnover_diff": 7
+  }
+}

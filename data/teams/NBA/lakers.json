@@ -1,0 +1,18 @@
+{
+  "name": "Los Angeles Lakers",
+  "abbreviation": "LAL",
+  "city": "Los Angeles",
+  "short_name": "Lakers",
+  "record": "50-32",
+  "stats": {
+    "ppg": 115.8,
+    "opp_ppg": 112.4,
+    "pace": 100.1,
+    "off_rtg": 117.2,
+    "def_rtg": 113.8,
+    "reb_pg": 44.6,
+    "ast_pg": 27.5,
+    "fg_pct": 0.476,
+    "three_pct": 0.356
+  }
+}

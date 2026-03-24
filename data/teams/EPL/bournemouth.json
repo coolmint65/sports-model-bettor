@@ -1,0 +1,17 @@
+{
+  "name": "AFC Bournemouth",
+  "abbreviation": "BOU",
+  "city": "Bournemouth",
+  "short_name": "Bournemouth",
+  "record": "14W-9D-15L",
+  "stats": {
+    "goals_for_avg": 1.39,
+    "goals_against_avg": 1.34,
+    "xg_for": 1.32,
+    "xg_against": 1.40,
+    "possession_avg": 47.1,
+    "shots_pg": 12.1,
+    "shots_against_pg": 13.0,
+    "clean_sheet_pct": 0.24
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Leicester City",
+  "abbreviation": "LEI",
+  "city": "Leicester",
+  "short_name": "Leicester",
+  "record": "6W-9D-23L",
+  "stats": {
+    "goals_for_avg": 0.89,
+    "goals_against_avg": 1.71,
+    "xg_for": 0.95,
+    "xg_against": 1.65,
+    "possession_avg": 43.5,
+    "shots_pg": 10.0,
+    "shots_against_pg": 14.8,
+    "clean_sheet_pct": 0.11
+  }
+}

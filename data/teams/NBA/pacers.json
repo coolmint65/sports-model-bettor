@@ -1,0 +1,18 @@
+{
+  "name": "Indiana Pacers",
+  "abbreviation": "IND",
+  "city": "Indianapolis",
+  "short_name": "Pacers",
+  "record": "50-32",
+  "stats": {
+    "ppg": 118.6,
+    "opp_ppg": 114.2,
+    "pace": 102.8,
+    "off_rtg": 117.0,
+    "def_rtg": 112.6,
+    "reb_pg": 43.4,
+    "ast_pg": 30.2,
+    "fg_pct": 0.486,
+    "three_pct": 0.374
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Club Leon",
+  "abbreviation": "LEO",
+  "city": "Leon",
+  "short_name": "Leon",
+  "record": "6W-5D-6L",
+  "stats": {
+    "goals_for_avg": 1.12,
+    "goals_against_avg": 1.12,
+    "xg_for": 1.08,
+    "xg_against": 1.15,
+    "possession_avg": 49.0,
+    "shots_pg": 11.2,
+    "shots_against_pg": 12.0,
+    "clean_sheet_pct": 0.24
+  }
+}

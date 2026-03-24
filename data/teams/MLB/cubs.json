@@ -1,0 +1,19 @@
+{
+  "name": "Chicago Cubs",
+  "abbreviation": "CHC",
+  "city": "Chicago",
+  "short_name": "Cubs",
+  "record": "83-79",
+  "stats": {
+    "runs_per_game": 4.62,
+    "era": 3.98,
+    "batting_avg": 0.248,
+    "obp": 0.322,
+    "slg": 0.418,
+    "ops": 0.740,
+    "hr_per_game": 1.35,
+    "whip": 1.26,
+    "k_per_9": 8.75,
+    "bb_per_9": 3.18
+  }
+}

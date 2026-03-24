@@ -1,0 +1,17 @@
+{
+  "name": "Colorado Buffaloes",
+  "abbreviation": "COL",
+  "city": "Boulder",
+  "short_name": "Colorado",
+  "record": "26-7",
+  "stats": {
+    "ppg": 77.5,
+    "opp_ppg": 66.2,
+    "pace": 71.5,
+    "off_rtg": 110.8,
+    "def_rtg": 94.5,
+    "reb_pg": 38.2,
+    "fg_pct": 0.452,
+    "three_pct": 0.328
+  }
+}

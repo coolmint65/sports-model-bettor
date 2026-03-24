@@ -1,0 +1,17 @@
+{
+  "name": "UConn Huskies",
+  "abbreviation": "UCONN",
+  "city": "Storrs",
+  "short_name": "UConn",
+  "record": "30-5",
+  "stats": {
+    "ppg": 78.5,
+    "opp_ppg": 60.1,
+    "pace": 68.9,
+    "off_rtg": 115.2,
+    "def_rtg": 88.5,
+    "reb_pg": 40.2,
+    "fg_pct": 0.468,
+    "three_pct": 0.348
+  }
+}

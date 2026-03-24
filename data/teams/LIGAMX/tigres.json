@@ -1,0 +1,17 @@
+{
+  "name": "Tigres UANL",
+  "abbreviation": "TIG",
+  "city": "Monterrey",
+  "short_name": "Tigres",
+  "record": "11W-4D-2L",
+  "stats": {
+    "goals_for_avg": 1.76,
+    "goals_against_avg": 0.82,
+    "xg_for": 1.70,
+    "xg_against": 0.88,
+    "possession_avg": 55.3,
+    "shots_pg": 14.2,
+    "shots_against_pg": 10.1,
+    "clean_sheet_pct": 0.38
+  }
+}

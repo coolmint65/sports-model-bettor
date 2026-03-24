@@ -1,0 +1,17 @@
+{
+  "name": "New York Rangers",
+  "abbreviation": "NYR",
+  "city": "New York",
+  "short_name": "Rangers",
+  "record": "42-30-10",
+  "stats": {
+    "goals_for_avg": 2.95,
+    "goals_against_avg": 2.82,
+    "pp_pct": 0.235,
+    "pk_pct": 0.820,
+    "shots_per_game": 30.5,
+    "shots_against_per_game": 28.8,
+    "faceoff_pct": 0.498,
+    "save_pct": 0.908
+  }
+}

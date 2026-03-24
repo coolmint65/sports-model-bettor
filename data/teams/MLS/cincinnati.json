@@ -1,0 +1,17 @@
+{
+  "name": "FC Cincinnati",
+  "abbreviation": "CIN",
+  "city": "Cincinnati",
+  "short_name": "Cincinnati",
+  "record": "18W-7D-9L",
+  "stats": {
+    "goals_for_avg": 1.76,
+    "goals_against_avg": 1.15,
+    "xg_for": 1.70,
+    "xg_against": 1.10,
+    "possession_avg": 53.4,
+    "shots_pg": 14.2,
+    "shots_against_pg": 10.8,
+    "clean_sheet_pct": 0.32
+  }
+}

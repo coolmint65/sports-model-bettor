@@ -1,0 +1,19 @@
+{
+  "name": "Los Angeles Dodgers",
+  "abbreviation": "LAD",
+  "city": "Los Angeles",
+  "short_name": "Dodgers",
+  "record": "98-64",
+  "stats": {
+    "runs_per_game": 5.35,
+    "era": 3.42,
+    "batting_avg": 0.258,
+    "obp": 0.338,
+    "slg": 0.445,
+    "ops": 0.783,
+    "hr_per_game": 1.52,
+    "whip": 1.17,
+    "k_per_9": 9.35,
+    "bb_per_9": 2.95
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "Washington Commanders",
+  "abbreviation": "WAS",
+  "city": "Washington",
+  "short_name": "Commanders",
+  "record": "12-5",
+  "stats": {
+    "ppg": 26.2,
+    "opp_ppg": 21.8,
+    "yards_per_game": 358.7,
+    "opp_yards_per_game": 320.5,
+    "rush_ypg": 124.1,
+    "pass_ypg": 234.6,
+    "turnover_diff": 8
+  }
+}

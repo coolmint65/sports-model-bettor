@@ -1,0 +1,16 @@
+{
+  "name": "Oklahoma State Cowboys",
+  "abbreviation": "OKST",
+  "city": "Stillwater",
+  "short_name": "Oklahoma State",
+  "record": "10-4",
+  "stats": {
+    "ppg": 30.9,
+    "opp_ppg": 22.1,
+    "yards_per_game": 400.0,
+    "opp_yards_per_game": 330.0,
+    "rush_ypg": 150.0,
+    "pass_ypg": 250.0,
+    "turnover_diff": 3
+  }
+}

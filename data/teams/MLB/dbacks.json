@@ -1,0 +1,19 @@
+{
+  "name": "Arizona Diamondbacks",
+  "abbreviation": "ARI",
+  "city": "Phoenix",
+  "short_name": "Diamondbacks",
+  "record": "86-76",
+  "stats": {
+    "runs_per_game": 4.72,
+    "era": 3.85,
+    "batting_avg": 0.256,
+    "obp": 0.324,
+    "slg": 0.428,
+    "ops": 0.752,
+    "hr_per_game": 1.38,
+    "whip": 1.24,
+    "k_per_9": 8.80,
+    "bb_per_9": 3.12
+  }
+}

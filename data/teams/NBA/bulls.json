@@ -1,0 +1,18 @@
+{
+  "name": "Chicago Bulls",
+  "abbreviation": "CHI",
+  "city": "Chicago",
+  "short_name": "Bulls",
+  "record": "27-55",
+  "stats": {
+    "ppg": 110.2,
+    "opp_ppg": 115.4,
+    "pace": 98.5,
+    "off_rtg": 113.1,
+    "def_rtg": 118.5,
+    "reb_pg": 42.1,
+    "ast_pg": 25.7,
+    "fg_pct": 0.464,
+    "three_pct": 0.351
+  }
+}

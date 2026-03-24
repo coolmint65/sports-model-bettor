@@ -1,0 +1,17 @@
+{
+  "name": "Atletico Madrid",
+  "abbreviation": "ATM",
+  "city": "Madrid",
+  "short_name": "Atletico",
+  "record": "21W-8D-5L",
+  "stats": {
+    "goals_for_avg": 1.82,
+    "goals_against_avg": 0.71,
+    "xg_for": 1.72,
+    "xg_against": 0.80,
+    "possession_avg": 52.8,
+    "shots_pg": 13.4,
+    "shots_against_pg": 10.2,
+    "clean_sheet_pct": 0.47
+  }
+}

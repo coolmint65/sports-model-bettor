@@ -1,0 +1,17 @@
+{
+  "name": "James Madison Dukes",
+  "abbreviation": "JMU",
+  "city": "Harrisonburg",
+  "short_name": "James Madison",
+  "record": "26-6",
+  "stats": {
+    "ppg": 77.3,
+    "opp_ppg": 65.8,
+    "pace": 67.1,
+    "off_rtg": 115.4,
+    "def_rtg": 96.2,
+    "reb_pg": 34.9,
+    "fg_pct": 0.462,
+    "three_pct": 0.351
+  }
+}

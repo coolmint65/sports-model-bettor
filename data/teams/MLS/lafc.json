@@ -1,0 +1,17 @@
+{
+  "name": "Los Angeles FC",
+  "abbreviation": "LAFC",
+  "city": "Los Angeles",
+  "short_name": "LAFC",
+  "record": "18W-6D-10L",
+  "stats": {
+    "goals_for_avg": 1.82,
+    "goals_against_avg": 1.21,
+    "xg_for": 1.78,
+    "xg_against": 1.18,
+    "possession_avg": 56.2,
+    "shots_pg": 15.3,
+    "shots_against_pg": 10.2,
+    "clean_sheet_pct": 0.31
+  }
+}

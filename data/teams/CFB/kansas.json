@@ -1,0 +1,16 @@
+{
+  "name": "Kansas Jayhawks",
+  "abbreviation": "KU",
+  "city": "Lawrence",
+  "short_name": "Kansas",
+  "record": "9-4",
+  "stats": {
+    "ppg": 29.1,
+    "opp_ppg": 21.3,
+    "yards_per_game": 385.0,
+    "opp_yards_per_game": 325.0,
+    "rush_ypg": 155.0,
+    "pass_ypg": 230.0,
+    "turnover_diff": 4
+  }
+}

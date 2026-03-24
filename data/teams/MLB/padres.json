@@ -1,0 +1,19 @@
+{
+  "name": "San Diego Padres",
+  "abbreviation": "SD",
+  "city": "San Diego",
+  "short_name": "Padres",
+  "record": "87-75",
+  "stats": {
+    "runs_per_game": 4.75,
+    "era": 3.72,
+    "batting_avg": 0.255,
+    "obp": 0.328,
+    "slg": 0.425,
+    "ops": 0.753,
+    "hr_per_game": 1.35,
+    "whip": 1.22,
+    "k_per_9": 8.90,
+    "bb_per_9": 3.10
+  }
+}

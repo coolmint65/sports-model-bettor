@@ -1,0 +1,17 @@
+{
+  "name": "Seattle Reign FC",
+  "abbreviation": "SEA",
+  "city": "Seattle",
+  "short_name": "Reign",
+  "record": "9W-7D-10L",
+  "stats": {
+    "goals_for_avg": 1.15,
+    "goals_against_avg": 1.15,
+    "xg_for": 1.18,
+    "xg_against": 1.18,
+    "possession_avg": 51.0,
+    "shots_pg": 12.2,
+    "shots_against_pg": 11.8,
+    "clean_sheet_pct": 0.27
+  }
+}

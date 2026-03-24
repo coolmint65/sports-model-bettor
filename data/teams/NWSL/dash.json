@@ -1,0 +1,17 @@
+{
+  "name": "Houston Dash",
+  "abbreviation": "HOU",
+  "city": "Houston",
+  "short_name": "Dash",
+  "record": "6W-5D-15L",
+  "stats": {
+    "goals_for_avg": 0.88,
+    "goals_against_avg": 1.50,
+    "xg_for": 0.95,
+    "xg_against": 1.45,
+    "possession_avg": 46.2,
+    "shots_pg": 10.2,
+    "shots_against_pg": 13.2,
+    "clean_sheet_pct": 0.12
+  }
+}

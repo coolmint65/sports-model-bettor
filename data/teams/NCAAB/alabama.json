@@ -1,0 +1,17 @@
+{
+  "name": "Alabama Crimson Tide",
+  "abbreviation": "BAMA",
+  "city": "Tuscaloosa",
+  "short_name": "Alabama",
+  "record": "25-10",
+  "stats": {
+    "ppg": 84.1,
+    "opp_ppg": 73.5,
+    "pace": 72.4,
+    "off_rtg": 117.3,
+    "def_rtg": 102.8,
+    "reb_pg": 37.5,
+    "fg_pct": 0.459,
+    "three_pct": 0.356
+  }
+}

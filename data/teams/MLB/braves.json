@@ -1,0 +1,19 @@
+{
+  "name": "Atlanta Braves",
+  "abbreviation": "ATL",
+  "city": "Atlanta",
+  "short_name": "Braves",
+  "record": "89-73",
+  "stats": {
+    "runs_per_game": 4.88,
+    "era": 3.72,
+    "batting_avg": 0.251,
+    "obp": 0.325,
+    "slg": 0.430,
+    "ops": 0.755,
+    "hr_per_game": 1.40,
+    "whip": 1.23,
+    "k_per_9": 9.00,
+    "bb_per_9": 3.15
+  }
+}

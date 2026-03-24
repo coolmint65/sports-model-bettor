@@ -1,0 +1,17 @@
+{
+  "name": "AC Milan",
+  "abbreviation": "ACM",
+  "city": "Milan",
+  "short_name": "AC Milan",
+  "record": "17W-9D-8L",
+  "stats": {
+    "goals_for_avg": 1.68,
+    "goals_against_avg": 1.06,
+    "xg_for": 1.62,
+    "xg_against": 1.12,
+    "possession_avg": 54.2,
+    "shots_pg": 13.8,
+    "shots_against_pg": 11.4,
+    "clean_sheet_pct": 0.32
+  }
+}

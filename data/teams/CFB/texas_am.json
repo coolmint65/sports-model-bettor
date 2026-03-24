@@ -1,0 +1,16 @@
+{
+  "name": "Texas A&M Aggies",
+  "abbreviation": "TAMU",
+  "city": "College Station",
+  "short_name": "Texas A&M",
+  "record": "7-6",
+  "stats": {
+    "ppg": 26.8,
+    "opp_ppg": 22.4,
+    "yards_per_game": 370.0,
+    "opp_yards_per_game": 335.0,
+    "rush_ypg": 165.0,
+    "pass_ypg": 205.0,
+    "turnover_diff": 0
+  }
+}

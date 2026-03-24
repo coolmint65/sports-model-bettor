@@ -1,0 +1,16 @@
+{
+  "name": "Miami Dolphins",
+  "abbreviation": "MIA",
+  "city": "Miami",
+  "short_name": "Dolphins",
+  "record": "9-8",
+  "stats": {
+    "ppg": 24.1,
+    "opp_ppg": 23.4,
+    "yards_per_game": 360.2,
+    "opp_yards_per_game": 335.8,
+    "rush_ypg": 108.5,
+    "pass_ypg": 251.7,
+    "turnover_diff": 1
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Columbus Crew",
+  "abbreviation": "CLB",
+  "city": "Columbus",
+  "short_name": "Columbus",
+  "record": "17W-8D-9L",
+  "stats": {
+    "goals_for_avg": 1.68,
+    "goals_against_avg": 1.12,
+    "xg_for": 1.72,
+    "xg_against": 1.08,
+    "possession_avg": 55.1,
+    "shots_pg": 14.5,
+    "shots_against_pg": 10.4,
+    "clean_sheet_pct": 0.35
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Racing Louisville FC",
+  "abbreviation": "RAC",
+  "city": "Louisville",
+  "short_name": "Racing",
+  "record": "7W-8D-11L",
+  "stats": {
+    "goals_for_avg": 1.00,
+    "goals_against_avg": 1.27,
+    "xg_for": 1.05,
+    "xg_against": 1.22,
+    "possession_avg": 47.5,
+    "shots_pg": 11.0,
+    "shots_against_pg": 12.5,
+    "clean_sheet_pct": 0.19
+  }
+}

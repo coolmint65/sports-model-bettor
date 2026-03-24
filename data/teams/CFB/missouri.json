@@ -1,0 +1,16 @@
+{
+  "name": "Missouri Tigers",
+  "abbreviation": "MIZ",
+  "city": "Columbia",
+  "short_name": "Missouri",
+  "record": "11-2",
+  "stats": {
+    "ppg": 29.4,
+    "opp_ppg": 17.6,
+    "yards_per_game": 380.0,
+    "opp_yards_per_game": 295.0,
+    "rush_ypg": 165.0,
+    "pass_ypg": 215.0,
+    "turnover_diff": 10
+  }
+}

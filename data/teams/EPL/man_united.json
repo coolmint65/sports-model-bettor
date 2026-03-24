@@ -1,0 +1,17 @@
+{
+  "name": "Manchester United",
+  "abbreviation": "MUN",
+  "city": "Manchester",
+  "short_name": "Man Utd",
+  "record": "12W-6D-20L",
+  "stats": {
+    "goals_for_avg": 1.16,
+    "goals_against_avg": 1.47,
+    "xg_for": 1.22,
+    "xg_against": 1.40,
+    "possession_avg": 52.1,
+    "shots_pg": 12.8,
+    "shots_against_pg": 12.4,
+    "clean_sheet_pct": 0.18
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Philadelphia Union",
+  "abbreviation": "PHI",
+  "city": "Chester",
+  "short_name": "Philadelphia",
+  "record": "13W-9D-12L",
+  "stats": {
+    "goals_for_avg": 1.35,
+    "goals_against_avg": 1.21,
+    "xg_for": 1.32,
+    "xg_against": 1.18,
+    "possession_avg": 50.8,
+    "shots_pg": 12.4,
+    "shots_against_pg": 11.6,
+    "clean_sheet_pct": 0.28
+  }
+}

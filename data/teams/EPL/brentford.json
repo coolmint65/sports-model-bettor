@@ -1,0 +1,17 @@
+{
+  "name": "Brentford",
+  "abbreviation": "BRE",
+  "city": "London",
+  "short_name": "Brentford",
+  "record": "14W-8D-16L",
+  "stats": {
+    "goals_for_avg": 1.50,
+    "goals_against_avg": 1.42,
+    "xg_for": 1.45,
+    "xg_against": 1.38,
+    "possession_avg": 48.5,
+    "shots_pg": 12.8,
+    "shots_against_pg": 12.6,
+    "clean_sheet_pct": 0.21
+  }
+}

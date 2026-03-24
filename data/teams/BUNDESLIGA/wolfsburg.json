@@ -1,0 +1,17 @@
+{
+  "name": "VfL Wolfsburg",
+  "abbreviation": "WOB",
+  "city": "Wolfsburg",
+  "short_name": "Wolfsburg",
+  "record": "12W-9D-13L",
+  "stats": {
+    "goals_for_avg": 1.35,
+    "goals_against_avg": 1.24,
+    "xg_for": 1.32,
+    "xg_against": 1.28,
+    "possession_avg": 51.8,
+    "shots_pg": 12.8,
+    "shots_against_pg": 12.0,
+    "clean_sheet_pct": 0.24
+  }
+}

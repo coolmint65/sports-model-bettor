@@ -1,0 +1,16 @@
+{
+  "name": "Minnesota Vikings",
+  "abbreviation": "MIN",
+  "city": "Minneapolis",
+  "short_name": "Vikings",
+  "record": "12-5",
+  "stats": {
+    "ppg": 26.8,
+    "opp_ppg": 21.6,
+    "yards_per_game": 360.5,
+    "opp_yards_per_game": 318.4,
+    "rush_ypg": 112.3,
+    "pass_ypg": 248.2,
+    "turnover_diff": 7
+  }
+}

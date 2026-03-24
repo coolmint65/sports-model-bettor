@@ -1,0 +1,17 @@
+{
+  "name": "Colorado State Rams",
+  "abbreviation": "CSU",
+  "city": "Fort Collins",
+  "short_name": "Colorado State",
+  "record": "26-6",
+  "stats": {
+    "ppg": 74.6,
+    "opp_ppg": 63.8,
+    "pace": 64.5,
+    "off_rtg": 115.1,
+    "def_rtg": 95.2,
+    "reb_pg": 34.8,
+    "fg_pct": 0.459,
+    "three_pct": 0.356
+  }
+}

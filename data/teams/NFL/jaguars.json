@@ -1,0 +1,16 @@
+{
+  "name": "Jacksonville Jaguars",
+  "abbreviation": "JAX",
+  "city": "Jacksonville",
+  "short_name": "Jaguars",
+  "record": "5-12",
+  "stats": {
+    "ppg": 18.7,
+    "opp_ppg": 25.9,
+    "yards_per_game": 305.2,
+    "opp_yards_per_game": 355.4,
+    "rush_ypg": 102.1,
+    "pass_ypg": 203.1,
+    "turnover_diff": -12
+  }
+}

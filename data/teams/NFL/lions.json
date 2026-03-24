@@ -1,0 +1,16 @@
+{
+  "name": "Detroit Lions",
+  "abbreviation": "DET",
+  "city": "Detroit",
+  "short_name": "Lions",
+  "record": "14-3",
+  "stats": {
+    "ppg": 31.5,
+    "opp_ppg": 21.2,
+    "yards_per_game": 390.8,
+    "opp_yards_per_game": 320.4,
+    "rush_ypg": 145.6,
+    "pass_ypg": 245.2,
+    "turnover_diff": 11
+  }
+}

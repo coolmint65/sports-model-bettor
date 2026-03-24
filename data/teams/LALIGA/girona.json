@@ -1,0 +1,17 @@
+{
+  "name": "Girona FC",
+  "abbreviation": "GIR",
+  "city": "Girona",
+  "short_name": "Girona",
+  "record": "14W-8D-16L",
+  "stats": {
+    "goals_for_avg": 1.42,
+    "goals_against_avg": 1.32,
+    "xg_for": 1.48,
+    "xg_against": 1.28,
+    "possession_avg": 52.4,
+    "shots_pg": 13.2,
+    "shots_against_pg": 12.0,
+    "clean_sheet_pct": 0.21
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "Notre Dame Fighting Irish",
+  "abbreviation": "ND",
+  "city": "South Bend",
+  "short_name": "Notre Dame",
+  "record": "10-3",
+  "stats": {
+    "ppg": 29.8,
+    "opp_ppg": 18.9,
+    "yards_per_game": 385.0,
+    "opp_yards_per_game": 300.0,
+    "rush_ypg": 190.0,
+    "pass_ypg": 195.0,
+    "turnover_diff": 5
+  }
+}

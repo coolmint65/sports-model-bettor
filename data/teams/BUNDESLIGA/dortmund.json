@@ -1,0 +1,17 @@
+{
+  "name": "Borussia Dortmund",
+  "abbreviation": "BVB",
+  "city": "Dortmund",
+  "short_name": "Dortmund",
+  "record": "18W-7D-9L",
+  "stats": {
+    "goals_for_avg": 2.09,
+    "goals_against_avg": 1.21,
+    "xg_for": 1.95,
+    "xg_against": 1.18,
+    "possession_avg": 56.2,
+    "shots_pg": 14.5,
+    "shots_against_pg": 10.8,
+    "clean_sheet_pct": 0.32
+  }
+}

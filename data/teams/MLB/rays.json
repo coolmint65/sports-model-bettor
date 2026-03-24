@@ -1,0 +1,19 @@
+{
+  "name": "Tampa Bay Rays",
+  "abbreviation": "TB",
+  "city": "Tampa Bay",
+  "short_name": "Rays",
+  "record": "80-82",
+  "stats": {
+    "runs_per_game": 4.35,
+    "era": 3.88,
+    "batting_avg": 0.238,
+    "obp": 0.315,
+    "slg": 0.398,
+    "ops": 0.713,
+    "hr_per_game": 1.22,
+    "whip": 1.24,
+    "k_per_9": 9.10,
+    "bb_per_9": 3.18
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Atlas FC",
+  "abbreviation": "ATL",
+  "city": "Guadalajara",
+  "short_name": "Atlas",
+  "record": "7W-5D-5L",
+  "stats": {
+    "goals_for_avg": 1.18,
+    "goals_against_avg": 1.00,
+    "xg_for": 1.15,
+    "xg_against": 1.05,
+    "possession_avg": 49.5,
+    "shots_pg": 11.5,
+    "shots_against_pg": 11.8,
+    "clean_sheet_pct": 0.29
+  }
+}

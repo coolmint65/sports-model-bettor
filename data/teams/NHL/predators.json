@@ -1,0 +1,17 @@
+{
+  "name": "Nashville Predators",
+  "abbreviation": "NSH",
+  "city": "Nashville",
+  "short_name": "Predators",
+  "record": "34-36-12",
+  "stats": {
+    "goals_for_avg": 2.72,
+    "goals_against_avg": 3.05,
+    "pp_pct": 0.195,
+    "pk_pct": 0.808,
+    "shots_per_game": 29.8,
+    "shots_against_per_game": 30.5,
+    "faceoff_pct": 0.505,
+    "save_pct": 0.902
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Portland Timbers",
+  "abbreviation": "POR",
+  "city": "Portland",
+  "short_name": "Portland",
+  "record": "13W-7D-14L",
+  "stats": {
+    "goals_for_avg": 1.41,
+    "goals_against_avg": 1.44,
+    "xg_for": 1.38,
+    "xg_against": 1.40,
+    "possession_avg": 51.0,
+    "shots_pg": 12.9,
+    "shots_against_pg": 12.5,
+    "clean_sheet_pct": 0.22
+  }
+}

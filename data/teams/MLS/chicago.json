@@ -1,0 +1,17 @@
+{
+  "name": "Chicago Fire",
+  "abbreviation": "CHI",
+  "city": "Chicago",
+  "short_name": "Chicago",
+  "record": "8W-6D-20L",
+  "stats": {
+    "goals_for_avg": 1.06,
+    "goals_against_avg": 1.62,
+    "xg_for": 1.12,
+    "xg_against": 1.55,
+    "possession_avg": 47.2,
+    "shots_pg": 11.2,
+    "shots_against_pg": 13.5,
+    "clean_sheet_pct": 0.15
+  }
+}

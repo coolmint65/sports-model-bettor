@@ -1,0 +1,19 @@
+{
+  "name": "Baltimore Orioles",
+  "abbreviation": "BAL",
+  "city": "Baltimore",
+  "short_name": "Orioles",
+  "record": "91-71",
+  "stats": {
+    "runs_per_game": 4.92,
+    "era": 3.65,
+    "batting_avg": 0.252,
+    "obp": 0.322,
+    "slg": 0.432,
+    "ops": 0.754,
+    "hr_per_game": 1.44,
+    "whip": 1.21,
+    "k_per_9": 8.95,
+    "bb_per_9": 3.08
+  }
+}

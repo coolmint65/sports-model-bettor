@@ -1,0 +1,16 @@
+{
+  "name": "Appalachian State Mountaineers",
+  "abbreviation": "APP",
+  "city": "Boone",
+  "short_name": "Appalachian State",
+  "record": "9-5",
+  "stats": {
+    "ppg": 29.5,
+    "opp_ppg": 22.8,
+    "yards_per_game": 385.0,
+    "opp_yards_per_game": 330.0,
+    "rush_ypg": 190.0,
+    "pass_ypg": 195.0,
+    "turnover_diff": 3
+  }
+}

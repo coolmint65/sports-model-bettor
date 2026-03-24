@@ -1,0 +1,17 @@
+{
+  "name": "Drake Bulldogs",
+  "abbreviation": "DRKE",
+  "city": "Des Moines",
+  "short_name": "Drake",
+  "record": "28-5",
+  "stats": {
+    "ppg": 74.9,
+    "opp_ppg": 62.1,
+    "pace": 63.7,
+    "off_rtg": 116.8,
+    "def_rtg": 94.5,
+    "reb_pg": 34.2,
+    "fg_pct": 0.465,
+    "three_pct": 0.358
+  }
+}

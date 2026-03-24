@@ -1,0 +1,17 @@
+{
+  "name": "Cadiz CF",
+  "abbreviation": "CAD",
+  "city": "Cadiz",
+  "short_name": "Cadiz",
+  "record": "5W-12D-21L",
+  "stats": {
+    "goals_for_avg": 0.71,
+    "goals_against_avg": 1.58,
+    "xg_for": 0.78,
+    "xg_against": 1.52,
+    "possession_avg": 42.1,
+    "shots_pg": 9.0,
+    "shots_against_pg": 14.5,
+    "clean_sheet_pct": 0.13
+  }
+}

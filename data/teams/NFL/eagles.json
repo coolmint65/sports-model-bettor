@@ -1,0 +1,16 @@
+{
+  "name": "Philadelphia Eagles",
+  "abbreviation": "PHI",
+  "city": "Philadelphia",
+  "short_name": "Eagles",
+  "record": "14-3",
+  "stats": {
+    "ppg": 27.8,
+    "opp_ppg": 17.6,
+    "yards_per_game": 375.2,
+    "opp_yards_per_game": 295.8,
+    "rush_ypg": 160.3,
+    "pass_ypg": 214.9,
+    "turnover_diff": 13
+  }
+}

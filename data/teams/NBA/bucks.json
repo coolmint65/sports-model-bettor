@@ -1,0 +1,18 @@
+{
+  "name": "Milwaukee Bucks",
+  "abbreviation": "MIL",
+  "city": "Milwaukee",
+  "short_name": "Bucks",
+  "record": "48-34",
+  "stats": {
+    "ppg": 115.9,
+    "opp_ppg": 113.1,
+    "pace": 99.5,
+    "off_rtg": 118.0,
+    "def_rtg": 115.2,
+    "reb_pg": 44.3,
+    "ast_pg": 25.8,
+    "fg_pct": 0.481,
+    "three_pct": 0.361
+  }
+}

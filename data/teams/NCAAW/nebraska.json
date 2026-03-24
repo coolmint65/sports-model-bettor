@@ -1,0 +1,17 @@
+{
+  "name": "Nebraska Cornhuskers",
+  "abbreviation": "NEB",
+  "city": "Lincoln",
+  "short_name": "Nebraska",
+  "record": "24-8",
+  "stats": {
+    "ppg": 75.2,
+    "opp_ppg": 65.5,
+    "pace": 69.5,
+    "off_rtg": 109.8,
+    "def_rtg": 94.8,
+    "reb_pg": 38.2,
+    "fg_pct": 0.452,
+    "three_pct": 0.328
+  }
+}

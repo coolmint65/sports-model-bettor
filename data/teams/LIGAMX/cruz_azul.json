@@ -1,0 +1,17 @@
+{
+  "name": "Cruz Azul",
+  "abbreviation": "CAZ",
+  "city": "Mexico City",
+  "short_name": "Cruz Azul",
+  "record": "13W-2D-2L",
+  "stats": {
+    "goals_for_avg": 1.94,
+    "goals_against_avg": 0.71,
+    "xg_for": 1.85,
+    "xg_against": 0.78,
+    "possession_avg": 55.8,
+    "shots_pg": 14.8,
+    "shots_against_pg": 9.5,
+    "clean_sheet_pct": 0.47
+  }
+}

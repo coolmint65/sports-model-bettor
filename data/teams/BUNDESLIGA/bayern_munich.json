@@ -1,0 +1,17 @@
+{
+  "name": "Bayern Munich",
+  "abbreviation": "BAY",
+  "city": "Munich",
+  "short_name": "Bayern",
+  "record": "23W-4D-7L",
+  "stats": {
+    "goals_for_avg": 2.56,
+    "goals_against_avg": 1.06,
+    "xg_for": 2.42,
+    "xg_against": 1.10,
+    "possession_avg": 62.8,
+    "shots_pg": 16.8,
+    "shots_against_pg": 9.5,
+    "clean_sheet_pct": 0.38
+  }
+}

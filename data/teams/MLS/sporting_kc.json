@@ -1,0 +1,17 @@
+{
+  "name": "Sporting Kansas City",
+  "abbreviation": "SKC",
+  "city": "Kansas City",
+  "short_name": "Sporting KC",
+  "record": "11W-7D-16L",
+  "stats": {
+    "goals_for_avg": 1.21,
+    "goals_against_avg": 1.50,
+    "xg_for": 1.25,
+    "xg_against": 1.45,
+    "possession_avg": 48.4,
+    "shots_pg": 11.5,
+    "shots_against_pg": 13.1,
+    "clean_sheet_pct": 0.18
+  }
+}

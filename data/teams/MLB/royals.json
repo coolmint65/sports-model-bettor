@@ -1,0 +1,19 @@
+{
+  "name": "Kansas City Royals",
+  "abbreviation": "KC",
+  "city": "Kansas City",
+  "short_name": "Royals",
+  "record": "84-78",
+  "stats": {
+    "runs_per_game": 4.58,
+    "era": 3.95,
+    "batting_avg": 0.252,
+    "obp": 0.320,
+    "slg": 0.412,
+    "ops": 0.732,
+    "hr_per_game": 1.28,
+    "whip": 1.26,
+    "k_per_9": 8.60,
+    "bb_per_9": 3.20
+  }
+}

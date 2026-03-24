@@ -1,0 +1,16 @@
+{
+  "name": "UNLV Rebels",
+  "abbreviation": "UNLV",
+  "city": "Las Vegas",
+  "short_name": "UNLV",
+  "record": "9-5",
+  "stats": {
+    "ppg": 30.3,
+    "opp_ppg": 23.4,
+    "yards_per_game": 395.0,
+    "opp_yards_per_game": 340.0,
+    "rush_ypg": 190.0,
+    "pass_ypg": 205.0,
+    "turnover_diff": 3
+  }
+}

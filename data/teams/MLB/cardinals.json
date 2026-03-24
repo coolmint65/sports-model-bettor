@@ -1,0 +1,19 @@
+{
+  "name": "St. Louis Cardinals",
+  "abbreviation": "STL",
+  "city": "St. Louis",
+  "short_name": "Cardinals",
+  "record": "74-88",
+  "stats": {
+    "runs_per_game": 4.20,
+    "era": 4.22,
+    "batting_avg": 0.243,
+    "obp": 0.314,
+    "slg": 0.398,
+    "ops": 0.712,
+    "hr_per_game": 1.22,
+    "whip": 1.30,
+    "k_per_9": 8.55,
+    "bb_per_9": 3.25
+  }
+}

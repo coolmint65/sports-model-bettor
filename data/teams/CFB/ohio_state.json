@@ -1,0 +1,16 @@
+{
+  "name": "Ohio State Buckeyes",
+  "abbreviation": "OSU",
+  "city": "Columbus",
+  "short_name": "Ohio State",
+  "record": "11-2",
+  "stats": {
+    "ppg": 37.5,
+    "opp_ppg": 15.8,
+    "yards_per_game": 448.2,
+    "opp_yards_per_game": 278.5,
+    "rush_ypg": 185.5,
+    "pass_ypg": 262.7,
+    "turnover_diff": 11
+  }
+}

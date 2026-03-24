@@ -1,0 +1,17 @@
+{
+  "name": "Edmonton Oilers",
+  "abbreviation": "EDM",
+  "city": "Edmonton",
+  "short_name": "Oilers",
+  "record": "52-23-7",
+  "stats": {
+    "goals_for_avg": 3.45,
+    "goals_against_avg": 2.85,
+    "pp_pct": 0.265,
+    "pk_pct": 0.812,
+    "shots_per_game": 33.5,
+    "shots_against_per_game": 29.8,
+    "faceoff_pct": 0.512,
+    "save_pct": 0.908
+  }
+}

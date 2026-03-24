@@ -1,0 +1,17 @@
+{
+  "name": "West Ham United",
+  "abbreviation": "WHU",
+  "city": "London",
+  "short_name": "West Ham",
+  "record": "12W-7D-19L",
+  "stats": {
+    "goals_for_avg": 1.18,
+    "goals_against_avg": 1.47,
+    "xg_for": 1.25,
+    "xg_against": 1.42,
+    "possession_avg": 47.5,
+    "shots_pg": 11.6,
+    "shots_against_pg": 13.2,
+    "clean_sheet_pct": 0.18
+  }
+}

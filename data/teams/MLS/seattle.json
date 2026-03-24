@@ -1,0 +1,17 @@
+{
+  "name": "Seattle Sounders",
+  "abbreviation": "SEA",
+  "city": "Seattle",
+  "short_name": "Seattle",
+  "record": "15W-9D-10L",
+  "stats": {
+    "goals_for_avg": 1.56,
+    "goals_against_avg": 1.18,
+    "xg_for": 1.52,
+    "xg_against": 1.15,
+    "possession_avg": 53.5,
+    "shots_pg": 14.1,
+    "shots_against_pg": 10.9,
+    "clean_sheet_pct": 0.30
+  }
+}

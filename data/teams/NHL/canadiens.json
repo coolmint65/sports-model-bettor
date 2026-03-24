@@ -1,0 +1,17 @@
+{
+  "name": "Montreal Canadiens",
+  "abbreviation": "MTL",
+  "city": "Montreal",
+  "short_name": "Canadiens",
+  "record": "35-36-11",
+  "stats": {
+    "goals_for_avg": 2.85,
+    "goals_against_avg": 3.15,
+    "pp_pct": 0.205,
+    "pk_pct": 0.782,
+    "shots_per_game": 30.8,
+    "shots_against_per_game": 31.8,
+    "faceoff_pct": 0.492,
+    "save_pct": 0.895
+  }
+}

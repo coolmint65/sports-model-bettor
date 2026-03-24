@@ -1,0 +1,17 @@
+{
+  "name": "Werder Bremen",
+  "abbreviation": "SVW",
+  "city": "Bremen",
+  "short_name": "Bremen",
+  "record": "11W-8D-15L",
+  "stats": {
+    "goals_for_avg": 1.32,
+    "goals_against_avg": 1.41,
+    "xg_for": 1.28,
+    "xg_against": 1.38,
+    "possession_avg": 49.5,
+    "shots_pg": 11.8,
+    "shots_against_pg": 12.5,
+    "clean_sheet_pct": 0.21
+  }
+}

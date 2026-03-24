@@ -1,0 +1,17 @@
+{
+  "name": "FC Koln",
+  "abbreviation": "KOE",
+  "city": "Cologne",
+  "short_name": "Koln",
+  "record": "5W-11D-18L",
+  "stats": {
+    "goals_for_avg": 0.88,
+    "goals_against_avg": 1.65,
+    "xg_for": 0.95,
+    "xg_against": 1.58,
+    "possession_avg": 47.5,
+    "shots_pg": 10.8,
+    "shots_against_pg": 13.5,
+    "clean_sheet_pct": 0.15
+  }
+}

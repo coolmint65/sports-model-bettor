@@ -1,0 +1,17 @@
+{
+  "name": "Newcastle United",
+  "abbreviation": "NEW",
+  "city": "Newcastle",
+  "short_name": "Newcastle",
+  "record": "18W-10D-10L",
+  "stats": {
+    "goals_for_avg": 1.71,
+    "goals_against_avg": 1.05,
+    "xg_for": 1.65,
+    "xg_against": 1.10,
+    "possession_avg": 54.6,
+    "shots_pg": 14.0,
+    "shots_against_pg": 11.2,
+    "clean_sheet_pct": 0.34
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Chicago Blackhawks",
+  "abbreviation": "CHI",
+  "city": "Chicago",
+  "short_name": "Blackhawks",
+  "record": "27-43-12",
+  "stats": {
+    "goals_for_avg": 2.52,
+    "goals_against_avg": 3.48,
+    "pp_pct": 0.178,
+    "pk_pct": 0.762,
+    "shots_per_game": 28.8,
+    "shots_against_per_game": 33.5,
+    "faceoff_pct": 0.482,
+    "save_pct": 0.882
+  }
+}

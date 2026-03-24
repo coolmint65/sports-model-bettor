@@ -1,0 +1,17 @@
+{
+  "name": "Florida State Seminoles",
+  "abbreviation": "FSU",
+  "city": "Tallahassee",
+  "short_name": "Florida State",
+  "record": "23-10",
+  "stats": {
+    "ppg": 73.2,
+    "opp_ppg": 65.1,
+    "pace": 69.8,
+    "off_rtg": 107.8,
+    "def_rtg": 95.2,
+    "reb_pg": 37.5,
+    "fg_pct": 0.442,
+    "three_pct": 0.318
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "Buffalo Bills",
+  "abbreviation": "BUF",
+  "city": "Buffalo",
+  "short_name": "Bills",
+  "record": "13-4",
+  "stats": {
+    "ppg": 29.8,
+    "opp_ppg": 20.1,
+    "yards_per_game": 385.5,
+    "opp_yards_per_game": 305.2,
+    "rush_ypg": 135.4,
+    "pass_ypg": 250.1,
+    "turnover_diff": 14
+  }
+}

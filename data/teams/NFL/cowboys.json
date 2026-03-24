@@ -1,0 +1,16 @@
+{
+  "name": "Dallas Cowboys",
+  "abbreviation": "DAL",
+  "city": "Dallas",
+  "short_name": "Cowboys",
+  "record": "7-10",
+  "stats": {
+    "ppg": 21.3,
+    "opp_ppg": 24.8,
+    "yards_per_game": 325.4,
+    "opp_yards_per_game": 345.6,
+    "rush_ypg": 98.2,
+    "pass_ypg": 227.2,
+    "turnover_diff": -8
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Tennessee Volunteers",
+  "abbreviation": "TENN",
+  "city": "Knoxville",
+  "short_name": "Tennessee",
+  "record": "27-8",
+  "stats": {
+    "ppg": 72.1,
+    "opp_ppg": 60.5,
+    "pace": 63.9,
+    "off_rtg": 114.8,
+    "def_rtg": 92.3,
+    "reb_pg": 36.5,
+    "fg_pct": 0.455,
+    "three_pct": 0.335
+  }
+}

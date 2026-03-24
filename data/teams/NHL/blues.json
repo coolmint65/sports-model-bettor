@@ -1,0 +1,17 @@
+{
+  "name": "St. Louis Blues",
+  "abbreviation": "STL",
+  "city": "St. Louis",
+  "short_name": "Blues",
+  "record": "40-32-10",
+  "stats": {
+    "goals_for_avg": 3.02,
+    "goals_against_avg": 3.05,
+    "pp_pct": 0.212,
+    "pk_pct": 0.792,
+    "shots_per_game": 30.5,
+    "shots_against_per_game": 30.8,
+    "faceoff_pct": 0.510,
+    "save_pct": 0.902
+  }
+}

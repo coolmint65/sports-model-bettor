@@ -1,0 +1,17 @@
+{
+  "name": "Duke Blue Devils",
+  "abbreviation": "DUKE",
+  "city": "Durham",
+  "short_name": "Duke",
+  "record": "29-7",
+  "stats": {
+    "ppg": 80.1,
+    "opp_ppg": 68.3,
+    "pace": 69.4,
+    "off_rtg": 118.9,
+    "def_rtg": 99.2,
+    "reb_pg": 37.9,
+    "fg_pct": 0.476,
+    "three_pct": 0.355
+  }
+}

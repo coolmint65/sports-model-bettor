@@ -1,0 +1,17 @@
+{
+  "name": "Syracuse Orange",
+  "abbreviation": "SYR",
+  "city": "Syracuse",
+  "short_name": "Syracuse",
+  "record": "22-10",
+  "stats": {
+    "ppg": 73.8,
+    "opp_ppg": 66.5,
+    "pace": 70.8,
+    "off_rtg": 107.2,
+    "def_rtg": 96.2,
+    "reb_pg": 37.8,
+    "fg_pct": 0.445,
+    "three_pct": 0.322
+  }
+}

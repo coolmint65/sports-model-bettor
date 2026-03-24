@@ -1,0 +1,17 @@
+{
+  "name": "New Jersey Devils",
+  "abbreviation": "NJD",
+  "city": "Newark",
+  "short_name": "Devils",
+  "record": "44-28-10",
+  "stats": {
+    "goals_for_avg": 3.20,
+    "goals_against_avg": 2.88,
+    "pp_pct": 0.240,
+    "pk_pct": 0.802,
+    "shots_per_game": 33.0,
+    "shots_against_per_game": 29.5,
+    "faceoff_pct": 0.495,
+    "save_pct": 0.906
+  }
+}

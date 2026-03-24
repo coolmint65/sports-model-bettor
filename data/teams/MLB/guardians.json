@@ -1,0 +1,19 @@
+{
+  "name": "Cleveland Guardians",
+  "abbreviation": "CLE",
+  "city": "Cleveland",
+  "short_name": "Guardians",
+  "record": "88-74",
+  "stats": {
+    "runs_per_game": 4.55,
+    "era": 3.70,
+    "batting_avg": 0.253,
+    "obp": 0.326,
+    "slg": 0.410,
+    "ops": 0.736,
+    "hr_per_game": 1.18,
+    "whip": 1.20,
+    "k_per_9": 8.80,
+    "bb_per_9": 2.98
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "Minnesota Twins",
+  "abbreviation": "MIN",
+  "city": "Minneapolis",
+  "short_name": "Twins",
+  "record": "85-77",
+  "stats": {
+    "runs_per_game": 4.68,
+    "era": 3.92,
+    "batting_avg": 0.250,
+    "obp": 0.324,
+    "slg": 0.418,
+    "ops": 0.742,
+    "hr_per_game": 1.35,
+    "whip": 1.25,
+    "k_per_9": 8.70,
+    "bb_per_9": 3.12
+  }
+}

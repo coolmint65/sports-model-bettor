@@ -1,0 +1,16 @@
+{
+  "name": "New England Patriots",
+  "abbreviation": "NE",
+  "city": "Foxborough",
+  "short_name": "Patriots",
+  "record": "3-14",
+  "stats": {
+    "ppg": 15.4,
+    "opp_ppg": 27.2,
+    "yards_per_game": 278.3,
+    "opp_yards_per_game": 365.4,
+    "rush_ypg": 100.1,
+    "pass_ypg": 178.2,
+    "turnover_diff": -16
+  }
+}

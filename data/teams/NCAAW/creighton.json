@@ -1,0 +1,17 @@
+{
+  "name": "Creighton Bluejays",
+  "abbreviation": "CREI",
+  "city": "Omaha",
+  "short_name": "Creighton",
+  "record": "25-8",
+  "stats": {
+    "ppg": 74.1,
+    "opp_ppg": 63.8,
+    "pace": 68.8,
+    "off_rtg": 110.2,
+    "def_rtg": 93.8,
+    "reb_pg": 37.1,
+    "fg_pct": 0.455,
+    "three_pct": 0.348
+  }
+}

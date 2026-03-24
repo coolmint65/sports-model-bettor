@@ -1,0 +1,16 @@
+{
+  "name": "Carolina Panthers",
+  "abbreviation": "CAR",
+  "city": "Charlotte",
+  "short_name": "Panthers",
+  "record": "4-13",
+  "stats": {
+    "ppg": 16.5,
+    "opp_ppg": 26.8,
+    "yards_per_game": 285.4,
+    "opp_yards_per_game": 362.5,
+    "rush_ypg": 98.6,
+    "pass_ypg": 186.8,
+    "turnover_diff": -13
+  }
+}

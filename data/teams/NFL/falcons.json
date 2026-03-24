@@ -1,0 +1,16 @@
+{
+  "name": "Atlanta Falcons",
+  "abbreviation": "ATL",
+  "city": "Atlanta",
+  "short_name": "Falcons",
+  "record": "8-9",
+  "stats": {
+    "ppg": 22.9,
+    "opp_ppg": 23.5,
+    "yards_per_game": 342.8,
+    "opp_yards_per_game": 340.1,
+    "rush_ypg": 132.4,
+    "pass_ypg": 210.4,
+    "turnover_diff": -3
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "Sacramento Kings",
+  "abbreviation": "SAC",
+  "city": "Sacramento",
+  "short_name": "Kings",
+  "record": "44-38",
+  "stats": {
+    "ppg": 114.5,
+    "opp_ppg": 113.2,
+    "pace": 100.8,
+    "off_rtg": 115.1,
+    "def_rtg": 113.8,
+    "reb_pg": 42.4,
+    "ast_pg": 28.6,
+    "fg_pct": 0.477,
+    "three_pct": 0.358
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Eintracht Frankfurt",
+  "abbreviation": "SGE",
+  "city": "Frankfurt",
+  "short_name": "Frankfurt",
+  "record": "15W-8D-11L",
+  "stats": {
+    "goals_for_avg": 1.71,
+    "goals_against_avg": 1.24,
+    "xg_for": 1.65,
+    "xg_against": 1.28,
+    "possession_avg": 52.0,
+    "shots_pg": 13.2,
+    "shots_against_pg": 11.8,
+    "clean_sheet_pct": 0.26
+  }
+}

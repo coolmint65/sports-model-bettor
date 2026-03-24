@@ -1,0 +1,17 @@
+{
+  "name": "Utah Hockey Club",
+  "abbreviation": "UTA",
+  "city": "Salt Lake City",
+  "short_name": "Utah HC",
+  "record": "33-37-12",
+  "stats": {
+    "goals_for_avg": 2.80,
+    "goals_against_avg": 3.15,
+    "pp_pct": 0.200,
+    "pk_pct": 0.785,
+    "shots_per_game": 30.0,
+    "shots_against_per_game": 31.5,
+    "faceoff_pct": 0.494,
+    "save_pct": 0.896
+  }
+}

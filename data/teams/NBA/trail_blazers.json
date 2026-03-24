@@ -1,0 +1,18 @@
+{
+  "name": "Portland Trail Blazers",
+  "abbreviation": "POR",
+  "city": "Portland",
+  "short_name": "Trail Blazers",
+  "record": "22-60",
+  "stats": {
+    "ppg": 108.6,
+    "opp_ppg": 117.4,
+    "pace": 99.4,
+    "off_rtg": 110.5,
+    "def_rtg": 119.5,
+    "reb_pg": 42.4,
+    "ast_pg": 24.3,
+    "fg_pct": 0.455,
+    "three_pct": 0.340
+  }
+}

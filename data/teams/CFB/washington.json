@@ -1,0 +1,16 @@
+{
+  "name": "Washington Huskies",
+  "abbreviation": "WASH",
+  "city": "Seattle",
+  "short_name": "Washington",
+  "record": "14-1",
+  "stats": {
+    "ppg": 38.8,
+    "opp_ppg": 22.1,
+    "yards_per_game": 468.2,
+    "opp_yards_per_game": 338.5,
+    "rush_ypg": 145.2,
+    "pass_ypg": 323.0,
+    "turnover_diff": 8
+  }
+}

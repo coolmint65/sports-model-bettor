@@ -1,0 +1,16 @@
+{
+  "name": "Michigan Wolverines",
+  "abbreviation": "MICH",
+  "city": "Ann Arbor",
+  "short_name": "Michigan",
+  "record": "15-0",
+  "stats": {
+    "ppg": 34.2,
+    "opp_ppg": 12.9,
+    "yards_per_game": 398.5,
+    "opp_yards_per_game": 261.8,
+    "rush_ypg": 222.8,
+    "pass_ypg": 175.7,
+    "turnover_diff": 15
+  }
+}

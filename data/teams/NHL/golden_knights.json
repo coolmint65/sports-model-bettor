@@ -1,0 +1,17 @@
+{
+  "name": "Vegas Golden Knights",
+  "abbreviation": "VGK",
+  "city": "Las Vegas",
+  "short_name": "Golden Knights",
+  "record": "48-25-9",
+  "stats": {
+    "goals_for_avg": 3.28,
+    "goals_against_avg": 2.82,
+    "pp_pct": 0.222,
+    "pk_pct": 0.815,
+    "shots_per_game": 32.0,
+    "shots_against_per_game": 29.2,
+    "faceoff_pct": 0.510,
+    "save_pct": 0.908
+  }
+}

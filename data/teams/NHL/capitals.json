@@ -1,0 +1,17 @@
+{
+  "name": "Washington Capitals",
+  "abbreviation": "WSH",
+  "city": "Washington",
+  "short_name": "Capitals",
+  "record": "52-22-8",
+  "stats": {
+    "goals_for_avg": 3.35,
+    "goals_against_avg": 2.78,
+    "pp_pct": 0.242,
+    "pk_pct": 0.818,
+    "shots_per_game": 31.2,
+    "shots_against_per_game": 29.5,
+    "faceoff_pct": 0.508,
+    "save_pct": 0.910
+  }
+}

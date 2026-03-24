@@ -1,0 +1,16 @@
+{
+  "name": "Utah Utes",
+  "abbreviation": "UTAH",
+  "city": "Salt Lake City",
+  "short_name": "Utah",
+  "record": "8-5",
+  "stats": {
+    "ppg": 27.3,
+    "opp_ppg": 19.8,
+    "yards_per_game": 365.0,
+    "opp_yards_per_game": 305.0,
+    "rush_ypg": 175.0,
+    "pass_ypg": 190.0,
+    "turnover_diff": 3
+  }
+}

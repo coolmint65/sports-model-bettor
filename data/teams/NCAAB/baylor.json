@@ -1,0 +1,17 @@
+{
+  "name": "Baylor Bears",
+  "abbreviation": "BAY",
+  "city": "Waco",
+  "short_name": "Baylor",
+  "record": "24-10",
+  "stats": {
+    "ppg": 77.2,
+    "opp_ppg": 69.8,
+    "pace": 67.9,
+    "off_rtg": 114.5,
+    "def_rtg": 100.1,
+    "reb_pg": 36.2,
+    "fg_pct": 0.461,
+    "three_pct": 0.345
+  }
+}

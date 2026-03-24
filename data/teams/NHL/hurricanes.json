@@ -1,0 +1,17 @@
+{
+  "name": "Carolina Hurricanes",
+  "abbreviation": "CAR",
+  "city": "Raleigh",
+  "short_name": "Hurricanes",
+  "record": "49-23-10",
+  "stats": {
+    "goals_for_avg": 3.22,
+    "goals_against_avg": 2.65,
+    "pp_pct": 0.228,
+    "pk_pct": 0.838,
+    "shots_per_game": 34.2,
+    "shots_against_per_game": 27.5,
+    "faceoff_pct": 0.522,
+    "save_pct": 0.910
+  }
+}

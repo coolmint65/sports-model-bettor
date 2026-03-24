@@ -1,0 +1,17 @@
+{
+  "name": "NC State Wolfpack",
+  "abbreviation": "NCST",
+  "city": "Raleigh",
+  "short_name": "NC State",
+  "record": "22-13",
+  "stats": {
+    "ppg": 76.9,
+    "opp_ppg": 70.5,
+    "pace": 68.4,
+    "off_rtg": 113.1,
+    "def_rtg": 100.8,
+    "reb_pg": 35.6,
+    "fg_pct": 0.455,
+    "three_pct": 0.337
+  }
+}

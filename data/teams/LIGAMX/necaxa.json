@@ -1,0 +1,17 @@
+{
+  "name": "Club Necaxa",
+  "abbreviation": "NEC",
+  "city": "Aguascalientes",
+  "short_name": "Necaxa",
+  "record": "5W-5D-7L",
+  "stats": {
+    "goals_for_avg": 1.00,
+    "goals_against_avg": 1.18,
+    "xg_for": 1.05,
+    "xg_against": 1.15,
+    "possession_avg": 47.0,
+    "shots_pg": 10.8,
+    "shots_against_pg": 12.2,
+    "clean_sheet_pct": 0.24
+  }
+}

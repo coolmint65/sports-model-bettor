@@ -1,0 +1,17 @@
+{
+  "name": "SV Darmstadt 98",
+  "abbreviation": "DAR",
+  "city": "Darmstadt",
+  "short_name": "Darmstadt",
+  "record": "3W-8D-23L",
+  "stats": {
+    "goals_for_avg": 0.65,
+    "goals_against_avg": 1.94,
+    "xg_for": 0.72,
+    "xg_against": 1.88,
+    "possession_avg": 41.8,
+    "shots_pg": 9.2,
+    "shots_against_pg": 15.5,
+    "clean_sheet_pct": 0.06
+  }
+}

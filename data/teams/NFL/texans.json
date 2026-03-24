@@ -1,0 +1,16 @@
+{
+  "name": "Houston Texans",
+  "abbreviation": "HOU",
+  "city": "Houston",
+  "short_name": "Texans",
+  "record": "11-6",
+  "stats": {
+    "ppg": 26.3,
+    "opp_ppg": 21.5,
+    "yards_per_game": 358.4,
+    "opp_yards_per_game": 318.2,
+    "rush_ypg": 115.6,
+    "pass_ypg": 242.8,
+    "turnover_diff": 7
+  }
+}

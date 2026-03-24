@@ -1,0 +1,17 @@
+{
+  "name": "Pittsburgh Penguins",
+  "abbreviation": "PIT",
+  "city": "Pittsburgh",
+  "short_name": "Penguins",
+  "record": "38-33-11",
+  "stats": {
+    "goals_for_avg": 3.00,
+    "goals_against_avg": 3.12,
+    "pp_pct": 0.218,
+    "pk_pct": 0.788,
+    "shots_per_game": 31.5,
+    "shots_against_per_game": 31.2,
+    "faceoff_pct": 0.502,
+    "save_pct": 0.900
+  }
+}

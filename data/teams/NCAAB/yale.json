@@ -1,0 +1,17 @@
+{
+  "name": "Yale Bulldogs",
+  "abbreviation": "YALE",
+  "city": "New Haven",
+  "short_name": "Yale",
+  "record": "25-7",
+  "stats": {
+    "ppg": 78.2,
+    "opp_ppg": 66.4,
+    "pace": 67.3,
+    "off_rtg": 116.5,
+    "def_rtg": 97.1,
+    "reb_pg": 34.5,
+    "fg_pct": 0.472,
+    "three_pct": 0.368
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Everton",
+  "abbreviation": "EVE",
+  "city": "Liverpool",
+  "short_name": "Everton",
+  "record": "10W-9D-19L",
+  "stats": {
+    "goals_for_avg": 1.00,
+    "goals_against_avg": 1.39,
+    "xg_for": 1.05,
+    "xg_against": 1.42,
+    "possession_avg": 44.2,
+    "shots_pg": 10.4,
+    "shots_against_pg": 13.8,
+    "clean_sheet_pct": 0.21
+  }
+}

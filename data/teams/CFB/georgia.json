@@ -1,0 +1,16 @@
+{
+  "name": "Georgia Bulldogs",
+  "abbreviation": "UGA",
+  "city": "Athens",
+  "short_name": "Georgia",
+  "record": "13-1",
+  "stats": {
+    "ppg": 36.2,
+    "opp_ppg": 16.5,
+    "yards_per_game": 435.8,
+    "opp_yards_per_game": 288.2,
+    "rush_ypg": 180.5,
+    "pass_ypg": 255.3,
+    "turnover_diff": 12
+  }
+}

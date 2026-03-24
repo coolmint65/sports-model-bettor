@@ -1,0 +1,16 @@
+{
+  "name": "Tennessee Volunteers",
+  "abbreviation": "TENN",
+  "city": "Knoxville",
+  "short_name": "Tennessee",
+  "record": "9-4",
+  "stats": {
+    "ppg": 30.2,
+    "opp_ppg": 20.8,
+    "yards_per_game": 395.0,
+    "opp_yards_per_game": 320.0,
+    "rush_ypg": 175.0,
+    "pass_ypg": 220.0,
+    "turnover_diff": 4
+  }
+}

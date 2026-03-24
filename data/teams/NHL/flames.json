@@ -1,0 +1,17 @@
+{
+  "name": "Calgary Flames",
+  "abbreviation": "CGY",
+  "city": "Calgary",
+  "short_name": "Flames",
+  "record": "41-30-11",
+  "stats": {
+    "goals_for_avg": 2.98,
+    "goals_against_avg": 2.88,
+    "pp_pct": 0.208,
+    "pk_pct": 0.810,
+    "shots_per_game": 30.2,
+    "shots_against_per_game": 29.5,
+    "faceoff_pct": 0.512,
+    "save_pct": 0.906
+  }
+}

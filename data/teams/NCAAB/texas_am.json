@@ -1,0 +1,17 @@
+{
+  "name": "Texas A&M Aggies",
+  "abbreviation": "TAMU",
+  "city": "College Station",
+  "short_name": "Texas A&M",
+  "record": "22-12",
+  "stats": {
+    "ppg": 73.4,
+    "opp_ppg": 66.9,
+    "pace": 65.8,
+    "off_rtg": 112.9,
+    "def_rtg": 98.5,
+    "reb_pg": 36.8,
+    "fg_pct": 0.453,
+    "three_pct": 0.334
+  }
+}

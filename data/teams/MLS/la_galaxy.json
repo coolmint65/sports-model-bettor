@@ -1,0 +1,17 @@
+{
+  "name": "LA Galaxy",
+  "abbreviation": "LAG",
+  "city": "Carson",
+  "short_name": "Galaxy",
+  "record": "16W-7D-11L",
+  "stats": {
+    "goals_for_avg": 1.65,
+    "goals_against_avg": 1.26,
+    "xg_for": 1.60,
+    "xg_against": 1.30,
+    "possession_avg": 52.8,
+    "shots_pg": 14.0,
+    "shots_against_pg": 11.5,
+    "clean_sheet_pct": 0.28
+  }
+}

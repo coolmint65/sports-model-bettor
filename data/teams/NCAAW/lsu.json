@@ -1,0 +1,17 @@
+{
+  "name": "LSU Tigers",
+  "abbreviation": "LSU",
+  "city": "Baton Rouge",
+  "short_name": "LSU",
+  "record": "28-6",
+  "stats": {
+    "ppg": 82.3,
+    "opp_ppg": 66.5,
+    "pace": 73.1,
+    "off_rtg": 114.8,
+    "def_rtg": 93.2,
+    "reb_pg": 41.8,
+    "fg_pct": 0.462,
+    "three_pct": 0.318
+  }
+}

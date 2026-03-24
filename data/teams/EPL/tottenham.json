@@ -1,0 +1,17 @@
+{
+  "name": "Tottenham Hotspur",
+  "abbreviation": "TOT",
+  "city": "London",
+  "short_name": "Spurs",
+  "record": "16W-5D-17L",
+  "stats": {
+    "goals_for_avg": 1.82,
+    "goals_against_avg": 1.37,
+    "xg_for": 1.78,
+    "xg_against": 1.32,
+    "possession_avg": 56.2,
+    "shots_pg": 14.6,
+    "shots_against_pg": 11.8,
+    "clean_sheet_pct": 0.21
+  }
+}

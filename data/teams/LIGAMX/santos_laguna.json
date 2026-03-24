@@ -1,0 +1,17 @@
+{
+  "name": "Santos Laguna",
+  "abbreviation": "SAN",
+  "city": "Torreon",
+  "short_name": "Santos",
+  "record": "5W-5D-7L",
+  "stats": {
+    "goals_for_avg": 1.06,
+    "goals_against_avg": 1.35,
+    "xg_for": 1.10,
+    "xg_against": 1.30,
+    "possession_avg": 46.2,
+    "shots_pg": 10.8,
+    "shots_against_pg": 13.1,
+    "clean_sheet_pct": 0.21
+  }
+}

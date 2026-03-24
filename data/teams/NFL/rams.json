@@ -1,0 +1,16 @@
+{
+  "name": "Los Angeles Rams",
+  "abbreviation": "LAR",
+  "city": "Los Angeles",
+  "short_name": "Rams",
+  "record": "10-7",
+  "stats": {
+    "ppg": 24.5,
+    "opp_ppg": 21.9,
+    "yards_per_game": 352.3,
+    "opp_yards_per_game": 325.8,
+    "rush_ypg": 108.6,
+    "pass_ypg": 243.7,
+    "turnover_diff": 5
+  }
+}

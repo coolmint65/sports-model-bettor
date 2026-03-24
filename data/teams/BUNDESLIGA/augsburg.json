@@ -1,0 +1,17 @@
+{
+  "name": "FC Augsburg",
+  "abbreviation": "AUG",
+  "city": "Augsburg",
+  "short_name": "Augsburg",
+  "record": "10W-6D-18L",
+  "stats": {
+    "goals_for_avg": 1.18,
+    "goals_against_avg": 1.56,
+    "xg_for": 1.15,
+    "xg_against": 1.52,
+    "possession_avg": 44.2,
+    "shots_pg": 10.5,
+    "shots_against_pg": 13.8,
+    "clean_sheet_pct": 0.18
+  }
+}

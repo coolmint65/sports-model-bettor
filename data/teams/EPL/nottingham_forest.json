@@ -1,0 +1,17 @@
+{
+  "name": "Nottingham Forest",
+  "abbreviation": "NFO",
+  "city": "Nottingham",
+  "short_name": "Nott'm Forest",
+  "record": "19W-7D-12L",
+  "stats": {
+    "goals_for_avg": 1.55,
+    "goals_against_avg": 1.13,
+    "xg_for": 1.40,
+    "xg_against": 1.22,
+    "possession_avg": 45.8,
+    "shots_pg": 11.4,
+    "shots_against_pg": 13.0,
+    "clean_sheet_pct": 0.32
+  }
+}

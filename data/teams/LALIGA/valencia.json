@@ -1,0 +1,17 @@
+{
+  "name": "Valencia CF",
+  "abbreviation": "VAL",
+  "city": "Valencia",
+  "short_name": "Valencia",
+  "record": "10W-8D-20L",
+  "stats": {
+    "goals_for_avg": 1.03,
+    "goals_against_avg": 1.45,
+    "xg_for": 1.08,
+    "xg_against": 1.40,
+    "possession_avg": 48.8,
+    "shots_pg": 11.6,
+    "shots_against_pg": 13.2,
+    "clean_sheet_pct": 0.18
+  }
+}

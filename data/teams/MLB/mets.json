@@ -1,0 +1,19 @@
+{
+  "name": "New York Mets",
+  "abbreviation": "NYM",
+  "city": "New York",
+  "short_name": "Mets",
+  "record": "91-71",
+  "stats": {
+    "runs_per_game": 4.85,
+    "era": 3.60,
+    "batting_avg": 0.253,
+    "obp": 0.330,
+    "slg": 0.428,
+    "ops": 0.758,
+    "hr_per_game": 1.38,
+    "whip": 1.20,
+    "k_per_9": 9.10,
+    "bb_per_9": 3.05
+  }
+}

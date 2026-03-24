@@ -1,0 +1,17 @@
+{
+  "name": "Michigan State Spartans",
+  "abbreviation": "MSU",
+  "city": "East Lansing",
+  "short_name": "Michigan State",
+  "record": "22-12",
+  "stats": {
+    "ppg": 75.1,
+    "opp_ppg": 68.4,
+    "pace": 66.9,
+    "off_rtg": 113.2,
+    "def_rtg": 99.1,
+    "reb_pg": 37.3,
+    "fg_pct": 0.458,
+    "three_pct": 0.341
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Brighton & Hove Albion",
+  "abbreviation": "BHA",
+  "city": "Brighton",
+  "short_name": "Brighton",
+  "record": "16W-10D-12L",
+  "stats": {
+    "goals_for_avg": 1.58,
+    "goals_against_avg": 1.21,
+    "xg_for": 1.62,
+    "xg_against": 1.18,
+    "possession_avg": 55.3,
+    "shots_pg": 14.2,
+    "shots_against_pg": 11.0,
+    "clean_sheet_pct": 0.29
+  }
+}

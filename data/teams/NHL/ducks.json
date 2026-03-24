@@ -1,0 +1,17 @@
+{
+  "name": "Anaheim Ducks",
+  "abbreviation": "ANA",
+  "city": "Anaheim",
+  "short_name": "Ducks",
+  "record": "30-40-12",
+  "stats": {
+    "goals_for_avg": 2.65,
+    "goals_against_avg": 3.28,
+    "pp_pct": 0.188,
+    "pk_pct": 0.772,
+    "shots_per_game": 29.2,
+    "shots_against_per_game": 32.5,
+    "faceoff_pct": 0.488,
+    "save_pct": 0.890
+  }
+}

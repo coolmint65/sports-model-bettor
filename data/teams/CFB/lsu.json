@@ -1,0 +1,16 @@
+{
+  "name": "LSU Tigers",
+  "abbreviation": "LSU",
+  "city": "Baton Rouge",
+  "short_name": "LSU",
+  "record": "10-3",
+  "stats": {
+    "ppg": 33.1,
+    "opp_ppg": 22.4,
+    "yards_per_game": 430.0,
+    "opp_yards_per_game": 340.0,
+    "rush_ypg": 160.0,
+    "pass_ypg": 270.0,
+    "turnover_diff": 3
+  }
+}

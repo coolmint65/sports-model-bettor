@@ -1,0 +1,17 @@
+{
+  "name": "Paris Saint-Germain",
+  "abbreviation": "PSG",
+  "city": "Paris",
+  "short_name": "PSG",
+  "record": "24W-5D-5L",
+  "stats": {
+    "goals_for_avg": 2.32,
+    "goals_against_avg": 0.79,
+    "xg_for": 2.20,
+    "xg_against": 0.88,
+    "possession_avg": 61.4,
+    "shots_pg": 15.6,
+    "shots_against_pg": 9.4,
+    "clean_sheet_pct": 0.44
+  }
+}
