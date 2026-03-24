@@ -69,23 +69,23 @@ def main():
     errors = []
 
     logger.info("=" * 60)
-    logger.info(f"SCRAPER RUN — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"SCRAPER RUN - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("=" * 60)
 
     for espn_sport, espn_league, our_key in ESPN_LEAGUES:
         if target_leagues is not None and our_key not in target_leagues:
             continue
 
-        logger.info(f"\n{'─' * 40}")
+        logger.info(f"\n{'-' * 40}")
         logger.info(f"LEAGUE: {our_key}")
-        logger.info(f"{'─' * 40}")
+        logger.info(f"{'-' * 40}")
 
         try:
             updated = scrape_league(espn_sport, espn_league, our_key)
             total_updated += len(updated)
-            logger.info(f"✓ {our_key}: Updated {len(updated)} teams")
+            logger.info(f"[OK] {our_key}: Updated {len(updated)} teams")
         except Exception as e:
-            logger.error(f"✗ {our_key}: {e}")
+            logger.error(f"[FAIL] {our_key}: {e}")
             errors.append((our_key, str(e)))
 
         # Brief pause between leagues
@@ -93,7 +93,7 @@ def main():
 
     elapsed = time.time() - start
     logger.info(f"\n{'=' * 60}")
-    logger.info(f"COMPLETE — {total_updated} teams updated in {elapsed:.0f}s")
+    logger.info(f"COMPLETE - {total_updated} teams updated in {elapsed:.0f}s")
     if errors:
         logger.info(f"ERRORS ({len(errors)}):")
         for league, err in errors:
