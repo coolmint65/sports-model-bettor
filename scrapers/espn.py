@@ -24,6 +24,7 @@ from .config import (
     espn_standings_url,
     espn_team_schedule_url,
     espn_team_record_url,
+    LEAGUE_SETTINGS,
 )
 
 logger = logging.getLogger(__name__)
@@ -99,8 +100,14 @@ def scrape_league(espn_sport: str, espn_league: str, our_league: str) -> list[st
 
     logger.info(f"Scraping {our_league} from ESPN ({espn_sport}/{espn_league})...")
 
-    # Step 1: Get team list
-    teams_data = _fetch_json(espn_teams_url(espn_sport, espn_league))
+    # Step 1: Get team list (with per-league limit and division filtering)
+    settings = LEAGUE_SETTINGS.get(our_league, {})
+    teams_url = espn_teams_url(
+        espn_sport, espn_league,
+        limit=settings.get("limit", 50),
+        groups=settings.get("groups"),
+    )
+    teams_data = _fetch_json(teams_url)
     if not teams_data:
         logger.error(f"Failed to fetch teams for {our_league}")
         return []

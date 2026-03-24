@@ -33,12 +33,36 @@ ESPN_LEAGUES = [
     ("soccer", "mex.1", "LIGAMX"),
 ]
 
+# Per-league team fetch limits and ESPN group IDs for division filtering.
+# ESPN defaults to 50 teams; college leagues need higher limits.
+# groups: ESPN group ID to filter by division (e.g. 80 = FBS, 50 = D1 basketball)
+LEAGUE_SETTINGS = {
+    "NFL":        {"limit": 50},
+    "CFB":        {"limit": 200, "groups": 80},     # FBS (130 teams)
+    "NBA":        {"limit": 50},
+    "NCAAB":      {"limit": 400, "groups": 50},     # D1 (362 teams)
+    "NCAAW":      {"limit": 400, "groups": 50},     # D1
+    "MLB":        {"limit": 50},
+    "NHL":        {"limit": 50},
+    "EPL":        {"limit": 50},
+    "UCL":        {"limit": 50},
+    "LALIGA":     {"limit": 50},
+    "BUNDESLIGA": {"limit": 50},
+    "MLS":        {"limit": 50},
+    "NWSL":       {"limit": 50},
+    "LIGAMX":     {"limit": 50},
+}
+
 # ESPN API endpoints
 ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports"
 
 
-def espn_teams_url(sport: str, league: str) -> str:
-    return f"{ESPN_BASE}/{sport}/{league}/teams"
+def espn_teams_url(sport: str, league: str, limit: int = 50,
+                    groups: int | None = None) -> str:
+    url = f"{ESPN_BASE}/{sport}/{league}/teams?limit={limit}"
+    if groups is not None:
+        url += f"&groups={groups}"
+    return url
 
 
 def espn_team_stats_url(sport: str, league: str, team_id: str) -> str:
