@@ -5,12 +5,12 @@
   "short_name": "Oregon State",
   "record": "8-5",
   "stats": {
-    "ppg": 27.6,
-    "opp_ppg": 21.9,
-    "yards_per_game": 375.0,
-    "opp_yards_per_game": 325.0,
-    "rush_ypg": 160.0,
-    "pass_ypg": 215.0,
+    "ppg": 29.8,
+    "opp_ppg": 22.2,
+    "yards_per_game": 395.5,
+    "opp_yards_per_game": 328.8,
+    "rush_ypg": 162.5,
+    "pass_ypg": 233.0,
     "turnover_diff": 3
   }
 }

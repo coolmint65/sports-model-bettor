@@ -5,12 +5,12 @@
   "short_name": "Texas A&M",
   "record": "7-6",
   "stats": {
-    "ppg": 26.8,
-    "opp_ppg": 22.4,
-    "yards_per_game": 370.0,
-    "opp_yards_per_game": 335.0,
-    "rush_ypg": 165.0,
-    "pass_ypg": 205.0,
-    "turnover_diff": 0
+    "ppg": 28.5,
+    "opp_ppg": 22.8,
+    "yards_per_game": 392.5,
+    "opp_yards_per_game": 325.8,
+    "rush_ypg": 165.2,
+    "pass_ypg": 227.3,
+    "turnover_diff": 1
   }
 }

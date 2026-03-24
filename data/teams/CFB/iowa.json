@@ -5,12 +5,12 @@
   "short_name": "Iowa",
   "record": "10-4",
   "stats": {
-    "ppg": 22.8,
-    "opp_ppg": 14.2,
-    "yards_per_game": 310.0,
-    "opp_yards_per_game": 265.0,
-    "rush_ypg": 170.0,
-    "pass_ypg": 140.0,
-    "turnover_diff": 12
+    "ppg": 24.5,
+    "opp_ppg": 15.8,
+    "yards_per_game": 338.2,
+    "opp_yards_per_game": 272.5,
+    "rush_ypg": 168.5,
+    "pass_ypg": 169.7,
+    "turnover_diff": 10
   }
 }

@@ -5,12 +5,12 @@
   "short_name": "Missouri",
   "record": "11-2",
   "stats": {
-    "ppg": 29.4,
-    "opp_ppg": 17.6,
-    "yards_per_game": 380.0,
-    "opp_yards_per_game": 295.0,
-    "rush_ypg": 165.0,
-    "pass_ypg": 215.0,
-    "turnover_diff": 10
+    "ppg": 32.5,
+    "opp_ppg": 17.8,
+    "yards_per_game": 405.2,
+    "opp_yards_per_game": 295.5,
+    "rush_ypg": 162.5,
+    "pass_ypg": 242.7,
+    "turnover_diff": 9
   }
 }

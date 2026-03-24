@@ -5,12 +5,12 @@
   "short_name": "Toledo",
   "record": "11-3",
   "stats": {
-    "ppg": 31.6,
-    "opp_ppg": 22.1,
-    "yards_per_game": 410.0,
-    "opp_yards_per_game": 330.0,
-    "rush_ypg": 175.0,
-    "pass_ypg": 235.0,
+    "ppg": 33.2,
+    "opp_ppg": 22.5,
+    "yards_per_game": 418.8,
+    "opp_yards_per_game": 332.5,
+    "rush_ypg": 178.5,
+    "pass_ypg": 240.3,
     "turnover_diff": 6
   }
 }

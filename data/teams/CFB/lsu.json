@@ -5,12 +5,12 @@
   "short_name": "LSU",
   "record": "10-3",
   "stats": {
-    "ppg": 33.1,
-    "opp_ppg": 22.4,
-    "yards_per_game": 430.0,
-    "opp_yards_per_game": 340.0,
-    "rush_ypg": 160.0,
-    "pass_ypg": 270.0,
+    "ppg": 35.2,
+    "opp_ppg": 22.5,
+    "yards_per_game": 445.8,
+    "opp_yards_per_game": 342.1,
+    "rush_ypg": 158.5,
+    "pass_ypg": 287.3,
     "turnover_diff": 3
   }
 }

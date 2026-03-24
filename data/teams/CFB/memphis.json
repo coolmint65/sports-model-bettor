@@ -5,12 +5,12 @@
   "short_name": "Memphis",
   "record": "10-3",
   "stats": {
-    "ppg": 33.2,
-    "opp_ppg": 24.8,
-    "yards_per_game": 435.0,
-    "opp_yards_per_game": 350.0,
-    "rush_ypg": 185.0,
-    "pass_ypg": 250.0,
+    "ppg": 35.8,
+    "opp_ppg": 24.5,
+    "yards_per_game": 442.8,
+    "opp_yards_per_game": 358.2,
+    "rush_ypg": 182.5,
+    "pass_ypg": 260.3,
     "turnover_diff": 4
   }
 }

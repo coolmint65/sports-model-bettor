@@ -5,12 +5,12 @@
   "short_name": "Arizona",
   "record": "10-3",
   "stats": {
-    "ppg": 34.5,
-    "opp_ppg": 23.7,
-    "yards_per_game": 445.0,
-    "opp_yards_per_game": 345.0,
-    "rush_ypg": 165.0,
-    "pass_ypg": 280.0,
-    "turnover_diff": 5
+    "ppg": 36.2,
+    "opp_ppg": 24.5,
+    "yards_per_game": 448.5,
+    "opp_yards_per_game": 355.2,
+    "rush_ypg": 155.8,
+    "pass_ypg": 292.7,
+    "turnover_diff": 2
   }
 }

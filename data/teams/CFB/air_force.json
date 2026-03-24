@@ -1,16 +1,16 @@
 {
   "name": "Air Force Falcons",
-  "abbreviation": "AFA",
+  "abbreviation": "AF",
   "city": "Colorado Springs",
   "short_name": "Air Force",
   "record": "9-4",
   "stats": {
-    "ppg": 27.5,
-    "opp_ppg": 18.6,
-    "yards_per_game": 370.0,
-    "opp_yards_per_game": 295.0,
-    "rush_ypg": 280.0,
-    "pass_ypg": 90.0,
-    "turnover_diff": 7
+    "ppg": 28.8,
+    "opp_ppg": 19.5,
+    "yards_per_game": 382.5,
+    "opp_yards_per_game": 298.8,
+    "rush_ypg": 278.5,
+    "pass_ypg": 104.0,
+    "turnover_diff": 6
   }
 }

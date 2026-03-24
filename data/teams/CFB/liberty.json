@@ -5,12 +5,12 @@
   "short_name": "Liberty",
   "record": "13-1",
   "stats": {
-    "ppg": 31.2,
-    "opp_ppg": 18.4,
-    "yards_per_game": 390.0,
-    "opp_yards_per_game": 305.0,
-    "rush_ypg": 185.0,
-    "pass_ypg": 205.0,
-    "turnover_diff": 9
+    "ppg": 33.2,
+    "opp_ppg": 18.5,
+    "yards_per_game": 415.8,
+    "opp_yards_per_game": 302.1,
+    "rush_ypg": 195.2,
+    "pass_ypg": 220.6,
+    "turnover_diff": 7
   }
 }

@@ -5,12 +5,12 @@
   "short_name": "Troy",
   "record": "11-3",
   "stats": {
-    "ppg": 28.9,
-    "opp_ppg": 20.7,
-    "yards_per_game": 380.0,
-    "opp_yards_per_game": 315.0,
-    "rush_ypg": 160.0,
-    "pass_ypg": 220.0,
+    "ppg": 30.5,
+    "opp_ppg": 21.8,
+    "yards_per_game": 402.5,
+    "opp_yards_per_game": 325.8,
+    "rush_ypg": 172.5,
+    "pass_ypg": 230.0,
     "turnover_diff": 5
   }
 }

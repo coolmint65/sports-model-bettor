@@ -5,12 +5,12 @@
   "short_name": "Clemson",
   "record": "9-4",
   "stats": {
-    "ppg": 28.6,
-    "opp_ppg": 19.2,
-    "yards_per_game": 375.0,
-    "opp_yards_per_game": 305.0,
-    "rush_ypg": 170.0,
-    "pass_ypg": 205.0,
+    "ppg": 30.5,
+    "opp_ppg": 20.8,
+    "yards_per_game": 398.5,
+    "opp_yards_per_game": 312.5,
+    "rush_ypg": 175.2,
+    "pass_ypg": 223.3,
     "turnover_diff": 4
   }
 }

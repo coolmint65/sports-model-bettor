@@ -5,12 +5,12 @@
   "short_name": "Utah",
   "record": "8-5",
   "stats": {
-    "ppg": 27.3,
-    "opp_ppg": 19.8,
-    "yards_per_game": 365.0,
-    "opp_yards_per_game": 305.0,
-    "rush_ypg": 175.0,
-    "pass_ypg": 190.0,
+    "ppg": 28.5,
+    "opp_ppg": 20.8,
+    "yards_per_game": 385.2,
+    "opp_yards_per_game": 308.5,
+    "rush_ypg": 168.5,
+    "pass_ypg": 216.7,
     "turnover_diff": 3
   }
 }

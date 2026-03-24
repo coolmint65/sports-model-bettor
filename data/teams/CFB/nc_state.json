@@ -5,12 +5,12 @@
   "short_name": "NC State",
   "record": "9-4",
   "stats": {
-    "ppg": 28.4,
-    "opp_ppg": 20.6,
-    "yards_per_game": 370.0,
-    "opp_yards_per_game": 315.0,
-    "rush_ypg": 160.0,
-    "pass_ypg": 210.0,
+    "ppg": 30.2,
+    "opp_ppg": 21.5,
+    "yards_per_game": 398.8,
+    "opp_yards_per_game": 322.5,
+    "rush_ypg": 165.2,
+    "pass_ypg": 233.6,
     "turnover_diff": 5
   }
 }

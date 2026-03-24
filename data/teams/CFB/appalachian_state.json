@@ -5,12 +5,12 @@
   "short_name": "Appalachian State",
   "record": "9-5",
   "stats": {
-    "ppg": 29.5,
-    "opp_ppg": 22.8,
-    "yards_per_game": 385.0,
-    "opp_yards_per_game": 330.0,
-    "rush_ypg": 190.0,
-    "pass_ypg": 195.0,
-    "turnover_diff": 3
+    "ppg": 31.8,
+    "opp_ppg": 23.5,
+    "yards_per_game": 408.2,
+    "opp_yards_per_game": 338.5,
+    "rush_ypg": 188.2,
+    "pass_ypg": 220.0,
+    "turnover_diff": 2
   }
 }

@@ -5,12 +5,12 @@
   "short_name": "Miami",
   "record": "7-6",
   "stats": {
-    "ppg": 28.9,
+    "ppg": 30.8,
     "opp_ppg": 24.5,
-    "yards_per_game": 400.0,
-    "opp_yards_per_game": 355.0,
-    "rush_ypg": 145.0,
-    "pass_ypg": 255.0,
+    "yards_per_game": 412.5,
+    "opp_yards_per_game": 348.2,
+    "rush_ypg": 148.5,
+    "pass_ypg": 264.0,
     "turnover_diff": -2
   }
 }

@@ -5,12 +5,12 @@
   "short_name": "Oklahoma",
   "record": "10-3",
   "stats": {
-    "ppg": 31.5,
-    "opp_ppg": 19.7,
-    "yards_per_game": 410.0,
-    "opp_yards_per_game": 315.0,
-    "rush_ypg": 175.0,
-    "pass_ypg": 235.0,
-    "turnover_diff": 6
+    "ppg": 33.8,
+    "opp_ppg": 21.5,
+    "yards_per_game": 428.2,
+    "opp_yards_per_game": 325.8,
+    "rush_ypg": 165.5,
+    "pass_ypg": 262.7,
+    "turnover_diff": 5
   }
 }

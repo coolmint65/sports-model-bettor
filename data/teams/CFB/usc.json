@@ -5,12 +5,12 @@
   "short_name": "USC",
   "record": "8-5",
   "stats": {
-    "ppg": 31.4,
-    "opp_ppg": 24.1,
-    "yards_per_game": 425.0,
-    "opp_yards_per_game": 350.0,
-    "rush_ypg": 140.0,
-    "pass_ypg": 285.0,
+    "ppg": 33.5,
+    "opp_ppg": 24.2,
+    "yards_per_game": 438.2,
+    "opp_yards_per_game": 358.5,
+    "rush_ypg": 142.5,
+    "pass_ypg": 295.7,
     "turnover_diff": 1
   }
 }
