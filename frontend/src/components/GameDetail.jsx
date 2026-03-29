@@ -149,10 +149,11 @@ function BettingPicks({ data, odds }) {
 
   const total = d.total
   const vegasTotal = odds?.over_under
-  const ouPick = vegasTotal ? (total > vegasTotal ? 'Over' : 'Under') : null
-  const ouConf = vegasTotal && d.over_under
-    ? getOUConfidence(d.over_under, vegasTotal)
+  const ouResult = vegasTotal && d.over_under
+    ? getOUPick(d.over_under, vegasTotal, total)
     : null
+  const ouPick = ouResult?.pick
+  const ouConf = ouResult?.prob
 
   const nrfi = d.first_inning?.nrfi
   const nrfiPick = nrfi != null ? (nrfi > 0.50 ? 'NRFI' : 'YRFI') : null
@@ -248,19 +249,30 @@ function PickRow({ label, pick, prob, odds, pct }) {
 }
 
 
-function getOUConfidence(ouLines, vegasTotal) {
-  const key = String(parseFloat(vegasTotal))
-  if (ouLines[key]) {
-    return Math.max(ouLines[key].over, ouLines[key].under)
+function getOUPick(ouLines, vegasTotal, modelTotal) {
+  // Try exact match with different string formats
+  const vt = parseFloat(vegasTotal)
+  let entry = ouLines[String(vt)] || ouLines[vt.toFixed(1)] || ouLines[String(Math.round(vt))]
+
+  // If no exact match, find closest line
+  if (!entry) {
+    const lines = Object.keys(ouLines).map(Number).sort((a, b) => a - b)
+    let closest = lines[0]
+    for (const l of lines) {
+      if (Math.abs(l - vt) < Math.abs(closest - vt)) closest = l
+    }
+    entry = ouLines[String(closest)] || ouLines[closest.toFixed(1)]
   }
-  // Find closest line
-  const lines = Object.keys(ouLines).map(Number).sort((a, b) => a - b)
-  let closest = lines[0]
-  for (const l of lines) {
-    if (Math.abs(l - vegasTotal) < Math.abs(closest - vegasTotal)) closest = l
+
+  if (!entry) {
+    // Fallback: use model total vs vegas total
+    const pick = modelTotal > vt ? 'Over' : 'Under'
+    return { pick, prob: modelTotal > vt ? 0.55 : 0.55 }
   }
-  const entry = ouLines[String(closest)]
-  return entry ? Math.max(entry.over, entry.under) : null
+
+  const pick = entry.over > entry.under ? 'Over' : 'Under'
+  const prob = Math.max(entry.over, entry.under)
+  return { pick, prob }
 }
 
 
