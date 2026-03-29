@@ -414,6 +414,19 @@ def api_debug_teams():
     return [dict(r) for r in rows]
 
 
+@app.get("/api/backtest")
+def api_backtest(days: int = Query(default=0), min_edge: float = Query(default=0)):
+    """Run model backtest against historical games."""
+    from engine.backtest import run_backtest
+    results = run_backtest(
+        days=days if days > 0 else None,
+        min_edge=min_edge,
+    )
+    # Don't send full game log to frontend (too large)
+    results.pop("game_log", None)
+    return results
+
+
 @app.get("/api/standings")
 def api_standings():
     """Return MLB standings grouped by division."""

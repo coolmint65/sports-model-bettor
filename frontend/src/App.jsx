@@ -3,17 +3,20 @@ import axios from 'axios'
 import Scoreboard from './components/Scoreboard'
 import GameDetail from './components/GameDetail'
 import Standings from './components/Standings'
+import Backtest from './components/Backtest'
 
 const api = axios.create({ baseURL: '/api' })
 
 export default function App() {
-  const [view, setView] = useState('games')  // 'games' | 'standings'
+  const [view, setView] = useState('games')
   const [games, setGames] = useState([])
   const [gamesLoading, setGamesLoading] = useState(true)
   const [selectedGame, setSelectedGame] = useState(null)
   const [prediction, setPrediction] = useState(null)
   const [predLoading, setPredLoading] = useState(false)
   const [standings, setStandings] = useState([])
+  const [backtest, setBacktest] = useState(null)
+  const [btLoading, setBtLoading] = useState(false)
 
   // Load today's games on mount + auto-refresh every 5 min
   useEffect(() => {
@@ -35,6 +38,7 @@ export default function App() {
 
   const selectGame = useCallback((game) => {
     setSelectedGame(game)
+    setView('games')
     setPrediction(null)
     setPredLoading(true)
 
@@ -45,7 +49,6 @@ export default function App() {
       return
     }
 
-    // Get pitcher IDs from ESPN data if available
     const homePitcherId = game.home_pitcher?.id ? parseInt(game.home_pitcher.id) : null
     const awayPitcherId = game.away_pitcher?.id ? parseInt(game.away_pitcher.id) : null
 
@@ -70,6 +73,30 @@ export default function App() {
         .catch(() => {})
     }
   }, [standings.length])
+
+  const showBacktest = useCallback(() => {
+    setView('backtest')
+    setSelectedGame(null)
+    if (!backtest) {
+      setBtLoading(true)
+      api.get('/backtest')
+        .then(r => setBacktest(r.data))
+        .catch(() => setBacktest({ error: "No historical data. Run sync.bat --full first." }))
+        .finally(() => setBtLoading(false))
+    }
+  }, [backtest])
+
+  const runBacktest = useCallback((days, minEdge) => {
+    setBtLoading(true)
+    setBacktest(null)
+    const params = new URLSearchParams()
+    if (days) params.set('days', days)
+    if (minEdge) params.set('min_edge', minEdge)
+    api.get(`/backtest?${params}`)
+      .then(r => setBacktest(r.data))
+      .catch(() => setBacktest({ error: "Backtest failed" }))
+      .finally(() => setBtLoading(false))
+  }, [])
 
   const goBack = useCallback(() => {
     setSelectedGame(null)
@@ -97,6 +124,12 @@ export default function App() {
         >
           Standings
         </button>
+        <button
+          className={`nav-tab ${view === 'backtest' ? 'active' : ''}`}
+          onClick={showBacktest}
+        >
+          Model Performance
+        </button>
       </nav>
 
       {view === 'games' && !selectedGame && (
@@ -118,6 +151,14 @@ export default function App() {
 
       {view === 'standings' && (
         <Standings divisions={standings} />
+      )}
+
+      {view === 'backtest' && (
+        <Backtest
+          data={backtest}
+          loading={btLoading}
+          onRun={runBacktest}
+        />
       )}
     </div>
   )
