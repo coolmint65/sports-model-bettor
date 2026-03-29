@@ -15,13 +15,22 @@ export default function App() {
   const [predLoading, setPredLoading] = useState(false)
   const [standings, setStandings] = useState([])
 
-  // Load today's games on mount
+  // Load today's games on mount + auto-refresh every 5 min
   useEffect(() => {
+    const fetchGames = () => {
+      api.get('/scoreboard')
+        .then(r => setGames(r.data))
+        .catch(() => {})
+    }
+
     setGamesLoading(true)
     api.get('/scoreboard')
       .then(r => setGames(r.data))
       .catch(() => setGames([]))
       .finally(() => setGamesLoading(false))
+
+    const interval = setInterval(fetchGames, 5 * 60 * 1000)
+    return () => clearInterval(interval)
   }, [])
 
   const selectGame = useCallback((game) => {
