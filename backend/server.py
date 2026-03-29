@@ -156,6 +156,22 @@ def api_scoreboard(date: str = Query(default="")):
     return games
 
 
+def _safe_game_pk(uid: str, event_id: str) -> int:
+    """Extract a numeric game PK from ESPN uid or event id."""
+    # Try uid formats: "s:1~l:10~e:401814725" or "e:401814725"
+    for part in uid.split("~"):
+        if part.startswith("e:"):
+            try:
+                return int(part[2:])
+            except ValueError:
+                pass
+    # Fall back to event id
+    try:
+        return int(event_id)
+    except (ValueError, TypeError):
+        return 0
+
+
 def _parse_espn_scoreboard(data: dict) -> list[dict]:
     """Parse ESPN scoreboard into clean game objects."""
     events = data.get("events", [])
@@ -231,7 +247,7 @@ def _parse_espn_scoreboard(data: dict) -> list[dict]:
 
         game = {
             "id": event.get("id", ""),
-            "game_pk": int(event.get("uid", "0").split("~")[-1]) if "~" in event.get("uid", "") else 0,
+            "game_pk": _safe_game_pk(event.get("uid", ""), event.get("id", "")),
             "date": event.get("date", ""),
             "name": event.get("name", ""),
             "short_name": event.get("shortName", ""),
