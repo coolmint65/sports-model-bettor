@@ -64,7 +64,16 @@ def _fetch_espn_json(url: str) -> dict | None:
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    conn = get_conn()
+    teams = conn.execute("SELECT COUNT(*) as c FROM teams").fetchone()["c"]
+    stats = conn.execute("SELECT COUNT(*) as c FROM team_stats").fetchone()["c"]
+    from engine.db import DB_PATH
+    return {
+        "status": "ok",
+        "db_path": str(DB_PATH),
+        "teams": teams,
+        "team_stats": stats,
+    }
 
 
 @app.get("/api/teams")
@@ -313,15 +322,47 @@ def _parse_espn_scoreboard(data: dict) -> list[dict]:
     return games
 
 
+# ESPN uses different abbreviations than MLB Stats API for some teams
+_ESPN_ABBR_MAP = {
+    "CHW": "CWS",   # White Sox
+    "WSH": "WSH",   # Nationals (sometimes WAS)
+    "WAS": "WSH",
+    "AZ": "ARI",    # Diamondbacks
+    "SF": "SF",      # Giants
+    "SD": "SD",      # Padres
+    "TB": "TB",      # Rays
+    "KC": "KC",      # Royals
+}
+
+
+def _resolve_abbr(espn_abbr: str):
+    """Try to find a team by ESPN abbreviation, with fallback mapping."""
+    team = get_team_by_abbr(espn_abbr)
+    if team:
+        return team
+    # Try mapped abbreviation
+    mapped = _ESPN_ABBR_MAP.get(espn_abbr)
+    if mapped and mapped != espn_abbr:
+        team = get_team_by_abbr(mapped)
+        if team:
+            return team
+    # Try by team name substring
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM teams WHERE name LIKE ? LIMIT 1",
+        (f"%{espn_abbr}%",)
+    ).fetchone()
+    return dict(row) if row else None
+
+
 def _enrich_games(games: list[dict], date: str) -> list[dict]:
     """Enrich ESPN game data with our DB records/stats."""
     for game in games:
-        # Try to match teams to our DB
         home_abbr = game["home"].get("abbreviation", "")
         away_abbr = game["away"].get("abbreviation", "")
 
-        home_db = get_team_by_abbr(home_abbr)
-        away_db = get_team_by_abbr(away_abbr)
+        home_db = _resolve_abbr(home_abbr)
+        away_db = _resolve_abbr(away_abbr)
 
         if home_db:
             game["home"]["team_id"] = home_db["mlb_id"]
