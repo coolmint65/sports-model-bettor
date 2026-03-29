@@ -72,6 +72,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         day_night       TEXT,
         weather_temp    REAL,
         weather_wind    TEXT,
+        umpire          TEXT,
         winning_pitcher INTEGER ,
         losing_pitcher  INTEGER ,
         save_pitcher    INTEGER ,
@@ -285,6 +286,20 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         UNIQUE(game_id, source)
     );
 
+    CREATE TABLE IF NOT EXISTS umpires (
+        id          INTEGER PRIMARY KEY,
+        name        TEXT UNIQUE NOT NULL,
+        games       INTEGER DEFAULT 0,
+        -- Zone tendencies (career or recent season)
+        k_pct       REAL,       -- Strikeout rate in games umped
+        bb_pct      REAL,       -- Walk rate
+        rpg         REAL,       -- Avg runs per game
+        over_pct    REAL,       -- % of games that went over
+        ba          REAL,       -- Batting avg in games umped
+        run_factor  REAL DEFAULT 1.0,  -- >1 = more runs, <1 = fewer
+        updated_at  TEXT DEFAULT (datetime('now'))
+    );
+
     -- Indexes for common queries
     CREATE INDEX IF NOT EXISTS idx_games_date ON games(date);
     CREATE INDEX IF NOT EXISTS idx_games_season ON games(season);
@@ -485,3 +500,9 @@ def get_team_h2h_vs_pitcher(team_id: int, pitcher_id: int) -> list[dict]:
         ORDER BY h.at_bats DESC
     """, (team_id, pitcher_id)).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_umpire(name: str) -> dict | None:
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM umpires WHERE name = ?", (name,)).fetchone()
+    return dict(row) if row else None

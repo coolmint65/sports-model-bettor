@@ -297,6 +297,7 @@ class PredictRequest(BaseModel):
     home_pitcher_id: int | None = None
     away_pitcher_id: int | None = None
     venue: str | None = None
+    umpire: str | None = None
 
 
 @app.post("/api/predict")
@@ -308,6 +309,7 @@ def api_predict(req: PredictRequest):
         home_pitcher_id=req.home_pitcher_id,
         away_pitcher_id=req.away_pitcher_id,
         venue=req.venue,
+        umpire=req.umpire,
     )
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
