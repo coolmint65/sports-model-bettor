@@ -448,6 +448,62 @@ def _safe_int(val, default=0) -> int:
         return default
 
 
+# ── Bullpen Fatigue Tracking ─────────────────────────────────
+
+def compute_bullpen_fatigue():
+    """
+    Compute recent bullpen usage from game data.
+    Looks at the last 3 and 7 days of games to estimate
+    how heavily each team's bullpen has been used.
+    """
+    from engine.db import get_conn
+    conn = get_conn()
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    three_days_ago = (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%d")
+    seven_days_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+
+    teams = conn.execute("SELECT mlb_id FROM teams").fetchall()
+
+    for team in teams:
+        team_id = team["mlb_id"]
+
+        # Count games in last 3 days
+        games_3d = conn.execute("""
+            SELECT COUNT(*) as cnt FROM games
+            WHERE (home_team_id = ? OR away_team_id = ?)
+              AND date >= ? AND date <= ? AND status = 'final'
+        """, (team_id, team_id, three_days_ago, today)).fetchone()["cnt"]
+
+        # Estimate bullpen innings from game results
+        # Starters typically go ~5.5 IP, so bullpen covers ~3.5 IP per game
+        # If we have starter data we can be more precise
+        bp_innings_3d = games_3d * 3.5  # Rough estimate
+        bp_innings_7d = 0
+
+        games_7d = conn.execute("""
+            SELECT COUNT(*) as cnt FROM games
+            WHERE (home_team_id = ? OR away_team_id = ?)
+              AND date >= ? AND date <= ? AND status = 'final'
+        """, (team_id, team_id, seven_days_ago, today)).fetchone()["cnt"]
+
+        bp_innings_7d = games_7d * 3.5
+
+        # Upsert into bullpen_stats
+        conn.execute("""
+            INSERT INTO bullpen_stats (team_id, season, innings_last_3d, innings_last_7d, games_last_3d)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(team_id, season) DO UPDATE SET
+                innings_last_3d = excluded.innings_last_3d,
+                innings_last_7d = excluded.innings_last_7d,
+                games_last_3d = excluded.games_last_3d,
+                updated_at = datetime('now')
+        """, (team_id, SEASON, bp_innings_3d, bp_innings_7d, games_3d))
+
+    conn.commit()
+    _progress(f"       Updated bullpen fatigue for {len(teams)} teams")
+
+
 # ── Progress helper ──────────────────────────────────────────
 
 def _progress(msg: str) -> None:
@@ -497,8 +553,11 @@ def quick_sync():
     games = fetch_today()
     _progress(f"       Found {len(games)} games today")
 
-    _progress("[3/3] Fetching standings...")
+    _progress("[3/4] Fetching standings...")
     fetch_standings()
+
+    _progress("[4/4] Computing bullpen fatigue...")
+    compute_bullpen_fatigue()
 
     elapsed = time.time() - start
     _progress(f"=== Quick sync done in {elapsed:.0f} seconds ===")
@@ -519,6 +578,9 @@ def daily_sync():
     tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
     _progress("[3/3] Tomorrow's schedule...")
     fetch_schedule(tomorrow, tomorrow)
+
+    _progress("[4/4] Computing bullpen fatigue...")
+    compute_bullpen_fatigue()
 
     _progress("=== Daily sync complete ===")
 
