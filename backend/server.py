@@ -439,15 +439,21 @@ def api_standings():
     """, (SEASON,)).fetchall()
 
     logger.info("Standings query returned %d rows", len(rows))
+    # Log first few rows to see actual values
+    for r in rows[:3]:
+        logger.info("  Row: %s league='%s' division='%s' wins=%s",
+                    r["abbreviation"], r["league"], r["division"], r["wins"])
 
     if not rows:
         return []
 
     divisions = {}
     for r in rows:
-        league = r["league"] or "Unknown"
-        division = r["division"] or "Unknown"
-        if league == "Unknown" or division == "Unknown":
+        league = (r["league"] or "").strip()
+        division = (r["division"] or "").strip()
+        if not league or not division:
+            logger.warning("  Skipping %s: league='%s' division='%s'",
+                          r["abbreviation"], league, division)
             continue
         div_key = f"{league} {division}"
         if div_key not in divisions:
