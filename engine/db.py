@@ -25,7 +25,7 @@ def get_conn() -> sqlite3.Connection:
         _conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
         _conn.row_factory = sqlite3.Row
         _conn.execute("PRAGMA journal_mode=WAL")
-        _conn.execute("PRAGMA foreign_keys=ON")
+        _conn.execute("PRAGMA foreign_keys=OFF")
         _init_schema(_conn)
     return _conn
 
@@ -49,7 +49,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         id          INTEGER PRIMARY KEY,
         mlb_id      INTEGER UNIQUE NOT NULL,
         name        TEXT NOT NULL,
-        team_id     INTEGER REFERENCES teams(mlb_id),
+        team_id     INTEGER ,
         position    TEXT,       -- 'P', 'C', '1B', etc.
         bats        TEXT,       -- 'R', 'L', 'S'
         throws      TEXT,       -- 'R', 'L'
@@ -61,29 +61,29 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         id              INTEGER PRIMARY KEY,
         mlb_game_id     INTEGER UNIQUE NOT NULL,
         date            TEXT NOT NULL,
-        home_team_id    INTEGER REFERENCES teams(mlb_id),
-        away_team_id    INTEGER REFERENCES teams(mlb_id),
+        home_team_id    INTEGER ,
+        away_team_id    INTEGER ,
         home_score      INTEGER,
         away_score      INTEGER,
         status          TEXT DEFAULT 'scheduled', -- scheduled, live, final
-        home_pitcher_id INTEGER REFERENCES players(mlb_id),
-        away_pitcher_id INTEGER REFERENCES players(mlb_id),
+        home_pitcher_id INTEGER ,
+        away_pitcher_id INTEGER ,
         venue           TEXT,
         day_night       TEXT,
         weather_temp    REAL,
         weather_wind    TEXT,
-        winning_pitcher INTEGER REFERENCES players(mlb_id),
-        losing_pitcher  INTEGER REFERENCES players(mlb_id),
-        save_pitcher    INTEGER REFERENCES players(mlb_id),
+        winning_pitcher INTEGER ,
+        losing_pitcher  INTEGER ,
+        save_pitcher    INTEGER ,
         season          INTEGER,
         updated_at      TEXT DEFAULT (datetime('now'))
     );
 
     CREATE TABLE IF NOT EXISTS pitcher_stats (
         id          INTEGER PRIMARY KEY,
-        player_id   INTEGER NOT NULL REFERENCES players(mlb_id),
+        player_id   INTEGER NOT NULL ,
         season      INTEGER NOT NULL,
-        team_id     INTEGER REFERENCES teams(mlb_id),
+        team_id     INTEGER ,
         -- Counting stats
         games       INTEGER DEFAULT 0,
         games_started INTEGER DEFAULT 0,
@@ -131,9 +131,9 @@ def _init_schema(conn: sqlite3.Connection) -> None:
 
     CREATE TABLE IF NOT EXISTS batter_stats (
         id          INTEGER PRIMARY KEY,
-        player_id   INTEGER NOT NULL REFERENCES players(mlb_id),
+        player_id   INTEGER NOT NULL ,
         season      INTEGER NOT NULL,
-        team_id     INTEGER REFERENCES teams(mlb_id),
+        team_id     INTEGER ,
         -- Counting stats
         games       INTEGER DEFAULT 0,
         plate_appearances INTEGER DEFAULT 0,
@@ -181,7 +181,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
 
     CREATE TABLE IF NOT EXISTS bullpen_stats (
         id          INTEGER PRIMARY KEY,
-        team_id     INTEGER NOT NULL REFERENCES teams(mlb_id),
+        team_id     INTEGER NOT NULL ,
         season      INTEGER NOT NULL,
         era         REAL,
         whip        REAL,
@@ -201,8 +201,8 @@ def _init_schema(conn: sqlite3.Connection) -> None:
 
     CREATE TABLE IF NOT EXISTS h2h_matchups (
         id          INTEGER PRIMARY KEY,
-        batter_id   INTEGER NOT NULL REFERENCES players(mlb_id),
-        pitcher_id  INTEGER NOT NULL REFERENCES players(mlb_id),
+        batter_id   INTEGER NOT NULL ,
+        pitcher_id  INTEGER NOT NULL ,
         at_bats     INTEGER DEFAULT 0,
         hits        INTEGER DEFAULT 0,
         doubles     INTEGER DEFAULT 0,
@@ -219,7 +219,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     CREATE TABLE IF NOT EXISTS park_factors (
         id          INTEGER PRIMARY KEY,
         venue       TEXT NOT NULL,
-        team_id     INTEGER REFERENCES teams(mlb_id),
+        team_id     INTEGER ,
         season      INTEGER,
         run_factor  REAL DEFAULT 1.0,   -- >1 hitter-friendly
         hr_factor   REAL DEFAULT 1.0,
@@ -231,7 +231,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
 
     CREATE TABLE IF NOT EXISTS team_stats (
         id          INTEGER PRIMARY KEY,
-        team_id     INTEGER NOT NULL REFERENCES teams(mlb_id),
+        team_id     INTEGER NOT NULL ,
         season      INTEGER NOT NULL,
         -- Offense
         runs_pg     REAL,
