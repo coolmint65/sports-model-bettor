@@ -1,6 +1,7 @@
 """
-FastAPI backend for Sports Matchup Engine.
-Serves league/team data, scoreboard, and predictions via REST API.
+MLB Prediction Engine API.
+
+Serves MLB schedule, team data, and game predictions.
 """
 
 import sys
@@ -11,19 +12,24 @@ import json
 import time
 import logging
 import urllib.request
-import urllib.error
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from engine.leagues import LEAGUES, list_leagues
-from engine.data import list_teams, search_teams, load_team
-from engine.predict import predict_matchup
+
+from engine.db import (
+    get_conn, get_all_teams, get_team_by_id, get_team_by_abbr,
+    get_today_games, get_team_record, get_pitcher_season,
+    get_bullpen, get_recent_games,
+)
+from engine.mlb_predict import predict_game
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Sports Matchup Engine")
+SEASON = datetime.now().year
+
+app = FastAPI(title="MLB Prediction Engine")
 
 app.add_middleware(
     CORSMiddleware,
@@ -32,33 +38,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── ESPN sport/league slug mapping (mirrors scrapers/config.py) ──
-ESPN_SLUGS = {
-    "NFL": ("football", "nfl"),
-    "CFB": ("football", "college-football"),
-    "NBA": ("basketball", "nba"),
-    "NCAAB": ("basketball", "mens-college-basketball"),
-    "NCAAW": ("basketball", "womens-college-basketball"),
-    "MLB": ("baseball", "mlb"),
-    "NHL": ("hockey", "nhl"),
-    "EPL": ("soccer", "eng.1"),
-    "UCL": ("soccer", "uefa.champions"),
-    "LALIGA": ("soccer", "esp.1"),
-    "BUNDESLIGA": ("soccer", "ger.1"),
-    "MLS": ("soccer", "usa.1"),
-    "NWSL": ("soccer", "usa.nwsl"),
-    "LIGAMX": ("soccer", "mex.1"),
-}
+# ── ESPN integration for live scoreboard ────────────────────
 
 ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports"
-
-# Simple in-memory scoreboard cache: {league_key: (timestamp, data)}
 _scoreboard_cache: dict[str, tuple[float, list]] = {}
-CACHE_TTL = 120  # seconds
+CACHE_TTL = 120
 
 
 def _fetch_espn_json(url: str) -> dict | None:
-    """Fetch JSON from ESPN with a single retry."""
     for attempt in range(2):
         try:
             req = urllib.request.Request(url, headers={
@@ -73,20 +60,88 @@ def _fetch_espn_json(url: str) -> dict | None:
     return None
 
 
-def _team_key_from_name(name: str) -> str:
-    """Derive a team_key from display name (mirrors scrapers logic)."""
-    import re
-    import unicodedata
-    key = name.lower().strip()
-    key = unicodedata.normalize("NFKD", key)
-    key = "".join(c for c in key if not unicodedata.combining(c))
-    key = key.replace("&", "and")
-    key = re.sub(r"[^a-z0-9]+", "_", key)
-    return key.strip("_")
+# ── Endpoints ───────────────────────────────────────────────
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
 
-def _parse_scoreboard(data: dict, league_key: str) -> list[dict]:
-    """Parse ESPN scoreboard response into a clean games list."""
+@app.get("/api/teams")
+def api_teams():
+    """Return all 30 MLB teams."""
+    teams = get_all_teams()
+    result = []
+    for t in teams:
+        record = get_team_record(t["mlb_id"], SEASON)
+        result.append({
+            "id": t["mlb_id"],
+            "name": t["name"],
+            "abbreviation": t["abbreviation"],
+            "city": t.get("city", ""),
+            "venue": t.get("venue", ""),
+            "league": t.get("league", ""),
+            "division": t.get("division", ""),
+            "record": f"{record['wins']}-{record['losses']}" if record else "",
+            "streak": record.get("streak", "") if record else "",
+            "last_10": f"{record.get('last_10_wins', 0)}-{record.get('last_10_losses', 0)}" if record else "",
+            "run_diff": record.get("run_diff", 0) if record else 0,
+        })
+    return result
+
+
+@app.get("/api/teams/{team_id}")
+def api_team_detail(team_id: int):
+    """Return full team data with stats."""
+    team = get_team_by_id(team_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    record = get_team_record(team_id, SEASON) or {}
+    bp = get_bullpen(team_id, SEASON) or {}
+    recent = get_recent_games(team_id, 10)
+
+    return {
+        "team": team,
+        "record": record,
+        "bullpen": bp,
+        "recent_games": recent,
+    }
+
+
+@app.get("/api/scoreboard")
+def api_scoreboard(date: str = Query(default="")):
+    """
+    Return today's MLB games.
+    Combines ESPN live data with our DB data (probable pitchers, records).
+    """
+    target_date = date or datetime.now().strftime("%Y-%m-%d")
+    espn_date = target_date.replace("-", "")
+
+    cache_key = f"mlb:{espn_date}"
+    now = time.time()
+    if cache_key in _scoreboard_cache:
+        ts, cached = _scoreboard_cache[cache_key]
+        if now - ts < CACHE_TTL:
+            return cached
+
+    # Fetch from ESPN
+    url = f"{ESPN_BASE}/baseball/mlb/scoreboard?dates={espn_date}"
+    espn_data = _fetch_espn_json(url)
+
+    games = []
+    if espn_data:
+        games = _parse_espn_scoreboard(espn_data)
+
+    # Enrich with our DB data
+    games = _enrich_games(games, target_date)
+
+    _scoreboard_cache[cache_key] = (now, games)
+    return games
+
+
+def _parse_espn_scoreboard(data: dict) -> list[dict]:
+    """Parse ESPN scoreboard into clean game objects."""
     events = data.get("events", [])
     games = []
 
@@ -112,18 +167,19 @@ def _parse_scoreboard(data: dict, league_key: str) -> list[dict]:
             else:
                 score = str(raw_score)
 
-            short_name = team.get("shortDisplayName", team.get("name", ""))
             entry = {
-                "id": team.get("id", ""),
+                "espn_id": team.get("id", ""),
                 "name": team.get("displayName", team.get("name", "")),
-                "short_name": short_name,
                 "abbreviation": team.get("abbreviation", ""),
-                "key": _team_key_from_name(short_name),
                 "score": score,
-                "record": c.get("records", [{}])[0].get("summary", "") if c.get("records") else "",
-                "logo": team.get("logo", team.get("logos", [{}])[0].get("href", "")) if team.get("logos") else "",
+                "record": (c.get("records", [{}])[0].get("summary", "")
+                          if c.get("records") else ""),
+                "logo": "",
                 "winner": c.get("winner", False),
             }
+            logos = team.get("logos", [])
+            if logos:
+                entry["logo"] = logos[0].get("href", "")
 
             if c.get("homeAway") == "home":
                 home_team = entry
@@ -133,27 +189,55 @@ def _parse_scoreboard(data: dict, league_key: str) -> list[dict]:
         if not home_team or not away_team:
             continue
 
+        # Probable pitchers from ESPN
+        home_pp = None
+        away_pp = None
+        for c in competitors:
+            pp = c.get("probables", [])
+            if pp:
+                pitcher = pp[0].get("athlete", {})
+                pitcher_info = {
+                    "name": pitcher.get("displayName", "TBD"),
+                    "id": pitcher.get("id"),
+                    "headshot": pitcher.get("headshot", {}).get("href", ""),
+                    "stats": [],
+                }
+                # Extract pitcher stats from ESPN
+                for s in pp[0].get("statistics", []):
+                    pitcher_info["stats"].append({
+                        "name": s.get("abbreviation", s.get("name", "")),
+                        "value": s.get("displayValue", ""),
+                    })
+                if c.get("homeAway") == "home":
+                    home_pp = pitcher_info
+                else:
+                    away_pp = pitcher_info
+
         game = {
             "id": event.get("id", ""),
+            "game_pk": int(event.get("uid", "0").split("~")[-1]) if "~" in event.get("uid", "") else 0,
             "date": event.get("date", ""),
             "name": event.get("name", ""),
             "short_name": event.get("shortName", ""),
             "home": home_team,
             "away": away_team,
+            "home_pitcher": home_pp,
+            "away_pitcher": away_pp,
             "status": {
-                "state": status_type.get("state", "pre"),  # pre, in, post
-                "detail": status.get("type", {}).get("shortDetail",
-                          status.get("type", {}).get("detail", "")),
+                "state": status_type.get("state", "pre"),
+                "detail": status_type.get("shortDetail",
+                          status_type.get("detail", "")),
                 "description": status_type.get("description", ""),
                 "completed": status_type.get("completed", False),
-                "period": status.get("period", 0),
-                "clock": status.get("displayClock", ""),
+                "inning": status.get("period", 0),
+                "inning_half": status.get("type", {}).get("description", ""),
             },
             "venue": comp.get("venue", {}).get("fullName", ""),
             "broadcast": "",
+            "odds": None,
         }
 
-        # Extract broadcast info
+        # Broadcast
         broadcasts = comp.get("broadcasts", [])
         if broadcasts:
             names = []
@@ -162,13 +246,15 @@ def _parse_scoreboard(data: dict, league_key: str) -> list[dict]:
                     names.append(n)
             game["broadcast"] = ", ".join(names[:2])
 
-        # Extract odds if available
+        # Odds
         odds = comp.get("odds", [])
         if odds:
             o = odds[0]
             game["odds"] = {
                 "spread": o.get("details", ""),
-                "over_under": o.get("overUnder", None),
+                "over_under": o.get("overUnder"),
+                "home_ml": o.get("homeTeamOdds", {}).get("moneyLine"),
+                "away_ml": o.get("awayTeamOdds", {}).get("moneyLine"),
             }
 
         games.append(game)
@@ -176,96 +262,122 @@ def _parse_scoreboard(data: dict, league_key: str) -> list[dict]:
     return games
 
 
-@app.get("/health")
-def health():
-    return {"status": "ok"}
+def _enrich_games(games: list[dict], date: str) -> list[dict]:
+    """Enrich ESPN game data with our DB records/stats."""
+    for game in games:
+        # Try to match teams to our DB
+        home_abbr = game["home"].get("abbreviation", "")
+        away_abbr = game["away"].get("abbreviation", "")
 
+        home_db = get_team_by_abbr(home_abbr)
+        away_db = get_team_by_abbr(away_abbr)
 
-@app.get("/api/leagues")
-def get_leagues():
-    """Return all leagues grouped by sport."""
-    result = []
-    for key in list_leagues():
-        league = LEAGUES[key]
-        result.append({
-            "key": key,
-            "name": league["name"],
-            "sport": league["sport"],
-        })
-    return result
+        if home_db:
+            game["home"]["team_id"] = home_db["mlb_id"]
+            rec = get_team_record(home_db["mlb_id"], SEASON)
+            if rec:
+                game["home"]["db_record"] = f"{rec['wins']}-{rec['losses']}"
+                game["home"]["streak"] = rec.get("streak", "")
+                game["home"]["last_10"] = f"{rec.get('last_10_wins', 0)}-{rec.get('last_10_losses', 0)}"
 
+        if away_db:
+            game["away"]["team_id"] = away_db["mlb_id"]
+            rec = get_team_record(away_db["mlb_id"], SEASON)
+            if rec:
+                game["away"]["db_record"] = f"{rec['wins']}-{rec['losses']}"
+                game["away"]["streak"] = rec.get("streak", "")
+                game["away"]["last_10"] = f"{rec.get('last_10_wins', 0)}-{rec.get('last_10_losses', 0)}"
 
-@app.get("/api/leagues/{league_key}/teams")
-def get_teams(league_key: str):
-    """Return all teams for a league."""
-    key = league_key.upper()
-    if key not in LEAGUES:
-        raise HTTPException(status_code=404, detail=f"League '{key}' not found")
-    return list_teams(key)
-
-
-@app.get("/api/leagues/{league_key}/teams/search")
-def search(league_key: str, q: str = ""):
-    """Search teams by name/city/abbreviation."""
-    key = league_key.upper()
-    if key not in LEAGUES:
-        raise HTTPException(status_code=404, detail=f"League '{key}' not found")
-    if not q.strip():
-        return list_teams(key)
-    return search_teams(key, q)
-
-
-@app.get("/api/leagues/{league_key}/teams/{team_key}")
-def get_team(league_key: str, team_key: str):
-    """Return full team data."""
-    team = load_team(league_key.upper(), team_key.lower())
-    if not team:
-        raise HTTPException(status_code=404, detail=f"Team '{team_key}' not found")
-    return team
-
-
-@app.get("/api/leagues/{league_key}/scoreboard")
-def get_scoreboard(league_key: str, dates: str = Query(default="")):
-    """
-    Return today's games for a league from ESPN.
-    Optional dates param in YYYYMMDD format.
-    Cached for 2 minutes.
-    """
-    key = league_key.upper()
-    if key not in ESPN_SLUGS:
-        raise HTTPException(status_code=404, detail=f"League '{key}' not found")
-
-    cache_key = f"{key}:{dates}"
-    now = time.time()
-    if cache_key in _scoreboard_cache:
-        ts, cached = _scoreboard_cache[cache_key]
-        if now - ts < CACHE_TTL:
-            return cached
-
-    sport, league_slug = ESPN_SLUGS[key]
-    url = f"{ESPN_BASE}/{sport}/{league_slug}/scoreboard"
-    if dates:
-        url += f"?dates={dates}"
-
-    data = _fetch_espn_json(url)
-    if not data:
-        return []
-
-    games = _parse_scoreboard(data, key)
-    _scoreboard_cache[cache_key] = (now, games)
     return games
 
 
-class MatchupRequest(BaseModel):
-    league: str
-    home: str
-    away: str
+class PredictRequest(BaseModel):
+    home_team_id: int
+    away_team_id: int
+    home_pitcher_id: int | None = None
+    away_pitcher_id: int | None = None
+    venue: str | None = None
 
 
 @app.post("/api/predict")
-def predict(req: MatchupRequest):
-    """Run a matchup prediction."""
-    result = predict_matchup(req.league, req.home, req.away)
+def api_predict(req: PredictRequest):
+    """Run a game prediction."""
+    result = predict_game(
+        home_team_id=req.home_team_id,
+        away_team_id=req.away_team_id,
+        season=SEASON,
+        home_pitcher_id=req.home_pitcher_id,
+        away_pitcher_id=req.away_pitcher_id,
+        venue=req.venue,
+    )
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
     return result
+
+
+@app.get("/api/standings")
+def api_standings():
+    """Return MLB standings grouped by division."""
+    conn = get_conn()
+    rows = conn.execute("""
+        SELECT t.mlb_id, t.name, t.abbreviation, t.league, t.division,
+               ts.wins, ts.losses, ts.run_diff, ts.streak,
+               ts.last_10_wins, ts.last_10_losses,
+               ts.home_wins, ts.home_losses, ts.away_wins, ts.away_losses,
+               ts.era, ts.ops, ts.wrc_plus
+        FROM teams t
+        LEFT JOIN team_stats ts ON t.mlb_id = ts.team_id AND ts.season = ?
+        ORDER BY t.league, t.division, ts.wins DESC
+    """, (SEASON,)).fetchall()
+
+    divisions = {}
+    for r in rows:
+        div_key = f"{r['league']} {r['division']}"
+        if div_key not in divisions:
+            divisions[div_key] = {
+                "league": r["league"],
+                "division": r["division"],
+                "teams": [],
+            }
+        w = r["wins"] or 0
+        l = r["losses"] or 0
+        divisions[div_key]["teams"].append({
+            "id": r["mlb_id"],
+            "name": r["name"],
+            "abbreviation": r["abbreviation"],
+            "wins": w,
+            "losses": l,
+            "pct": f".{int(w / (w + l) * 1000):03d}" if (w + l) > 0 else ".000",
+            "run_diff": r["run_diff"] or 0,
+            "streak": r["streak"] or "",
+            "last_10": f"{r['last_10_wins'] or 0}-{r['last_10_losses'] or 0}",
+            "home": f"{r['home_wins'] or 0}-{r['home_losses'] or 0}",
+            "away": f"{r['away_wins'] or 0}-{r['away_losses'] or 0}",
+            "era": r["era"],
+            "ops": r["ops"],
+            "wrc_plus": r["wrc_plus"],
+        })
+
+    return list(divisions.values())
+
+
+@app.get("/api/pitcher/{pitcher_id}")
+def api_pitcher(pitcher_id: int):
+    """Return pitcher stats and recent starts."""
+    from engine.db import get_pitcher_recent_starts
+    conn = get_conn()
+
+    player = conn.execute(
+        "SELECT * FROM players WHERE mlb_id = ?", (pitcher_id,)
+    ).fetchone()
+    if not player:
+        raise HTTPException(status_code=404, detail="Pitcher not found")
+
+    stats = get_pitcher_season(pitcher_id, SEASON)
+    recent = get_pitcher_recent_starts(pitcher_id, 5)
+
+    return {
+        "player": dict(player),
+        "stats": dict(stats) if stats else None,
+        "recent_starts": recent,
+    }

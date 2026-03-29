@@ -20,6 +20,7 @@ export default function GameDetail({ game, prediction, loading, onBack }) {
           <div className="detail-team">
             <div className="detail-team-name">{away.name}</div>
             <div className="detail-team-record">{away.record}</div>
+            {away.streak && <div className="detail-streak">{away.streak}</div>}
             {(isLive || isFinal) && (
               <div className={`detail-score ${away.winner ? 'winner' : ''}`}>{away.score}</div>
             )}
@@ -30,11 +31,45 @@ export default function GameDetail({ game, prediction, loading, onBack }) {
           <div className="detail-team">
             <div className="detail-team-name">{home.name}</div>
             <div className="detail-team-record">{home.record}</div>
+            {home.streak && <div className="detail-streak">{home.streak}</div>}
             {(isLive || isFinal) && (
               <div className={`detail-score ${home.winner ? 'winner' : ''}`}>{home.score}</div>
             )}
           </div>
         </div>
+
+        {/* Pitching matchup */}
+        {(game.home_pitcher || game.away_pitcher) && (
+          <div className="pitching-matchup">
+            <div className="pitcher-card">
+              <div className="pitcher-label">Away SP</div>
+              <div className="pitcher-name">{game.away_pitcher?.name || 'TBD'}</div>
+              {game.away_pitcher?.stats?.length > 0 && (
+                <div className="pitcher-stats-row">
+                  {game.away_pitcher.stats.map((s, i) => (
+                    <span key={i} className="pitcher-stat">
+                      {s.name}: {s.value}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="vs-label">VS</div>
+            <div className="pitcher-card">
+              <div className="pitcher-label">Home SP</div>
+              <div className="pitcher-name">{game.home_pitcher?.name || 'TBD'}</div>
+              {game.home_pitcher?.stats?.length > 0 && (
+                <div className="pitcher-stats-row">
+                  {game.home_pitcher.stats.map((s, i) => (
+                    <span key={i} className="pitcher-stat">
+                      {s.name}: {s.value}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         <div className="detail-info">
           {game.venue && <span>{game.venue}</span>}
@@ -45,13 +80,23 @@ export default function GameDetail({ game, prediction, loading, onBack }) {
               hour: 'numeric', minute: '2-digit'
             })}</span>
           )}
-          {isLive && <span className="live-clock">{status.detail || status.clock}</span>}
+          {isLive && <span className="live-clock">{status.detail}</span>}
         </div>
 
         {game.odds && (
           <div className="detail-odds">
             {game.odds.spread && <span className="odds-chip">{game.odds.spread}</span>}
             {game.odds.over_under && <span className="odds-chip">O/U {game.odds.over_under}</span>}
+            {game.odds.home_ml && (
+              <span className="odds-chip">
+                {home.abbreviation} {game.odds.home_ml > 0 ? '+' : ''}{game.odds.home_ml}
+              </span>
+            )}
+            {game.odds.away_ml && (
+              <span className="odds-chip">
+                {away.abbreviation} {game.odds.away_ml > 0 ? '+' : ''}{game.odds.away_ml}
+              </span>
+            )}
           </div>
         )}
       </div>
@@ -67,11 +112,12 @@ export default function GameDetail({ game, prediction, loading, onBack }) {
           </div>
         )}
 
-        {prediction && <PredictionResults data={prediction} />}
+        {prediction && <PredictionResults data={prediction} odds={game.odds} />}
 
         {!loading && !prediction && (
           <div className="no-prediction">
-            <p>Prediction unavailable for this matchup. One or both teams may not have enough data.</p>
+            <p>Prediction unavailable. Run the data sync first:</p>
+            <code>python -m scrapers.mlb_stats --today</code>
           </div>
         )}
       </div>

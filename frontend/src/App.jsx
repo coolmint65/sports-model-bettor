@@ -1,123 +1,100 @@
 import { useState, useEffect, useCallback } from 'react'
 import axios from 'axios'
-import LeagueTabs from './components/LeagueTabs'
-import GamesList from './components/GamesList'
+import Scoreboard from './components/Scoreboard'
 import GameDetail from './components/GameDetail'
-import TeamPicker from './components/TeamPicker'
-import PredictionResults from './components/PredictionResults'
+import Standings from './components/Standings'
 
 const api = axios.create({ baseURL: '/api' })
 
 export default function App() {
-  const [leagues, setLeagues] = useState([])
-  const [selectedLeague, setSelectedLeague] = useState(null)
+  const [view, setView] = useState('games')  // 'games' | 'standings'
   const [games, setGames] = useState([])
-  const [gamesLoading, setGamesLoading] = useState(false)
+  const [gamesLoading, setGamesLoading] = useState(true)
   const [selectedGame, setSelectedGame] = useState(null)
-
-  // Custom matchup state
-  const [showCustom, setShowCustom] = useState(false)
-  const [teams, setTeams] = useState([])
-  const [homeTeam, setHomeTeam] = useState(null)
-  const [awayTeam, setAwayTeam] = useState(null)
-
-  // Prediction state
   const [prediction, setPrediction] = useState(null)
   const [predLoading, setPredLoading] = useState(false)
+  const [standings, setStandings] = useState([])
 
+  // Load today's games on mount
   useEffect(() => {
-    api.get('/leagues').then(r => setLeagues(r.data))
-  }, [])
-
-  const selectLeague = useCallback((key) => {
-    setSelectedLeague(key)
-    setSelectedGame(null)
-    setPrediction(null)
-    setShowCustom(false)
-    setHomeTeam(null)
-    setAwayTeam(null)
-    setTeams([])
-
-    // Fetch scoreboard
     setGamesLoading(true)
-    setGames([])
-    api.get(`/leagues/${key}/scoreboard`)
+    api.get('/scoreboard')
       .then(r => setGames(r.data))
       .catch(() => setGames([]))
       .finally(() => setGamesLoading(false))
   }, [])
 
-  const openCustom = useCallback(() => {
-    setShowCustom(true)
-    setSelectedGame(null)
-    setPrediction(null)
-    if (teams.length === 0 && selectedLeague) {
-      api.get(`/leagues/${selectedLeague}/teams`).then(r => setTeams(r.data))
-    }
-  }, [selectedLeague, teams.length])
-
   const selectGame = useCallback((game) => {
     setSelectedGame(game)
-    setShowCustom(false)
     setPrediction(null)
     setPredLoading(true)
+
+    const homeId = game.home.team_id
+    const awayId = game.away.team_id
+    if (!homeId || !awayId) {
+      setPredLoading(false)
+      return
+    }
+
+    // Get pitcher IDs from ESPN data if available
+    const homePitcherId = game.home_pitcher?.id ? parseInt(game.home_pitcher.id) : null
+    const awayPitcherId = game.away_pitcher?.id ? parseInt(game.away_pitcher.id) : null
+
     api.post('/predict', {
-      league: selectedLeague,
-      home: game.home.key,
-      away: game.away.key,
+      home_team_id: homeId,
+      away_team_id: awayId,
+      home_pitcher_id: homePitcherId,
+      away_pitcher_id: awayPitcherId,
+      venue: game.venue || null,
     })
       .then(r => setPrediction(r.data))
       .catch(() => setPrediction(null))
       .finally(() => setPredLoading(false))
-  }, [selectedLeague])
+  }, [])
 
-  const runCustomPrediction = useCallback(async () => {
-    if (!homeTeam || !awayTeam) return
-    setPredLoading(true)
-    setPrediction(null)
+  const showStandings = useCallback(() => {
+    setView('standings')
     setSelectedGame(null)
-    try {
-      const res = await api.post('/predict', {
-        league: selectedLeague,
-        home: homeTeam.key,
-        away: awayTeam.key,
-      })
-      setPrediction(res.data)
-    } catch (err) {
-      console.error(err)
-    } finally {
-      setPredLoading(false)
+    if (standings.length === 0) {
+      api.get('/standings')
+        .then(r => setStandings(r.data))
+        .catch(() => {})
     }
-  }, [selectedLeague, homeTeam, awayTeam])
+  }, [standings.length])
 
   const goBack = useCallback(() => {
     setSelectedGame(null)
     setPrediction(null)
-    setShowCustom(false)
+    setView('games')
   }, [])
-
-  const leagueInfo = leagues.find(l => l.key === selectedLeague)
-  const canPredict = homeTeam && awayTeam && homeTeam.key !== awayTeam.key
 
   return (
     <div className="app">
       <div className="header">
-        <h1>Sports Matchup Engine</h1>
+        <h1>MLB Prediction Engine</h1>
+        <p className="subtitle">Data-driven MLB game predictions</p>
       </div>
 
-      <LeagueTabs
-        leagues={leagues}
-        selected={selectedLeague}
-        onSelect={selectLeague}
-      />
+      <nav className="nav-tabs">
+        <button
+          className={`nav-tab ${view === 'games' && !selectedGame ? 'active' : ''}`}
+          onClick={goBack}
+        >
+          Today's Games
+        </button>
+        <button
+          className={`nav-tab ${view === 'standings' ? 'active' : ''}`}
+          onClick={showStandings}
+        >
+          Standings
+        </button>
+      </nav>
 
-      {selectedLeague && !selectedGame && !showCustom && (
-        <GamesList
+      {view === 'games' && !selectedGame && (
+        <Scoreboard
           games={games}
           loading={gamesLoading}
-          leagueInfo={leagueInfo}
           onSelectGame={selectGame}
-          onCustomMatchup={openCustom}
         />
       )}
 
@@ -130,53 +107,8 @@ export default function App() {
         />
       )}
 
-      {showCustom && (
-        <div className="custom-matchup">
-          <button className="back-btn" onClick={goBack}>
-            <span className="back-arrow">&larr;</span> Back to games
-          </button>
-          <h2 className="section-title">Custom Matchup</h2>
-          <div className="matchup-setup">
-            <TeamPicker
-              label="Home"
-              teams={teams}
-              selected={homeTeam}
-              onSelect={setHomeTeam}
-              excludeKey={awayTeam?.key}
-            />
-            <div className="vs-divider">VS</div>
-            <TeamPicker
-              label="Away"
-              teams={teams}
-              selected={awayTeam}
-              onSelect={setAwayTeam}
-              excludeKey={homeTeam?.key}
-            />
-          </div>
-
-          <button
-            className="predict-btn"
-            disabled={!canPredict || predLoading}
-            onClick={runCustomPrediction}
-          >
-            {predLoading ? 'Running Model...' : 'Run Prediction'}
-          </button>
-
-          {predLoading && !prediction && (
-            <div className="loading">
-              <div className="spinner" />
-              <p>Crunching numbers...</p>
-            </div>
-          )}
-
-          {prediction && <PredictionResults data={prediction} />}
-        </div>
-      )}
-
-      {!selectedLeague && (
-        <div className="welcome">
-          <p>Select a league above to see today's games and matchup predictions.</p>
-        </div>
+      {view === 'standings' && (
+        <Standings divisions={standings} />
       )}
     </div>
   )

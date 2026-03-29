@@ -1,6 +1,6 @@
 @echo off
 echo ============================================
-echo   Sports Matchup Engine
+echo   MLB Prediction Engine
 echo ============================================
 echo.
 
