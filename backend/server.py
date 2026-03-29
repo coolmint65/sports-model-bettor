@@ -406,6 +406,14 @@ def api_predict(req: PredictRequest):
     return result
 
 
+@app.get("/api/debug/teams")
+def api_debug_teams():
+    """Debug: dump raw team data to see league/division values."""
+    conn = get_conn()
+    rows = conn.execute("SELECT mlb_id, abbreviation, name, league, division FROM teams").fetchall()
+    return [dict(r) for r in rows]
+
+
 @app.get("/api/standings")
 def api_standings():
     """Return MLB standings grouped by division."""
