@@ -358,6 +358,8 @@ def api_standings():
                ts.era, ts.ops, ts.wrc_plus
         FROM teams t
         LEFT JOIN team_stats ts ON t.mlb_id = ts.team_id AND ts.season = ?
+        WHERE t.league IS NOT NULL AND t.league != ''
+          AND t.division IS NOT NULL AND t.division != ''
         ORDER BY t.league, t.division, ts.wins DESC
     """, (SEASON,)).fetchall()
 

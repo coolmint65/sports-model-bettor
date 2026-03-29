@@ -5,6 +5,9 @@ export default function GameDetail({ game, prediction, loading, onBack }) {
   const isLive = status.state === 'in'
   const isFinal = status.state === 'post'
 
+  // Merge ESPN pitcher data into prediction if prediction pitchers are TBD
+  const mergedPrediction = prediction ? mergePitcherData(prediction, game) : null
+
   return (
     <div className="game-detail">
       <button className="back-btn" onClick={onBack}>
@@ -18,9 +21,9 @@ export default function GameDetail({ game, prediction, loading, onBack }) {
 
         <div className="detail-matchup">
           <div className="detail-team">
+            {away.logo && <img src={away.logo} alt="" className="detail-logo" />}
             <div className="detail-team-name">{away.name}</div>
             <div className="detail-team-record">{away.record}</div>
-            {away.streak && <div className="detail-streak">{away.streak}</div>}
             {(isLive || isFinal) && (
               <div className={`detail-score ${away.winner ? 'winner' : ''}`}>{away.score}</div>
             )}
@@ -29,9 +32,9 @@ export default function GameDetail({ game, prediction, loading, onBack }) {
           <div className="detail-at">@</div>
 
           <div className="detail-team">
+            {home.logo && <img src={home.logo} alt="" className="detail-logo" />}
             <div className="detail-team-name">{home.name}</div>
             <div className="detail-team-record">{home.record}</div>
-            {home.streak && <div className="detail-streak">{home.streak}</div>}
             {(isLive || isFinal) && (
               <div className={`detail-score ${home.winner ? 'winner' : ''}`}>{home.score}</div>
             )}
@@ -85,18 +88,17 @@ export default function GameDetail({ game, prediction, loading, onBack }) {
 
         {game.odds && (
           <div className="detail-odds">
-            {game.odds.spread && <span className="odds-chip">{game.odds.spread}</span>}
-            {game.odds.over_under && <span className="odds-chip">O/U {game.odds.over_under}</span>}
             {game.odds.home_ml && (
-              <span className="odds-chip">
+              <span className="odds-chip ml">
                 {home.abbreviation} {game.odds.home_ml > 0 ? '+' : ''}{game.odds.home_ml}
               </span>
             )}
             {game.odds.away_ml && (
-              <span className="odds-chip">
+              <span className="odds-chip ml">
                 {away.abbreviation} {game.odds.away_ml > 0 ? '+' : ''}{game.odds.away_ml}
               </span>
             )}
+            {game.odds.over_under && <span className="odds-chip">O/U {game.odds.over_under}</span>}
           </div>
         )}
       </div>
@@ -112,15 +114,35 @@ export default function GameDetail({ game, prediction, loading, onBack }) {
           </div>
         )}
 
-        {prediction && <PredictionResults data={prediction} odds={game.odds} />}
+        {mergedPrediction && <PredictionResults data={mergedPrediction} odds={game.odds} />}
 
         {!loading && !prediction && (
           <div className="no-prediction">
             <p>Prediction unavailable. Run the data sync first:</p>
-            <code>python -m scrapers.mlb_stats --today</code>
+            <code>sync.bat</code>
           </div>
         )}
       </div>
     </div>
   )
+}
+
+function mergePitcherData(prediction, game) {
+  // If prediction has TBD pitchers but ESPN has names, use ESPN data
+  const p = { ...prediction }
+
+  if (p.home?.pitcher?.name === 'TBD' && game.home_pitcher?.name) {
+    p.home = {
+      ...p.home,
+      pitcher: { ...p.home.pitcher, name: game.home_pitcher.name },
+    }
+  }
+  if (p.away?.pitcher?.name === 'TBD' && game.away_pitcher?.name) {
+    p.away = {
+      ...p.away,
+      pitcher: { ...p.away.pitcher, name: game.away_pitcher.name },
+    }
+  }
+
+  return p
 }

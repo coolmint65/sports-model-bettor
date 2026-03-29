@@ -1,24 +1,34 @@
 export default function Standings({ divisions }) {
   if (!divisions || divisions.length === 0) {
     return (
-      <div className="loading">
-        <div className="spinner" />
-        <p>Loading standings...</p>
+      <div className="no-games">
+        <p>No standings data available.</p>
+        <p className="sub">Run <code style={{background:'#1e293b',padding:'2px 8px',borderRadius:4}}>sync.bat</code> to pull standings from MLB.</p>
       </div>
     )
   }
 
-  // Group by league (AL/NL)
-  const al = divisions.filter(d => d.league === 'AL')
-  const nl = divisions.filter(d => d.league === 'NL')
+  // Filter out empty divisions (no teams)
+  const filled = divisions.filter(d => d.teams && d.teams.length > 0)
+  if (filled.length === 0) {
+    return (
+      <div className="no-games">
+        <p>Standings data is empty — season may not have started yet.</p>
+        <p className="sub">Run <code style={{background:'#1e293b',padding:'2px 8px',borderRadius:4}}>sync.bat</code> to pull the latest data.</p>
+      </div>
+    )
+  }
+
+  const al = filled.filter(d => d.league === 'AL')
+  const nl = filled.filter(d => d.league === 'NL')
 
   return (
     <div className="standings-page">
       <h2 className="section-title">MLB Standings</h2>
 
       <div className="standings-leagues">
-        <LeagueStandings name="American League" divisions={al} />
-        <LeagueStandings name="National League" divisions={nl} />
+        {al.length > 0 && <LeagueStandings name="American League" divisions={al} />}
+        {nl.length > 0 && <LeagueStandings name="National League" divisions={nl} />}
       </div>
     </div>
   )
@@ -41,8 +51,6 @@ function LeagueStandings({ name, divisions }) {
                 <th>DIFF</th>
                 <th>STRK</th>
                 <th>L10</th>
-                <th>Home</th>
-                <th>Away</th>
               </tr>
             </thead>
             <tbody>
@@ -62,8 +70,6 @@ function LeagueStandings({ name, divisions }) {
                     {team.streak}
                   </td>
                   <td>{team.last_10}</td>
-                  <td>{team.home}</td>
-                  <td>{team.away}</td>
                 </tr>
               ))}
             </tbody>

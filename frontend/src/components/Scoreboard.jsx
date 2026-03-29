@@ -41,23 +41,9 @@ function GameCard({ game, onClick }) {
       {isFinal && <div className="final-badge">FINAL</div>}
 
       <div className="game-teams">
-        <div className="game-team">
-          <span className="team-abbr">{away.abbreviation}</span>
-          <span className="team-name">{away.name}</span>
-          <span className="team-record">{away.record}</span>
-          {(isLive || isFinal) && (
-            <span className={`game-score ${away.winner ? 'winner' : ''}`}>{away.score}</span>
-          )}
-        </div>
+        <TeamRow team={away} isLive={isLive} isFinal={isFinal} />
         <div className="game-at">@</div>
-        <div className="game-team">
-          <span className="team-abbr">{home.abbreviation}</span>
-          <span className="team-name">{home.name}</span>
-          <span className="team-record">{home.record}</span>
-          {(isLive || isFinal) && (
-            <span className={`game-score ${home.winner ? 'winner' : ''}`}>{home.score}</span>
-          )}
-        </div>
+        <TeamRow team={home} isLive={isLive} isFinal={isFinal} />
       </div>
 
       {/* Probable pitchers */}
@@ -76,13 +62,12 @@ function GameCard({ game, onClick }) {
       {/* Odds */}
       {game.odds && (
         <div className="game-odds">
-          {game.odds.spread && <span className="odds-chip">{game.odds.spread}</span>}
-          {game.odds.over_under && <span className="odds-chip">O/U {game.odds.over_under}</span>}
           {game.odds.home_ml && (
             <span className="odds-chip ml">
               {home.abbreviation} {game.odds.home_ml > 0 ? '+' : ''}{game.odds.home_ml}
             </span>
           )}
+          {game.odds.over_under && <span className="odds-chip">O/U {game.odds.over_under}</span>}
         </div>
       )}
 
@@ -96,6 +81,22 @@ function GameCard({ game, onClick }) {
         {isLive && <span className="game-inning">{status.detail}</span>}
         {game.broadcast && <span className="game-broadcast">{game.broadcast}</span>}
       </div>
+    </div>
+  )
+}
+
+function TeamRow({ team, isLive, isFinal }) {
+  return (
+    <div className="game-team">
+      {team.logo && (
+        <img src={team.logo} alt="" className="team-logo" />
+      )}
+      <span className="team-abbr">{team.abbreviation}</span>
+      <span className="team-name">{team.name}</span>
+      <span className="team-record">{team.record}</span>
+      {(isLive || isFinal) && (
+        <span className={`game-score ${team.winner ? 'winner' : ''}`}>{team.score}</span>
+      )}
     </div>
   )
 }

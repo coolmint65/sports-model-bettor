@@ -168,6 +168,13 @@ body {
   gap: 8px;
 }
 
+.team-logo {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
 .team-abbr {
   font-size: 0.85rem;
   font-weight: 700;
@@ -307,6 +314,13 @@ body {
 .detail-team {
   flex: 1;
   max-width: 300px;
+}
+
+.detail-logo {
+  width: 56px;
+  height: 56px;
+  object-fit: contain;
+  margin-bottom: 8px;
 }
 
 .detail-team-name {
