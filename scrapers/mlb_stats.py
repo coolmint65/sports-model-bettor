@@ -51,17 +51,40 @@ def fetch_teams() -> list[dict]:
 
     from engine.db import upsert_team
 
+    # MLB team IDs are stable — hardcode league lookup as fallback
+    AL_TEAMS = {108, 109, 110, 111, 114, 116, 117, 118, 133, 136, 139, 140, 141, 142, 145}
+    NL_TEAMS = {112, 113, 115, 119, 120, 121, 134, 135, 137, 138, 143, 144, 146, 147, 158}
+
     teams = []
     for t in data.get("teams", []):
+        tid = t["id"]
+        # Try API league field first, fall back to hardcoded
+        league_data = t.get("league", {})
+        league_abbr = ""
+        if isinstance(league_data, dict):
+            league_abbr = league_data.get("abbreviation", "") or league_data.get("name", "")
+            if "American" in league_abbr:
+                league_abbr = "AL"
+            elif "National" in league_abbr:
+                league_abbr = "NL"
+        if not league_abbr:
+            league_abbr = "AL" if tid in AL_TEAMS else "NL" if tid in NL_TEAMS else ""
+
+        # Division
+        div_data = t.get("division", {})
+        division = ""
+        if isinstance(div_data, dict):
+            division = div_data.get("name", "")
+            division = division.replace("American League ", "").replace("National League ", "")
+
         team = {
-            "mlb_id": t["id"],
+            "mlb_id": tid,
             "name": t.get("name", ""),
             "abbreviation": t.get("abbreviation", ""),
             "city": t.get("locationName", ""),
             "venue": t.get("venue", {}).get("name", ""),
-            "league": t.get("league", {}).get("abbreviation", ""),
-            "division": t.get("division", {}).get("name", "").replace(
-                "American League ", "").replace("National League ", ""),
+            "league": league_abbr,
+            "division": division,
         }
         upsert_team(**team)
         teams.append(team)
