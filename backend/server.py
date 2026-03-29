@@ -23,7 +23,7 @@ from engine.db import (
     get_today_games, get_team_record, get_pitcher_season,
     get_bullpen, get_recent_games,
 )
-from engine.mlb_predict import predict_game
+from engine.mlb_predict import predict_matchup
 
 logger = logging.getLogger(__name__)
 
@@ -302,10 +302,9 @@ class PredictRequest(BaseModel):
 @app.post("/api/predict")
 def api_predict(req: PredictRequest):
     """Run a game prediction."""
-    result = predict_game(
+    result = predict_matchup(
         home_team_id=req.home_team_id,
         away_team_id=req.away_team_id,
-        season=SEASON,
         home_pitcher_id=req.home_pitcher_id,
         away_pitcher_id=req.away_pitcher_id,
         venue=req.venue,
