@@ -215,7 +215,7 @@ def _parse_espn_scoreboard(data: dict) -> list[dict]:
                 pitcher_info = {
                     "name": pitcher.get("displayName", "TBD"),
                     "id": pitcher.get("id"),
-                    "headshot": pitcher.get("headshot", {}).get("href", ""),
+                    "headshot": pitcher.get("headshot", "") if isinstance(pitcher.get("headshot"), str) else pitcher.get("headshot", {}).get("href", ""),
                     "stats": [],
                 }
                 # Extract pitcher stats from ESPN
