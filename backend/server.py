@@ -134,6 +134,14 @@ def api_scoreboard(date: str = Query(default="")):
     if espn_data:
         events = espn_data.get("events", [])
         logger.info("ESPN returned %d events for date %s", len(events), espn_date)
+        # Debug: log first team's keys to see logo format
+        if events:
+            try:
+                first_comp = events[0].get("competitions", [{}])[0]
+                first_team = first_comp.get("competitors", [{}])[0].get("team", {})
+                logger.info("ESPN team keys: %s", list(first_team.keys()))
+            except Exception:
+                pass
         games = _parse_espn_scoreboard(espn_data)
     else:
         logger.warning("ESPN returned no data for %s", url)
@@ -209,9 +217,20 @@ def _parse_espn_scoreboard(data: dict) -> list[dict]:
                 "logo": "",
                 "winner": c.get("winner", False),
             }
-            logos = team.get("logos", [])
-            if logos:
-                entry["logo"] = logos[0].get("href", "")
+            # ESPN sends logos in different formats
+            logo = team.get("logo", "")
+            if isinstance(logo, str) and logo:
+                entry["logo"] = logo
+            elif isinstance(logo, dict):
+                entry["logo"] = logo.get("href", "")
+            else:
+                logos = team.get("logos", [])
+                if logos and isinstance(logos, list):
+                    first = logos[0]
+                    if isinstance(first, str):
+                        entry["logo"] = first
+                    elif isinstance(first, dict):
+                        entry["logo"] = first.get("href", "")
 
             if c.get("homeAway") == "home":
                 home_team = entry

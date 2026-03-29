@@ -203,10 +203,15 @@ def fetch_season_results(season: int | None = None) -> list[dict]:
 
 def fetch_standings() -> dict:
     """Fetch current standings for all divisions."""
-    data = _fetch(f"{MLB_API}/standings?leagueId=103,104&season={SEASON}"
-                  f"&standingsTypes=regularSeason&hydrate=team")
+    url = f"{MLB_API}/standings?leagueId=103,104&season={SEASON}&standingsTypes=regularSeason&hydrate=team"
+    _progress(f"       Standings URL: {url}")
+    data = _fetch(url)
     if not data:
+        _progress("       WARNING: MLB API returned no standings data")
         return {}
+
+    records = data.get("records", [])
+    _progress(f"       Got {len(records)} division records")
 
     from engine.db import get_conn
 
@@ -266,7 +271,7 @@ def fetch_standings() -> dict:
             }
 
     conn.commit()
-    logger.info("Updated standings for %d teams", len(standings))
+    _progress(f"       Updated standings for {len(standings)} teams")
     return standings
 
 
