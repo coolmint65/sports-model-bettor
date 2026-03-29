@@ -114,7 +114,7 @@ def fetch_all_rosters():
     from engine.db import get_all_teams
     teams = get_all_teams()
     for i, t in enumerate(teams):
-        logger.info("[%d/%d] Fetching roster: %s", i + 1, len(teams), t["name"])
+        _progress(f"  [{i+1}/{len(teams)}] {t['name']}")
         fetch_roster(t["mlb_id"])
         time.sleep(0.5)
 
@@ -411,11 +411,12 @@ def sync_all_player_stats(season: int | None = None):
         name = p["name"]
 
         if pos == "P" or pos == "TWP":
-            logger.info("[%d/%d] Pitcher stats: %s", i + 1, total, name)
             sync_pitcher_stats(pid, p["team_id"], season)
         else:
-            logger.info("[%d/%d] Batter stats: %s", i + 1, total, name)
             sync_batter_stats(pid, p["team_id"], season)
+
+        if (i + 1) % 25 == 0 or (i + 1) == total:
+            _progress(f"  [{i+1}/{total}] players synced...")
 
         # Be polite
         if (i + 1) % 10 == 0:
@@ -447,48 +448,79 @@ def _safe_int(val, default=0) -> int:
         return default
 
 
+# ── Progress helper ──────────────────────────────────────────
+
+def _progress(msg: str) -> None:
+    """Print + log so Windows console always shows output."""
+    print(msg, flush=True)
+    logger.info(msg)
+
+
 # ── Full Sync ───────────────────────────────────────────────
 
 def full_sync():
     """Run a complete data sync: teams, rosters, season games, standings, stats."""
-    logger.info("=== MLB Full Data Sync ===")
+    _progress("=== MLB Full Data Sync ===")
     start = time.time()
 
-    logger.info("--- Step 1/5: Teams ---")
-    fetch_teams()
+    _progress("[1/5] Fetching teams...")
+    teams = fetch_teams()
+    _progress(f"       Loaded {len(teams)} teams")
 
-    logger.info("--- Step 2/5: Rosters ---")
+    _progress("[2/5] Fetching rosters (this takes a few minutes)...")
     fetch_all_rosters()
 
-    logger.info("--- Step 3/5: Season Games ---")
-    fetch_season_results()
+    _progress("[3/5] Fetching season games...")
+    games = fetch_season_results()
+    _progress(f"       Loaded {len(games)} games")
 
-    logger.info("--- Step 4/5: Standings ---")
+    _progress("[4/5] Fetching standings...")
     fetch_standings()
 
-    logger.info("--- Step 5/5: Player Stats ---")
+    _progress("[5/5] Fetching player stats (this takes a while)...")
     sync_all_player_stats()
 
     elapsed = time.time() - start
-    logger.info("=== Sync complete in %.0f seconds ===", elapsed)
+    _progress(f"=== Sync complete in {elapsed:.0f} seconds ===")
+
+
+def quick_sync():
+    """Fast sync: teams, today's games, standings. No rosters or per-player stats."""
+    _progress("=== MLB Quick Sync ===")
+    start = time.time()
+
+    _progress("[1/3] Fetching teams...")
+    teams = fetch_teams()
+    _progress(f"       Loaded {len(teams)} teams")
+
+    _progress("[2/3] Fetching today's games + schedule...")
+    games = fetch_today()
+    _progress(f"       Found {len(games)} games today")
+
+    _progress("[3/3] Fetching standings...")
+    fetch_standings()
+
+    elapsed = time.time() - start
+    _progress(f"=== Quick sync done in {elapsed:.0f} seconds ===")
 
 
 def daily_sync():
     """Quick daily update: today's games, standings, probable pitchers."""
-    logger.info("=== MLB Daily Sync ===")
+    _progress("=== MLB Daily Sync ===")
 
-    logger.info("--- Today's games ---")
-    fetch_today()
+    _progress("[1/3] Today's games...")
+    games = fetch_today()
+    _progress(f"       Found {len(games)} games")
 
-    logger.info("--- Standings ---")
+    _progress("[2/3] Standings...")
     fetch_standings()
 
     # Also fetch tomorrow for probable pitchers
     tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-    logger.info("--- Tomorrow's schedule ---")
+    _progress("[3/3] Tomorrow's schedule...")
     fetch_schedule(tomorrow, tomorrow)
 
-    logger.info("=== Daily sync complete ===")
+    _progress("=== Daily sync complete ===")
 
 
 # ── CLI entry point ─────────────────────────────────────────
@@ -507,7 +539,9 @@ if __name__ == "__main__":
 
     args = set(sys.argv[1:])
 
-    if "--today" in args or "--daily" in args:
+    if "--full" in args:
+        full_sync()
+    elif "--today" in args or "--daily" in args:
         daily_sync()
     elif "--season" in args:
         fetch_teams()
@@ -522,4 +556,4 @@ if __name__ == "__main__":
     elif "--stats" in args:
         sync_all_player_stats()
     else:
-        full_sync()
+        quick_sync()

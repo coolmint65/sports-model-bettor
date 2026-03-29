@@ -26,17 +26,16 @@ REM Create logs directory
 if not exist "data\logs" mkdir "data\logs"
 
 if "%1"=="" (
-    echo Running full data sync...
-    echo This will take a few minutes on first run.
+    echo Running quick sync (teams, today's games, standings)...
     echo.
     python -m scrapers.mlb_stats
-    if errorlevel 1 (
-        echo.
-        echo WARNING: MLB Stats sync had errors. Check above for details.
-        echo.
-    )
+) else if "%1"=="--full" (
+    echo Running FULL data sync (teams, rosters, all games, player stats)...
+    echo This will take 10-15 minutes.
     echo.
-    echo Running advanced stats sync...
+    python -m scrapers.mlb_stats --full
+    echo.
+    echo Running advanced stats (Statcast + FanGraphs)...
     python -m scrapers.mlb_advanced
 ) else if "%1"=="--daily" (
     echo Running daily sync...
@@ -48,12 +47,13 @@ if "%1"=="" (
     echo Updating standings...
     python -m scrapers.mlb_stats --standings
 ) else (
-    echo Usage: sync.bat [--daily ^| --advanced ^| --standings]
+    echo Usage: sync.bat [--full ^| --daily ^| --advanced ^| --standings]
     echo.
-    echo   (no args)   Full sync: teams, rosters, games, standings, stats
-    echo   --daily     Quick: today's games + standings
-    echo   --advanced  Statcast + FanGraphs advanced metrics
-    echo   --standings Standings only
+    echo   (no args)     Quick sync: teams, today's games, standings (~30 sec)
+    echo   --full        Everything: rosters, all games, player stats (~15 min)
+    echo   --daily       Today's games + standings
+    echo   --advanced    Statcast + FanGraphs advanced metrics
+    echo   --standings   Standings only
 )
 
 echo.
