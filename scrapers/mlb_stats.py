@@ -250,7 +250,13 @@ def fetch_standings() -> dict:
             wins = entry.get("wins", 0)
             losses = entry.get("losses", 0)
             streak_data = entry.get("streak", {})
-            streak = f"{streak_data.get('streakType', 'W')}{streak_data.get('streakNumber', 0)}"
+            streak_type = streak_data.get("streakType", "W")
+            # MLB API returns "wins"/"losses" — normalize to W/L
+            if streak_type.startswith("win"):
+                streak_type = "W"
+            elif streak_type.startswith("loss"):
+                streak_type = "L"
+            streak = f"{streak_type}{streak_data.get('streakNumber', 0)}"
             run_diff = entry.get("runDifferential", 0)
 
             # Home/away records
