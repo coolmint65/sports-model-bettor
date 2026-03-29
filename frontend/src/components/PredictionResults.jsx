@@ -165,6 +165,34 @@ export default function PredictionResults({ data, odds }) {
         )}
       </div>
 
+      {/* ── First Inning / NRFI ── */}
+      {d.first_inning && (
+        <div className="result-card">
+          <h2>First Inning</h2>
+          <div className="nrfi-display">
+            <div className={`nrfi-box ${d.first_inning.nrfi > 0.55 ? 'favored' : ''}`}>
+              <div className="nrfi-label">NRFI</div>
+              <div className="nrfi-value">{pct(d.first_inning.nrfi)}</div>
+              <div className="nrfi-sub">No Run First Inning</div>
+            </div>
+            <div className={`nrfi-box yrfi ${d.first_inning.yrfi > 0.55 ? 'favored' : ''}`}>
+              <div className="nrfi-label">YRFI</div>
+              <div className="nrfi-value">{pct(d.first_inning.yrfi)}</div>
+              <div className="nrfi-sub">Yes Run First Inning</div>
+            </div>
+          </div>
+
+          <div className="stat-row">
+            <span className="stat-label">{away.abbreviation} scores in 1st</span>
+            <span className="stat-value">{pct(d.first_inning.away_scores_1st)}</span>
+          </div>
+          <div className="stat-row">
+            <span className="stat-label">{home.abbreviation} scores in 1st</span>
+            <span className="stat-value">{pct(d.first_inning.home_scores_1st)}</span>
+          </div>
+        </div>
+      )}
+
       {/* ── Score Predictions ── */}
       <div className="result-card">
         <h2>Most Likely Final Scores</h2>

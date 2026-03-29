@@ -150,6 +150,9 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     # ── Inning breakdown ──
     innings = _inning_breakdown(home_xr, away_xr)
 
+    # ── NRFI / First Inning ──
+    first_inning = _compute_first_inning(home_xr, away_xr, home_sp_factor, away_sp_factor)
+
     # ── Correct scores ──
     correct_scores = _top_correct_scores(matrix, n=8)
 
@@ -199,6 +202,7 @@ def predict_matchup(home_team_id: int, away_team_id: int,
         "over_under": ou_lines,
         "run_line": run_line,
         "f5": f5,
+        "first_inning": first_inning,
         "innings": innings,
         "correct_scores": correct_scores,
         "h2h": h2h_data,
@@ -465,6 +469,53 @@ def _compute_f5(home_xr: float, away_xr: float,
 
 
 # ── Inning Breakdown ─────────────────────────────────────────
+
+def _compute_first_inning(home_xr: float, away_xr: float,
+                           home_sp_factor: float, away_sp_factor: float) -> dict:
+    """
+    First inning analysis for NRFI/YRFI betting.
+
+    Starting pitchers dominate the first inning — they're fresh, throwing
+    their best stuff, and hitters haven't seen them yet. First inning
+    expected runs are lower than the per-inning average.
+
+    First inning accounts for ~10.5% of total runs, but with an SP
+    adjustment: better pitchers suppress first inning scoring even more.
+    """
+    first_inning_weight = 0.105
+
+    # SP quality amplifies first-inning dominance
+    # Good SPs (factor < 1) are even more dominant in the 1st
+    home_1st_xr = home_xr * first_inning_weight * (0.85 + 0.15 * away_sp_factor)
+    away_1st_xr = away_xr * first_inning_weight * (0.85 + 0.15 * home_sp_factor)
+
+    # P(0 runs) for each team using Poisson
+    p_home_zero = _poisson_prob(home_1st_xr, 0)
+    p_away_zero = _poisson_prob(away_1st_xr, 0)
+
+    # NRFI = both teams score 0 in the first
+    nrfi = p_home_zero * p_away_zero
+    yrfi = 1 - nrfi
+
+    # P(exactly 1 run total in 1st)
+    p_home_one = _poisson_prob(home_1st_xr, 1)
+    p_away_one = _poisson_prob(away_1st_xr, 1)
+    p_exactly_one = (p_home_one * p_away_zero) + (p_home_zero * p_away_one)
+
+    # Away team bats first — P(away scores in top 1st)
+    p_away_scores_1st = 1 - p_away_zero
+    p_home_scores_1st = 1 - p_home_zero
+
+    return {
+        "nrfi": round(nrfi, 4),
+        "yrfi": round(yrfi, 4),
+        "home_scores_1st": round(p_home_scores_1st, 4),
+        "away_scores_1st": round(p_away_scores_1st, 4),
+        "home_xr_1st": round(home_1st_xr, 3),
+        "away_xr_1st": round(away_1st_xr, 3),
+        "exactly_one_run": round(p_exactly_one, 4),
+    }
+
 
 def _inning_breakdown(home_xr: float, away_xr: float) -> list[dict]:
     """Expected runs by inning with typical MLB scoring distribution."""

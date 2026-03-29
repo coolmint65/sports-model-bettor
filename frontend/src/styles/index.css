@@ -813,6 +813,61 @@ body {
   color: #f87171;
 }
 
+/* NRFI Display */
+.nrfi-display {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.nrfi-box {
+  background: #0d1117;
+  border: 1px solid #1e293b;
+  border-radius: 10px;
+  padding: 16px;
+  text-align: center;
+  transition: border-color 0.2s;
+}
+
+.nrfi-box.favored {
+  border-color: #34d399;
+}
+
+.nrfi-box.yrfi.favored {
+  border-color: #f87171;
+}
+
+.nrfi-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #64748b;
+  margin-bottom: 6px;
+}
+
+.nrfi-box.favored .nrfi-label {
+  color: #34d399;
+}
+
+.nrfi-box.yrfi.favored .nrfi-label {
+  color: #f87171;
+}
+
+.nrfi-value {
+  font-size: 1.8rem;
+  font-weight: 800;
+  color: #f8fafc;
+  line-height: 1;
+  margin-bottom: 4px;
+}
+
+.nrfi-sub {
+  font-size: 0.68rem;
+  color: #475569;
+}
+
 /* Correct Scores */
 .correct-scores {
   display: flex;
