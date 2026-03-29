@@ -125,13 +125,29 @@ def api_scoreboard(date: str = Query(default="")):
         if now - ts < CACHE_TTL:
             return cached
 
-    # Fetch from ESPN
+    # Fetch from ESPN — try with and without date param
     url = f"{ESPN_BASE}/baseball/mlb/scoreboard?dates={espn_date}"
+    logger.info("Fetching scoreboard: %s", url)
     espn_data = _fetch_espn_json(url)
 
     games = []
     if espn_data:
+        events = espn_data.get("events", [])
+        logger.info("ESPN returned %d events for date %s", len(events), espn_date)
         games = _parse_espn_scoreboard(espn_data)
+    else:
+        logger.warning("ESPN returned no data for %s", url)
+
+    # If no games found for the specific date, try without date param
+    # (ESPN defaults to today's games in their timezone)
+    if not games and date == "":
+        fallback_url = f"{ESPN_BASE}/baseball/mlb/scoreboard"
+        logger.info("Trying fallback (no date): %s", fallback_url)
+        espn_data = _fetch_espn_json(fallback_url)
+        if espn_data:
+            events = espn_data.get("events", [])
+            logger.info("Fallback returned %d events", len(events))
+            games = _parse_espn_scoreboard(espn_data)
 
     # Enrich with our DB data
     games = _enrich_games(games, target_date)
