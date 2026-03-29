@@ -437,11 +437,106 @@ body {
 }
 
 .detail-prediction {
-  margin-top: 4px;
+  margin-top: 16px;
 }
 
-.detail-prediction .section-title {
-  margin-bottom: 16px;
+/* Two-column: main results left, picks sidebar right */
+.prediction-layout {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 16px;
+  align-items: start;
+}
+
+.prediction-main {
+  min-width: 0;
+}
+
+.prediction-sidebar {
+  position: sticky;
+  top: 16px;
+}
+
+/* ── Picks Card ── */
+.picks-card {
+  background: #111827;
+  border: 1px solid #1e293b;
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.picks-card h2 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 14px;
+}
+
+.pick-row {
+  display: flex;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid #1e293b;
+  gap: 8px;
+}
+
+.pick-row:last-of-type {
+  border-bottom: none;
+}
+
+.pick-label {
+  font-size: 0.75rem;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  width: 80px;
+  flex-shrink: 0;
+}
+
+.pick-choice {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pick-name {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.pick-odds {
+  font-size: 0.78rem;
+  color: #64748b;
+}
+
+.pick-prob {
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-align: right;
+  min-width: 50px;
+}
+
+.pick-prob.conf-high { color: #34d399; }
+.pick-prob.conf-med { color: #60a5fa; }
+.pick-prob.conf-low { color: #94a3b8; }
+
+.pick-row.conf-high { background: rgba(52, 211, 153, 0.04); border-radius: 6px; margin: 0 -8px; padding: 12px 8px; }
+
+.picks-footer {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #1e293b;
+  font-size: 0.8rem;
+  color: #64748b;
+  text-align: center;
+}
+
+.picks-footer strong {
+  color: #f8fafc;
 }
 
 .no-prediction {
@@ -1040,5 +1135,7 @@ body {
   .pitcher-comparison { grid-template-columns: 1fr; }
   .pitching-matchup { flex-direction: column; }
   .pitcher-card { max-width: 100%; }
+  .prediction-layout { grid-template-columns: 1fr; }
+  .prediction-sidebar { position: static; }
   .standings-table .standing-name { display: none; }
 }
