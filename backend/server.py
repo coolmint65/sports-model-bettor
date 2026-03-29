@@ -414,7 +414,15 @@ def api_standings():
     # Debug: check what's in the DB
     team_count = conn.execute("SELECT COUNT(*) as c FROM teams").fetchone()["c"]
     ts_count = conn.execute("SELECT COUNT(*) as c FROM team_stats").fetchone()["c"]
-    logger.info("Standings query: %d teams, %d team_stats rows", team_count, ts_count)
+    with_league = conn.execute(
+        "SELECT COUNT(*) as c FROM teams WHERE league IS NOT NULL AND league != ''"
+    ).fetchone()["c"]
+    sample = conn.execute(
+        "SELECT abbreviation, league, division FROM teams LIMIT 3"
+    ).fetchall()
+    logger.info("Standings: %d teams, %d stats, %d with league. Sample: %s",
+                team_count, ts_count, with_league,
+                [(dict(r)) for r in sample])
 
     if team_count == 0:
         return []
@@ -427,20 +435,25 @@ def api_standings():
                ts.era, ts.ops, ts.wrc_plus
         FROM teams t
         LEFT JOIN team_stats ts ON t.mlb_id = ts.team_id AND ts.season = ?
-        WHERE t.league IS NOT NULL AND t.league != ''
-          AND t.division IS NOT NULL AND t.division != ''
         ORDER BY t.league, t.division, ts.wins DESC
     """, (SEASON,)).fetchall()
 
     logger.info("Standings query returned %d rows", len(rows))
 
+    if not rows:
+        return []
+
     divisions = {}
     for r in rows:
-        div_key = f"{r['league']} {r['division']}"
+        league = r["league"] or "Unknown"
+        division = r["division"] or "Unknown"
+        if league == "Unknown" or division == "Unknown":
+            continue
+        div_key = f"{league} {division}"
         if div_key not in divisions:
             divisions[div_key] = {
-                "league": r["league"],
-                "division": r["division"],
+                "league": league,
+                "division": division,
                 "teams": [],
             }
         w = r["wins"] or 0
