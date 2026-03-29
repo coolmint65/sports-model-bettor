@@ -46,8 +46,7 @@ MLB_HOME_EDGE = 0.28       # ~0.28 runs home advantage
 def predict_matchup(home_team_id: int, away_team_id: int,
                     home_pitcher_id: int | None = None,
                     away_pitcher_id: int | None = None,
-                    venue: str | None = None,
-                    umpire: str | None = None) -> dict:
+                    venue: str | None = None) -> dict:
     """
     Full MLB matchup prediction.
 
@@ -99,14 +98,9 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     home_xr *= park_run_factor
     away_xr *= park_run_factor
 
-    # ── Step 5: Umpire adjustment ──
-    from .umpires import get_umpire_factor
-    ump_factor, ump_data = get_umpire_factor(umpire)
-    if ump_factor != 1.0:
-        home_xr *= ump_factor
-        away_xr *= ump_factor
-
-    # ── Step 6: Home advantage ──
+    # ── Step 5: Home advantage ──
+    # Note: Umpire zone impact removed — MLB ABS (automated balls/strikes)
+    # fully rolled out in 2026, eliminating umpire zone variance.
     home_xr += MLB_HOME_EDGE / 2
     away_xr -= MLB_HOME_EDGE / 2
 
@@ -164,7 +158,6 @@ def predict_matchup(home_team_id: int, away_team_id: int,
         home_team, away_team, home_stats, away_stats,
         home_sp, away_sp, home_xr, away_xr,
         park_run_factor, home_form, away_form, h2h_data,
-        ump_factor, umpire,
     )
 
     # ── Pitcher detail for frontend ──
@@ -203,12 +196,6 @@ def predict_matchup(home_team_id: int, away_team_id: int,
             "away": round(p_away, 4),
         },
         "park_factor": round(park_run_factor, 3),
-        "umpire": {
-            "name": umpire,
-            "run_factor": round(ump_factor, 3),
-            "over_pct": ump_data.get("over_pct") if ump_data else None,
-            "rpg": ump_data.get("rpg") if ump_data else None,
-        } if umpire else None,
         "over_under": ou_lines,
         "run_line": run_line,
         "f5": f5,
@@ -540,8 +527,7 @@ def _pitcher_detail(sp: dict | None, pitcher_id: int | None) -> dict | None:
 
 def _build_reasoning(home_team, away_team, home_stats, away_stats,
                      home_sp, away_sp, home_xr, away_xr,
-                     park_factor, home_form, away_form, h2h_data,
-                     ump_factor=1.0, umpire_name=None) -> list[str]:
+                     park_factor, home_form, away_form, h2h_data) -> list[str]:
     hn = home_team.get("abbreviation", "HOME")
     an = away_team.get("abbreviation", "AWAY")
     reasons = []
@@ -576,13 +562,6 @@ def _build_reasoning(home_team, away_team, home_stats, away_stats,
             reasons.append(f"Park factor {park_factor:.2f} — hitter-friendly venue")
         elif park_factor < 0.97:
             reasons.append(f"Park factor {park_factor:.2f} — pitcher-friendly venue")
-
-    # Umpire
-    if umpire_name and ump_factor != 1.0:
-        if ump_factor > 1.03:
-            reasons.append(f"HP umpire {umpire_name} — hitter-friendly zone ({ump_factor:.2f}x)")
-        elif ump_factor < 0.97:
-            reasons.append(f"HP umpire {umpire_name} — pitcher-friendly zone ({ump_factor:.2f}x)")
 
     if abs(home_form) > 0.03:
         reasons.append(f"{hn} running {'hot' if home_form > 0 else 'cold'} (form {home_form:+.1%})")
