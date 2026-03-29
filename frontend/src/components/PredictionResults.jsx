@@ -174,23 +174,23 @@ export default function PredictionResults({ data, odds }) {
           <h2>Run Line</h2>
           <div className="ou-row header">
             <span>LINE</span>
-            <span>{home.abbreviation} COVERS</span>
-            <span>{away.abbreviation} COVERS</span>
+            <span>COVERS</span>
+            <span>PROBABILITY</span>
           </div>
-          {Object.entries(d.run_line).map(([line, pCover]) => {
-            const rl = parseFloat(line)
-            return (
-              <div key={line} className="ou-row">
-                <span className="ou-line">{rl > 0 ? '+' : ''}{line}</span>
-                <span className={`ou-prob ${pCover > 0.55 ? 'over' : ''}`}>
-                  {pct(pCover)}
-                </span>
-                <span className={`ou-prob ${(1 - pCover) > 0.55 ? 'under' : ''}`}>
-                  {pct(1 - pCover)}
-                </span>
-              </div>
-            )
-          })}
+          <div className="ou-row">
+            <span className="ou-line">{home.abbreviation} -1.5</span>
+            <span className={`ou-prob ${d.run_line.home_minus_1_5 > 0.50 ? 'over' : ''}`}>
+              {pct(d.run_line.home_minus_1_5)}
+            </span>
+            <span className="ou-prob">{pct(1 - d.run_line.home_minus_1_5)}</span>
+          </div>
+          <div className="ou-row">
+            <span className="ou-line">{away.abbreviation} +1.5</span>
+            <span className={`ou-prob ${d.run_line.away_plus_1_5 > 0.50 ? 'over' : ''}`}>
+              {pct(d.run_line.away_plus_1_5)}
+            </span>
+            <span className="ou-prob">{pct(1 - d.run_line.away_plus_1_5)}</span>
+          </div>
         </div>
       )}
 
