@@ -369,6 +369,15 @@ def api_predict(req: PredictRequest):
 def api_standings():
     """Return MLB standings grouped by division."""
     conn = get_conn()
+
+    # Debug: check what's in the DB
+    team_count = conn.execute("SELECT COUNT(*) as c FROM teams").fetchone()["c"]
+    ts_count = conn.execute("SELECT COUNT(*) as c FROM team_stats").fetchone()["c"]
+    logger.info("Standings query: %d teams, %d team_stats rows", team_count, ts_count)
+
+    if team_count == 0:
+        return []
+
     rows = conn.execute("""
         SELECT t.mlb_id, t.name, t.abbreviation, t.league, t.division,
                ts.wins, ts.losses, ts.run_diff, ts.streak,
@@ -381,6 +390,8 @@ def api_standings():
           AND t.division IS NOT NULL AND t.division != ''
         ORDER BY t.league, t.division, ts.wins DESC
     """, (SEASON,)).fetchall()
+
+    logger.info("Standings query returned %d rows", len(rows))
 
     divisions = {}
     for r in rows:
