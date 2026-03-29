@@ -532,7 +532,7 @@ def _build_reasoning(home_team, away_team, home_stats, away_stats,
     an = away_team.get("abbreviation", "AWAY")
     reasons = []
 
-    reasons.append(f"Model projects {hn} {home_xr:.1f} - {away_xr:.1f} {an}")
+    reasons.append(f"Model projects {hn} {round(home_xr)} - {round(away_xr)} {an} (expected runs: {home_xr:.1f} - {away_xr:.1f})")
 
     if home_sp:
         era = home_sp.get("era") or home_sp.get("fip")
