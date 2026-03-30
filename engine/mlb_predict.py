@@ -175,7 +175,7 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     ou_lines = _generate_ou_lines(total, matrix)
 
     # ── Run line probabilities ──
-    run_line = _run_line_probs(matrix)
+    run_line = _run_line_probs(matrix, home_xr, away_xr)
 
     # ── F5 (First 5 innings) ──
     f5 = _compute_f5(home_xr, away_xr, home_sp_factor, away_sp_factor)
@@ -464,21 +464,57 @@ def _generate_ou_lines(total: float, matrix: list[list[float]]) -> dict:
 
 # ── Run Line ─────────────────────────────────────────────────
 
-def _run_line_probs(matrix: list[list[float]]) -> dict:
-    p_home_cover = 0.0  # Home -1.5 (wins by 2+)
-    p_away_cover = 0.0  # Away +1.5 (loses by 1 or less, or wins)
-
+def _run_line_probs(matrix: list[list[float]], home_xr: float = 0,
+                     away_xr: float = 0) -> dict:
+    """
+    Compute run line probabilities for multiple spreads.
+    Includes standard -1.5 plus the model's projected spread.
+    """
+    # Calculate probability for each possible margin
+    margin_probs = {}
     for h in range(len(matrix)):
         for a in range(len(matrix[0])):
-            margin = h - a
-            if margin >= 2:
-                p_home_cover += matrix[h][a]
-            if margin <= 1:
-                p_away_cover += matrix[h][a]
+            margin = h - a  # Positive = home wins by N
+            margin_probs[margin] = margin_probs.get(margin, 0) + matrix[h][a]
+
+    # Standard -1.5 run line
+    p_home_15 = sum(p for m, p in margin_probs.items() if m >= 2)
+    p_away_15 = sum(p for m, p in margin_probs.items() if m <= 1)
+
+    # Model's projected spread (rounded to 0.5)
+    model_spread = round((home_xr - away_xr) * 2) / 2
+    if model_spread == 0:
+        model_spread = 0.5 if home_xr > away_xr else -0.5
+
+    # Generate lines: -1.5, model spread, and a couple around it
+    lines = sorted(set([-1.5, 1.5, model_spread]))
+    # Add +/- 0.5 around model spread
+    for offset in [-1, -0.5, 0.5, 1]:
+        lines.append(model_spread + offset)
+    lines = sorted(set(l for l in lines if -6 <= l <= 6))
+
+    spreads = {}
+    for line in lines:
+        # P(home covers line): home margin > line
+        if line > 0:
+            # Home -line: home must win by more than line
+            p_cover = sum(p for m, p in margin_probs.items() if m > line)
+            label = f"home_{line:+.1f}".replace("+", "minus_").replace("-", "plus_").replace(".", "_")
+        else:
+            # Home +line (underdog): home can lose by less than |line|
+            p_cover = sum(p for m, p in margin_probs.items() if m > line)
+            label = f"home_{line:+.1f}".replace("+", "minus_").replace("-", "plus_").replace(".", "_")
+
+        spreads[str(line)] = {
+            "home_cover": round(p_cover, 4),
+            "away_cover": round(1 - p_cover, 4),
+        }
 
     return {
-        "home_minus_1_5": round(p_home_cover, 4),
-        "away_plus_1_5": round(p_away_cover, 4),
+        "home_minus_1_5": round(p_home_15, 4),
+        "away_plus_1_5": round(p_away_15, 4),
+        "model_spread": model_spread,
+        "spreads": spreads,
     }
 
 

@@ -129,20 +129,47 @@ export default function PredictionResults({ data, odds }) {
           </>
         )}
 
-        {/* Run Line */}
+        {/* Run Line / Spreads */}
         {d.run_line && (
           <>
-            <h3 style={{marginTop: 20}}>Run Line (-1.5)</h3>
-            <div className="ou-row">
-              <span className="ou-line">{home.abbreviation} -1.5</span>
-              <span className={`ou-prob ${d.run_line.home_minus_1_5 > 0.50 ? 'over' : ''}`}>{pct(d.run_line.home_minus_1_5)}</span>
-              <span className={`ou-prob ${d.run_line.home_minus_1_5 < 0.50 ? 'under' : ''}`}>{pct(1 - d.run_line.home_minus_1_5)}</span>
-            </div>
-            <div className="ou-row">
-              <span className="ou-line">{away.abbreviation} +1.5</span>
-              <span className={`ou-prob ${d.run_line.away_plus_1_5 > 0.50 ? 'over' : ''}`}>{pct(d.run_line.away_plus_1_5)}</span>
-              <span className={`ou-prob ${d.run_line.away_plus_1_5 < 0.50 ? 'under' : ''}`}>{pct(1 - d.run_line.away_plus_1_5)}</span>
-            </div>
+            <h3 style={{marginTop: 20}}>
+              Run Line
+              {d.run_line.model_spread != null && (
+                <span style={{fontWeight: 400, color: '#64748b', fontSize: '0.7rem', marginLeft: 8}}>
+                  Model spread: {home.abbreviation} {d.run_line.model_spread > 0 ? '-' : '+'}{Math.abs(d.run_line.model_spread).toFixed(1)}
+                </span>
+              )}
+            </h3>
+            {d.run_line.spreads && Object.entries(d.run_line.spreads).map(([spread, probs]) => {
+              const s = parseFloat(spread)
+              const homeLabel = s > 0
+                ? `${home.abbreviation} -${s.toFixed(1)}`
+                : `${home.abbreviation} +${Math.abs(s).toFixed(1)}`
+              const awayLabel = s > 0
+                ? `${away.abbreviation} +${s.toFixed(1)}`
+                : `${away.abbreviation} -${Math.abs(s).toFixed(1)}`
+              return (
+                <div key={spread} className="ou-row">
+                  <span className="ou-line">{homeLabel}</span>
+                  <span className={`ou-prob ${probs.home_cover > 0.55 ? 'over' : ''}`}>{pct(probs.home_cover)}</span>
+                  <span className={`ou-prob ${probs.away_cover > 0.55 ? 'over' : ''}`}>{pct(probs.away_cover)}</span>
+                </div>
+              )
+            })}
+            {!d.run_line.spreads && (
+              <>
+                <div className="ou-row">
+                  <span className="ou-line">{home.abbreviation} -1.5</span>
+                  <span className={`ou-prob ${d.run_line.home_minus_1_5 > 0.50 ? 'over' : ''}`}>{pct(d.run_line.home_minus_1_5)}</span>
+                  <span className="ou-prob">{pct(1 - d.run_line.home_minus_1_5)}</span>
+                </div>
+                <div className="ou-row">
+                  <span className="ou-line">{away.abbreviation} +1.5</span>
+                  <span className={`ou-prob ${d.run_line.away_plus_1_5 > 0.50 ? 'over' : ''}`}>{pct(d.run_line.away_plus_1_5)}</span>
+                  <span className="ou-prob">{pct(1 - d.run_line.away_plus_1_5)}</span>
+                </div>
+              </>
+            )}
           </>
         )}
 
