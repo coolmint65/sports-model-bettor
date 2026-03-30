@@ -34,30 +34,41 @@ python -m scrapers.mlb_stats --full
 echo.
 echo Running advanced stats (Statcast + FanGraphs)...
 python -m scrapers.mlb_advanced
-goto :done
+goto :calibrate
 
 :daily
 echo Running daily sync...
 python -m scrapers.mlb_stats --daily
-goto :done
+goto :calibrate
 
 :standings
 echo Updating standings...
 python -m scrapers.mlb_stats --standings
-goto :done
+goto :calibrate
 
 :history
 echo Loading %2 season data for backtesting...
 echo This will take a few minutes.
 echo.
 python -m scrapers.mlb_stats --history %2
-goto :done
+goto :calibrate
 
 :quick
 echo Running quick sync (teams, today's games, standings)...
 echo.
 python -m scrapers.mlb_stats
-goto :done
+goto :calibrate
+
+:calibrate
+echo.
+echo Calibrating model...
+python -m engine.calibration --days 30
+echo.
+echo Recording today's picks...
+python -m engine.tracker --record
+echo.
+echo Settling completed picks...
+python -m engine.tracker --settle
 
 :done
 echo.
