@@ -1,7 +1,20 @@
 @echo off
+cd /d "%~dp0"
 echo ============================================
 echo   MLB Prediction Engine
 echo ============================================
+echo.
+
+:: Run sync first (data + calibrate + record picks + settle)
+echo Syncing data...
+echo.
+if not exist "data\logs" mkdir "data\logs"
+python -m scrapers.mlb_stats 2>nul
+python -m engine.calibration --days 30 2>nul
+python -m engine.tracker --record 2>nul
+python -m engine.tracker --settle 2>nul
+echo.
+echo Sync complete.
 echo.
 
 :: Start backend
