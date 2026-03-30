@@ -10,37 +10,39 @@ import logging
 import sqlite3
 from pathlib import Path
 
+import threading
+
 logger = logging.getLogger(__name__)
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "mlb.db"
 
-_conn: sqlite3.Connection | None = None
+# Thread-local storage for DB connections — each thread gets its own
+_local = threading.local()
 
 
 def get_conn() -> sqlite3.Connection:
-    """Get or create a module-level DB connection."""
-    global _conn
-    if _conn is not None:
-        # Verify connection is still usable
+    """Get a thread-local DB connection."""
+    conn = getattr(_local, 'conn', None)
+    if conn is not None:
         try:
-            _conn.execute("SELECT 1")
-            return _conn
+            conn.execute("SELECT 1")
+            return conn
         except Exception:
-            logger.warning("DB connection was corrupted, reconnecting")
             try:
-                _conn.close()
+                conn.close()
             except Exception:
                 pass
-            _conn = None
+            _local.conn = None
 
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
-    _conn.row_factory = sqlite3.Row
-    _conn.execute("PRAGMA journal_mode=WAL")
-    _conn.execute("PRAGMA foreign_keys=OFF")
-    _init_schema(_conn)
-    _migrate(_conn)
-    return _conn
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=OFF")
+    _init_schema(conn)
+    _migrate(conn)
+    _local.conn = conn
+    return conn
 
 
 def _init_schema(conn: sqlite3.Connection) -> None:
