@@ -171,7 +171,7 @@ def run_backtest(season: int | None = None, days: int | None = None,
             else:
                 _record_bet(results["over_under"], actual_total < ou_line, OU_ODDS)
 
-        # ── NRFI ──
+        # ── NRFI (uses pitcher-specific + team-specific first-inning data) ──
         home_ls_raw = game.get("home_linescore")
         away_ls_raw = game.get("away_linescore")
         has_linescore = home_ls_raw and away_ls_raw
@@ -183,11 +183,19 @@ def run_backtest(season: int | None = None, days: int | None = None,
                 if len(h_inn) > 0 and len(a_inn) > 0:
                     actual_nrfi = (h_inn[0] == 0 and a_inn[0] == 0)
 
-                    # Model's NRFI probability
-                    first_inn_wt = 0.105
-                    h1_xr = home_xr * first_inn_wt
-                    a1_xr = away_xr * first_inn_wt
-                    model_nrfi = _poisson_prob(h1_xr, 0) * _poisson_prob(a1_xr, 0)
+                    # Build NRFI probability from multiple factors:
+                    # 1. Pitcher's first-inning scoreless rate
+                    # 2. Team's first-inning scoring tendency
+                    # 3. Generic Poisson as fallback
+
+                    # P(away scores 0 in top 1st) — driven by home SP
+                    # P(home scores 0 in bot 1st) — driven by away SP
+                    p_away_zero = _nrfi_half_prob(
+                        away_pit, home_sp_pit, away_xr)
+                    p_home_zero = _nrfi_half_prob(
+                        home_pit, away_sp_pit, home_xr)
+
+                    model_nrfi = p_home_zero * p_away_zero
 
                     nrfi_pick = model_nrfi > 0.50
                     nrfi_prob = model_nrfi if nrfi_pick else (1 - model_nrfi)
@@ -277,6 +285,53 @@ def _cached_pit(cache, team_id, date, season):
     if key not in cache:
         cache[key] = compute_team_stats_at_date(team_id, date, season)
     return cache[key]
+
+
+def _nrfi_half_prob(batting_team_pit, opp_pitcher_pit, team_xr):
+    """
+    Probability that a team scores 0 runs in their half of the 1st inning.
+
+    Uses three signals blended by confidence:
+    1. Pitcher's first-inning scoreless % (most predictive, direct measurement)
+    2. Team's first-inning scoring % (how aggressive is their lineup in 1st)
+    3. Poisson from expected runs (generic fallback)
+    """
+    # Weight allocation: pitcher > team > generic
+    # Pitcher first-inning data is most predictive because the same pitcher
+    # faces the same slot in the lineup every start
+    signals = []
+    weights = []
+
+    # Signal 1: Pitcher's first-inning scoreless rate
+    if opp_pitcher_pit and opp_pitcher_pit.get("first_inning_scoreless_pct") is not None:
+        starts = opp_pitcher_pit.get("first_inning_starts", 0)
+        if starts >= 5:  # Need decent sample
+            p_scoreless = opp_pitcher_pit["first_inning_scoreless_pct"]
+            signals.append(p_scoreless)
+            weights.append(min(starts / 15, 1.0) * 0.50)  # Up to 50% weight
+
+    # Signal 2: Team's first-inning scoring tendency
+    if batting_team_pit and batting_team_pit.get("first_inning_score_pct") is not None:
+        fi_games = batting_team_pit.get("first_inning_games", 0)
+        if fi_games >= 15:
+            p_team_scores = batting_team_pit["first_inning_score_pct"]
+            p_team_zero = 1 - p_team_scores
+            signals.append(p_team_zero)
+            weights.append(min(fi_games / 50, 1.0) * 0.30)  # Up to 30% weight
+
+    # Signal 3: Generic Poisson from expected runs
+    first_inn_xr = team_xr * 0.105
+    generic_p_zero = _poisson_prob(first_inn_xr, 0)
+    signals.append(generic_p_zero)
+    weights.append(0.20)  # Always 20% weight for generic
+
+    # Weighted blend
+    total_weight = sum(weights)
+    if total_weight == 0:
+        return generic_p_zero
+
+    blended = sum(s * w for s, w in zip(signals, weights)) / total_weight
+    return max(0.01, min(0.99, blended))
 
 
 def _empty_cat():

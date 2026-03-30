@@ -151,7 +151,9 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     innings = _inning_breakdown(home_xr, away_xr)
 
     # ── NRFI / First Inning ──
-    first_inning = _compute_first_inning(home_xr, away_xr, home_sp_factor, away_sp_factor)
+    first_inning = _compute_first_inning(
+        home_xr, away_xr, home_sp_factor, away_sp_factor,
+        home_pitcher_id, away_pitcher_id, home_team_id, away_team_id)
 
     # ── Correct scores ──
     correct_scores = _top_correct_scores(matrix, n=8)
@@ -471,27 +473,46 @@ def _compute_f5(home_xr: float, away_xr: float,
 # ── Inning Breakdown ─────────────────────────────────────────
 
 def _compute_first_inning(home_xr: float, away_xr: float,
-                           home_sp_factor: float, away_sp_factor: float) -> dict:
+                           home_sp_factor: float, away_sp_factor: float,
+                           home_pitcher_id: int | None = None,
+                           away_pitcher_id: int | None = None,
+                           home_team_id: int | None = None,
+                           away_team_id: int | None = None) -> dict:
     """
     First inning analysis for NRFI/YRFI betting.
 
-    Starting pitchers dominate the first inning — they're fresh, throwing
-    their best stuff, and hitters haven't seen them yet. First inning
-    expected runs are lower than the per-inning average.
-
-    First inning accounts for ~10.5% of total runs, but with an SP
-    adjustment: better pitchers suppress first inning scoring even more.
+    Uses pitcher-specific first-inning history when available,
+    falls back to Poisson estimates from expected runs.
     """
     first_inning_weight = 0.105
 
-    # SP quality amplifies first-inning dominance
-    # Good SPs (factor < 1) are even more dominant in the 1st
-    home_1st_xr = home_xr * first_inning_weight * (0.85 + 0.15 * away_sp_factor)
-    away_1st_xr = away_xr * first_inning_weight * (0.85 + 0.15 * home_sp_factor)
+    # Try to get pitcher first-inning scoreless rates from PIT data
+    from .pit_stats import compute_pitcher_stats_at_date, compute_team_stats_at_date
+    from datetime import datetime
+    today = datetime.now().strftime("%Y-%m-%d")
+    season = datetime.now().year
 
-    # P(0 runs) for each team using Poisson
-    p_home_zero = _poisson_prob(home_1st_xr, 0)
-    p_away_zero = _poisson_prob(away_1st_xr, 0)
+    # P(away scores 0) — driven by home pitcher's first-inning dominance
+    p_away_zero = None
+    if home_pitcher_id:
+        sp_pit = compute_pitcher_stats_at_date(home_pitcher_id, today, season)
+        if sp_pit and sp_pit.get("first_inning_scoreless_pct") is not None and sp_pit.get("first_inning_starts", 0) >= 3:
+            p_away_zero = sp_pit["first_inning_scoreless_pct"]
+
+    # P(home scores 0) — driven by away pitcher's first-inning dominance
+    p_home_zero = None
+    if away_pitcher_id:
+        sp_pit = compute_pitcher_stats_at_date(away_pitcher_id, today, season)
+        if sp_pit and sp_pit.get("first_inning_scoreless_pct") is not None and sp_pit.get("first_inning_starts", 0) >= 3:
+            p_home_zero = sp_pit["first_inning_scoreless_pct"]
+
+    # Fallback to Poisson if no pitcher data
+    if p_away_zero is None:
+        away_1st_xr = away_xr * first_inning_weight * (0.85 + 0.15 * home_sp_factor)
+        p_away_zero = _poisson_prob(away_1st_xr, 0)
+    if p_home_zero is None:
+        home_1st_xr = home_xr * first_inning_weight * (0.85 + 0.15 * away_sp_factor)
+        p_home_zero = _poisson_prob(home_1st_xr, 0)
 
     # NRFI = both teams score 0 in the first
     nrfi = p_home_zero * p_away_zero

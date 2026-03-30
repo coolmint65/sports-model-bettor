@@ -48,8 +48,10 @@ def compute_team_stats_at_date(team_id: int, date: str, season: int) -> dict:
     away_wins = 0
     away_losses = 0
     games_played = 0
-    first_inning_scoreless = 0
+    first_inning_scoreless = 0  # Both teams 0 in 1st
     first_inning_games = 0
+    team_first_inning_runs_total = 0
+    team_first_inning_scored = 0  # Games where THIS team scored in 1st
 
     # Track last 10 for form
     last_10_results = []
@@ -91,6 +93,10 @@ def compute_team_stats_at_date(team_id: int, date: str, season: int) -> dict:
                 a_innings = json.loads(away_ls)
                 if len(h_innings) > 0 and len(a_innings) > 0:
                     first_inning_games += 1
+                    team_1st = h_innings[0] if is_home else a_innings[0]
+                    team_first_inning_runs_total += team_1st
+                    if team_1st > 0:
+                        team_first_inning_scored += 1
                     if h_innings[0] == 0 and a_innings[0] == 0:
                         first_inning_scoreless += 1
             except (json.JSONDecodeError, IndexError):
@@ -136,6 +142,10 @@ def compute_team_stats_at_date(team_id: int, date: str, season: int) -> dict:
         "games_played": games_played,
         "nrfi_rate": nrfi_rate,
         "first_inning_games": first_inning_games,
+        # How often this team scores in the 1st inning
+        "first_inning_score_pct": round(team_first_inning_scored / first_inning_games, 3) if first_inning_games > 0 else None,
+        # Average runs this team scores in the 1st inning
+        "first_inning_avg_runs": round(team_first_inning_runs_total / first_inning_games, 3) if first_inning_games > 0 else None,
     }
 
 
@@ -169,6 +179,10 @@ def compute_pitcher_stats_at_date(pitcher_id: int, date: str, season: int) -> di
     total_runs_allowed = 0
     total_first_inning_runs = 0
     first_inning_starts = 0
+    first_inning_scoreless = 0
+    # Track runs allowed in first 5 innings vs last 4
+    f5_runs_allowed = 0
+    f5_innings_count = 0
 
     for g in games:
         g = dict(g)
@@ -176,13 +190,11 @@ def compute_pitcher_stats_at_date(pitcher_id: int, date: str, season: int) -> di
 
         is_home_sp = g["home_pitcher_id"] == pitcher_id
 
-        # Did they get the W or L?
         if g["winning_pitcher"] == pitcher_id:
             wins += 1
         elif g["losing_pitcher"] == pitcher_id:
             losses += 1
 
-        # Estimate runs allowed: starter typically responsible for ~60% of team's runs allowed
         if is_home_sp:
             opp_score = g["away_score"] or 0
             opp_ls = g.get("away_linescore")
@@ -190,29 +202,40 @@ def compute_pitcher_stats_at_date(pitcher_id: int, date: str, season: int) -> di
             opp_score = g["home_score"] or 0
             opp_ls = g.get("home_linescore")
 
-        # Starter gets charged with ~60% of opponent runs
         total_runs_allowed += opp_score * 0.60
 
-        # First inning runs against
         if opp_ls:
             try:
                 opp_innings = json.loads(opp_ls)
                 if len(opp_innings) > 0:
                     first_inning_starts += 1
-                    total_first_inning_runs += opp_innings[0]
+                    first_inning_runs = opp_innings[0]
+                    total_first_inning_runs += first_inning_runs
+                    if first_inning_runs == 0:
+                        first_inning_scoreless += 1
+
+                    # F5 runs (innings 1-5)
+                    if len(opp_innings) >= 5:
+                        f5_runs_allowed += sum(opp_innings[:5])
+                        f5_innings_count += 1
             except (json.JSONDecodeError, IndexError):
                 pass
 
     if starts == 0:
         return {}
 
-    # Estimate ERA: (runs_allowed / starts) * 9 / ~5.5 IP per start
     estimated_innings = starts * 5.5
     era = round((total_runs_allowed / estimated_innings) * 9, 2) if estimated_innings > 0 else None
 
     first_inning_era = None
+    first_inning_scoreless_pct = None
     if first_inning_starts > 0:
         first_inning_era = round((total_first_inning_runs / first_inning_starts) * 9, 2)
+        first_inning_scoreless_pct = round(first_inning_scoreless / first_inning_starts, 3)
+
+    f5_era = None
+    if f5_innings_count > 0:
+        f5_era = round((f5_runs_allowed / (f5_innings_count * 5)) * 9, 2)
 
     return {
         "games_started": starts,
@@ -223,4 +246,7 @@ def compute_pitcher_stats_at_date(pitcher_id: int, date: str, season: int) -> di
         "runs_per_start": round(total_runs_allowed / starts, 2),
         "first_inning_era": first_inning_era,
         "first_inning_runs_per_start": round(total_first_inning_runs / first_inning_starts, 2) if first_inning_starts > 0 else None,
+        "first_inning_scoreless_pct": first_inning_scoreless_pct,
+        "first_inning_starts": first_inning_starts,
+        "f5_era": f5_era,
     }
