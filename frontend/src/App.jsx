@@ -31,11 +31,18 @@ export default function App() {
       api.get('/scoreboard').then(r => setGames(r.data)).catch(() => {})
     }
     setGamesLoading(true)
-    api.get('/scoreboard')
-      .then(r => setGames(r.data))
-      .catch(() => setGames([]))
+    Promise.all([
+      api.get('/scoreboard'),
+      api.get('/best-bets'),
+    ]).then(([g, b]) => {
+      setGames(g.data)
+      setBestBets(b.data)
+    }).catch(() => setGames([]))
       .finally(() => setGamesLoading(false))
-    const interval = setInterval(fetchGames, 5 * 60 * 1000)
+    const interval = setInterval(() => {
+      fetchGames()
+      api.get('/best-bets').then(r => setBestBets(r.data)).catch(() => {})
+    }, 5 * 60 * 1000)
     return () => clearInterval(interval)
   }, [])
 
@@ -152,7 +159,7 @@ export default function App() {
       </nav>
 
       {view === 'games' && !selectedGame && (
-        <Scoreboard games={games} loading={gamesLoading} onSelectGame={selectGame} />
+        <Scoreboard games={games} loading={gamesLoading} onSelectGame={selectGame} bestBets={bestBets} />
       )}
 
       {selectedGame && (

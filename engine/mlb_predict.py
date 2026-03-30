@@ -103,30 +103,14 @@ def predict_matchup(home_team_id: int, away_team_id: int,
         away_sp_pit = compute_pitcher_stats_at_date(away_pitcher_id, today, SEASON)
 
     # ── Step 1: Baseline expected runs ──
-    # Prefer PIT runs/game over team_stats table
-    if home_pit and home_pit.get("runs_pg") and home_pit.get("games_played", 0) >= 10:
-        home_off = home_pit["runs_pg"]
-    else:
-        home_off = _team_offense_rating(home_stats)
-
-    if away_pit and away_pit.get("runs_pg") and away_pit.get("games_played", 0) >= 10:
-        away_off = away_pit["runs_pg"]
-    else:
-        away_off = _team_offense_rating(away_stats)
+    # Blend PIT data with league average based on sample size.
+    # Early season: lean on league avg. Mid-season: lean on PIT data.
+    home_off = _blended_offense(home_pit, home_stats)
+    away_off = _blended_offense(away_pit, away_stats)
 
     # ── Step 2: Starting pitcher adjustment ──
-    # Prefer PIT pitcher ERA over season-aggregate stats
-    if home_sp_pit and home_sp_pit.get("era") and home_sp_pit.get("games_started", 0) >= 3:
-        home_sp_factor = home_sp_pit["era"] / MLB_AVG_ERA
-        home_sp_factor = max(0.60, min(1.50, home_sp_factor))
-    else:
-        home_sp_factor = _pitcher_factor(home_sp)
-
-    if away_sp_pit and away_sp_pit.get("era") and away_sp_pit.get("games_started", 0) >= 3:
-        away_sp_factor = away_sp_pit["era"] / MLB_AVG_ERA
-        away_sp_factor = max(0.60, min(1.50, away_sp_factor))
-    else:
-        away_sp_factor = _pitcher_factor(away_sp)
+    home_sp_factor = _blended_pitcher(home_sp_pit, home_sp)
+    away_sp_factor = _blended_pitcher(away_sp_pit, away_sp)
 
     # Home offense scores against away SP, away offense against home SP
     home_xr = home_off * away_sp_factor
@@ -354,6 +338,64 @@ def _team_offense_rating(stats: dict) -> float:
         base = MLB_AVG_RPG * ops_factor * 0.5 + base * 0.5
 
     return base
+
+
+def _blended_offense(pit: dict | None, stats: dict) -> float:
+    """
+    Blend PIT runs/game with league average based on sample size.
+    Small sample: mostly league avg. Large sample: mostly PIT data.
+    """
+    base = _team_offense_rating(stats)  # From team_stats table or league avg
+
+    if not pit or not pit.get("runs_pg"):
+        return base
+
+    gp = pit.get("games_played", 0)
+    pit_rpg = pit["runs_pg"]
+
+    if gp == 0:
+        return base
+    elif gp < 5:
+        # Very small sample — 20% PIT, 80% baseline
+        return pit_rpg * 0.20 + base * 0.80
+    elif gp < 15:
+        # Small sample — 50% PIT, 50% baseline
+        return pit_rpg * 0.50 + base * 0.50
+    elif gp < 30:
+        # Moderate — 75% PIT, 25% baseline
+        return pit_rpg * 0.75 + base * 0.25
+    else:
+        # Full confidence in PIT data
+        return pit_rpg
+
+
+def _blended_pitcher(sp_pit: dict | None, sp_db: dict | None) -> float:
+    """
+    Blend PIT pitcher ERA with DB stats or league average.
+    Small sample: mostly league avg. More starts: mostly PIT.
+    """
+    db_factor = _pitcher_factor(sp_db)
+
+    if not sp_pit or not sp_pit.get("era"):
+        return db_factor
+
+    starts = sp_pit.get("games_started", 0)
+    pit_factor = sp_pit["era"] / MLB_AVG_ERA
+    pit_factor = max(0.60, min(1.50, pit_factor))
+
+    if starts == 0:
+        return db_factor
+    elif starts == 1:
+        # One start — 20% PIT, 80% baseline
+        return pit_factor * 0.20 + db_factor * 0.80
+    elif starts <= 3:
+        # 50/50 blend
+        return pit_factor * 0.50 + db_factor * 0.50
+    elif starts <= 8:
+        # 75% PIT
+        return pit_factor * 0.75 + db_factor * 0.25
+    else:
+        return pit_factor
 
 
 def _pitcher_factor(sp: dict | None) -> float:

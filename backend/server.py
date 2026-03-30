@@ -397,6 +397,10 @@ def _parse_espn_scoreboard(data: dict) -> list[dict]:
                 "over_under": o.get("overUnder"),
                 "home_ml": o.get("homeTeamOdds", {}).get("moneyLine"),
                 "away_ml": o.get("awayTeamOdds", {}).get("moneyLine"),
+                "home_spread_odds": o.get("homeTeamOdds", {}).get("spreadOdds"),
+                "away_spread_odds": o.get("awayTeamOdds", {}).get("spreadOdds"),
+                "over_odds": o.get("overOdds"),
+                "under_odds": o.get("underOdds"),
             }
 
         games.append(game)

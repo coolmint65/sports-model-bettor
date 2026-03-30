@@ -127,6 +127,66 @@ body {
   transform: translateY(-1px);
 }
 
+.game-card.card-strong { border-color: rgba(52, 211, 153, 0.35); }
+.game-card.card-moderate { border-color: rgba(96, 165, 250, 0.30); }
+
+/* Pick badge on game card */
+.pick-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+.pick-badge.badge-strong {
+  background: rgba(52, 211, 153, 0.10);
+  color: #34d399;
+}
+
+.pick-badge.badge-moderate {
+  background: rgba(96, 165, 250, 0.08);
+  color: #60a5fa;
+}
+
+.pick-badge.badge-lean {
+  background: rgba(148, 163, 184, 0.06);
+  color: #94a3b8;
+}
+
+.pick-badge-type {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.7;
+}
+
+.pick-badge-pick { font-weight: 700; }
+
+.pick-badge-edge {
+  margin-left: auto;
+  font-size: 0.68rem;
+}
+
+.edge-count {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #34d399;
+  margin-left: 12px;
+}
+
+.team-streak {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: #1e293b;
+  color: #94a3b8;
+}
+
 .game-card.live {
   border-color: #22c55e40;
 }
