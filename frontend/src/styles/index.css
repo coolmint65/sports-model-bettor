@@ -1284,6 +1284,157 @@ body {
 }
 
 /* ═══════════════════════════════════════════
+   Best Bets
+   ═══════════════════════════════════════════ */
+.best-bets-page { animation: fadeIn 0.2s ease; }
+
+.bb-subtitle {
+  font-size: 0.8rem;
+  color: #64748b;
+  margin-bottom: 20px;
+}
+
+.bb-section { margin-bottom: 24px; }
+
+.bb-tier {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 6px 12px;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  display: inline-block;
+}
+
+.bb-tier.strong { background: rgba(52, 211, 153, 0.12); color: #34d399; }
+.bb-tier.moderate { background: rgba(96, 165, 250, 0.10); color: #60a5fa; }
+.bb-tier.lean { background: rgba(148, 163, 184, 0.08); color: #94a3b8; }
+
+.bb-card {
+  background: #111827;
+  border: 1px solid #1e293b;
+  border-radius: 12px;
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+
+.bb-card.conf-strong { border-color: rgba(52, 211, 153, 0.30); }
+.bb-card.conf-moderate { border-color: rgba(96, 165, 250, 0.25); }
+
+.bb-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 20px;
+  border-bottom: 1px solid #1e293b;
+}
+
+.bb-matchup {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.bb-logo { width: 24px; height: 24px; object-fit: contain; }
+
+.bb-teams {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #f8fafc;
+}
+
+.bb-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 0.78rem;
+  color: #64748b;
+}
+
+.bb-venue { color: #475569; }
+
+.bb-card-body { padding: 16px 20px; }
+
+.bb-best-pick {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  margin-bottom: 14px;
+}
+
+.bb-best-pick.conf-strong { background: rgba(52, 211, 153, 0.08); }
+.bb-best-pick.conf-moderate { background: rgba(96, 165, 250, 0.06); }
+.bb-best-pick.conf-lean { background: rgba(148, 163, 184, 0.05); }
+
+.bb-pick-type {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #64748b;
+  width: 60px;
+}
+
+.bb-pick-name {
+  font-size: 1.1rem;
+  font-weight: 800;
+  color: #f8fafc;
+  flex: 1;
+}
+
+.bb-pick-edge {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #34d399;
+}
+
+.bb-pick-prob {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #94a3b8;
+}
+
+.bb-all-picks {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-bottom: 12px;
+}
+
+.bb-pick-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid #1e293b;
+  font-size: 0.8rem;
+}
+
+.bb-pick-row:last-child { border-bottom: none; }
+.bb-pick-row.best { font-weight: 600; }
+
+.bb-pr-type { color: #64748b; width: 55px; font-size: 0.72rem; text-transform: uppercase; }
+.bb-pr-pick { color: #e2e8f0; flex: 1; }
+.bb-pr-prob { color: #94a3b8; width: 50px; text-align: right; }
+.bb-pr-edge { width: 55px; text-align: right; font-weight: 600; }
+
+.bb-summary {
+  display: flex;
+  gap: 16px;
+  font-size: 0.75rem;
+  color: #64748b;
+  padding-top: 10px;
+  border-top: 1px solid #1e293b;
+}
+
+/* ═══════════════════════════════════════════
+   Pick History
+   ═══════════════════════════════════════════ */
+.history-page { animation: fadeIn 0.2s ease; }
+
+/* ═══════════════════════════════════════════
    Responsive
    ═══════════════════════════════════════════ */
 @media (max-width: 768px) {

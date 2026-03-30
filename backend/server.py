@@ -406,6 +406,206 @@ def api_predict(req: PredictRequest):
     return result
 
 
+@app.get("/api/best-bets")
+def api_best_bets():
+    """
+    Run predictions on all today's games and return best plays sorted by edge.
+    Each game gets its top pick with edge calculation vs average odds.
+    """
+    # Get today's scoreboard
+    target_date = datetime.now().strftime("%Y-%m-%d")
+    espn_date = target_date.replace("-", "")
+
+    url = f"{ESPN_BASE}/baseball/mlb/scoreboard"
+    espn_data = _fetch_espn_json(url)
+    if not espn_data:
+        return []
+
+    games = _parse_espn_scoreboard(espn_data)
+    games = _enrich_games(games, target_date)
+
+    bets = []
+    for game in games:
+        home_id = game["home"].get("team_id")
+        away_id = game["away"].get("team_id")
+        if not home_id or not away_id:
+            continue
+
+        # Skip live/final games
+        if game["status"]["state"] != "pre":
+            continue
+
+        home_pid = game.get("home_pitcher", {})
+        away_pid = game.get("away_pitcher", {})
+
+        try:
+            pred = predict_matchup(
+                home_team_id=home_id,
+                away_team_id=away_id,
+                home_pitcher_id=int(home_pid["id"]) if home_pid and home_pid.get("id") else None,
+                away_pitcher_id=int(away_pid["id"]) if away_pid and away_pid.get("id") else None,
+                venue=game.get("venue"),
+            )
+        except Exception:
+            continue
+
+        if "error" in pred:
+            continue
+
+        wp = pred.get("win_prob", {})
+        es = pred.get("expected_score", {})
+        fi = pred.get("first_inning", {})
+        rl = pred.get("run_line", {})
+        total = pred.get("total", 0)
+        odds = game.get("odds") or {}
+
+        h_abbr = game["home"]["abbreviation"]
+        a_abbr = game["away"]["abbreviation"]
+
+        # Collect all picks for this game
+        game_picks = []
+
+        # ML
+        if wp.get("home") and wp.get("away"):
+            fav = h_abbr if wp["home"] > wp["away"] else a_abbr
+            fav_prob = max(wp["home"], wp["away"])
+            ml_odds = odds.get("home_ml") if wp["home"] > wp["away"] else odds.get("away_ml")
+            implied = abs(ml_odds) / (abs(ml_odds) + 100) if ml_odds and ml_odds < 0 else 100 / (ml_odds + 100) if ml_odds and ml_odds > 0 else 0.55
+            edge = (fav_prob - implied) * 100
+            game_picks.append({
+                "type": "ML", "pick": fav, "prob": fav_prob,
+                "edge": round(edge, 1), "odds": ml_odds,
+            })
+
+        # O/U
+        vegas_total = odds.get("over_under")
+        if vegas_total and pred.get("over_under"):
+            ou_data = _find_ou(pred["over_under"], vegas_total)
+            if ou_data:
+                ou_pick = "Over" if ou_data["over"] > ou_data["under"] else "Under"
+                ou_prob = max(ou_data["over"], ou_data["under"])
+                ou_edge = (ou_prob - 0.524) * 100
+                game_picks.append({
+                    "type": "O/U", "pick": f"{ou_pick} {vegas_total}",
+                    "prob": ou_prob, "edge": round(ou_edge, 1),
+                })
+
+        # NRFI
+        nrfi = fi.get("nrfi", 0.5)
+        nrfi_pick = "NRFI" if nrfi > 0.5 else "YRFI"
+        nrfi_prob = nrfi if nrfi > 0.5 else fi.get("yrfi", 0.5)
+        nrfi_edge = (nrfi_prob - 0.545) * 100  # -120 implied
+        if abs(nrfi_edge) > 1:
+            game_picks.append({
+                "type": "1st INN", "pick": nrfi_pick,
+                "prob": nrfi_prob, "edge": round(nrfi_edge, 1),
+            })
+
+        # Run Line
+        if rl.get("model_spread") is not None:
+            spread = rl["model_spread"]
+            rl_pick = f"{h_abbr} -{abs(spread)}" if spread > 0 else f"{a_abbr} -{abs(spread)}" if spread < 0 else "PK"
+            rl_p = rl.get("home_minus_1_5", 0.5) if spread > 0 else rl.get("away_plus_1_5", 0.5)
+            rl_edge = (rl_p - 0.524) * 100
+            game_picks.append({
+                "type": "RL", "pick": rl_pick,
+                "prob": rl_p, "edge": round(rl_edge, 1),
+            })
+
+        if not game_picks:
+            continue
+
+        # Sort picks by edge, take best
+        game_picks.sort(key=lambda p: p["edge"], reverse=True)
+        best = game_picks[0]
+
+        # Confidence level
+        conf = "strong" if best["edge"] > 8 else "moderate" if best["edge"] > 4 else "lean" if best["edge"] > 1.5 else "skip"
+
+        bets.append({
+            "game_id": game["id"],
+            "matchup": f"{a_abbr} @ {h_abbr}",
+            "home": game["home"],
+            "away": game["away"],
+            "time": game["date"],
+            "venue": game.get("venue", ""),
+            "best_pick": best,
+            "all_picks": game_picks[:4],
+            "confidence": conf,
+            "prediction_summary": {
+                "home_score": round(es.get("home", 0)),
+                "away_score": round(es.get("away", 0)),
+                "total": round(total, 1),
+                "home_wp": round(wp.get("home", 0.5), 3),
+                "away_wp": round(wp.get("away", 0.5), 3),
+                "spread": pred.get("spread", 0),
+            },
+            "situational": pred.get("situational"),
+        })
+
+    # Sort by best edge
+    bets.sort(key=lambda b: b["best_pick"]["edge"], reverse=True)
+    return bets
+
+
+def _find_ou(ou_lines, vegas_total):
+    """Find the O/U entry closest to the Vegas total."""
+    vt = float(vegas_total)
+    for fmt in [str(vt), f"{vt:.1f}", str(int(vt))]:
+        if fmt in ou_lines:
+            return ou_lines[fmt]
+    # Closest
+    best_key = min(ou_lines.keys(), key=lambda k: abs(float(k) - vt), default=None)
+    return ou_lines.get(best_key) if best_key else None
+
+
+@app.get("/api/tracker/history")
+def api_pick_history():
+    """Return recent pick history with results."""
+    conn = get_conn()
+    picks = conn.execute("""
+        SELECT * FROM picks ORDER BY created_at DESC LIMIT 50
+    """).fetchall()
+    return [dict(p) for p in picks]
+
+
+@app.get("/api/teams/{team_id}/profile")
+def api_team_profile(team_id: int):
+    """Full team profile with stats, recent games, and form."""
+    team = get_team_by_id(team_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    record = get_team_record(team_id, SEASON) or {}
+    recent = get_recent_games(team_id, 15)
+    bp = get_bullpen(team_id, SEASON) or {}
+
+    # PIT stats for deeper analysis
+    from engine.pit_stats import compute_team_stats_at_date
+    today = datetime.now().strftime("%Y-%m-%d")
+    pit = compute_team_stats_at_date(team_id, today, SEASON)
+
+    # Get roster pitchers
+    conn = get_conn()
+    pitchers = conn.execute("""
+        SELECT p.mlb_id, p.name, p.throws,
+               ps.era, ps.whip, ps.k_per_9, ps.wins, ps.losses, ps.innings
+        FROM players p
+        LEFT JOIN pitcher_stats ps ON p.mlb_id = ps.player_id AND ps.season = ?
+        WHERE p.team_id = ? AND p.position = 'P' AND p.active = 1
+        ORDER BY ps.innings DESC
+    """, (SEASON, team_id)).fetchall()
+
+    return {
+        "team": team,
+        "record": record,
+        "pit_stats": pit,
+        "bullpen": bp,
+        "recent_games": recent,
+        "pitchers": [dict(p) for p in pitchers],
+    }
+
+
 @app.get("/api/debug/teams")
 def api_debug_teams():
     """Debug: dump raw team data to see league/division values."""

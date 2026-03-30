@@ -4,6 +4,8 @@ import Scoreboard from './components/Scoreboard'
 import GameDetail from './components/GameDetail'
 import Standings from './components/Standings'
 import Backtest from './components/Backtest'
+import BestBets from './components/BestBets'
+import PickHistory from './components/PickHistory'
 
 const api = axios.create({ baseURL: '/api' })
 
@@ -17,21 +19,22 @@ export default function App() {
   const [standings, setStandings] = useState([])
   const [backtest, setBacktest] = useState(null)
   const [btLoading, setBtLoading] = useState(false)
+  const [bestBets, setBestBets] = useState(null)
+  const [bbLoading, setBbLoading] = useState(false)
+  const [pickSummary, setPickSummary] = useState(null)
+  const [pickHistory, setPickHistory] = useState(null)
+  const [phLoading, setPhLoading] = useState(false)
 
   // Load today's games on mount + auto-refresh every 5 min
   useEffect(() => {
     const fetchGames = () => {
-      api.get('/scoreboard')
-        .then(r => setGames(r.data))
-        .catch(() => {})
+      api.get('/scoreboard').then(r => setGames(r.data)).catch(() => {})
     }
-
     setGamesLoading(true)
     api.get('/scoreboard')
       .then(r => setGames(r.data))
       .catch(() => setGames([]))
       .finally(() => setGamesLoading(false))
-
     const interval = setInterval(fetchGames, 5 * 60 * 1000)
     return () => clearInterval(interval)
   }, [])
@@ -44,19 +47,14 @@ export default function App() {
 
     const homeId = game.home.team_id
     const awayId = game.away.team_id
-    if (!homeId || !awayId) {
-      setPredLoading(false)
-      return
-    }
+    if (!homeId || !awayId) { setPredLoading(false); return }
 
-    const homePitcherId = game.home_pitcher?.id ? parseInt(game.home_pitcher.id) : null
-    const awayPitcherId = game.away_pitcher?.id ? parseInt(game.away_pitcher.id) : null
+    const homePid = game.home_pitcher?.id ? parseInt(game.home_pitcher.id) : null
+    const awayPid = game.away_pitcher?.id ? parseInt(game.away_pitcher.id) : null
 
     api.post('/predict', {
-      home_team_id: homeId,
-      away_team_id: awayId,
-      home_pitcher_id: homePitcherId,
-      away_pitcher_id: awayPitcherId,
+      home_team_id: homeId, away_team_id: awayId,
+      home_pitcher_id: homePid, away_pitcher_id: awayPid,
       venue: game.venue || null,
     })
       .then(r => setPrediction(r.data))
@@ -65,30 +63,18 @@ export default function App() {
   }, [])
 
   const showStandings = useCallback(() => {
-    setView('standings')
-    setSelectedGame(null)
+    setView('standings'); setSelectedGame(null)
     if (standings.length === 0) {
-      api.get('/standings')
-        .then(r => setStandings(r.data))
-        .catch(() => {})
+      api.get('/standings').then(r => setStandings(r.data)).catch(() => {})
     }
   }, [standings.length])
 
   const showBacktest = useCallback(() => {
-    setView('backtest')
-    setSelectedGame(null)
-    if (!backtest) {
-      setBtLoading(true)
-      api.get('/backtest')
-        .then(r => setBacktest(r.data))
-        .catch(() => setBacktest({ error: "No historical data. Run sync.bat --full first." }))
-        .finally(() => setBtLoading(false))
-    }
-  }, [backtest])
+    setView('backtest'); setSelectedGame(null)
+  }, [])
 
   const runBacktest = useCallback((days, minEdge, season) => {
-    setBtLoading(true)
-    setBacktest(null)
+    setBtLoading(true); setBacktest(null)
     const params = new URLSearchParams()
     if (days) params.set('days', days)
     if (minEdge) params.set('min_edge', minEdge)
@@ -99,10 +85,45 @@ export default function App() {
       .finally(() => setBtLoading(false))
   }, [])
 
+  const showBestBets = useCallback(() => {
+    setView('best-bets'); setSelectedGame(null)
+    setBbLoading(true)
+    api.get('/best-bets')
+      .then(r => setBestBets(r.data))
+      .catch(() => setBestBets([]))
+      .finally(() => setBbLoading(false))
+  }, [])
+
+  const showHistory = useCallback(() => {
+    setView('history'); setSelectedGame(null)
+    setPhLoading(true)
+    Promise.all([
+      api.get('/tracker/summary'),
+      api.get('/tracker/history'),
+    ]).then(([s, h]) => {
+      setPickSummary(s.data)
+      setPickHistory(h.data)
+    }).catch(() => {})
+      .finally(() => setPhLoading(false))
+  }, [])
+
+  const recordPicks = useCallback(() => {
+    api.post('/tracker/record').then(() => {
+      // Refresh
+      api.get('/tracker/summary').then(r => setPickSummary(r.data))
+      api.get('/tracker/history').then(r => setPickHistory(r.data))
+    })
+  }, [])
+
+  const settlePicks = useCallback(() => {
+    api.post('/tracker/settle').then(() => {
+      api.get('/tracker/summary').then(r => setPickSummary(r.data))
+      api.get('/tracker/history').then(r => setPickHistory(r.data))
+    })
+  }, [])
+
   const goBack = useCallback(() => {
-    setSelectedGame(null)
-    setPrediction(null)
-    setView('games')
+    setSelectedGame(null); setPrediction(null); setView('games')
   }, [])
 
   return (
@@ -113,53 +134,51 @@ export default function App() {
       </div>
 
       <nav className="nav-tabs">
-        <button
-          className={`nav-tab ${view === 'games' && !selectedGame ? 'active' : ''}`}
-          onClick={goBack}
-        >
-          Today's Games
+        <button className={`nav-tab ${view === 'games' && !selectedGame ? 'active' : ''}`} onClick={goBack}>
+          Games
         </button>
-        <button
-          className={`nav-tab ${view === 'standings' ? 'active' : ''}`}
-          onClick={showStandings}
-        >
+        <button className={`nav-tab ${view === 'best-bets' ? 'active' : ''}`} onClick={showBestBets}>
+          Best Bets
+        </button>
+        <button className={`nav-tab ${view === 'standings' ? 'active' : ''}`} onClick={showStandings}>
           Standings
         </button>
-        <button
-          className={`nav-tab ${view === 'backtest' ? 'active' : ''}`}
-          onClick={showBacktest}
-        >
-          Model Performance
+        <button className={`nav-tab ${view === 'history' ? 'active' : ''}`} onClick={showHistory}>
+          Pick Tracker
+        </button>
+        <button className={`nav-tab ${view === 'backtest' ? 'active' : ''}`} onClick={showBacktest}>
+          Backtest
         </button>
       </nav>
 
       {view === 'games' && !selectedGame && (
-        <Scoreboard
-          games={games}
-          loading={gamesLoading}
-          onSelectGame={selectGame}
-        />
+        <Scoreboard games={games} loading={gamesLoading} onSelectGame={selectGame} />
       )}
 
       {selectedGame && (
-        <GameDetail
-          game={selectedGame}
-          prediction={prediction}
-          loading={predLoading}
-          onBack={goBack}
-        />
+        <GameDetail game={selectedGame} prediction={prediction} loading={predLoading} onBack={goBack} />
+      )}
+
+      {view === 'best-bets' && (
+        <BestBets bets={bestBets} loading={bbLoading} />
       )}
 
       {view === 'standings' && (
         <Standings divisions={standings} />
       )}
 
-      {view === 'backtest' && (
-        <Backtest
-          data={backtest}
-          loading={btLoading}
-          onRun={runBacktest}
+      {view === 'history' && (
+        <PickHistory
+          summary={pickSummary}
+          history={pickHistory}
+          loading={phLoading}
+          onRecord={recordPicks}
+          onSettle={settlePicks}
         />
+      )}
+
+      {view === 'backtest' && (
+        <Backtest data={backtest} loading={btLoading} onRun={runBacktest} />
       )}
     </div>
   )
