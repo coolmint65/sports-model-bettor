@@ -72,10 +72,13 @@ def fetch_dk_odds() -> dict:
                 break
 
         if not game_lines:
-            # Try first category
             game_lines = offer_cats[0]
 
+        # Debug: log structure
+        logger.info("DK categories: %s", [c.get("name") for c in offer_cats])
+
         subcats = game_lines.get("offerSubcategoryDescriptors", [])
+        logger.info("DK subcategories: %s", [s.get("name") for s in subcats])
 
         for subcat in subcats:
             offers = subcat.get("offerSubcategory", {}).get("offers", [])
@@ -87,6 +90,12 @@ def fetch_dk_odds() -> dict:
 
                     label = offer.get("label", "").lower()
                     outcomes = offer.get("outcomes", [])
+
+                    # Debug: log first offer structure
+                    if not odds_map and outcomes:
+                        logger.info("DK offer label='%s' keys=%s", label, list(offer.keys()))
+                        logger.info("DK outcome[0] keys=%s", list(outcomes[0].keys()) if outcomes else [])
+                        logger.info("DK outcome[0]=%s", outcomes[0] if outcomes else {})
 
                     if len(outcomes) < 2:
                         continue
