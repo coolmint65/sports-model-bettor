@@ -54,6 +54,14 @@ python -m scrapers.mlb_stats --history %2
 goto :calibrate
 
 :quick
+REM Check if DB needs rebuild (missing linescore data)
+python -c "from engine.db import get_conn; c=get_conn(); r=c.execute('SELECT COUNT(*) as c FROM games WHERE status=\"final\" AND home_linescore IS NOT NULL').fetchone(); exit(0 if r['c'] > 10 else 1)" 2>nul
+if errorlevel 1 (
+    echo Database needs rebuild (missing linescore data).
+    echo Running season reload first...
+    python -m scrapers.mlb_stats --season
+    echo.
+)
 echo Running quick sync (teams, today's games, standings)...
 echo.
 python -m scrapers.mlb_stats
