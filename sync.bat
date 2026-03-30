@@ -19,25 +19,37 @@ REM Create logs directory
 if not exist "data\logs" mkdir "data\logs"
 
 echo.
-if "%1"=="--full" (
-    echo Running FULL data sync (teams, rosters, all games, player stats)...
-    echo This will take 10-15 minutes.
-    echo.
-    python -m scrapers.mlb_stats --full
-    echo.
-    echo Running advanced stats (Statcast + FanGraphs)...
-    python -m scrapers.mlb_advanced
-) else if "%1"=="--daily" (
-    echo Running daily sync...
-    python -m scrapers.mlb_stats --daily
-) else if "%1"=="--standings" (
-    echo Updating standings...
-    python -m scrapers.mlb_stats --standings
-) else (
-    echo Running quick sync (teams, today's games, standings)...
-    echo.
-    python -m scrapers.mlb_stats
-)
+
+if "%1"=="--full" goto :full
+if "%1"=="--daily" goto :daily
+if "%1"=="--standings" goto :standings
+goto :quick
+
+:full
+echo Running FULL data sync (teams, rosters, all games, player stats)...
+echo This will take 10-15 minutes.
+echo.
+python -m scrapers.mlb_stats --full
+echo.
+echo Running advanced stats (Statcast + FanGraphs)...
+python -m scrapers.mlb_advanced
+goto :done
+
+:daily
+echo Running daily sync...
+python -m scrapers.mlb_stats --daily
+goto :done
+
+:standings
+echo Updating standings...
+python -m scrapers.mlb_stats --standings
+goto :done
+
+:quick
+echo Running quick sync (teams, today's games, standings)...
+echo.
+python -m scrapers.mlb_stats
+goto :done
 
 :done
 echo.
