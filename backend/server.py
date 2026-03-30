@@ -123,6 +123,7 @@ def api_scoreboard(date: str = Query(default="")):
     """
     Return today's MLB games.
     Combines ESPN live data with our DB data (probable pitchers, records).
+    Falls back to MLB Stats API if ESPN is unavailable.
     """
     target_date = date or datetime.now().strftime("%Y-%m-%d")
     espn_date = target_date.replace("-", "")
@@ -134,7 +135,9 @@ def api_scoreboard(date: str = Query(default="")):
         if now - ts < CACHE_TTL:
             return cached
 
-    # Fetch from ESPN — try with and without date param
+    games = []
+
+    # Primary: ESPN
     url = f"{ESPN_BASE}/baseball/mlb/scoreboard?dates={espn_date}"
     logger.info("Fetching scoreboard: %s", url)
     espn_data = _fetch_espn_json(url)
@@ -155,21 +158,99 @@ def api_scoreboard(date: str = Query(default="")):
     else:
         logger.warning("ESPN returned no data for %s", url)
 
-    # If no games found for the specific date, try without date param
-    # (ESPN defaults to today's games in their timezone)
+    # ESPN fallback: try without date param
     if not games and date == "":
         fallback_url = f"{ESPN_BASE}/baseball/mlb/scoreboard"
-        logger.info("Trying fallback (no date): %s", fallback_url)
+        logger.info("ESPN fallback (no date): %s", fallback_url)
         espn_data = _fetch_espn_json(fallback_url)
         if espn_data:
             events = espn_data.get("events", [])
             logger.info("Fallback returned %d events", len(events))
             games = _parse_espn_scoreboard(espn_data)
 
+    # Secondary fallback: MLB Stats API (if ESPN is completely down)
+    if not games:
+        logger.warning("ESPN unavailable, falling back to MLB Stats API")
+        games = _mlb_api_scoreboard(target_date)
+
     # Enrich with our DB data
     games = _enrich_games(games, target_date)
 
     _scoreboard_cache[cache_key] = (now, games)
+    return games
+
+
+def _mlb_api_scoreboard(date: str) -> list[dict]:
+    """Fallback scoreboard using MLB Stats API when ESPN is down."""
+    MLB_API = "https://statsapi.mlb.com/api/v1"
+    url = (f"{MLB_API}/schedule?sportId=1&date={date}"
+           f"&hydrate=probablePitcher,linescore,team")
+    data = _fetch_espn_json(url)  # Reuse the fetch helper
+    if not data:
+        return []
+
+    games = []
+    for date_entry in data.get("dates", []):
+        for g in date_entry.get("games", []):
+            status_code = g.get("status", {}).get("abstractGameCode", "")
+            home = g.get("teams", {}).get("home", {})
+            away = g.get("teams", {}).get("away", {})
+
+            home_team = home.get("team", {})
+            away_team = away.get("team", {})
+
+            home_pp = home.get("probablePitcher", {})
+            away_pp = away.get("probablePitcher", {})
+
+            state = {"P": "pre", "S": "pre", "L": "in", "I": "in", "F": "post"}.get(status_code, "pre")
+
+            game = {
+                "id": str(g.get("gamePk", "")),
+                "game_pk": g.get("gamePk", 0),
+                "date": g.get("gameDate", ""),
+                "name": f"{away_team.get('name', '')} @ {home_team.get('name', '')}",
+                "short_name": f"{away_team.get('abbreviation', '')} @ {home_team.get('abbreviation', '')}",
+                "home": {
+                    "espn_id": str(home_team.get("id", "")),
+                    "name": home_team.get("name", ""),
+                    "abbreviation": home_team.get("abbreviation", ""),
+                    "score": str(home.get("score", "0")),
+                    "record": f"{home.get('leagueRecord', {}).get('wins', 0)}-{home.get('leagueRecord', {}).get('losses', 0)}",
+                    "logo": "",
+                    "winner": False,
+                },
+                "away": {
+                    "espn_id": str(away_team.get("id", "")),
+                    "name": away_team.get("name", ""),
+                    "abbreviation": away_team.get("abbreviation", ""),
+                    "score": str(away.get("score", "0")),
+                    "record": f"{away.get('leagueRecord', {}).get('wins', 0)}-{away.get('leagueRecord', {}).get('losses', 0)}",
+                    "logo": "",
+                    "winner": False,
+                },
+                "home_pitcher": {
+                    "name": home_pp.get("fullName", "TBD"),
+                    "id": home_pp.get("id"),
+                } if home_pp else None,
+                "away_pitcher": {
+                    "name": away_pp.get("fullName", "TBD"),
+                    "id": away_pp.get("id"),
+                } if away_pp else None,
+                "status": {
+                    "state": state,
+                    "detail": g.get("status", {}).get("detailedState", ""),
+                    "description": "",
+                    "completed": state == "post",
+                    "inning": g.get("linescore", {}).get("currentInning", 0),
+                    "inning_half": g.get("linescore", {}).get("inningHalf", ""),
+                },
+                "venue": g.get("venue", {}).get("name", ""),
+                "broadcast": "",
+                "odds": None,
+            }
+            games.append(game)
+
+    logger.info("MLB API fallback returned %d games", len(games))
     return games
 
 
@@ -604,6 +685,23 @@ def api_team_profile(team_id: int):
         "recent_games": recent,
         "pitchers": [dict(p) for p in pitchers],
     }
+
+
+@app.post("/api/calibrate")
+def api_calibrate(days: int = Query(default=30)):
+    """Run model self-calibration on recent games."""
+    from engine.calibration import calibrate
+    from engine.mlb_predict import reload_weights
+    report = calibrate(days=days)
+    reload_weights()  # Refresh cached weights
+    return report
+
+
+@app.get("/api/calibration/status")
+def api_calibration_status():
+    """Return current model weights and calibration info."""
+    from engine.calibration import get_calibration_status
+    return get_calibration_status()
 
 
 @app.get("/api/debug/teams")

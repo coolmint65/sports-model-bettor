@@ -40,6 +40,22 @@ MLB_AVG_BB9 = 3.2
 MLB_AVG_WRC_PLUS = 100     # By definition
 MLB_HOME_EDGE = 0.28       # ~0.28 runs home advantage
 
+# Calibrated weights — loaded from DB on first use, updated by calibration system
+_cached_weights = None
+
+def _get_weights() -> dict:
+    """Load calibrated weights (cached after first call)."""
+    global _cached_weights
+    if _cached_weights is None:
+        from .calibration import get_weights
+        _cached_weights = get_weights()
+    return _cached_weights
+
+def reload_weights():
+    """Force reload weights from DB (call after calibration)."""
+    global _cached_weights
+    _cached_weights = None
+
 
 # ── Core prediction ──────────────────────────────────────────
 
@@ -132,8 +148,10 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     away_xr *= park_run_factor
 
     # ── Step 5: Home advantage ──
-    home_xr += MLB_HOME_EDGE / 2
-    away_xr -= MLB_HOME_EDGE / 2
+    w = _get_weights()
+    home_edge = w.get("home_edge", MLB_HOME_EDGE)
+    home_xr += home_edge / 2
+    away_xr -= home_edge / 2
 
     # ── Step 6: Situational adjustments ──
     # Weather, rest/fatigue, pitcher rest, lineup strength, platoon
