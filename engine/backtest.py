@@ -1,60 +1,70 @@
 """
-MLB Model Backtester.
+MLB Model Backtester — v2.
 
-Runs the prediction model against historical completed games to
-measure accuracy, ROI, and identify where the model has an edge.
+Runs the prediction model against historical games with:
+- Point-in-time stats (only data available before each game)
+- Real inning-by-inning NRFI validation from linescore data
+- Per-category results (ML, O/U, NRFI, RL all shown independently)
+- Realistic odds (-140 avg favorite, -110 for RL/OU, -120 NRFI)
 
 Usage:
-    python -m engine.backtest                    # Backtest current season
+    python -m engine.backtest                    # Current season
     python -m engine.backtest --season 2025      # Specific season
-    python -m engine.backtest --days 30          # Last 30 days only
-    python -m engine.backtest --min-edge 3       # Only bets with 3%+ edge
+    python -m engine.backtest --min-edge 3       # Only 3%+ edge bets
 """
 
+import json
 import logging
 import math
-from datetime import datetime, timedelta
+from datetime import datetime
 
-from .db import get_conn, get_team_by_id, get_team_record
-from .mlb_predict import predict_matchup, _poisson_prob
-from .bankroll import ml_to_implied_prob, ml_to_decimal
+from .db import get_conn, get_team_by_id
+from .mlb_predict import (
+    predict_matchup, _poisson_prob, _build_score_matrix,
+    _win_probs_from_matrix, MLB_AVG_RPG, MLB_HOME_EDGE,
+)
+from .pit_stats import compute_team_stats_at_date, compute_pitcher_stats_at_date
 
 logger = logging.getLogger(__name__)
 
 SEASON = datetime.now().year
 
+# Realistic average MLB odds
+AVG_FAV_ODDS = -140      # Average favorite line
+AVG_DOG_ODDS = 120       # Corresponding underdog
+RL_ODDS = -110           # Run line standard
+OU_ODDS = -110           # Over/under standard
+NRFI_ODDS = -120         # NRFI standard
+
 
 def run_backtest(season: int | None = None, days: int | None = None,
-                 min_edge: float = 0.0) -> dict:
+                 min_edge: float = 0.0, use_pit: bool = True) -> dict:
     """
     Run the model against completed games.
 
     Args:
-        season: Which season to test (default: current)
-        days: Only look at last N days (overrides season range)
-        min_edge: Minimum edge % to count as a bet (0 = bet everything)
-
-    Returns detailed results dict.
+        season: Which season to test
+        days: Only last N days
+        min_edge: Minimum edge % to count as a bet
+        use_pit: Use point-in-time stats (slower but accurate)
     """
     conn = get_conn()
     yr = season or SEASON
 
-    # Get completed games with scores
     if days:
+        from datetime import timedelta
         start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-        query = """
+        games = conn.execute("""
             SELECT * FROM games
             WHERE status = 'final' AND date >= ? AND season = ?
             ORDER BY date
-        """
-        games = conn.execute(query, (start_date, yr)).fetchall()
+        """, (start_date, yr)).fetchall()
     else:
-        query = """
+        games = conn.execute("""
             SELECT * FROM games
             WHERE status = 'final' AND season = ?
             ORDER BY date
-        """
-        games = conn.execute(query, (yr,)).fetchall()
+        """, (yr,)).fetchall()
 
     games = [dict(g) for g in games]
 
@@ -62,178 +72,244 @@ def run_backtest(season: int | None = None, days: int | None = None,
         return {"error": "No completed games found", "games_tested": 0}
 
     results = {
+        "season": yr,
         "games_tested": 0,
         "games_skipped": 0,
-        "moneyline": {"wins": 0, "losses": 0, "pushes": 0, "profit": 0.0},
-        "over_under": {"wins": 0, "losses": 0, "pushes": 0, "profit": 0.0},
-        "nrfi": {"wins": 0, "losses": 0, "pushes": 0, "profit": 0.0},
-        "run_line": {"wins": 0, "losses": 0, "pushes": 0, "profit": 0.0},
-        "f5": {"wins": 0, "losses": 0, "pushes": 0, "profit": 0.0},
-        "game_log": [],
+        "moneyline": _empty_cat(),
+        "over_under": _empty_cat(),
+        "nrfi": _empty_cat(),
+        "run_line": _empty_cat(),
     }
 
-    for game in games:
+    # Cache PIT stats to avoid recomputing for the same team/date
+    pit_cache = {}
+
+    for i, game in enumerate(games):
         home_id = game.get("home_team_id")
         away_id = game.get("away_team_id")
         home_score = game.get("home_score")
         away_score = game.get("away_score")
+        game_date = game.get("date", "")
 
         if not home_id or not away_id or home_score is None or away_score is None:
             results["games_skipped"] += 1
             continue
 
-        # Run prediction
-        pred = predict_matchup(
-            home_team_id=home_id,
-            away_team_id=away_id,
-            home_pitcher_id=game.get("home_pitcher_id"),
-            away_pitcher_id=game.get("away_pitcher_id"),
-            venue=game.get("venue"),
-        )
+        # ── Point-in-time stats ──
+        if use_pit and game_date:
+            home_pit = _cached_pit(pit_cache, home_id, game_date, yr)
+            away_pit = _cached_pit(pit_cache, away_id, game_date, yr)
+            home_sp_pit = None
+            away_sp_pit = None
+            if game.get("home_pitcher_id"):
+                home_sp_pit = compute_pitcher_stats_at_date(
+                    game["home_pitcher_id"], game_date, yr)
+            if game.get("away_pitcher_id"):
+                away_sp_pit = compute_pitcher_stats_at_date(
+                    game["away_pitcher_id"], game_date, yr)
+        else:
+            home_pit = away_pit = home_sp_pit = away_sp_pit = None
 
-        if "error" in pred:
-            results["games_skipped"] += 1
-            continue
+        # Skip early-season games with no history
+        if use_pit and home_pit and away_pit:
+            if home_pit.get("games_played", 0) < 10 or away_pit.get("games_played", 0) < 10:
+                results["games_skipped"] += 1
+                continue
+
+        # ── Build prediction from PIT data ──
+        home_xr, away_xr = _predict_from_pit(
+            home_pit, away_pit, home_sp_pit, away_sp_pit)
+
+        total_pred = home_xr + away_xr
+        matrix = _build_score_matrix(home_xr, away_xr, max_runs=15)
+        p_home, p_away = _win_probs_from_matrix(matrix)
 
         results["games_tested"] += 1
-
-        wp = pred.get("win_prob", {})
-        es = pred.get("expected_score", {})
-        total_pred = pred.get("total", 0)
-        fi = pred.get("first_inning", {})
-        rl = pred.get("run_line", {})
-        f5 = pred.get("f5", {})
-
         actual_total = home_score + away_score
         home_won = home_score > away_score
+        margin = home_score - away_score
 
         home_team = get_team_by_id(home_id)
         away_team = get_team_by_id(away_id)
         h_abbr = home_team["abbreviation"] if home_team else str(home_id)
         a_abbr = away_team["abbreviation"] if away_team else str(away_id)
 
-        game_entry = {
-            "date": game.get("date"),
-            "matchup": f"{a_abbr} @ {h_abbr}",
-            "actual": f"{home_score}-{away_score}",
-            "predicted": f"{round(es.get('home', 0))}-{round(es.get('away', 0))}",
-            "picks": {},
-        }
-
-        # ── Collect all candidate bets, then take highest conviction ──
-        candidates = []
-
-        # Moneyline
-        model_home = wp.get("home", 0.5)
-        model_away = wp.get("away", 0.5)
-        ml_pick_home = model_home > model_away
-        if ml_pick_home:
-            ml_prob, ml_implied, ml_odds = model_home, 0.60, -150
+        # ── Moneyline ──
+        fav_home = p_home > p_away
+        if fav_home:
+            ml_prob = p_home
+            ml_implied = abs(AVG_FAV_ODDS) / (abs(AVG_FAV_ODDS) + 100)
+            ml_odds = AVG_FAV_ODDS
         else:
-            ml_prob, ml_implied, ml_odds = model_away, 0.435, 130
+            ml_prob = p_away
+            ml_implied = 100 / (AVG_DOG_ODDS + 100)
+            ml_odds = AVG_DOG_ODDS
+
         ml_edge = (ml_prob - ml_implied) * 100
         if ml_edge >= min_edge:
-            ml_correct = (ml_pick_home and home_won) or (not ml_pick_home and not home_won)
-            candidates.append(("moneyline", h_abbr if ml_pick_home else a_abbr,
-                               ml_prob, ml_edge, ml_odds, ml_correct))
+            ml_correct = (fav_home and home_won) or (not fav_home and not home_won)
+            _record_bet(results["moneyline"], ml_correct, ml_odds)
 
-        # Over/Under
-        ou_line = 8.5
-        p_over = 0.5
-        if pred.get("over_under"):
-            for lk, probs in pred["over_under"].items():
-                if abs(float(lk) - ou_line) < 0.5:
-                    p_over = probs.get("over", 0.5)
-                    ou_line = float(lk)
-                    break
-        ou_pick_over = total_pred > ou_line
+        # ── Over/Under ──
+        ou_line = round(total_pred * 2) / 2  # Round to nearest 0.5
+        # Model probability for the side it picks
+        p_over = 0.0
+        for h in range(len(matrix)):
+            for a in range(len(matrix[0])):
+                if (h + a) > ou_line:
+                    p_over += matrix[h][a]
+        ou_pick_over = p_over > 0.50
         ou_prob = p_over if ou_pick_over else (1 - p_over)
-        ou_edge = (ou_prob - 0.524) * 100
+        ou_implied = abs(OU_ODDS) / (abs(OU_ODDS) + 100)
+        ou_edge = (ou_prob - ou_implied) * 100
+
         if ou_edge >= min_edge:
             if actual_total == ou_line:
-                ou_correct = None  # Push
+                pass  # Push, skip
+            elif ou_pick_over:
+                _record_bet(results["over_under"], actual_total > ou_line, OU_ODDS)
             else:
-                ou_correct = (ou_pick_over and actual_total > ou_line) or \
-                             (not ou_pick_over and actual_total < ou_line)
-            if ou_correct is not None:
-                ou_label = f"{'Over' if ou_pick_over else 'Under'} {ou_line}"
-                candidates.append(("over_under", ou_label, ou_prob, ou_edge, -110, ou_correct))
+                _record_bet(results["over_under"], actual_total < ou_line, OU_ODDS)
 
-        # NRFI
-        nrfi_prob_val = fi.get("nrfi", 0.5)
-        nrfi_pick = nrfi_prob_val > 0.50
-        nrfi_prob = nrfi_prob_val if nrfi_pick else fi.get("yrfi", 0.5)
-        nrfi_edge = (nrfi_prob - 0.524) * 100
-        if nrfi_edge >= min_edge:
-            home_1st_xr = (home_score / 9) * 1.05
-            away_1st_xr = (away_score / 9) * 1.05
-            actual_nrfi = _poisson_prob(home_1st_xr, 0) * _poisson_prob(away_1st_xr, 0)
-            game_hash = (game.get("mlb_game_id", 0) * 7 + home_score * 13 + away_score * 17) % 1000
-            scoreless = (game_hash / 1000) < actual_nrfi
-            nrfi_correct = (nrfi_pick and scoreless) or (not nrfi_pick and not scoreless)
-            candidates.append(("nrfi", "NRFI" if nrfi_pick else "YRFI",
-                               nrfi_prob, nrfi_edge, -120, nrfi_correct))
+        # ── NRFI ──
+        home_ls_raw = game.get("home_linescore")
+        away_ls_raw = game.get("away_linescore")
+        has_linescore = home_ls_raw and away_ls_raw
 
-        # Run Line
-        rl_h = rl.get("home_minus_1_5", 0.5)
-        rl_a = rl.get("away_plus_1_5", 0.5)
-        rl_pick_home = rl_h > 0.50
-        rl_prob = rl_h if rl_pick_home else rl_a
-        rl_edge = (rl_prob - 0.524) * 100
+        if has_linescore:
+            try:
+                h_inn = json.loads(home_ls_raw)
+                a_inn = json.loads(away_ls_raw)
+                if len(h_inn) > 0 and len(a_inn) > 0:
+                    actual_nrfi = (h_inn[0] == 0 and a_inn[0] == 0)
+
+                    # Model's NRFI probability
+                    first_inn_wt = 0.105
+                    h1_xr = home_xr * first_inn_wt
+                    a1_xr = away_xr * first_inn_wt
+                    model_nrfi = _poisson_prob(h1_xr, 0) * _poisson_prob(a1_xr, 0)
+
+                    nrfi_pick = model_nrfi > 0.50
+                    nrfi_prob = model_nrfi if nrfi_pick else (1 - model_nrfi)
+                    nrfi_implied = abs(NRFI_ODDS) / (abs(NRFI_ODDS) + 100)
+                    nrfi_edge = (nrfi_prob - nrfi_implied) * 100
+
+                    if nrfi_edge >= min_edge:
+                        nrfi_correct = (nrfi_pick and actual_nrfi) or \
+                                       (not nrfi_pick and not actual_nrfi)
+                        _record_bet(results["nrfi"], nrfi_correct, NRFI_ODDS)
+            except (json.JSONDecodeError, IndexError):
+                pass
+
+        # ── Run Line ──
+        p_home_cover = 0.0
+        for h in range(len(matrix)):
+            for a in range(len(matrix[0])):
+                if (h - a) >= 2:
+                    p_home_cover += matrix[h][a]
+        p_away_cover = 1 - p_home_cover  # Away +1.5
+
+        rl_pick_home = p_home_cover > 0.50
+        rl_prob = p_home_cover if rl_pick_home else p_away_cover
+        rl_implied = abs(RL_ODDS) / (abs(RL_ODDS) + 100)
+        rl_edge = (rl_prob - rl_implied) * 100
+
         if rl_edge >= min_edge:
-            margin = home_score - away_score
-            rl_correct = (margin >= 2) if rl_pick_home else (margin <= 1)
-            rl_label = f"{h_abbr} -1.5" if rl_pick_home else f"{a_abbr} +1.5"
-            candidates.append(("run_line", rl_label, rl_prob, rl_edge, -110, rl_correct))
+            if rl_pick_home:
+                rl_correct = margin >= 2
+            else:
+                rl_correct = margin <= 1
+            _record_bet(results["run_line"], rl_correct, RL_ODDS)
 
-        # ── Take only the highest-edge bet per game ──
-        if candidates:
-            candidates.sort(key=lambda c: c[3], reverse=True)  # Sort by edge
-            best = candidates[0]
-            bet_type, pick, prob, edge, odds, correct = best
-            payout = _calc_payout(odds, correct)
-            results[bet_type]["wins" if correct else "losses"] += 1
-            results[bet_type]["profit"] += payout
-            game_entry["picks"][bet_type] = {
-                "pick": pick, "prob": round(prob, 3),
-                "edge": round(edge, 1),
-                "result": "W" if correct else "L",
-                "payout": round(payout, 2),
-            }
-
-        results["game_log"].append(game_entry)
-
-    # ── Summary stats ──
-    for bet_type in ["moneyline", "over_under", "nrfi", "run_line"]:
-        bt = results[bet_type]
-        total_bets = bt["wins"] + bt["losses"]
-        bt["total_bets"] = total_bets
-        bt["win_pct"] = round(bt["wins"] / total_bets * 100, 1) if total_bets > 0 else 0
-        bt["roi"] = round(bt["profit"] / total_bets * 100, 1) if total_bets > 0 else 0
-        bt["profit"] = round(bt["profit"], 2)
+    # ── Compute summaries ──
+    for cat in ["moneyline", "over_under", "nrfi", "run_line"]:
+        _summarize(results[cat])
 
     return results
 
 
-def _calc_payout(odds: int, won: bool) -> float:
-    """Calculate profit/loss for a $100 bet."""
-    if won:
-        if odds > 0:
-            return odds  # +130 pays $130 on $100
-        else:
-            return 100 / abs(odds) * 100  # -150 pays $66.67 on $100
+def _predict_from_pit(home_pit, away_pit, home_sp_pit, away_sp_pit):
+    """
+    Generate expected runs from point-in-time stats.
+    Falls back to league averages when data is missing.
+    """
+    # Team offense
+    if home_pit and home_pit.get("runs_pg"):
+        home_off = home_pit["runs_pg"]
     else:
-        return -100  # Always risk $100
+        home_off = MLB_AVG_RPG
+
+    if away_pit and away_pit.get("runs_pg"):
+        away_off = away_pit["runs_pg"]
+    else:
+        away_off = MLB_AVG_RPG
+
+    # Pitcher adjustment
+    home_sp_factor = 1.0
+    away_sp_factor = 1.0
+
+    if home_sp_pit and home_sp_pit.get("era") and home_sp_pit["games_started"] >= 3:
+        home_sp_factor = home_sp_pit["era"] / 4.10  # vs league avg ERA
+        home_sp_factor = max(0.60, min(1.50, home_sp_factor))
+
+    if away_sp_pit and away_sp_pit.get("era") and away_sp_pit["games_started"] >= 3:
+        away_sp_factor = away_sp_pit["era"] / 4.10
+        away_sp_factor = max(0.60, min(1.50, away_sp_factor))
+
+    # Home scores against away SP, away scores against home SP
+    home_xr = home_off * away_sp_factor
+    away_xr = away_off * home_sp_factor
+
+    # Home edge
+    home_xr += MLB_HOME_EDGE / 2
+    away_xr -= MLB_HOME_EDGE / 2
+
+    # Floor
+    home_xr = max(home_xr, 1.5)
+    away_xr = max(away_xr, 1.5)
+
+    return home_xr, away_xr
+
+
+def _cached_pit(cache, team_id, date, season):
+    """Cache point-in-time stats to avoid recomputing."""
+    key = (team_id, date)
+    if key not in cache:
+        cache[key] = compute_team_stats_at_date(team_id, date, season)
+    return cache[key]
+
+
+def _empty_cat():
+    return {"wins": 0, "losses": 0, "pushes": 0, "profit": 0.0}
+
+
+def _record_bet(cat, won, odds):
+    if won:
+        cat["wins"] += 1
+        if odds > 0:
+            cat["profit"] += odds
+        else:
+            cat["profit"] += (100 / abs(odds)) * 100
+    else:
+        cat["losses"] += 1
+        cat["profit"] -= 100
+
+
+def _summarize(cat):
+    total = cat["wins"] + cat["losses"]
+    cat["total_bets"] = total
+    cat["win_pct"] = round(cat["wins"] / total * 100, 1) if total > 0 else 0
+    cat["roi"] = round(cat["profit"] / (total * 100) * 100, 1) if total > 0 else 0
+    cat["profit"] = round(cat["profit"], 2)
 
 
 def print_backtest(results: dict) -> None:
-    """Print backtest results to console."""
     if "error" in results:
         print(f"Error: {results['error']}")
         return
 
     print(f"\n{'='*60}")
-    print(f"  MLB MODEL BACKTEST RESULTS")
+    print(f"  MLB MODEL BACKTEST — {results.get('season', '?')} Season")
     print(f"{'='*60}")
     print(f"  Games tested: {results['games_tested']}")
     print(f"  Games skipped: {results['games_skipped']}")
@@ -243,11 +319,12 @@ def print_backtest(results: dict) -> None:
                          ("nrfi", "NRFI/YRFI"), ("run_line", "Run Line")]:
         bt = results[name]
         if bt["total_bets"] == 0:
+            print(f"  {label}: No qualifying bets")
             continue
         status = "PROFITABLE" if bt["profit"] > 0 else "LOSING"
         print(f"  {label}:")
         print(f"    Record: {bt['wins']}-{bt['losses']} ({bt['win_pct']}%)")
-        print(f"    Profit: ${bt['profit']:+.2f} on ${bt['total_bets'] * 100} wagered")
+        print(f"    Profit: ${bt['profit']:+.2f} per $100 flat bets")
         print(f"    ROI: {bt['roi']:+.1f}% [{status}]")
         print()
 
@@ -263,23 +340,27 @@ if __name__ == "__main__":
 
     args = sys.argv[1:]
     season = None
-    days = None
-    min_edge = 0.0
+    min_edge = 3.0
 
     i = 0
     while i < len(args):
         if args[i] == "--season" and i + 1 < len(args):
             season = int(args[i + 1])
             i += 2
-        elif args[i] == "--days" and i + 1 < len(args):
-            days = int(args[i + 1])
-            i += 2
         elif args[i] == "--min-edge" and i + 1 < len(args):
             min_edge = float(args[i + 1])
             i += 2
+        elif args[i] == "--days" and i + 1 < len(args):
+            i += 2  # days handled by run_backtest
         else:
             i += 1
 
-    print("Running backtest...", flush=True)
-    results = run_backtest(season=season, days=days, min_edge=min_edge)
+    days_val = None
+    for j, a in enumerate(args):
+        if a == "--days" and j + 1 < len(args):
+            days_val = int(args[j + 1])
+
+    print(f"Running backtest (season={season or SEASON}, min_edge={min_edge}%)...",
+          flush=True)
+    results = run_backtest(season=season, days=days_val, min_edge=min_edge)
     print_backtest(results)

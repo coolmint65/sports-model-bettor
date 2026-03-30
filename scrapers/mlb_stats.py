@@ -191,6 +191,18 @@ def fetch_schedule(start_date: str, end_date: str) -> list[dict]:
                 "season": int(game_date[:4]) if len(game_date) >= 4 else SEASON,
             }
 
+            # Extract linescore (runs per inning)
+            linescore = g.get("linescore", {})
+            ls_innings = linescore.get("innings", [])
+            if ls_innings:
+                home_runs_by_inn = []
+                away_runs_by_inn = []
+                for inn in ls_innings:
+                    home_runs_by_inn.append(inn.get("home", {}).get("runs", 0) or 0)
+                    away_runs_by_inn.append(inn.get("away", {}).get("runs", 0) or 0)
+                game["home_linescore"] = json.dumps(home_runs_by_inn)
+                game["away_linescore"] = json.dumps(away_runs_by_inn)
+
             # If final, extract winning/losing/save pitchers
             if game["status"] == "final":
                 decisions = g.get("decisions", {})

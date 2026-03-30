@@ -77,6 +77,9 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         losing_pitcher  INTEGER ,
         save_pitcher    INTEGER ,
         season          INTEGER,
+        -- Linescore: runs per inning as JSON arrays e.g. [0,1,0,2,0,0,1,0,0]
+        home_linescore  TEXT,
+        away_linescore  TEXT,
         updated_at      TEXT DEFAULT (datetime('now'))
     );
 
@@ -369,7 +372,7 @@ def upsert_game(mlb_game_id: int, **kwargs) -> None:
     fields = ["date", "home_team_id", "away_team_id", "home_score", "away_score",
               "status", "home_pitcher_id", "away_pitcher_id", "venue", "day_night",
               "weather_temp", "weather_wind", "winning_pitcher", "losing_pitcher",
-              "save_pitcher", "season"]
+              "save_pitcher", "season", "home_linescore", "away_linescore"]
     values = {k: kwargs.get(k) for k in fields}
     values["mlb_game_id"] = mlb_game_id
 

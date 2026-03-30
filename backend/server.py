@@ -415,7 +415,7 @@ def api_debug_teams():
 
 
 @app.get("/api/backtest")
-def api_backtest(days: int = Query(default=0), min_edge: float = Query(default=0),
+def api_backtest(days: int = Query(default=0), min_edge: float = Query(default=3),
                  season: int = Query(default=0)):
     """Run model backtest against historical games."""
     from engine.backtest import run_backtest
