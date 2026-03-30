@@ -169,8 +169,8 @@ body {
 }
 
 .team-logo {
-  width: 24px;
-  height: 24px;
+  width: 32px;
+  height: 32px;
   object-fit: contain;
   flex-shrink: 0;
   background: rgba(255, 255, 255, 0.06);
@@ -321,14 +321,14 @@ body {
 }
 
 .detail-logo {
-  width: 56px;
-  height: 56px;
+  width: 72px;
+  height: 72px;
   object-fit: contain;
   margin-bottom: 8px;
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.10);
   border-radius: 8px;
-  padding: 4px;
+  padding: 6px;
 }
 
 .detail-team-name {
@@ -1336,7 +1336,15 @@ body {
   gap: 10px;
 }
 
-.bb-logo { width: 24px; height: 24px; object-fit: contain; }
+.bb-logo {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 4px;
+  padding: 2px;
+}
 
 .bb-teams {
   font-size: 0.95rem;
