@@ -419,8 +419,30 @@ def api_backtest(days: int = Query(default=0), min_edge: float = Query(default=0
                  season: int = Query(default=0)):
     """Run model backtest against historical games."""
     from engine.backtest import run_backtest
+
+    yr = season if season > 0 else None
+
+    # If requesting a past season, auto-load the data if not already present
+    if yr:
+        conn = get_conn()
+        game_count = conn.execute(
+            "SELECT COUNT(*) as c FROM games WHERE season = ? AND status = 'final'",
+            (yr,)
+        ).fetchone()["c"]
+        if game_count < 100:
+            # Need to fetch this season's data first
+            logger.info("Loading %d season data for backtest...", yr)
+            from scrapers.mlb_stats import fetch_teams, fetch_season_results
+            fetch_teams()
+            fetch_season_results(season=yr)
+            game_count = conn.execute(
+                "SELECT COUNT(*) as c FROM games WHERE season = ? AND status = 'final'",
+                (yr,)
+            ).fetchone()["c"]
+            logger.info("Loaded %d games for %d", game_count, yr)
+
     results = run_backtest(
-        season=season if season > 0 else None,
+        season=yr,
         days=days if days > 0 else None,
         min_edge=min_edge,
     )

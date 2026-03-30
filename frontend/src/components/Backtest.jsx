@@ -1,32 +1,76 @@
 import { useState } from 'react'
 
 export default function Backtest({ data, loading, onRun }) {
+  const currentYear = new Date().getFullYear()
+  const [season, setSeason] = useState(String(currentYear))
   const [days, setDays] = useState('')
   const [minEdge, setMinEdge] = useState('')
 
+  // Always show controls even when loading/empty
+  const controls = (
+    <div className="bt-controls">
+      <div className="bt-control">
+        <label>Season</label>
+        <select value={season} onChange={e => setSeason(e.target.value)} className="bt-select">
+          {[currentYear, currentYear - 1, currentYear - 2, currentYear - 3].map(y => (
+            <option key={y} value={y}>{y}</option>
+          ))}
+        </select>
+      </div>
+      <div className="bt-control">
+        <label>Last N days</label>
+        <input
+          type="number"
+          placeholder="All"
+          value={days}
+          onChange={e => setDays(e.target.value)}
+        />
+      </div>
+      <div className="bt-control">
+        <label>Min edge %</label>
+        <input
+          type="number"
+          placeholder="0"
+          step="0.5"
+          value={minEdge}
+          onChange={e => setMinEdge(e.target.value)}
+        />
+      </div>
+      <button
+        className="bt-run-btn"
+        onClick={() => onRun(days || 0, minEdge || 0, season)}
+        disabled={loading}
+      >
+        {loading ? 'Running...' : 'Run Backtest'}
+      </button>
+    </div>
+  )
+
   if (loading) {
     return (
-      <div className="loading">
-        <div className="spinner" />
-        <p>Running backtest against historical games...</p>
+      <div className="backtest-page">
+        <h2 className="section-title">Model Performance</h2>
+        {controls}
+        <div className="loading">
+          <div className="spinner" />
+          <p>
+            {parseInt(season) < currentYear
+              ? `Loading ${season} season data and running backtest... This may take a minute.`
+              : 'Running backtest against historical games...'}
+          </p>
+        </div>
       </div>
     )
   }
 
-  if (!data) {
+  if (!data || data.error) {
     return (
-      <div className="no-games">
-        <p>No backtest data available.</p>
-        <p className="sub">Load historical games first with <code style={{background:'#1e293b',padding:'2px 8px',borderRadius:4}}>sync.bat --full</code></p>
-      </div>
-    )
-  }
-
-  if (data.error) {
-    return (
-      <div className="no-games">
-        <p>{data.error}</p>
-        <p className="sub">Run <code style={{background:'#1e293b',padding:'2px 8px',borderRadius:4}}>sync.bat --full</code> to load season data</p>
+      <div className="backtest-page">
+        <h2 className="section-title">Model Performance</h2>
+        {controls}
+        <div className="no-games">
+          <p>{data?.error || 'Select a season and click Run Backtest.'}</p>
+        </div>
       </div>
     )
   }
@@ -45,36 +89,8 @@ export default function Backtest({ data, loading, onRun }) {
 
   return (
     <div className="backtest-page">
-      <h2 className="section-title">Model Performance</h2>
-
-      {/* Controls */}
-      <div className="bt-controls">
-        <div className="bt-control">
-          <label>Last N days</label>
-          <input
-            type="number"
-            placeholder="All"
-            value={days}
-            onChange={e => setDays(e.target.value)}
-          />
-        </div>
-        <div className="bt-control">
-          <label>Min edge %</label>
-          <input
-            type="number"
-            placeholder="0"
-            step="0.5"
-            value={minEdge}
-            onChange={e => setMinEdge(e.target.value)}
-          />
-        </div>
-        <button
-          className="bt-run-btn"
-          onClick={() => onRun(days || 0, minEdge || 0)}
-        >
-          Run Backtest
-        </button>
-      </div>
+      <h2 className="section-title">Model Performance — {season} Season</h2>
+      {controls}
 
       {/* Summary */}
       <div className="result-card">

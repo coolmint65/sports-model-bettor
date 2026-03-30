@@ -86,15 +86,16 @@ export default function App() {
     }
   }, [backtest])
 
-  const runBacktest = useCallback((days, minEdge) => {
+  const runBacktest = useCallback((days, minEdge, season) => {
     setBtLoading(true)
     setBacktest(null)
     const params = new URLSearchParams()
     if (days) params.set('days', days)
     if (minEdge) params.set('min_edge', minEdge)
+    if (season) params.set('season', season)
     api.get(`/backtest?${params}`)
       .then(r => setBacktest(r.data))
-      .catch(() => setBacktest({ error: "Backtest failed" }))
+      .catch(() => setBacktest({ error: "Backtest failed. Try again." }))
       .finally(() => setBtLoading(false))
   }, [])
 

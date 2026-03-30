@@ -1122,7 +1122,8 @@ body {
   letter-spacing: 0.04em;
 }
 
-.bt-control input {
+.bt-control input,
+.bt-select {
   background: #111827;
   border: 1px solid #1e293b;
   border-radius: 6px;
@@ -1132,7 +1133,13 @@ body {
   width: 100px;
 }
 
-.bt-control input:focus {
+.bt-select {
+  width: 120px;
+  cursor: pointer;
+}
+
+.bt-control input:focus,
+.bt-select:focus {
   outline: none;
   border-color: #3b82f6;
 }
