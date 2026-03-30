@@ -57,11 +57,6 @@ def fetch_game_odds(event_id: str) -> dict | None:
     home_odds_data = o.get("homeTeamOdds", {}) or {}
     away_odds_data = o.get("awayTeamOdds", {}) or {}
 
-    # Debug: log all keys on first call
-    logger.info("ESPN odds top keys: %s", list(o.keys()))
-    logger.info("ESPN homeTeamOdds keys: %s", list(home_odds_data.keys()))
-    logger.info("ESPN homeTeamOdds full: %s", dict(home_odds_data))
-
     result["home_ml"] = home_odds_data.get("moneyLine")
     result["away_ml"] = away_odds_data.get("moneyLine")
 
