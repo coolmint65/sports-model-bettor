@@ -566,35 +566,44 @@ def api_best_bets():
         h_abbr = game["home"]["abbreviation"]
         a_abbr = game["away"]["abbreviation"]
 
-        # Collect all picks for this game
+        # Collect all picks for this game — only bettable lines
         game_picks = []
 
-        # ML
+        # ML — use real ESPN odds when available
         if wp.get("home") and wp.get("away"):
-            fav = h_abbr if wp["home"] > wp["away"] else a_abbr
-            fav_prob = max(wp["home"], wp["away"])
-            ml_odds = odds.get("home_ml") if wp["home"] > wp["away"] else odds.get("away_ml")
-            implied = abs(ml_odds) / (abs(ml_odds) + 100) if ml_odds and ml_odds < 0 else 100 / (ml_odds + 100) if ml_odds and ml_odds > 0 else 0.55
-            edge = (fav_prob - implied) * 100
+            fav_home = wp["home"] > wp["away"]
+            fav = h_abbr if fav_home else a_abbr
+            fav_prob = wp["home"] if fav_home else wp["away"]
+            ml_line = odds.get("home_ml") if fav_home else odds.get("away_ml")
+
+            if ml_line:
+                # Real odds available — calculate true edge
+                implied = abs(ml_line) / (abs(ml_line) + 100) if ml_line < 0 else 100 / (ml_line + 100)
+                edge = (fav_prob - implied) * 100
+            else:
+                # No real odds — use conservative -140 implied
+                edge = (fav_prob - 0.583) * 100
+
             game_picks.append({
                 "type": "ML", "pick": fav, "prob": fav_prob,
-                "edge": round(edge, 1), "odds": ml_odds,
+                "edge": round(edge, 1),
+                "odds": ml_line,
             })
 
-        # O/U
+        # O/U — use Vegas total from ESPN
         vegas_total = odds.get("over_under")
         if vegas_total and pred.get("over_under"):
             ou_data = _find_ou(pred["over_under"], vegas_total)
             if ou_data:
                 ou_pick = "Over" if ou_data["over"] > ou_data["under"] else "Under"
                 ou_prob = max(ou_data["over"], ou_data["under"])
-                ou_edge = (ou_prob - 0.524) * 100
+                ou_edge = (ou_prob - 0.524) * 100  # -110 implied
                 game_picks.append({
                     "type": "O/U", "pick": f"{ou_pick} {vegas_total}",
                     "prob": ou_prob, "edge": round(ou_edge, 1),
                 })
 
-        # NRFI
+        # NRFI — standard -120 line
         nrfi = fi.get("nrfi", 0.5)
         nrfi_pick = "NRFI" if nrfi > 0.5 else "YRFI"
         nrfi_prob = nrfi if nrfi > 0.5 else fi.get("yrfi", 0.5)
@@ -605,16 +614,20 @@ def api_best_bets():
                 "prob": nrfi_prob, "edge": round(nrfi_edge, 1),
             })
 
-        # Run Line
-        if rl.get("model_spread") is not None:
-            spread = rl["model_spread"]
-            rl_pick = f"{h_abbr} -{abs(spread)}" if spread > 0 else f"{a_abbr} -{abs(spread)}" if spread < 0 else "PK"
-            rl_p = rl.get("home_minus_1_5", 0.5) if spread > 0 else rl.get("away_plus_1_5", 0.5)
-            rl_edge = (rl_p - 0.524) * 100
-            game_picks.append({
-                "type": "RL", "pick": rl_pick,
-                "prob": rl_p, "edge": round(rl_edge, 1),
-            })
+        # Run Line — ALWAYS ±1.5 (the only RL sportsbooks offer at -110)
+        rl_home_15 = rl.get("home_minus_1_5", 0.5)
+        rl_away_15 = rl.get("away_plus_1_5", 0.5)
+        if rl_home_15 > 0.5:
+            rl_pick_label = f"{h_abbr} -1.5"
+            rl_prob = rl_home_15
+        else:
+            rl_pick_label = f"{a_abbr} +1.5"
+            rl_prob = rl_away_15
+        rl_edge = (rl_prob - 0.524) * 100  # -110 implied
+        game_picks.append({
+            "type": "RL", "pick": rl_pick_label,
+            "prob": rl_prob, "edge": round(rl_edge, 1),
+        })
 
         if not game_picks:
             continue
