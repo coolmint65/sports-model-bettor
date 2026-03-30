@@ -344,13 +344,22 @@ def _migrate(conn: sqlite3.Connection) -> None:
         ("games", "away_linescore", "TEXT"),
         ("games", "umpire", "TEXT"),
     ]
+
+    # Check existing columns first to avoid ALTER TABLE errors
     for table, column, col_type in migrations:
         try:
-            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
-            logger.info("Added column %s.%s", table, column)
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-    conn.commit()
+            existing = conn.execute(f"PRAGMA table_info({table})").fetchall()
+            col_names = [r[1] for r in existing]
+            if column not in col_names:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+                logger.info("Added column %s.%s", table, column)
+        except Exception as e:
+            logger.warning("Migration failed for %s.%s: %s", table, column, e)
+
+    try:
+        conn.commit()
+    except Exception:
+        pass
 
 
 # ── Convenience helpers ──────────────────────────────────────
