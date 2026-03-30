@@ -70,14 +70,47 @@ def predict_matchup(home_team_id: int, away_team_id: int,
 
     park = get_park_factor(venue, SEASON) if venue else None
 
+    # ── Point-in-time stats from game history ──
+    # These are always available after a quick sync and are more
+    # accurate than season-aggregate stats from the full sync
+    from .pit_stats import compute_team_stats_at_date, compute_pitcher_stats_at_date
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    home_pit = compute_team_stats_at_date(home_team_id, today, SEASON)
+    away_pit = compute_team_stats_at_date(away_team_id, today, SEASON)
+
+    home_sp_pit = None
+    away_sp_pit = None
+    if home_pitcher_id:
+        home_sp_pit = compute_pitcher_stats_at_date(home_pitcher_id, today, SEASON)
+    if away_pitcher_id:
+        away_sp_pit = compute_pitcher_stats_at_date(away_pitcher_id, today, SEASON)
+
     # ── Step 1: Baseline expected runs ──
-    home_off = _team_offense_rating(home_stats)
-    away_off = _team_offense_rating(away_stats)
+    # Prefer PIT runs/game over team_stats table
+    if home_pit and home_pit.get("runs_pg") and home_pit.get("games_played", 0) >= 10:
+        home_off = home_pit["runs_pg"]
+    else:
+        home_off = _team_offense_rating(home_stats)
+
+    if away_pit and away_pit.get("runs_pg") and away_pit.get("games_played", 0) >= 10:
+        away_off = away_pit["runs_pg"]
+    else:
+        away_off = _team_offense_rating(away_stats)
 
     # ── Step 2: Starting pitcher adjustment ──
-    # Pitcher factor: <1 = good pitcher (suppresses runs), >1 = bad
-    home_sp_factor = _pitcher_factor(home_sp)
-    away_sp_factor = _pitcher_factor(away_sp)
+    # Prefer PIT pitcher ERA over season-aggregate stats
+    if home_sp_pit and home_sp_pit.get("era") and home_sp_pit.get("games_started", 0) >= 3:
+        home_sp_factor = home_sp_pit["era"] / MLB_AVG_ERA
+        home_sp_factor = max(0.60, min(1.50, home_sp_factor))
+    else:
+        home_sp_factor = _pitcher_factor(home_sp)
+
+    if away_sp_pit and away_sp_pit.get("era") and away_sp_pit.get("games_started", 0) >= 3:
+        away_sp_factor = away_sp_pit["era"] / MLB_AVG_ERA
+        away_sp_factor = max(0.60, min(1.50, away_sp_factor))
+    else:
+        away_sp_factor = _pitcher_factor(away_sp)
 
     # Home offense scores against away SP, away offense against home SP
     home_xr = home_off * away_sp_factor
