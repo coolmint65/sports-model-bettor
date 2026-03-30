@@ -131,8 +131,10 @@ def record_picks(date: str | None = None, min_edge: float = 1.5) -> list[dict]:
         if rl_edge >= min_edge:
             picks.append(("rl", rl_pick, rl_prob, rl_edge, -110))
 
-        # Insert picks
-        for bet_type, pick, prob, edge, odds in picks:
+        # Take only the highest-edge pick per game
+        if picks:
+            picks.sort(key=lambda p: p[3], reverse=True)  # Sort by edge
+            bet_type, pick, prob, edge, odds = picks[0]
             conn.execute("""
                 INSERT INTO picks (game_id, date, matchup, bet_type, pick, model_prob, edge, odds)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
