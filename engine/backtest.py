@@ -120,129 +120,84 @@ def run_backtest(season: int | None = None, days: int | None = None,
             "picks": {},
         }
 
-        # ── Moneyline ──
+        # ── Collect all candidate bets, then take highest conviction ──
+        candidates = []
+
+        # Moneyline
         model_home = wp.get("home", 0.5)
         model_away = wp.get("away", 0.5)
         ml_pick_home = model_home > model_away
-
-        # Use -150/+130 as standard MLB favorite/dog odds
         if ml_pick_home:
-            pick_prob = model_home
-            implied = 0.60  # ~-150 implied
-            odds = -150
+            ml_prob, ml_implied, ml_odds = model_home, 0.60, -150
         else:
-            pick_prob = model_away
-            implied = 0.435  # ~+130 implied
-            odds = 130
+            ml_prob, ml_implied, ml_odds = model_away, 0.435, 130
+        ml_edge = (ml_prob - ml_implied) * 100
+        if ml_edge >= min_edge:
+            ml_correct = (ml_pick_home and home_won) or (not ml_pick_home and not home_won)
+            candidates.append(("moneyline", h_abbr if ml_pick_home else a_abbr,
+                               ml_prob, ml_edge, ml_odds, ml_correct))
 
-        edge = (pick_prob - implied) * 100
-
-        if edge >= min_edge:
-            pick_correct = (ml_pick_home and home_won) or (not ml_pick_home and not home_won)
-            payout = _calc_payout(odds, pick_correct)
-            results["moneyline"]["wins" if pick_correct else "losses"] += 1
-            results["moneyline"]["profit"] += payout
-            game_entry["picks"]["ml"] = {
-                "pick": h_abbr if ml_pick_home else a_abbr,
-                "prob": round(pick_prob, 3),
-                "edge": round(edge, 1),
-                "result": "W" if pick_correct else "L",
-                "payout": round(payout, 2),
-            }
-
-        # ── Over/Under ──
-        # Use 8.5 as a standard total if no specific line
+        # Over/Under
         ou_line = 8.5
-        ou_pick_over = total_pred > ou_line
         p_over = 0.5
         if pred.get("over_under"):
-            # Find closest line to 8.5
-            for line_key, probs in pred["over_under"].items():
-                if abs(float(line_key) - ou_line) < 0.5:
+            for lk, probs in pred["over_under"].items():
+                if abs(float(lk) - ou_line) < 0.5:
                     p_over = probs.get("over", 0.5)
-                    ou_line = float(line_key)
+                    ou_line = float(lk)
                     break
-
-        ou_pick_prob = p_over if ou_pick_over else (1 - p_over)
-        ou_edge = (ou_pick_prob - 0.524) * 100  # -110 implied = 52.4%
-
+        ou_pick_over = total_pred > ou_line
+        ou_prob = p_over if ou_pick_over else (1 - p_over)
+        ou_edge = (ou_prob - 0.524) * 100
         if ou_edge >= min_edge:
-            if actual_total > ou_line:
-                ou_correct = ou_pick_over
-            elif actual_total < ou_line:
-                ou_correct = not ou_pick_over
+            if actual_total == ou_line:
+                ou_correct = None  # Push
             else:
-                results["over_under"]["pushes"] += 1
-                ou_correct = None
-
+                ou_correct = (ou_pick_over and actual_total > ou_line) or \
+                             (not ou_pick_over and actual_total < ou_line)
             if ou_correct is not None:
-                payout = _calc_payout(-110, ou_correct)
-                results["over_under"]["wins" if ou_correct else "losses"] += 1
-                results["over_under"]["profit"] += payout
-                game_entry["picks"]["ou"] = {
-                    "pick": f"{'Over' if ou_pick_over else 'Under'} {ou_line}",
-                    "prob": round(ou_pick_prob, 3),
-                    "edge": round(ou_edge, 1),
-                    "result": "W" if ou_correct else "L",
-                    "payout": round(payout, 2),
-                }
+                ou_label = f"{'Over' if ou_pick_over else 'Under'} {ou_line}"
+                candidates.append(("over_under", ou_label, ou_prob, ou_edge, -110, ou_correct))
 
-        # ── NRFI ──
-        # Use Poisson simulation based on actual game runs to estimate
-        # whether the first inning was scoreless. In real MLB data,
-        # ~38-40% of first innings are scoreless.
-        nrfi_prob = fi.get("nrfi", 0.5)
-        nrfi_pick = nrfi_prob > 0.50
-        nrfi_pick_prob = nrfi_prob if nrfi_pick else fi.get("yrfi", 0.5)
-        nrfi_edge = (nrfi_pick_prob - 0.524) * 100
-
+        # NRFI
+        nrfi_prob_val = fi.get("nrfi", 0.5)
+        nrfi_pick = nrfi_prob_val > 0.50
+        nrfi_prob = nrfi_prob_val if nrfi_pick else fi.get("yrfi", 0.5)
+        nrfi_edge = (nrfi_prob - 0.524) * 100
         if nrfi_edge >= min_edge:
-            # Simulate first inning from actual game scoring rate
-            # Each team's 1st inning xR ≈ their actual per-inning rate
-            home_1st_xr = (home_score / 9) * 1.05  # 1st inning ~10.5% of runs
+            home_1st_xr = (home_score / 9) * 1.05
             away_1st_xr = (away_score / 9) * 1.05
-            p_home_zero = _poisson_prob(home_1st_xr, 0)
-            p_away_zero = _poisson_prob(away_1st_xr, 0)
-            actual_nrfi_prob = p_home_zero * p_away_zero
-
-            # Determine outcome probabilistically using a hash for consistency
+            actual_nrfi = _poisson_prob(home_1st_xr, 0) * _poisson_prob(away_1st_xr, 0)
             game_hash = (game.get("mlb_game_id", 0) * 7 + home_score * 13 + away_score * 17) % 1000
-            first_inning_scoreless = (game_hash / 1000) < actual_nrfi_prob
+            scoreless = (game_hash / 1000) < actual_nrfi
+            nrfi_correct = (nrfi_pick and scoreless) or (not nrfi_pick and not scoreless)
+            candidates.append(("nrfi", "NRFI" if nrfi_pick else "YRFI",
+                               nrfi_prob, nrfi_edge, -120, nrfi_correct))
 
-            nrfi_correct = (nrfi_pick and first_inning_scoreless) or \
-                           (not nrfi_pick and not first_inning_scoreless)
-            payout = _calc_payout(-120, nrfi_correct)
-            results["nrfi"]["wins" if nrfi_correct else "losses"] += 1
-            results["nrfi"]["profit"] += payout
-            game_entry["picks"]["nrfi"] = {
-                "pick": "NRFI" if nrfi_pick else "YRFI",
-                "prob": round(nrfi_pick_prob, 3),
-                "edge": round(nrfi_edge, 1),
-                "result": "W" if nrfi_correct else "L",
-                "payout": round(payout, 2),
-            }
-
-        # ── Run Line ──
-        rl_home_cover = rl.get("home_minus_1_5", 0.5)
-        rl_away_cover = rl.get("away_plus_1_5", 0.5)
-        rl_pick_home = rl_home_cover > 0.50
-        rl_pick_prob = rl_home_cover if rl_pick_home else rl_away_cover
-        rl_edge = (rl_pick_prob - 0.524) * 100
-
+        # Run Line
+        rl_h = rl.get("home_minus_1_5", 0.5)
+        rl_a = rl.get("away_plus_1_5", 0.5)
+        rl_pick_home = rl_h > 0.50
+        rl_prob = rl_h if rl_pick_home else rl_a
+        rl_edge = (rl_prob - 0.524) * 100
         if rl_edge >= min_edge:
             margin = home_score - away_score
-            if rl_pick_home:
-                rl_correct = margin >= 2
-            else:
-                rl_correct = margin <= 1
-            payout = _calc_payout(-110, rl_correct)
-            results["run_line"]["wins" if rl_correct else "losses"] += 1
-            results["run_line"]["profit"] += payout
-            game_entry["picks"]["rl"] = {
-                "pick": f"{h_abbr} -1.5" if rl_pick_home else f"{a_abbr} +1.5",
-                "prob": round(rl_pick_prob, 3),
-                "edge": round(rl_edge, 1),
-                "result": "W" if rl_correct else "L",
+            rl_correct = (margin >= 2) if rl_pick_home else (margin <= 1)
+            rl_label = f"{h_abbr} -1.5" if rl_pick_home else f"{a_abbr} +1.5"
+            candidates.append(("run_line", rl_label, rl_prob, rl_edge, -110, rl_correct))
+
+        # ── Take only the highest-edge bet per game ──
+        if candidates:
+            candidates.sort(key=lambda c: c[3], reverse=True)  # Sort by edge
+            best = candidates[0]
+            bet_type, pick, prob, edge, odds, correct = best
+            payout = _calc_payout(odds, correct)
+            results[bet_type]["wins" if correct else "losses"] += 1
+            results[bet_type]["profit"] += payout
+            game_entry["picks"][bet_type] = {
+                "pick": pick, "prob": round(prob, 3),
+                "edge": round(edge, 1),
+                "result": "W" if correct else "L",
                 "payout": round(payout, 2),
             }
 
