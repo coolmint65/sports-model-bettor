@@ -27,6 +27,7 @@ def get_conn() -> sqlite3.Connection:
         _conn.execute("PRAGMA journal_mode=WAL")
         _conn.execute("PRAGMA foreign_keys=OFF")
         _init_schema(_conn)
+        _migrate(_conn)
     return _conn
 
 
@@ -333,6 +334,22 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     CREATE INDEX IF NOT EXISTS idx_h2h_pitcher ON h2h_matchups(pitcher_id);
     CREATE INDEX IF NOT EXISTS idx_team_stats_team ON team_stats(team_id, season);
     """)
+    conn.commit()
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add columns that may be missing from older databases."""
+    migrations = [
+        ("games", "home_linescore", "TEXT"),
+        ("games", "away_linescore", "TEXT"),
+        ("games", "umpire", "TEXT"),
+    ]
+    for table, column, col_type in migrations:
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+            logger.info("Added column %s.%s", table, column)
+        except sqlite3.OperationalError:
+            pass  # Column already exists
     conn.commit()
 
 
