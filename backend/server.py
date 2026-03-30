@@ -397,11 +397,12 @@ def _parse_espn_scoreboard(data: dict) -> list[dict]:
 
             # Log raw odds structure on first game for debugging
             if not games:
-                logger.info("ESPN odds keys: %s", list(o.keys()))
-                logger.info("ESPN homeTeamOdds keys: %s", list(home_odds.keys()))
-                logger.info("ESPN raw odds sample: %s", {
-                    k: o.get(k) for k in list(o.keys())[:15]
-                })
+                logger.info("ESPN odds top-level keys: %s", list(o.keys()))
+                logger.info("ESPN homeTeamOdds: %s", dict(home_odds))
+                logger.info("ESPN awayTeamOdds: %s", dict(away_odds))
+                # Log any additional odds entries (some have spread/total as separate items)
+                if len(odds) > 1:
+                    logger.info("ESPN odds[1]: %s", odds[1])
 
             game["odds"] = {
                 "spread": o.get("details", ""),
@@ -738,6 +739,28 @@ def api_calibration_status():
     """Return current model weights and calibration info."""
     from engine.calibration import get_calibration_status
     return get_calibration_status()
+
+
+@app.get("/api/debug/odds")
+def api_debug_odds():
+    """Dump raw ESPN odds for first game to debug field names."""
+    url = f"{ESPN_BASE}/baseball/mlb/scoreboard"
+    data = _fetch_espn_json(url)
+    if not data:
+        return {"error": "No ESPN data"}
+
+    events = data.get("events", [])
+    if not events:
+        return {"error": "No events"}
+
+    comp = events[0].get("competitions", [{}])[0]
+    raw_odds = comp.get("odds", [])
+
+    return {
+        "game": events[0].get("shortName", ""),
+        "odds_count": len(raw_odds),
+        "odds": raw_odds,
+    }
 
 
 @app.get("/api/debug/teams")
