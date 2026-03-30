@@ -235,8 +235,12 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     total = home_xr + away_xr
     spread = away_xr - home_xr  # Negative = home favored
 
-    # ── Win probability (Poisson-based) ──
-    matrix = _build_score_matrix(home_xr, away_xr, max_runs=15)
+    # ── Win probability (Poisson-based with uncertainty) ──
+    # When confidence is low, use a mixture of Poissons to widen
+    # the probability distribution. This prevents overconfident
+    # predictions early in the season.
+    conf = _compute_confidence(home_pit, away_pit, home_sp_pit, away_sp_pit)
+    matrix = _build_uncertain_matrix(home_xr, away_xr, conf["score"])
     p_home, p_away = _win_probs_from_matrix(matrix)
 
     # ── Over/Under lines ──
@@ -303,6 +307,7 @@ def predict_matchup(home_team_id: int, away_team_id: int,
         },
         "park_factor": round(park_run_factor, 3),
         "situational": sit,
+        "confidence": _compute_confidence(home_pit, away_pit, home_sp_pit, away_sp_pit),
         "over_under": ou_lines,
         "run_line": run_line,
         "f5": f5,
@@ -338,6 +343,56 @@ def _team_offense_rating(stats: dict) -> float:
         base = MLB_AVG_RPG * ops_factor * 0.5 + base * 0.5
 
     return base
+
+
+def _compute_confidence(home_pit, away_pit, home_sp_pit, away_sp_pit) -> dict:
+    """
+    Compute prediction confidence based on data quality.
+    Returns 0-100 score and a label.
+    """
+    score = 0
+    max_score = 0
+
+    # Team games played (0-25 pts each)
+    for pit in [home_pit, away_pit]:
+        max_score += 25
+        gp = pit.get("games_played", 0) if pit else 0
+        if gp >= 50:
+            score += 25
+        elif gp >= 30:
+            score += 20
+        elif gp >= 15:
+            score += 15
+        elif gp >= 5:
+            score += 8
+        elif gp > 0:
+            score += 3
+
+    # Pitcher starts (0-25 pts each)
+    for sp in [home_sp_pit, away_sp_pit]:
+        max_score += 25
+        starts = sp.get("games_started", 0) if sp else 0
+        if starts >= 10:
+            score += 25
+        elif starts >= 5:
+            score += 18
+        elif starts >= 3:
+            score += 12
+        elif starts >= 1:
+            score += 5
+
+    pct = round(score / max_score * 100) if max_score > 0 else 0
+
+    if pct >= 80:
+        label = "high"
+    elif pct >= 50:
+        label = "medium"
+    elif pct >= 25:
+        label = "low"
+    else:
+        label = "very_low"
+
+    return {"score": pct, "label": label}
 
 
 def _blended_offense(pit: dict | None, stats: dict) -> float:
@@ -534,6 +589,53 @@ def _poisson_prob(lam: float, k: int) -> float:
     if lam <= 0:
         return 1.0 if k == 0 else 0.0
     return (lam ** k) * math.exp(-lam) / math.factorial(k)
+
+
+def _build_uncertain_matrix(home_xr: float, away_xr: float,
+                            confidence: int, max_runs: int = 15) -> list[list[float]]:
+    """
+    Build score matrix with uncertainty baked in.
+
+    Instead of a single Poisson(lambda), we average over multiple
+    lambdas drawn from a range around the point estimate. The range
+    is wider when confidence is low.
+
+    At 100% confidence: single Poisson (standard).
+    At 0% confidence: average over lambda ± 2.0 runs (very uncertain).
+
+    This naturally produces probabilities closer to 50% when we
+    don't have good data, preventing fake 84% edges.
+    """
+    if confidence >= 90:
+        # High confidence — use standard single Poisson
+        return _build_score_matrix(home_xr, away_xr, max_runs)
+
+    # Uncertainty: at low confidence, each team's true scoring rate could
+    # be significantly different from our estimate. We model this by
+    # averaging over a range of possible lambdas.
+    # 0% conf = ±3.0 runs uncertainty, 50% = ±1.5, 90% = ±0.0
+    uncertainty = 3.0 * (1 - confidence / 100) ** 0.7
+
+    # Generate 9 scenarios across the uncertainty range
+    n_scenarios = 9
+    combined = [[0.0] * (max_runs + 1) for _ in range(max_runs + 1)]
+
+    for i in range(n_scenarios):
+        frac = (i / (n_scenarios - 1)) - 0.5  # -0.5 to +0.5
+        h_off = frac * 2 * uncertainty
+        a_off = frac * 2 * uncertainty
+        h_lambda = max(1.5, home_xr + h_off)
+        a_lambda = max(1.5, away_xr + a_off)
+        m = _build_score_matrix(h_lambda, a_lambda, max_runs)
+        for h in range(max_runs + 1):
+            for a in range(max_runs + 1):
+                combined[h][a] += m[h][a]
+
+    for h in range(max_runs + 1):
+        for a in range(max_runs + 1):
+            combined[h][a] /= n_scenarios
+
+    return combined
 
 
 def _build_score_matrix(home_xr: float, away_xr: float,

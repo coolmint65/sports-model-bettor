@@ -392,15 +392,31 @@ def _parse_espn_scoreboard(data: dict) -> list[dict]:
         odds = comp.get("odds", [])
         if odds:
             o = odds[0]
+            home_odds = o.get("homeTeamOdds", {}) or {}
+            away_odds = o.get("awayTeamOdds", {}) or {}
+
+            # Log raw odds structure on first game for debugging
+            if not games:
+                logger.info("ESPN odds keys: %s", list(o.keys()))
+                logger.info("ESPN homeTeamOdds keys: %s", list(home_odds.keys()))
+                logger.info("ESPN raw odds sample: %s", {
+                    k: o.get(k) for k in list(o.keys())[:15]
+                })
+
             game["odds"] = {
                 "spread": o.get("details", ""),
                 "over_under": o.get("overUnder"),
-                "home_ml": o.get("homeTeamOdds", {}).get("moneyLine"),
-                "away_ml": o.get("awayTeamOdds", {}).get("moneyLine"),
-                "home_spread_odds": o.get("homeTeamOdds", {}).get("spreadOdds"),
-                "away_spread_odds": o.get("awayTeamOdds", {}).get("spreadOdds"),
-                "over_odds": o.get("overOdds"),
-                "under_odds": o.get("underOdds"),
+                # Moneyline
+                "home_ml": home_odds.get("moneyLine"),
+                "away_ml": away_odds.get("moneyLine"),
+                # Run line (spread odds)
+                "home_spread": home_odds.get("spreadOdds") or home_odds.get("spread"),
+                "away_spread": away_odds.get("spreadOdds") or away_odds.get("spread"),
+                "home_spread_line": home_odds.get("spreadLine") or home_odds.get("line"),
+                "away_spread_line": away_odds.get("spreadLine") or away_odds.get("line"),
+                # Over/Under odds
+                "over_odds": o.get("overOdds") or home_odds.get("overOdds"),
+                "under_odds": o.get("underOdds") or away_odds.get("underOdds"),
             }
 
         games.append(game)

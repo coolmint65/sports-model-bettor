@@ -103,8 +103,17 @@ function GameCard({ game, bet, onClick }) {
               {away.abbreviation} {game.odds.away_ml > 0 ? '+' : ''}{game.odds.away_ml}
             </span>
           )}
-          {game.odds.over_under && <span className="odds-chip">O/U {game.odds.over_under}</span>}
-          {game.odds.spread && <span className="odds-chip">{game.odds.spread}</span>}
+          {game.odds.over_under && (
+            <span className="odds-chip">
+              O/U {game.odds.over_under}
+              {game.odds.over_odds ? ` (${game.odds.over_odds > 0 ? '+' : ''}${game.odds.over_odds})` : ''}
+            </span>
+          )}
+          {game.odds.home_spread && (
+            <span className="odds-chip">
+              RL {game.odds.spread || '±1.5'}
+            </span>
+          )}
         </div>
       )}
 
