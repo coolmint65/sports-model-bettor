@@ -4,7 +4,7 @@ export default function Backtest({ data, loading, onRun }) {
   const currentYear = new Date().getFullYear()
   const [season, setSeason] = useState(String(currentYear))
   const [days, setDays] = useState('')
-  const [minEdge, setMinEdge] = useState('')
+  const [minEdge, setMinEdge] = useState('3')
 
   // Always show controls even when loading/empty
   const controls = (
