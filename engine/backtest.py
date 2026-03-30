@@ -79,6 +79,8 @@ def run_backtest(season: int | None = None, days: int | None = None,
         "over_under": _empty_cat(),
         "nrfi": _empty_cat(),
         "run_line": _empty_cat(),
+        # Best-bet-per-game summary
+        "best_bet": _empty_cat(),
     }
 
     # Cache PIT stats to avoid recomputing for the same team/date
@@ -125,6 +127,7 @@ def run_backtest(season: int | None = None, days: int | None = None,
         p_home, p_away = _win_probs_from_matrix(matrix)
 
         results["games_tested"] += 1
+        game_bets = []  # Track (edge, correct, odds) for best-bet selection
         actual_total = home_score + away_score
         home_won = home_score > away_score
         margin = home_score - away_score
@@ -149,6 +152,7 @@ def run_backtest(season: int | None = None, days: int | None = None,
         if ml_edge >= min_edge:
             ml_correct = (fav_home and home_won) or (not fav_home and not home_won)
             _record_bet(results["moneyline"], ml_correct, ml_odds)
+            game_bets.append((ml_edge, ml_correct, ml_odds))
 
         # ── Over/Under ──
         ou_line = round(total_pred * 2) / 2  # Round to nearest 0.5
@@ -167,9 +171,13 @@ def run_backtest(season: int | None = None, days: int | None = None,
             if actual_total == ou_line:
                 pass  # Push, skip
             elif ou_pick_over:
-                _record_bet(results["over_under"], actual_total > ou_line, OU_ODDS)
+                ou_correct = actual_total > ou_line
+                _record_bet(results["over_under"], ou_correct, OU_ODDS)
+                game_bets.append((ou_edge, ou_correct, OU_ODDS))
             else:
-                _record_bet(results["over_under"], actual_total < ou_line, OU_ODDS)
+                ou_correct = actual_total < ou_line
+                _record_bet(results["over_under"], ou_correct, OU_ODDS)
+                game_bets.append((ou_edge, ou_correct, OU_ODDS))
 
         # ── NRFI (uses pitcher-specific + team-specific first-inning data) ──
         home_ls_raw = game.get("home_linescore")
@@ -206,6 +214,7 @@ def run_backtest(season: int | None = None, days: int | None = None,
                         nrfi_correct = (nrfi_pick and actual_nrfi) or \
                                        (not nrfi_pick and not actual_nrfi)
                         _record_bet(results["nrfi"], nrfi_correct, NRFI_ODDS)
+                        game_bets.append((nrfi_edge, nrfi_correct, NRFI_ODDS))
             except (json.JSONDecodeError, IndexError):
                 pass
 
@@ -228,9 +237,16 @@ def run_backtest(season: int | None = None, days: int | None = None,
             else:
                 rl_correct = margin <= 1
             _record_bet(results["run_line"], rl_correct, RL_ODDS)
+            game_bets.append((rl_edge, rl_correct, RL_ODDS))
+
+        # ── Best bet per game ──
+        if game_bets:
+            game_bets.sort(key=lambda x: x[0], reverse=True)
+            best_edge, best_correct, best_odds = game_bets[0]
+            _record_bet(results["best_bet"], best_correct, best_odds)
 
     # ── Compute summaries ──
-    for cat in ["moneyline", "over_under", "nrfi", "run_line"]:
+    for cat in ["moneyline", "over_under", "nrfi", "run_line", "best_bet"]:
         _summarize(results[cat])
 
     return results

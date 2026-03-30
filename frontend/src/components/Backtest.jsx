@@ -82,10 +82,12 @@ export default function Backtest({ data, loading, onRun }) {
     { key: 'run_line', label: 'Run Line' },
   ]
 
-  const totalProfit = cats.reduce((sum, c) => sum + (data[c.key]?.profit || 0), 0)
-  const totalBets = cats.reduce((sum, c) => sum + (data[c.key]?.total_bets || 0), 0)
-  const totalWins = cats.reduce((sum, c) => sum + (data[c.key]?.wins || 0), 0)
-  const totalLosses = cats.reduce((sum, c) => sum + (data[c.key]?.losses || 0), 0)
+  // Use best-bet-per-game for summary (one bet per game, highest conviction)
+  const bb = data.best_bet || {}
+  const totalProfit = bb.profit || 0
+  const totalBets = bb.total_bets || 0
+  const totalWins = bb.wins || 0
+  const totalLosses = bb.losses || 0
 
   return (
     <div className="backtest-page">
