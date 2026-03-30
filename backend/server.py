@@ -506,14 +506,16 @@ def api_best_bets():
     games = _enrich_games(games, target_date)
 
     bets = []
+    logger.info("Best bets: analyzing %d games", len(games))
     for game in games:
         home_id = game["home"].get("team_id")
         away_id = game["away"].get("team_id")
         if not home_id or not away_id:
+            logger.info("  Skipping %s: no team_id", game.get("short_name", "?"))
             continue
 
-        # Skip live/final games
-        if game["status"]["state"] != "pre":
+        # Skip final games
+        if game["status"].get("completed") or game["status"].get("state") == "post":
             continue
 
         home_pid = game.get("home_pitcher", {})
@@ -527,10 +529,12 @@ def api_best_bets():
                 away_pitcher_id=int(away_pid["id"]) if away_pid and away_pid.get("id") else None,
                 venue=game.get("venue"),
             )
-        except Exception:
+        except Exception as e:
+            logger.error("  Prediction failed for %s: %s", game.get("short_name", "?"), e)
             continue
 
         if "error" in pred:
+            logger.info("  Prediction error for %s: %s", game.get("short_name", "?"), pred["error"])
             continue
 
         wp = pred.get("win_prob", {})
