@@ -173,9 +173,10 @@ def fetch_schedule(start_date: str, end_date: str) -> list[dict]:
             # Weather
             weather = g.get("weather", {})
 
+            game_date = g.get("officialDate", g.get("gameDate", "")[:10])
             game = {
                 "mlb_game_id": game_id,
-                "date": g.get("officialDate", g.get("gameDate", "")[:10]),
+                "date": game_date,
                 "home_team_id": home_team.get("team", {}).get("id"),
                 "away_team_id": away_team.get("team", {}).get("id"),
                 "home_score": home_team.get("score"),
@@ -187,7 +188,7 @@ def fetch_schedule(start_date: str, end_date: str) -> list[dict]:
                 "day_night": g.get("dayNight", ""),
                 "weather_temp": _safe_float(weather.get("temp")),
                 "weather_wind": weather.get("wind", ""),
-                "season": SEASON,
+                "season": int(game_date[:4]) if len(game_date) >= 4 else SEASON,
             }
 
             # If final, extract winning/losing/save pitchers
