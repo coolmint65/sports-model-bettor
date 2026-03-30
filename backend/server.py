@@ -509,19 +509,26 @@ def api_best_bets():
         if game["status"].get("completed") or game["status"].get("state") == "post":
             continue
 
-        home_pid = game.get("home_pitcher", {})
-        away_pid = game.get("away_pitcher", {})
+        home_pid = game.get("home_pitcher") or {}
+        away_pid = game.get("away_pitcher") or {}
+
+        try:
+            h_pitcher_id = int(home_pid["id"]) if home_pid.get("id") else None
+            a_pitcher_id = int(away_pid["id"]) if away_pid.get("id") else None
+        except (ValueError, TypeError):
+            h_pitcher_id = None
+            a_pitcher_id = None
 
         try:
             pred = predict_matchup(
                 home_team_id=home_id,
                 away_team_id=away_id,
-                home_pitcher_id=int(home_pid["id"]) if home_pid and home_pid.get("id") else None,
-                away_pitcher_id=int(away_pid["id"]) if away_pid and away_pid.get("id") else None,
+                home_pitcher_id=h_pitcher_id,
+                away_pitcher_id=a_pitcher_id,
                 venue=game.get("venue"),
             )
         except Exception as e:
-            logger.error("  Prediction failed for %s: %s", game.get("short_name", "?"), e)
+            logger.error("  Prediction failed for %s: %s", game.get("short_name", "?"), e, exc_info=True)
             continue
 
         if "error" in pred:
