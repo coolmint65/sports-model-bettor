@@ -234,6 +234,13 @@ function BettingPicks({ data, odds }) {
 function PickRow({ label, pick, prob, odds, pct }) {
   const conf = prob > 0.60 ? 'high' : prob > 0.53 ? 'med' : 'low'
 
+  // Calculate edge vs Vegas when real odds available
+  let edge = null
+  if (odds && prob) {
+    const implied = odds < 0 ? Math.abs(odds) / (Math.abs(odds) + 100) : 100 / (odds + 100)
+    edge = ((prob - implied) * 100).toFixed(1)
+  }
+
   return (
     <div className={`pick-row conf-${conf}`}>
       <div className="pick-label">{label}</div>
@@ -243,7 +250,12 @@ function PickRow({ label, pick, prob, odds, pct }) {
           <span className="pick-odds">({odds > 0 ? '+' : ''}{odds})</span>
         )}
       </div>
-      <div className={`pick-prob conf-${conf}`}>{pct(prob)}</div>
+      <div className="pick-numbers">
+        <span className={`pick-prob conf-${conf}`}>{pct(prob)}</span>
+        {edge && parseFloat(edge) > 0 && (
+          <span className="pick-edge positive">+{edge}%</span>
+        )}
+      </div>
     </div>
   )
 }
