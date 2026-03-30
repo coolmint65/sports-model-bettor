@@ -217,7 +217,8 @@ def fetch_season_results(season: int | None = None) -> list[dict]:
     start = f"{yr}-03-20"
     end = f"{yr}-10-01"
     today = datetime.now().strftime("%Y-%m-%d")
-    if end > today:
+    # Only cap at today if it's the current season
+    if yr == SEASON and end > today:
         end = today
     return fetch_schedule(start, end)
 
@@ -633,23 +634,38 @@ if __name__ == "__main__":
         ]
     )
 
-    args = set(sys.argv[1:])
+    args = sys.argv[1:]
+    args_set = set(args)
 
-    if "--full" in args:
+    # Parse --history YEAR
+    history_year = None
+    for i, a in enumerate(args):
+        if a == "--history" and i + 1 < len(args):
+            history_year = int(args[i + 1])
+
+    if history_year:
+        _progress(f"=== Loading {history_year} Season Data ===")
+        _progress(f"[1/2] Fetching teams...")
+        fetch_teams()
+        _progress(f"[2/2] Fetching all {history_year} games (this takes a few minutes)...")
+        games = fetch_season_results(season=history_year)
+        _progress(f"       Loaded {len(games)} games from {history_year}")
+        _progress(f"=== Done ===")
+    elif "--full" in args_set:
         full_sync()
-    elif "--today" in args or "--daily" in args:
+    elif "--today" in args_set or "--daily" in args_set:
         daily_sync()
-    elif "--season" in args:
+    elif "--season" in args_set:
         fetch_teams()
         fetch_season_results()
         fetch_standings()
-    elif "--rosters" in args:
+    elif "--rosters" in args_set:
         fetch_teams()
         fetch_all_rosters()
-    elif "--standings" in args:
+    elif "--standings" in args_set:
         fetch_teams()
         fetch_standings()
-    elif "--stats" in args:
+    elif "--stats" in args_set:
         sync_all_player_stats()
     else:
         quick_sync()

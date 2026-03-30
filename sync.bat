@@ -23,6 +23,7 @@ echo.
 if "%1"=="--full" goto :full
 if "%1"=="--daily" goto :daily
 if "%1"=="--standings" goto :standings
+if "%1"=="--history" goto :history
 goto :quick
 
 :full
@@ -43,6 +44,13 @@ goto :done
 :standings
 echo Updating standings...
 python -m scrapers.mlb_stats --standings
+goto :done
+
+:history
+echo Loading %2 season data for backtesting...
+echo This will take a few minutes.
+echo.
+python -m scrapers.mlb_stats --history %2
 goto :done
 
 :quick
