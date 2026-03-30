@@ -132,10 +132,76 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     away_xr *= park_run_factor
 
     # ── Step 5: Home advantage ──
-    # Note: Umpire zone impact removed — MLB ABS (automated balls/strikes)
-    # fully rolled out in 2026, eliminating umpire zone variance.
     home_xr += MLB_HOME_EDGE / 2
     away_xr -= MLB_HOME_EDGE / 2
+
+    # ── Step 6: Situational adjustments ──
+    # Weather, rest/fatigue, pitcher rest, lineup strength, platoon
+    from .situational import compute_all_adjustments
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    # Try to get pitcher handedness
+    home_throws = None
+    away_throws = None
+    if home_sp:
+        conn = get_conn()
+        row = conn.execute("SELECT throws FROM players WHERE mlb_id = ?",
+                          (home_pitcher_id,)).fetchone()
+        if row:
+            home_throws = row["throws"]
+    if away_sp:
+        conn = get_conn()
+        row = conn.execute("SELECT throws FROM players WHERE mlb_id = ?",
+                          (away_pitcher_id,)).fetchone()
+        if row:
+            away_throws = row["throws"]
+
+    # Try to get lineups for today's game
+    home_lineup = None
+    away_lineup = None
+    if venue:
+        # Check if game is today — try fetching lineup
+        game_row = get_conn().execute("""
+            SELECT mlb_game_id, weather_temp, weather_wind FROM games
+            WHERE home_team_id = ? AND away_team_id = ? AND date = ?
+            LIMIT 1
+        """, (home_team_id, away_team_id, today)).fetchone()
+
+        game_temp = None
+        game_wind = None
+        if game_row:
+            game_temp = game_row["weather_temp"]
+            game_wind = game_row["weather_wind"]
+
+            try:
+                from scrapers.mlb_stats import fetch_game_lineups
+                lineups = fetch_game_lineups(game_row["mlb_game_id"])
+                if lineups:
+                    home_lineup = lineups.get("home_lineup")
+                    away_lineup = lineups.get("away_lineup")
+            except Exception:
+                pass
+    else:
+        game_temp = None
+        game_wind = None
+
+    sit = compute_all_adjustments(
+        home_team_id=home_team_id,
+        away_team_id=away_team_id,
+        home_pitcher_id=home_pitcher_id,
+        away_pitcher_id=away_pitcher_id,
+        game_date=today,
+        venue=venue,
+        weather_temp=game_temp,
+        weather_wind=game_wind,
+        home_lineup=home_lineup,
+        away_lineup=away_lineup,
+        home_pitcher_throws=home_throws,
+        away_pitcher_throws=away_throws,
+    )
+
+    home_xr *= sit["home_multiplier"]
+    away_xr *= sit["away_multiplier"]
 
     # ── Step 7: H2H adjustments ──
     h2h_adj_home, h2h_adj_away = 0.0, 0.0
@@ -234,6 +300,7 @@ def predict_matchup(home_team_id: int, away_team_id: int,
             "away": round(p_away, 4),
         },
         "park_factor": round(park_run_factor, 3),
+        "situational": sit,
         "over_under": ou_lines,
         "run_line": run_line,
         "f5": f5,

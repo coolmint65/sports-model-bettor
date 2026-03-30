@@ -223,6 +223,46 @@ def fetch_today() -> list[dict]:
     return fetch_schedule(today, today)
 
 
+def fetch_game_lineups(game_pk: int) -> dict | None:
+    """
+    Fetch confirmed lineups for a specific game from the live feed.
+    Returns {home_lineup: [...], away_lineup: [...]} with player IDs and names.
+    """
+    url = f"{MLB_API}/game/{game_pk}/boxscore"
+    data = _fetch(url)
+    if not data:
+        return None
+
+    result = {"home_lineup": [], "away_lineup": []}
+
+    for side in ["home", "away"]:
+        team_data = data.get("teams", {}).get(side, {})
+        batting_order = team_data.get("battingOrder", [])
+        players = team_data.get("players", {})
+
+        lineup = []
+        for player_id in batting_order:
+            key = f"ID{player_id}"
+            p = players.get(key, {})
+            person = p.get("person", {})
+            pos = p.get("position", {})
+            stats = p.get("seasonStats", {}).get("batting", {})
+
+            lineup.append({
+                "id": player_id,
+                "name": person.get("fullName", ""),
+                "position": pos.get("abbreviation", ""),
+                "bats": "",  # Would need person endpoint for this
+                "season_avg": _safe_float(stats.get("avg")),
+                "season_ops": _safe_float(stats.get("ops")),
+                "season_hr": _safe_int(stats.get("homeRuns")),
+            })
+
+        result[f"{side}_lineup"] = lineup
+
+    return result if (result["home_lineup"] or result["away_lineup"]) else None
+
+
 def fetch_season_results(season: int | None = None) -> list[dict]:
     """Fetch all games for a season (or current season)."""
     yr = season or SEASON

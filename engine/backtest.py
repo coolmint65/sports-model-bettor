@@ -122,6 +122,19 @@ def run_backtest(season: int | None = None, days: int | None = None,
         home_xr, away_xr = _predict_from_pit(
             home_pit, away_pit, home_sp_pit, away_sp_pit)
 
+        # ── Situational adjustments ──
+        from .situational import weather_factor, rest_fatigue_factor, pitcher_rest_factor
+
+        wx = weather_factor(game.get("weather_temp"), game.get("weather_wind"),
+                           game.get("venue"))
+        home_rest = rest_fatigue_factor(home_id, game_date, yr)
+        away_rest = rest_fatigue_factor(away_id, game_date, yr)
+        home_sp_rest = pitcher_rest_factor(game.get("home_pitcher_id"), game_date, yr) if game.get("home_pitcher_id") else 1.0
+        away_sp_rest = pitcher_rest_factor(game.get("away_pitcher_id"), game_date, yr) if game.get("away_pitcher_id") else 1.0
+
+        home_xr *= wx * home_rest * away_sp_rest
+        away_xr *= wx * away_rest * home_sp_rest
+
         total_pred = home_xr + away_xr
         matrix = _build_score_matrix(home_xr, away_xr, max_runs=15)
         p_home, p_away = _win_probs_from_matrix(matrix)
