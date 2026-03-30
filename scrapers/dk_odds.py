@@ -18,16 +18,40 @@ import urllib.request
 
 logger = logging.getLogger(__name__)
 
-# DraftKings public sportsbook API
-DK_MLB_URL = "https://sportsbook.draftkings.com//sites/US-SB/api/v5/eventgroups/84240?format=json"
+# DraftKings public sportsbook API — try multiple subdomains
+DK_URLS = [
+    "https://sportsbook.draftkings.com//sites/US-SB/api/v5/eventgroups/84240?format=json",
+    "https://sportsbook-us-nj.draftkings.com//sites/US-NJ-SB/api/v5/eventgroups/84240?format=json",
+    "https://sportsbook-us-il.draftkings.com//sites/US-IL-SB/api/v5/eventgroups/84240?format=json",
+    "https://sportsbook-us-co.draftkings.com//sites/US-CO-SB/api/v5/eventgroups/84240?format=json",
+]
 
 # Offer category IDs in DraftKings response
 GAME_LINES_CAT = 0  # First category is usually "Game Lines"
 
 
+def _fetch_dk(url: str) -> dict | None:
+    """Fetch JSON from DraftKings with browser-like headers."""
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://sportsbook.draftkings.com/",
+            "Origin": "https://sportsbook.draftkings.com",
+        })
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read().decode())
+    except Exception as e:
+        logger.debug("DK fetch failed for %s: %s", url, e)
+        return None
+
+
 def fetch_dk_odds() -> dict:
     """
     Fetch all MLB odds from DraftKings.
+
+    Tries multiple state subdomains since some may be geo-restricted.
 
     Returns dict keyed by a normalized matchup string:
     {
@@ -40,18 +64,15 @@ def fetch_dk_odds() -> dict:
         ...
     }
     """
-    try:
-        req = urllib.request.Request(DK_MLB_URL, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json",
-        })
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode())
-    except Exception as e:
-        logger.warning("Failed to fetch DraftKings odds: %s", e)
-        return {}
+    data = None
+    for url in DK_URLS:
+        data = _fetch_dk(url)
+        if data:
+            logger.info("DraftKings: connected via %s", url.split("//")[1].split("/")[0])
+            break
 
     if not data:
+        logger.warning("Failed to fetch DraftKings odds: all URLs returned 403/empty")
         return {}
 
     odds_map = {}
