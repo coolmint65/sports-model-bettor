@@ -427,6 +427,28 @@ def api_backtest(days: int = Query(default=0), min_edge: float = Query(default=0
     return results
 
 
+@app.post("/api/tracker/record")
+def api_record_picks():
+    """Record today's model picks."""
+    from engine.tracker import record_picks
+    picks = record_picks()
+    return {"recorded": len(picks), "picks": picks}
+
+
+@app.post("/api/tracker/settle")
+def api_settle_picks():
+    """Settle completed picks against final scores."""
+    from engine.tracker import settle_picks
+    return settle_picks()
+
+
+@app.get("/api/tracker/summary")
+def api_pick_summary():
+    """Get running pick totals."""
+    from engine.tracker import get_pick_summary
+    return get_pick_summary()
+
+
 @app.get("/api/standings")
 def api_standings():
     """Return MLB standings grouped by division."""

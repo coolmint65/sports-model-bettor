@@ -300,6 +300,25 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         updated_at  TEXT DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS picks (
+        id          INTEGER PRIMARY KEY,
+        game_id     INTEGER,
+        date        TEXT NOT NULL,
+        matchup     TEXT,           -- "NYY @ BOS"
+        bet_type    TEXT NOT NULL,   -- 'ml', 'ou', 'nrfi', 'rl', 'f5'
+        pick        TEXT NOT NULL,   -- "NYY", "Over 8.5", "NRFI", etc.
+        model_prob  REAL,
+        edge        REAL,
+        odds        INTEGER,
+        result      TEXT,            -- 'W', 'L', 'P' (push), NULL (pending)
+        profit      REAL,            -- dollars won/lost on $100 bet
+        created_at  TEXT DEFAULT (datetime('now')),
+        settled_at  TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_picks_date ON picks(date);
+    CREATE INDEX IF NOT EXISTS idx_picks_result ON picks(result);
+
     -- Indexes for common queries
     CREATE INDEX IF NOT EXISTS idx_games_date ON games(date);
     CREATE INDEX IF NOT EXISTS idx_games_season ON games(season);
