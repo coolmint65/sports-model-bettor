@@ -493,17 +493,8 @@ def api_best_bets():
     Run predictions on all today's games and return best plays sorted by edge.
     Each game gets its top pick with edge calculation vs average odds.
     """
-    # Get today's scoreboard
-    target_date = datetime.now().strftime("%Y-%m-%d")
-    espn_date = target_date.replace("-", "")
-
-    url = f"{ESPN_BASE}/baseball/mlb/scoreboard"
-    espn_data = _fetch_espn_json(url)
-    if not espn_data:
-        return []
-
-    games = _parse_espn_scoreboard(espn_data)
-    games = _enrich_games(games, target_date)
+    # Reuse the scoreboard endpoint (already handles caching and fallbacks)
+    games = api_scoreboard()
 
     bets = []
     logger.info("Best bets: analyzing %d games", len(games))
