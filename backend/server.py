@@ -779,23 +779,22 @@ def api_calibration_status():
 
 @app.get("/api/debug/odds")
 def api_debug_odds():
-    """Dump raw ESPN odds for first game to debug field names."""
-    url = f"{ESPN_BASE}/baseball/mlb/scoreboard"
-    data = _fetch_espn_json(url)
-    if not data:
-        return {"error": "No ESPN data"}
+    """Dump per-game odds from ESPN core API."""
+    games = _get_scoreboard()
+    if not games:
+        return {"error": "No games"}
 
-    events = data.get("events", [])
-    if not events:
-        return {"error": "No events"}
+    first = games[0]
+    event_id = first.get("id")
 
-    comp = events[0].get("competitions", [{}])[0]
-    raw_odds = comp.get("odds", [])
+    from scrapers.espn_odds import fetch_game_odds
+    raw = fetch_game_odds(event_id)
 
     return {
-        "game": events[0].get("shortName", ""),
-        "odds_count": len(raw_odds),
-        "odds": raw_odds,
+        "game": first.get("short_name", ""),
+        "event_id": event_id,
+        "odds": raw,
+        "game_odds": first.get("odds"),
     }
 
 
