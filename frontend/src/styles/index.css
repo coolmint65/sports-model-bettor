@@ -299,7 +299,37 @@ body {
   font-weight: 500;
 }
 
-/* Odds chips */
+/* Odds grid */
+.game-odds-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-top: 8px;
+  border-top: 1px solid #1e293b;
+  font-size: 0.72rem;
+}
+
+.odds-line {
+  display: grid;
+  grid-template-columns: 28px 1fr 1fr;
+  gap: 6px;
+  align-items: center;
+}
+
+.odds-label {
+  color: #475569;
+  font-weight: 600;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+}
+
+.odds-val {
+  color: #94a3b8;
+  font-family: 'Inter', monospace;
+  font-size: 0.72rem;
+}
+
+/* Legacy odds chips (for other pages) */
 .game-odds {
   display: flex;
   gap: 6px;

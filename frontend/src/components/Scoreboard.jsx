@@ -92,26 +92,30 @@ function GameCard({ game, bet, onClick }) {
 
       {/* Odds */}
       {game.odds && (
-        <div className="game-odds">
-          {game.odds.home_ml && (
-            <span className="odds-chip ml">
-              {home.abbreviation} {game.odds.home_ml > 0 ? '+' : ''}{game.odds.home_ml}
-            </span>
+        <div className="game-odds-grid">
+          {/* ML */}
+          {(game.odds.home_ml || game.odds.away_ml) && (
+            <div className="odds-line">
+              <span className="odds-label">ML</span>
+              <span className="odds-val">{away.abbreviation} {game.odds.away_ml > 0 ? '+' : ''}{game.odds.away_ml || '-'}</span>
+              <span className="odds-val">{home.abbreviation} {game.odds.home_ml > 0 ? '+' : ''}{game.odds.home_ml || '-'}</span>
+            </div>
           )}
-          {game.odds.away_ml && (
-            <span className="odds-chip ml">
-              {away.abbreviation} {game.odds.away_ml > 0 ? '+' : ''}{game.odds.away_ml}
-            </span>
-          )}
+          {/* O/U */}
           {game.odds.over_under && (
-            <span className="odds-chip">
-              O/U {game.odds.over_under}
-            </span>
+            <div className="odds-line">
+              <span className="odds-label">O/U</span>
+              <span className="odds-val">o{game.odds.over_under} {game.odds.over_odds ? `(${game.odds.over_odds > 0 ? '+' : ''}${game.odds.over_odds})` : ''}</span>
+              <span className="odds-val">u{game.odds.over_under} {game.odds.under_odds ? `(${game.odds.under_odds > 0 ? '+' : ''}${game.odds.under_odds})` : ''}</span>
+            </div>
           )}
-          {game.odds.spread_details && (
-            <span className="odds-chip">
-              {game.odds.spread_details}
-            </span>
+          {/* RL */}
+          {game.odds.spread && (
+            <div className="odds-line">
+              <span className="odds-label">RL</span>
+              <span className="odds-val">+{Math.abs(game.odds.spread)} {game.odds.away_spread_odds ? `(${game.odds.away_spread_odds > 0 ? '+' : ''}${game.odds.away_spread_odds})` : ''}</span>
+              <span className="odds-val">-{Math.abs(game.odds.spread)} {game.odds.home_spread_odds ? `(${game.odds.home_spread_odds > 0 ? '+' : ''}${game.odds.home_spread_odds})` : ''}</span>
+            </div>
           )}
         </div>
       )}
