@@ -118,13 +118,8 @@ def api_team_detail(team_id: int):
     }
 
 
-@app.get("/api/scoreboard")
-def api_scoreboard(date: str = Query(default="")):
-    """
-    Return today's MLB games.
-    Combines ESPN live data with our DB data (probable pitchers, records).
-    Falls back to MLB Stats API if ESPN is unavailable.
-    """
+def _get_scoreboard(date: str = "") -> list[dict]:
+    """Core scoreboard logic — reusable by other endpoints."""
     target_date = date or datetime.now().strftime("%Y-%m-%d")
     espn_date = target_date.replace("-", "")
 
@@ -178,6 +173,12 @@ def api_scoreboard(date: str = Query(default="")):
 
     _scoreboard_cache[cache_key] = (now, games)
     return games
+
+
+@app.get("/api/scoreboard")
+def api_scoreboard(date: str = Query(default="")):
+    """Return today's MLB games."""
+    return _get_scoreboard(date)
 
 
 def _mlb_api_scoreboard(date: str) -> list[dict]:
@@ -493,8 +494,8 @@ def api_best_bets():
     Run predictions on all today's games and return best plays sorted by edge.
     Each game gets its top pick with edge calculation vs average odds.
     """
-    # Reuse the scoreboard endpoint (already handles caching and fallbacks)
-    games = api_scoreboard()
+    # Reuse scoreboard logic (handles caching and fallbacks)
+    games = _get_scoreboard()
 
     bets = []
     logger.info("Best bets: analyzing %d games", len(games))
