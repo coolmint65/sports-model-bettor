@@ -106,12 +106,11 @@ function GameCard({ game, bet, onClick }) {
           {game.odds.over_under && (
             <span className="odds-chip">
               O/U {game.odds.over_under}
-              {game.odds.over_odds ? ` (${game.odds.over_odds > 0 ? '+' : ''}${game.odds.over_odds})` : ''}
             </span>
           )}
-          {game.odds.home_spread && (
+          {game.odds.spread_details && (
             <span className="odds-chip">
-              RL {game.odds.spread || '±1.5'}
+              {game.odds.spread_details}
             </span>
           )}
         </div>

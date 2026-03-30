@@ -171,6 +171,17 @@ def _get_scoreboard(date: str = "") -> list[dict]:
     # Enrich with our DB data
     games = _enrich_games(games, target_date)
 
+    # Fetch real odds from ESPN's per-game odds endpoint
+    try:
+        from scrapers.espn_odds import fetch_all_game_odds
+        odds_map = fetch_all_game_odds(games)
+        for game in games:
+            gid = game.get("id")
+            if gid and gid in odds_map:
+                game["odds"] = odds_map[gid]
+    except Exception as e:
+        logger.warning("Failed to fetch per-game odds: %s", e)
+
     _scoreboard_cache[cache_key] = (now, games)
     return games
 
@@ -591,17 +602,26 @@ def api_best_bets():
                 "odds": ml_line,
             })
 
-        # O/U — use Vegas total from ESPN
+        # O/U — use real odds when available
         vegas_total = odds.get("over_under")
         if vegas_total and pred.get("over_under"):
             ou_data = _find_ou(pred["over_under"], vegas_total)
             if ou_data:
                 ou_pick = "Over" if ou_data["over"] > ou_data["under"] else "Under"
                 ou_prob = max(ou_data["over"], ou_data["under"])
-                ou_edge = (ou_prob - 0.524) * 100  # -110 implied
+
+                # Use real O/U odds if available
+                real_ou_odds = odds.get("over_odds") if ou_pick == "Over" else odds.get("under_odds")
+                if real_ou_odds:
+                    ou_implied = _implied(real_ou_odds)
+                else:
+                    ou_implied = 0.524  # Standard -110
+
+                ou_edge = (ou_prob - ou_implied) * 100
                 game_picks.append({
                     "type": "O/U", "pick": f"{ou_pick} {vegas_total}",
                     "prob": ou_prob, "edge": round(ou_edge, 1),
+                    "odds": real_ou_odds,
                 })
 
         # NRFI — standard -120 line
@@ -615,19 +635,28 @@ def api_best_bets():
                 "prob": nrfi_prob, "edge": round(nrfi_edge, 1),
             })
 
-        # Run Line — ALWAYS ±1.5 (the only RL sportsbooks offer at -110)
+        # Run Line ±1.5 — use real spread odds when available
         rl_home_15 = rl.get("home_minus_1_5", 0.5)
         rl_away_15 = rl.get("away_plus_1_5", 0.5)
         if rl_home_15 > 0.5:
             rl_pick_label = f"{h_abbr} -1.5"
             rl_prob = rl_home_15
+            rl_real_odds = odds.get("home_spread_odds")
         else:
             rl_pick_label = f"{a_abbr} +1.5"
             rl_prob = rl_away_15
-        rl_edge = (rl_prob - 0.524) * 100  # -110 implied
+            rl_real_odds = odds.get("away_spread_odds")
+
+        if rl_real_odds:
+            rl_implied = _implied(rl_real_odds)
+        else:
+            rl_implied = 0.524  # Standard -110
+        rl_edge = (rl_prob - rl_implied) * 100
+
         game_picks.append({
             "type": "RL", "pick": rl_pick_label,
             "prob": rl_prob, "edge": round(rl_edge, 1),
+            "odds": rl_real_odds,
         })
 
         if not game_picks:
@@ -664,6 +693,13 @@ def api_best_bets():
     # Sort by best edge
     bets.sort(key=lambda b: b["best_pick"]["edge"], reverse=True)
     return bets
+
+
+def _implied(ml: int) -> float:
+    """Convert American odds to implied probability."""
+    if ml < 0:
+        return abs(ml) / (abs(ml) + 100)
+    return 100 / (ml + 100)
 
 
 def _find_ou(ou_lines, vegas_total):
