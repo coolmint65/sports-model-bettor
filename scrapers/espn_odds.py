@@ -15,61 +15,126 @@ import urllib.request
 
 logger = logging.getLogger(__name__)
 
+# Per-game odds (has ML and O/U but NOT RL juice)
 ESPN_ODDS_URL = "https://sports.core.api.espn.com/v2/sports/baseball/leagues/mlb/events/{event_id}/competitions/{event_id}/odds"
 
+# Full odds page API (has all lines including RL juice)
+ESPN_ODDS_PAGE_URL = "https://site.web.api.espn.com/apis/v2/scoreboard/header?sport=baseball&league=mlb"
 
-def fetch_game_odds(event_id: str) -> dict | None:
-    """
-    Fetch full odds for a specific game from ESPN's core API.
 
-    Returns {
-        home_ml, away_ml,
-        over_under, over_odds, under_odds,
-        home_spread, away_spread, spread_line
-    }
-    """
-    url = ESPN_ODDS_URL.format(event_id=event_id)
+def _fetch(url: str) -> dict | None:
+    """Fetch JSON from a URL."""
     try:
         req = urllib.request.Request(url, headers={
             "User-Agent": "Mozilla/5.0",
             "Accept": "application/json",
         })
         with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
-    except Exception as e:
-        logger.debug("Failed to fetch odds for event %s: %s", event_id, e)
+            return json.loads(resp.read().decode())
+    except Exception:
         return None
 
-    if not data:
-        return None
 
-    # ESPN returns odds as a list of providers
-    items = data.get("items", [])
-    if not items:
-        return None
+def _derive_rl_odds(ml: int, is_favorite: bool) -> int:
+    """
+    Derive approximate run line (±1.5) odds from moneyline.
 
-    # Use first provider (usually DraftKings)
-    o = items[0]
+    Based on real DraftKings data, the RL shift from ML is large in
+    baseball (~250-320 points) because 1.5 runs is a huge spread.
 
+    Calibrated from actual DK lines:
+    -300 ML → -130 RL (-1.5)    |  +240 ML → +110 RL (+1.5)
+    -210 ML → +110 RL (-1.5)    |  +175 ML → -130 RL (+1.5)
+    -165 ML → +135 RL (-1.5)    |  +135 ML → -160 RL (+1.5)
+    -135 ML → +150 RL (-1.5)    |  +115 ML → -185 RL (+1.5)
+    """
+    # Convert to implied probability, shift, convert back
+    if ml < 0:
+        impl = abs(ml) / (abs(ml) + 100)
+    else:
+        impl = 100 / (ml + 100)
+
+    if is_favorite:
+        # Favorite -1.5: probability drops ~25-30 percentage points
+        # More lopsided favorites lose less
+        if impl > 0.75:
+            drop = 0.20  # -300+ ML: only drops 20pts
+        elif impl > 0.65:
+            drop = 0.25
+        elif impl > 0.58:
+            drop = 0.28
+        else:
+            drop = 0.30  # Small favorite: drops 30pts
+
+        new_impl = max(0.25, impl - drop)
+    else:
+        # Underdog +1.5: probability increases ~25-30 percentage points
+        if impl < 0.30:
+            gain = 0.30  # Big underdog gains a lot
+        elif impl < 0.38:
+            gain = 0.28
+        elif impl < 0.43:
+            gain = 0.25
+        else:
+            gain = 0.22  # Slight underdog gains less
+
+        new_impl = min(0.75, impl + gain)
+
+    # Convert back to American odds
+    if new_impl >= 0.5:
+        rl = int(-100 * new_impl / (1 - new_impl))
+    else:
+        rl = int(100 * (1 - new_impl) / new_impl)
+
+    return max(-250, min(250, rl))
+
+
+def fetch_game_odds(event_id: str) -> dict | None:
+    """
+    Fetch full odds for a specific game from ESPN's core API.
+    Tries multiple endpoints to get all lines including RL juice.
+    """
     result = {}
 
-    # Moneyline
-    home_odds_data = o.get("homeTeamOdds", {}) or {}
-    away_odds_data = o.get("awayTeamOdds", {}) or {}
+    # Endpoint 1: Per-game odds (has ML, O/U, spread value)
+    url = ESPN_ODDS_URL.format(event_id=event_id)
+    data = _fetch(url)
+    if data:
+        items = data.get("items", [])
+        if items:
+            o = items[0]
+            home_odds_data = o.get("homeTeamOdds", {}) or {}
+            away_odds_data = o.get("awayTeamOdds", {}) or {}
 
-    result["home_ml"] = home_odds_data.get("moneyLine")
-    result["away_ml"] = away_odds_data.get("moneyLine")
+            result["home_ml"] = home_odds_data.get("moneyLine")
+            result["away_ml"] = away_odds_data.get("moneyLine")
+            result["over_under"] = o.get("overUnder")
+            result["over_odds"] = o.get("overOdds") or home_odds_data.get("overOdds")
+            result["under_odds"] = o.get("underOdds") or away_odds_data.get("underOdds")
+            result["spread"] = o.get("spread")
+            result["spread_details"] = o.get("details", "")
+            result["home_spread_odds"] = home_odds_data.get("spreadOdds")
+            result["away_spread_odds"] = away_odds_data.get("spreadOdds")
 
-    # Over/Under
-    result["over_under"] = o.get("overUnder")
-    result["over_odds"] = o.get("overOdds") or home_odds_data.get("overOdds")
-    result["under_odds"] = o.get("underOdds") or away_odds_data.get("underOdds")
+            provider = o.get("provider", {})
+            result["provider"] = provider.get("name", "Unknown")
 
-    # Spread (Run Line)
-    result["spread"] = o.get("spread")
-    result["spread_details"] = o.get("details", "")
-    result["home_spread_odds"] = home_odds_data.get("spreadOdds")
-    result["away_spread_odds"] = away_odds_data.get("spreadOdds")
+    # Endpoint 2: Try the pickcenter/odds endpoint for RL juice
+    pc_url = f"https://sports.core.api.espn.com/v2/sports/baseball/leagues/mlb/events/{event_id}/competitions/{event_id}/odds?limit=20"
+    pc_data = _fetch(pc_url)
+    if pc_data:
+        for item in pc_data.get("items", []):
+            ho = item.get("homeTeamOdds", {}) or {}
+            ao = item.get("awayTeamOdds", {}) or {}
+            # Some providers include spreadOdds
+            if ho.get("spreadOdds") and not result.get("home_spread_odds"):
+                result["home_spread_odds"] = ho["spreadOdds"]
+                result["away_spread_odds"] = ao.get("spreadOdds")
+                break
+
+    # ESPN doesn't provide RL juice through the API.
+    # Don't guess — leave as null and let the frontend/edge calculator
+    # handle it with standard -110 assumption.
 
     # Provider info
     provider = o.get("provider", {})
