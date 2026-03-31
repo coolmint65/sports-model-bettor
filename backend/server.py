@@ -176,7 +176,9 @@ def _get_scoreboard(date: str = "") -> list[dict]:
     odds_matched = 0
     try:
         from scrapers.odds_api import fetch_odds
+        logger.info("Calling Odds API...")
         api_odds = fetch_odds()
+        logger.info("Odds API returned %d games", len(api_odds) if api_odds else 0)
         if api_odds:
             for game in games:
                 h_abbr = game["home"].get("abbreviation", "")
@@ -187,7 +189,7 @@ def _get_scoreboard(date: str = "") -> list[dict]:
                     odds_matched += 1
             logger.info("Odds API: matched %d/%d games", odds_matched, len(games))
     except Exception as e:
-        logger.warning("Odds API failed: %s", e)
+        logger.warning("Odds API failed: %s", e, exc_info=True)
 
     # Fallback: ESPN per-game odds for games without API odds
     if odds_matched < len(games):
