@@ -171,16 +171,40 @@ def _get_scoreboard(date: str = "") -> list[dict]:
     # Enrich with our DB data
     games = _enrich_games(games, target_date)
 
-    # Fetch real odds from ESPN's per-game odds endpoint
+    # Fetch real odds — try DraftKings first (has RL juice), then ESPN
+    dk_matched = 0
     try:
-        from scrapers.espn_odds import fetch_all_game_odds
-        odds_map = fetch_all_game_odds(games)
-        for game in games:
-            gid = game.get("id")
-            if gid and gid in odds_map:
-                game["odds"] = odds_map[gid]
+        from scrapers.dk_odds import fetch_dk_odds
+        dk_odds = fetch_dk_odds()
+        if dk_odds:
+            for game in games:
+                h_abbr = game["home"].get("abbreviation", "")
+                a_abbr = game["away"].get("abbreviation", "")
+                key = f"{a_abbr}@{h_abbr}"
+                if key in dk_odds:
+                    game["odds"] = dk_odds[key]
+                    game["odds"]["provider"] = "DraftKings"
+                    dk_matched += 1
+            logger.info("DraftKings: matched %d/%d games", dk_matched, len(games))
     except Exception as e:
-        logger.warning("Failed to fetch per-game odds: %s", e)
+        logger.warning("DraftKings odds failed: %s", e)
+
+    # Fallback: ESPN per-game odds for games without DK odds
+    if dk_matched < len(games):
+        try:
+            from scrapers.espn_odds import fetch_all_game_odds
+            games_needing_odds = [g for g in games
+                                  if not g.get("odds") or not g["odds"].get("home_ml")]
+            if games_needing_odds:
+                espn_odds = fetch_all_game_odds(games_needing_odds)
+                for game in games:
+                    gid = game.get("id")
+                    if gid and gid in espn_odds and (
+                        not game.get("odds") or not game["odds"].get("home_ml")):
+                        game["odds"] = espn_odds[gid]
+                        game["odds"]["provider"] = "ESPN"
+        except Exception as e:
+            logger.warning("ESPN per-game odds failed: %s", e)
 
     _scoreboard_cache[cache_key] = (now, games)
     return games
@@ -779,23 +803,42 @@ def api_calibration_status():
 
 @app.get("/api/debug/odds")
 def api_debug_odds():
-    """Dump per-game odds from ESPN core API."""
-    games = _get_scoreboard()
-    if not games:
-        return {"error": "No games"}
+    """Test both DraftKings and ESPN odds sources."""
+    result = {"dk": None, "espn": None}
 
-    first = games[0]
-    event_id = first.get("id")
+    # Test DraftKings
+    try:
+        from scrapers.dk_odds import fetch_dk_odds, DK_URLS, _fetch_dk
+        # Try each URL and report which work
+        dk_results = {}
+        for url in DK_URLS:
+            data = _fetch_dk(url)
+            dk_results[url.split("//")[1].split("/")[0]] = "OK" if data else "FAILED"
+        result["dk_urls"] = dk_results
 
-    from scrapers.espn_odds import fetch_game_odds
-    raw = fetch_game_odds(event_id)
+        dk_odds = fetch_dk_odds()
+        result["dk"] = {
+            "games_found": len(dk_odds),
+            "sample": dict(list(dk_odds.items())[:2]) if dk_odds else None,
+        }
+    except Exception as e:
+        result["dk"] = {"error": str(e)}
 
-    return {
-        "game": first.get("short_name", ""),
-        "event_id": event_id,
-        "odds": raw,
-        "game_odds": first.get("odds"),
-    }
+    # Test ESPN
+    try:
+        games = _get_scoreboard()
+        if games:
+            from scrapers.espn_odds import fetch_game_odds
+            first = games[0]
+            espn = fetch_game_odds(first.get("id"))
+            result["espn"] = {
+                "game": first.get("short_name", ""),
+                "odds": espn,
+            }
+    except Exception as e:
+        result["espn"] = {"error": str(e)}
+
+    return result
 
 
 @app.get("/api/debug/teams")

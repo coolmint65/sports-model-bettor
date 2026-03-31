@@ -20,10 +20,12 @@ logger = logging.getLogger(__name__)
 
 # DraftKings public sportsbook API — try multiple subdomains
 DK_URLS = [
+    "https://sportsbook-nash.draftkings.com//sites/US-SB/api/v5/eventgroups/84240?format=json",
     "https://sportsbook.draftkings.com//sites/US-SB/api/v5/eventgroups/84240?format=json",
     "https://sportsbook-us-nj.draftkings.com//sites/US-NJ-SB/api/v5/eventgroups/84240?format=json",
     "https://sportsbook-us-il.draftkings.com//sites/US-IL-SB/api/v5/eventgroups/84240?format=json",
     "https://sportsbook-us-co.draftkings.com//sites/US-CO-SB/api/v5/eventgroups/84240?format=json",
+    "https://sportsbook-us-pa.draftkings.com//sites/US-PA-SB/api/v5/eventgroups/84240?format=json",
 ]
 
 # Offer category IDs in DraftKings response
