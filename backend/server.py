@@ -805,38 +805,33 @@ def api_calibration_status():
 
 @app.get("/api/debug/odds")
 def api_debug_odds():
-    """Test both DraftKings and ESPN odds sources."""
-    result = {"dk": None, "espn": None}
+    """Test all odds sources."""
+    result = {}
 
-    # Test DraftKings
+    # Test The Odds API
     try:
-        from scrapers.dk_odds import fetch_dk_odds, DK_URLS, _fetch_dk
-        # Try each URL and report which work
-        dk_results = {}
-        for url in DK_URLS:
-            data = _fetch_dk(url)
-            dk_results[url.split("//")[1].split("/")[0]] = "OK" if data else "FAILED"
-        result["dk_urls"] = dk_results
-
-        dk_odds = fetch_dk_odds()
-        result["dk"] = {
-            "games_found": len(dk_odds),
-            "sample": dict(list(dk_odds.items())[:2]) if dk_odds else None,
+        from scrapers.odds_api import fetch_odds, _get_api_key, KEY_FILE
+        key = _get_api_key()
+        result["odds_api"] = {
+            "key_found": key is not None,
+            "key_file": str(KEY_FILE),
+            "key_file_exists": KEY_FILE.exists(),
+            "key_preview": key[:8] + "..." if key else None,
         }
+        if key:
+            odds = fetch_odds()
+            result["odds_api"]["games_found"] = len(odds)
+            result["odds_api"]["sample"] = dict(list(odds.items())[:1]) if odds else None
     except Exception as e:
-        result["dk"] = {"error": str(e)}
+        result["odds_api"] = {"error": str(e)}
 
     # Test ESPN
     try:
+        from scrapers.espn_odds import fetch_game_odds
         games = _get_scoreboard()
         if games:
-            from scrapers.espn_odds import fetch_game_odds
-            first = games[0]
-            espn = fetch_game_odds(first.get("id"))
-            result["espn"] = {
-                "game": first.get("short_name", ""),
-                "odds": espn,
-            }
+            espn = fetch_game_odds(games[0].get("id"))
+            result["espn"] = {"game": games[0].get("short_name", ""), "odds": espn}
     except Exception as e:
         result["espn"] = {"error": str(e)}
 
