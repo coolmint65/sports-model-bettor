@@ -171,26 +171,26 @@ def _get_scoreboard(date: str = "") -> list[dict]:
     # Enrich with our DB data
     games = _enrich_games(games, target_date)
 
-    # Fetch real odds — try DraftKings first (has RL juice), then ESPN
-    dk_matched = 0
+    # Fetch real odds — try The Odds API first (has all lines with juice),
+    # then ESPN per-game as fallback
+    odds_matched = 0
     try:
-        from scrapers.dk_odds import fetch_dk_odds
-        dk_odds = fetch_dk_odds()
-        if dk_odds:
+        from scrapers.odds_api import fetch_odds
+        api_odds = fetch_odds()
+        if api_odds:
             for game in games:
                 h_abbr = game["home"].get("abbreviation", "")
                 a_abbr = game["away"].get("abbreviation", "")
                 key = f"{a_abbr}@{h_abbr}"
-                if key in dk_odds:
-                    game["odds"] = dk_odds[key]
-                    game["odds"]["provider"] = "DraftKings"
-                    dk_matched += 1
-            logger.info("DraftKings: matched %d/%d games", dk_matched, len(games))
+                if key in api_odds:
+                    game["odds"] = api_odds[key]
+                    odds_matched += 1
+            logger.info("Odds API: matched %d/%d games", odds_matched, len(games))
     except Exception as e:
-        logger.warning("DraftKings odds failed: %s", e)
+        logger.warning("Odds API failed: %s", e)
 
-    # Fallback: ESPN per-game odds for games without DK odds
-    if dk_matched < len(games):
+    # Fallback: ESPN per-game odds for games without API odds
+    if odds_matched < len(games):
         try:
             from scrapers.espn_odds import fetch_all_game_odds
             games_needing_odds = [g for g in games

@@ -151,9 +151,19 @@ def record_picks(date: str | None = None, min_edge: float = 1.5) -> list[dict]:
 def settle_picks() -> dict:
     """
     Settle all pending picks against final game results.
-    Returns summary of settled picks.
+    First refreshes recent game scores from MLB API, then settles.
     """
     conn = get_conn()
+
+    # Re-fetch recent game results so yesterday's games are marked 'final'
+    try:
+        from scrapers.mlb_stats import fetch_schedule
+        from datetime import timedelta
+        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        three_days_ago = (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%d")
+        fetch_schedule(three_days_ago, yesterday)
+    except Exception as e:
+        logger.warning("Could not refresh recent games: %s", e)
 
     pending = conn.execute(
         "SELECT * FROM picks WHERE result IS NULL"

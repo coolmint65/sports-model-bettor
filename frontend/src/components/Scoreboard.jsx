@@ -113,8 +113,14 @@ function GameCard({ game, bet, onClick }) {
           {game.odds.spread && (
             <div className="odds-line">
               <span className="odds-label">RL</span>
-              <span className="odds-val">{away.abbreviation} +{Math.abs(game.odds.spread)}</span>
-              <span className="odds-val">{home.abbreviation} -{Math.abs(game.odds.spread)}</span>
+              <span className="odds-val">
+                {away.abbreviation} +{Math.abs(game.odds.spread)}
+                {game.odds.away_spread_odds ? ` (${game.odds.away_spread_odds > 0 ? '+' : ''}${Math.round(game.odds.away_spread_odds)})` : ''}
+              </span>
+              <span className="odds-val">
+                {home.abbreviation} -{Math.abs(game.odds.spread)}
+                {game.odds.home_spread_odds ? ` (${game.odds.home_spread_odds > 0 ? '+' : ''}${Math.round(game.odds.home_spread_odds)})` : ''}
+              </span>
             </div>
           )}
         </div>
