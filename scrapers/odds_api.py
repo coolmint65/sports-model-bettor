@@ -15,16 +15,20 @@ import os
 import urllib.request
 from pathlib import Path
 
+import time
+
 logger = logging.getLogger(__name__)
 
 API_BASE = "https://api.the-odds-api.com/v4"
 KEY_FILE = Path(__file__).resolve().parent.parent / "data" / "odds_api_key.txt"
 
-# MLB sport key for The Odds API
 MLB_SPORT = "baseball_mlb"
-
-# Preferred book — DraftKings
 PREFERRED_BOOK = "draftkings"
+
+# Cache odds for 10 minutes to avoid burning API credits
+_odds_cache: dict | None = None
+_odds_cache_time: float = 0
+ODDS_CACHE_TTL = 600  # 10 minutes
 
 
 def _get_api_key() -> str | None:
@@ -56,6 +60,13 @@ def fetch_odds() -> dict:
         }
     }
     """
+    global _odds_cache, _odds_cache_time
+
+    # Return cached odds if fresh
+    if _odds_cache and (time.time() - _odds_cache_time) < ODDS_CACHE_TTL:
+        logger.debug("Odds API: returning cached odds (%d games)", len(_odds_cache))
+        return _odds_cache
+
     api_key = _get_api_key()
     if not api_key:
         logger.info("No Odds API key found. Set ODDS_API_KEY env var or create data/odds_api_key.txt")
@@ -142,6 +153,11 @@ def fetch_odds() -> dict:
             odds_map[key] = result
 
     logger.info("Odds API: fetched odds for %d games", len(odds_map))
+
+    # Cache the results
+    _odds_cache = odds_map
+    _odds_cache_time = time.time()
+
     return odds_map
 
 
