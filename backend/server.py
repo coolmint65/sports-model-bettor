@@ -180,6 +180,8 @@ def _get_scoreboard(date: str = "") -> list[dict]:
         api_odds = fetch_odds()
         logger.info("Odds API returned %d games", len(api_odds) if api_odds else 0)
         if api_odds:
+            # Log what keys we're trying to match
+            api_keys = set(api_odds.keys())
             for game in games:
                 h_abbr = game["home"].get("abbreviation", "")
                 a_abbr = game["away"].get("abbreviation", "")
@@ -187,6 +189,24 @@ def _get_scoreboard(date: str = "") -> list[dict]:
                 if key in api_odds:
                     game["odds"] = api_odds[key]
                     odds_matched += 1
+                else:
+                    # Try reverse key or alternate abbreviations
+                    alt_keys = [
+                        f"{a_abbr}@{h_abbr}",
+                        f"{_alt_abbr(a_abbr)}@{_alt_abbr(h_abbr)}",
+                        f"{_alt_abbr(a_abbr)}@{h_abbr}",
+                        f"{a_abbr}@{_alt_abbr(h_abbr)}",
+                    ]
+                    matched = False
+                    for ak in alt_keys:
+                        if ak in api_odds:
+                            game["odds"] = api_odds[ak]
+                            odds_matched += 1
+                            matched = True
+                            break
+                    if not matched:
+                        logger.debug("No odds match for %s (tried %s, available: %s)",
+                                    key, alt_keys[:2], list(api_keys)[:3])
             logger.info("Odds API: matched %d/%d games", odds_matched, len(games))
     except Exception as e:
         logger.warning("Odds API failed: %s", e, exc_info=True)
@@ -493,6 +513,18 @@ def _resolve_abbr(espn_abbr: str):
         (f"%{espn_abbr}%",)
     ).fetchone()
     return dict(row) if row else None
+
+
+# Abbreviation mapping: ESPN ↔ Odds API differences
+_ABBR_ALTS = {
+    "ARI": "AZ", "AZ": "ARI",
+    "CHW": "CWS", "CWS": "CHW",
+    "WSH": "WAS", "WAS": "WSH",
+    "ATH": "OAK", "OAK": "ATH",
+}
+
+def _alt_abbr(abbr: str) -> str:
+    return _ABBR_ALTS.get(abbr, abbr)
 
 
 def _enrich_games(games: list[dict], date: str) -> list[dict]:
