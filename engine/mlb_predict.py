@@ -116,7 +116,27 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     home_xr = home_off * away_sp_factor
     away_xr = away_off * home_sp_factor
 
-    # ── Step 3: Bullpen adjustment ──
+    # ── Step 3: Per-team adjustments ──
+    # Each team has learned factors from their actual performance
+    from .team_calibration import get_team_adjustment
+    home_adj = get_team_adjustment(home_team_id, SEASON)
+    away_adj = get_team_adjustment(away_team_id, SEASON)
+
+    # Apply offense/defense factors
+    if home_adj["games_analyzed"] >= 3:
+        home_xr *= home_adj["offense_factor"]
+        away_xr *= home_adj["defense_factor"]  # Home defense affects away scoring
+    if away_adj["games_analyzed"] >= 3:
+        away_xr *= away_adj["offense_factor"]
+        home_xr *= away_adj["defense_factor"]  # Away defense affects home scoring
+
+    # Home/away split factors
+    if home_adj["games_analyzed"] >= 5:
+        home_xr *= home_adj["home_factor"]
+    if away_adj["games_analyzed"] >= 5:
+        away_xr *= away_adj["away_factor"]
+
+    # ── Step 4: Bullpen adjustment ──
     home_bp_factor = _bullpen_factor(home_bullpen)
     away_bp_factor = _bullpen_factor(away_bullpen)
 
