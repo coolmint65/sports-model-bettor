@@ -10,6 +10,7 @@ echo Syncing data...
 if not exist "data\logs" mkdir "data\logs"
 python -m scrapers.mlb_stats 2>nul
 python -m engine.calibration --days 30 2>nul
+python -m engine.team_calibration 2>nul
 python -m engine.tracker --record 2>nul
 python -m engine.tracker --settle 2>nul
 echo Sync complete.
