@@ -217,9 +217,20 @@ def get_team_adjustment(team_id: int, season: int | None = None) -> dict:
     conn = get_conn()
     yr = season or datetime.now().year
 
-    row = conn.execute("""
-        SELECT * FROM team_adjustments WHERE team_id = ? AND season = ?
-    """, (team_id, yr)).fetchone()
+    defaults = {
+        "offense_factor": 1.0, "defense_factor": 1.0,
+        "home_factor": 1.0, "away_factor": 1.0,
+        "first_inn_factor": 1.0, "bullpen_factor": 1.0,
+        "games_analyzed": 0,
+    }
+
+    try:
+        row = conn.execute("""
+            SELECT * FROM team_adjustments WHERE team_id = ? AND season = ?
+        """, (team_id, yr)).fetchone()
+    except Exception:
+        # Table doesn't exist yet — return defaults
+        return defaults
 
     if row:
         return {
@@ -232,12 +243,7 @@ def get_team_adjustment(team_id: int, season: int | None = None) -> dict:
             "games_analyzed": row["games_analyzed"],
         }
 
-    return {
-        "offense_factor": 1.0, "defense_factor": 1.0,
-        "home_factor": 1.0, "away_factor": 1.0,
-        "first_inn_factor": 1.0, "bullpen_factor": 1.0,
-        "games_analyzed": 0,
-    }
+    return defaults
 
 
 # ── CLI ──────────────────────────────────────────────────────
