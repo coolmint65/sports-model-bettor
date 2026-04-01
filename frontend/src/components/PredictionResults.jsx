@@ -220,6 +220,54 @@ export default function PredictionResults({ data, odds }) {
         </div>
       )}
 
+      {/* ── Matchup Insights ── */}
+      {d.matchup_insights && d.matchup_insights.length > 0 && (
+        <div className="result-card">
+          <h2>Matchup Analysis</h2>
+          <ul className="reasoning-list">
+            {d.matchup_insights.map((insight, i) => <li key={i}>{insight}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {/* ── H2H History ── */}
+      {d.h2h_history && d.h2h_history.games > 0 && (
+        <div className="result-card">
+          <h2>Head to Head ({d.h2h_history.seasons_covered || 3}yr)</h2>
+          <div className="key-stats">
+            <div className="key-stat">
+              <span className="key-value">{d.h2h_history.a_wins}-{d.h2h_history.b_wins}</span>
+              <span className="key-label">{home.abbreviation} Record</span>
+            </div>
+            <div className="key-stat">
+              <span className="key-value">{d.h2h_history.a_runs_pg}</span>
+              <span className="key-label">{home.abbreviation} R/G</span>
+            </div>
+            <div className="key-stat">
+              <span className="key-value">{d.h2h_history.b_runs_pg}</span>
+              <span className="key-label">{away.abbreviation} R/G</span>
+            </div>
+            <div className="key-stat">
+              <span className="key-value">{d.h2h_history.games}</span>
+              <span className="key-label">Games</span>
+            </div>
+          </div>
+          {d.h2h_history.recent && d.h2h_history.recent.length > 0 && (
+            <div style={{marginTop: 12}}>
+              <h3>Recent Meetings</h3>
+              {d.h2h_history.recent.slice(0, 5).map((g, i) => (
+                <div key={i} className="stat-row">
+                  <span className="stat-label">{g.date}</span>
+                  <span className={`stat-value ${g.a_won ? 'positive' : 'negative'}`}>
+                    {home.abbreviation} {g.a_score} - {g.b_score} {away.abbreviation}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ── Score Predictions ── */}
       <div className="result-card">
         <h2>Most Likely Final Scores</h2>

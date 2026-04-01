@@ -879,6 +879,13 @@ def api_calibration_status():
     return get_calibration_status()
 
 
+@app.post("/api/calibrate/teams")
+def api_calibrate_teams():
+    """Run per-team calibration."""
+    from engine.team_calibration import calibrate_teams
+    return calibrate_teams()
+
+
 @app.get("/api/debug/odds")
 def api_debug_odds():
     """Test all odds sources."""

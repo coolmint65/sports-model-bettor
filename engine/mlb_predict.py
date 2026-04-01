@@ -225,7 +225,22 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     home_xr *= sit["home_multiplier"]
     away_xr *= sit["away_multiplier"]
 
-    # ── Step 7: H2H adjustments ──
+    # ── Step 7: Matchup interaction ──
+    # Compound effects: how do these two specific teams interact TODAY
+    from .matchup import compute_matchup_interaction, get_h2h_history
+    matchup = compute_matchup_interaction(
+        home_team_id, away_team_id,
+        home_pitcher_id, away_pitcher_id,
+        home_pit, away_pit, home_sp_pit, away_sp_pit,
+        home_adj, away_adj, venue,
+    )
+    home_xr *= matchup["home_interaction"]
+    away_xr *= matchup["away_interaction"]
+
+    # H2H historical record for display
+    h2h_history = get_h2h_history(home_team_id, away_team_id)
+
+    # ── Step 8: Batter vs pitcher H2H ──
     h2h_adj_home, h2h_adj_away = 0.0, 0.0
     h2h_data = {}
     if away_pitcher_id:
@@ -350,6 +365,8 @@ def predict_matchup(home_team_id: int, away_team_id: int,
         "innings": innings,
         "correct_scores": correct_scores,
         "h2h": h2h_data,
+        "h2h_history": h2h_history,
+        "matchup_insights": matchup.get("insights", []),
         "reasoning": reasoning,
     }
 
