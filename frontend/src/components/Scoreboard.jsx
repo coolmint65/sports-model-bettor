@@ -109,16 +109,16 @@ function GameCard({ game, bet, onClick }) {
               <span className="odds-val">u{game.odds.over_under} {game.odds.under_odds ? `(${Math.round(game.odds.under_odds) > 0 ? '+' : ''}${Math.round(game.odds.under_odds)})` : ''}</span>
             </div>
           )}
-          {/* RL — spread is HOME team's handicap from Odds API */}
-          {game.odds.spread != null && (
+          {/* RL — each team has its own spread point from Odds API */}
+          {(game.odds.away_spread_point != null || game.odds.home_spread_point != null) && (
             <div className="odds-line">
               <span className="odds-label">RL</span>
               <span className="odds-val">
-                {away.abbreviation} {game.odds.spread > 0 ? '-' : '+'}{Math.abs(game.odds.spread)}
+                {away.abbreviation} {game.odds.away_spread_point > 0 ? '+' : ''}{game.odds.away_spread_point}
                 {game.odds.away_spread_odds ? ` (${game.odds.away_spread_odds > 0 ? '+' : ''}${Math.round(game.odds.away_spread_odds)})` : ''}
               </span>
               <span className="odds-val">
-                {home.abbreviation} {game.odds.spread >= 0 ? '+' : '-'}{Math.abs(game.odds.spread)}
+                {home.abbreviation} {game.odds.home_spread_point > 0 ? '+' : ''}{game.odds.home_spread_point}
                 {game.odds.home_spread_odds ? ` (${game.odds.home_spread_odds > 0 ? '+' : ''}${Math.round(game.odds.home_spread_odds)})` : ''}
               </span>
             </div>

@@ -134,9 +134,12 @@ def fetch_odds() -> dict:
                     point = o.get("point", 0)
                     if name == home:
                         result["home_spread_odds"] = price
-                        result["spread"] = point
+                        result["home_spread_point"] = point
                     elif name == away:
                         result["away_spread_odds"] = price
+                        result["away_spread_point"] = point
+                # Keep generic spread for backward compat
+                result["spread"] = 1.5
 
             elif mkey == "totals":  # Over/Under
                 for o in outcomes:
