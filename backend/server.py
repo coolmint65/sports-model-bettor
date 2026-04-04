@@ -638,37 +638,46 @@ def api_best_bets():
 
         # Collect all picks for this game — only bettable lines
         game_picks = []
+        conf_score = pred.get("confidence", {}).get("score", 50)
 
         # ML — evaluate BOTH sides against real odds, pick best edge
         if wp.get("home") and wp.get("away"):
             ml_candidates = []
+
+            # Use dampened probabilities for edge calc
+            home_wp = wp["home"]
+            away_wp = wp["away"]
+            if conf_score < 80:
+                ml_dampen = conf_score / 100
+                home_wp = home_wp * ml_dampen + 0.50 * (1 - ml_dampen)
+                away_wp = away_wp * ml_dampen + 0.50 * (1 - ml_dampen)
 
             home_ml = odds.get("home_ml")
             away_ml = odds.get("away_ml")
 
             if home_ml:
                 home_implied = _implied(home_ml)
-                home_edge = (wp["home"] - home_implied) * 100
+                home_edge = (home_wp - home_implied) * 100
                 if home_edge > 0:
                     ml_candidates.append({
-                        "type": "ML", "pick": h_abbr, "prob": wp["home"],
+                        "type": "ML", "pick": h_abbr, "prob": home_wp,
                         "edge": round(home_edge, 1), "odds": home_ml,
                     })
 
             if away_ml:
                 away_implied = _implied(away_ml)
-                away_edge = (wp["away"] - away_implied) * 100
+                away_edge = (away_wp - away_implied) * 100
                 if away_edge > 0:
                     ml_candidates.append({
-                        "type": "ML", "pick": a_abbr, "prob": wp["away"],
+                        "type": "ML", "pick": a_abbr, "prob": away_wp,
                         "edge": round(away_edge, 1), "odds": away_ml,
                     })
 
             # No real odds fallback
             if not ml_candidates and not home_ml and not away_ml:
-                fav_home = wp["home"] > wp["away"]
+                fav_home = home_wp > away_wp
                 fav = h_abbr if fav_home else a_abbr
-                fav_prob = max(wp["home"], wp["away"])
+                fav_prob = max(home_wp, away_wp)
                 edge = (fav_prob - 0.583) * 100
                 if edge > 0:
                     ml_candidates.append({
@@ -687,6 +696,11 @@ def api_best_bets():
             if ou_data:
                 ou_pick = "Over" if ou_data["over"] > ou_data["under"] else "Under"
                 ou_prob = max(ou_data["over"], ou_data["under"])
+
+                # Dampen O/U prob toward 50% at low confidence
+                if conf_score < 80:
+                    ou_dampen = conf_score / 100
+                    ou_prob = ou_prob * ou_dampen + 0.50 * (1 - ou_dampen)
 
                 # Use real O/U odds if available
                 real_ou_odds = odds.get("over_odds") if ou_pick == "Over" else odds.get("under_odds")
@@ -716,6 +730,13 @@ def api_best_bets():
         # Run Line ±1.5 — evaluate BOTH sides against real odds
         rl_home_15 = rl.get("home_minus_1_5", 0.5)
         rl_away_15 = rl.get("away_plus_1_5", 0.5)
+
+        # Dampen RL probs toward neutral at low confidence
+        # MLB avg: +1.5 covers ~62%, -1.5 covers ~38%
+        if conf_score < 80:
+            rl_dampen = conf_score / 100
+            rl_home_15 = rl_home_15 * rl_dampen + 0.38 * (1 - rl_dampen)
+            rl_away_15 = rl_away_15 * rl_dampen + 0.62 * (1 - rl_dampen)
 
         rl_candidates = []
 
