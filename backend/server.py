@@ -639,6 +639,7 @@ def api_best_bets():
         # Collect all picks for this game — only bettable lines
         game_picks = []
         conf_score = pred.get("confidence", {}).get("score", 50)
+        JUICE_WALL = -180  # Don't pick anything with worse odds than this
 
         # ML — evaluate BOTH sides against real odds, pick best edge
         if wp.get("home") and wp.get("away"):
@@ -655,7 +656,7 @@ def api_best_bets():
             home_ml = odds.get("home_ml")
             away_ml = odds.get("away_ml")
 
-            if home_ml:
+            if home_ml and home_ml >= JUICE_WALL:
                 home_implied = _implied(home_ml)
                 home_edge = (home_wp - home_implied) * 100
                 if home_edge > 0:
@@ -664,7 +665,7 @@ def api_best_bets():
                         "edge": round(home_edge, 1), "odds": home_ml,
                     })
 
-            if away_ml:
+            if away_ml and away_ml >= JUICE_WALL:
                 away_implied = _implied(away_ml)
                 away_edge = (away_wp - away_implied) * 100
                 if away_edge > 0:
@@ -740,23 +741,51 @@ def api_best_bets():
 
         rl_candidates = []
 
-        # Home -1.5
+        # Juice wall: don't pick anything worse than -180
+        JUICE_WALL = -180
+
+        # Home RL
         home_rl_odds = odds.get("home_spread_odds")
-        if home_rl_odds:
+        home_rl_point = odds.get("home_spread_point")
+        if home_rl_odds and home_rl_point is not None and home_rl_odds >= JUICE_WALL:
+            # Determine which model prob to use based on the actual spread
+            if home_rl_point < 0:
+                # Home is -1.5 (favorite) — use home_minus_1_5
+                rl_prob = rl_home_15
+            else:
+                # Home is +1.5 (underdog) — use away_plus_1_5 inverted
+                rl_prob = rl_away_15
+
             home_rl_implied = _implied(home_rl_odds)
-            home_rl_edge = (rl_home_15 - home_rl_implied) * 100
+            home_rl_edge = (rl_prob - home_rl_implied) * 100
             if home_rl_edge > 0:
                 rl_candidates.append({
-                    "type": "RL", "pick": f"{h_abbr} -1.5",
-                    "prob": rl_home_15, "edge": round(home_rl_edge, 1),
+                    "type": "RL",
+                    "pick": f"{h_abbr} {'+' if home_rl_point > 0 else ''}{home_rl_point}",
+                    "prob": rl_prob, "edge": round(home_rl_edge, 1),
                     "odds": home_rl_odds,
                 })
 
-        # Away +1.5
+        # Away RL
         away_rl_odds = odds.get("away_spread_odds")
-        if away_rl_odds:
+        away_rl_point = odds.get("away_spread_point")
+        if away_rl_odds and away_rl_point is not None and away_rl_odds >= JUICE_WALL:
+            if away_rl_point > 0:
+                # Away is +1.5 (underdog) — use away_plus_1_5
+                rl_prob = rl_away_15
+            else:
+                # Away is -1.5 (favorite) — use home_minus_1_5 inverted
+                rl_prob = rl_home_15
+
             away_rl_implied = _implied(away_rl_odds)
-            away_rl_edge = (rl_away_15 - away_rl_implied) * 100
+            away_rl_edge = (rl_prob - away_rl_implied) * 100
+            if away_rl_edge > 0:
+                rl_candidates.append({
+                    "type": "RL",
+                    "pick": f"{a_abbr} {'+' if away_rl_point > 0 else ''}{away_rl_point}",
+                    "prob": rl_prob, "edge": round(away_rl_edge, 1),
+                    "odds": away_rl_odds,
+                })
             if away_rl_edge > 0:
                 rl_candidates.append({
                     "type": "RL", "pick": f"{a_abbr} +1.5",
