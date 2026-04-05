@@ -58,10 +58,10 @@ export default function PickHistory({ summary, history, loading, onRecord, onSet
       {Object.keys(byType).length > 0 && (
         <div className="bt-grid" style={{marginTop: 16}}>
           {[
-            {key: 'ml', label: 'Moneyline'},
-            {key: 'ou', label: 'Over/Under'},
-            {key: 'nrfi', label: 'NRFI'},
-            {key: 'rl', label: 'Run Line'},
+            {key: 'ML', label: 'Moneyline'},
+            {key: 'O/U', label: 'Over/Under'},
+            {key: '1st INN', label: '1st Inning'},
+            {key: 'RL', label: 'Run Line'},
           ].map(({key, label}) => {
             const s = byType[key]
             if (!s || s.total === 0) return null

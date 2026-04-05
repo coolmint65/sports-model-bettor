@@ -107,13 +107,13 @@ def settle_picks() -> dict:
     """
     conn = get_conn()
 
-    # Re-fetch recent game results so yesterday's games are marked 'final'
+    # Re-fetch recent game results so completed games are marked 'final'
     try:
         from scrapers.mlb_stats import fetch_schedule
         from datetime import timedelta
-        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        today = datetime.now().strftime("%Y-%m-%d")
         three_days_ago = (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%d")
-        fetch_schedule(three_days_ago, yesterday)
+        fetch_schedule(three_days_ago, today)
     except Exception as e:
         logger.warning("Could not refresh recent games: %s", e)
 
@@ -157,7 +157,7 @@ def settle_picks() -> dict:
         pk = pick["pick"]
         odds = pick["odds"] or -110
 
-        if bt == "ml":
+        if bt in ("ml", "ML"):
             home_won = hs > as_
             if pk == h:
                 won = home_won
@@ -165,7 +165,7 @@ def settle_picks() -> dict:
                 won = not home_won
             result = "W" if won else "L"
 
-        elif bt == "ou":
+        elif bt in ("ou", "O/U"):
             if "Over" in pk:
                 line = float(pk.split()[-1])
                 if total_runs > line:
@@ -183,7 +183,7 @@ def settle_picks() -> dict:
                 else:
                     result = "P"
 
-        elif bt == "nrfi" or bt == "1st INN":
+        elif bt in ("nrfi", "1st INN"):
             # Use real linescore data when available
             import json as _json
             home_ls = game.get("home_linescore")
@@ -206,11 +206,28 @@ def settle_picks() -> dict:
             else:
                 result = "W" if not scoreless_1st else "L"
 
-        elif bt == "rl":
-            if "-1.5" in pk:
-                result = "W" if margin >= 2 else "L"
+        elif bt in ("rl", "RL"):
+            # Extract team and spread from pick (e.g. "DET -1.5", "COL +1.5")
+            parts = pk.split()
+            pick_team = parts[0] if parts else ""
+            spread = float(parts[1]) if len(parts) > 1 else 1.5
+
+            # Calculate margin from the picked team's perspective
+            if pick_team == h:
+                team_margin = hs - as_
             else:
-                result = "W" if margin <= 1 else "L"
+                team_margin = as_ - hs
+
+            # Team covers if their margin + spread > 0
+            if team_margin + spread > 0:
+                result = "W"
+            elif team_margin + spread == 0:
+                result = "P"
+            else:
+                result = "L"
+
+        if result is None:
+            continue  # Could not determine result — skip
 
         if result == "W":
             profit = (odds if odds > 0 else 100 / abs(odds) * 100)
@@ -219,7 +236,7 @@ def settle_picks() -> dict:
             profit = -100
             losses += 1
         else:
-            profit = 0
+            profit = 0  # Push
 
         conn.execute("""
             UPDATE picks SET result = ?, profit = ?, settled_at = datetime('now')
@@ -244,7 +261,7 @@ def get_pick_summary() -> dict:
     conn = get_conn()
 
     summary = {}
-    for bt in ["ml", "ou", "nrfi", "1st INN", "rl"]:
+    for bt in ["ML", "O/U", "1st INN", "RL"]:
         row = conn.execute("""
             SELECT
                 COUNT(*) as total,
@@ -340,7 +357,7 @@ if __name__ == "__main__":
         print(f"  Profit: ${overall['profit']:+.2f}")
         print(f"  Pending: {overall['pending']}")
         print()
-        for bt, label in [("ml", "ML"), ("ou", "O/U"), ("nrfi", "NRFI"), ("rl", "RL")]:
+        for bt, label in [("ML", "Moneyline"), ("O/U", "Over/Under"), ("1st INN", "1st Inning"), ("RL", "Run Line")]:
             s = summary["by_type"][bt]
             if s["total"] == 0:
                 continue
