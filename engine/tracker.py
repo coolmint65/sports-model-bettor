@@ -82,21 +82,37 @@ def record_picks(date: str | None = None, min_edge: float = 1.5) -> list[dict]:
 
         picks = []
 
-        # Moneyline
+        # Fetch real odds for this game
+        real_odds = {}
+        try:
+            from scrapers.odds_api import fetch_odds
+            all_odds = fetch_odds()  # Cached, won't burn API credits
+            for key, odds_data in all_odds.items():
+                parts = key.split("@")
+                if len(parts) == 2 and ((parts[0] == a and parts[1] == h) or
+                                         (parts[0] == h and parts[1] == a)):
+                    real_odds = odds_data
+                    break
+        except Exception:
+            pass
+
+        # Moneyline — use real odds if available
+        home_ml_odds = real_odds.get("home_ml", -150)
+        away_ml_odds = real_odds.get("away_ml", 130)
         if wp.get("home", 0) > wp.get("away", 0):
             ml_pick, ml_prob = h, wp["home"]
-            ml_implied = 0.60  # ~-150
-            ml_odds = -150
+            ml_odds = home_ml_odds
+            ml_implied = abs(ml_odds) / (abs(ml_odds) + 100) if ml_odds < 0 else 100 / (ml_odds + 100)
         else:
             ml_pick, ml_prob = a, wp["away"]
-            ml_implied = 0.435  # ~+130
-            ml_odds = 130
+            ml_odds = away_ml_odds
+            ml_implied = abs(ml_odds) / (abs(ml_odds) + 100) if ml_odds < 0 else 100 / (ml_odds + 100)
         ml_edge = (ml_prob - ml_implied) * 100
         if ml_edge >= min_edge:
             picks.append(("ml", ml_pick, ml_prob, ml_edge, ml_odds))
 
-        # Over/Under (use 8.5 as default line)
-        ou_line = 8.5
+        # Over/Under — use real O/U odds if available
+        ou_line = real_odds.get("over_under", 8.5)
         ou_probs = pred.get("over_under", {})
         p_over = 0.5
         for lk, probs in ou_probs.items():
@@ -106,11 +122,13 @@ def record_picks(date: str | None = None, min_edge: float = 1.5) -> list[dict]:
                 break
         ou_pick = f"Over {ou_line}" if p_over > 0.5 else f"Under {ou_line}"
         ou_prob = p_over if p_over > 0.5 else 1 - p_over
-        ou_edge = (ou_prob - 0.524) * 100
+        ou_real_odds = real_odds.get("over_odds", -110) if p_over > 0.5 else real_odds.get("under_odds", -110)
+        ou_implied = abs(ou_real_odds) / (abs(ou_real_odds) + 100) if ou_real_odds < 0 else 100 / (ou_real_odds + 100)
+        ou_edge = (ou_prob - ou_implied) * 100
         if ou_edge >= min_edge:
-            picks.append(("ou", ou_pick, ou_prob, ou_edge, -110))
+            picks.append(("ou", ou_pick, ou_prob, ou_edge, ou_real_odds))
 
-        # NRFI
+        # First Inning
         nrfi_prob = fi.get("nrfi", 0.5)
         if nrfi_prob > 0.5:
             nrfi_pick, nrfi_p = "NRFI", nrfi_prob
@@ -118,18 +136,39 @@ def record_picks(date: str | None = None, min_edge: float = 1.5) -> list[dict]:
             nrfi_pick, nrfi_p = "YRFI", fi.get("yrfi", 0.5)
         nrfi_edge = (nrfi_p - 0.524) * 100
         if nrfi_edge >= min_edge:
-            picks.append(("nrfi", nrfi_pick, nrfi_p, nrfi_edge, -120))
+            picks.append(("1st INN", nrfi_pick, nrfi_p, nrfi_edge, -120))
 
-        # Run Line
+        # Run Line — use real spread odds and points
         rl_h = rl.get("home_minus_1_5", 0.5)
         rl_a = rl.get("away_plus_1_5", 0.5)
-        if rl_h > 0.5:
-            rl_pick, rl_prob = f"{h} -1.5", rl_h
-        else:
-            rl_pick, rl_prob = f"{a} +1.5", rl_a
-        rl_edge = (rl_prob - 0.524) * 100
-        if rl_edge >= min_edge:
-            picks.append(("rl", rl_pick, rl_prob, rl_edge, -110))
+        home_rl_point = real_odds.get("home_spread_point")
+        away_rl_point = real_odds.get("away_spread_point")
+        home_rl_odds = real_odds.get("home_spread_odds", -110)
+        away_rl_odds = real_odds.get("away_spread_odds", -110)
+
+        # Pick the side with better edge against real odds, respecting juice wall
+        rl_candidates = []
+        if home_rl_odds >= -180:
+            h_implied = abs(home_rl_odds) / (abs(home_rl_odds) + 100) if home_rl_odds < 0 else 100 / (home_rl_odds + 100)
+            h_prob = rl_h if (home_rl_point and home_rl_point < 0) else rl_a
+            h_edge = (h_prob - h_implied) * 100
+            h_label = f"{h} {'+' if home_rl_point and home_rl_point > 0 else ''}{home_rl_point or -1.5}"
+            if h_edge > 0:
+                rl_candidates.append((h_label, h_prob, h_edge, home_rl_odds))
+
+        if away_rl_odds >= -180:
+            a_implied = abs(away_rl_odds) / (abs(away_rl_odds) + 100) if away_rl_odds < 0 else 100 / (away_rl_odds + 100)
+            a_prob = rl_a if (away_rl_point and away_rl_point > 0) else rl_h
+            a_edge = (a_prob - a_implied) * 100
+            a_label = f"{a} {'+' if away_rl_point and away_rl_point > 0 else ''}{away_rl_point or 1.5}"
+            if a_edge > 0:
+                rl_candidates.append((a_label, a_prob, a_edge, away_rl_odds))
+
+        if rl_candidates:
+            rl_candidates.sort(key=lambda x: x[2], reverse=True)
+            best_rl = rl_candidates[0]
+            if best_rl[2] >= min_edge:
+                picks.append(("rl", best_rl[0], best_rl[1], best_rl[2], best_rl[3]))
 
         # Take only the highest-edge pick per game
         if picks:
@@ -231,9 +270,24 @@ def settle_picks() -> dict:
                 else:
                     result = "P"
 
-        elif bt == "nrfi":
-            # Rough approximation — proper tracking needs inning data
-            scoreless_1st = total_runs <= 6
+        elif bt == "nrfi" or bt == "1st INN":
+            # Use real linescore data when available
+            import json as _json
+            home_ls = game.get("home_linescore")
+            away_ls = game.get("away_linescore")
+            if home_ls and away_ls:
+                try:
+                    h_inn = _json.loads(home_ls)
+                    a_inn = _json.loads(away_ls)
+                    if len(h_inn) > 0 and len(a_inn) > 0:
+                        scoreless_1st = (h_inn[0] == 0 and a_inn[0] == 0)
+                    else:
+                        scoreless_1st = total_runs <= 6
+                except Exception:
+                    scoreless_1st = total_runs <= 6
+            else:
+                scoreless_1st = total_runs <= 6
+
             if pk == "NRFI":
                 result = "W" if scoreless_1st else "L"
             else:
@@ -277,7 +331,7 @@ def get_pick_summary() -> dict:
     conn = get_conn()
 
     summary = {}
-    for bt in ["ml", "ou", "nrfi", "rl"]:
+    for bt in ["ml", "ou", "nrfi", "1st INN", "rl"]:
         row = conn.execute("""
             SELECT
                 COUNT(*) as total,
