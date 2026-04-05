@@ -261,8 +261,16 @@ def get_pick_summary() -> dict:
     conn = get_conn()
 
     summary = {}
-    for bt in ["ML", "O/U", "1st INN", "RL"]:
-        row = conn.execute("""
+    # Map canonical keys to all possible bet_type values (old lowercase + new uppercase)
+    bt_aliases = {
+        "ML": ("ML", "ml"),
+        "O/U": ("O/U", "ou"),
+        "1st INN": ("1st INN", "nrfi"),
+        "RL": ("RL", "rl"),
+    }
+    for bt, aliases in bt_aliases.items():
+        placeholders = ",".join("?" for _ in aliases)
+        row = conn.execute(f"""
             SELECT
                 COUNT(*) as total,
                 SUM(CASE WHEN result = 'W' THEN 1 ELSE 0 END) as wins,
@@ -270,8 +278,8 @@ def get_pick_summary() -> dict:
                 SUM(CASE WHEN result = 'P' THEN 1 ELSE 0 END) as pushes,
                 SUM(CASE WHEN result IS NULL THEN 1 ELSE 0 END) as pending,
                 COALESCE(SUM(profit), 0) as profit
-            FROM picks WHERE bet_type = ?
-        """, (bt,)).fetchone()
+            FROM picks WHERE bet_type IN ({placeholders})
+        """, aliases).fetchone()
 
         total = row["total"] or 0
         w = row["wins"] or 0
