@@ -24,22 +24,23 @@ SEASON = datetime.now().year
 
 def record_picks(date: str | None = None, min_edge: float = 1.5) -> list[dict]:
     """
-    Run model on today's games and record picks with edge >= min_edge.
-    Only records picks that haven't already been recorded for this date.
+    Run model on today's games and record the best pick per game.
+    Uses the unified picks engine for consistent edge calculations.
     """
     conn = get_conn()
     target_date = date or datetime.now().strftime("%Y-%m-%d")
 
-    # Get today's scheduled/live games
     games = conn.execute("""
-        SELECT * FROM games WHERE date = ? AND status IN ('scheduled', 'live')
+        SELECT * FROM games WHERE date = ?
     """, (target_date,)).fetchall()
 
     if not games:
-        # Try from games that are final today (late recording)
-        games = conn.execute("""
-            SELECT * FROM games WHERE date = ?
-        """, (target_date,)).fetchall()
+        return []
+
+    # Fetch real odds once for all games
+    from .picks import generate_picks, get_best_pick, fetch_real_odds_for_games, match_odds
+
+    all_odds = fetch_real_odds_for_games()
 
     recorded = []
     for game in games:
@@ -58,130 +59,42 @@ def record_picks(date: str | None = None, min_edge: float = 1.5) -> list[dict]:
         if not home_id or not away_id:
             continue
 
-        pred = predict_matchup(
-            home_team_id=home_id,
-            away_team_id=away_id,
-            home_pitcher_id=game.get("home_pitcher_id"),
-            away_pitcher_id=game.get("away_pitcher_id"),
-            venue=game.get("venue"),
-        )
-
-        if "error" in pred:
-            continue
-
         home_team = get_team_by_id(home_id)
         away_team = get_team_by_id(away_id)
         h = home_team["abbreviation"] if home_team else "?"
         a = away_team["abbreviation"] if away_team else "?"
         matchup = f"{a} @ {h}"
 
-        wp = pred.get("win_prob", {})
-        fi = pred.get("first_inning", {})
-        rl = pred.get("run_line", {})
-        total = pred.get("total", 0)
+        # Get real odds for this game
+        game_odds = match_odds(h, a, all_odds)
 
-        picks = []
+        # Generate picks using unified engine
+        picks = generate_picks(
+            home_team_id=home_id,
+            away_team_id=away_id,
+            home_pitcher_id=game.get("home_pitcher_id"),
+            away_pitcher_id=game.get("away_pitcher_id"),
+            venue=game.get("venue"),
+            odds=game_odds,
+        )
 
-        # Fetch real odds for this game
-        real_odds = {}
-        try:
-            from scrapers.odds_api import fetch_odds
-            all_odds = fetch_odds()  # Cached, won't burn API credits
-            for key, odds_data in all_odds.items():
-                parts = key.split("@")
-                if len(parts) == 2 and ((parts[0] == a and parts[1] == h) or
-                                         (parts[0] == h and parts[1] == a)):
-                    real_odds = odds_data
-                    break
-        except Exception:
-            pass
+        # Take the best pick
+        best = get_best_pick(picks)
+        if not best or best["edge"] < min_edge:
+            continue
 
-        # Moneyline — use real odds if available
-        home_ml_odds = real_odds.get("home_ml", -150)
-        away_ml_odds = real_odds.get("away_ml", 130)
-        if wp.get("home", 0) > wp.get("away", 0):
-            ml_pick, ml_prob = h, wp["home"]
-            ml_odds = home_ml_odds
-            ml_implied = abs(ml_odds) / (abs(ml_odds) + 100) if ml_odds < 0 else 100 / (ml_odds + 100)
-        else:
-            ml_pick, ml_prob = a, wp["away"]
-            ml_odds = away_ml_odds
-            ml_implied = abs(ml_odds) / (abs(ml_odds) + 100) if ml_odds < 0 else 100 / (ml_odds + 100)
-        ml_edge = (ml_prob - ml_implied) * 100
-        if ml_edge >= min_edge:
-            picks.append(("ml", ml_pick, ml_prob, ml_edge, ml_odds))
+        conn.execute("""
+            INSERT INTO picks (game_id, date, matchup, bet_type, pick,
+                             model_prob, edge, odds)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (game_id, target_date, matchup, best["type"], best["pick"],
+              best["prob"], best["edge"], best["odds"]))
 
-        # Over/Under — use real O/U odds if available
-        ou_line = real_odds.get("over_under", 8.5)
-        ou_probs = pred.get("over_under", {})
-        p_over = 0.5
-        for lk, probs in ou_probs.items():
-            if abs(float(lk) - ou_line) < 0.5:
-                p_over = probs.get("over", 0.5)
-                ou_line = float(lk)
-                break
-        ou_pick = f"Over {ou_line}" if p_over > 0.5 else f"Under {ou_line}"
-        ou_prob = p_over if p_over > 0.5 else 1 - p_over
-        ou_real_odds = real_odds.get("over_odds", -110) if p_over > 0.5 else real_odds.get("under_odds", -110)
-        ou_implied = abs(ou_real_odds) / (abs(ou_real_odds) + 100) if ou_real_odds < 0 else 100 / (ou_real_odds + 100)
-        ou_edge = (ou_prob - ou_implied) * 100
-        if ou_edge >= min_edge:
-            picks.append(("ou", ou_pick, ou_prob, ou_edge, ou_real_odds))
-
-        # First Inning
-        nrfi_prob = fi.get("nrfi", 0.5)
-        if nrfi_prob > 0.5:
-            nrfi_pick, nrfi_p = "NRFI", nrfi_prob
-        else:
-            nrfi_pick, nrfi_p = "YRFI", fi.get("yrfi", 0.5)
-        nrfi_edge = (nrfi_p - 0.524) * 100
-        if nrfi_edge >= min_edge:
-            picks.append(("1st INN", nrfi_pick, nrfi_p, nrfi_edge, -120))
-
-        # Run Line — use real spread odds and points
-        rl_h = rl.get("home_minus_1_5", 0.5)
-        rl_a = rl.get("away_plus_1_5", 0.5)
-        home_rl_point = real_odds.get("home_spread_point")
-        away_rl_point = real_odds.get("away_spread_point")
-        home_rl_odds = real_odds.get("home_spread_odds", -110)
-        away_rl_odds = real_odds.get("away_spread_odds", -110)
-
-        # Pick the side with better edge against real odds, respecting juice wall
-        rl_candidates = []
-        if home_rl_odds >= -180:
-            h_implied = abs(home_rl_odds) / (abs(home_rl_odds) + 100) if home_rl_odds < 0 else 100 / (home_rl_odds + 100)
-            h_prob = rl_h if (home_rl_point and home_rl_point < 0) else rl_a
-            h_edge = (h_prob - h_implied) * 100
-            h_label = f"{h} {'+' if home_rl_point and home_rl_point > 0 else ''}{home_rl_point or -1.5}"
-            if h_edge > 0:
-                rl_candidates.append((h_label, h_prob, h_edge, home_rl_odds))
-
-        if away_rl_odds >= -180:
-            a_implied = abs(away_rl_odds) / (abs(away_rl_odds) + 100) if away_rl_odds < 0 else 100 / (away_rl_odds + 100)
-            a_prob = rl_a if (away_rl_point and away_rl_point > 0) else rl_h
-            a_edge = (a_prob - a_implied) * 100
-            a_label = f"{a} {'+' if away_rl_point and away_rl_point > 0 else ''}{away_rl_point or 1.5}"
-            if a_edge > 0:
-                rl_candidates.append((a_label, a_prob, a_edge, away_rl_odds))
-
-        if rl_candidates:
-            rl_candidates.sort(key=lambda x: x[2], reverse=True)
-            best_rl = rl_candidates[0]
-            if best_rl[2] >= min_edge:
-                picks.append(("rl", best_rl[0], best_rl[1], best_rl[2], best_rl[3]))
-
-        # Take only the highest-edge pick per game
-        if picks:
-            picks.sort(key=lambda p: p[3], reverse=True)  # Sort by edge
-            bet_type, pick, prob, edge, odds = picks[0]
-            conn.execute("""
-                INSERT INTO picks (game_id, date, matchup, bet_type, pick, model_prob, edge, odds)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (game_id, target_date, matchup, bet_type, pick, prob, edge, odds))
-            recorded.append({
-                "matchup": matchup, "type": bet_type,
-                "pick": pick, "prob": round(prob, 3), "edge": round(edge, 1),
-            })
+        recorded.append({
+            "matchup": matchup, "type": best["type"],
+            "pick": best["pick"], "prob": round(best["prob"], 3),
+            "edge": round(best["edge"], 1), "odds": best["odds"],
+        })
 
     conn.commit()
     return recorded

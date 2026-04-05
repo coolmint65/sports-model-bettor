@@ -581,28 +581,28 @@ def api_predict(req: PredictRequest):
 @app.get("/api/best-bets")
 def api_best_bets():
     """
-    Run predictions on all today's games and return best plays sorted by edge.
-    Each game gets its top pick with edge calculation vs average odds.
+    Run predictions on all today's games using the unified picks engine.
     """
-    # Reuse scoreboard logic (handles caching and fallbacks)
     games = _get_scoreboard()
+
+    from engine.picks import generate_picks, get_best_pick, match_odds, fetch_real_odds_for_games
+
+    all_odds = fetch_real_odds_for_games()
 
     bets = []
     logger.info("Best bets: analyzing %d games", len(games))
+
     for game in games:
         home_id = game["home"].get("team_id")
         away_id = game["away"].get("team_id")
         if not home_id or not away_id:
-            logger.info("  Skipping %s: no team_id", game.get("short_name", "?"))
             continue
 
-        # Skip final games
         if game["status"].get("completed") or game["status"].get("state") == "post":
             continue
 
         home_pid = game.get("home_pitcher") or {}
         away_pid = game.get("away_pitcher") or {}
-
         try:
             h_pitcher_id = int(home_pid["id"]) if home_pid.get("id") else None
             a_pitcher_id = int(away_pid["id"]) if away_pid.get("id") else None
@@ -610,216 +610,30 @@ def api_best_bets():
             h_pitcher_id = None
             a_pitcher_id = None
 
+        h_abbr = game["home"]["abbreviation"]
+        a_abbr = game["away"]["abbreviation"]
+
+        game_odds = game.get("odds") or match_odds(h_abbr, a_abbr, all_odds)
+
         try:
-            pred = predict_matchup(
+            picks = generate_picks(
                 home_team_id=home_id,
                 away_team_id=away_id,
                 home_pitcher_id=h_pitcher_id,
                 away_pitcher_id=a_pitcher_id,
                 venue=game.get("venue"),
+                odds=game_odds,
             )
         except Exception as e:
-            logger.error("  Prediction failed for %s: %s", game.get("short_name", "?"), e, exc_info=True)
+            logger.error("  Prediction failed for %s: %s", game.get("short_name", "?"), e)
             continue
 
-        if "error" in pred:
-            logger.info("  Prediction error for %s: %s", game.get("short_name", "?"), pred["error"])
+        if not picks:
             continue
 
-        wp = pred.get("win_prob", {})
-        es = pred.get("expected_score", {})
-        fi = pred.get("first_inning", {})
-        rl = pred.get("run_line", {})
-        total = pred.get("total", 0)
-        odds = game.get("odds") or {}
-
-        h_abbr = game["home"]["abbreviation"]
-        a_abbr = game["away"]["abbreviation"]
-
-        # Collect all picks for this game — only bettable lines
-        game_picks = []
-        conf_score = pred.get("confidence", {}).get("score", 50)
-        JUICE_WALL = -180  # Don't pick anything with worse odds than this
-
-        # ML — evaluate BOTH sides against real odds, pick best edge
-        if wp.get("home") and wp.get("away"):
-            ml_candidates = []
-
-            # Use dampened probabilities for edge calc
-            home_wp = wp["home"]
-            away_wp = wp["away"]
-            if conf_score < 80:
-                ml_dampen = conf_score / 100
-                home_wp = home_wp * ml_dampen + 0.50 * (1 - ml_dampen)
-                away_wp = away_wp * ml_dampen + 0.50 * (1 - ml_dampen)
-
-            home_ml = odds.get("home_ml")
-            away_ml = odds.get("away_ml")
-
-            if home_ml and home_ml >= JUICE_WALL:
-                home_implied = _implied(home_ml)
-                home_edge = (home_wp - home_implied) * 100
-                if home_edge > 0:
-                    ml_candidates.append({
-                        "type": "ML", "pick": h_abbr, "prob": home_wp,
-                        "edge": round(home_edge, 1), "odds": home_ml,
-                    })
-
-            if away_ml and away_ml >= JUICE_WALL:
-                away_implied = _implied(away_ml)
-                away_edge = (away_wp - away_implied) * 100
-                if away_edge > 0:
-                    ml_candidates.append({
-                        "type": "ML", "pick": a_abbr, "prob": away_wp,
-                        "edge": round(away_edge, 1), "odds": away_ml,
-                    })
-
-            # No real odds fallback
-            if not ml_candidates and not home_ml and not away_ml:
-                fav_home = home_wp > away_wp
-                fav = h_abbr if fav_home else a_abbr
-                fav_prob = max(home_wp, away_wp)
-                edge = (fav_prob - 0.583) * 100
-                if edge > 0:
-                    ml_candidates.append({
-                        "type": "ML", "pick": fav, "prob": fav_prob,
-                        "edge": round(edge, 1),
-                    })
-
-            if ml_candidates:
-                ml_candidates.sort(key=lambda x: x["edge"], reverse=True)
-                game_picks.append(ml_candidates[0])
-
-        # O/U — use real odds when available
-        vegas_total = odds.get("over_under")
-        if vegas_total and pred.get("over_under"):
-            ou_data = _find_ou(pred["over_under"], vegas_total)
-            if ou_data:
-                ou_pick = "Over" if ou_data["over"] > ou_data["under"] else "Under"
-                ou_prob = max(ou_data["over"], ou_data["under"])
-
-                # Dampen O/U prob toward 50% at low confidence
-                if conf_score < 80:
-                    ou_dampen = conf_score / 100
-                    ou_prob = ou_prob * ou_dampen + 0.50 * (1 - ou_dampen)
-
-                # Use real O/U odds if available
-                real_ou_odds = odds.get("over_odds") if ou_pick == "Over" else odds.get("under_odds")
-                if real_ou_odds:
-                    ou_implied = _implied(real_ou_odds)
-                else:
-                    ou_implied = 0.524  # Standard -110
-
-                ou_edge = (ou_prob - ou_implied) * 100
-                game_picks.append({
-                    "type": "O/U", "pick": f"{ou_pick} {vegas_total}",
-                    "prob": ou_prob, "edge": round(ou_edge, 1),
-                    "odds": real_ou_odds,
-                })
-
-        # NRFI — standard -120 line
-        nrfi = fi.get("nrfi", 0.5)
-        nrfi_pick = "NRFI" if nrfi > 0.5 else "YRFI"
-        nrfi_prob = nrfi if nrfi > 0.5 else fi.get("yrfi", 0.5)
-        nrfi_edge = (nrfi_prob - 0.545) * 100  # -120 implied
-        if abs(nrfi_edge) > 1:
-            game_picks.append({
-                "type": "1st INN", "pick": nrfi_pick,
-                "prob": nrfi_prob, "edge": round(nrfi_edge, 1),
-            })
-
-        # Run Line ±1.5 — evaluate BOTH sides against real odds
-        rl_home_15 = rl.get("home_minus_1_5", 0.5)
-        rl_away_15 = rl.get("away_plus_1_5", 0.5)
-
-        # Dampen RL probs toward neutral at low confidence
-        # MLB avg: +1.5 covers ~62%, -1.5 covers ~38%
-        if conf_score < 80:
-            rl_dampen = conf_score / 100
-            rl_home_15 = rl_home_15 * rl_dampen + 0.38 * (1 - rl_dampen)
-            rl_away_15 = rl_away_15 * rl_dampen + 0.62 * (1 - rl_dampen)
-
-        rl_candidates = []
-
-        # Juice wall: don't pick anything worse than -180
-        JUICE_WALL = -180
-
-        # Home RL
-        home_rl_odds = odds.get("home_spread_odds")
-        home_rl_point = odds.get("home_spread_point")
-        if home_rl_odds and home_rl_point is not None and home_rl_odds >= JUICE_WALL:
-            # Determine which model prob to use based on the actual spread
-            if home_rl_point < 0:
-                # Home is -1.5 (favorite) — use home_minus_1_5
-                rl_prob = rl_home_15
-            else:
-                # Home is +1.5 (underdog) — use away_plus_1_5 inverted
-                rl_prob = rl_away_15
-
-            home_rl_implied = _implied(home_rl_odds)
-            home_rl_edge = (rl_prob - home_rl_implied) * 100
-            if home_rl_edge > 0:
-                rl_candidates.append({
-                    "type": "RL",
-                    "pick": f"{h_abbr} {'+' if home_rl_point > 0 else ''}{home_rl_point}",
-                    "prob": rl_prob, "edge": round(home_rl_edge, 1),
-                    "odds": home_rl_odds,
-                })
-
-        # Away RL
-        away_rl_odds = odds.get("away_spread_odds")
-        away_rl_point = odds.get("away_spread_point")
-        if away_rl_odds and away_rl_point is not None and away_rl_odds >= JUICE_WALL:
-            if away_rl_point > 0:
-                # Away is +1.5 (underdog) — use away_plus_1_5
-                rl_prob = rl_away_15
-            else:
-                # Away is -1.5 (favorite) — use home_minus_1_5 inverted
-                rl_prob = rl_home_15
-
-            away_rl_implied = _implied(away_rl_odds)
-            away_rl_edge = (rl_prob - away_rl_implied) * 100
-            if away_rl_edge > 0:
-                rl_candidates.append({
-                    "type": "RL",
-                    "pick": f"{a_abbr} {'+' if away_rl_point > 0 else ''}{away_rl_point}",
-                    "prob": rl_prob, "edge": round(away_rl_edge, 1),
-                    "odds": away_rl_odds,
-                })
-            if away_rl_edge > 0:
-                rl_candidates.append({
-                    "type": "RL", "pick": f"{a_abbr} +1.5",
-                    "prob": rl_away_15, "edge": round(away_rl_edge, 1),
-                    "odds": away_rl_odds,
-                })
-
-        # If no real odds, fall back to -110 assumed
-        if not rl_candidates and not home_rl_odds and not away_rl_odds:
-            if rl_home_15 > 0.524:
-                rl_candidates.append({
-                    "type": "RL", "pick": f"{h_abbr} -1.5",
-                    "prob": rl_home_15, "edge": round((rl_home_15 - 0.524) * 100, 1),
-                })
-            elif rl_away_15 > 0.524:
-                rl_candidates.append({
-                    "type": "RL", "pick": f"{a_abbr} +1.5",
-                    "prob": rl_away_15, "edge": round((rl_away_15 - 0.524) * 100, 1),
-                })
-
-        # Take the RL with the best edge
-        if rl_candidates:
-            rl_candidates.sort(key=lambda x: x["edge"], reverse=True)
-            game_picks.append(rl_candidates[0])
-
-        if not game_picks:
+        best = get_best_pick(picks)
+        if not best:
             continue
-
-        # Sort picks by edge, take best
-        game_picks.sort(key=lambda p: p["edge"], reverse=True)
-        best = game_picks[0]
-
-        # Confidence level
-        conf = "strong" if best["edge"] > 8 else "moderate" if best["edge"] > 4 else "lean" if best["edge"] > 1.5 else "skip"
 
         bets.append({
             "game_id": game["id"],
@@ -829,20 +643,10 @@ def api_best_bets():
             "time": game["date"],
             "venue": game.get("venue", ""),
             "best_pick": best,
-            "all_picks": game_picks[:4],
-            "confidence": conf,
-            "prediction_summary": {
-                "home_score": round(es.get("home", 0)),
-                "away_score": round(es.get("away", 0)),
-                "total": round(total, 1),
-                "home_wp": round(wp.get("home", 0.5), 3),
-                "away_wp": round(wp.get("away", 0.5), 3),
-                "spread": pred.get("spread", 0),
-            },
-            "situational": pred.get("situational"),
+            "all_picks": picks[:4],
+            "confidence": best.get("confidence", "lean"),
         })
 
-    # Sort by best edge
     bets.sort(key=lambda b: b["best_pick"]["edge"], reverse=True)
     return bets
 

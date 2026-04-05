@@ -97,6 +97,7 @@ export default function PickHistory({ summary, history, loading, onRecord, onSet
                 <th className="team-col">Matchup</th>
                 <th>Type</th>
                 <th>Pick</th>
+                <th>Odds</th>
                 <th>Prob</th>
                 <th>Edge</th>
                 <th>Result</th>
@@ -110,6 +111,7 @@ export default function PickHistory({ summary, history, loading, onRecord, onSet
                   <td className="team-col">{p.matchup}</td>
                   <td>{p.bet_type?.toUpperCase()}</td>
                   <td style={{fontWeight: 600}}>{p.pick}</td>
+                  <td style={{color: '#94a3b8'}}>{p.odds ? `${p.odds > 0 ? '+' : ''}${p.odds}` : '-'}</td>
                   <td>{p.model_prob ? pct(p.model_prob) : '-'}</td>
                   <td className={p.edge > 4 ? 'positive' : ''}>{p.edge ? `+${p.edge.toFixed(1)}%` : '-'}</td>
                   <td>
