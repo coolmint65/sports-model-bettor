@@ -109,20 +109,35 @@ function GameCard({ game, bet, onClick }) {
               <span className="odds-val">u{game.odds.over_under} {game.odds.under_odds ? `(${Math.round(game.odds.under_odds) > 0 ? '+' : ''}${Math.round(game.odds.under_odds)})` : ''}</span>
             </div>
           )}
-          {/* RL — each team has its own spread point from Odds API */}
-          {(game.odds.away_spread_point != null || game.odds.home_spread_point != null) && (
-            <div className="odds-line">
-              <span className="odds-label">RL</span>
-              <span className="odds-val">
-                {away.abbreviation} {game.odds.away_spread_point > 0 ? '+' : ''}{game.odds.away_spread_point}
-                {game.odds.away_spread_odds ? ` (${game.odds.away_spread_odds > 0 ? '+' : ''}${Math.round(game.odds.away_spread_odds)})` : ''}
-              </span>
-              <span className="odds-val">
-                {home.abbreviation} {game.odds.home_spread_point > 0 ? '+' : ''}{game.odds.home_spread_point}
-                {game.odds.home_spread_odds ? ` (${game.odds.home_spread_odds > 0 ? '+' : ''}${Math.round(game.odds.home_spread_odds)})` : ''}
-              </span>
-            </div>
-          )}
+          {/* RL — real spread points or assumed ±1.5 */}
+          {(() => {
+            const hasReal = game.odds.away_spread_point != null || game.odds.home_spread_point != null
+            const awayPt = game.odds.away_spread_point
+            const homePt = game.odds.home_spread_point
+            const awayOdds = game.odds.away_spread_odds
+            const homeOdds = game.odds.home_spread_odds
+
+            // If no real RL, derive from ML: favorite gets -1.5, underdog gets +1.5
+            const homeFav = game.odds.home_ml && game.odds.away_ml && game.odds.home_ml < game.odds.away_ml
+            const dAwayPt = hasReal ? awayPt : (homeFav ? 1.5 : -1.5)
+            const dHomePt = hasReal ? homePt : (homeFav ? -1.5 : 1.5)
+            const dAwayOdds = awayOdds || (dAwayPt > 0 ? -140 : 120)
+            const dHomeOdds = homeOdds || (dHomePt > 0 ? -140 : 120)
+
+            return (
+              <div className="odds-line">
+                <span className="odds-label">RL</span>
+                <span className="odds-val">
+                  {away.abbreviation} {dAwayPt > 0 ? '+' : ''}{dAwayPt}
+                  {` (${dAwayOdds > 0 ? '+' : ''}${Math.round(dAwayOdds)})`}
+                </span>
+                <span className="odds-val">
+                  {home.abbreviation} {dHomePt > 0 ? '+' : ''}{dHomePt}
+                  {` (${dHomeOdds > 0 ? '+' : ''}${Math.round(dHomeOdds)})`}
+                </span>
+              </div>
+            )
+          })()}
         </div>
       )}
 

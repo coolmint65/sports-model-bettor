@@ -167,10 +167,30 @@ def generate_picks(home_team_id: int, away_team_id: int,
         })
 
     # ── Run Line ──
+    # Use real odds when available, otherwise derive from ML
     home_rl_odds = odds.get("home_spread_odds")
     away_rl_odds = odds.get("away_spread_odds")
     home_rl_point = odds.get("home_spread_point")
     away_rl_point = odds.get("away_spread_point")
+
+    # If no RL data from API, derive from ML: favorite gets -1.5, dog gets +1.5
+    if home_rl_point is None and home_ml and away_ml:
+        home_is_fav = (home_ml < 0 and abs(home_ml) > abs(away_ml)) if home_ml < 0 else False
+        if not home_is_fav and away_ml < 0:
+            home_is_fav = False
+        elif home_ml < 0:
+            home_is_fav = True
+
+        if home_is_fav:
+            home_rl_point = -1.5
+            away_rl_point = 1.5
+            home_rl_odds = home_rl_odds or 120   # Fav -1.5 pays +120
+            away_rl_odds = away_rl_odds or -140   # Dog +1.5 costs -140
+        else:
+            home_rl_point = 1.5
+            away_rl_point = -1.5
+            home_rl_odds = home_rl_odds or -140   # Dog +1.5 costs -140
+            away_rl_odds = away_rl_odds or 120    # Fav -1.5 pays +120
 
     # Home side
     if home_rl_odds and home_rl_odds >= JUICE_WALL and home_rl_point is not None:
