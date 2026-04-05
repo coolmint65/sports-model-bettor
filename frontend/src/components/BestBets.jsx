@@ -51,7 +51,7 @@ export default function BestBets({ bets, loading }) {
 
 function BetCard({ bet }) {
   const pct = n => `${(n * 100).toFixed(1)}%`
-  const { best_pick, all_picks, prediction_summary: ps, situational: sit } = bet
+  const { best_pick, all_picks } = bet
 
   return (
     <div className={`bb-card conf-${bet.confidence}`}>
@@ -90,16 +90,11 @@ function BetCard({ bet }) {
           ))}
         </div>
 
-        {/* Quick prediction summary */}
+        {/* Pick odds */}
         <div className="bb-summary">
-          <span>Score: {ps.home_score}-{ps.away_score}</span>
-          <span>Total: {ps.total}</span>
-          <span>WP: {pct(Math.max(ps.home_wp, ps.away_wp))}</span>
-          {sit && sit.weather !== 1.0 && (
-            <span className={sit.weather > 1.02 ? 'positive' : sit.weather < 0.98 ? 'negative' : ''}>
-              Wx: {sit.weather.toFixed(2)}x
-            </span>
-          )}
+          {all_picks.slice(0, 4).map((p, i) => (
+            p.odds && <span key={i}>{p.type}: {p.odds > 0 ? '+' : ''}{p.odds}</span>
+          ))}
         </div>
       </div>
     </div>
