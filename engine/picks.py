@@ -91,19 +91,11 @@ def generate_picks(home_team_id: int, away_team_id: int,
     h_abbr = home.get("abbreviation", "HOME")
     a_abbr = away.get("abbreviation", "AWAY")
 
-    # ── Dampen probabilities based on confidence ──
-    dampen = conf_score / 100 if conf_score < 80 else 1.0
-
-    home_wp = wp.get("home", 0.5) * dampen + 0.50 * (1 - dampen)
-    away_wp = wp.get("away", 0.5) * dampen + 0.50 * (1 - dampen)
-
-    rl_home_15 = rl.get("home_minus_1_5", 0.5) * dampen + 0.38 * (1 - dampen)
-    rl_away_15 = rl.get("away_plus_1_5", 0.5) * dampen + 0.62 * (1 - dampen)
-
-    # Minimum confidence to claim edge on big underdogs/favorites
-    # If model is heavily dampened (near 50%), don't bet on +200 underdogs
-    # or lay -250 favorites — the model doesn't actually "know" enough
-    min_edge_confidence = 0.03  # Must deviate at least 3% from 50% to bet
+    # Raw model probabilities — no dampening. Real odds are the calibration.
+    home_wp = wp.get("home", 0.5)
+    away_wp = wp.get("away", 0.5)
+    rl_home_15 = rl.get("home_minus_1_5", 0.5)
+    rl_away_15 = rl.get("away_plus_1_5", 0.5)
 
     picks = []
 
@@ -112,23 +104,20 @@ def generate_picks(home_team_id: int, away_team_id: int,
     away_ml = odds.get("away_ml")
 
     if home_ml and home_ml >= JUICE_WALL:
-        # Only claim edge if model has genuine conviction (not just dampened noise)
-        if abs(home_wp - 0.5) > min_edge_confidence or conf_score >= 60:
-            edge = (home_wp - _implied(home_ml)) * 100
-            if edge > 0:
-                picks.append({
-                    "type": "ML", "pick": h_abbr, "prob": round(home_wp, 4),
-                    "edge": round(edge, 1), "odds": home_ml,
-                })
+        edge = (home_wp - _implied(home_ml)) * 100
+        if edge > 0:
+            picks.append({
+                "type": "ML", "pick": h_abbr, "prob": round(home_wp, 4),
+                "edge": round(edge, 1), "odds": home_ml,
+            })
 
     if away_ml and away_ml >= JUICE_WALL:
-        if abs(away_wp - 0.5) > min_edge_confidence or conf_score >= 60:
-            edge = (away_wp - _implied(away_ml)) * 100
-            if edge > 0:
-                picks.append({
-                    "type": "ML", "pick": a_abbr, "prob": round(away_wp, 4),
-                    "edge": round(edge, 1), "odds": away_ml,
-                })
+        edge = (away_wp - _implied(away_ml)) * 100
+        if edge > 0:
+            picks.append({
+                "type": "ML", "pick": a_abbr, "prob": round(away_wp, 4),
+                "edge": round(edge, 1), "odds": away_ml,
+            })
 
     # ── Over/Under ──
     vegas_total = odds.get("over_under")
@@ -136,8 +125,7 @@ def generate_picks(home_team_id: int, away_team_id: int,
         ou_data = _find_ou(pred["over_under"], vegas_total)
         if ou_data:
             ou_pick_over = ou_data["over"] > ou_data["under"]
-            raw_prob = max(ou_data["over"], ou_data["under"])
-            ou_prob = raw_prob * dampen + 0.50 * (1 - dampen)
+            ou_prob = max(ou_data["over"], ou_data["under"])
             ou_label = f"{'Over' if ou_pick_over else 'Under'} {vegas_total}"
 
             real_ou_odds = odds.get("over_odds") if ou_pick_over else odds.get("under_odds")
@@ -158,7 +146,6 @@ def generate_picks(home_team_id: int, away_team_id: int,
     nrfi = fi.get("nrfi", 0.5)
     nrfi_pick = "NRFI" if nrfi > 0.5 else "YRFI"
     nrfi_prob = nrfi if nrfi > 0.5 else fi.get("yrfi", 0.5)
-    nrfi_prob = nrfi_prob * dampen + 0.50 * (1 - dampen)
     nrfi_edge = (nrfi_prob - 0.545) * 100  # -120 implied
     if nrfi_edge > 1:
         picks.append({

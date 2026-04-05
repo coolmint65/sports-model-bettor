@@ -270,28 +270,13 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     total = home_xr + away_xr
     spread = away_xr - home_xr  # Negative = home favored
 
-    # ── Win probability (Poisson-based with uncertainty) ──
+    # ── Win probability (Poisson-based) ──
     conf = _compute_confidence(home_pit, away_pit, home_sp_pit, away_sp_pit)
 
-    # ── Confidence dampening ──
-    # At low confidence, pull expected runs toward league average.
-    # This prevents absurd edges on 3-game samples.
-    conf_score = conf["score"]
-    if conf_score < 80:
-        dampen = conf_score / 100  # 0.0 to 0.80
-        home_xr = home_xr * dampen + MLB_AVG_RPG * (1 - dampen)
-        away_xr = away_xr * dampen + MLB_AVG_RPG * (1 - dampen)
-        total = home_xr + away_xr
-        spread = away_xr - home_xr
-
-    matrix = _build_uncertain_matrix(home_xr, away_xr, conf_score)
+    # No dampening — raw model output compared against real market odds.
+    # The DraftKings odds are the calibration, not artificial dampening.
+    matrix = _build_score_matrix(home_xr, away_xr, max_runs=15)
     p_home, p_away = _win_probs_from_matrix(matrix)
-
-    # Also cap max win probability based on confidence
-    if conf_score < 80:
-        max_dev = 0.05 + (conf_score / 100) * 0.40  # 5% to 37%
-        p_home = 0.5 + max(min(p_home - 0.5, max_dev), -max_dev)
-        p_away = 1 - p_home
 
     # ── Over/Under lines ──
     ou_lines = _generate_ou_lines(total, matrix)
