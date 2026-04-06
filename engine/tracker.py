@@ -147,6 +147,8 @@ def record_picks(date: str | None = None, min_edge: float = 1.5) -> list[dict]:
 
     all_odds = fetch_real_odds_for_games()
 
+    print(f"[RECORD] Found {len(games)} games for {target_date}", flush=True)
+
     recorded = []
     for game in games:
         game = dict(game)
@@ -157,11 +159,13 @@ def record_picks(date: str | None = None, min_edge: float = 1.5) -> list[dict]:
             "SELECT COUNT(*) as c FROM picks WHERE game_id = ?", (game_id,)
         ).fetchone()["c"]
         if existing > 0:
+            print(f"[RECORD]   {game_id}: already recorded, skipping", flush=True)
             continue
 
         home_id = game.get("home_team_id")
         away_id = game.get("away_team_id")
         if not home_id or not away_id:
+            print(f"[RECORD]   {game_id}: missing team IDs (home={home_id}, away={away_id}), skipping", flush=True)
             continue
 
         home_team = get_team_by_id(home_id)

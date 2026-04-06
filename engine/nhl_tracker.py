@@ -81,7 +81,14 @@ def record_picks(date: str | None = None, min_edge: float = 1.5) -> list[dict]:
     from engine.nhl_predict import generate_nhl_picks
     from engine.data import list_teams, load_team
 
-    # Build abbreviation -> key map
+    # Build abbreviation -> key map (include ESPN alternate abbreviations)
+    _ALT_ABBRS = {
+        "TBL": "TB", "TB": "TBL", "NJD": "NJ", "NJ": "NJD",
+        "SJS": "SJ", "SJ": "SJS", "LAK": "LA", "LA": "LAK",
+        "WSH": "WAS", "WAS": "WSH", "CBJ": "CLB", "CLB": "CBJ",
+        "MTL": "MON", "MON": "MTL", "NSH": "NAS", "NAS": "NSH",
+        "UTA": "UTAH", "UTAH": "UTA",
+    }
     key_map = {}
     for t in list_teams("NHL"):
         team = load_team("NHL", t["key"])
@@ -89,6 +96,10 @@ def record_picks(date: str | None = None, min_edge: float = 1.5) -> list[dict]:
             abbr = team.get("abbreviation", "")
             if abbr:
                 key_map[abbr] = t["key"]
+                # Add alternate abbreviation
+                alt = _ALT_ABBRS.get(abbr)
+                if alt:
+                    key_map[alt] = t["key"]
 
     # Fetch today's games from ESPN
     events = _fetch_nhl_scoreboard(target_date)
