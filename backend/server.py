@@ -1336,29 +1336,51 @@ def _fetch_nhl_odds() -> dict:
 
 @app.get("/api/nhl/goalies/debug")
 def api_nhl_goalies_debug():
-    """Debug: fetch DailyFaceoff HTML and return a sample for inspection."""
+    """Debug: fetch DailyFaceoff HTML and return structure for inspection."""
     import urllib.request
     try:
         req = urllib.request.Request("https://www.dailyfaceoff.com/starting-goalies/", headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html",
+            "Accept": "text/html,application/xhtml+xml",
             "Accept-Language": "en-US,en;q=0.9",
         })
         with urllib.request.urlopen(req, timeout=15) as resp:
             html = resp.read().decode("utf-8", errors="replace")
-        # Find goalie-related sections
         import re
-        snippets = []
-        # Look for any element with "goalie" or "starter" in class/id
-        for m in re.finditer(r'<[^>]*(goalie|starter|matchup|game-card)[^>]*>', html, re.IGNORECASE):
-            start = max(0, m.start() - 50)
-            end = min(len(html), m.end() + 500)
-            snippets.append(html[start:end])
+
+        # Look for JSON data embedded in the page (Next.js __NEXT_DATA__)
+        next_data = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
+        next_data_preview = ""
+        if next_data:
+            nd = next_data.group(1)
+            next_data_preview = nd[:3000]
+
+        # Look for any JSON-like data with goalie/team info
+        json_blocks = re.findall(r'\{[^{}]*(?:goalie|Goalie|netminder)[^{}]*\}', html)
+
+        # Find team names near player-looking names (First Last pattern)
+        team_player = re.findall(
+            r'(?:Bruins|Maple Leafs|Canadiens|Rangers|Islanders|Devils|Flyers|Penguins|'
+            r'Capitals|Hurricanes|Blue Jackets|Lightning|Panthers|Sabres|Senators|Red Wings|'
+            r'Blackhawks|Blues|Predators|Stars|Wild|Jets|Avalanche|Flames|Oilers|Canucks|'
+            r'Golden Knights|Kraken|Kings|Ducks|Sharks|Mammoth)[^<]{0,200}',
+            html
+        )
+
+        # Find confirmed/expected status text
+        status_context = []
+        for m in re.finditer(r'(?:confirmed|expected|unconfirmed|likely|probable)', html, re.IGNORECASE):
+            start = max(0, m.start() - 200)
+            end = min(len(html), m.end() + 200)
+            status_context.append(html[start:end])
+
         return {
             "html_length": len(html),
-            "title": re.search(r'<title>(.*?)</title>', html, re.IGNORECASE).group(1) if re.search(r'<title>(.*?)</title>', html, re.IGNORECASE) else "?",
-            "goalie_snippets": snippets[:10],
-            "sample_500": html[1000:1500],  # Random middle sample
+            "has_next_data": bool(next_data),
+            "next_data_preview": next_data_preview,
+            "json_goalie_blocks": json_blocks[:5],
+            "team_player_nearby": team_player[:10],
+            "status_context": status_context[:5],
         }
     except Exception as e:
         return {"error": str(e)}
