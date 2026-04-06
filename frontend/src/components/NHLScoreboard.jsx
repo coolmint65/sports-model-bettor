@@ -88,12 +88,22 @@ function NHLGameCard({ game, bet, onClick }) {
             {game.away_goalie?.name || 'TBD'}
             {game.away_goalie?.status === 'confirmed' && <span style={{color:'#34d399',marginLeft:4,fontSize:'0.7rem'}}>✓</span>}
             {game.away_goalie?.status === 'expected' && <span style={{color:'#fbbf24',marginLeft:4,fontSize:'0.7rem'}}>~</span>}
+            {game.away_goalie?.save_pct > 0 && (
+              <span style={{color:'#64748b',fontSize:'0.7rem',marginLeft:6}}>
+                {game.away_goalie.save_pct.toFixed(3)} SV%
+              </span>
+            )}
           </span>
           <span className="vs">vs</span>
           <span className="pitcher">
             {game.home_goalie?.name || 'TBD'}
             {game.home_goalie?.status === 'confirmed' && <span style={{color:'#34d399',marginLeft:4,fontSize:'0.7rem'}}>✓</span>}
             {game.home_goalie?.status === 'expected' && <span style={{color:'#fbbf24',marginLeft:4,fontSize:'0.7rem'}}>~</span>}
+            {game.home_goalie?.save_pct > 0 && (
+              <span style={{color:'#64748b',fontSize:'0.7rem',marginLeft:6}}>
+                {game.home_goalie.save_pct.toFixed(3)} SV%
+              </span>
+            )}
           </span>
         </div>
       )}
