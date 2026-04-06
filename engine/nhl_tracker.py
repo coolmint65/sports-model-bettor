@@ -202,14 +202,29 @@ def record_picks(date: str | None = None, min_edge: float = 1.5) -> list[dict]:
         if existing > 0:
             continue
 
-        h_key = key_map.get(h_abbr)
-        a_key = key_map.get(a_abbr)
+        # Try direct and alternate abbreviations
+        _ALT = {
+            "TB": "TBL", "TBL": "TB", "NJ": "NJD", "NJD": "NJ",
+            "SJ": "SJS", "SJS": "SJ", "LA": "LAK", "LAK": "LA",
+            "WAS": "WSH", "WSH": "WAS", "CLB": "CBJ", "CBJ": "CLB",
+            "MON": "MTL", "MTL": "MON", "NAS": "NSH", "NSH": "NAS",
+        }
+        h_key = key_map.get(h_abbr) or key_map.get(_ALT.get(h_abbr, ""))
+        a_key = key_map.get(a_abbr) or key_map.get(_ALT.get(a_abbr, ""))
         if not h_key or not a_key:
             logger.warning("Could not find team keys for %s vs %s", a_abbr, h_abbr)
             continue
 
-        # Match odds
-        game_odds = odds_map.get(f"{a_abbr}@{h_abbr}")
+        # Match odds (try alternate abbreviations too)
+        game_odds = None
+        for a_try in [a_abbr, _ALT.get(a_abbr, "")]:
+            for h_try in [h_abbr, _ALT.get(h_abbr, "")]:
+                if a_try and h_try:
+                    game_odds = odds_map.get(f"{a_try}@{h_try}")
+                    if game_odds:
+                        break
+            if game_odds:
+                break
 
         picks = generate_nhl_picks(h_key, a_key, game_odds)
         if not picks:

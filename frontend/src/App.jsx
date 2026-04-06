@@ -357,29 +357,42 @@ function NHLGameDetail({ game, prediction, loading, onBack }) {
       <button className="back-btn" onClick={onBack}>Back to Games</button>
 
       <div className="detail-header">
-        <div className="detail-team">
-          {away.logo && <img src={away.logo} alt="" className="detail-logo" />}
-          <div>
-            <h2>{away.name}</h2>
-            <span className="detail-record">{away.record}</span>
+        <div className="detail-matchup">
+          <div className="detail-team">
+            {away.logo && <img src={away.logo} alt="" className="detail-logo" />}
+            <div className="detail-team-name">{away.name}</div>
+            <div className="detail-team-record">{away.record}</div>
+            {game.away_goalie && (
+              <div style={{fontSize:'0.8rem',color:'#94a3b8',marginTop:4}}>
+                {game.away_goalie.name}
+                {game.away_goalie.status === 'confirmed' && <span style={{color:'#34d399',marginLeft:4}}>✓</span>}
+                {game.away_goalie.status === 'expected' && <span style={{color:'#fbbf24',marginLeft:4}}>~</span>}
+              </div>
+            )}
+          </div>
+          <div className="detail-vs">
+            {status.state === 'pre' ? 'vs' : `${away.score} - ${home.score}`}
+          </div>
+          <div className="detail-team">
+            {home.logo && <img src={home.logo} alt="" className="detail-logo" />}
+            <div className="detail-team-name">{home.name}</div>
+            <div className="detail-team-record">{home.record}</div>
+            {game.home_goalie && (
+              <div style={{fontSize:'0.8rem',color:'#94a3b8',marginTop:4}}>
+                {game.home_goalie.name}
+                {game.home_goalie.status === 'confirmed' && <span style={{color:'#34d399',marginLeft:4}}>✓</span>}
+                {game.home_goalie.status === 'expected' && <span style={{color:'#fbbf24',marginLeft:4}}>~</span>}
+              </div>
+            )}
           </div>
         </div>
-        <div className="detail-vs">
-          {status.state === 'pre' ? 'vs' : `${away.score} - ${home.score}`}
+        <div className="detail-meta">
+          <span>{new Date(game.date).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span>
+          {game.venue && <span style={{margin:'0 8px'}}>|</span>}
+          {game.venue && <span>{game.venue}</span>}
+          {game.broadcast && <span style={{margin:'0 8px'}}>|</span>}
+          {game.broadcast && <span>{game.broadcast}</span>}
         </div>
-        <div className="detail-team">
-          {home.logo && <img src={home.logo} alt="" className="detail-logo" />}
-          <div>
-            <h2>{home.name}</h2>
-            <span className="detail-record">{home.record}</span>
-          </div>
-        </div>
-      </div>
-
-      <div className="detail-meta">
-        <span>{new Date(game.date).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span>
-        {game.venue && <span>{game.venue}</span>}
-        {game.broadcast && <span>{game.broadcast}</span>}
       </div>
 
       {loading && (

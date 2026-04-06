@@ -462,6 +462,23 @@ body {
   margin-bottom: 4px;
 }
 
+.detail-vs {
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: #94a3b8;
+  padding: 0 16px;
+}
+
+.detail-meta {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+  margin-top: 12px;
+  font-size: 0.8rem;
+  color: #64748b;
+}
+
 .detail-team-record {
   font-size: 0.8rem;
   color: #64748b;
