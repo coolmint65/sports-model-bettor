@@ -53,10 +53,8 @@ echo.
 echo Opening browser...
 start http://localhost:5173
 echo.
-echo You can close this window.
 echo To stop servers: close Backend and Frontend windows
 echo   or end "node.exe" and "python.exe" in Task Manager.
 echo.
-pause
 
 :done
