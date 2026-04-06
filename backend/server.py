@@ -1287,191 +1287,105 @@ def api_nhl_scoreboard(date: str = Query(default="")):
     return _get_nhl_scoreboard(date)
 
 
-@app.get("/api/nhl/standings/debug")
-def api_nhl_standings_debug():
-    """Debug endpoint: try all ESPN URL patterns and report what works."""
-    now = datetime.now(timezone.utc)
-    season = now.year if now.month >= 8 else now.year - 1
-
-    ESPN_BASES = [
-        "https://site.api.espn.com/apis/site/v2/sports",
-        "https://site.web.api.espn.com/apis/v2/sports",
-    ]
-
-    results = []
-    for base in ESPN_BASES:
-        for params in [
-            f"?season={season}",
-            f"?season={season}&type=0",
-            f"?season={season}&type=1",
-            f"?season={season}&level=3",
-            f"?season={season}&sort=points",
-            f"?season={season}&group=7",
-            f"?season={season}&group=8",
-            f"?season={season + 1}",
-            "",
-        ]:
-            url = f"{base}/hockey/nhl/standings{params}"
-            data = _fetch_espn_json(url)
-            top_keys = list(data.keys()) if data else []
-            children = len(data.get("children", [])) if data else 0
-            has_standings = bool(data.get("standings")) if data else False
-            fvl = data.get("fullViewLink", "") if data else ""
-
-            entry = {
-                "url": url,
-                "top_keys": top_keys,
-                "children": children,
-                "has_standings": has_standings,
-                "fullViewLink": fvl[:80] if fvl else "",
-            }
-
-            # If it has children, peek at structure
-            if children > 0:
-                child = data["children"][0]
-                entry["first_child_keys"] = list(child.keys())[:8]
-                entry["first_child_name"] = child.get("name", "?")
-                sub_children = len(child.get("children", []))
-                entry["sub_children"] = sub_children
-                if sub_children > 0:
-                    sub = child["children"][0]
-                    entry["first_sub_name"] = sub.get("name", "?")
-                    entry["sub_has_standings"] = "standings" in sub
-
-            results.append(entry)
-
-            # If we found real data, note it
-            if children > 0 or has_standings:
-                entry["WORKS"] = True
-
-    return results
-
-
 @app.get("/api/nhl/standings")
 def api_nhl_standings():
-    """Return NHL standings from ESPN."""
-    now = datetime.now(timezone.utc)
-    season = now.year if now.month >= 8 else now.year - 1
+    """Return NHL standings from the official NHL API."""
+    # Primary: NHL Stats API (api-web.nhle.com)
+    nhl_url = "https://api-web.nhle.com/v1/standings/now"
+    data = _fetch_espn_json(nhl_url)  # reuse fetch helper
 
-    # Try multiple ESPN API bases and param combos
-    ESPN_BASES = [
-        "https://site.api.espn.com/apis/site/v2/sports",
-        "https://site.web.api.espn.com/apis/v2/sports",
-    ]
+    if data and data.get("standings"):
+        return _parse_nhl_api_standings(data)
 
-    data = None
-    for base in ESPN_BASES:
-        for params in [
-            f"?season={season}&level=3",
-            f"?season={season}&type=0",
-            f"?season={season}",
-            f"?season={season}&group=7",
-            f"?season={season + 1}",
-            "",
-        ]:
-            url = f"{base}/hockey/nhl/standings{params}"
-            print(f"[NHL STANDINGS] Trying: {url}", flush=True)
-            data = _fetch_espn_json(url)
-            if data and (data.get("children") or data.get("standings")):
-                print(f"[NHL STANDINGS] SUCCESS with {url}", flush=True)
-                break
-        if data and (data.get("children") or data.get("standings")):
-            break
+    # Fallback: local team JSON files
+    logger.warning("NHL API standings failed, using JSON fallback")
+    return _nhl_standings_from_json()
 
-    if not data or not (data.get("children") or data.get("standings")):
-        print(f"[NHL STANDINGS] ESPN failed, using JSON fallback", flush=True)
-        return _nhl_standings_from_json()
 
-    print(f"[NHL STANDINGS] Top keys: {list(data.keys())}", flush=True)
-    print(f"[NHL STANDINGS] children count: {len(data.get('children', []))}", flush=True)
-
+def _parse_nhl_api_standings(data: dict) -> list[dict]:
+    """Parse standings from api-web.nhle.com/v1/standings/now."""
     divisions = {}
-    groups = []
 
-    # ESPN NHL: children = conferences or divisions, possibly nested
-    for child in data.get("children", []):
-        if not isinstance(child, dict):
-            continue
-        child_name = child.get("name", child.get("abbreviation", "?"))
-        child_keys = list(child.keys())
-        has_standings = "standings" in child
-        sub_children = child.get("children", [])
-        print(f"[NHL STANDINGS]   child: '{child_name}' keys={child_keys[:6]} has_standings={has_standings} sub_children={len(sub_children)}", flush=True)
+    for entry in data.get("standings", []):
+        div = entry.get("divisionName", "Unknown")
 
-        if has_standings:
-            groups.append(child)
-        for sub in sub_children:
-            if isinstance(sub, dict):
-                sub_name = sub.get("name", sub.get("abbreviation", "?"))
-                sub_has = "standings" in sub
-                print(f"[NHL STANDINGS]     sub: '{sub_name}' has_standings={sub_has}", flush=True)
-                if sub_has:
-                    groups.append(sub)
+        # Team name from nested object or string
+        team_name_obj = entry.get("teamName", {})
+        if isinstance(team_name_obj, dict):
+            team_name = team_name_obj.get("default", "")
+        else:
+            team_name = str(team_name_obj)
 
-    # Also check if standings is directly on data (no children)
-    if not groups and "standings" in data:
-        groups.append(data)
+        team_abbr_obj = entry.get("teamAbbrev", {})
+        if isinstance(team_abbr_obj, dict):
+            team_abbr = team_abbr_obj.get("default", "")
+        else:
+            team_abbr = str(team_abbr_obj)
 
-    print(f"[NHL STANDINGS] Found {len(groups)} groups with standings data", flush=True)
+        # Build team logo URL from NHL CDN
+        team_logo = entry.get("teamLogo", "")
 
-    for group in groups:
-        div_name = group.get("name", group.get("abbreviation", "Unknown"))
-        standings_data = group.get("standings", {})
-        if not isinstance(standings_data, dict):
-            continue
+        place_name = entry.get("placeName", {})
+        if isinstance(place_name, dict):
+            place = place_name.get("default", "")
+        else:
+            place = str(place_name)
 
-        teams = []
-        for entry in standings_data.get("entries", []):
-            if not isinstance(entry, dict):
-                continue
-            team = entry.get("team", {})
-            if not isinstance(team, dict):
-                continue
+        full_name = f"{place} {team_name}".strip()
 
-            stats_map = {}
-            for s in entry.get("stats", []):
-                if isinstance(s, dict):
-                    stats_map[s.get("name", "")] = s.get("displayValue", s.get("value", ""))
+        wins = entry.get("wins", 0)
+        losses = entry.get("losses", 0)
+        otl = entry.get("otLosses", 0)
+        points = entry.get("points", 0)
+        gf = entry.get("goalFor", 0)
+        ga = entry.get("goalAgainst", 0)
+        diff = entry.get("goalDifferential", 0)
 
-            teams.append({
-                "name": team.get("displayName", team.get("name", "")),
-                "abbreviation": team.get("abbreviation", ""),
-                "logo": "",
-                "record": stats_map.get("overall", ""),
-                "wins": int(float(stats_map.get("wins", 0))),
-                "losses": int(float(stats_map.get("losses", 0))),
-                "otl": int(float(stats_map.get("OTLosses", stats_map.get("otLosses", 0)))),
-                "points": int(float(stats_map.get("points", 0))),
-                "gf": int(float(stats_map.get("pointsFor", stats_map.get("goalsFor", 0)))),
-                "ga": int(float(stats_map.get("pointsAgainst", stats_map.get("goalsAgainst", 0)))),
-                "diff": int(float(stats_map.get("pointDifferential", stats_map.get("differential", 0)))),
-                "streak": stats_map.get("streak", ""),
-                "home": stats_map.get("Home", stats_map.get("home", "")),
-                "away": stats_map.get("Road", stats_map.get("away", stats_map.get("road", ""))),
-                "l10": stats_map.get("Last Ten", stats_map.get("lastTen", "")),
-            })
+        streak_code = entry.get("streakCode", "")
+        streak_count = entry.get("streakCount", 0)
+        streak = f"{streak_code}{streak_count}" if streak_code else ""
 
-            # Get logo
-            logo = team.get("logo", "")
-            if isinstance(logo, str) and logo:
-                teams[-1]["logo"] = logo
-            elif isinstance(logo, dict):
-                teams[-1]["logo"] = logo.get("href", "")
-            else:
-                logos = team.get("logos", [])
-                if logos and isinstance(logos, list):
-                    first = logos[0]
-                    teams[-1]["logo"] = first.get("href", "") if isinstance(first, dict) else (first if isinstance(first, str) else "")
+        l10w = entry.get("l10Wins", 0)
+        l10l = entry.get("l10Losses", 0)
+        l10o = entry.get("l10OtLosses", 0)
+        l10 = f"{l10w}-{l10l}-{l10o}"
 
-        teams.sort(key=lambda t: t["points"], reverse=True)
-        logger.info("  Division '%s': %d teams", div_name, len(teams))
+        hw = entry.get("homeWins", 0)
+        hl = entry.get("homeLosses", 0)
+        ho = entry.get("homeOtLosses", 0)
+        home = f"{hw}-{hl}-{ho}"
 
-        divisions[div_name] = {
-            "name": div_name,
-            "teams": teams,
+        rw = entry.get("roadWins", 0)
+        rl = entry.get("roadLosses", 0)
+        ro = entry.get("roadOtLosses", 0)
+        away = f"{rw}-{rl}-{ro}"
+
+        team_entry = {
+            "name": full_name,
+            "abbreviation": team_abbr,
+            "logo": team_logo,
+            "record": f"{wins}-{losses}-{otl}",
+            "wins": wins,
+            "losses": losses,
+            "otl": otl,
+            "points": points,
+            "gf": gf,
+            "ga": ga,
+            "diff": diff,
+            "streak": streak,
+            "home": home,
+            "away": away,
+            "l10": l10,
         }
 
-    logger.info("NHL standings: returning %d divisions", len(divisions))
+        if div not in divisions:
+            divisions[div] = {"name": div, "teams": []}
+        divisions[div]["teams"].append(team_entry)
+
+    # Sort each division by points
+    for div in divisions.values():
+        div["teams"].sort(key=lambda t: t["points"], reverse=True)
+
     return list(divisions.values())
 
 
@@ -1481,10 +1395,10 @@ def _nhl_standings_from_json() -> list[dict]:
 
     # NHL division assignments
     _DIVISIONS = {
-        "Atlantic": ["BOS", "BUF", "DET", "FLA", "MTL", "OTT", "TBL", "TOR"],
-        "Metropolitan": ["CAR", "CBJ", "NJD", "NYI", "NYR", "PHI", "PIT", "WSH"],
-        "Central": ["CHI", "COL", "DAL", "MIN", "NSH", "STL", "UTA", "WPG"],
-        "Pacific": ["ANA", "CGY", "EDM", "LAK", "SEA", "SJS", "VAN", "VGK"],
+        "Atlantic": ["BOS", "BUF", "DET", "FLA", "MTL", "OTT", "TBL", "TB", "TOR"],
+        "Metropolitan": ["CAR", "CBJ", "CLB", "NJD", "NJ", "NYI", "NYR", "PHI", "PIT", "WSH", "WAS"],
+        "Central": ["CHI", "COL", "DAL", "MIN", "NSH", "NAS", "STL", "UTA", "AZ", "WPG"],
+        "Pacific": ["ANA", "CGY", "EDM", "LAK", "LA", "SEA", "SJS", "SJ", "VAN", "VGK"],
     }
 
     # Reverse lookup: abbr -> division
