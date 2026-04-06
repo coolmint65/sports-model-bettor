@@ -1290,28 +1290,46 @@ def api_nhl_scoreboard(date: str = Query(default="")):
 @app.get("/api/nhl/standings")
 def api_nhl_standings():
     """Return NHL standings from ESPN."""
-    url = f"{ESPN_BASE}/hockey/nhl/standings"
-    # Add season param
     now = datetime.now(timezone.utc)
     season = now.year if now.month >= 8 else now.year - 1
-    url += f"?season={season}"
 
-    data = _fetch_espn_json(url)
+    # Try with different season params — ESPN may use start year or end year
+    data = None
+    for url in [
+        f"{ESPN_BASE}/hockey/nhl/standings?season={season}",
+        f"{ESPN_BASE}/hockey/nhl/standings?season={season + 1}",
+        f"{ESPN_BASE}/hockey/nhl/standings",
+    ]:
+        logger.info("Fetching NHL standings: %s", url)
+        data = _fetch_espn_json(url)
+        if data and (data.get("children") or data.get("standings")):
+            break
+
     if not data:
+        logger.warning("NHL standings: no data from ESPN")
         return []
 
+    logger.info("NHL standings top keys: %s", list(data.keys()))
+
     divisions = {}
-    # ESPN NHL standings: children = conferences, sub-children = divisions
     groups = []
 
+    # ESPN NHL: children = conferences or divisions, possibly nested
     for child in data.get("children", []):
         if not isinstance(child, dict):
             continue
+        logger.info("  child: name=%s keys=%s", child.get("name", "?"), list(child.keys())[:6])
         if "standings" in child:
             groups.append(child)
         for sub in child.get("children", []):
             if isinstance(sub, dict) and "standings" in sub:
                 groups.append(sub)
+
+    # Also check if standings is directly on data (no children)
+    if not groups and "standings" in data:
+        groups.append(data)
+
+    logger.info("NHL standings: found %d groups with standings data", len(groups))
 
     for group in groups:
         div_name = group.get("name", group.get("abbreviation", "Unknown"))
@@ -1363,12 +1381,14 @@ def api_nhl_standings():
                     teams[-1]["logo"] = first.get("href", "") if isinstance(first, dict) else (first if isinstance(first, str) else "")
 
         teams.sort(key=lambda t: t["points"], reverse=True)
+        logger.info("  Division '%s': %d teams", div_name, len(teams))
 
         divisions[div_name] = {
             "name": div_name,
             "teams": teams,
         }
 
+    logger.info("NHL standings: returning %d divisions", len(divisions))
     return list(divisions.values())
 
 
