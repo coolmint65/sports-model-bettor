@@ -1306,10 +1306,11 @@ def api_nhl_standings():
             break
 
     if not data:
-        logger.warning("NHL standings: no data from ESPN")
+        print("[NHL STANDINGS] No data from ESPN", flush=True)
         return []
 
-    logger.info("NHL standings top keys: %s", list(data.keys()))
+    print(f"[NHL STANDINGS] Top keys: {list(data.keys())}", flush=True)
+    print(f"[NHL STANDINGS] children count: {len(data.get('children', []))}", flush=True)
 
     divisions = {}
     groups = []
@@ -1318,18 +1319,27 @@ def api_nhl_standings():
     for child in data.get("children", []):
         if not isinstance(child, dict):
             continue
-        logger.info("  child: name=%s keys=%s", child.get("name", "?"), list(child.keys())[:6])
-        if "standings" in child:
+        child_name = child.get("name", child.get("abbreviation", "?"))
+        child_keys = list(child.keys())
+        has_standings = "standings" in child
+        sub_children = child.get("children", [])
+        print(f"[NHL STANDINGS]   child: '{child_name}' keys={child_keys[:6]} has_standings={has_standings} sub_children={len(sub_children)}", flush=True)
+
+        if has_standings:
             groups.append(child)
-        for sub in child.get("children", []):
-            if isinstance(sub, dict) and "standings" in sub:
-                groups.append(sub)
+        for sub in sub_children:
+            if isinstance(sub, dict):
+                sub_name = sub.get("name", sub.get("abbreviation", "?"))
+                sub_has = "standings" in sub
+                print(f"[NHL STANDINGS]     sub: '{sub_name}' has_standings={sub_has}", flush=True)
+                if sub_has:
+                    groups.append(sub)
 
     # Also check if standings is directly on data (no children)
     if not groups and "standings" in data:
         groups.append(data)
 
-    logger.info("NHL standings: found %d groups with standings data", len(groups))
+    print(f"[NHL STANDINGS] Found {len(groups)} groups with standings data", flush=True)
 
     for group in groups:
         div_name = group.get("name", group.get("abbreviation", "Unknown"))
