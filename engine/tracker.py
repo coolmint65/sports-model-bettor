@@ -10,12 +10,96 @@ Usage:
     python -m engine.tracker --summary    # Print running totals
 """
 
+import json
 import logging
+import urllib.request
 from datetime import datetime
 
 from .db import get_conn, get_team_by_id
 from .mlb_predict import predict_matchup
 from .bankroll import ml_to_implied_prob
+
+ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports"
+
+
+def _fetch_espn_scoreboard(date: str) -> list[dict]:
+    """Fetch MLB scoreboard from ESPN for a given date."""
+    espn_date = date.replace("-", "")
+    url = f"{ESPN_BASE}/baseball/mlb/scoreboard?dates={espn_date}"
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "application/json",
+        })
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+    except Exception as e:
+        logger.warning("ESPN scoreboard fetch failed: %s", e)
+        return []
+
+    games = []
+    for event in data.get("events", []):
+        comps = event.get("competitions", [])
+        if not comps:
+            continue
+        comp = comps[0]
+        competitors = comp.get("competitors", [])
+        if len(competitors) < 2:
+            continue
+
+        home_team, away_team = None, None
+        for c in competitors:
+            team = c.get("team", {})
+            entry = {
+                "abbreviation": team.get("abbreviation", ""),
+                "name": team.get("displayName", ""),
+                "team_id": None,
+            }
+            # Try to resolve team_id from DB
+            db_team = get_team_by_id(None)  # won't match
+            from .db import get_conn as _gc
+            row = _gc().execute(
+                "SELECT mlb_id FROM teams WHERE abbreviation = ?",
+                (entry["abbreviation"],)
+            ).fetchone()
+            if row:
+                entry["team_id"] = row["mlb_id"]
+
+            if c.get("homeAway") == "home":
+                home_team = entry
+            else:
+                away_team = entry
+
+        if not home_team or not away_team:
+            continue
+
+        status = comp.get("status", {}).get("type", {})
+
+        # Probable pitchers
+        home_pid, away_pid = None, None
+        for c in competitors:
+            pp = c.get("probables", [])
+            if pp:
+                pid = pp[0].get("athlete", {}).get("id")
+                if c.get("homeAway") == "home":
+                    home_pid = pid
+                else:
+                    away_pid = pid
+
+        games.append({
+            "id": event.get("id", ""),
+            "home": home_team,
+            "away": away_team,
+            "home_pitcher": {"id": home_pid} if home_pid else {},
+            "away_pitcher": {"id": away_pid} if away_pid else {},
+            "venue": comp.get("venue", {}).get("fullName", ""),
+            "status": {
+                "state": status.get("state", "pre"),
+                "completed": status.get("completed", False),
+            },
+        })
+
+    return games
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +110,7 @@ def record_picks(date: str | None = None, min_edge: float = 1.5) -> list[dict]:
     """
     Run model on today's games and record the best pick per game.
     Uses the unified picks engine for consistent edge calculations.
+    Falls back to ESPN scoreboard if games aren't in the DB.
     """
     conn = get_conn()
     target_date = date or datetime.now().strftime("%Y-%m-%d")
@@ -34,7 +119,27 @@ def record_picks(date: str | None = None, min_edge: float = 1.5) -> list[dict]:
         SELECT * FROM games WHERE date = ?
     """, (target_date,)).fetchall()
 
+    # If no games in DB, try syncing today's schedule first
     if not games:
+        logger.info("No games in DB for %s — fetching from MLB API", target_date)
+        try:
+            from scrapers.mlb_stats import fetch_schedule
+            fetch_schedule(target_date, target_date)
+            games = conn.execute("""
+                SELECT * FROM games WHERE date = ?
+            """, (target_date,)).fetchall()
+        except Exception as e:
+            logger.warning("Could not fetch today's schedule: %s", e)
+
+    # Still no games? Try ESPN scoreboard as last resort
+    if not games:
+        try:
+            scoreboard = _fetch_espn_scoreboard(target_date)
+            if scoreboard:
+                logger.info("Using ESPN scoreboard (%d games)", len(scoreboard))
+                return _record_from_scoreboard(conn, scoreboard, target_date, min_edge)
+        except Exception as e:
+            logger.warning("Scoreboard fallback failed: %s", e)
         return []
 
     # Fetch real odds once for all games
@@ -97,6 +202,83 @@ def record_picks(date: str | None = None, min_edge: float = 1.5) -> list[dict]:
         })
 
     conn.commit()
+    return recorded
+
+
+def _record_from_scoreboard(conn, scoreboard: list, target_date: str,
+                            min_edge: float) -> list[dict]:
+    """Record picks using live scoreboard data when DB has no games."""
+    from .picks import generate_picks, get_best_pick, match_odds, fetch_real_odds_for_games
+
+    all_odds = fetch_real_odds_for_games()
+    recorded = []
+
+    for game in scoreboard:
+        # Skip completed games
+        if game.get("status", {}).get("completed") or game.get("status", {}).get("state") == "post":
+            continue
+
+        game_id = game.get("id") or game.get("game_pk")
+        if not game_id:
+            continue
+
+        # Skip if already recorded
+        existing = conn.execute(
+            "SELECT COUNT(*) as c FROM picks WHERE game_id = ?", (game_id,)
+        ).fetchone()["c"]
+        if existing > 0:
+            continue
+
+        home_id = game.get("home", {}).get("team_id")
+        away_id = game.get("away", {}).get("team_id")
+        if not home_id or not away_id:
+            continue
+
+        h = game.get("home", {}).get("abbreviation", "?")
+        a = game.get("away", {}).get("abbreviation", "?")
+        matchup = f"{a} @ {h}"
+
+        # Get odds
+        game_odds = game.get("odds") or match_odds(h, a, all_odds)
+
+        # Get pitcher IDs
+        hp = game.get("home_pitcher") or {}
+        ap = game.get("away_pitcher") or {}
+        try:
+            h_pid = int(hp["id"]) if hp.get("id") else None
+            a_pid = int(ap["id"]) if ap.get("id") else None
+        except (ValueError, TypeError):
+            h_pid, a_pid = None, None
+
+        try:
+            picks = generate_picks(
+                home_team_id=home_id, away_team_id=away_id,
+                home_pitcher_id=h_pid, away_pitcher_id=a_pid,
+                venue=game.get("venue"), odds=game_odds,
+            )
+        except Exception as e:
+            logger.warning("Prediction failed for %s: %s", matchup, e)
+            continue
+
+        best = get_best_pick(picks)
+        if not best or best["edge"] < min_edge:
+            continue
+
+        conn.execute("""
+            INSERT INTO picks (game_id, date, matchup, bet_type, pick,
+                             model_prob, edge, odds)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (game_id, target_date, matchup, best["type"], best["pick"],
+              best["prob"], best["edge"], best["odds"]))
+
+        recorded.append({
+            "matchup": matchup, "type": best["type"],
+            "pick": best["pick"], "prob": round(best["prob"], 3),
+            "edge": round(best["edge"], 1), "odds": best["odds"],
+        })
+
+    conn.commit()
+    logger.info("Recorded %d picks from scoreboard", len(recorded))
     return recorded
 
 
