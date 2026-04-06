@@ -62,6 +62,7 @@ export default function PickHistory({ summary, history, loading, onRecord, onSet
             {key: 'O/U', label: 'Over/Under'},
             {key: '1st INN', label: '1st Inning'},
             {key: 'RL', label: 'Run Line'},
+            {key: 'PL', label: 'Puck Line'},
           ].map(({key, label}) => {
             const s = byType[key]
             if (!s || s.total === 0) return null

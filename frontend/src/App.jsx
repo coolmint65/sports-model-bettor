@@ -40,6 +40,9 @@ export default function App() {
   const [nhlPrediction, setNhlPrediction] = useState(null)
   const [nhlPredLoading, setNhlPredLoading] = useState(false)
   const [nhlSelectedGame, setNhlSelectedGame] = useState(null)
+  const [nhlPickSummary, setNhlPickSummary] = useState(null)
+  const [nhlPickHistory, setNhlPickHistory] = useState(null)
+  const [nhlPhLoading, setNhlPhLoading] = useState(false)
 
   // Load MLB games on mount + auto-refresh every 5 min
   useEffect(() => {
@@ -170,30 +173,56 @@ export default function App() {
 
   const showHistory = useCallback(() => {
     setView('history'); setSelectedGame(null); setNhlSelectedGame(null)
-    setPhLoading(true)
-    Promise.all([
-      api.get('/tracker/summary'),
-      api.get('/tracker/history'),
-    ]).then(([s, h]) => {
-      setPickSummary(s.data)
-      setPickHistory(h.data)
-    }).catch(() => {})
-      .finally(() => setPhLoading(false))
-  }, [])
+    if (league === 'MLB') {
+      setPhLoading(true)
+      Promise.all([
+        api.get('/tracker/summary'),
+        api.get('/tracker/history'),
+      ]).then(([s, h]) => {
+        setPickSummary(s.data)
+        setPickHistory(h.data)
+      }).catch(() => {})
+        .finally(() => setPhLoading(false))
+    } else {
+      setNhlPhLoading(true)
+      Promise.all([
+        api.get('/nhl/tracker/summary'),
+        api.get('/nhl/tracker/history'),
+      ]).then(([s, h]) => {
+        setNhlPickSummary(s.data)
+        setNhlPickHistory(h.data)
+      }).catch(() => {})
+        .finally(() => setNhlPhLoading(false))
+    }
+  }, [league])
 
   const recordPicks = useCallback(() => {
-    api.post('/tracker/record').then(() => {
-      api.get('/tracker/summary').then(r => setPickSummary(r.data))
-      api.get('/tracker/history').then(r => setPickHistory(r.data))
-    })
-  }, [])
+    if (league === 'MLB') {
+      api.post('/tracker/record').then(() => {
+        api.get('/tracker/summary').then(r => setPickSummary(r.data))
+        api.get('/tracker/history').then(r => setPickHistory(r.data))
+      })
+    } else {
+      api.post('/nhl/tracker/record').then(() => {
+        api.get('/nhl/tracker/summary').then(r => setNhlPickSummary(r.data))
+        api.get('/nhl/tracker/history').then(r => setNhlPickHistory(r.data))
+      })
+    }
+  }, [league])
 
   const settlePicks = useCallback(() => {
-    api.post('/tracker/settle').then(() => {
-      api.get('/tracker/summary').then(r => setPickSummary(r.data))
-      api.get('/tracker/history').then(r => setPickHistory(r.data))
-    })
-  }, [])
+    if (league === 'MLB') {
+      api.post('/tracker/settle').then(() => {
+        api.get('/tracker/summary').then(r => setPickSummary(r.data))
+        api.get('/tracker/history').then(r => setPickHistory(r.data))
+      })
+    } else {
+      api.post('/nhl/tracker/settle').then(() => {
+        api.get('/nhl/tracker/summary').then(r => setNhlPickSummary(r.data))
+        api.get('/nhl/tracker/history').then(r => setNhlPickHistory(r.data))
+      })
+    }
+  }, [league])
 
   const goBack = useCallback(() => {
     setSelectedGame(null); setNhlSelectedGame(null)
@@ -246,15 +275,13 @@ export default function App() {
         <button className={`nav-tab ${view === 'standings' ? 'active' : ''}`} onClick={showStandings}>
           Standings
         </button>
+        <button className={`nav-tab ${view === 'history' ? 'active' : ''}`} onClick={showHistory}>
+          Pick Tracker
+        </button>
         {isMLB && (
-          <>
-            <button className={`nav-tab ${view === 'history' ? 'active' : ''}`} onClick={showHistory}>
-              Pick Tracker
-            </button>
-            <button className={`nav-tab ${view === 'backtest' ? 'active' : ''}`} onClick={showBacktest}>
-              Backtest
-            </button>
-          </>
+          <button className={`nav-tab ${view === 'backtest' ? 'active' : ''}`} onClick={showBacktest}>
+            Backtest
+          </button>
         )}
       </nav>
 
@@ -304,6 +331,16 @@ export default function App() {
 
       {isNHL && view === 'standings' && (
         <NHLStandings divisions={nhlStandings} loading={nhlStandingsLoading} />
+      )}
+
+      {isNHL && view === 'history' && (
+        <PickHistory
+          summary={nhlPickSummary}
+          history={nhlPickHistory}
+          loading={nhlPhLoading}
+          onRecord={recordPicks}
+          onSettle={settlePicks}
+        />
       )}
     </div>
   )

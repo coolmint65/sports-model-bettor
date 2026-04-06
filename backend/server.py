@@ -1446,3 +1446,36 @@ def api_nhl_best_bets():
 
     bets.sort(key=lambda b: b["best_pick"]["edge"], reverse=True)
     return bets
+
+
+@app.get("/api/nhl/tracker/history")
+def api_nhl_pick_history():
+    """Return recent NHL pick history."""
+    from engine.nhl_tracker import _get_nhl_db
+    conn = _get_nhl_db()
+    picks = conn.execute("""
+        SELECT * FROM nhl_picks ORDER BY created_at DESC LIMIT 50
+    """).fetchall()
+    return [dict(p) for p in picks]
+
+
+@app.get("/api/nhl/tracker/summary")
+def api_nhl_pick_summary():
+    """Get NHL running pick totals."""
+    from engine.nhl_tracker import get_pick_summary
+    return get_pick_summary()
+
+
+@app.post("/api/nhl/tracker/record")
+def api_nhl_record_picks():
+    """Record today's NHL picks."""
+    from engine.nhl_tracker import record_picks
+    picks = record_picks()
+    return {"recorded": len(picks), "picks": picks}
+
+
+@app.post("/api/nhl/tracker/settle")
+def api_nhl_settle_picks():
+    """Settle completed NHL picks."""
+    from engine.nhl_tracker import settle_picks
+    return settle_picks()

@@ -1,90 +1,78 @@
 @echo off
 cd /d "%~dp0"
 echo ============================================
-echo   MLB Data Sync
+echo   Sports Data Sync
 echo ============================================
 echo.
-echo Working directory: %cd%
-echo.
 
-REM Check Python is available
 python --version 2>&1
 if errorlevel 1 (
-    echo.
-    echo ERROR: Python not found. Make sure Python is installed and on your PATH.
+    echo ERROR: Python not found.
     goto :done
 )
 
-REM Create logs directory
 if not exist "data\logs" mkdir "data\logs"
 
-echo.
-
+if "%1"=="--mlb" goto :mlb_only
+if "%1"=="--nhl" goto :nhl_only
 if "%1"=="--full" goto :full
 if "%1"=="--daily" goto :daily
-if "%1"=="--standings" goto :standings
 if "%1"=="--history" goto :history
 goto :quick
 
 :full
-echo Running FULL data sync (teams, rosters, all games, player stats)...
-echo This will take 10-15 minutes.
-echo.
+echo Running FULL MLB data sync...
 python -m scrapers.mlb_stats --full
-echo.
-echo Running advanced stats (Statcast + FanGraphs)...
 python -m scrapers.mlb_advanced
 goto :calibrate
 
 :daily
-echo Running daily sync...
+echo Running daily MLB sync...
 python -m scrapers.mlb_stats --daily
-goto :calibrate
-
-:standings
-echo Updating standings...
-python -m scrapers.mlb_stats --standings
 goto :calibrate
 
 :history
 echo Loading %2 season data for backtesting...
-echo This will take a few minutes.
-echo.
 python -m scrapers.mlb_stats --history %2
 goto :calibrate
 
+:mlb_only
+echo Running MLB sync only...
+call sync_mlb.bat
+goto :done
+
+:nhl_only
+echo Running NHL sync only...
+call sync_nhl.bat
+goto :done
+
 :quick
-REM Check if DB needs rebuild (missing linescore data)
-python -c "from engine.db import get_conn; c=get_conn(); r=c.execute('SELECT COUNT(*) as c FROM games WHERE status=\"final\" AND home_linescore IS NOT NULL').fetchone(); exit(0 if r['c'] > 10 else 1)" 2>nul
-if errorlevel 1 (
-    echo Database needs rebuild (missing linescore data).
-    echo Running season reload first...
-    python -m scrapers.mlb_stats --season
-    echo.
-)
-echo Running quick sync (teams, today's games, standings)...
 echo.
-python -m scrapers.mlb_stats
-goto :calibrate
+echo ── MLB Sync ──
+call sync_mlb.bat
+echo.
+echo ── NHL Sync ──
+call sync_nhl.bat
+goto :done
 
 :calibrate
 echo.
-echo Calibrating global model...
+echo Calibrating MLB model...
 python -m engine.calibration --days 30
-echo.
-echo Calibrating per-team factors...
 python -m engine.team_calibration
 echo.
-echo Recording today's picks...
+echo Recording + settling MLB picks...
 python -m engine.tracker --record
-echo.
-echo Settling completed picks...
 python -m engine.tracker --settle
+echo.
+echo Recording + settling NHL picks...
+python -m engine.nhl_tracker --record
+python -m engine.nhl_tracker --settle
 
 :done
 echo.
 echo ============================================
-echo   Finished
+echo   Sync Complete
 echo ============================================
 echo.
 pause
