@@ -154,8 +154,7 @@ function NHLPredictionResults({ data, odds, home, away }) {
   const homeWins = es.home > es.away
   const pct = n => `${(n * 100).toFixed(1)}%`
 
-  const edge = odds ? computeEdge(wp, odds) : null
-  const bestEdge = edge ? getBestEdge(edge, home, away, odds) : null
+  const bestEdge = odds ? findBestEdge(d, odds, home, away) : null
 
   return (
     <div className="results">
@@ -210,7 +209,7 @@ function NHLPredictionResults({ data, odds, home, away }) {
           <div className={`edge-callout ${bestEdge.rating}`}>
             <span className="edge-icon">{bestEdge.rating === 'strong' ? '!!' : bestEdge.rating === 'moderate' ? '!' : ''}</span>
             <span className="edge-text">
-              {bestEdge.side} ML ({bestEdge.ml > 0 ? '+' : ''}{bestEdge.ml}) — {bestEdge.edge > 0 ? '+' : ''}{bestEdge.edge.toFixed(1)}% edge
+              {bestEdge.label} ({bestEdge.odds > 0 ? '+' : ''}{bestEdge.odds}) — +{bestEdge.edge.toFixed(1)}% edge
             </span>
           </div>
         )}
@@ -481,30 +480,56 @@ function PickRow({ label, pick, prob, odds, pct }) {
 }
 
 
-function computeEdge(wp, odds) {
-  const result = { home_edge: null, away_edge: null }
-  if (odds?.home_ml) {
-    result.home_edge = (wp.home - mlToProb(odds.home_ml)) * 100
-  }
-  if (odds?.away_ml) {
-    result.away_edge = (wp.away - mlToProb(odds.away_ml)) * 100
-  }
-  return result
-}
+function findBestEdge(data, odds, home, away) {
+  const candidates = []
+  const wp = data.win_prob
 
-function getBestEdge(edge, home, away, odds) {
-  let best = null
-  if (edge.home_edge != null && edge.home_edge > 1.5) {
-    best = { side: home.abbreviation, ml: odds.home_ml, edge: edge.home_edge }
+  // ML edges
+  if (odds.home_ml && wp.home) {
+    const e = (wp.home - mlToProb(odds.home_ml)) * 100
+    if (e > 1.5) candidates.push({ label: `${home.abbreviation} ML`, odds: odds.home_ml, edge: e })
   }
-  if (edge.away_edge != null && edge.away_edge > 1.5) {
-    if (!best || edge.away_edge > best.edge) {
-      best = { side: away.abbreviation, ml: odds.away_ml, edge: edge.away_edge }
+  if (odds.away_ml && wp.away) {
+    const e = (wp.away - mlToProb(odds.away_ml)) * 100
+    if (e > 1.5) candidates.push({ label: `${away.abbreviation} ML`, odds: odds.away_ml, edge: e })
+  }
+
+  // O/U edge
+  if (odds.over_under && data.over_under) {
+    const vt = parseFloat(odds.over_under)
+    const key = Object.keys(data.over_under).find(k => Math.abs(parseFloat(k) - vt) < 0.5)
+    if (key) {
+      const ou = data.over_under[key]
+      const pickOver = ou.over > ou.under
+      const prob = Math.max(ou.over, ou.under)
+      const realOdds = pickOver ? odds.over_odds : odds.under_odds
+      if (realOdds) {
+        const e = (prob - mlToProb(realOdds)) * 100
+        if (e > 1.5) candidates.push({ label: `${pickOver ? 'Over' : 'Under'} ${vt}`, odds: realOdds, edge: e })
+      }
     }
   }
-  if (best) {
-    best.rating = best.edge > 8 ? 'strong' : best.edge > 4 ? 'moderate' : 'lean'
+
+  // PL edge
+  if (data.puck_line && odds.home_spread_odds) {
+    const hProb = data.puck_line.home_minus_1_5
+    if (hProb > 0.5) {
+      const e = (hProb - mlToProb(odds.home_spread_odds)) * 100
+      if (e > 1.5) candidates.push({ label: `${home.abbreviation} -1.5`, odds: odds.home_spread_odds, edge: e })
+    }
   }
+  if (data.puck_line && odds.away_spread_odds) {
+    const aProb = data.puck_line.away_plus_1_5
+    if (aProb > 0.5) {
+      const e = (aProb - mlToProb(odds.away_spread_odds)) * 100
+      if (e > 1.5) candidates.push({ label: `${away.abbreviation} +1.5`, odds: odds.away_spread_odds, edge: e })
+    }
+  }
+
+  if (candidates.length === 0) return null
+
+  const best = candidates.sort((a, b) => b.edge - a.edge)[0]
+  best.rating = best.edge > 8 ? 'strong' : best.edge > 4 ? 'moderate' : 'lean'
   return best
 }
 

@@ -284,11 +284,22 @@ def predict_matchup(home_key: str, away_key: str,
                      for a in range(MAX_GOALS + 1) if a - h >= 2)
     p_home_p15 = 1 - p_away_m15
 
-    # ── Totals ──
+    # ── Totals (must account for OT goal) ──
+    # NHL O/U includes overtime. Tied games go to OT where exactly 1 more
+    # goal is scored. So for each tie scenario (h == a), the actual total
+    # is h + a + 1, not h + a.
     ou_lines = {}
     for line in [4.5, 5.0, 5.5, 6.0, 6.5, 7.0]:
-        p_over = sum(matrix[h][a] for h in range(MAX_GOALS + 1)
-                     for a in range(MAX_GOALS + 1) if (h + a) > line)
+        p_over = 0
+        for h in range(MAX_GOALS + 1):
+            for a in range(MAX_GOALS + 1):
+                if h == a:
+                    # Game goes to OT — total becomes h + a + 1
+                    actual_total = h + a + 1
+                else:
+                    actual_total = h + a
+                if actual_total > line:
+                    p_over += matrix[h][a]
         ou_lines[str(line)] = {
             "over": round(p_over, 4),
             "under": round(1 - p_over, 4),
@@ -336,7 +347,7 @@ def predict_matchup(home_key: str, away_key: str,
             "home": round(home_xg, 2),
             "away": round(away_xg, 2),
         },
-        "total": round(home_xg + away_xg, 2),
+        "total": round(home_xg + away_xg + p_draw, 2),  # +p_draw accounts for OT goal
         "spread": round(away_xg - home_xg, 1),
         "win_prob": {
             "home": round(p_home_ml, 4),
