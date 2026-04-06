@@ -316,10 +316,23 @@ def predict_matchup(home_key: str, away_key: str,
             "total": round((home_xg + away_xg) * weights[i], 2),
         })
 
-    # ── First period scoreless (NRFI equivalent) ──
+    # ── First period total goals O/U ──
     p1_home = home_xg * weights[0]
     p1_away = away_xg * weights[0]
-    p_scoreless_p1 = poisson(p1_home, 0) * poisson(p1_away, 0)
+    # Build first period goal probability matrix
+    p1_total_probs = {}  # total_goals -> probability
+    for hg in range(6):
+        for ag in range(6):
+            total = hg + ag
+            prob = poisson(p1_home, hg) * poisson(p1_away, ag)
+            p1_total_probs[total] = p1_total_probs.get(total, 0) + prob
+
+    # O/U 0.5 (any goal in P1)
+    p1_over_05 = 1 - p1_total_probs.get(0, 0)
+    # O/U 1.5 (DraftKings standard line)
+    p1_over_15 = sum(p for t, p in p1_total_probs.items() if t >= 2)
+    # O/U 2.5
+    p1_over_25 = sum(p for t, p in p1_total_probs.items() if t >= 3)
 
     # ── Top correct scores ──
     scores = []
@@ -363,8 +376,13 @@ def predict_matchup(home_key: str, away_key: str,
         "over_under": ou_lines,
         "periods": periods,
         "first_period": {
-            "scoreless": round(p_scoreless_p1, 4),
-            "scoring": round(1 - p_scoreless_p1, 4),
+            "over_05": round(p1_over_05, 4),
+            "under_05": round(1 - p1_over_05, 4),
+            "over_15": round(p1_over_15, 4),
+            "under_15": round(1 - p1_over_15, 4),
+            "over_25": round(p1_over_25, 4),
+            "under_25": round(1 - p1_over_25, 4),
+            "expected_total": round(p1_home + p1_away, 2),
         },
         "correct_scores": top_scores,
         "factors": {

@@ -254,21 +254,30 @@ function NHLPredictionResults({ data, odds, home, away }) {
         )}
       </div>
 
-      {/* First Period */}
+      {/* First Period Total Goals */}
       {d.first_period && (
         <div className="result-card">
-          <h2>First Period</h2>
-          <div className="nrfi-display">
-            <div className={`nrfi-box ${d.first_period.scoreless > 0.45 ? 'favored' : ''}`}>
-              <div className="nrfi-label">Scoreless P1</div>
-              <div className="nrfi-value">{pct(d.first_period.scoreless)}</div>
-              <div className="nrfi-sub">No goal in 1st period</div>
-            </div>
-            <div className={`nrfi-box yrfi ${d.first_period.scoring > 0.55 ? 'favored' : ''}`}>
-              <div className="nrfi-label">Scoring P1</div>
-              <div className="nrfi-value">{pct(d.first_period.scoring)}</div>
-              <div className="nrfi-sub">Goal in 1st period</div>
-            </div>
+          <h2>1st Period Total Goals</h2>
+          <div style={{textAlign:'center',color:'#94a3b8',fontSize:'0.8rem',marginBottom:12}}>
+            Expected P1 total: <strong>{d.first_period.expected_total}</strong> goals
+          </div>
+          <div className="ou-row header">
+            <span>Line</span><span>Over</span><span>Under</span>
+          </div>
+          <div className="ou-row">
+            <span className="ou-line">0.5</span>
+            <span className={`ou-prob ${d.first_period.over_05 > 0.55 ? 'over' : ''}`}>{pct(d.first_period.over_05)}</span>
+            <span className={`ou-prob ${d.first_period.under_05 > 0.55 ? 'under' : ''}`}>{pct(d.first_period.under_05)}</span>
+          </div>
+          <div className="ou-row">
+            <span className="ou-line">1.5</span>
+            <span className={`ou-prob ${d.first_period.over_15 > 0.55 ? 'over' : ''}`}>{pct(d.first_period.over_15)}</span>
+            <span className={`ou-prob ${d.first_period.under_15 > 0.55 ? 'under' : ''}`}>{pct(d.first_period.under_15)}</span>
+          </div>
+          <div className="ou-row">
+            <span className="ou-line">2.5</span>
+            <span className={`ou-prob ${d.first_period.over_25 > 0.55 ? 'over' : ''}`}>{pct(d.first_period.over_25)}</span>
+            <span className={`ou-prob ${d.first_period.under_25 > 0.55 ? 'under' : ''}`}>{pct(d.first_period.under_25)}</span>
           </div>
         </div>
       )}
@@ -422,8 +431,8 @@ function NHLBettingPicks({ data, odds, home, away }) {
     : null
 
   const p1 = d.first_period
-  const p1Pick = p1 ? (p1.scoreless > 0.45 ? 'Scoreless' : 'Scoring') : null
-  const p1Prob = p1 ? Math.max(p1.scoreless, p1.scoring) : null
+  const p1Pick = p1 ? (p1.over_15 > 0.50 ? 'Over 1.5' : 'Under 1.5') : null
+  const p1Prob = p1 ? Math.max(p1.over_15, p1.under_15) : null
 
   return (
     <div className="picks-card">
