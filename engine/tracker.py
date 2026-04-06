@@ -154,14 +154,6 @@ def record_picks(date: str | None = None, min_edge: float = 1.5) -> list[dict]:
         game = dict(game)
         game_id = game.get("mlb_game_id")
 
-        # Skip if already recorded
-        existing = conn.execute(
-            "SELECT COUNT(*) as c FROM picks WHERE game_id = ?", (game_id,)
-        ).fetchone()["c"]
-        if existing > 0:
-            print(f"[RECORD]   {game_id}: already recorded, skipping", flush=True)
-            continue
-
         home_id = game.get("home_team_id")
         away_id = game.get("away_team_id")
         if not home_id or not away_id:
@@ -170,9 +162,21 @@ def record_picks(date: str | None = None, min_edge: float = 1.5) -> list[dict]:
 
         home_team = get_team_by_id(home_id)
         away_team = get_team_by_id(away_id)
-        h = home_team["abbreviation"] if home_team else "?"
-        a = away_team["abbreviation"] if away_team else "?"
+        if not home_team or not away_team:
+            print(f"[RECORD]   game {game_id}: team not in DB (home_id={home_id} found={bool(home_team)}, away_id={away_id} found={bool(away_team)})", flush=True)
+            continue
+        h = home_team["abbreviation"]
+        a = away_team["abbreviation"]
         matchup = f"{a} @ {h}"
+
+        # Skip if already recorded (check by game_id OR by matchup+date to prevent dupes)
+        existing = conn.execute(
+            "SELECT COUNT(*) as c FROM picks WHERE game_id = ? OR (matchup = ? AND date = ?)",
+            (game_id, matchup, target_date)
+        ).fetchone()["c"]
+        if existing > 0:
+            print(f"[RECORD]   {matchup}: already recorded, skipping", flush=True)
+            continue
 
         # Get real odds for this game
         game_odds = match_odds(h, a, all_odds)
@@ -226,9 +230,14 @@ def _record_from_scoreboard(conn, scoreboard: list, target_date: str,
         if not game_id:
             continue
 
-        # Skip if already recorded
+        h = game.get("home", {}).get("abbreviation", "?")
+        a = game.get("away", {}).get("abbreviation", "?")
+        matchup = f"{a} @ {h}"
+
+        # Skip if already recorded (check by game_id OR matchup+date)
         existing = conn.execute(
-            "SELECT COUNT(*) as c FROM picks WHERE game_id = ?", (game_id,)
+            "SELECT COUNT(*) as c FROM picks WHERE game_id = ? OR (matchup = ? AND date = ?)",
+            (game_id, matchup, target_date)
         ).fetchone()["c"]
         if existing > 0:
             continue
@@ -236,11 +245,8 @@ def _record_from_scoreboard(conn, scoreboard: list, target_date: str,
         home_id = game.get("home", {}).get("team_id")
         away_id = game.get("away", {}).get("team_id")
         if not home_id or not away_id:
+            print(f"[RECORD]   {matchup}: no team_id (home={home_id}, away={away_id}), skipping", flush=True)
             continue
-
-        h = game.get("home", {}).get("abbreviation", "?")
-        a = game.get("away", {}).get("abbreviation", "?")
-        matchup = f"{a} @ {h}"
 
         # Get odds
         game_odds = game.get("odds") or match_odds(h, a, all_odds)
