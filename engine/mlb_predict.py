@@ -906,12 +906,14 @@ def _compute_first_inning(home_xr: float, away_xr: float,
         if sp_pit and sp_pit.get("first_inning_scoreless_pct") is not None and sp_pit.get("first_inning_starts", 0) >= 3:
             p_home_zero = sp_pit["first_inning_scoreless_pct"]
 
+    # Always compute expected 1st inning runs (needed for later calculations)
+    away_1st_xr = away_xr * first_inning_weight * (0.85 + 0.15 * home_sp_factor)
+    home_1st_xr = home_xr * first_inning_weight * (0.85 + 0.15 * away_sp_factor)
+
     # Fallback to Poisson if no pitcher data
     if p_away_zero is None:
-        away_1st_xr = away_xr * first_inning_weight * (0.85 + 0.15 * home_sp_factor)
         p_away_zero = _poisson_prob(away_1st_xr, 0)
     if p_home_zero is None:
-        home_1st_xr = home_xr * first_inning_weight * (0.85 + 0.15 * away_sp_factor)
         p_home_zero = _poisson_prob(home_1st_xr, 0)
 
     # NRFI = both teams score 0 in the first
