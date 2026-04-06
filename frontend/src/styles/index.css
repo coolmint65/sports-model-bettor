@@ -48,6 +48,40 @@ body {
 }
 
 /* ═══════════════════════════════════════════
+   League Switcher
+   ═══════════════════════════════════════════ */
+.league-switcher {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  padding: 8px 0 0;
+}
+
+.league-btn {
+  padding: 6px 24px;
+  border-radius: 20px;
+  border: 2px solid #334155;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  letter-spacing: 0.5px;
+}
+
+.league-btn:hover {
+  border-color: #60a5fa;
+  color: #e2e8f0;
+}
+
+.league-btn.active {
+  border-color: #3b82f6;
+  background: #1e3a5f;
+  color: #60a5fa;
+}
+
+/* ═══════════════════════════════════════════
    Navigation Tabs
    ═══════════════════════════════════════════ */
 .nav-tabs {
