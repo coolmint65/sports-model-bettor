@@ -1061,7 +1061,8 @@ def _get_nhl_scoreboard(date: str = "") -> list[dict]:
     except Exception as e:
         logger.warning("NHL odds failed: %s", e)
 
-    # Enrich with DailyFaceoff starting goalies
+    # Enrich with starting goalies — try DailyFaceoff first, then NHL API
+    goalie_count = 0
     try:
         from scrapers.dailyfaceoff import get_starting_goalies
         df_goalies = get_starting_goalies()
@@ -1073,9 +1074,59 @@ def _get_nhl_scoreboard(date: str = "") -> list[dict]:
                     for try_abbr in [abbr_try, _nhl_alt_abbr(abbr_try)]:
                         if try_abbr in df_goalies:
                             game[side] = df_goalies[try_abbr]
+                            goalie_count += 1
                             break
     except Exception as e:
-        logger.debug("DailyFaceoff enrichment failed: %s", e)
+        logger.debug("DailyFaceoff failed: %s", e)
+
+    # Fallback: NHL API for goalies if DailyFaceoff didn't work
+    if goalie_count == 0:
+        try:
+            nhl_schedule = _fetch_espn_json("https://api-web.nhle.com/v1/score/now")
+            if nhl_schedule and nhl_schedule.get("games"):
+                for nhl_game in nhl_schedule["games"]:
+                    # Extract team abbreviations
+                    def _gs(obj):
+                        return obj.get("default", "") if isinstance(obj, dict) else str(obj) if obj else ""
+
+                    h_abbr = _gs(nhl_game.get("homeTeam", {}).get("abbrev", ""))
+                    a_abbr = _gs(nhl_game.get("awayTeam", {}).get("abbrev", ""))
+
+                    # Match to our scoreboard games
+                    for game in games:
+                        gh = game["home"]["abbreviation"]
+                        ga = game["away"]["abbreviation"]
+                        if (gh == h_abbr or _nhl_alt_abbr(gh) == h_abbr) and \
+                           (ga == a_abbr or _nhl_alt_abbr(ga) == a_abbr):
+                            # Home goalie
+                            hg = nhl_game.get("homeTeam", {}).get("goalie", {})
+                            if not hg:
+                                # Try alternate field names
+                                hg = nhl_game.get("homeTeam", {}).get("startingGoalie", {})
+                            if hg and hg.get("id"):
+                                first = _gs(hg.get("firstName", ""))
+                                last = _gs(hg.get("lastName", ""))
+                                game["home_goalie"] = {
+                                    "name": f"{first} {last}".strip(),
+                                    "status": "expected",
+                                    "id": hg.get("id"),
+                                }
+
+                            # Away goalie
+                            ag = nhl_game.get("awayTeam", {}).get("goalie", {})
+                            if not ag:
+                                ag = nhl_game.get("awayTeam", {}).get("startingGoalie", {})
+                            if ag and ag.get("id"):
+                                first = _gs(ag.get("firstName", ""))
+                                last = _gs(ag.get("lastName", ""))
+                                game["away_goalie"] = {
+                                    "name": f"{first} {last}".strip(),
+                                    "status": "expected",
+                                    "id": ag.get("id"),
+                                }
+                            break
+        except Exception as e:
+            logger.debug("NHL API goalie fallback failed: %s", e)
 
     _scoreboard_cache[cache_key] = (now, games)
     return games
