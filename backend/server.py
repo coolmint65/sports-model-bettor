@@ -1061,6 +1061,22 @@ def _get_nhl_scoreboard(date: str = "") -> list[dict]:
     except Exception as e:
         logger.warning("NHL odds failed: %s", e)
 
+    # Enrich with DailyFaceoff starting goalies
+    try:
+        from scrapers.dailyfaceoff import get_starting_goalies
+        df_goalies = get_starting_goalies()
+        if df_goalies:
+            for game in games:
+                h = game["home"]["abbreviation"]
+                a = game["away"]["abbreviation"]
+                for abbr_try, side in [(h, "home_goalie"), (a, "away_goalie")]:
+                    for try_abbr in [abbr_try, _nhl_alt_abbr(abbr_try)]:
+                        if try_abbr in df_goalies:
+                            game[side] = df_goalies[try_abbr]
+                            break
+    except Exception as e:
+        logger.debug("DailyFaceoff enrichment failed: %s", e)
+
     _scoreboard_cache[cache_key] = (now, games)
     return games
 
@@ -1481,6 +1497,16 @@ def api_nhl_best_bets():
     games = _get_nhl_scoreboard()
     key_map = _nhl_espn_to_key()
 
+    # Fetch starting goalies from DailyFaceoff
+    df_goalies = {}
+    try:
+        from scrapers.dailyfaceoff import get_starting_goalies, match_goalie_to_player
+        df_goalies = get_starting_goalies()
+        if df_goalies:
+            logger.info("DailyFaceoff: %d starting goalies loaded", len(df_goalies))
+    except Exception as e:
+        logger.debug("DailyFaceoff unavailable: %s", e)
+
     bets = []
     for game in games:
         if game["status"].get("completed") or game["status"].get("state") == "post":
@@ -1493,13 +1519,31 @@ def api_nhl_best_bets():
         a_key = key_map.get(a_abbr)
 
         if not h_key or not a_key:
-            # Try lowercase name matching
             h_name = game["home"]["name"].split()[-1].lower()
             a_name = game["away"]["name"].split()[-1].lower()
             h_key = h_key or key_map.get(h_name, h_name)
             a_key = a_key or key_map.get(a_name, a_name)
 
         odds = game.get("odds")
+
+        # Match DailyFaceoff goalies to player IDs
+        home_goalie_id = None
+        away_goalie_id = None
+        home_goalie_name = None
+        away_goalie_name = None
+
+        # Try DailyFaceoff first, then alt abbreviations
+        for h_try in [h_abbr, _nhl_alt_abbr(h_abbr)]:
+            if h_try in df_goalies:
+                home_goalie_name = df_goalies[h_try]["name"]
+                home_goalie_id = match_goalie_to_player(home_goalie_name, h_abbr) if df_goalies else None
+                break
+
+        for a_try in [a_abbr, _nhl_alt_abbr(a_abbr)]:
+            if a_try in df_goalies:
+                away_goalie_name = df_goalies[a_try]["name"]
+                away_goalie_id = match_goalie_to_player(away_goalie_name, a_abbr) if df_goalies else None
+                break
 
         try:
             picks = generate_nhl_picks(h_key, a_key, odds)
@@ -1512,6 +1556,15 @@ def api_nhl_best_bets():
 
         best = picks[0]  # Already sorted by edge
 
+        # Build goalie info for display
+        goalie_info = {}
+        if home_goalie_name:
+            h_gs = df_goalies.get(h_abbr, df_goalies.get(_nhl_alt_abbr(h_abbr), {}))
+            goalie_info["home"] = {"name": home_goalie_name, "status": h_gs.get("status", "unconfirmed")}
+        if away_goalie_name:
+            a_gs = df_goalies.get(a_abbr, df_goalies.get(_nhl_alt_abbr(a_abbr), {}))
+            goalie_info["away"] = {"name": away_goalie_name, "status": a_gs.get("status", "unconfirmed")}
+
         bets.append({
             "game_id": game["id"],
             "matchup": f"{a_abbr} @ {h_abbr}",
@@ -1519,6 +1572,7 @@ def api_nhl_best_bets():
             "away": game["away"],
             "time": game["date"],
             "venue": game.get("venue", ""),
+            "goalies": goalie_info,
             "best_pick": best,
             "all_picks": picks[:4],
             "confidence": best.get("confidence", "lean"),

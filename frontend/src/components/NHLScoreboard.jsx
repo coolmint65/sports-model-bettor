@@ -81,6 +81,23 @@ function NHLGameCard({ game, bet, onClick }) {
         <TeamRow team={home} isLive={isLive} isFinal={isFinal} />
       </div>
 
+      {/* Starting goalies */}
+      {isPre && (game.away_goalie || game.home_goalie) && (
+        <div className="game-pitchers">
+          <span className="pitcher">
+            {game.away_goalie?.name || 'TBD'}
+            {game.away_goalie?.status === 'confirmed' && <span style={{color:'#34d399',marginLeft:4,fontSize:'0.7rem'}}>✓</span>}
+            {game.away_goalie?.status === 'expected' && <span style={{color:'#fbbf24',marginLeft:4,fontSize:'0.7rem'}}>~</span>}
+          </span>
+          <span className="vs">vs</span>
+          <span className="pitcher">
+            {game.home_goalie?.name || 'TBD'}
+            {game.home_goalie?.status === 'confirmed' && <span style={{color:'#34d399',marginLeft:4,fontSize:'0.7rem'}}>✓</span>}
+            {game.home_goalie?.status === 'expected' && <span style={{color:'#fbbf24',marginLeft:4,fontSize:'0.7rem'}}>~</span>}
+          </span>
+        </div>
+      )}
+
       {/* Odds */}
       {game.odds && (
         <div className="game-odds-grid">
