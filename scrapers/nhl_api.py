@@ -217,12 +217,23 @@ def fetch_schedule(start_date: str, end_date: str) -> list[dict]:
     current = start
 
     all_games = []
+    total_days = (end - start).days + 1
+    day_count = 0
+    last_month = ""
     while current <= end:
         date_str = current.strftime("%Y-%m-%d")
+
+        # Show monthly progress
+        month_str = current.strftime("%Y-%m")
+        if month_str != last_month:
+            _progress(f"       {month_str}...")
+            last_month = month_str
+
         data = _fetch(f"{NHL_API}/score/{date_str}")
+        day_count += 1
         if not data:
             current += timedelta(days=1)
-            time.sleep(1)
+            time.sleep(0.5)
             continue
 
         for g in data.get("games", []):

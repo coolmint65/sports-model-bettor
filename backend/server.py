@@ -1334,6 +1334,36 @@ def _fetch_nhl_odds() -> dict:
     return odds_map
 
 
+@app.get("/api/nhl/goalies/debug")
+def api_nhl_goalies_debug():
+    """Debug: fetch DailyFaceoff HTML and return a sample for inspection."""
+    import urllib.request
+    try:
+        req = urllib.request.Request("https://www.dailyfaceoff.com/starting-goalies/", headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html",
+            "Accept-Language": "en-US,en;q=0.9",
+        })
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            html = resp.read().decode("utf-8", errors="replace")
+        # Find goalie-related sections
+        import re
+        snippets = []
+        # Look for any element with "goalie" or "starter" in class/id
+        for m in re.finditer(r'<[^>]*(goalie|starter|matchup|game-card)[^>]*>', html, re.IGNORECASE):
+            start = max(0, m.start() - 50)
+            end = min(len(html), m.end() + 500)
+            snippets.append(html[start:end])
+        return {
+            "html_length": len(html),
+            "title": re.search(r'<title>(.*?)</title>', html, re.IGNORECASE).group(1) if re.search(r'<title>(.*?)</title>', html, re.IGNORECASE) else "?",
+            "goalie_snippets": snippets[:10],
+            "sample_500": html[1000:1500],  # Random middle sample
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.post("/api/nhl/sync")
 def api_nhl_sync():
     """Refresh NHL team data from ESPN."""
