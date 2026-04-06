@@ -41,35 +41,17 @@ export default function NHLGameDetail({ game, prediction, loading, onBack }) {
         {/* Goalie matchup */}
         {(game.home_goalie || game.away_goalie) && (
           <div className="pitching-matchup">
-            <div className="pitcher-card">
-              <div className="pitcher-label">Away G</div>
-              <div className="pitcher-name">
-                {game.away_goalie?.name || 'TBD'}
-                {game.away_goalie?.status === 'confirmed' && <span style={{color:'#34d399',marginLeft:6}}>✓</span>}
-                {game.away_goalie?.status === 'expected' && <span style={{color:'#fbbf24',marginLeft:6}}>~</span>}
-              </div>
-              {pred?.goalie_matchup?.away && (
-                <div className="pitcher-stats-row">
-                  <span className="pitcher-stat">SV%: {pred.goalie_matchup.away.save_pct}</span>
-                  <span className="pitcher-stat">GAA: {pred.goalie_matchup.away.gaa}</span>
-                </div>
-              )}
-            </div>
+            <GoalieCard
+              label="Away G"
+              goalie={game.away_goalie}
+              predGoalie={pred?.goalie_matchup?.away}
+            />
             <div className="vs-label">VS</div>
-            <div className="pitcher-card">
-              <div className="pitcher-label">Home G</div>
-              <div className="pitcher-name">
-                {game.home_goalie?.name || 'TBD'}
-                {game.home_goalie?.status === 'confirmed' && <span style={{color:'#34d399',marginLeft:6}}>✓</span>}
-                {game.home_goalie?.status === 'expected' && <span style={{color:'#fbbf24',marginLeft:6}}>~</span>}
-              </div>
-              {pred?.goalie_matchup?.home && (
-                <div className="pitcher-stats-row">
-                  <span className="pitcher-stat">SV%: {pred.goalie_matchup.home.save_pct}</span>
-                  <span className="pitcher-stat">GAA: {pred.goalie_matchup.home.gaa}</span>
-                </div>
-              )}
-            </div>
+            <GoalieCard
+              label="Home G"
+              goalie={game.home_goalie}
+              predGoalie={pred?.goalie_matchup?.home}
+            />
           </div>
         )}
 
@@ -129,6 +111,37 @@ export default function NHLGameDetail({ game, prediction, loading, onBack }) {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+
+function GoalieCard({ label, goalie, predGoalie }) {
+  // Use DailyFaceoff data first (has SV%, GAA, record), fall back to prediction model
+  const name = goalie?.name || predGoalie?.name || 'TBD'
+  const svPct = goalie?.save_pct || predGoalie?.save_pct || 0
+  const gaa = goalie?.gaa || predGoalie?.gaa || 0
+  const wins = goalie?.wins
+  const losses = goalie?.losses
+  const otl = goalie?.otl
+  const status = goalie?.status
+  const hasRecord = wins != null && losses != null
+
+  return (
+    <div className="pitcher-card">
+      <div className="pitcher-label">{label}</div>
+      <div className="pitcher-name">
+        {name}
+        {status === 'confirmed' && <span style={{color:'#34d399',marginLeft:6}}>✓</span>}
+        {status === 'expected' && <span style={{color:'#fbbf24',marginLeft:6}}>~</span>}
+      </div>
+      {(svPct > 0 || hasRecord) && (
+        <div className="pitcher-stats-row">
+          {svPct > 0 && <span className="pitcher-stat">SV%: {svPct.toFixed(3)}</span>}
+          {gaa > 0 && <span className="pitcher-stat">GAA: {gaa.toFixed(2)}</span>}
+          {hasRecord && <span className="pitcher-stat">{wins}-{losses}-{otl || 0}</span>}
+        </div>
+      )}
     </div>
   )
 }
