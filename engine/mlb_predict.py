@@ -892,29 +892,39 @@ def _compute_first_inning(home_xr: float, away_xr: float,
     today = datetime.now().strftime("%Y-%m-%d")
     season = datetime.now().year
 
-    # P(away scores 0) — driven by home pitcher's first-inning dominance
-    p_away_zero = None
-    if home_pitcher_id:
-        sp_pit = compute_pitcher_stats_at_date(home_pitcher_id, today, season)
-        if sp_pit and sp_pit.get("first_inning_scoreless_pct") is not None and sp_pit.get("first_inning_starts", 0) >= 3:
-            p_away_zero = sp_pit["first_inning_scoreless_pct"]
-
-    # P(home scores 0) — driven by away pitcher's first-inning dominance
-    p_home_zero = None
-    if away_pitcher_id:
-        sp_pit = compute_pitcher_stats_at_date(away_pitcher_id, today, season)
-        if sp_pit and sp_pit.get("first_inning_scoreless_pct") is not None and sp_pit.get("first_inning_starts", 0) >= 3:
-            p_home_zero = sp_pit["first_inning_scoreless_pct"]
-
-    # Always compute expected 1st inning runs (needed for later calculations)
+    # Always compute expected 1st inning runs (needed for Poisson baseline)
     away_1st_xr = away_xr * first_inning_weight * (0.85 + 0.15 * home_sp_factor)
     home_1st_xr = home_xr * first_inning_weight * (0.85 + 0.15 * away_sp_factor)
 
-    # Fallback to Poisson if no pitcher data
-    if p_away_zero is None:
-        p_away_zero = _poisson_prob(away_1st_xr, 0)
-    if p_home_zero is None:
-        p_home_zero = _poisson_prob(home_1st_xr, 0)
+    # Poisson baseline (always computed)
+    p_away_zero_poisson = _poisson_prob(away_1st_xr, 0)
+    p_home_zero_poisson = _poisson_prob(home_1st_xr, 0)
+
+    # Start with Poisson
+    p_away_zero = p_away_zero_poisson
+    p_home_zero = p_home_zero_poisson
+
+    # Blend with pitcher first-inning data when available
+    # Weight by sample size: more starts = more trust in pitcher data
+    if home_pitcher_id:
+        sp_pit = compute_pitcher_stats_at_date(home_pitcher_id, today, season)
+        if sp_pit and sp_pit.get("first_inning_scoreless_pct") is not None and sp_pit.get("first_inning_starts", 0) >= 3:
+            starts = sp_pit["first_inning_starts"]
+            pit_weight = min(0.7, starts / 30)  # Max 70% pitcher data, even with 30+ starts
+            p_away_zero = (pit_weight * sp_pit["first_inning_scoreless_pct"]
+                          + (1 - pit_weight) * p_away_zero_poisson)
+
+    if away_pitcher_id:
+        sp_pit = compute_pitcher_stats_at_date(away_pitcher_id, today, season)
+        if sp_pit and sp_pit.get("first_inning_scoreless_pct") is not None and sp_pit.get("first_inning_starts", 0) >= 3:
+            starts = sp_pit["first_inning_starts"]
+            pit_weight = min(0.7, starts / 30)
+            p_home_zero = (pit_weight * sp_pit["first_inning_scoreless_pct"]
+                          + (1 - pit_weight) * p_home_zero_poisson)
+
+    # Cap at realistic bounds — no pitcher is truly 100% or 0%
+    p_away_zero = max(0.40, min(0.92, p_away_zero))
+    p_home_zero = max(0.40, min(0.92, p_home_zero))
 
     # NRFI = both teams score 0 in the first
     nrfi = p_home_zero * p_away_zero
