@@ -11,6 +11,7 @@ faceoff dominance, form, and home/away splits.
 
 import math
 import logging
+from datetime import datetime
 from .data import load_team, list_teams, get_league_averages
 
 logger = logging.getLogger(__name__)
@@ -72,13 +73,17 @@ def _split_adj(team: dict, is_home: bool) -> float:
     return max(0.88, min(1.12, split_ppg / overall))
 
 
-def predict_matchup(home_key: str, away_key: str) -> dict | None:
+def predict_matchup(home_key: str, away_key: str,
+                    home_goalie_id: int | None = None,
+                    away_goalie_id: int | None = None) -> dict | None:
     """
     Run full NHL matchup prediction.
 
     Args:
         home_key: team JSON file stem (e.g. "bruins")
         away_key: team JSON file stem (e.g. "maple_leafs")
+        home_goalie_id: optional starting goalie ID for home team
+        away_goalie_id: optional starting goalie ID for away team
 
     Returns prediction dict or None on failure.
     """
@@ -91,6 +96,54 @@ def predict_matchup(home_key: str, away_key: str) -> dict | None:
     la = get_league_averages(LEAGUE)
     hs = home.get("stats", {})
     as_ = away.get("stats", {})
+
+    # Try to enrich with DB data if available
+    db_home_stats, db_away_stats = None, None
+    h2h_data = {}
+    home_goalie_info, away_goalie_info = None, None
+
+    try:
+        from .nhl_db import (get_nhl_team_by_abbr, get_team_goalies,
+                             get_h2h_nhl, get_recent_nhl_games, get_goalie_stats)
+        from .nhl_calibration import get_calibrated_home_edge, get_total_adjustment
+
+        h_abbr = home.get("abbreviation", "")
+        a_abbr = away.get("abbreviation", "")
+
+        db_home = get_nhl_team_by_abbr(h_abbr)
+        db_away = get_nhl_team_by_abbr(a_abbr)
+
+        if db_home and db_away:
+            # H2H history
+            h2h_data = get_h2h_nhl(db_home["id"], db_away["id"])
+
+            # Goalie matchup
+            season = datetime.now().year if datetime.now().month >= 8 else datetime.now().year - 1
+            season_str = f"{season}{season+1}"
+
+            if home_goalie_id:
+                home_goalie_info = get_goalie_stats(home_goalie_id, int(season_str))
+            else:
+                # Get team's best goalie by games played
+                goalies = get_team_goalies(db_home["id"], int(season_str))
+                if goalies:
+                    home_goalie_info = dict(goalies[0])
+
+            if away_goalie_id:
+                away_goalie_info = get_goalie_stats(away_goalie_id, int(season_str))
+            else:
+                goalies = get_team_goalies(db_away["id"], int(season_str))
+                if goalies:
+                    away_goalie_info = dict(goalies[0])
+
+            # Use calibrated home edge if available
+            calibrated_he = get_calibrated_home_edge()
+            if calibrated_he:
+                global HOME_EDGE
+                HOME_EDGE = calibrated_he
+
+    except Exception as e:
+        logger.debug("DB enrichment unavailable: %s", e)
 
     avg_gf = la.get("goals_for_avg", 3.0)
     avg_ga = la.get("goals_against_avg", 3.0)
@@ -158,6 +211,54 @@ def predict_matchup(home_key: str, away_key: str) -> dict | None:
     away_xg *= (1 + _form_factor(away))
     home_xg *= _split_adj(home, is_home=True)
     away_xg *= _split_adj(away, is_home=False)
+
+    # ── Goalie matchup adjustment ──
+    # If we have specific goalie data from the DB, use it to override
+    # the generic team save% adjustment
+    goalie_factor = {"home": None, "away": None}
+    if home_goalie_info:
+        g_sv = home_goalie_info.get("save_pct") or 0
+        g_gaa = home_goalie_info.get("gaa") or 0
+        if g_sv > 0 and league_sv > 0:
+            # Better goalie suppresses opponent scoring
+            goalie_adj = league_sv / g_sv
+            away_xg *= max(0.82, min(1.18, goalie_adj))
+            goalie_factor["home"] = {
+                "name": home_goalie_info.get("name", ""),
+                "save_pct": round(g_sv, 3),
+                "gaa": round(g_gaa, 2),
+            }
+
+    if away_goalie_info:
+        g_sv = away_goalie_info.get("save_pct") or 0
+        g_gaa = away_goalie_info.get("gaa") or 0
+        if g_sv > 0 and league_sv > 0:
+            goalie_adj = league_sv / g_sv
+            home_xg *= max(0.82, min(1.18, goalie_adj))
+            goalie_factor["away"] = {
+                "name": away_goalie_info.get("name", ""),
+                "save_pct": round(g_sv, 3),
+                "gaa": round(g_gaa, 2),
+            }
+
+    # ── H2H adjustment ──
+    h2h_adj = 0
+    if h2h_data and h2h_data.get("games", 0) >= 3:
+        h2h_wr = h2h_data.get("team1_wins", 0) / h2h_data["games"]
+        # Small adjustment based on H2H dominance
+        h2h_adj = (h2h_wr - 0.5) * 0.08
+        home_xg *= (1 + h2h_adj)
+        away_xg *= (1 - h2h_adj)
+
+    # ── Calibrated total adjustment ──
+    try:
+        from .nhl_calibration import get_total_adjustment
+        total_adj = get_total_adjustment()
+        if total_adj:
+            home_xg += total_adj / 2
+            away_xg += total_adj / 2
+    except Exception:
+        pass
 
     # Floor
     home_xg = max(home_xg, 1.0)
@@ -267,6 +368,8 @@ def predict_matchup(home_key: str, away_key: str) -> dict | None:
             "home_fo": round(h_fo, 3),
             "away_fo": round(a_fo, 3),
         },
+        "goalie_matchup": goalie_factor,
+        "h2h": h2h_data,
     }
 
 

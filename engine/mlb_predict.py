@@ -9,6 +9,10 @@ Generates matchup predictions using:
   5. Park factors (run environment)
   6. Home/away splits & recent form
   7. Platoon advantages (L/R matchups)
+  8. Umpire tendencies (HP umpire run factor)
+  9. Weather conditions (temperature, wind, precipitation)
+  10. Travel fatigue (schedule density, road trips)
+  11. Simplified platoon splits (LHP suppression)
 
 Output: expected runs, win probability, run line, O/U, F5, inning
 breakdown, and edge analysis vs Vegas.
@@ -225,6 +229,63 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     home_xr *= sit["home_multiplier"]
     away_xr *= sit["away_multiplier"]
 
+    # ── Step 6b: Umpire tendency ──
+    umpire_factor = 1.0
+    umpire_name = None
+    if venue:
+        try:
+            from .umpire import compute_umpire_adjustment
+            # Check if umpire is stored on today's game row
+            ump_row = get_conn().execute(
+                "SELECT umpire FROM games WHERE home_team_id = ? AND away_team_id = ? AND date = ? LIMIT 1",
+                (home_team_id, away_team_id, today),
+            ).fetchone()
+            if ump_row and ump_row["umpire"]:
+                umpire_name = ump_row["umpire"]
+                umpire_factor = compute_umpire_adjustment(umpire_name)
+                home_xr *= umpire_factor
+                away_xr *= umpire_factor
+        except Exception as e:
+            logger.warning("Umpire adjustment failed: %s", e)
+
+    # ── Step 6c: Weather (Open-Meteo) ──
+    weather_adj = 1.0
+    try:
+        from .weather import get_weather_for_venue, compute_weather_adjustment, DOMED_STADIUMS
+        if venue and venue not in DOMED_STADIUMS:
+            wx_data, is_domed = get_weather_for_venue(venue)
+            if wx_data and not is_domed:
+                weather_adj = compute_weather_adjustment(wx_data, venue)
+                home_xr *= weather_adj
+                away_xr *= weather_adj
+    except Exception as e:
+        logger.warning("Weather adjustment failed: %s", e)
+
+    # ── Step 6d: Travel fatigue ──
+    home_travel = 1.0
+    away_travel = 1.0
+    try:
+        from .travel import compute_travel_fatigue
+        home_travel = compute_travel_fatigue(home_team_id, today, SEASON)
+        away_travel = compute_travel_fatigue(away_team_id, today, SEASON)
+        home_xr *= home_travel
+        away_xr *= away_travel
+    except Exception as e:
+        logger.warning("Travel fatigue adjustment failed: %s", e)
+
+    # ── Step 6e: Platoon splits (simplified) ──
+    # LHP slightly suppresses offense vs average lineup composition.
+    # This is a coarse adjustment on top of the lineup-based platoon
+    # factor in situational.py (which requires confirmed lineups).
+    platoon_home_adj = 1.0
+    platoon_away_adj = 1.0
+    if away_throws and away_throws.upper() == "L":
+        platoon_home_adj = 0.97  # LHP suppresses home offense slightly
+        home_xr *= platoon_home_adj
+    if home_throws and home_throws.upper() == "L":
+        platoon_away_adj = 0.97  # LHP suppresses away offense slightly
+        away_xr *= platoon_away_adj
+
     # ── Step 7: Matchup interaction ──
     # Compound effects: how do these two specific teams interact TODAY
     from .matchup import compute_matchup_interaction, get_h2h_history
@@ -342,6 +403,10 @@ def predict_matchup(home_team_id: int, away_team_id: int,
         },
         "park_factor": round(park_run_factor, 3),
         "situational": sit,
+        "umpire": {"name": umpire_name, "factor": round(umpire_factor, 4)},
+        "weather_adj": round(weather_adj, 4),
+        "travel": {"home": round(home_travel, 4), "away": round(away_travel, 4)},
+        "platoon_adj": {"home": round(platoon_home_adj, 4), "away": round(platoon_away_adj, 4)},
         "confidence": _compute_confidence(home_pit, away_pit, home_sp_pit, away_sp_pit),
         "over_under": ou_lines,
         "run_line": run_line,
