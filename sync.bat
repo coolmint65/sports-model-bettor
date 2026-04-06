@@ -1,8 +1,17 @@
 @echo off
 cd /d "%~dp0"
 echo ============================================
-echo   Sports Data Sync
+echo   Manual Data Sync
 echo ============================================
+echo.
+echo   NOTE: start.bat already does a full sync
+echo   automatically. Only use this for:
+echo     --full       Full MLB rebuild + advanced stats
+echo     --history X  Load historical season (e.g. 2025)
+echo     --mlb        MLB only
+echo     --nhl        NHL only
+echo     --nhl --full Full NHL rebuild (rosters + stats)
+echo     (no args)    Quick sync both sports
 echo.
 
 python --version 2>&1
@@ -43,7 +52,7 @@ goto :done
 
 :nhl_only
 echo Running NHL sync only...
-call sync_nhl.bat
+call sync_nhl.bat %2
 goto :done
 
 :quick

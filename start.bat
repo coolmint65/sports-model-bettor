@@ -4,6 +4,10 @@ echo ============================================
 echo   Sports Prediction Engine
 echo ============================================
 echo.
+echo   This is the only script you need to run.
+echo   It syncs data, starts servers, and opens
+echo   the app in your browser.
+echo.
 
 REM Check Python
 python --version 2>&1
@@ -14,7 +18,7 @@ if errorlevel 1 (
 
 if not exist "data\logs" mkdir "data\logs"
 
-echo Starting syncs and servers...
+echo Starting everything...
 echo.
 
 REM ── Sync: MLB (auto-closes when done) ──
@@ -44,17 +48,15 @@ echo ============================================
 echo   App running at http://localhost:5173
 echo ============================================
 echo.
-echo   Windows opened:
-echo     MLB-Sync   - syncs MLB data (auto-closes)
-echo     NHL-Sync   - syncs NHL data (auto-closes)
-echo     Backend    - API server on :8000 (minimized)
-echo     Frontend   - Vite dev server (minimized)
+echo   4 windows launched:
+echo     MLB-Sync  - syncs data, records + settles picks (auto-closes)
+echo     NHL-Sync  - syncs data, records + settles picks (auto-closes)
+echo     Backend   - API server on :8000 (stays open)
+echo     Frontend  - UI server on :5173 (stays open)
 echo.
-echo Opening browser...
-start http://localhost:5173
-echo.
-echo To stop servers: close Backend and Frontend windows
+echo   To stop: close Backend-API and Frontend windows,
 echo   or end "node.exe" and "python.exe" in Task Manager.
 echo.
+start http://localhost:5173
 
 :done
