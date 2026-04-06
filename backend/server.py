@@ -1287,54 +1287,99 @@ def api_nhl_scoreboard(date: str = Query(default="")):
     return _get_nhl_scoreboard(date)
 
 
+@app.get("/api/nhl/standings/debug")
+def api_nhl_standings_debug():
+    """Debug endpoint: try all ESPN URL patterns and report what works."""
+    now = datetime.now(timezone.utc)
+    season = now.year if now.month >= 8 else now.year - 1
+
+    ESPN_BASES = [
+        "https://site.api.espn.com/apis/site/v2/sports",
+        "https://site.web.api.espn.com/apis/v2/sports",
+    ]
+
+    results = []
+    for base in ESPN_BASES:
+        for params in [
+            f"?season={season}",
+            f"?season={season}&type=0",
+            f"?season={season}&type=1",
+            f"?season={season}&level=3",
+            f"?season={season}&sort=points",
+            f"?season={season}&group=7",
+            f"?season={season}&group=8",
+            f"?season={season + 1}",
+            "",
+        ]:
+            url = f"{base}/hockey/nhl/standings{params}"
+            data = _fetch_espn_json(url)
+            top_keys = list(data.keys()) if data else []
+            children = len(data.get("children", [])) if data else 0
+            has_standings = bool(data.get("standings")) if data else False
+            fvl = data.get("fullViewLink", "") if data else ""
+
+            entry = {
+                "url": url,
+                "top_keys": top_keys,
+                "children": children,
+                "has_standings": has_standings,
+                "fullViewLink": fvl[:80] if fvl else "",
+            }
+
+            # If it has children, peek at structure
+            if children > 0:
+                child = data["children"][0]
+                entry["first_child_keys"] = list(child.keys())[:8]
+                entry["first_child_name"] = child.get("name", "?")
+                sub_children = len(child.get("children", []))
+                entry["sub_children"] = sub_children
+                if sub_children > 0:
+                    sub = child["children"][0]
+                    entry["first_sub_name"] = sub.get("name", "?")
+                    entry["sub_has_standings"] = "standings" in sub
+
+            results.append(entry)
+
+            # If we found real data, note it
+            if children > 0 or has_standings:
+                entry["WORKS"] = True
+
+    return results
+
+
 @app.get("/api/nhl/standings")
 def api_nhl_standings():
     """Return NHL standings from ESPN."""
     now = datetime.now(timezone.utc)
     season = now.year if now.month >= 8 else now.year - 1
 
-    # ESPN NHL standings needs specific params to return actual data
-    data = None
-    urls_to_try = [
-        # Standard with season year
-        f"{ESPN_BASE}/hockey/nhl/standings?season={season}",
-        # Some ESPN endpoints need season type
-        f"{ESPN_BASE}/hockey/nhl/standings?season={season}&seasontype=2",
-        # Try end year of season
-        f"{ESPN_BASE}/hockey/nhl/standings?season={season + 1}",
-        # No params
-        f"{ESPN_BASE}/hockey/nhl/standings",
+    # Try multiple ESPN API bases and param combos
+    ESPN_BASES = [
+        "https://site.api.espn.com/apis/site/v2/sports",
+        "https://site.web.api.espn.com/apis/v2/sports",
     ]
 
-    for url in urls_to_try:
-        print(f"[NHL STANDINGS] Trying: {url}", flush=True)
-        data = _fetch_espn_json(url)
-        if not data:
-            continue
-        # If ESPN returns a fullViewLink, follow it
-        if data.get("fullViewLink") and not data.get("children"):
-            fvl = data["fullViewLink"]
-            print(f"[NHL STANDINGS] Following fullViewLink: {fvl}", flush=True)
-            # ESPN fullViewLink might be a web URL, convert to API URL
-            if "espn.com" in fvl and "/standings" in fvl:
-                # Extract any useful params from the link
-                # Try the API version with group param
-                for group_id in [1, 2, 7, 8]:  # Conference/division group IDs
-                    group_url = f"{ESPN_BASE}/hockey/nhl/standings?season={season}&group={group_id}"
-                    gdata = _fetch_espn_json(group_url)
-                    if gdata and (gdata.get("children") or gdata.get("standings")):
-                        data = gdata
-                        print(f"[NHL STANDINGS] Got data with group={group_id}", flush=True)
-                        break
-        if data.get("children") or data.get("standings"):
-            print(f"[NHL STANDINGS] Success! Keys: {list(data.keys())}", flush=True)
+    data = None
+    for base in ESPN_BASES:
+        for params in [
+            f"?season={season}&level=3",
+            f"?season={season}&type=0",
+            f"?season={season}",
+            f"?season={season}&group=7",
+            f"?season={season + 1}",
+            "",
+        ]:
+            url = f"{base}/hockey/nhl/standings{params}"
+            print(f"[NHL STANDINGS] Trying: {url}", flush=True)
+            data = _fetch_espn_json(url)
+            if data and (data.get("children") or data.get("standings")):
+                print(f"[NHL STANDINGS] SUCCESS with {url}", flush=True)
+                break
+        if data and (data.get("children") or data.get("standings")):
             break
 
     if not data or not (data.get("children") or data.get("standings")):
-        print(f"[NHL STANDINGS] No standings data found. Last response keys: {list(data.keys()) if data else 'None'}", flush=True)
-
-        # Last resort: build standings from team JSON files
-        print("[NHL STANDINGS] Falling back to local team data", flush=True)
+        print(f"[NHL STANDINGS] ESPN failed, using JSON fallback", flush=True)
         return _nhl_standings_from_json()
 
     print(f"[NHL STANDINGS] Top keys: {list(data.keys())}", flush=True)
