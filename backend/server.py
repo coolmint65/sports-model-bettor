@@ -1309,29 +1309,27 @@ def _parse_nhl_api_standings(data: dict) -> list[dict]:
     for entry in data.get("standings", []):
         div = entry.get("divisionName", "Unknown")
 
-        # Team name from nested object or string
-        team_name_obj = entry.get("teamName", {})
-        if isinstance(team_name_obj, dict):
-            team_name = team_name_obj.get("default", "")
-        else:
-            team_name = str(team_name_obj)
+        # Team name — use teamCommonName (e.g. "Avalanche") + placeName (e.g. "Colorado")
+        # teamName.default often contains the full name already, so avoid doubling
+        def _nhl_str(obj):
+            if isinstance(obj, dict):
+                return obj.get("default", "")
+            return str(obj) if obj else ""
 
-        team_abbr_obj = entry.get("teamAbbrev", {})
-        if isinstance(team_abbr_obj, dict):
-            team_abbr = team_abbr_obj.get("default", "")
-        else:
-            team_abbr = str(team_abbr_obj)
-
-        # Build team logo URL from NHL CDN
+        team_abbr = _nhl_str(entry.get("teamAbbrev", ""))
         team_logo = entry.get("teamLogo", "")
+        place = _nhl_str(entry.get("placeName", ""))
+        common_name = _nhl_str(entry.get("teamCommonName", ""))
+        team_name = _nhl_str(entry.get("teamName", ""))
 
-        place_name = entry.get("placeName", {})
-        if isinstance(place_name, dict):
-            place = place_name.get("default", "")
+        # Use "Place CommonName" (e.g. "Colorado Avalanche")
+        # Fall back to teamName if commonName not available
+        if common_name:
+            full_name = f"{place} {common_name}".strip()
+        elif team_name and place and not team_name.startswith(place):
+            full_name = f"{place} {team_name}".strip()
         else:
-            place = str(place_name)
-
-        full_name = f"{place} {team_name}".strip()
+            full_name = team_name or place
 
         wins = entry.get("wins", 0)
         losses = entry.get("losses", 0)
