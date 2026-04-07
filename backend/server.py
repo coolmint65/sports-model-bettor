@@ -1011,8 +1011,36 @@ def _nhl_alt_abbr(abbr: str) -> str:
 
 @app.get("/api/debug/injuries")
 def api_debug_injuries():
-    """Debug: test injury fetching for both sports."""
+    """Debug: test injury fetching + show raw ESPN structure."""
     result = {}
+
+    # Raw ESPN response inspection
+    try:
+        nhl_raw = _fetch_espn_json("https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/injuries")
+        if nhl_raw:
+            result["nhl_raw_keys"] = list(nhl_raw.keys())
+            # Find the team blocks
+            for key in nhl_raw:
+                if isinstance(nhl_raw[key], list) and len(nhl_raw[key]) > 0:
+                    first = nhl_raw[key][0]
+                    if isinstance(first, dict):
+                        result[f"nhl_{key}_first_keys"] = list(first.keys())[:10]
+                        if "team" in first:
+                            result[f"nhl_{key}_team_keys"] = list(first["team"].keys())[:10]
+                            result[f"nhl_{key}_team_sample"] = {
+                                k: first["team"][k] for k in list(first["team"].keys())[:5]
+                            }
+                        # Check if injuries are nested
+                        if "injuries" in first:
+                            inj = first["injuries"]
+                            if isinstance(inj, list) and len(inj) > 0:
+                                result[f"nhl_{key}_injury_first"] = inj[0] if isinstance(inj[0], dict) else str(inj[0])[:200]
+        else:
+            result["nhl_raw"] = "null/empty"
+    except Exception as e:
+        result["nhl_raw_error"] = str(e)
+
+    # Parsed results
     try:
         from engine.injuries import fetch_nhl_injuries
         nhl = fetch_nhl_injuries()
