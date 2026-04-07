@@ -116,6 +116,29 @@ export default function NHLGameDetail({ game, prediction, loading, onBack }) {
 }
 
 
+function FactorRow({ label, awayVal, awayRank, homeVal, homeRank }) {
+  const rankColor = (r) => {
+    if (!r) return '#64748b'
+    if (r <= 5) return '#34d399'   // Top 5 = green
+    if (r <= 10) return '#60a5fa'  // Top 10 = blue
+    if (r <= 20) return '#94a3b8'  // Middle = gray
+    if (r <= 27) return '#f59e0b'  // Bottom 10 = yellow
+    return '#ef4444'               // Bottom 5 = red
+  }
+  const rankLabel = (r) => r ? `${r}${r === 1 ? 'st' : r === 2 ? 'nd' : r === 3 ? 'rd' : 'th'}` : '-'
+
+  return (
+    <tr>
+      <td style={{textAlign:'left',fontWeight:500}}>{label}</td>
+      <td style={{textAlign:'center'}}>{awayVal}</td>
+      <td style={{textAlign:'center',color:rankColor(awayRank),fontWeight:600}}>{rankLabel(awayRank)}</td>
+      <td style={{textAlign:'center'}}>{homeVal}</td>
+      <td style={{textAlign:'center',color:rankColor(homeRank),fontWeight:600}}>{rankLabel(homeRank)}</td>
+    </tr>
+  )
+}
+
+
 function GoalieCard({ label, goalie, predGoalie }) {
   // Use DailyFaceoff data first (has SV%, GAA, record), fall back to prediction model
   const name = goalie?.name || predGoalie?.name || 'TBD'
@@ -258,26 +281,20 @@ function NHLPredictionResults({ data, odds, home, away }) {
       {d.first_period && (
         <div className="result-card">
           <h2>1st Period Total Goals</h2>
-          <div style={{textAlign:'center',color:'#94a3b8',fontSize:'0.8rem',marginBottom:12}}>
-            Expected P1 total: <strong>{d.first_period.expected_total}</strong> goals
+          <div className="nrfi-display">
+            <div className={`nrfi-box ${d.first_period.over_15 > 0.55 ? 'favored' : ''}`}>
+              <div className="nrfi-label">Over 1.5</div>
+              <div className="nrfi-value">{pct(d.first_period.over_15)}</div>
+              <div className="nrfi-sub">2+ goals in 1st period</div>
+            </div>
+            <div className={`nrfi-box yrfi ${d.first_period.under_15 > 0.55 ? 'favored' : ''}`}>
+              <div className="nrfi-label">Under 1.5</div>
+              <div className="nrfi-value">{pct(d.first_period.under_15)}</div>
+              <div className="nrfi-sub">0-1 goals in 1st period</div>
+            </div>
           </div>
-          <div className="ou-row header">
-            <span>Line</span><span>Over</span><span>Under</span>
-          </div>
-          <div className="ou-row">
-            <span className="ou-line">0.5</span>
-            <span className={`ou-prob ${d.first_period.over_05 > 0.55 ? 'over' : ''}`}>{pct(d.first_period.over_05)}</span>
-            <span className={`ou-prob ${d.first_period.under_05 > 0.55 ? 'under' : ''}`}>{pct(d.first_period.under_05)}</span>
-          </div>
-          <div className="ou-row">
-            <span className="ou-line">1.5</span>
-            <span className={`ou-prob ${d.first_period.over_15 > 0.55 ? 'over' : ''}`}>{pct(d.first_period.over_15)}</span>
-            <span className={`ou-prob ${d.first_period.under_15 > 0.55 ? 'under' : ''}`}>{pct(d.first_period.under_15)}</span>
-          </div>
-          <div className="ou-row">
-            <span className="ou-line">2.5</span>
-            <span className={`ou-prob ${d.first_period.over_25 > 0.55 ? 'over' : ''}`}>{pct(d.first_period.over_25)}</span>
-            <span className={`ou-prob ${d.first_period.under_25 > 0.55 ? 'under' : ''}`}>{pct(d.first_period.under_25)}</span>
+          <div style={{textAlign:'center',color:'#64748b',fontSize:'0.75rem',marginTop:8}}>
+            Expected P1 total: ~{Math.round(d.first_period.expected_total)} goals
           </div>
         </div>
       )}
@@ -299,9 +316,9 @@ function NHLPredictionResults({ data, odds, home, away }) {
               {d.periods.map(p => (
                 <tr key={p.period}>
                   <td style={{fontWeight:600}}>{p.period}</td>
-                  <td>{p.away}</td>
-                  <td>{p.home}</td>
-                  <td>{p.total}</td>
+                  <td>{p.away.toFixed(1)}</td>
+                  <td>{p.home.toFixed(1)}</td>
+                  <td>{p.total.toFixed(1)}</td>
                 </tr>
               ))}
             </tbody>
@@ -309,50 +326,58 @@ function NHLPredictionResults({ data, odds, home, away }) {
         </div>
       )}
 
-      {/* Key Factors */}
+      {/* Key Factors with Rankings */}
       {d.factors && (
         <div className="result-card">
           <h2>Key Factors</h2>
-          <div className="stat-row">
-            <span className="stat-label">Power Play</span>
-            <span className="stat-value">
-              {away.abbreviation} {d.factors.away_pp != null ? (d.factors.away_pp * 100).toFixed(1) + '%' : '-'}
-              {' / '}
-              {home.abbreviation} {d.factors.home_pp != null ? (d.factors.home_pp * 100).toFixed(1) + '%' : '-'}
-            </span>
-          </div>
-          <div className="stat-row">
-            <span className="stat-label">Penalty Kill</span>
-            <span className="stat-value">
-              {away.abbreviation} {d.factors.away_pk != null ? (d.factors.away_pk * 100).toFixed(1) + '%' : '-'}
-              {' / '}
-              {home.abbreviation} {d.factors.home_pk != null ? (d.factors.home_pk * 100).toFixed(1) + '%' : '-'}
-            </span>
-          </div>
-          <div className="stat-row">
-            <span className="stat-label">Save %</span>
-            <span className="stat-value">
-              {away.abbreviation} {d.factors.away_sv?.toFixed(3) || '-'}
-              {' / '}
-              {home.abbreviation} {d.factors.home_sv?.toFixed(3) || '-'}
-            </span>
-          </div>
-          <div className="stat-row">
-            <span className="stat-label">Shots/Game</span>
-            <span className="stat-value">
-              {away.abbreviation} {d.factors.away_shots}
-              {' / '}
-              {home.abbreviation} {d.factors.home_shots}
-            </span>
-          </div>
-          <div className="stat-row">
-            <span className="stat-label">Faceoff %</span>
-            <span className="stat-value">
-              {away.abbreviation} {(d.factors.away_fo * 100).toFixed(1)}%
-              {' / '}
-              {home.abbreviation} {(d.factors.home_fo * 100).toFixed(1)}%
-            </span>
-          </div>
+          <table className="standings-table" style={{fontSize:'0.85rem'}}>
+            <thead>
+              <tr>
+                <th style={{textAlign:'left'}}>Stat</th>
+                <th>{away.abbreviation}</th>
+                <th>Rank</th>
+                <th>{home.abbreviation}</th>
+                <th>Rank</th>
+              </tr>
+            </thead>
+            <tbody>
+              <FactorRow
+                label="Power Play"
+                awayVal={d.factors.away_pp != null ? (d.factors.away_pp * 100).toFixed(1) + '%' : '-'}
+                awayRank={d.factors.away_pp_rank}
+                homeVal={d.factors.home_pp != null ? (d.factors.home_pp * 100).toFixed(1) + '%' : '-'}
+                homeRank={d.factors.home_pp_rank}
+              />
+              <FactorRow
+                label="Penalty Kill"
+                awayVal={d.factors.away_pk != null ? (d.factors.away_pk * 100).toFixed(1) + '%' : '-'}
+                awayRank={d.factors.away_pk_rank}
+                homeVal={d.factors.home_pk != null ? (d.factors.home_pk * 100).toFixed(1) + '%' : '-'}
+                homeRank={d.factors.home_pk_rank}
+              />
+              <FactorRow
+                label="Save %"
+                awayVal={d.factors.away_sv?.toFixed(3) || '-'}
+                awayRank={d.factors.away_sv_rank}
+                homeVal={d.factors.home_sv?.toFixed(3) || '-'}
+                homeRank={d.factors.home_sv_rank}
+              />
+              <FactorRow
+                label="Shots/Game"
+                awayVal={d.factors.away_shots}
+                awayRank={d.factors.away_shots_rank}
+                homeVal={d.factors.home_shots}
+                homeRank={d.factors.home_shots_rank}
+              />
+              <FactorRow
+                label="Faceoff %"
+                awayVal={(d.factors.away_fo * 100).toFixed(1) + '%'}
+                awayRank={d.factors.away_fo_rank}
+                homeVal={(d.factors.home_fo * 100).toFixed(1) + '%'}
+                homeRank={d.factors.home_fo_rank}
+              />
+            </tbody>
+          </table>
         </div>
       )}
 

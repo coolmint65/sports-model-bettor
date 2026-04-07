@@ -73,6 +73,59 @@ def _split_adj(team: dict, is_home: bool) -> float:
     return max(0.88, min(1.12, split_ppg / overall))
 
 
+def _build_factors_with_ranks(home, away, hs, as_,
+                              h_pp, a_pp, h_pk, a_pk, h_sv, a_sv,
+                              h_shots, a_shots, h_fo, a_fo):
+    """Build factors dict with league rankings (1st = best)."""
+    # Load all teams to compute rankings
+    all_teams = list_teams(LEAGUE)
+    all_stats = []
+    for t in all_teams:
+        team = load_team(LEAGUE, t["key"])
+        if team and team.get("stats"):
+            all_stats.append(team["stats"])
+
+    def rank_stat(val, key, higher_is_better=True):
+        """Return rank out of 32 for a given stat value."""
+        if not val or not all_stats:
+            return None
+        values = [s.get(key, 0) for s in all_stats if s.get(key)]
+        if not values:
+            return None
+        if higher_is_better:
+            values.sort(reverse=True)
+        else:
+            values.sort()
+        # Find position
+        for i, v in enumerate(values):
+            if (higher_is_better and val >= v) or (not higher_is_better and val <= v):
+                return i + 1
+        return len(values)
+
+    return {
+        "home_pp": round(h_pp, 3) if h_pp else None,
+        "away_pp": round(a_pp, 3) if a_pp else None,
+        "home_pp_rank": rank_stat(h_pp, "pp_pct", True),
+        "away_pp_rank": rank_stat(a_pp, "pp_pct", True),
+        "home_pk": round(h_pk, 3) if h_pk else None,
+        "away_pk": round(a_pk, 3) if a_pk else None,
+        "home_pk_rank": rank_stat(h_pk, "pk_pct", True),
+        "away_pk_rank": rank_stat(a_pk, "pk_pct", True),
+        "home_sv": round(h_sv, 3) if h_sv else None,
+        "away_sv": round(a_sv, 3) if a_sv else None,
+        "home_sv_rank": rank_stat(h_sv, "save_pct", True),
+        "away_sv_rank": rank_stat(a_sv, "save_pct", True),
+        "home_shots": round(h_shots, 1),
+        "away_shots": round(a_shots, 1),
+        "home_shots_rank": rank_stat(h_shots, "shots_per_game", True),
+        "away_shots_rank": rank_stat(a_shots, "shots_per_game", True),
+        "home_fo": round(h_fo, 3),
+        "away_fo": round(a_fo, 3),
+        "home_fo_rank": rank_stat(h_fo, "faceoff_pct", True),
+        "away_fo_rank": rank_stat(a_fo, "faceoff_pct", True),
+    }
+
+
 def predict_matchup(home_key: str, away_key: str,
                     home_goalie_id: int | None = None,
                     away_goalie_id: int | None = None) -> dict | None:
@@ -385,18 +438,11 @@ def predict_matchup(home_key: str, away_key: str,
             "expected_total": round(p1_home + p1_away, 2),
         },
         "correct_scores": top_scores,
-        "factors": {
-            "home_pp": round(h_pp, 3) if h_pp else None,
-            "away_pp": round(a_pp, 3) if a_pp else None,
-            "home_pk": round(h_pk, 3) if h_pk else None,
-            "away_pk": round(a_pk, 3) if a_pk else None,
-            "home_sv": round(h_sv, 3) if h_sv else None,
-            "away_sv": round(a_sv, 3) if a_sv else None,
-            "home_shots": round(h_shots, 1),
-            "away_shots": round(a_shots, 1),
-            "home_fo": round(h_fo, 3),
-            "away_fo": round(a_fo, 3),
-        },
+        "factors": _build_factors_with_ranks(
+            home, away, hs, as_,
+            h_pp, a_pp, h_pk, a_pk, h_sv, a_sv,
+            h_shots, a_shots, h_fo, a_fo
+        ),
         "goalie_matchup": goalie_factor,
         "h2h": h2h_data,
     }
