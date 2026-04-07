@@ -120,6 +120,43 @@ def _get_season_context() -> dict:
     return {"phase": "regular", "implications": None}
 
 
+_live_standings_cache: dict | None = None
+_live_standings_time: float = 0
+
+def _get_live_record(abbr: str) -> str | None:
+    """Get current W-L-OTL record from NHL API standings (cached 30 min)."""
+    import time as _time
+    global _live_standings_cache, _live_standings_time
+
+    if _live_standings_cache and (_time.time() - _live_standings_time) < 1800:
+        return _live_standings_cache.get(abbr)
+
+    try:
+        import json
+        import urllib.request
+        req = urllib.request.Request(
+            "https://api-web.nhle.com/v1/standings/now",
+            headers={"User-Agent": "Mozilla/5.0"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+
+        standings = {}
+        for entry in data.get("standings", []):
+            team_abbr_obj = entry.get("teamAbbrev", {})
+            team_abbr = team_abbr_obj.get("default", "") if isinstance(team_abbr_obj, dict) else str(team_abbr_obj)
+            wins = entry.get("wins", 0)
+            losses = entry.get("losses", 0)
+            otl = entry.get("otLosses", 0)
+            standings[team_abbr] = f"{wins}-{losses}-{otl}"
+
+        _live_standings_cache = standings
+        _live_standings_time = _time.time()
+        return standings.get(abbr)
+    except Exception:
+        return None
+
+
 def _record_to_points_pct(record: str) -> float:
     """
     Parse an NHL record string like "45-22-10" into a points percentage.
@@ -355,8 +392,9 @@ def predict_matchup(home_key: str, away_key: str,
     away_xg *= (1 + _compute_recent_form_from_standings(away))
 
     # ── Win percentage / team quality adjustment ──
-    home_record = home.get("record", "")
-    away_record = away.get("record", "")
+    # Try live standings first (NHL API), fall back to JSON record
+    home_record = _get_live_record(home.get("abbreviation", "")) or home.get("record", "")
+    away_record = _get_live_record(away.get("abbreviation", "")) or away.get("record", "")
     home_pct = _record_to_points_pct(home_record)
     away_pct = _record_to_points_pct(away_record)
     quality_diff = home_pct - away_pct

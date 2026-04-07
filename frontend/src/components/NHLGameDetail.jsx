@@ -413,18 +413,42 @@ function NHLPredictionResults({ data, odds, home, away }) {
         </div>
       )}
 
-      {/* Most Likely Scores */}
-      <div className="result-card">
-        <h2>Most Likely Final Scores</h2>
-        <div className="correct-scores">
-          {d.correct_scores?.map((cs, i) => (
-            <div key={i} className="cs-chip">
-              <div className="score">{cs.score}</div>
-              <div className="prob">{pct(cs.prob)}</div>
+      {/* Injuries */}
+      {d.injuries && (d.injuries.home?.length > 0 || d.injuries.away?.length > 0) && (
+        <div className="result-card">
+          <h2>Injuries</h2>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
+            <div>
+              <h3 style={{fontSize:'0.85rem',color:'#94a3b8',marginBottom:8}}>{home.abbreviation}</h3>
+              {d.injuries.home?.length > 0 ? d.injuries.home.map((inj, i) => (
+                <div key={i} style={{fontSize:'0.8rem',marginBottom:4,display:'flex',justifyContent:'space-between'}}>
+                  <span>
+                    <span style={{fontWeight:600}}>{inj.name}</span>
+                    {inj.position && <span style={{color:'#64748b',marginLeft:4}}>({inj.position})</span>}
+                  </span>
+                  <span style={{color: inj.status === 'Out' ? '#ef4444' : '#f59e0b',fontSize:'0.75rem'}}>
+                    {inj.status || inj.type || 'Out'}
+                  </span>
+                </div>
+              )) : <span style={{color:'#64748b',fontSize:'0.8rem'}}>No injuries reported</span>}
             </div>
-          ))}
+            <div>
+              <h3 style={{fontSize:'0.85rem',color:'#94a3b8',marginBottom:8}}>{away.abbreviation}</h3>
+              {d.injuries.away?.length > 0 ? d.injuries.away.map((inj, i) => (
+                <div key={i} style={{fontSize:'0.8rem',marginBottom:4,display:'flex',justifyContent:'space-between'}}>
+                  <span>
+                    <span style={{fontWeight:600}}>{inj.name}</span>
+                    {inj.position && <span style={{color:'#64748b',marginLeft:4}}>({inj.position})</span>}
+                  </span>
+                  <span style={{color: inj.status === 'Out' ? '#ef4444' : '#f59e0b',fontSize:'0.75rem'}}>
+                    {inj.status || inj.type || 'Out'}
+                  </span>
+                </div>
+              )) : <span style={{color:'#64748b',fontSize:'0.8rem'}}>No injuries reported</span>}
+            </div>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   )
 }
