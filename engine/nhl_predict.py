@@ -513,8 +513,15 @@ def predict_matchup(home_key: str, away_key: str,
         h_abbr = home.get("abbreviation", "")
         a_abbr = away.get("abbreviation", "")
 
-        h_injuries = nhl_injuries.get(h_abbr, [])
-        a_injuries = nhl_injuries.get(a_abbr, [])
+        # Try both original and alternate abbreviations (TBL/TB, NJD/NJ, etc.)
+        _INJ_ALT = {
+            "TBL": "TB", "TB": "TBL", "NJD": "NJ", "NJ": "NJD",
+            "SJS": "SJ", "SJ": "SJS", "LAK": "LA", "LA": "LAK",
+            "WSH": "WAS", "WAS": "WSH", "CBJ": "CLB", "CLB": "CBJ",
+            "MTL": "MON", "MON": "MTL",
+        }
+        h_injuries = nhl_injuries.get(h_abbr, []) or nhl_injuries.get(_INJ_ALT.get(h_abbr, ""), [])
+        a_injuries = nhl_injuries.get(a_abbr, []) or nhl_injuries.get(_INJ_ALT.get(a_abbr, ""), [])
 
         if h_injuries:
             h_impact = compute_nhl_injury_impact(h_abbr, h_injuries)
