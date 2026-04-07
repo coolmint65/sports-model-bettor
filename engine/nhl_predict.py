@@ -122,6 +122,53 @@ def _get_season_context() -> dict:
 
 _live_standings_cache: dict | None = None
 _live_standings_time: float = 0
+_live_stats_cache: dict | None = None
+_live_stats_time: float = 0
+
+
+def _get_live_team_stats() -> dict:
+    """Get current season per-game stats from NHL API standings (cached 30 min).
+    Returns {abbr: {goals_for_avg, goals_against_avg, ...}}
+    """
+    import time as _time
+    global _live_stats_cache, _live_stats_time
+
+    if _live_stats_cache and (_time.time() - _live_stats_time) < 1800:
+        return _live_stats_cache
+
+    try:
+        import json
+        import urllib.request
+        req = urllib.request.Request(
+            "https://api-web.nhle.com/v1/standings/now",
+            headers={"User-Agent": "Mozilla/5.0"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+
+        stats = {}
+        for entry in data.get("standings", []):
+            team_abbr_obj = entry.get("teamAbbrev", {})
+            abbr = team_abbr_obj.get("default", "") if isinstance(team_abbr_obj, dict) else str(team_abbr_obj)
+
+            wins = entry.get("wins", 0)
+            losses = entry.get("losses", 0)
+            otl = entry.get("otLosses", 0)
+            gp = wins + losses + otl
+            gf = entry.get("goalFor", 0)
+            ga = entry.get("goalAgainst", 0)
+
+            if gp > 0:
+                stats[abbr] = {
+                    "goals_for_avg": round(gf / gp, 2),
+                    "goals_against_avg": round(ga / gp, 2),
+                }
+
+        _live_stats_cache = stats
+        _live_stats_time = _time.time()
+        return stats
+    except Exception:
+        return {}
 
 def _get_live_record(abbr: str) -> str | None:
     """Get current W-L-OTL record from NHL API standings (cached 30 min)."""
@@ -258,6 +305,15 @@ def predict_matchup(home_key: str, away_key: str,
     la = get_league_averages(LEAGUE)
     hs = home.get("stats", {})
     as_ = away.get("stats", {})
+
+    # Override stale JSON stats with live NHL API data when available
+    live_stats = _get_live_team_stats()
+    h_abbr_for_stats = home.get("abbreviation", "")
+    a_abbr_for_stats = away.get("abbreviation", "")
+    if h_abbr_for_stats in live_stats:
+        hs = {**hs, **live_stats[h_abbr_for_stats]}
+    if a_abbr_for_stats in live_stats:
+        as_ = {**as_, **live_stats[a_abbr_for_stats]}
 
     # Use a local copy so repeated calls don't drift the module constant
     home_edge = HOME_EDGE
