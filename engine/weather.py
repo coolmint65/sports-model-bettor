@@ -60,6 +60,12 @@ DOMED_STADIUMS = {
 }
 
 
+# ── Weather cache (avoid rate limiting) ────────────────────
+import time as _time
+_weather_cache: dict = {}  # key: "lat,lon" -> {"data": ..., "time": float}
+_WEATHER_CACHE_TTL = 3600  # 1 hour — weather doesn't change that fast
+
+
 # ── API fetch ───────────────────────────────────────────────
 
 def get_game_weather(lat: float, lon: float, game_time: datetime | None = None) -> dict | None:
@@ -70,6 +76,13 @@ def get_game_weather(lat: float, lon: float, game_time: datetime | None = None) 
     wind_direction (degrees), humidity (%), precipitation (mm).
     Returns None on failure.
     """
+    # Check cache first
+    cache_key = f"{lat:.2f},{lon:.2f}"
+    if cache_key in _weather_cache:
+        entry = _weather_cache[cache_key]
+        if _time.time() - entry["time"] < _WEATHER_CACHE_TTL:
+            return entry["data"]
+
     url = (
         f"https://api.open-meteo.com/v1/forecast"
         f"?latitude={lat}&longitude={lon}"
@@ -89,13 +102,15 @@ def get_game_weather(lat: float, lon: float, game_time: datetime | None = None) 
     if not current:
         return None
 
-    return {
+    result = {
         "temperature": current.get("temperature_2m"),
         "wind_speed": current.get("wind_speed_10m"),
         "wind_direction": current.get("wind_direction_10m"),
         "humidity": current.get("relative_humidity_2m"),
         "precipitation": current.get("precipitation"),
     }
+    _weather_cache[cache_key] = {"data": result, "time": _time.time()}
+    return result
 
 
 def compute_weather_adjustment(weather: dict | None, venue: str | None = None) -> float:

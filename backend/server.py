@@ -1009,6 +1009,27 @@ def _nhl_alt_abbr(abbr: str) -> str:
     return _NHL_ABBR_ALTS.get(abbr, abbr)
 
 
+@app.get("/api/debug/injuries")
+def api_debug_injuries():
+    """Debug: test injury fetching for both sports."""
+    result = {}
+    try:
+        from engine.injuries import fetch_nhl_injuries
+        nhl = fetch_nhl_injuries()
+        result["nhl_teams_with_injuries"] = len(nhl)
+        result["nhl_sample"] = {k: v[:2] for k, v in list(nhl.items())[:3]} if nhl else "empty"
+    except Exception as e:
+        result["nhl_error"] = str(e)
+    try:
+        from engine.injuries import fetch_mlb_injuries
+        mlb = fetch_mlb_injuries()
+        result["mlb_teams_with_injuries"] = len(mlb)
+        result["mlb_sample"] = {k: v[:2] for k, v in list(mlb.items())[:3]} if mlb else "empty"
+    except Exception as e:
+        result["mlb_error"] = str(e)
+    return result
+
+
 def _get_nhl_scoreboard(date: str = "") -> list[dict]:
     """Fetch NHL scoreboard from ESPN."""
     target_date = date or datetime.now().strftime("%Y-%m-%d")
