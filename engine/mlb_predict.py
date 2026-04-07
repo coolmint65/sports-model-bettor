@@ -120,6 +120,13 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     home_xr = home_off * away_sp_factor
     away_xr = away_off * home_sp_factor
 
+    # ── Step 2b: Lineup-level offense adjustment ──
+    # Uses individual batter wRC+/OPS when available
+    home_lineup_str = _compute_lineup_strength(home_team_id, SEASON)
+    away_lineup_str = _compute_lineup_strength(away_team_id, SEASON)
+    home_xr *= home_lineup_str
+    away_xr *= away_lineup_str
+
     # ── Step 3: Per-team adjustments ──
     # Each team has learned factors from their actual performance
     from .team_calibration import get_team_adjustment
@@ -148,12 +155,31 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     home_xr *= (1 + 0.35 * (away_bp_factor - 1))
     away_xr *= (1 + 0.35 * (home_bp_factor - 1))
 
-    # ── Step 4: Park factor ──
+    # ── Step 4a: Enhanced bullpen fatigue weighting ──
+    # Tired bullpen = more opponent runs in late innings.
+    # Check recent game history to detect heavy usage patterns.
+    home_recent = get_recent_games(home_team_id, 3)
+    away_recent = get_recent_games(away_team_id, 3)
+
+    home_bp_fatigue = _bullpen_fatigue_penalty(home_bullpen, home_recent)
+    away_bp_fatigue = _bullpen_fatigue_penalty(away_bullpen, away_recent)
+
+    # Fatigue in home bullpen means away scores more (and vice versa)
+    away_xr *= home_bp_fatigue
+    home_xr *= away_bp_fatigue
+
+    # ── Step 4b: Park factor ──
     park_run_factor = 1.0
     if park:
         park_run_factor = park.get("run_factor", 1.0) or 1.0
     home_xr *= park_run_factor
     away_xr *= park_run_factor
+
+    # Coors Field specific correction — standard park factor underestimates
+    if venue and "coors" in venue.lower():
+        coors_boost = 1.08  # Additional 8% on top of park factor
+        home_xr *= coors_boost
+        away_xr *= coors_boost
 
     # ── Step 5: Home advantage ──
     w = _get_weights()
@@ -652,6 +678,112 @@ def _bullpen_factor(bp: dict) -> float:
         factor *= 1.04
 
     return max(0.70, min(1.40, factor))
+
+
+def _bullpen_fatigue_penalty(bp: dict, recent_games: list[dict]) -> float:
+    """
+    Additional bullpen fatigue penalty based on heavy recent usage.
+
+    Returns a multiplier >= 1.0 (higher = opponent scores more runs).
+    Compounds with the base bullpen factor.
+
+    Checks two conditions:
+    1. Used 4+ relievers yesterday AND played the day before that: +3%
+    2. Bullpen ERA in last 7 days > 5.00: +2%
+    """
+    penalty = 1.0
+
+    if not recent_games or len(recent_games) < 2:
+        return penalty
+
+    # Condition 1: Heavy reliever usage in back-to-back games.
+    # Detect if they played yesterday AND the day before by checking
+    # the dates of the two most recent games.
+    from datetime import timedelta
+    today_dt = datetime.now().date()
+    try:
+        game1_date = datetime.strptime(recent_games[0].get("date", ""), "%Y-%m-%d").date()
+        game2_date = datetime.strptime(recent_games[1].get("date", ""), "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        game1_date = None
+        game2_date = None
+
+    if game1_date and game2_date:
+        played_yesterday = (today_dt - game1_date).days == 1
+        played_day_before = (today_dt - game2_date).days == 2
+
+        if played_yesterday and played_day_before:
+            # Check if bullpen was heavily used yesterday.
+            # games_last_3d >= 4 implies 4+ relievers appeared in the window;
+            # with back-to-back games that signals heavy usage yesterday.
+            games_3d = (bp or {}).get("games_last_3d", 0) or 0
+            if games_3d >= 4:
+                penalty *= 1.03  # -3% runs penalty (tired bullpen)
+
+    # Condition 2: Recent bullpen ERA is terrible.
+    # innings_last_7d is tracked; estimate a 7-day ERA from it
+    # by looking at the bullpen's recent innings and overall ERA trend.
+    # The bullpen_stats table doesn't have a separate era_7d field,
+    # so we approximate: if the bullpen has high innings in 7 days AND
+    # the season ERA is already elevated, that compounds.
+    bp_era = (bp or {}).get("era", 0) or 0
+    innings_7d = (bp or {}).get("innings_last_7d", 0) or 0
+
+    # If heavy recent innings and bad ERA, it's likely worse in that window
+    if bp_era > 5.00 and innings_7d > 5:
+        penalty *= 1.02  # -2% additional penalty
+
+    return penalty
+
+
+def _compute_lineup_strength(team_id: int, season: int) -> float:
+    """Compute lineup quality multiplier from individual batter stats.
+
+    Queries the batter_stats table for the team's active batters,
+    computes average wRC+ or OPS, and compares to league average.
+
+    Returns multiplier (1.0 = average, 1.05 = strong, 0.95 = weak).
+    """
+    conn = get_conn()
+
+    # Get batters for this team/season with meaningful plate appearances
+    rows = conn.execute("""
+        SELECT wrc_plus, ops, plate_appearances
+        FROM batter_stats
+        WHERE team_id = ? AND season = ? AND plate_appearances >= 30
+        ORDER BY plate_appearances DESC
+        LIMIT 13
+    """, (team_id, season)).fetchall()
+
+    if not rows:
+        return 1.0
+
+    # Prefer wRC+ (directly comparable to league avg of 100)
+    wrc_values = [(r["wrc_plus"], r["plate_appearances"]) for r in rows
+                  if r["wrc_plus"] is not None and r["wrc_plus"] > 0]
+
+    if wrc_values:
+        total_pa = sum(pa for _, pa in wrc_values)
+        if total_pa == 0:
+            return 1.0
+        weighted_wrc = sum(wrc * pa for wrc, pa in wrc_values) / total_pa
+        # Convert to multiplier: 100 = 1.0, 110 = ~1.04, 90 = ~0.96
+        multiplier = 1.0 + (weighted_wrc - MLB_AVG_WRC_PLUS) / MLB_AVG_WRC_PLUS * 0.40
+        return max(0.90, min(1.12, multiplier))
+
+    # Fallback to OPS
+    ops_values = [(r["ops"], r["plate_appearances"]) for r in rows
+                  if r["ops"] is not None and r["ops"] > 0]
+
+    if ops_values:
+        total_pa = sum(pa for _, pa in ops_values)
+        if total_pa == 0:
+            return 1.0
+        weighted_ops = sum(ops * pa for ops, pa in ops_values) / total_pa
+        multiplier = 1.0 + (weighted_ops - MLB_AVG_OPS) / MLB_AVG_OPS * 0.35
+        return max(0.90, min(1.12, multiplier))
+
+    return 1.0
 
 
 def _h2h_adjustment(h2h_matchups: list[dict]) -> float:

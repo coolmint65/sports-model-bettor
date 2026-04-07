@@ -11,7 +11,7 @@ faceoff dominance, form, and home/away splits.
 
 import math
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from .data import load_team, list_teams, get_league_averages
 
 logger = logging.getLogger(__name__)
@@ -124,6 +124,92 @@ _live_standings_cache: dict | None = None
 _live_standings_time: float = 0
 _live_stats_cache: dict | None = None
 _live_stats_time: float = 0
+_b2b_cache: dict = {}
+_b2b_cache_time: float = 0
+
+
+def _check_back_to_back(team_abbr: str) -> float:
+    """Check if team played yesterday or recently. Returns xG multiplier.
+
+    Back-to-back: 0.95 (5% penalty)
+    3-in-4 nights: 0.97 (3% penalty)
+    Rest advantage (2+ days off): 1.02 (2% bonus)
+    """
+    import time as _time
+    global _b2b_cache, _b2b_cache_time
+
+    # Cache the yesterday + day-before scoreboard for 30 min
+    if _b2b_cache and (_time.time() - _b2b_cache_time) < 1800:
+        return _b2b_cache.get(team_abbr, 1.0)
+
+    try:
+        import json
+        import urllib.request
+
+        today = datetime.utcnow().date()
+        teams_yesterday: set[str] = set()
+        teams_day_before: set[str] = set()
+
+        for days_ago, target_set in [(1, teams_yesterday), (2, teams_day_before)]:
+            check_date = today - timedelta(days=days_ago)
+            espn_date = check_date.strftime("%Y%m%d")
+            url = (
+                "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl"
+                f"/scoreboard?dates={espn_date}"
+            )
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0",
+                "Accept": "application/json",
+            })
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+
+            for event in data.get("events", []):
+                for comp in event.get("competitions", []):
+                    for team_entry in comp.get("competitors", []):
+                        t = team_entry.get("team", {})
+                        abbr = t.get("abbreviation", "")
+                        if abbr:
+                            target_set.add(abbr)
+
+        # Build multiplier map for all teams
+        result: dict[str, float] = {}
+        all_abbrs = teams_yesterday | teams_day_before
+        for abbr in all_abbrs:
+            if abbr in teams_yesterday:
+                # Played yesterday = back-to-back
+                result[abbr] = 0.95
+            elif abbr in teams_day_before:
+                # Played 2 days ago but not yesterday -- check 3-in-4
+                # If they also played yesterday that's already caught above.
+                # 3-in-4 is approximated as: played day-before but not yesterday
+                # (a lighter fatigue signal).
+                pass  # No penalty -- 1 day rest is normal in NHL
+
+        # 3-in-4: played both yesterday AND day-before-yesterday
+        for abbr in teams_yesterday & teams_day_before:
+            result[abbr] = 0.95  # Already penalized as b2b, keep same
+
+        # Rest advantage: didn't play in either of the last 2 days
+        # We only know about teams that DID play; for any team not in either
+        # set, they've had 2+ days off.  We'll store a positive factor.
+        # But we can only do this for teams we know about -- live standings
+        # gives us all abbreviations.
+        try:
+            live_stats = _get_live_team_stats()
+            for abbr in live_stats:
+                if abbr not in teams_yesterday and abbr not in teams_day_before:
+                    result[abbr] = 1.02  # 2% rest bonus
+        except Exception:
+            pass
+
+        _b2b_cache = result
+        _b2b_cache_time = _time.time()
+        return result.get(team_abbr, 1.0)
+
+    except Exception as e:
+        logger.debug("Back-to-back check failed: %s", e)
+        return 1.0
 
 
 def _get_live_team_stats() -> dict:
@@ -159,10 +245,40 @@ def _get_live_team_stats() -> dict:
             ga = entry.get("goalAgainst", 0)
 
             if gp > 0:
-                stats[abbr] = {
+                team_stats = {
                     "goals_for_avg": round(gf / gp, 2),
                     "goals_against_avg": round(ga / gp, 2),
                 }
+
+                # Extract home/away split win rates for venue adjustment
+                home_wins = entry.get("homeWins", 0)
+                home_losses = entry.get("homeLosses", 0)
+                home_otl = entry.get("homeOtLosses", 0)
+                home_gp = home_wins + home_losses + home_otl
+                road_wins = entry.get("roadWins", 0)
+                road_losses = entry.get("roadLosses", 0)
+                road_otl = entry.get("roadOtLosses", 0)
+                road_gp = road_wins + road_losses + road_otl
+
+                if home_gp > 0:
+                    home_pts_pct = (home_wins * 2 + home_otl) / (home_gp * 2)
+                    team_stats["home_pts_pct"] = round(home_pts_pct, 3)
+                    home_gf = entry.get("homeGoalsFor", 0)
+                    home_ga = entry.get("homeGoalsAgainst", 0)
+                    if home_gf > 0:
+                        team_stats["home_gf_avg"] = round(home_gf / home_gp, 2)
+                        team_stats["home_ga_avg"] = round(home_ga / home_gp, 2)
+
+                if road_gp > 0:
+                    road_pts_pct = (road_wins * 2 + road_otl) / (road_gp * 2)
+                    team_stats["road_pts_pct"] = round(road_pts_pct, 3)
+                    road_gf = entry.get("roadGoalsFor", 0)
+                    road_ga = entry.get("roadGoalsAgainst", 0)
+                    if road_gf > 0:
+                        team_stats["road_gf_avg"] = round(road_gf / road_gp, 2)
+                        team_stats["road_ga_avg"] = round(road_ga / road_gp, 2)
+
+                stats[abbr] = team_stats
 
         _live_stats_cache = stats
         _live_stats_time = _time.time()
@@ -486,6 +602,41 @@ def predict_matchup(home_key: str, away_key: str,
                 "gaa": round(g_gaa, 2),
             }
 
+    # ── Extra penalty for backup goalies ──
+    # If the starting goalie's SV% is significantly worse than the team's
+    # season average SV%, the opponent gets a scoring boost.
+    league_sv_ref = la.get("save_pct", 0.905)
+    if goalie_factor.get("home") and goalie_factor["home"].get("save_pct"):
+        sv_gap = goalie_factor["home"]["save_pct"] - hs.get("save_pct", league_sv_ref)
+        if sv_gap < -0.010:  # Backup is >1% worse than team avg
+            away_xg *= (1 + abs(sv_gap) * 3)  # Amplify the difference
+    if goalie_factor.get("away") and goalie_factor["away"].get("save_pct"):
+        sv_gap = goalie_factor["away"]["save_pct"] - as_.get("save_pct", league_sv_ref)
+        if sv_gap < -0.010:
+            home_xg *= (1 + abs(sv_gap) * 3)
+
+    # ── Live home/away venue split adjustment ──
+    # Use the live standings home/away points% to adjust xG for venue.
+    # A team much better at home vs road gets a boost when playing at home.
+    if h_abbr_for_stats in live_stats:
+        h_live = live_stats[h_abbr_for_stats]
+        h_home_pct = h_live.get("home_pts_pct")
+        h_road_pct = h_live.get("road_pts_pct")
+        if h_home_pct and h_road_pct and h_home_pct != h_road_pct:
+            # Positive = better at home, negative = better on road
+            venue_diff = h_home_pct - h_road_pct
+            # Cap at +/- 5% xG adjustment
+            home_xg *= max(0.95, min(1.05, 1 + venue_diff * 0.15))
+
+    if a_abbr_for_stats in live_stats:
+        a_live = live_stats[a_abbr_for_stats]
+        a_home_pct = a_live.get("home_pts_pct")
+        a_road_pct = a_live.get("road_pts_pct")
+        if a_home_pct and a_road_pct and a_home_pct != a_road_pct:
+            venue_diff = a_road_pct - a_home_pct
+            # Positive = better on road, negative = worse on road
+            away_xg *= max(0.95, min(1.05, 1 + venue_diff * 0.15))
+
     # ── H2H adjustment ──
     h2h_adj = 0
     if h2h_data and h2h_data.get("games", 0) >= 3:
@@ -534,6 +685,21 @@ def predict_matchup(home_key: str, away_key: str,
             injury_data["away"] = a_injuries[:5]
     except Exception as e:
         logger.debug("Injury data unavailable: %s", e)
+
+    # ── Back-to-back / rest adjustment ──
+    h_abbr_b2b = home.get("abbreviation", "")
+    a_abbr_b2b = away.get("abbreviation", "")
+    if h_abbr_b2b:
+        h_b2b = _check_back_to_back(h_abbr_b2b)
+        home_xg *= h_b2b
+        if h_b2b < 1.0:
+            # Tired team also concedes more
+            away_xg *= (1 + (1 - h_b2b) * 0.5)
+    if a_abbr_b2b:
+        a_b2b = _check_back_to_back(a_abbr_b2b)
+        away_xg *= a_b2b
+        if a_b2b < 1.0:
+            home_xg *= (1 + (1 - a_b2b) * 0.5)
 
     # Floor
     home_xg = max(home_xg, 1.0)

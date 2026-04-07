@@ -149,11 +149,12 @@ export default function App() {
     if (days) params.set('days', days)
     if (minEdge) params.set('min_edge', minEdge)
     if (season) params.set('season', season)
-    api.get(`/backtest?${params}`)
+    const endpoint = league === 'NHL' ? '/nhl/backtest' : '/backtest'
+    api.get(`${endpoint}?${params}`)
       .then(r => setBacktest(r.data))
       .catch(() => setBacktest({ error: "Backtest failed. Try again." }))
       .finally(() => setBtLoading(false))
-  }, [])
+  }, [league])
 
   const showBestBets = useCallback(() => {
     setView('best-bets'); setSelectedGame(null); setNhlSelectedGame(null)
@@ -279,11 +280,9 @@ export default function App() {
         <button className={`nav-tab ${view === 'history' ? 'active' : ''}`} onClick={showHistory}>
           Pick Tracker
         </button>
-        {isMLB && (
-          <button className={`nav-tab ${view === 'backtest' ? 'active' : ''}`} onClick={showBacktest}>
-            Backtest
-          </button>
-        )}
+        <button className={`nav-tab ${view === 'backtest' ? 'active' : ''}`} onClick={showBacktest}>
+          Backtest
+        </button>
       </nav>
 
       {/* ── MLB Views ── */}
@@ -342,6 +341,10 @@ export default function App() {
           onRecord={recordPicks}
           onSettle={settlePicks}
         />
+      )}
+
+      {isNHL && view === 'backtest' && (
+        <Backtest data={backtest} loading={btLoading} onRun={runBacktest} />
       )}
     </div>
   )

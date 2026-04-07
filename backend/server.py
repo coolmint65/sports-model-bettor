@@ -1765,3 +1765,41 @@ def api_nhl_settle_picks():
     """Settle completed NHL picks."""
     from engine.nhl_tracker import settle_picks
     return settle_picks()
+
+
+@app.get("/api/nhl/backtest")
+def api_nhl_backtest(days: int = Query(default=30), min_edge: float = Query(default=3.0),
+                     season: int | None = Query(default=None)):
+    """Run NHL backtest on historical games."""
+    try:
+        from engine.nhl_backtest import run_nhl_backtest
+        return run_nhl_backtest(days=days, min_edge=min_edge, season=season)
+    except Exception as e:
+        logger.error("NHL backtest failed: %s", e, exc_info=True)
+        return {"error": str(e)}
+
+
+@app.get("/api/accuracy")
+def api_accuracy(sport: str = Query(default="mlb")):
+    """Get prediction accuracy / calibration data."""
+    try:
+        from engine.accuracy import compute_calibration
+        return compute_calibration(sport=sport)
+    except Exception as e:
+        logger.error("Accuracy computation failed: %s", e, exc_info=True)
+        return {"error": str(e)}
+
+
+@app.get("/api/line-movement/{sport}/{matchup_key}")
+def api_line_movement(sport: str, matchup_key: str):
+    """Get line movement for a specific game."""
+    try:
+        from engine.line_movement import get_line_movement
+        from scrapers.odds_api import fetch_odds
+        current_odds = {}
+        if sport == "mlb":
+            all_odds = fetch_odds()
+            current_odds = all_odds.get(matchup_key, {})
+        return get_line_movement(sport, matchup_key, current_odds) or {"movement": "none"}
+    except Exception as e:
+        return {"error": str(e)}
