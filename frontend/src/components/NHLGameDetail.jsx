@@ -181,6 +181,21 @@ function NHLPredictionResults({ data, odds, home, away }) {
 
   return (
     <div className="results">
+      {/* Season Context Banner */}
+      {d.season_context && d.season_context.implications && (
+        <div style={{
+          background: d.season_context.phase === 'playoffs' ? '#1e3a2f' : '#1e2a3f',
+          border: `1px solid ${d.season_context.phase === 'playoffs' ? '#34d399' : '#60a5fa'}`,
+          borderRadius: 8, padding: '8px 16px', marginBottom: 12,
+          fontSize: '0.8rem', fontWeight: 600,
+          color: d.season_context.phase === 'playoffs' ? '#34d399' : '#60a5fa',
+          textAlign: 'center',
+        }}>
+          {d.season_context.phase === 'playoffs' ? 'PLAYOFF GAME' : 'LATE SEASON — Playoff Race'}
+          {' '}— Model adjusts for higher intensity
+        </div>
+      )}
+
       {/* Projected Outcome */}
       <div className="result-card">
         <h2>Projected Outcome</h2>

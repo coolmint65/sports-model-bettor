@@ -73,6 +73,78 @@ def _split_adj(team: dict, is_home: bool) -> float:
     return max(0.88, min(1.12, split_ppg / overall))
 
 
+def _compute_recent_form_from_standings(team: dict) -> float:
+    """
+    Additional recent-form xG adjustment based on L10 record.
+
+    Uses strength_of_schedule.recent_wins / recent_games as a proxy
+    for L10 record.  Hot streak (7+ wins in 10) boosts xG up to 5%;
+    cold streak (3- wins in 10) reduces up to 5%.  Stacks with the
+    existing _form_factor().
+    """
+    sos = team.get("strength_of_schedule", {})
+    recent_games = sos.get("recent_games", 0)
+    recent_wins = sos.get("recent_wins", 0)
+    if recent_games < 5:
+        return 0.0
+    # Normalise to a 10-game window
+    win_rate = recent_wins / recent_games
+    if win_rate >= 0.7:          # 7-3 or better
+        # Scale linearly: 0.7 -> 0%, 1.0 -> 5%
+        return min(0.05, (win_rate - 0.7) / 0.3 * 0.05)
+    elif win_rate <= 0.3:        # 3-7 or worse
+        # Scale linearly: 0.3 -> 0%, 0.0 -> -5%
+        return max(-0.05, -(0.3 - win_rate) / 0.3 * 0.05)
+    return 0.0
+
+
+def _is_playoff_window() -> bool:
+    """NHL playoffs typically start mid-April."""
+    now = datetime.now()
+    # Regular season ends ~April 17, playoffs run through June
+    return now.month >= 4 and now.day >= 10
+
+
+def _is_late_season() -> bool:
+    """Last 2 weeks of regular season -- teams fighting for spots or resting."""
+    now = datetime.now()
+    return now.month == 4 and now.day < 17
+
+
+def _get_season_context() -> dict:
+    """Return season phase and implications for the current date."""
+    if _is_playoff_window():
+        return {"phase": "playoffs", "implications": "Playoffs"}
+    if _is_late_season():
+        return {"phase": "late_regular", "implications": "Playoff race"}
+    return {"phase": "regular", "implications": None}
+
+
+def _record_to_points_pct(record: str) -> float:
+    """
+    Parse an NHL record string like "45-22-10" into a points percentage.
+
+    Points percentage = (W*2 + OTL) / (GP * 2).
+    Returns 0.5 (league-average) if the record can't be parsed.
+    """
+    if not record:
+        return 0.5
+    parts = record.split("-")
+    if len(parts) < 2:
+        return 0.5
+    try:
+        wins = int(parts[0])
+        losses = int(parts[1])
+        otl = int(parts[2]) if len(parts) >= 3 else 0
+        gp = wins + losses + otl
+        if gp == 0:
+            return 0.5
+        points = wins * 2 + otl
+        return points / (gp * 2)
+    except (ValueError, IndexError):
+        return 0.5
+
+
 def _build_factors_with_ranks(home, away, hs, as_,
                               h_pp, a_pp, h_pk, a_pk, h_sv, a_sv,
                               h_shots, a_shots, h_fo, a_fo):
@@ -150,6 +222,9 @@ def predict_matchup(home_key: str, away_key: str,
     hs = home.get("stats", {})
     as_ = away.get("stats", {})
 
+    # Use a local copy so repeated calls don't drift the module constant
+    home_edge = HOME_EDGE
+
     # Try to enrich with DB data if available
     db_home_stats, db_away_stats = None, None
     h2h_data = {}
@@ -192,8 +267,7 @@ def predict_matchup(home_key: str, away_key: str,
             # Use calibrated home edge if available
             calibrated_he = get_calibrated_home_edge()
             if calibrated_he:
-                global HOME_EDGE
-                HOME_EDGE = calibrated_he
+                home_edge = calibrated_he
 
     except Exception as e:
         logger.debug("DB enrichment unavailable: %s", e)
@@ -201,14 +275,19 @@ def predict_matchup(home_key: str, away_key: str,
     avg_gf = la.get("goals_for_avg", 3.0)
     avg_ga = la.get("goals_against_avg", 3.0)
 
+    # ── Season context ──
+    season_context = _get_season_context()
+    if _is_late_season():
+        home_edge *= 1.10  # Home ice matters more in high-stakes late games
+
     # Base expected goals
     home_off = hs.get("goals_for_avg", avg_gf)
     home_def = hs.get("goals_against_avg", avg_ga)
     away_off = as_.get("goals_for_avg", avg_gf)
     away_def = as_.get("goals_against_avg", avg_ga)
 
-    home_xg = _expected_goals(home_off, away_def, avg_ga) + HOME_EDGE / 2
-    away_xg = _expected_goals(away_off, home_def, avg_ga) - HOME_EDGE / 2
+    home_xg = _expected_goals(home_off, away_def, avg_ga) + home_edge / 2
+    away_xg = _expected_goals(away_off, home_def, avg_ga) - home_edge / 2
 
     # ── Special teams adjustment ──
     league_pp = la.get("pp_pct", 0.20)
@@ -260,10 +339,29 @@ def predict_matchup(home_key: str, away_key: str,
     away_xg -= fo_diff * 0.3
 
     # ── Form + splits ──
-    home_xg *= (1 + _form_factor(home))
-    away_xg *= (1 + _form_factor(away))
+    home_form = _form_factor(home)
+    away_form = _form_factor(away)
+    if _is_late_season():
+        # Weight recent form more heavily when teams are fighting for spots
+        home_form *= 1.25
+        away_form *= 1.25
+    home_xg *= (1 + home_form)
+    away_xg *= (1 + away_form)
     home_xg *= _split_adj(home, is_home=True)
     away_xg *= _split_adj(away, is_home=False)
+
+    # ── Recent form (L10) adjustment — stacks with _form_factor ──
+    home_xg *= (1 + _compute_recent_form_from_standings(home))
+    away_xg *= (1 + _compute_recent_form_from_standings(away))
+
+    # ── Win percentage / team quality adjustment ──
+    home_record = home.get("record", "")
+    away_record = away.get("record", "")
+    home_pct = _record_to_points_pct(home_record)
+    away_pct = _record_to_points_pct(away_record)
+    quality_diff = home_pct - away_pct
+    home_xg *= (1 + quality_diff * 0.15)  # max ~3% adjustment
+    away_xg *= (1 - quality_diff * 0.15)
 
     # ── Goalie matchup adjustment ──
     # If we have specific goalie data from the DB, use it to override
@@ -312,6 +410,29 @@ def predict_matchup(home_key: str, away_key: str,
             away_xg += total_adj / 2
     except Exception:
         pass
+
+    # ── Injury adjustment ──
+    injury_data = {"home": [], "away": []}
+    try:
+        from .injuries import fetch_nhl_injuries, compute_nhl_injury_impact
+        nhl_injuries = fetch_nhl_injuries()
+        h_abbr = home.get("abbreviation", "")
+        a_abbr = away.get("abbreviation", "")
+
+        h_injuries = nhl_injuries.get(h_abbr, [])
+        a_injuries = nhl_injuries.get(a_abbr, [])
+
+        if h_injuries:
+            h_impact = compute_nhl_injury_impact(h_abbr, h_injuries)
+            home_xg *= h_impact
+            injury_data["home"] = h_injuries[:5]  # Top 5 for display
+
+        if a_injuries:
+            a_impact = compute_nhl_injury_impact(a_abbr, a_injuries)
+            away_xg *= a_impact
+            injury_data["away"] = a_injuries[:5]
+    except Exception as e:
+        logger.debug("Injury data unavailable: %s", e)
 
     # Floor
     home_xg = max(home_xg, 1.0)
@@ -445,6 +566,8 @@ def predict_matchup(home_key: str, away_key: str,
         ),
         "goalie_matchup": goalie_factor,
         "h2h": h2h_data,
+        "season_context": season_context,
+        "injuries": injury_data,
     }
 
 

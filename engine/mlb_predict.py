@@ -324,6 +324,29 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     home_xr *= (1 + home_form)
     away_xr *= (1 + away_form)
 
+    # ── Injury adjustment ──
+    injury_data = {"home": [], "away": []}
+    try:
+        from .injuries import fetch_mlb_injuries, compute_mlb_injury_impact
+        mlb_injuries = fetch_mlb_injuries()
+        h_abbr = home_team["abbreviation"] if home_team else ""
+        a_abbr = away_team["abbreviation"] if away_team else ""
+
+        h_injuries = mlb_injuries.get(h_abbr, [])
+        a_injuries = mlb_injuries.get(a_abbr, [])
+
+        if h_injuries:
+            h_impact = compute_mlb_injury_impact(home_team_id, h_injuries)
+            home_xr *= h_impact
+            injury_data["home"] = h_injuries[:5]
+
+        if a_injuries:
+            a_impact = compute_mlb_injury_impact(away_team_id, a_injuries)
+            away_xr *= a_impact
+            injury_data["away"] = a_injuries[:5]
+    except Exception as e:
+        logger.debug("MLB injury data unavailable: %s", e)
+
     # ── Floor ──
     home_xr = max(home_xr, 1.5)
     away_xr = max(away_xr, 1.5)
@@ -416,6 +439,7 @@ def predict_matchup(home_team_id: int, away_team_id: int,
         "correct_scores": correct_scores,
         "h2h": h2h_data,
         "h2h_history": h2h_history,
+        "injuries": injury_data,
         "matchup_insights": matchup.get("insights", []),
         "reasoning": reasoning,
     }
