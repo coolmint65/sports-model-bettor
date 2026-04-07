@@ -89,8 +89,39 @@ _NHL_TEAM_IDS = list(range(1, 36))  # ESPN IDs aren't contiguous; overshoot a bi
 _MLB_TEAM_IDS = list(range(1, 31))
 
 
+_TEAM_NAME_TO_ABBR: dict[str, str] = {
+    # NHL
+    "Anaheim Ducks": "ANA", "Boston Bruins": "BOS", "Buffalo Sabres": "BUF",
+    "Calgary Flames": "CGY", "Carolina Hurricanes": "CAR", "Chicago Blackhawks": "CHI",
+    "Colorado Avalanche": "COL", "Columbus Blue Jackets": "CBJ", "Dallas Stars": "DAL",
+    "Detroit Red Wings": "DET", "Edmonton Oilers": "EDM", "Florida Panthers": "FLA",
+    "Los Angeles Kings": "LAK", "Minnesota Wild": "MIN", "Montreal Canadiens": "MTL",
+    "Nashville Predators": "NSH", "New Jersey Devils": "NJD", "New York Islanders": "NYI",
+    "New York Rangers": "NYR", "Ottawa Senators": "OTT", "Philadelphia Flyers": "PHI",
+    "Pittsburgh Penguins": "PIT", "San Jose Sharks": "SJS", "Seattle Kraken": "SEA",
+    "St. Louis Blues": "STL", "Tampa Bay Lightning": "TBL", "Toronto Maple Leafs": "TOR",
+    "Utah Hockey Club": "UTA", "Vancouver Canucks": "VAN", "Vegas Golden Knights": "VGK",
+    "Washington Capitals": "WSH", "Winnipeg Jets": "WPG",
+    # MLB
+    "Arizona Diamondbacks": "ARI", "Atlanta Braves": "ATL", "Baltimore Orioles": "BAL",
+    "Boston Red Sox": "BOS", "Chicago Cubs": "CHC", "Chicago White Sox": "CWS",
+    "Cincinnati Reds": "CIN", "Cleveland Guardians": "CLE", "Colorado Rockies": "COL",
+    "Detroit Tigers": "DET", "Houston Astros": "HOU", "Kansas City Royals": "KC",
+    "Los Angeles Angels": "LAA", "Los Angeles Dodgers": "LAD", "Miami Marlins": "MIA",
+    "Milwaukee Brewers": "MIL", "Minnesota Twins": "MIN", "New York Mets": "NYM",
+    "New York Yankees": "NYY", "Oakland Athletics": "OAK", "Philadelphia Phillies": "PHI",
+    "Pittsburgh Pirates": "PIT", "San Diego Padres": "SD", "San Francisco Giants": "SF",
+    "Seattle Mariners": "SEA", "St. Louis Cardinals": "STL", "Tampa Bay Rays": "TB",
+    "Texas Rangers": "TEX", "Toronto Blue Jays": "TOR", "Washington Nationals": "WSH",
+}
+
+
 def _normalize_abbr(abbr: str, sport: str) -> str:
-    """Map ESPN abbreviation to the codebase's canonical form."""
+    """Map ESPN abbreviation or team name to the codebase's canonical form."""
+    # Try full team name lookup first
+    if abbr in _TEAM_NAME_TO_ABBR:
+        return _TEAM_NAME_TO_ABBR[abbr]
+
     abbr = abbr.upper().strip()
     mapping = _NHL_ABBR_MAP if sport == "nhl" else _MLB_ABBR_MAP
     return mapping.get(abbr, abbr)
@@ -161,12 +192,35 @@ def _parse_injury_entry(entry: dict) -> dict:
 
 def _parse_team_block(team_block: dict, sport: str) -> tuple[str, list[dict]]:
     """Parse a team's injury block, returning (abbreviation, [injury_entries])."""
+    # ESPN structure: each block has "displayName" (team name) and "injuries" list.
+    # Team abbreviation can be found in:
+    # 1. block.team.abbreviation (old format)
+    # 2. block.injuries[0].athlete.team.abbreviation (current format)
+    # 3. block.displayName -> map to abbreviation
+
+    abbr = "UNK"
+
+    # Try block.team first (old format)
     team_info = team_block.get("team") or {}
-    abbr = (
-        team_info.get("abbreviation")
-        or team_info.get("shortDisplayName")
-        or team_info.get("displayName", "UNK")
-    )
+    if team_info.get("abbreviation"):
+        abbr = team_info["abbreviation"]
+
+    # Try getting from first injury's athlete.team
+    if abbr == "UNK":
+        raw_injuries = team_block.get("injuries") or team_block.get("items") or []
+        for inj in raw_injuries:
+            athlete = inj.get("athlete") or {}
+            athlete_team = athlete.get("team") or {}
+            if athlete_team.get("abbreviation"):
+                abbr = athlete_team["abbreviation"]
+                break
+
+    # Fall back to displayName -> abbreviation mapping
+    if abbr == "UNK":
+        display = team_block.get("displayName", "")
+        if display:
+            abbr = display  # _normalize_abbr will try to map full names
+
     abbr = _normalize_abbr(abbr, sport)
 
     raw_injuries = team_block.get("injuries") or team_block.get("items") or []
