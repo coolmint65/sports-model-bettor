@@ -111,13 +111,148 @@ def _is_late_season() -> bool:
     return now.month == 4 and now.day < 17
 
 
-def _get_season_context() -> dict:
-    """Return season phase and implications for the current date."""
+# Cached playoff context per team
+_playoff_context_cache: dict | None = None
+_playoff_context_time: float = 0
+
+
+def _get_team_playoff_context(abbr: str) -> dict:
+    """Get detailed playoff context for a team from live standings.
+
+    Returns:
+        {
+            "clinched": bool,        # Has clinched a playoff spot
+            "eliminated": bool,      # Mathematically eliminated
+            "fighting": bool,        # In the hunt but not clinched
+            "clinch_indicator": "x", # x=clinched, y=division, z=conference, p=presidents
+            "wildcard_seq": int,     # 0=division spot, 1-2=wildcard, 3+=out
+            "points_pace": float,    # Points percentage
+            "l10_record": str,       # e.g. "7-2-1"
+            "l10_pts_pct": float,    # Recent performance
+            "motivation": float,     # 0.0 (nothing to play for) to 1.0 (desperate)
+        }
+    """
+    import time as _time
+    global _playoff_context_cache, _playoff_context_time
+
+    if _playoff_context_cache and (_time.time() - _playoff_context_time) < 1800:
+        return _playoff_context_cache.get(abbr, {})
+
+    try:
+        import json
+        import urllib.request
+        req = urllib.request.Request(
+            "https://api-web.nhle.com/v1/standings/now",
+            headers={"User-Agent": "Mozilla/5.0"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+
+        context = {}
+        for entry in data.get("standings", []):
+            team_abbr_obj = entry.get("teamAbbrev", {})
+            team_abbr = team_abbr_obj.get("default", "") if isinstance(team_abbr_obj, dict) else str(team_abbr_obj)
+
+            clinch = entry.get("clinchIndicator", "")
+            wildcard = entry.get("wildcardSequence", 99)
+            pts_pct = entry.get("pointPctg", 0.5)
+            l10w = entry.get("l10Wins", 0)
+            l10l = entry.get("l10Losses", 0)
+            l10o = entry.get("l10OtLosses", 0)
+            l10_gp = entry.get("l10GamesPlayed", 10)
+            l10_pts = l10w * 2 + l10o
+            l10_pts_pct = l10_pts / (l10_gp * 2) if l10_gp > 0 else 0.5
+
+            clinched = bool(clinch)  # Any clinch indicator = clinched
+            eliminated = pts_pct < 0.40 and not clinched  # Rough heuristic
+            fighting = not clinched and not eliminated and wildcard <= 4
+
+            # Motivation score: how much does this game matter?
+            if eliminated:
+                motivation = 0.2  # Playing for pride/draft position
+            elif clinched and wildcard == 0:
+                # Clinched division — might rest players
+                motivation = 0.6
+            elif clinched:
+                # Clinched but seeding still matters
+                motivation = 0.75
+            elif fighting:
+                # In the race — every point counts
+                motivation = 1.0
+            else:
+                # On the bubble
+                motivation = 0.9
+
+            # Boost motivation if recent form is hot (team is surging)
+            if l10_pts_pct > 0.7:
+                motivation = min(1.0, motivation + 0.1)
+            elif l10_pts_pct < 0.3:
+                motivation = max(0.2, motivation - 0.1)
+
+            context[team_abbr] = {
+                "clinched": clinched,
+                "eliminated": eliminated,
+                "fighting": fighting,
+                "clinch_indicator": clinch,
+                "wildcard_seq": wildcard,
+                "points_pace": round(pts_pct, 3),
+                "l10_record": f"{l10w}-{l10l}-{l10o}",
+                "l10_pts_pct": round(l10_pts_pct, 3),
+                "motivation": round(motivation, 2),
+            }
+
+        _playoff_context_cache = context
+        _playoff_context_time = _time.time()
+        return context.get(abbr, {})
+
+    except Exception as e:
+        logger.debug("Playoff context fetch failed: %s", e)
+        return {}
+
+
+def _get_season_context_for_matchup(home_abbr: str, away_abbr: str) -> dict:
+    """Build rich season context for a specific matchup."""
+    home_ctx = _get_team_playoff_context(home_abbr)
+    away_ctx = _get_team_playoff_context(away_abbr)
+
     if _is_playoff_window():
-        return {"phase": "playoffs", "implications": "Playoffs"}
-    if _is_late_season():
-        return {"phase": "late_regular", "implications": "Playoff race"}
-    return {"phase": "regular", "implications": None}
+        phase = "playoffs"
+    elif _is_late_season():
+        phase = "late_regular"
+    else:
+        phase = "regular"
+
+    # Build implications string
+    implications = []
+    if home_ctx.get("clinched") and away_ctx.get("clinched"):
+        implications.append("Both teams clinched")
+    elif home_ctx.get("eliminated") and away_ctx.get("eliminated"):
+        implications.append("Both teams eliminated")
+    else:
+        if home_ctx.get("fighting"):
+            implications.append(f"{home_abbr} fighting for playoff spot")
+        elif home_ctx.get("eliminated"):
+            implications.append(f"{home_abbr} eliminated")
+        elif home_ctx.get("clinched"):
+            ci = home_ctx.get("clinch_indicator", "")
+            label = {"x": "clinched", "y": "clinched division", "z": "clinched conference", "p": "Presidents' Trophy"}.get(ci, "clinched")
+            implications.append(f"{home_abbr} {label}")
+
+        if away_ctx.get("fighting"):
+            implications.append(f"{away_abbr} fighting for playoff spot")
+        elif away_ctx.get("eliminated"):
+            implications.append(f"{away_abbr} eliminated")
+        elif away_ctx.get("clinched"):
+            ci = away_ctx.get("clinch_indicator", "")
+            label = {"x": "clinched", "y": "clinched division", "z": "clinched conference", "p": "Presidents' Trophy"}.get(ci, "clinched")
+            implications.append(f"{away_abbr} {label}")
+
+    return {
+        "phase": phase,
+        "implications": " | ".join(implications) if implications else None,
+        "home": home_ctx,
+        "away": away_ctx,
+    }
 
 
 _live_standings_cache: dict | None = None
@@ -484,10 +619,22 @@ def predict_matchup(home_key: str, away_key: str,
     avg_gf = la.get("goals_for_avg", 3.0)
     avg_ga = la.get("goals_against_avg", 3.0)
 
-    # ── Season context ──
-    season_context = _get_season_context()
-    if _is_late_season():
-        home_edge *= 1.10  # Home ice matters more in high-stakes late games
+    # ── Season context + motivation ──
+    h_abbr_ctx = home.get("abbreviation", "")
+    a_abbr_ctx = away.get("abbreviation", "")
+    season_context = _get_season_context_for_matchup(h_abbr_ctx, a_abbr_ctx)
+
+    home_motivation = season_context.get("home", {}).get("motivation", 0.8)
+    away_motivation = season_context.get("away", {}).get("motivation", 0.8)
+
+    if _is_late_season() or _is_playoff_window():
+        home_edge *= 1.10  # Home ice matters more in high-stakes games
+
+        # Motivation gap: a desperate team vs a resting team
+        # If home is fighting (1.0) and away is eliminated (0.2), home gets a boost
+        motivation_gap = home_motivation - away_motivation
+        # Cap at ±5% xG adjustment from motivation difference
+        # Positive = home more motivated, negative = away more motivated
 
     # Base expected goals
     home_off = hs.get("goals_for_avg", avg_gf)
@@ -502,19 +649,24 @@ def predict_matchup(home_key: str, away_key: str,
     league_pp = la.get("pp_pct", 0.20)
     league_pk = la.get("pk_pct", 0.80)
 
+    # In playoffs, refs call fewer penalties — reduce PP impact
+    pp_weight = 2.5  # ~3 PP chances per game in regular season
+    if _is_playoff_window():
+        pp_weight = 1.8  # Fewer PP opportunities in playoffs
+
     # Home PP vs away PK
     h_pp = hs.get("pp_pct", league_pp)
     a_pk = as_.get("pk_pct", league_pk)
     if h_pp and a_pk:
         pp_edge = (h_pp - league_pp) + (league_pk - a_pk)
-        home_xg += pp_edge * 2.5  # ~3 PP chances per game, scaled
+        home_xg += pp_edge * pp_weight
 
     # Away PP vs home PK
     a_pp = as_.get("pp_pct", league_pp)
     h_pk = hs.get("pk_pct", league_pk)
     if a_pp and h_pk:
         pp_edge = (a_pp - league_pp) + (league_pk - h_pk)
-        away_xg += pp_edge * 2.5
+        away_xg += pp_edge * pp_weight
 
     # ── Goaltending / save% adjustment ──
     league_sv = la.get("save_pct", 0.905)
@@ -550,10 +702,10 @@ def predict_matchup(home_key: str, away_key: str,
     # ── Form + splits ──
     home_form = _form_factor(home)
     away_form = _form_factor(away)
-    if _is_late_season():
-        # Weight recent form more heavily when teams are fighting for spots
-        home_form *= 1.25
-        away_form *= 1.25
+    if _is_late_season() or _is_playoff_window():
+        # Weight recent form more heavily in high-stakes games
+        home_form *= (0.8 + home_motivation * 0.6)  # 0.8-1.4x based on motivation
+        away_form *= (0.8 + away_motivation * 0.6)
     home_xg *= (1 + home_form)
     away_xg *= (1 + away_form)
     home_xg *= _split_adj(home, is_home=True)
@@ -562,6 +714,14 @@ def predict_matchup(home_key: str, away_key: str,
     # ── Recent form (L10) adjustment — stacks with _form_factor ──
     home_xg *= (1 + _compute_recent_form_from_standings(home))
     away_xg *= (1 + _compute_recent_form_from_standings(away))
+
+    # ── Motivation adjustment ──
+    # A team fighting for their playoff life vs an eliminated team
+    if _is_late_season() or _is_playoff_window():
+        motivation_gap = home_motivation - away_motivation
+        if abs(motivation_gap) > 0.2:
+            home_xg *= (1 + motivation_gap * 0.05)  # max ±5% from motivation
+            away_xg *= (1 - motivation_gap * 0.05)
 
     # ── Win percentage / team quality adjustment ──
     # Try live standings first (NHL API), fall back to JSON record
