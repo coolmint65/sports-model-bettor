@@ -1767,6 +1767,24 @@ def api_nhl_settle_picks():
     return settle_picks()
 
 
+@app.get("/api/debug/nhl-api-keys")
+def api_debug_nhl_keys():
+    """Debug: show what fields the NHL API standings returns."""
+    data = _fetch_espn_json("https://api-web.nhle.com/v1/standings/now")
+    if not data or not data.get("standings"):
+        return {"error": "No data from NHL API"}
+    entry = data["standings"][0]
+    # Return all keys with their types and values for team-related fields
+    result = {}
+    for k in sorted(entry.keys()):
+        v = entry[k]
+        if isinstance(v, (int, float, str, bool)) or v is None:
+            result[k] = v
+        elif isinstance(v, dict):
+            result[k] = {dk: dv for dk, dv in v.items() if isinstance(dv, (int, float, str, bool))}
+    return result
+
+
 @app.get("/api/nhl/backtest")
 def api_nhl_backtest(days: int = Query(default=30), min_edge: float = Query(default=3.0),
                      season: int | None = Query(default=None)):
