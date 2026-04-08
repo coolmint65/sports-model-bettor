@@ -125,26 +125,33 @@ def fetch_teams() -> list[dict]:
 
     from engine.nhl_db import upsert_nhl_team
 
+    # NHL API standings has no numeric team ID — map from abbreviation
+    _ABBR_TO_ID = {
+        "ANA": 24, "BOS": 6, "BUF": 7, "CGY": 20, "CAR": 12,
+        "CHI": 16, "COL": 21, "CBJ": 29, "DAL": 25, "DET": 17,
+        "EDM": 22, "FLA": 13, "LAK": 26, "MIN": 30, "MTL": 8,
+        "NSH": 18, "NJD": 1, "NYI": 2, "NYR": 3, "OTT": 9,
+        "PHI": 4, "PIT": 5, "SJS": 28, "SEA": 55, "STL": 19,
+        "TBL": 14, "TOR": 10, "UTA": 53, "VAN": 23, "VGK": 54,
+        "WPG": 52, "WSH": 15,
+    }
+
     teams = []
     for entry in data.get("standings", []):
         team_abbr = entry.get("teamAbbrev", {})
         abbr = team_abbr.get("default", "") if isinstance(team_abbr, dict) else str(team_abbr)
-        team_name = _nhl_str(entry, "teamName")
         team_common = _nhl_str(entry, "teamCommonName")
         place_name = _nhl_str(entry, "placeName")
 
-        # Build full name from place + common (e.g. "Toronto Maple Leafs")
-        full_name = f"{place_name} {team_common}".strip() if place_name and team_common else team_name
+        full_name = f"{place_name} {team_common}".strip() if place_name and team_common else _nhl_str(entry, "teamName")
 
         team = {
-            "team_id": (_safe_int(entry.get("teamId", 0))
-                       or _safe_int(entry.get("id", 0))
-                       or abs(hash(abbr)) % 100000 + 1000),
+            "team_id": _ABBR_TO_ID.get(abbr, abs(hash(abbr)) % 100000),
             "name": full_name,
             "abbreviation": abbr,
             "city": place_name,
-            "division": _nhl_str(entry, "divisionName"),
-            "conference": _nhl_str(entry, "conferenceName"),
+            "division": entry.get("divisionName", ""),
+            "conference": entry.get("conferenceName", ""),
             "venue": "",
         }
 
