@@ -639,9 +639,21 @@ def predict_matchup(home_key: str, away_key: str,
 
     # ── H2H adjustment ──
     h2h_adj = 0
-    if h2h_data and h2h_data.get("games", 0) >= 3:
+    if h2h_data and isinstance(h2h_data, list) and len(h2h_data) >= 3:
+        # h2h_data is a list of game dicts — compute summary
+        h2h_games = len(h2h_data)
+        h_abbr_val = home.get("abbreviation", "")
+        team1_wins = sum(1 for g in h2h_data
+                        if (g.get("home_abbr") == h_abbr_val and (g.get("home_score", 0) or 0) > (g.get("away_score", 0) or 0))
+                        or (g.get("away_abbr") == h_abbr_val and (g.get("away_score", 0) or 0) > (g.get("home_score", 0) or 0)))
+        h2h_wr = team1_wins / h2h_games
+        h2h_adj = (h2h_wr - 0.5) * 0.08
+        home_xg *= (1 + h2h_adj)
+        away_xg *= (1 - h2h_adj)
+        # Convert to summary dict for display
+        h2h_data = {"games": h2h_games, "team1_wins": team1_wins, "team2_wins": h2h_games - team1_wins}
+    elif h2h_data and isinstance(h2h_data, dict) and h2h_data.get("games", 0) >= 3:
         h2h_wr = h2h_data.get("team1_wins", 0) / h2h_data["games"]
-        # Small adjustment based on H2H dominance
         h2h_adj = (h2h_wr - 0.5) * 0.08
         home_xg *= (1 + h2h_adj)
         away_xg *= (1 - h2h_adj)
