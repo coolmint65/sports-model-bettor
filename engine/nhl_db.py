@@ -313,6 +313,23 @@ def upsert_nhl_player(player_id: int, name: str, team_id: int | None = None,
 def upsert_nhl_game(game_id: int, **kwargs) -> None:
     """Insert or update an NHL game."""
     conn = get_conn()
+
+    # Check if game already exists — if so, just UPDATE the provided fields
+    existing = conn.execute("SELECT 1 FROM nhl_games WHERE game_id = ?", (game_id,)).fetchone()
+
+    if existing:
+        # Only update fields that were explicitly provided
+        updates = {k: v for k, v in kwargs.items() if v is not None}
+        if updates:
+            set_clause = ", ".join(f"{k} = ?" for k in updates)
+            conn.execute(
+                f"UPDATE nhl_games SET {set_clause} WHERE game_id = ?",
+                list(updates.values()) + [game_id]
+            )
+            conn.commit()
+        return
+
+    # New game — INSERT with all provided fields
     fields = [
         "date", "home_team_id", "away_team_id", "home_score", "away_score",
         "home_goalie_id", "away_goalie_id", "status",
@@ -325,15 +342,16 @@ def upsert_nhl_game(game_id: int, **kwargs) -> None:
     values = {k: kwargs.get(k) for k in fields}
     values["game_id"] = game_id
 
+    # Skip if missing required fields
+    if not values.get("date"):
+        logger.warning("Cannot insert game %s without date", game_id)
+        return
+
     cols = ", ".join(values.keys())
     placeholders = ", ".join(["?"] * len(values))
-    updates = ", ".join(f"{k}=excluded.{k}" for k in fields if kwargs.get(k) is not None)
-    if not updates:
-        updates = "game_id=excluded.game_id"  # no-op update
 
     conn.execute(f"""
-        INSERT INTO nhl_games ({cols}) VALUES ({placeholders})
-        ON CONFLICT(game_id) DO UPDATE SET {updates}
+        INSERT OR IGNORE INTO nhl_games ({cols}) VALUES ({placeholders})
     """, list(values.values()))
     conn.commit()
 

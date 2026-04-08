@@ -137,16 +137,18 @@ def fetch_teams() -> list[dict]:
         full_name = f"{place_name} {team_common}".strip() if place_name and team_common else team_name
 
         team = {
-            "team_id": _safe_int(entry.get("teamId", 0)),
+            "team_id": (_safe_int(entry.get("teamId", 0))
+                       or _safe_int(entry.get("id", 0))
+                       or abs(hash(abbr)) % 100000 + 1000),
             "name": full_name,
             "abbreviation": abbr,
             "city": place_name,
             "division": _nhl_str(entry, "divisionName"),
             "conference": _nhl_str(entry, "conferenceName"),
-            "venue": "",  # not in standings; filled by roster if needed
+            "venue": "",
         }
 
-        if team["team_id"] and team["abbreviation"]:
+        if team["abbreviation"]:
             upsert_nhl_team(**team)
             teams.append(team)
 
