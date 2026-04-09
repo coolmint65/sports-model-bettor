@@ -210,15 +210,18 @@ def _abbr_to_team_key(abbr: str) -> str | None:
 
 
 def _prob_to_american(prob: float) -> int:
-    """Convert probability to approximate American odds with standard vig (5%)."""
+    """Convert probability to approximate American odds with standard vig (5%).
+    This represents what the MARKET would price this at, not our model's view.
+    """
     if prob <= 0 or prob >= 1:
         return -110
-    # Add vig: increase implied probability by ~2.5% on each side
-    vigged = min(0.95, prob + 0.025)
-    if vigged >= 0.5:
-        return int(-vigged / (1 - vigged) * 100)
+    # Market odds = model probability adjusted DOWN (market is tighter)
+    # We subtract ~3% to simulate that the market is slightly less confident
+    market_prob = max(0.05, min(0.95, prob - 0.03))
+    if market_prob >= 0.5:
+        return int(-market_prob / (1 - market_prob) * 100)
     else:
-        return int((1 - vigged) / vigged * 100)
+        return int((1 - market_prob) / market_prob * 100)
 
 
 def _compute_pit_stats(conn, team_id: int, game_date: str,
