@@ -1786,7 +1786,7 @@ def api_debug_nhl_keys():
 
 
 @app.get("/api/nhl/backtest")
-def api_nhl_backtest(days: int = Query(default=30), min_edge: float = Query(default=3.0),
+def api_nhl_backtest(days: int = Query(default=0), min_edge: float = Query(default=3.0),
                      season: int | None = Query(default=None)):
     """Run NHL backtest on historical games."""
     try:
