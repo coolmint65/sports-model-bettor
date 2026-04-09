@@ -5,15 +5,18 @@ Runs the NHL prediction model against historical games with:
 - DB-backed games from nhl_games table (primary)
 - On-the-fly ESPN API fetch when DB is empty (fallback)
 - Per-category results (ML, O/U, PL all shown independently)
-- Realistic NHL odds (-150 avg favorite, -110 for PL/OU)
+- Point-in-time rolling stats (no lookahead bias)
+- Probability-based realistic odds with vig
 
 The output dict is compatible with the Backtest.jsx frontend component.
 
 Usage:
-    python -m engine.nhl_backtest                    # Last 30 days
+    python -m engine.nhl_backtest                    # Last 30 days (PIT mode)
     python -m engine.nhl_backtest --days 60           # Last 60 days
     python -m engine.nhl_backtest --season 2025       # Full season
     python -m engine.nhl_backtest --min-edge 3        # Only 3%+ edge bets
+    python -m engine.nhl_backtest --no-pit            # Use live model (lookahead)
+    python -m engine.nhl_backtest --thresholds        # Compare edge thresholds
 """
 
 import json
@@ -206,6 +209,120 @@ def _abbr_to_team_key(abbr: str) -> str | None:
 # ── Prediction for backtest ───────────────────────────────────
 
 
+def _prob_to_american(prob: float) -> int:
+    """Convert probability to approximate American odds with standard vig (5%)."""
+    if prob <= 0 or prob >= 1:
+        return -110
+    # Add vig: increase implied probability by ~2.5% on each side
+    vigged = min(0.95, prob + 0.025)
+    if vigged >= 0.5:
+        return int(-vigged / (1 - vigged) * 100)
+    else:
+        return int((1 - vigged) / vigged * 100)
+
+
+def _compute_pit_stats(conn, team_id: int, game_date: str,
+                       window: int = 20) -> dict | None:
+    """Compute point-in-time stats for a team using only games before this date.
+
+    Uses a rolling window of recent games from the nhl_games table so the
+    backtest never peeks at future data.
+
+    Returns: {goals_for_avg, goals_against_avg, win_pct} or None if not
+    enough history.
+    """
+    rows = conn.execute("""
+        SELECT home_team_id, away_team_id, home_score, away_score
+        FROM nhl_games
+        WHERE status = 'final' AND date < ?
+          AND (home_team_id = ? OR away_team_id = ?)
+        ORDER BY date DESC LIMIT ?
+    """, (game_date, team_id, team_id, window)).fetchall()
+
+    if len(rows) < 5:
+        return None  # Not enough history
+
+    gf, ga, wins = 0, 0, 0
+    for r in rows:
+        if r["home_team_id"] == team_id:
+            gf += r["home_score"] or 0
+            ga += r["away_score"] or 0
+            if (r["home_score"] or 0) > (r["away_score"] or 0):
+                wins += 1
+        else:
+            gf += r["away_score"] or 0
+            ga += r["home_score"] or 0
+            if (r["away_score"] or 0) > (r["home_score"] or 0):
+                wins += 1
+
+    n = len(rows)
+    return {
+        "goals_for_avg": gf / n,
+        "goals_against_avg": ga / n,
+        "win_pct": wins / n,
+    }
+
+
+def _pit_predict(home_stats: dict, away_stats: dict) -> dict | None:
+    """Simple Poisson prediction using point-in-time stats.
+
+    Uses the same attack*defense/league_avg formula as the main model but
+    with historical rolling-window stats instead of current-season stats.
+    """
+    # NHL league-average goals per game is ~3.0
+    league_avg = 3.0
+
+    home_xg = (home_stats["goals_for_avg"] * away_stats["goals_against_avg"]) / league_avg + 0.075
+    away_xg = (away_stats["goals_for_avg"] * home_stats["goals_against_avg"]) / league_avg - 0.075
+
+    # Floor
+    home_xg = max(home_xg, 1.0)
+    away_xg = max(away_xg, 1.0)
+
+    matrix = _score_matrix(home_xg, away_xg)
+
+    p_home = sum(matrix[h][a] for h in range(MAX_GOALS + 1)
+                 for a in range(MAX_GOALS + 1) if h > a)
+    p_away = sum(matrix[h][a] for h in range(MAX_GOALS + 1)
+                 for a in range(MAX_GOALS + 1) if a > h)
+    p_draw = sum(matrix[i][i] for i in range(MAX_GOALS + 1))
+
+    # OT split: slight home edge
+    p_home_ml = p_home + p_draw * 0.52
+    p_away_ml = p_away + p_draw * 0.48
+
+    # O/U: account for OT goal in tied games
+    pred_total = home_xg + away_xg
+    ou_line = round(pred_total * 2) / 2
+
+    p_over = 0.0
+    for h in range(MAX_GOALS + 1):
+        for a in range(MAX_GOALS + 1):
+            eff_total = (h + a + 1) if h == a else (h + a)
+            if eff_total > ou_line:
+                p_over += matrix[h][a]
+
+    # Puck line (-1.5)
+    p_home_cover = sum(matrix[h][a] for h in range(MAX_GOALS + 1)
+                       for a in range(MAX_GOALS + 1) if (h - a) >= 2)
+
+    return {
+        "home_xg": home_xg,
+        "away_xg": away_xg,
+        "p_home": p_home_ml,
+        "p_away": p_away_ml,
+        "total": pred_total + p_draw,  # +p_draw approximates OT goal
+        "p_over": p_over,
+        "ou_line": ou_line,
+        "p_home_cover": p_home_cover,
+        "puck_line": {
+            "home_minus_1_5": p_home_cover,
+            "away_plus_1_5": 1 - p_home_cover,
+        },
+        "over_under": {},
+    }
+
+
 def _predict_game(home_abbr: str, away_abbr: str) -> dict | None:
     """Run the NHL prediction model for a matchup by abbreviation.
 
@@ -263,8 +380,17 @@ def _summarize(cat):
 
 
 def run_nhl_backtest(days: int = 30, min_edge: float = 3.0,
-                     season: int | None = None) -> dict:
+                     season: int | None = None,
+                     pit_mode: bool = True) -> dict:
     """Run backtest on historical NHL games.
+
+    Args:
+        days: Number of recent days to include (0 = full season).
+        min_edge: Minimum edge percentage to place a bet.
+        season: NHL season year (e.g. 2025 for 2025-26).
+        pit_mode: If True, use point-in-time rolling stats to avoid
+            lookahead bias.  If False, use the live prediction model
+            (current stats applied to historical games -- for comparison).
 
     Returns a dict compatible with the Backtest.jsx frontend component:
         {
@@ -296,6 +422,17 @@ def run_nhl_backtest(days: int = 30, min_edge: float = 3.0,
 
     yr = season or SEASON
 
+    # Get DB connection for PIT mode
+    pit_conn = None
+    if pit_mode:
+        try:
+            from .nhl_db import get_conn
+            pit_conn = get_conn()
+        except Exception:
+            logger.warning("PIT mode requested but nhl_db unavailable, "
+                           "falling back to live model")
+            pit_mode = False
+
     # Debug: track data source
     game_dates = [g.get("date", "?") for g in games[:3]]
     game_seasons = [g.get("season", "?") for g in games[:3]]
@@ -303,6 +440,7 @@ def run_nhl_backtest(days: int = 30, min_edge: float = 3.0,
     results = {
         "season": yr,
         "source": source,
+        "pit_mode": pit_mode,
         "debug_game_count": len(games),
         "debug_sample_dates": game_dates,
         "debug_sample_seasons": game_seasons,
@@ -338,8 +476,22 @@ def run_nhl_backtest(days: int = 30, min_edge: float = 3.0,
             results["games_skipped"] += 1
             continue
 
-        # Run prediction model
-        pred = _predict_game(home_abbr, away_abbr)
+        # ── Get prediction (PIT or live model) ──
+        pred = None
+        if pit_mode and pit_conn:
+            home_tid = game.get("home_team_id")
+            away_tid = game.get("away_team_id")
+            game_date = game.get("date", "")
+            if home_tid and away_tid and game_date:
+                home_pit = _compute_pit_stats(pit_conn, home_tid, game_date)
+                away_pit = _compute_pit_stats(pit_conn, away_tid, game_date)
+                if home_pit and away_pit:
+                    pred = _pit_predict(home_pit, away_pit)
+
+        if pred is None and not pit_mode:
+            # Fall back to live model (lookahead -- for comparison only)
+            pred = _predict_game(home_abbr, away_abbr)
+
         if not pred:
             results["games_skipped"] += 1
             continue
@@ -366,16 +518,19 @@ def run_nhl_backtest(days: int = 30, min_edge: float = 3.0,
                 calibration_buckets[bucket_key][1] += 1  # correct
 
         # ── Moneyline ──
+        # Task 3: Use probability-based realistic odds with vig instead of
+        # flat -150/+130.  Estimate what the market line would be from the
+        # model's own probabilities, then check if the edge still clears.
         fav_home = p_home > p_away
         if fav_home:
             ml_prob = p_home
-            ml_implied = _implied(AVG_FAV_ODDS)
-            ml_odds = AVG_FAV_ODDS
+            ml_odds = _prob_to_american(p_home)
+            ml_implied = _implied(ml_odds)
             ml_pick = home_abbr
         else:
             ml_prob = p_away
-            ml_implied = _implied(AVG_DOG_ODDS)
-            ml_odds = AVG_DOG_ODDS
+            ml_odds = _prob_to_american(p_away)
+            ml_implied = _implied(ml_odds)
             ml_pick = away_abbr
 
         ml_edge = (ml_prob - ml_implied) * 100
@@ -415,7 +570,8 @@ def run_nhl_backtest(days: int = 30, min_edge: float = 3.0,
 
         ou_pick_over = p_over > 0.50
         ou_prob = p_over if ou_pick_over else (1 - p_over)
-        ou_implied = _implied(OU_ODDS)
+        ou_odds = _prob_to_american(ou_prob)
+        ou_implied = _implied(ou_odds)
         ou_edge = (ou_prob - ou_implied) * 100
 
         if ou_edge >= min_edge:
@@ -423,13 +579,13 @@ def run_nhl_backtest(days: int = 30, min_edge: float = 3.0,
                 results["over_under"]["pushes"] += 1
             elif ou_pick_over:
                 ou_correct = actual_total > ou_line
-                _record_bet(results["over_under"], ou_correct, OU_ODDS)
-                game_bets.append((ou_edge, ou_correct, OU_ODDS, "O/U",
+                _record_bet(results["over_under"], ou_correct, ou_odds)
+                game_bets.append((ou_edge, ou_correct, ou_odds, "O/U",
                                   f"{'Over' if ou_pick_over else 'Under'} {ou_line}"))
             else:
                 ou_correct = actual_total < ou_line
-                _record_bet(results["over_under"], ou_correct, OU_ODDS)
-                game_bets.append((ou_edge, ou_correct, OU_ODDS, "O/U",
+                _record_bet(results["over_under"], ou_correct, ou_odds)
+                game_bets.append((ou_edge, ou_correct, ou_odds, "O/U",
                                   f"Under {ou_line}"))
 
         # ── Puck Line (-1.5) ──
@@ -442,7 +598,8 @@ def run_nhl_backtest(days: int = 30, min_edge: float = 3.0,
 
         pl_pick_home = p_home_cover > 0.50
         pl_prob = p_home_cover if pl_pick_home else p_away_cover
-        pl_implied = _implied(PL_ODDS)
+        pl_odds = _prob_to_american(pl_prob)
+        pl_implied = _implied(pl_odds)
         pl_edge = (pl_prob - pl_implied) * 100
 
         if pl_edge >= min_edge:
@@ -452,8 +609,8 @@ def run_nhl_backtest(days: int = 30, min_edge: float = 3.0,
             else:
                 pl_correct = margin <= 1
                 pl_pick = f"{away_abbr} +1.5"
-            _record_bet(results["puck_line"], pl_correct, PL_ODDS)
-            game_bets.append((pl_edge, pl_correct, PL_ODDS, "PL", pl_pick))
+            _record_bet(results["puck_line"], pl_correct, pl_odds)
+            game_bets.append((pl_edge, pl_correct, pl_odds, "PL", pl_pick))
 
         # ── Best bet per game ──
         if game_bets:
@@ -483,6 +640,39 @@ def run_nhl_backtest(days: int = 30, min_edge: float = 3.0,
     results["calibration"] = cal
     results["source"] = source
 
+    return results
+
+
+# ── Edge threshold analysis ──────────────────────────────────
+
+
+def analyze_edge_thresholds(days: int = 0, season: int | None = None,
+                            pit_mode: bool = True) -> list[dict]:
+    """Run backtest at multiple edge thresholds and report which is optimal.
+
+    Returns a list of dicts, one per threshold, with bets/win_pct/roi/profit
+    for each bet category plus the best-bet aggregation.
+    """
+    thresholds = [1, 3, 5, 8, 10, 15]
+    results = []
+    for threshold in thresholds:
+        bt = run_nhl_backtest(days=days, min_edge=threshold, season=season,
+                              pit_mode=pit_mode)
+        entry = {
+            "threshold": threshold,
+            "games_tested": bt.get("games_tested", 0),
+        }
+        for cat in ["moneyline", "over_under", "puck_line", "best_bet"]:
+            cat_data = bt.get(cat, {})
+            entry[cat] = {
+                "bets": cat_data.get("total_bets", 0),
+                "wins": cat_data.get("wins", 0),
+                "losses": cat_data.get("losses", 0),
+                "win_pct": cat_data.get("win_pct", 0),
+                "roi": cat_data.get("roi", 0),
+                "profit": cat_data.get("profit", 0),
+            }
+        results.append(entry)
     return results
 
 
@@ -547,6 +737,8 @@ if __name__ == "__main__":
     season = None
     min_edge = 3.0
     days_val = 30
+    pit = True
+    run_thresholds = False
 
     i = 0
     while i < len(args):
@@ -559,10 +751,34 @@ if __name__ == "__main__":
         elif args[i] == "--days" and i + 1 < len(args):
             days_val = int(args[i + 1])
             i += 2
+        elif args[i] == "--no-pit":
+            pit = False
+            i += 1
+        elif args[i] == "--thresholds":
+            run_thresholds = True
+            i += 1
         else:
             i += 1
 
-    print(f"Running NHL backtest (days={days_val}, min_edge={min_edge}%)...",
-          flush=True)
-    results = run_nhl_backtest(days=days_val, min_edge=min_edge, season=season)
-    print_backtest(results)
+    if run_thresholds:
+        print(f"Running edge threshold analysis (season={season})...",
+              flush=True)
+        th_results = analyze_edge_thresholds(days=days_val, season=season,
+                                             pit_mode=pit)
+        print(f"\n{'='*70}")
+        print(f"  EDGE THRESHOLD ANALYSIS")
+        print(f"{'='*70}")
+        for r in th_results:
+            bb = r.get("best_bet", {})
+            print(f"  {r['threshold']:>2}% min edge: "
+                  f"{bb.get('bets', 0):>4} bets | "
+                  f"{bb.get('win_pct', 0):>5.1f}% win | "
+                  f"ROI {bb.get('roi', 0):>+6.1f}% | "
+                  f"P/L ${bb.get('profit', 0):>+8.2f}")
+        print(f"{'='*70}")
+    else:
+        print(f"Running NHL backtest (days={days_val}, min_edge={min_edge}%, "
+              f"pit={'on' if pit else 'off'})...", flush=True)
+        results = run_nhl_backtest(days=days_val, min_edge=min_edge,
+                                   season=season, pit_mode=pit)
+        print_backtest(results)

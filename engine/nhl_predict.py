@@ -413,6 +413,14 @@ def _get_live_team_stats() -> dict:
                         team_stats["road_gf_avg"] = round(road_gf / road_gp, 2)
                         team_stats["road_ga_avg"] = round(road_ga / road_gp, 2)
 
+                # L10 scoring averages for totals blending
+                l10_gf = entry.get("l10GoalsFor", 0)
+                l10_ga = entry.get("l10GoalsAgainst", 0)
+                l10_gp_val = entry.get("l10GamesPlayed", 0)
+                if l10_gp_val > 0:
+                    team_stats["l10_gf_avg"] = round(l10_gf / l10_gp_val, 2)
+                    team_stats["l10_ga_avg"] = round(l10_ga / l10_gp_val, 2)
+
                 stats[abbr] = team_stats
 
         _live_stats_cache = stats
@@ -877,7 +885,61 @@ def predict_matchup(home_key: str, away_key: str,
     home_xg = max(home_xg, 1.0)
     away_xg = max(away_xg, 1.0)
 
-    # ── Poisson matrix ──
+    # ── O/U-specific adjustments (L10 scoring + goalie impact on totals) ──
+    # These produce a separate xG pair used ONLY for the O/U Poisson matrix,
+    # so they don't pollute the ML/puck-line probabilities.
+    ou_home_xg = home_xg
+    ou_away_xg = away_xg
+
+    # Fix 1: Blend season avg with L10 scoring for totals
+    # If both teams are scoring more in L10 than season average, total should
+    # be pushed higher; if they've gone cold, pushed lower.
+    if h_abbr_for_stats in live_stats:
+        h_live = live_stats[h_abbr_for_stats]
+        l10_gf = h_live.get("l10_gf_avg")
+        season_gf = h_live.get("goals_for_avg")
+        if l10_gf and season_gf:
+            # 40% weight on recent form for totals
+            ou_home_xg = ou_home_xg * 0.6 + (ou_home_xg * l10_gf / season_gf) * 0.4
+        l10_ga = h_live.get("l10_ga_avg")
+        season_ga = h_live.get("goals_against_avg")
+        if l10_ga and season_ga and season_ga > 0:
+            # If home team conceding more recently, away xG goes up for totals
+            ou_away_xg = ou_away_xg * 0.6 + (ou_away_xg * l10_ga / season_ga) * 0.4
+
+    if a_abbr_for_stats in live_stats:
+        a_live = live_stats[a_abbr_for_stats]
+        l10_gf = a_live.get("l10_gf_avg")
+        season_gf = a_live.get("goals_for_avg")
+        if l10_gf and season_gf:
+            ou_away_xg = ou_away_xg * 0.6 + (ou_away_xg * l10_gf / season_gf) * 0.4
+        l10_ga = a_live.get("l10_ga_avg")
+        season_ga = a_live.get("goals_against_avg")
+        if l10_ga and season_ga and season_ga > 0:
+            ou_home_xg = ou_home_xg * 0.6 + (ou_home_xg * l10_ga / season_ga) * 0.4
+
+    # Fix 2: Goalie impact on totals (separate from ML goalie adjustment)
+    # A backup goalie (.890 SV%) vs starter (.920) should push the total up.
+    ou_goalie_adj = 0.0
+    if goalie_factor.get("home") and goalie_factor["home"].get("save_pct"):
+        team_sv = hs.get("save_pct", 0.905)
+        goalie_sv = goalie_factor["home"]["save_pct"]
+        # Worse goalie = higher total (opponent scores more)
+        ou_goalie_adj += (team_sv - goalie_sv) * 15
+    if goalie_factor.get("away") and goalie_factor["away"].get("save_pct"):
+        team_sv = as_.get("save_pct", 0.905)
+        goalie_sv = goalie_factor["away"]["save_pct"]
+        ou_goalie_adj += (team_sv - goalie_sv) * 15
+
+    # Apply goalie adj evenly to both sides for totals
+    ou_home_xg += ou_goalie_adj / 2
+    ou_away_xg += ou_goalie_adj / 2
+
+    # Floor the O/U-specific xGs
+    ou_home_xg = max(ou_home_xg, 1.0)
+    ou_away_xg = max(ou_away_xg, 1.0)
+
+    # ── Poisson matrix (for ML and puck line — uses standard xG) ──
     matrix = _score_matrix(home_xg, away_xg)
 
     p_home = sum(matrix[h][a] for h in range(MAX_GOALS + 1) for a in range(MAX_GOALS + 1) if h > a)
@@ -901,6 +963,8 @@ def predict_matchup(home_key: str, away_key: str,
     # NHL O/U includes overtime. Tied games go to OT where exactly 1 more
     # goal is scored. So for each tie scenario (h == a), the actual total
     # is h + a + 1, not h + a.
+    # Use the O/U-specific xGs (blended with L10 + goalie impact)
+    ou_matrix = _score_matrix(ou_home_xg, ou_away_xg)
     ou_lines = {}
     for line in [4.5, 5.0, 5.5, 6.0, 6.5, 7.0]:
         p_over = 0
@@ -912,7 +976,7 @@ def predict_matchup(home_key: str, away_key: str,
                 else:
                     actual_total = h + a
                 if actual_total > line:
-                    p_over += matrix[h][a]
+                    p_over += ou_matrix[h][a]
         ou_lines[str(line)] = {
             "over": round(p_over, 4),
             "under": round(1 - p_over, 4),
@@ -973,7 +1037,7 @@ def predict_matchup(home_key: str, away_key: str,
             "home": round(home_xg, 2),
             "away": round(away_xg, 2),
         },
-        "total": round(home_xg + away_xg + p_draw, 2),  # +p_draw accounts for OT goal
+        "total": round(ou_home_xg + ou_away_xg + p_draw, 2),  # O/U-adjusted xGs + OT goal
         "spread": round(away_xg - home_xg, 1),
         "win_prob": {
             "home": round(p_home_ml, 4),

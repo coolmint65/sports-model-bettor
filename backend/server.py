@@ -1787,11 +1787,18 @@ def api_debug_nhl_keys():
 
 @app.get("/api/nhl/backtest")
 def api_nhl_backtest(days: int = Query(default=0), min_edge: float = Query(default=3.0),
-                     season: int | None = Query(default=None)):
-    """Run NHL backtest on historical games."""
+                     season: int | None = Query(default=None),
+                     pit: bool = Query(default=True)):
+    """Run NHL backtest on historical games.
+
+    Args:
+        pit: If True (default), use point-in-time stats to avoid lookahead
+            bias.  If False, use current-season stats (for comparison).
+    """
     try:
         from engine.nhl_backtest import run_nhl_backtest
-        return run_nhl_backtest(days=days, min_edge=min_edge, season=season)
+        return run_nhl_backtest(days=days, min_edge=min_edge, season=season,
+                                pit_mode=pit)
     except Exception as e:
         logger.error("NHL backtest failed: %s", e, exc_info=True)
         return {"error": str(e)}
@@ -1820,4 +1827,21 @@ def api_line_movement(sport: str, matchup_key: str):
             current_odds = all_odds.get(matchup_key, {})
         return get_line_movement(sport, matchup_key, current_odds) or {"movement": "none"}
     except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/nhl/backtest/thresholds")
+def api_nhl_backtest_thresholds(days: int = Query(default=0),
+                                season: int | None = Query(default=None),
+                                pit: bool = Query(default=True)):
+    """Run NHL backtest at multiple edge thresholds (1-15%) and compare.
+
+    Returns a list of dicts with bets/win_pct/roi/profit per threshold for
+    each bet category (moneyline, over_under, puck_line, best_bet).
+    """
+    try:
+        from engine.nhl_backtest import analyze_edge_thresholds
+        return analyze_edge_thresholds(days=days, season=season, pit_mode=pit)
+    except Exception as e:
+        logger.error("NHL threshold analysis failed: %s", e, exc_info=True)
         return {"error": str(e)}
