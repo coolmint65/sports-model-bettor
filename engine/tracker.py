@@ -12,6 +12,7 @@ Usage:
 
 import json
 import logging
+import urllib.error
 import urllib.request
 from datetime import datetime
 
@@ -33,7 +34,7 @@ def _fetch_espn_scoreboard(date: str) -> list[dict]:
         })
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())
-    except Exception as e:
+    except (urllib.error.URLError, json.JSONDecodeError, OSError) as e:
         logger.warning("ESPN scoreboard fetch failed: %s", e)
         return []
 
@@ -55,8 +56,7 @@ def _fetch_espn_scoreboard(date: str) -> list[dict]:
                 "name": team.get("displayName", ""),
                 "team_id": None,
             }
-            # Try to resolve team_id from DB
-            db_team = get_team_by_id(None)  # won't match
+            # Resolve team_id from DB
             from .db import get_conn as _gc
             row = _gc().execute(
                 "SELECT mlb_id FROM teams WHERE abbreviation = ?",

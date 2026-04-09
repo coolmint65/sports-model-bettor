@@ -111,9 +111,166 @@ def _is_late_season() -> bool:
     return now.month == 4 and now.day < 17
 
 
+# ── Unified NHL standings cache ──────────────────────────────
+# All three data sources (live stats, records, playoff context) come from
+# the same NHL API endpoint.  _ensure_standings_loaded() fetches it once
+# and populates every cache from a single HTTP request.
+
+_standings_raw_cache: dict | None = None
+_standings_raw_time: float = 0
+
 # Cached playoff context per team
 _playoff_context_cache: dict | None = None
 _playoff_context_time: float = 0
+
+
+def _fetch_standings_api() -> dict | None:
+    """Fetch raw standings JSON from the NHL API (single HTTP call)."""
+    try:
+        import json
+        import urllib.error
+        import urllib.request
+        req = urllib.request.Request(
+            "https://api-web.nhle.com/v1/standings/now",
+            headers={"User-Agent": "Mozilla/5.0"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read().decode())
+    except (urllib.error.URLError, json.JSONDecodeError, OSError) as e:
+        logger.debug("NHL standings API fetch failed: %s", e)
+        return None
+
+
+def _ensure_standings_loaded() -> None:
+    """Fetch standings once and populate all caches (stats, records, playoff context)."""
+    import time as _time
+    global _standings_raw_cache, _standings_raw_time
+    global _live_stats_cache, _live_stats_time
+    global _live_standings_cache, _live_standings_time
+    global _playoff_context_cache, _playoff_context_time
+
+    # All caches share the same 30-min TTL; check one representative timestamp
+    if _standings_raw_cache and (_time.time() - _standings_raw_time) < 1800:
+        return  # Already fresh
+
+    data = _fetch_standings_api()
+    if not data:
+        return
+
+    _standings_raw_cache = data
+    _standings_raw_time = _time.time()
+
+    stats: dict = {}
+    standings: dict = {}
+    context: dict = {}
+
+    for entry in data.get("standings", []):
+        team_abbr_obj = entry.get("teamAbbrev", {})
+        abbr = team_abbr_obj.get("default", "") if isinstance(team_abbr_obj, dict) else str(team_abbr_obj)
+
+        # ── Records (for _get_live_record) ──
+        wins = entry.get("wins", 0)
+        losses = entry.get("losses", 0)
+        otl = entry.get("otLosses", 0)
+        standings[abbr] = f"{wins}-{losses}-{otl}"
+
+        # ── Team stats (for _get_live_team_stats) ──
+        gp = wins + losses + otl
+        gf = entry.get("goalFor", 0)
+        ga = entry.get("goalAgainst", 0)
+
+        if gp > 0:
+            team_stats = {
+                "goals_for_avg": round(gf / gp, 2),
+                "goals_against_avg": round(ga / gp, 2),
+            }
+
+            home_wins = entry.get("homeWins", 0)
+            home_losses = entry.get("homeLosses", 0)
+            home_otl = entry.get("homeOtLosses", 0)
+            home_gp = home_wins + home_losses + home_otl
+            road_wins = entry.get("roadWins", 0)
+            road_losses = entry.get("roadLosses", 0)
+            road_otl = entry.get("roadOtLosses", 0)
+            road_gp = road_wins + road_losses + road_otl
+
+            if home_gp > 0:
+                home_pts_pct = (home_wins * 2 + home_otl) / (home_gp * 2)
+                team_stats["home_pts_pct"] = round(home_pts_pct, 3)
+                home_gf = entry.get("homeGoalsFor", 0)
+                home_ga = entry.get("homeGoalsAgainst", 0)
+                if home_gf > 0:
+                    team_stats["home_gf_avg"] = round(home_gf / home_gp, 2)
+                    team_stats["home_ga_avg"] = round(home_ga / home_gp, 2)
+
+            if road_gp > 0:
+                road_pts_pct = (road_wins * 2 + road_otl) / (road_gp * 2)
+                team_stats["road_pts_pct"] = round(road_pts_pct, 3)
+                road_gf = entry.get("roadGoalsFor", 0)
+                road_ga = entry.get("roadGoalsAgainst", 0)
+                if road_gf > 0:
+                    team_stats["road_gf_avg"] = round(road_gf / road_gp, 2)
+                    team_stats["road_ga_avg"] = round(road_ga / road_gp, 2)
+
+            l10_gf = entry.get("l10GoalsFor", 0)
+            l10_ga = entry.get("l10GoalsAgainst", 0)
+            l10_gp_val = entry.get("l10GamesPlayed", 0)
+            if l10_gp_val > 0:
+                team_stats["l10_gf_avg"] = round(l10_gf / l10_gp_val, 2)
+                team_stats["l10_ga_avg"] = round(l10_ga / l10_gp_val, 2)
+
+            stats[abbr] = team_stats
+
+        # ── Playoff context (for _get_team_playoff_context) ──
+        clinch = entry.get("clinchIndicator", "")
+        wildcard = entry.get("wildcardSequence", 99)
+        pts_pct = entry.get("pointPctg", 0.5)
+        l10w = entry.get("l10Wins", 0)
+        l10l = entry.get("l10Losses", 0)
+        l10o = entry.get("l10OtLosses", 0)
+        l10_gp_ctx = entry.get("l10GamesPlayed", 10)
+        l10_pts = l10w * 2 + l10o
+        l10_pts_pct = l10_pts / (l10_gp_ctx * 2) if l10_gp_ctx > 0 else 0.5
+
+        clinched = bool(clinch)
+        eliminated = pts_pct < 0.40 and not clinched
+        fighting = not clinched and not eliminated and wildcard <= 4
+
+        if eliminated:
+            motivation = 0.2
+        elif clinched and wildcard == 0:
+            motivation = 0.6
+        elif clinched:
+            motivation = 0.75
+        elif fighting:
+            motivation = 1.0
+        else:
+            motivation = 0.9
+
+        if l10_pts_pct > 0.7:
+            motivation = min(1.0, motivation + 0.1)
+        elif l10_pts_pct < 0.3:
+            motivation = max(0.2, motivation - 0.1)
+
+        context[abbr] = {
+            "clinched": clinched,
+            "eliminated": eliminated,
+            "fighting": fighting,
+            "clinch_indicator": clinch,
+            "wildcard_seq": wildcard,
+            "points_pace": round(pts_pct, 3),
+            "l10_record": f"{l10w}-{l10l}-{l10o}",
+            "l10_pts_pct": round(l10_pts_pct, 3),
+            "motivation": round(motivation, 2),
+        }
+
+    now = _time.time()
+    _live_stats_cache = stats
+    _live_stats_time = now
+    _live_standings_cache = standings
+    _live_standings_time = now
+    _playoff_context_cache = context
+    _playoff_context_time = now
 
 
 def _get_team_playoff_context(abbr: str) -> dict:
@@ -132,82 +289,8 @@ def _get_team_playoff_context(abbr: str) -> dict:
             "motivation": float,     # 0.0 (nothing to play for) to 1.0 (desperate)
         }
     """
-    import time as _time
-    global _playoff_context_cache, _playoff_context_time
-
-    if _playoff_context_cache and (_time.time() - _playoff_context_time) < 1800:
-        return _playoff_context_cache.get(abbr, {})
-
-    try:
-        import json
-        import urllib.request
-        req = urllib.request.Request(
-            "https://api-web.nhle.com/v1/standings/now",
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
-
-        context = {}
-        for entry in data.get("standings", []):
-            team_abbr_obj = entry.get("teamAbbrev", {})
-            team_abbr = team_abbr_obj.get("default", "") if isinstance(team_abbr_obj, dict) else str(team_abbr_obj)
-
-            clinch = entry.get("clinchIndicator", "")
-            wildcard = entry.get("wildcardSequence", 99)
-            pts_pct = entry.get("pointPctg", 0.5)
-            l10w = entry.get("l10Wins", 0)
-            l10l = entry.get("l10Losses", 0)
-            l10o = entry.get("l10OtLosses", 0)
-            l10_gp = entry.get("l10GamesPlayed", 10)
-            l10_pts = l10w * 2 + l10o
-            l10_pts_pct = l10_pts / (l10_gp * 2) if l10_gp > 0 else 0.5
-
-            clinched = bool(clinch)  # Any clinch indicator = clinched
-            eliminated = pts_pct < 0.40 and not clinched  # Rough heuristic
-            fighting = not clinched and not eliminated and wildcard <= 4
-
-            # Motivation score: how much does this game matter?
-            if eliminated:
-                motivation = 0.2  # Playing for pride/draft position
-            elif clinched and wildcard == 0:
-                # Clinched division — might rest players
-                motivation = 0.6
-            elif clinched:
-                # Clinched but seeding still matters
-                motivation = 0.75
-            elif fighting:
-                # In the race — every point counts
-                motivation = 1.0
-            else:
-                # On the bubble
-                motivation = 0.9
-
-            # Boost motivation if recent form is hot (team is surging)
-            if l10_pts_pct > 0.7:
-                motivation = min(1.0, motivation + 0.1)
-            elif l10_pts_pct < 0.3:
-                motivation = max(0.2, motivation - 0.1)
-
-            context[team_abbr] = {
-                "clinched": clinched,
-                "eliminated": eliminated,
-                "fighting": fighting,
-                "clinch_indicator": clinch,
-                "wildcard_seq": wildcard,
-                "points_pace": round(pts_pct, 3),
-                "l10_record": f"{l10w}-{l10l}-{l10o}",
-                "l10_pts_pct": round(l10_pts_pct, 3),
-                "motivation": round(motivation, 2),
-            }
-
-        _playoff_context_cache = context
-        _playoff_context_time = _time.time()
-        return context.get(abbr, {})
-
-    except Exception as e:
-        logger.debug("Playoff context fetch failed: %s", e)
-        return {}
+    _ensure_standings_loaded()
+    return (_playoff_context_cache or {}).get(abbr, {})
 
 
 def _get_season_context_for_matchup(home_abbr: str, away_abbr: str) -> dict:
@@ -277,10 +360,11 @@ def _check_back_to_back(team_abbr: str) -> float:
     if _b2b_cache and (_time.time() - _b2b_cache_time) < 1800:
         return _b2b_cache.get(team_abbr, 1.0)
 
-    try:
-        import json
-        import urllib.request
+    import json
+    import urllib.error
+    import urllib.request
 
+    try:
         today = datetime.utcnow().date()
         teams_yesterday: set[str] = set()
         teams_day_before: set[str] = set()
@@ -342,7 +426,7 @@ def _check_back_to_back(team_abbr: str) -> float:
         _b2b_cache_time = _time.time()
         return result.get(team_abbr, 1.0)
 
-    except Exception as e:
+    except (urllib.error.URLError, json.JSONDecodeError, KeyError, OSError) as e:
         logger.debug("Back-to-back check failed: %s", e)
         return 1.0
 
@@ -351,116 +435,14 @@ def _get_live_team_stats() -> dict:
     """Get current season per-game stats from NHL API standings (cached 30 min).
     Returns {abbr: {goals_for_avg, goals_against_avg, ...}}
     """
-    import time as _time
-    global _live_stats_cache, _live_stats_time
+    _ensure_standings_loaded()
+    return _live_stats_cache or {}
 
-    if _live_stats_cache and (_time.time() - _live_stats_time) < 1800:
-        return _live_stats_cache
-
-    try:
-        import json
-        import urllib.request
-        req = urllib.request.Request(
-            "https://api-web.nhle.com/v1/standings/now",
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
-
-        stats = {}
-        for entry in data.get("standings", []):
-            team_abbr_obj = entry.get("teamAbbrev", {})
-            abbr = team_abbr_obj.get("default", "") if isinstance(team_abbr_obj, dict) else str(team_abbr_obj)
-
-            wins = entry.get("wins", 0)
-            losses = entry.get("losses", 0)
-            otl = entry.get("otLosses", 0)
-            gp = wins + losses + otl
-            gf = entry.get("goalFor", 0)
-            ga = entry.get("goalAgainst", 0)
-
-            if gp > 0:
-                team_stats = {
-                    "goals_for_avg": round(gf / gp, 2),
-                    "goals_against_avg": round(ga / gp, 2),
-                }
-
-                # Extract home/away split win rates for venue adjustment
-                home_wins = entry.get("homeWins", 0)
-                home_losses = entry.get("homeLosses", 0)
-                home_otl = entry.get("homeOtLosses", 0)
-                home_gp = home_wins + home_losses + home_otl
-                road_wins = entry.get("roadWins", 0)
-                road_losses = entry.get("roadLosses", 0)
-                road_otl = entry.get("roadOtLosses", 0)
-                road_gp = road_wins + road_losses + road_otl
-
-                if home_gp > 0:
-                    home_pts_pct = (home_wins * 2 + home_otl) / (home_gp * 2)
-                    team_stats["home_pts_pct"] = round(home_pts_pct, 3)
-                    home_gf = entry.get("homeGoalsFor", 0)
-                    home_ga = entry.get("homeGoalsAgainst", 0)
-                    if home_gf > 0:
-                        team_stats["home_gf_avg"] = round(home_gf / home_gp, 2)
-                        team_stats["home_ga_avg"] = round(home_ga / home_gp, 2)
-
-                if road_gp > 0:
-                    road_pts_pct = (road_wins * 2 + road_otl) / (road_gp * 2)
-                    team_stats["road_pts_pct"] = round(road_pts_pct, 3)
-                    road_gf = entry.get("roadGoalsFor", 0)
-                    road_ga = entry.get("roadGoalsAgainst", 0)
-                    if road_gf > 0:
-                        team_stats["road_gf_avg"] = round(road_gf / road_gp, 2)
-                        team_stats["road_ga_avg"] = round(road_ga / road_gp, 2)
-
-                # L10 scoring averages for totals blending
-                l10_gf = entry.get("l10GoalsFor", 0)
-                l10_ga = entry.get("l10GoalsAgainst", 0)
-                l10_gp_val = entry.get("l10GamesPlayed", 0)
-                if l10_gp_val > 0:
-                    team_stats["l10_gf_avg"] = round(l10_gf / l10_gp_val, 2)
-                    team_stats["l10_ga_avg"] = round(l10_ga / l10_gp_val, 2)
-
-                stats[abbr] = team_stats
-
-        _live_stats_cache = stats
-        _live_stats_time = _time.time()
-        return stats
-    except Exception:
-        return {}
 
 def _get_live_record(abbr: str) -> str | None:
     """Get current W-L-OTL record from NHL API standings (cached 30 min)."""
-    import time as _time
-    global _live_standings_cache, _live_standings_time
-
-    if _live_standings_cache and (_time.time() - _live_standings_time) < 1800:
-        return _live_standings_cache.get(abbr)
-
-    try:
-        import json
-        import urllib.request
-        req = urllib.request.Request(
-            "https://api-web.nhle.com/v1/standings/now",
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
-
-        standings = {}
-        for entry in data.get("standings", []):
-            team_abbr_obj = entry.get("teamAbbrev", {})
-            team_abbr = team_abbr_obj.get("default", "") if isinstance(team_abbr_obj, dict) else str(team_abbr_obj)
-            wins = entry.get("wins", 0)
-            losses = entry.get("losses", 0)
-            otl = entry.get("otLosses", 0)
-            standings[team_abbr] = f"{wins}-{losses}-{otl}"
-
-        _live_standings_cache = standings
-        _live_standings_time = _time.time()
-        return standings.get(abbr)
-    except Exception:
-        return None
+    _ensure_standings_loaded()
+    return (_live_standings_cache or {}).get(abbr)
 
 
 def _record_to_points_pct(record: str) -> float:
@@ -665,14 +647,14 @@ def predict_matchup(home_key: str, away_key: str,
     # Home PP vs away PK
     h_pp = hs.get("pp_pct", league_pp)
     a_pk = as_.get("pk_pct", league_pk)
-    if h_pp and a_pk:
+    if h_pp is not None and h_pp > 0 and a_pk is not None and a_pk > 0:
         pp_edge = (h_pp - league_pp) + (league_pk - a_pk)
         home_xg += pp_edge * pp_weight
 
     # Away PP vs home PK
     a_pp = as_.get("pp_pct", league_pp)
     h_pk = hs.get("pk_pct", league_pk)
-    if a_pp and h_pk:
+    if a_pp is not None and a_pp > 0 and h_pk is not None and h_pk > 0:
         pp_edge = (a_pp - league_pp) + (league_pk - h_pk)
         away_xg += pp_edge * pp_weight
 
@@ -681,9 +663,9 @@ def predict_matchup(home_key: str, away_key: str,
     h_sv = hs.get("save_pct", league_sv)
     a_sv = as_.get("save_pct", league_sv)
     # Better save% suppresses opponent's expected goals
-    if h_sv and league_sv:
+    if h_sv is not None and h_sv > 0 and league_sv > 0:
         away_xg *= max(0.85, min(1.15, league_sv / h_sv))
-    if a_sv and league_sv:
+    if a_sv is not None and a_sv > 0 and league_sv > 0:
         home_xg *= max(0.85, min(1.15, league_sv / a_sv))
 
     # ── Shot volume adjustment ──
@@ -898,7 +880,7 @@ def predict_matchup(home_key: str, away_key: str,
         h_live = live_stats[h_abbr_for_stats]
         l10_gf = h_live.get("l10_gf_avg")
         season_gf = h_live.get("goals_for_avg")
-        if l10_gf and season_gf:
+        if l10_gf and season_gf and season_gf > 0:
             # 40% weight on recent form for totals
             ou_home_xg = ou_home_xg * 0.6 + (ou_home_xg * l10_gf / season_gf) * 0.4
         l10_ga = h_live.get("l10_ga_avg")
@@ -911,7 +893,7 @@ def predict_matchup(home_key: str, away_key: str,
         a_live = live_stats[a_abbr_for_stats]
         l10_gf = a_live.get("l10_gf_avg")
         season_gf = a_live.get("goals_for_avg")
-        if l10_gf and season_gf:
+        if l10_gf and season_gf and season_gf > 0:
             ou_away_xg = ou_away_xg * 0.6 + (ou_away_xg * l10_gf / season_gf) * 0.4
         l10_ga = a_live.get("l10_ga_avg")
         season_ga = a_live.get("goals_against_avg")

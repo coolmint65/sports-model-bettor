@@ -1009,54 +1009,6 @@ def _nhl_alt_abbr(abbr: str) -> str:
     return _NHL_ABBR_ALTS.get(abbr, abbr)
 
 
-@app.get("/api/debug/injuries")
-def api_debug_injuries():
-    """Debug: test injury fetching + show raw ESPN structure."""
-    result = {}
-
-    # Raw ESPN response inspection
-    try:
-        nhl_raw = _fetch_espn_json("https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/injuries")
-        if nhl_raw:
-            result["nhl_raw_keys"] = list(nhl_raw.keys())
-            # Find the team blocks
-            for key in nhl_raw:
-                if isinstance(nhl_raw[key], list) and len(nhl_raw[key]) > 0:
-                    first = nhl_raw[key][0]
-                    if isinstance(first, dict):
-                        result[f"nhl_{key}_first_keys"] = list(first.keys())[:10]
-                        if "team" in first:
-                            result[f"nhl_{key}_team_keys"] = list(first["team"].keys())[:10]
-                            result[f"nhl_{key}_team_sample"] = {
-                                k: first["team"][k] for k in list(first["team"].keys())[:5]
-                            }
-                        # Check if injuries are nested
-                        if "injuries" in first:
-                            inj = first["injuries"]
-                            if isinstance(inj, list) and len(inj) > 0:
-                                result[f"nhl_{key}_injury_first"] = inj[0] if isinstance(inj[0], dict) else str(inj[0])[:200]
-        else:
-            result["nhl_raw"] = "null/empty"
-    except Exception as e:
-        result["nhl_raw_error"] = str(e)
-
-    # Parsed results
-    try:
-        from engine.injuries import fetch_nhl_injuries
-        nhl = fetch_nhl_injuries()
-        result["nhl_teams_with_injuries"] = len(nhl)
-        result["nhl_sample"] = {k: v[:2] for k, v in list(nhl.items())[:3]} if nhl else "empty"
-    except Exception as e:
-        result["nhl_error"] = str(e)
-    try:
-        from engine.injuries import fetch_mlb_injuries
-        mlb = fetch_mlb_injuries()
-        result["mlb_teams_with_injuries"] = len(mlb)
-        result["mlb_sample"] = {k: v[:2] for k, v in list(mlb.items())[:3]} if mlb else "empty"
-    except Exception as e:
-        result["mlb_error"] = str(e)
-    return result
-
 
 def _get_nhl_scoreboard(date: str = "") -> list[dict]:
     """Fetch NHL scoreboard from ESPN."""
@@ -1400,58 +1352,6 @@ def _fetch_nhl_odds() -> dict:
     return odds_map
 
 
-@app.get("/api/nhl/goalies/debug")
-def api_nhl_goalies_debug():
-    """Debug: fetch DailyFaceoff HTML and return structure for inspection."""
-    import urllib.request
-    try:
-        req = urllib.request.Request("https://www.dailyfaceoff.com/starting-goalies/", headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml",
-            "Accept-Language": "en-US,en;q=0.9",
-        })
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            html = resp.read().decode("utf-8", errors="replace")
-        import re
-
-        # Look for JSON data embedded in the page (Next.js __NEXT_DATA__)
-        next_data = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
-        next_data_preview = ""
-        if next_data:
-            nd = next_data.group(1)
-            next_data_preview = nd[:3000]
-
-        # Look for any JSON-like data with goalie/team info
-        json_blocks = re.findall(r'\{[^{}]*(?:goalie|Goalie|netminder)[^{}]*\}', html)
-
-        # Find team names near player-looking names (First Last pattern)
-        team_player = re.findall(
-            r'(?:Bruins|Maple Leafs|Canadiens|Rangers|Islanders|Devils|Flyers|Penguins|'
-            r'Capitals|Hurricanes|Blue Jackets|Lightning|Panthers|Sabres|Senators|Red Wings|'
-            r'Blackhawks|Blues|Predators|Stars|Wild|Jets|Avalanche|Flames|Oilers|Canucks|'
-            r'Golden Knights|Kraken|Kings|Ducks|Sharks|Mammoth)[^<]{0,200}',
-            html
-        )
-
-        # Find confirmed/expected status text
-        status_context = []
-        for m in re.finditer(r'(?:confirmed|expected|unconfirmed|likely|probable)', html, re.IGNORECASE):
-            start = max(0, m.start() - 200)
-            end = min(len(html), m.end() + 200)
-            status_context.append(html[start:end])
-
-        return {
-            "html_length": len(html),
-            "has_next_data": bool(next_data),
-            "next_data_preview": next_data_preview,
-            "json_goalie_blocks": json_blocks[:5],
-            "team_player_nearby": team_player[:10],
-            "status_context": status_context[:5],
-        }
-    except Exception as e:
-        return {"error": str(e)}
-
-
 @app.post("/api/nhl/sync")
 def api_nhl_sync():
     """Refresh NHL team data from ESPN."""
@@ -1782,24 +1682,6 @@ def api_nhl_settle_picks():
     """Settle completed NHL picks."""
     from engine.nhl_tracker import settle_picks
     return settle_picks()
-
-
-@app.get("/api/debug/nhl-api-keys")
-def api_debug_nhl_keys():
-    """Debug: show what fields the NHL API standings returns."""
-    data = _fetch_espn_json("https://api-web.nhle.com/v1/standings/now")
-    if not data or not data.get("standings"):
-        return {"error": "No data from NHL API"}
-    entry = data["standings"][0]
-    # Return all keys with their types and values for team-related fields
-    result = {}
-    for k in sorted(entry.keys()):
-        v = entry[k]
-        if isinstance(v, (int, float, str, bool)) or v is None:
-            result[k] = v
-        elif isinstance(v, dict):
-            result[k] = {dk: dv for dk, dv in v.items() if isinstance(dv, (int, float, str, bool))}
-    return result
 
 
 @app.get("/api/nhl/backtest")

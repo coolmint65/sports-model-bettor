@@ -5,10 +5,11 @@ Uses Open-Meteo API (free, no key needed) to fetch current weather
 conditions at game venues and compute run adjustments.
 """
 
+import json
 import logging
+import urllib.error
+import urllib.request
 from datetime import datetime
-
-import requests
 
 logger = logging.getLogger(__name__)
 
@@ -91,10 +92,10 @@ def get_game_weather(lat: float, lon: float, game_time: datetime | None = None) 
         f"&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=auto"
     )
     try:
-        resp = requests.get(url, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as e:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+    except (urllib.error.URLError, json.JSONDecodeError) as e:
         logger.warning("Failed to fetch weather at (%.4f, %.4f): %s", lat, lon, e)
         return None
 

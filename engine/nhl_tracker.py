@@ -9,21 +9,22 @@ Usage:
 
 import json
 import logging
+import sqlite3
+import threading
+import urllib.error
 from datetime import datetime, timedelta
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+_local = threading.local()
 
 
 def _get_nhl_db():
     """Get NHL picks DB connection (SQLite, separate from MLB)."""
-    import sqlite3
-    import threading
-    from pathlib import Path
-
     db_path = Path(__file__).resolve().parent.parent / "data" / "nhl.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    _local = threading.local()
     if not hasattr(_local, "conn") or _local.conn is None:
         conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
@@ -66,7 +67,7 @@ def _fetch_nhl_scoreboard(date: str) -> list[dict]:
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())
             return data.get("events", [])
-    except Exception as e:
+    except (urllib.error.URLError, json.JSONDecodeError, OSError) as e:
         logger.warning("Failed to fetch NHL scoreboard for %s: %s", date, e)
         return []
 

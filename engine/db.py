@@ -339,14 +339,18 @@ def _init_schema(conn: sqlite3.Connection) -> None:
 
     -- Indexes for common queries
     CREATE INDEX IF NOT EXISTS idx_games_date ON games(date);
+    CREATE INDEX IF NOT EXISTS idx_games_status ON games(status);
     CREATE INDEX IF NOT EXISTS idx_games_season ON games(season);
     CREATE INDEX IF NOT EXISTS idx_games_home ON games(home_team_id);
     CREATE INDEX IF NOT EXISTS idx_games_away ON games(away_team_id);
     CREATE INDEX IF NOT EXISTS idx_pitcher_stats_player ON pitcher_stats(player_id, season);
     CREATE INDEX IF NOT EXISTS idx_batter_stats_player ON batter_stats(player_id, season);
+    CREATE INDEX IF NOT EXISTS idx_batter_stats_team ON batter_stats(team_id, season);
     CREATE INDEX IF NOT EXISTS idx_h2h_batter ON h2h_matchups(batter_id);
     CREATE INDEX IF NOT EXISTS idx_h2h_pitcher ON h2h_matchups(pitcher_id);
     CREATE INDEX IF NOT EXISTS idx_team_stats_team ON team_stats(team_id, season);
+    CREATE INDEX IF NOT EXISTS idx_picks_game ON picks(game_id);
+    CREATE INDEX IF NOT EXISTS idx_players_team ON players(team_id);
     """)
     conn.commit()
 
