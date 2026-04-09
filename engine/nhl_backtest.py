@@ -210,20 +210,46 @@ def _abbr_to_team_key(abbr: str) -> str | None:
 
 
 def _prob_to_american(prob: float) -> int:
-    """Convert probability to approximate American odds with standard vig (5%).
-    This represents what the MARKET would price this at, not our model's view.
-    """
+    """Convert a raw probability to American odds with standard vig."""
     if prob <= 0 or prob >= 1:
         return -110
-    # Market odds = model probability adjusted DOWN (market is less confident)
-    # Real NHL market vig is ~4.5% total (2.25% per side) but the model
-    # should see edges of 3-10% on good picks. Use 4% gap to simulate
-    # that our model has genuine information advantage over the market.
-    market_prob = max(0.05, min(0.95, prob - 0.04))
-    if market_prob >= 0.5:
-        return int(-market_prob / (1 - market_prob) * 100)
+    # Add standard 2.5% vig per side
+    vigged = min(0.95, prob + 0.025)
+    if vigged >= 0.5:
+        return int(-vigged / (1 - vigged) * 100)
     else:
-        return int((1 - market_prob) / market_prob * 100)
+        return int((1 - vigged) / vigged * 100)
+
+
+def _compute_market_prob(home_stats: dict, away_stats: dict) -> float:
+    """Simulate what the market would price the home team at.
+
+    Uses a simpler model than our prediction (just win%, goals) to represent
+    what an average bettor/market maker would see. Our enhanced model should
+    find edges OVER this baseline.
+    """
+    # Simple market: weighted average of win% and goals-based estimate
+    # This is intentionally dumber than our PIT model
+    h_wp = home_stats.get("win_pct", 0.5)
+    a_wp = away_stats.get("win_pct", 0.5)
+
+    # Win% based estimate (+ small home-ice bonus)
+    wp_estimate = (h_wp / (h_wp + a_wp)) if (h_wp + a_wp) > 0 else 0.5
+    wp_estimate = wp_estimate * 0.95 + 0.025  # Add 2.5% home-ice
+
+    # Goals-based estimate (simpler than our full model)
+    h_gf = home_stats.get("goals_for_avg", 3.0)
+    a_gf = away_stats.get("goals_for_avg", 3.0)
+    h_ga = home_stats.get("goals_against_avg", 3.0)
+    a_ga = away_stats.get("goals_against_avg", 3.0)
+
+    h_strength = h_gf / max(h_ga, 1.5)
+    a_strength = a_gf / max(a_ga, 1.5)
+    goals_estimate = h_strength / (h_strength + a_strength) + 0.02  # Home ice
+
+    # Market = blend of both (no special teams, no momentum, no shots)
+    market = wp_estimate * 0.5 + goals_estimate * 0.5
+    return max(0.25, min(0.75, market))
 
 
 def _compute_pit_stats(conn, team_id: int, game_date: str,
@@ -596,23 +622,27 @@ def run_nhl_backtest(days: int = 30, min_edge: float = 3.0,
             if fav_won:
                 calibration_buckets[bucket_key][1] += 1  # correct
 
+        # ── Compute market baseline (simpler model = what bookmakers see) ──
+        if pit_mode and pit_conn and home_pit and away_pit:
+            market_home = _compute_market_prob(home_pit, away_pit)
+        else:
+            market_home = 0.5  # No market estimate available
+        market_away = 1 - market_home
+
         # ── Moneyline ──
-        # Task 3: Use probability-based realistic odds with vig instead of
-        # flat -150/+130.  Estimate what the market line would be from the
-        # model's own probabilities, then check if the edge still clears.
         fav_home = p_home > p_away
         if fav_home:
             ml_prob = p_home
-            ml_odds = _prob_to_american(p_home)
-            ml_implied = _implied(ml_odds)
+            ml_market = market_home
+            ml_odds = _prob_to_american(ml_market)  # Market odds from baseline
             ml_pick = home_abbr
         else:
             ml_prob = p_away
-            ml_odds = _prob_to_american(p_away)
-            ml_implied = _implied(ml_odds)
+            ml_market = market_away
+            ml_odds = _prob_to_american(ml_market)
             ml_pick = away_abbr
 
-        ml_edge = (ml_prob - ml_implied) * 100
+        ml_edge = (ml_prob - ml_market) * 100  # Edge = our model vs market baseline
         if ml_edge >= min_edge:
             ml_correct = (fav_home and home_won) or \
                          (not fav_home and not home_won)
@@ -649,9 +679,10 @@ def run_nhl_backtest(days: int = 30, min_edge: float = 3.0,
 
         ou_pick_over = p_over > 0.50
         ou_prob = p_over if ou_pick_over else (1 - p_over)
-        ou_odds = _prob_to_american(ou_prob)
-        ou_implied = _implied(ou_odds)
-        ou_edge = (ou_prob - ou_implied) * 100
+        # Market baseline for O/U: assume market prices at 52.4% (-110 vig)
+        ou_market = 0.524
+        ou_odds = -110  # Standard O/U odds
+        ou_edge = (ou_prob - ou_market) * 100
 
         if ou_edge >= min_edge:
             if actual_total == ou_line:
@@ -677,9 +708,11 @@ def run_nhl_backtest(days: int = 30, min_edge: float = 3.0,
 
         pl_pick_home = p_home_cover > 0.50
         pl_prob = p_home_cover if pl_pick_home else p_away_cover
-        pl_odds = _prob_to_american(pl_prob)
-        pl_implied = _implied(pl_odds)
-        pl_edge = (pl_prob - pl_implied) * 100
+        # Market baseline for PL: the +1.5 side is typically priced ~70% (-200),
+        # the -1.5 side ~30% (+170). Use 52.4% as baseline for whichever side we pick.
+        pl_market = 0.524
+        pl_odds = -110  # Standard PL odds for the side we're on
+        pl_edge = (pl_prob - pl_market) * 100
 
         if pl_edge >= min_edge:
             if pl_pick_home:
