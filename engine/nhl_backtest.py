@@ -78,11 +78,15 @@ def _load_games_from_db(days: int | None = None,
     yr = season or SEASON
 
     # NHL API stores season as YYYYYYYY (e.g. 20252026)
-    # Frontend sends just the start year (e.g. 2025)
-    # Try both formats
+    # Frontend sends just a year (e.g. 2025 or 2026)
+    # For NHL: season 2025-26 is stored as 20252026
+    # If user sends 2026, they mean the 2025-26 season (ends in 2026)
+    # If user sends 2025, they could mean 2025-26 (starts) or 2024-25 (ends)
     season_ids = [yr]
     if yr < 10000:
-        season_ids.append(yr * 10000 + yr + 1)  # 2025 -> 20252026
+        # Try both: year as start (2025->20252026) and as end (2025->20242025)
+        season_ids.append(yr * 10000 + yr + 1)      # 2025 -> 20252026
+        season_ids.append((yr - 1) * 10000 + yr)     # 2026 -> 20252026
 
     if days and days > 0:
         start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
