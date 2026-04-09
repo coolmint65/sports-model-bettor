@@ -77,7 +77,14 @@ def _load_games_from_db(days: int | None = None,
     conn = get_conn()
     yr = season or SEASON
 
-    if days:
+    # NHL API stores season as YYYYYYYY (e.g. 20252026)
+    # Frontend sends just the start year (e.g. 2025)
+    # Try both formats
+    season_ids = [yr]
+    if yr < 10000:
+        season_ids.append(yr * 10000 + yr + 1)  # 2025 -> 20252026
+
+    if days and days > 0:
         start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
         rows = conn.execute("""
             SELECT g.*,
@@ -90,16 +97,17 @@ def _load_games_from_db(days: int | None = None,
             ORDER BY g.date
         """, (start_date,)).fetchall()
     else:
-        rows = conn.execute("""
+        placeholders = ",".join("?" for _ in season_ids)
+        rows = conn.execute(f"""
             SELECT g.*,
                    ht.abbreviation as home_abbr, ht.name as home_name,
                    at.abbreviation as away_abbr, at.name as away_name
             FROM nhl_games g
             LEFT JOIN nhl_teams ht ON g.home_team_id = ht.id
             LEFT JOIN nhl_teams at ON g.away_team_id = at.id
-            WHERE g.status = 'final' AND g.season = ?
+            WHERE g.status = 'final' AND g.season IN ({placeholders})
             ORDER BY g.date
-        """, (yr,)).fetchall()
+        """, season_ids).fetchall()
 
     return [dict(r) for r in rows]
 
