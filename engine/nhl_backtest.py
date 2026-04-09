@@ -296,8 +296,16 @@ def run_nhl_backtest(days: int = 30, min_edge: float = 3.0,
 
     yr = season or SEASON
 
+    # Debug: track data source
+    game_dates = [g.get("date", "?") for g in games[:3]]
+    game_seasons = [g.get("season", "?") for g in games[:3]]
+
     results = {
         "season": yr,
+        "source": source,
+        "debug_game_count": len(games),
+        "debug_sample_dates": game_dates,
+        "debug_sample_seasons": game_seasons,
         "games_tested": 0,
         "games_skipped": 0,
         "moneyline": _empty_cat(),
