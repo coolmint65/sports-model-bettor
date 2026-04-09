@@ -469,15 +469,19 @@ def _pit_predict(home_stats: dict, away_stats: dict) -> dict | None:
         ou_home_xg = ou_home_xg * 0.6 + (ou_home_xg * l5_ga_a / season_ga_a) * 0.4
 
     # ── Goalie impact on totals (amplified vs ML) ──
-    # Goalie impact on totals is stronger than on win probability.
-    # A backup goalie doesn't change WHO wins as much as HOW MANY goals are scored.
+    # Only apply when save% deviates from league average — don't boost
+    # all predictions by a flat multiplier.
     if home_stats.get("save_pct_proxy") and away_stats.get("save_pct_proxy"):
         league_sv = 0.905
-        # For O/U, amplify the goaltending effect by 1.5x
-        h_sv_factor = max(0.80, min(1.20, league_sv / home_stats["save_pct_proxy"]))
-        a_sv_factor = max(0.80, min(1.20, league_sv / away_stats["save_pct_proxy"]))
-        ou_away_xg *= h_sv_factor * 1.2  # Home goalie quality affects away scoring more for totals
-        ou_home_xg *= a_sv_factor * 1.2
+        h_sv = home_stats["save_pct_proxy"]
+        a_sv = away_stats["save_pct_proxy"]
+        # Only adjust if goalie deviates from league average by >0.5%
+        if abs(h_sv - league_sv) > 0.005:
+            h_sv_factor = max(0.85, min(1.15, league_sv / h_sv))
+            ou_away_xg *= h_sv_factor  # Bad home goalie = more away goals
+        if abs(a_sv - league_sv) > 0.005:
+            a_sv_factor = max(0.85, min(1.15, league_sv / a_sv))
+            ou_home_xg *= a_sv_factor
 
     # Floor O/U xGs
     ou_home_xg = max(ou_home_xg, 1.0)
@@ -506,7 +510,12 @@ def _pit_predict(home_stats: dict, away_stats: dict) -> dict | None:
     ou_matrix = _score_matrix(ou_home_xg, ou_away_xg)
     ou_pred_total = ou_home_xg + ou_away_xg
     ou_p_draw = sum(ou_matrix[i][i] for i in range(MAX_GOALS + 1))
-    ou_line = round(ou_pred_total * 2) / 2
+    # O/U line: use a standard market line, NOT the model's own prediction.
+    # Using the model's predicted total as the line is circular — the model
+    # will always have ~55% on whichever side of its own prediction.
+    # Standard NHL totals are 5.5 or 6.5. Use 5.5 as the most common line.
+    # (In production, we compare against the real DK line.)
+    ou_line = 5.5
 
     p_over = 0.0
     for h in range(MAX_GOALS + 1):
@@ -818,10 +827,8 @@ def run_nhl_backtest(days: int = 30, min_edge: float = 3.0,
             # Recompute O/U probabilities with B2B-adjusted xGs
             ou_home_xg = max(ou_home_xg, 1.0)
             ou_away_xg = max(ou_away_xg, 1.0)
-            ou_pred_total = ou_home_xg + ou_away_xg
-            ou_line = round(ou_pred_total * 2) / 2
+            ou_line = 5.5  # Fixed market line, not model prediction
             ou_matrix = _score_matrix(ou_home_xg, ou_away_xg)
-            ou_p_draw = sum(ou_matrix[i][i] for i in range(MAX_GOALS + 1))
             p_over = 0.0
             for h in range(MAX_GOALS + 1):
                 for a in range(MAX_GOALS + 1):
@@ -829,9 +836,8 @@ def run_nhl_backtest(days: int = 30, min_edge: float = 3.0,
                     if eff_total > ou_line:
                         p_over += ou_matrix[h][a]
         elif ou_line is None:
-            # Fallback for live-model path which may not set ou_line
-            pred_total = home_xg + away_xg
-            ou_line = round(pred_total * 2) / 2
+            # Fallback for live-model path
+            ou_line = 5.5  # Fixed market line
             matrix = _score_matrix(home_xg, away_xg)
             p_over = 0.0
             for h in range(MAX_GOALS + 1):
