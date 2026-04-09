@@ -418,10 +418,13 @@ def fetch_boxscores_for_date(date_str: str) -> int:
 
     count = 0
     for row in rows:
-        result = fetch_boxscore(row["game_id"])
-        if result:
-            count += 1
-        time.sleep(1)
+        try:
+            result = fetch_boxscore(row["game_id"])
+            if result:
+                count += 1
+        except Exception as e:
+            logger.warning("Boxscore failed for game %s: %s", row["game_id"], e)
+        time.sleep(0.5)
 
     return count
 
