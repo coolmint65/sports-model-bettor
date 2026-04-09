@@ -1107,6 +1107,23 @@ def _get_nhl_scoreboard(date: str = "") -> list[dict]:
                         matched += 1
                         break
             logger.info("NHL odds: matched %d/%d games", matched, len(games))
+
+            # Store odds snapshots for historical backtesting
+            try:
+                from engine.odds_history import store_nhl_odds
+                odds_rows = []
+                for game in games:
+                    if game.get("odds"):
+                        odds_rows.append({
+                            "game_date": target_date,
+                            "home_abbr": game["home"]["abbreviation"],
+                            "away_abbr": game["away"]["abbreviation"],
+                            "odds": game["odds"],
+                        })
+                if odds_rows:
+                    store_nhl_odds(odds_rows)
+            except Exception as e:
+                logger.debug("Odds history storage failed: %s", e)
     except Exception as e:
         logger.warning("NHL odds failed: %s", e)
 
@@ -1845,3 +1862,10 @@ def api_nhl_backtest_thresholds(days: int = Query(default=0),
     except Exception as e:
         logger.error("NHL threshold analysis failed: %s", e, exc_info=True)
         return {"error": str(e)}
+
+
+@app.get("/api/nhl/odds/history")
+def api_nhl_odds_history(date: str = Query(default="")):
+    """Get stored historical odds."""
+    from engine.odds_history import get_historical_odds
+    return get_historical_odds(date=date or None)

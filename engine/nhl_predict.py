@@ -1079,6 +1079,10 @@ def generate_nhl_picks(home_key: str, away_key: str,
     """
     Generate all NHL picks for a matchup with edge calculations.
     Similar to MLB's engine/picks.py but for hockey.
+
+    Backtesting shows ML is -6% ROI while O/U is +19% and PL is +12%.
+    Picks are prioritised: O/U (1) > PL (2) > ML (3) so that the best
+    pick per game is O/U or PL unless neither has any edge.
     """
     pred = predict_matchup(home_key, away_key)
     if not pred:
@@ -1104,12 +1108,14 @@ def generate_nhl_picks(home_key: str, away_key: str,
     home_ml = odds.get("home_ml")
     away_ml = odds.get("away_ml")
 
+    # ML picks are generated but given lower priority (priority 3).
+    # Backtesting shows ML is -6% ROI — O/U and PL are preferred.
     if home_ml and home_ml >= JUICE_WALL:
         edge = (wp["home"] - _implied(home_ml)) * 100
         if edge > 0:
             picks.append({
                 "type": "ML", "pick": h_abbr, "prob": round(wp["home"], 4),
-                "edge": round(edge, 1), "odds": home_ml,
+                "edge": round(edge, 1), "odds": home_ml, "priority": 3,
             })
 
     if away_ml and away_ml >= JUICE_WALL:
@@ -1117,7 +1123,7 @@ def generate_nhl_picks(home_key: str, away_key: str,
         if edge > 0:
             picks.append({
                 "type": "ML", "pick": a_abbr, "prob": round(wp["away"], 4),
-                "edge": round(edge, 1), "odds": away_ml,
+                "edge": round(edge, 1), "odds": away_ml, "priority": 3,
             })
 
     # ── Totals (O/U) ──
@@ -1150,7 +1156,7 @@ def generate_nhl_picks(home_key: str, away_key: str,
             if edge > 0 and real_odds >= JUICE_WALL:
                 picks.append({
                     "type": "O/U", "pick": label, "prob": round(prob, 4),
-                    "edge": round(edge, 1), "odds": real_odds,
+                    "edge": round(edge, 1), "odds": real_odds, "priority": 1,
                 })
 
     # ── Puck Line ──
@@ -1187,6 +1193,7 @@ def generate_nhl_picks(home_key: str, away_key: str,
                     "type": "PL", "pick": f"{h_abbr} {home_pl_point:+.1f}",
                     "prob": round(h_pl_prob, 4),
                     "edge": round(h_edge, 1), "odds": home_pl_odds,
+                    "priority": 2,
                 })
 
     if away_pl_point is not None:
@@ -1202,10 +1209,13 @@ def generate_nhl_picks(home_key: str, away_key: str,
                     "type": "PL", "pick": f"{a_abbr} {away_pl_point:+.1f}",
                     "prob": round(a_pl_prob, 4),
                     "edge": round(a_edge, 1), "odds": away_pl_odds,
+                    "priority": 2,
                 })
 
-    # Sort by edge
-    picks.sort(key=lambda p: p["edge"], reverse=True)
+    # Sort by priority first (O/U=1 > PL=2 > ML=3), then by edge descending.
+    # This ensures the "best pick" per game prefers O/U and PL over ML,
+    # since backtesting shows ML is -6% ROI while O/U is +19% and PL is +12%.
+    picks.sort(key=lambda p: (p["priority"], -p["edge"]))
 
     # Assign confidence
     for p in picks:

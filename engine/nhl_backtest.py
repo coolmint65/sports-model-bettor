@@ -468,6 +468,17 @@ def _pit_predict(home_stats: dict, away_stats: dict) -> dict | None:
     if season_ga_a > 0:
         ou_home_xg = ou_home_xg * 0.6 + (ou_home_xg * l5_ga_a / season_ga_a) * 0.4
 
+    # ── Goalie impact on totals (amplified vs ML) ──
+    # Goalie impact on totals is stronger than on win probability.
+    # A backup goalie doesn't change WHO wins as much as HOW MANY goals are scored.
+    if home_stats.get("save_pct_proxy") and away_stats.get("save_pct_proxy"):
+        league_sv = 0.905
+        # For O/U, amplify the goaltending effect by 1.5x
+        h_sv_factor = max(0.80, min(1.20, league_sv / home_stats["save_pct_proxy"]))
+        a_sv_factor = max(0.80, min(1.20, league_sv / away_stats["save_pct_proxy"]))
+        ou_away_xg *= h_sv_factor * 1.2  # Home goalie quality affects away scoring more for totals
+        ou_home_xg *= a_sv_factor * 1.2
+
     # Floor O/U xGs
     ou_home_xg = max(ou_home_xg, 1.0)
     ou_away_xg = max(ou_away_xg, 1.0)
@@ -508,6 +519,8 @@ def _pit_predict(home_stats: dict, away_stats: dict) -> dict | None:
     return {
         "home_xg": home_xg,
         "away_xg": away_xg,
+        "ou_home_xg": ou_home_xg,
+        "ou_away_xg": ou_away_xg,
         "p_home": p_home_ml,
         "p_away": p_away_ml,
         "total": ou_pred_total + ou_p_draw,  # O/U-adjusted total + OT goal approx
@@ -552,6 +565,26 @@ def _predict_game(home_abbr: str, away_abbr: str) -> dict | None:
         "puck_line": pred["puck_line"],
         "over_under": pred.get("over_under", {}),
     }
+
+
+# ── Back-to-back detection ───────────────────────────────────
+
+
+def _check_b2b_from_games(games: list, game_idx: int, team_id: int) -> bool:
+    """Check if team_id played yesterday by looking at previous games in the list."""
+    current_date = games[game_idx].get("date", "")
+    if not current_date:
+        return False
+    # Check if this team appears in yesterday's games
+    yesterday = (datetime.strptime(current_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+    for i in range(game_idx - 1, max(0, game_idx - 20), -1):
+        g = games[i]
+        if g.get("date") == yesterday:
+            if g.get("home_team_id") == team_id or g.get("away_team_id") == team_id:
+                return True
+        elif g.get("date") < yesterday:
+            break
+    return False
 
 
 # ── Backtest core ─────────────────────────────────────────────
@@ -662,7 +695,7 @@ def run_nhl_backtest(days: int = 30, min_edge: float = 3.0,
         "90-100": [0, 0],
     }
 
-    for game in games:
+    for game_idx, game in enumerate(games):
         home_abbr = game.get("home_abbr", "")
         away_abbr = game.get("away_abbr", "")
         home_score = game.get("home_score")
@@ -756,13 +789,46 @@ def run_nhl_backtest(days: int = 30, min_edge: float = 3.0,
                     "score": f"{home_score}-{away_score}",
                 })
 
+        # ── Back-to-back adjustment for O/U ──
+        # B2B teams give up more goals — boost opponent xG for totals
+        ou_home_xg = pred.get("ou_home_xg", home_xg)
+        ou_away_xg = pred.get("ou_away_xg", away_xg)
+        b2b_adjusted = False
+
+        if pit_mode and pit_conn:
+            home_tid = game.get("home_team_id")
+            away_tid = game.get("away_team_id")
+            if home_tid and away_tid:
+                home_b2b = _check_b2b_from_games(games, game_idx, home_tid)
+                away_b2b = _check_b2b_from_games(games, game_idx, away_tid)
+                if home_b2b:
+                    ou_away_xg *= 1.04  # Tired team concedes 4% more goals
+                    b2b_adjusted = True
+                if away_b2b:
+                    ou_home_xg *= 1.04
+                    b2b_adjusted = True
+
         # ── Over/Under ──
         # Use pre-computed O/U values from _pit_predict (which already
         # use L5-blended xG and a separate O/U Poisson matrix)
         ou_line = pred.get("ou_line")
         p_over = pred.get("p_over", 0.5)
 
-        if ou_line is None:
+        if b2b_adjusted:
+            # Recompute O/U probabilities with B2B-adjusted xGs
+            ou_home_xg = max(ou_home_xg, 1.0)
+            ou_away_xg = max(ou_away_xg, 1.0)
+            ou_pred_total = ou_home_xg + ou_away_xg
+            ou_line = round(ou_pred_total * 2) / 2
+            ou_matrix = _score_matrix(ou_home_xg, ou_away_xg)
+            ou_p_draw = sum(ou_matrix[i][i] for i in range(MAX_GOALS + 1))
+            p_over = 0.0
+            for h in range(MAX_GOALS + 1):
+                for a in range(MAX_GOALS + 1):
+                    eff_total = (h + a + 1) if h == a else (h + a)
+                    if eff_total > ou_line:
+                        p_over += ou_matrix[h][a]
+        elif ou_line is None:
             # Fallback for live-model path which may not set ou_line
             pred_total = home_xg + away_xg
             ou_line = round(pred_total * 2) / 2

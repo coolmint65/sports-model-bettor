@@ -152,7 +152,28 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         updated_at TEXT DEFAULT (datetime('now'))
     );
 
+    -- Historical odds snapshots for backtesting against real market prices
+    CREATE TABLE IF NOT EXISTS nhl_odds (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        game_date TEXT NOT NULL,
+        home_abbr TEXT NOT NULL,
+        away_abbr TEXT NOT NULL,
+        home_ml INTEGER,
+        away_ml INTEGER,
+        over_under REAL,
+        over_odds INTEGER,
+        under_odds INTEGER,
+        home_spread_point REAL,
+        home_spread_odds INTEGER,
+        away_spread_point REAL,
+        away_spread_odds INTEGER,
+        provider TEXT DEFAULT 'DraftKings',
+        captured_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(game_date, home_abbr, away_abbr)
+    );
+
     -- Indexes for common queries
+    CREATE INDEX IF NOT EXISTS idx_nhl_odds_date ON nhl_odds(game_date);
     CREATE INDEX IF NOT EXISTS idx_nhl_games_date ON nhl_games(date);
     CREATE INDEX IF NOT EXISTS idx_nhl_games_season ON nhl_games(season);
     CREATE INDEX IF NOT EXISTS idx_nhl_games_home ON nhl_games(home_team_id);
