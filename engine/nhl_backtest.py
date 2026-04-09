@@ -258,7 +258,7 @@ def _compute_pit_stats(conn, team_id: int, game_date: str,
 
     Uses a rolling window of recent games from the nhl_games table so the
     backtest never peeks at future data. Enhanced with home/away splits,
-    special teams proxy, and momentum.
+    special teams proxy, momentum, save% proxy, and L5 scoring for O/U.
     """
     rows = conn.execute("""
         SELECT home_team_id, away_team_id, home_score, away_score,
@@ -278,8 +278,10 @@ def _compute_pit_stats(conn, team_id: int, game_date: str,
     away_gf, away_ga, away_games = 0, 0, 0
     pp_goals, pp_opps = 0, 0
     shots_for, shots_against = 0, 0
-    # Track last 5 for momentum
+    # Track last 5 for momentum and L5 scoring
     recent_wins = 0
+    l5_gf, l5_ga = 0, 0
+    l5_count = 0
 
     for i, r in enumerate(rows):
         is_home = r["home_team_id"] == team_id
@@ -313,10 +315,24 @@ def _compute_pit_stats(conn, team_id: int, game_date: str,
         else:
             losses += 1
 
+        # L5 scoring accumulators (rows ordered DESC, so first 5 = most recent)
+        if i < 5:
+            l5_gf += my_score
+            l5_ga += opp_score
+            l5_count += 1
+
     n = len(rows)
     pp_pct = pp_goals / pp_opps if pp_opps > 0 else 0.20
     shots_pg = shots_for / n if shots_for > 0 else 30.0
     shots_against_pg = shots_against / n if shots_against > 0 else 30.0
+
+    # Save percentage proxy: (1 - goals_against / shots_against)
+    # This estimates the team's goaltending quality from PIT data
+    total_shots_against = shots_against
+    if total_shots_against > 0:
+        save_pct_proxy = 1.0 - (ga / total_shots_against)
+    else:
+        save_pct_proxy = 0.905  # League average fallback
 
     return {
         "goals_for_avg": gf / n,
@@ -329,7 +345,10 @@ def _compute_pit_stats(conn, team_id: int, game_date: str,
         "pp_pct": pp_pct,
         "shots_per_game": shots_pg,
         "shots_against_pg": shots_against_pg,
+        "save_pct_proxy": save_pct_proxy,
         "momentum": recent_wins / min(5, n),  # Last 5 game win rate
+        "l5_gf_avg": l5_gf / l5_count if l5_count > 0 else gf / n,
+        "l5_ga_avg": l5_ga / l5_count if l5_count > 0 else ga / n,
         "games": n,
     }
 
@@ -337,29 +356,61 @@ def _compute_pit_stats(conn, team_id: int, game_date: str,
 def _pit_predict(home_stats: dict, away_stats: dict) -> dict | None:
     """Enhanced Poisson prediction using point-in-time stats.
 
-    Uses home/away splits, special teams, shot volume, and momentum
-    in addition to the base goals for/against.
+    Faithfully reproduces the production model's factor chain using only
+    historical PIT data:
+      1. Base xG from home/away splits (attack * defense / league_avg)
+      2. Home ice edge (+0.15)
+      3. Special teams (PP% vs league avg, ~2.5 PP/game weight)
+      4. Goaltending / save% (suppress opponent xG)
+      5. Shot volume adjustment
+      6. Momentum (L5 win rate)
+      7. Win% quality gap
+      8. Poisson matrix -> ML (with OT home edge), PL, O/U
+      9. Separate O/U xG using L5 scoring blend (40% recent, 60% season)
     """
     league_avg = 3.0
     home_edge = 0.15
 
-    # Base expected goals (use home/away specific stats)
+    # ── 1. Base expected goals (home/away splits) ──
     home_off = home_stats["home_gf_avg"]
     home_def = home_stats["home_ga_avg"]
     away_off = away_stats["away_gf_avg"]
     away_def = away_stats["away_ga_avg"]
 
+    # Production formula: (off * opp_def) / league_avg +/- home_edge/2
     home_xg = (home_off * away_def) / league_avg + home_edge / 2
     away_xg = (away_off * home_def) / league_avg - home_edge / 2
 
-    # Special teams: PP% differential
+    # ── 2. Special teams: PP% vs league average ──
+    # Production uses pp_weight=2.5 and combines PP% edge with PK edge.
+    # PIT model only has PP% (no separate PK%), so we use PP% differential
+    # against league average, weighted by ~2.5 PP opportunities per game.
     league_pp = 0.20
-    home_pp_edge = (home_stats["pp_pct"] - league_pp) * 2.0
-    away_pp_edge = (away_stats["pp_pct"] - league_pp) * 2.0
+    pp_weight = 2.5
+
+    # Home PP edge (home PP% above average = more goals for home)
+    home_pp_edge = (home_stats["pp_pct"] - league_pp) * pp_weight
+    # Away PP edge (away PP% above average = more goals for away)
+    away_pp_edge = (away_stats["pp_pct"] - league_pp) * pp_weight
     home_xg += home_pp_edge
     away_xg += away_pp_edge
 
-    # Shot volume adjustment
+    # ── 3. Goaltending / save% adjustment ──
+    # Production: better save% suppresses opponent xG via (league_sv / team_sv)
+    # PIT: use save_pct_proxy computed from (1 - GA/SA) over the window
+    league_sv = 0.905
+    h_sv = home_stats.get("save_pct_proxy", league_sv)
+    a_sv = away_stats.get("save_pct_proxy", league_sv)
+
+    # Home goaltending suppresses away scoring
+    if h_sv and h_sv > 0:
+        away_xg *= max(0.85, min(1.15, league_sv / h_sv))
+    # Away goaltending suppresses home scoring
+    if a_sv and a_sv > 0:
+        home_xg *= max(0.85, min(1.15, league_sv / a_sv))
+
+    # ── 4. Shot volume adjustment ──
+    # Production: combine team shots/game with opponent shots-against/game
     league_shots = 30.0
     if home_stats["shots_per_game"] > 0 and away_stats["shots_against_pg"] > 0:
         h_shot_factor = ((home_stats["shots_per_game"] / league_shots) +
@@ -369,21 +420,59 @@ def _pit_predict(home_stats: dict, away_stats: dict) -> dict | None:
         home_xg *= max(0.90, min(1.10, h_shot_factor))
         away_xg *= max(0.90, min(1.10, a_shot_factor))
 
-    # Momentum: hot teams get a small boost
+    # ── 5. Momentum: L5 win rate ──
+    # Production uses _form_factor (~±12%) + _compute_recent_form_from_standings (~±5%)
+    # PIT: use momentum (L5 win rate) as a combined proxy
     home_momentum = (home_stats["momentum"] - 0.5) * 0.08
     away_momentum = (away_stats["momentum"] - 0.5) * 0.08
     home_xg *= (1 + home_momentum)
     away_xg *= (1 + away_momentum)
 
-    # Win percentage quality adjustment
+    # ── 6. Win% quality gap ──
+    # Production uses points_pct * 0.15; PIT uses win_pct * 0.15
     quality_diff = home_stats["win_pct"] - away_stats["win_pct"]
-    home_xg *= (1 + quality_diff * 0.12)
-    away_xg *= (1 - quality_diff * 0.12)
+    home_xg *= (1 + quality_diff * 0.15)
+    away_xg *= (1 - quality_diff * 0.15)
 
-    # Floor
+    # ── Floor ──
     home_xg = max(home_xg, 1.0)
     away_xg = max(away_xg, 1.0)
 
+    # ── O/U-specific xG: blend season avg with L5 scoring ──
+    # Production blends 60% season + 40% L10 scoring for O/U.
+    # PIT uses L5 as the recent window (that's our available data).
+    ou_home_xg = home_xg
+    ou_away_xg = away_xg
+
+    # Home team recent scoring form
+    season_gf_h = home_stats["goals_for_avg"]
+    l5_gf_h = home_stats.get("l5_gf_avg", season_gf_h)
+    if season_gf_h > 0:
+        ou_home_xg = ou_home_xg * 0.6 + (ou_home_xg * l5_gf_h / season_gf_h) * 0.4
+
+    # Home team recent defensive form (affects away xG for O/U)
+    season_ga_h = home_stats["goals_against_avg"]
+    l5_ga_h = home_stats.get("l5_ga_avg", season_ga_h)
+    if season_ga_h > 0:
+        ou_away_xg = ou_away_xg * 0.6 + (ou_away_xg * l5_ga_h / season_ga_h) * 0.4
+
+    # Away team recent scoring form
+    season_gf_a = away_stats["goals_for_avg"]
+    l5_gf_a = away_stats.get("l5_gf_avg", season_gf_a)
+    if season_gf_a > 0:
+        ou_away_xg = ou_away_xg * 0.6 + (ou_away_xg * l5_gf_a / season_gf_a) * 0.4
+
+    # Away team recent defensive form (affects home xG for O/U)
+    season_ga_a = away_stats["goals_against_avg"]
+    l5_ga_a = away_stats.get("l5_ga_avg", season_ga_a)
+    if season_ga_a > 0:
+        ou_home_xg = ou_home_xg * 0.6 + (ou_home_xg * l5_ga_a / season_ga_a) * 0.4
+
+    # Floor O/U xGs
+    ou_home_xg = max(ou_home_xg, 1.0)
+    ou_away_xg = max(ou_away_xg, 1.0)
+
+    # ── Poisson matrix for ML and puck line (standard xG) ──
     matrix = _score_matrix(home_xg, away_xg)
 
     p_home = sum(matrix[h][a] for h in range(MAX_GOALS + 1)
@@ -392,31 +481,36 @@ def _pit_predict(home_stats: dict, away_stats: dict) -> dict | None:
                  for a in range(MAX_GOALS + 1) if a > h)
     p_draw = sum(matrix[i][i] for i in range(MAX_GOALS + 1))
 
-    # OT split: slight home edge
+    # OT split: slight home edge (matches production exactly)
     p_home_ml = p_home + p_draw * 0.52
     p_away_ml = p_away + p_draw * 0.48
 
-    # O/U: account for OT goal in tied games
-    pred_total = home_xg + away_xg
-    ou_line = round(pred_total * 2) / 2
+    # ── Puck line (±1.5) ──
+    # Production: home -1.5 = margin >= 2, away -1.5 = margin <= -2
+    p_home_cover = sum(matrix[h][a] for h in range(MAX_GOALS + 1)
+                       for a in range(MAX_GOALS + 1) if (h - a) >= 2)
+
+    # ── O/U: use separate ou_matrix with L5-blended xGs ──
+    # Production: tied games go to OT, adding exactly 1 goal
+    ou_matrix = _score_matrix(ou_home_xg, ou_away_xg)
+    ou_pred_total = ou_home_xg + ou_away_xg
+    ou_p_draw = sum(ou_matrix[i][i] for i in range(MAX_GOALS + 1))
+    ou_line = round(ou_pred_total * 2) / 2
 
     p_over = 0.0
     for h in range(MAX_GOALS + 1):
         for a in range(MAX_GOALS + 1):
+            # NHL OT adds exactly 1 goal for tied regulation games
             eff_total = (h + a + 1) if h == a else (h + a)
             if eff_total > ou_line:
-                p_over += matrix[h][a]
-
-    # Puck line (-1.5)
-    p_home_cover = sum(matrix[h][a] for h in range(MAX_GOALS + 1)
-                       for a in range(MAX_GOALS + 1) if (h - a) >= 2)
+                p_over += ou_matrix[h][a]
 
     return {
         "home_xg": home_xg,
         "away_xg": away_xg,
         "p_home": p_home_ml,
         "p_away": p_away_ml,
-        "total": pred_total + p_draw,  # +p_draw approximates OT goal
+        "total": ou_pred_total + ou_p_draw,  # O/U-adjusted total + OT goal approx
         "p_over": p_over,
         "ou_line": ou_line,
         "p_home_cover": p_home_cover,
@@ -663,19 +757,22 @@ def run_nhl_backtest(days: int = 30, min_edge: float = 3.0,
                 })
 
         # ── Over/Under ──
-        pred_total = home_xg + away_xg
-        # Round to nearest 0.5 for the OU line
-        ou_line = round(pred_total * 2) / 2
+        # Use pre-computed O/U values from _pit_predict (which already
+        # use L5-blended xG and a separate O/U Poisson matrix)
+        ou_line = pred.get("ou_line")
+        p_over = pred.get("p_over", 0.5)
 
-        # Use Poisson matrix for exact probability
-        matrix = _score_matrix(home_xg, away_xg)
-        p_over = 0.0
-        for h in range(MAX_GOALS + 1):
-            for a in range(MAX_GOALS + 1):
-                # NHL OT adds exactly 1 goal for ties
-                eff_total = (h + a + 1) if h == a else (h + a)
-                if eff_total > ou_line:
-                    p_over += matrix[h][a]
+        if ou_line is None:
+            # Fallback for live-model path which may not set ou_line
+            pred_total = home_xg + away_xg
+            ou_line = round(pred_total * 2) / 2
+            matrix = _score_matrix(home_xg, away_xg)
+            p_over = 0.0
+            for h in range(MAX_GOALS + 1):
+                for a in range(MAX_GOALS + 1):
+                    eff_total = (h + a + 1) if h == a else (h + a)
+                    if eff_total > ou_line:
+                        p_over += matrix[h][a]
 
         ou_pick_over = p_over > 0.50
         ou_prob = p_over if ou_pick_over else (1 - p_over)
@@ -691,7 +788,7 @@ def run_nhl_backtest(days: int = 30, min_edge: float = 3.0,
                 ou_correct = actual_total > ou_line
                 _record_bet(results["over_under"], ou_correct, ou_odds)
                 game_bets.append((ou_edge, ou_correct, ou_odds, "O/U",
-                                  f"{'Over' if ou_pick_over else 'Under'} {ou_line}"))
+                                  f"Over {ou_line}"))
             else:
                 ou_correct = actual_total < ou_line
                 _record_bet(results["over_under"], ou_correct, ou_odds)
@@ -699,19 +796,30 @@ def run_nhl_backtest(days: int = 30, min_edge: float = 3.0,
                                   f"Under {ou_line}"))
 
         # ── Puck Line (-1.5) ──
-        p_home_cover = 0.0
-        for h in range(MAX_GOALS + 1):
-            for a in range(MAX_GOALS + 1):
-                if (h - a) >= 2:
-                    p_home_cover += matrix[h][a]
+        # Use pre-computed puck line probability from _pit_predict
+        p_home_cover = pred.get("p_home_cover", 0.0)
+        if p_home_cover == 0.0:
+            # Fallback: compute from fresh matrix (live-model path)
+            matrix = _score_matrix(home_xg, away_xg)
+            p_home_cover = sum(matrix[h][a] for h in range(MAX_GOALS + 1)
+                               for a in range(MAX_GOALS + 1) if (h - a) >= 2)
         p_away_cover = 1 - p_home_cover  # Away +1.5
 
         pl_pick_home = p_home_cover > 0.50
         pl_prob = p_home_cover if pl_pick_home else p_away_cover
-        # Market baseline for PL: the +1.5 side is typically priced ~70% (-200),
-        # the -1.5 side ~30% (+170). Use 52.4% as baseline for whichever side we pick.
-        pl_market = 0.524
-        pl_odds = -110  # Standard PL odds for the side we're on
+
+        # Real puck line market pricing:
+        #   +1.5 (underdog side): typically -180, implied ~64-67%
+        #   -1.5 (favorite side): typically +150 to +170, implied ~37-40%
+        if pl_pick_home:
+            # Picking home -1.5 (favorite to win by 2+)
+            pl_market = 0.37   # Market prices -1.5 at about +170
+            pl_odds = 170      # +170 for -1.5 side
+        else:
+            # Picking away +1.5 (or home +1.5 -- underdog side)
+            pl_market = 0.65   # Market prices +1.5 at about -180
+            pl_odds = -180     # -180 for +1.5 side
+
         pl_edge = (pl_prob - pl_market) * 100
 
         if pl_edge >= min_edge:
