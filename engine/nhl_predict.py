@@ -342,8 +342,141 @@ _live_standings_cache: dict | None = None
 _live_standings_time: float = 0
 _live_stats_cache: dict | None = None
 _live_stats_time: float = 0
+_club_stats_cache: dict = {}   # Per-team club stats (PP%, PK%, SV%, shots, faceoff)
+_club_stats_time: float = 0
 _b2b_cache: dict = {}
 _b2b_cache_time: float = 0
+
+
+# NHL franchise team IDs used by the club-stats endpoint
+_NHL_TEAM_IDS_FOR_STATS = {
+    "ANA": 24, "BOS": 6, "BUF": 7, "CGY": 20, "CAR": 12,
+    "CHI": 16, "COL": 21, "CBJ": 29, "DAL": 25, "DET": 17,
+    "EDM": 22, "FLA": 13, "LAK": 26, "MIN": 30, "MTL": 8,
+    "NSH": 18, "NJD": 1, "NYI": 2, "NYR": 3, "OTT": 9,
+    "PHI": 4, "PIT": 5, "SJS": 28, "SEA": 55, "STL": 19,
+    "TBL": 14, "TOR": 10, "UTA": 59, "VAN": 23, "VGK": 54,
+    "WPG": 52, "WSH": 15,
+}
+
+
+def _fetch_club_stats_for_team(abbr: str) -> dict | None:
+    """Fetch live club stats (PP%, PK%, SV%, shots, faceoff) for a team
+    from the NHL club-stats endpoint. Returns stats dict or None.
+    """
+    import json
+    import urllib.error
+    import urllib.request
+
+    try:
+        url = f"https://api-web.nhle.com/v1/club-stats/{abbr}/now"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+    except (urllib.error.URLError, json.JSONDecodeError, OSError) as e:
+        logger.debug("club-stats fetch failed for %s: %s", abbr, e)
+        return None
+
+    stats = {}
+
+    # Aggregate skater stats to get team PP/PK-adjacent metrics
+    skaters = data.get("skaters", []) or []
+    total_shots = sum(s.get("shots", 0) or 0 for s in skaters)
+    games_played = max(
+        (s.get("gamesPlayed", 0) or 0 for s in skaters),
+        default=0,
+    )
+
+    if games_played > 0:
+        stats["shots_per_game"] = round(total_shots / games_played, 2)
+
+    # Aggregate goalie stats for team save%
+    goalies = data.get("goalies", []) or []
+    total_saves = 0
+    total_shots_against = 0
+    for g in goalies:
+        saves = g.get("saves", 0) or 0
+        shots_against = g.get("shotsAgainst", 0) or 0
+        total_saves += saves
+        total_shots_against += shots_against
+
+    if total_shots_against > 0:
+        stats["save_pct"] = round(total_saves / total_shots_against, 4)
+        # Derive shots against per game
+        if games_played > 0:
+            stats["shots_against_per_game"] = round(total_shots_against / games_played, 2)
+
+    return stats if stats else None
+
+
+def _fetch_team_summary_stats() -> dict:
+    """Fetch team-wide PP%, PK%, faceoff% from the NHL team-stats endpoint.
+
+    Returns {abbr: {pp_pct, pk_pct, faceoff_pct}}
+    """
+    import json
+    import urllib.error
+    import urllib.request
+
+    try:
+        # Try the stats.rest endpoint for current season team stats
+        url = ("https://api.nhle.com/stats/rest/en/team/summary"
+               "?cayenneExp=seasonId=20252026 and gameTypeId=2")
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+    except (urllib.error.URLError, json.JSONDecodeError, OSError) as e:
+        logger.debug("team-stats fetch failed: %s", e)
+        return {}
+
+    result = {}
+    for row in data.get("data", []):
+        abbr = row.get("teamAbbrev", row.get("teamFullName", ""))[:3].upper()
+        if not abbr:
+            continue
+        stats = {}
+        # PP% and PK% come as percentages (e.g. 22.5 for 22.5%)
+        if "powerPlayPct" in row:
+            stats["pp_pct"] = round(row["powerPlayPct"], 4)
+        if "penaltyKillPct" in row:
+            stats["pk_pct"] = round(row["penaltyKillPct"], 4)
+        if "faceoffWinPct" in row:
+            stats["faceoff_pct"] = round(row["faceoffWinPct"], 4)
+        if "shotsForPerGame" in row:
+            stats["shots_per_game"] = round(row["shotsForPerGame"], 2)
+        if "shotsAgainstPerGame" in row:
+            stats["shots_against_per_game"] = round(row["shotsAgainstPerGame"], 2)
+        if stats:
+            result[abbr] = stats
+    return result
+
+
+def _ensure_club_stats_loaded() -> None:
+    """Fetch live team-wide stats (PP%, PK%, SV%, shots, faceoff) once
+    per 30 minutes and merge into _live_stats_cache.
+    """
+    import time as _time
+    global _club_stats_cache, _club_stats_time, _live_stats_cache
+
+    if _club_stats_cache and (_time.time() - _club_stats_time) < 1800:
+        return
+
+    # Ensure the base standings cache is loaded first
+    _ensure_standings_loaded()
+
+    # Fetch team summary stats (PP%, PK%, faceoff) from stats.rest
+    summary = _fetch_team_summary_stats()
+
+    # Merge into _live_stats_cache
+    if _live_stats_cache is None:
+        _live_stats_cache = {}
+
+    for abbr, team_stats in summary.items():
+        existing = _live_stats_cache.get(abbr, {})
+        _live_stats_cache[abbr] = {**existing, **team_stats}
+
+    _club_stats_cache = summary or {"_loaded": True}
+    _club_stats_time = _time.time()
 
 
 def _check_back_to_back(team_abbr: str) -> float:
@@ -547,7 +680,13 @@ def predict_matchup(home_key: str, away_key: str,
     hs = home.get("stats", {})
     as_ = away.get("stats", {})
 
-    # Override stale JSON stats with live NHL API data when available
+    # Override stale JSON stats with live NHL API data when available.
+    # _ensure_club_stats_loaded() fetches PP%, PK%, faceoff%, shots, save%
+    # from the stats.rest team summary endpoint and merges into _live_stats_cache.
+    try:
+        _ensure_club_stats_loaded()
+    except Exception:
+        pass
     live_stats = _get_live_team_stats()
     h_abbr_for_stats = home.get("abbreviation", "")
     a_abbr_for_stats = away.get("abbreviation", "")
@@ -720,8 +859,11 @@ def predict_matchup(home_key: str, away_key: str,
     home_pct = _record_to_points_pct(home_record)
     away_pct = _record_to_points_pct(away_record)
     quality_diff = home_pct - away_pct
-    home_xg *= (1 + quality_diff * 0.15)  # max ~3% adjustment
-    away_xg *= (1 - quality_diff * 0.15)
+    # Strengthened from 0.15 (±3%) to 0.50 (±12%). A .650 vs .400 team
+    # should shift xG ~12%, not 3%. Previous setting was too weak to
+    # correct for teams with genuine quality gaps.
+    home_xg *= (1 + quality_diff * 0.50)
+    away_xg *= (1 - quality_diff * 0.50)
 
     # ── Goalie matchup adjustment ──
     # If we have specific goalie data from the DB, use it to override
@@ -1016,17 +1158,21 @@ def predict_matchup(home_key: str, away_key: str,
     top_scores = [{"score": f"{s['home']}-{s['away']}", "prob": round(s["prob"], 4)}
                   for s in scores[:5]]
 
+    # Use live records if available — JSON files have stale last-season data
+    h_live_record = _get_live_record(home.get("abbreviation", "")) or home.get("record", "")
+    a_live_record = _get_live_record(away.get("abbreviation", "")) or away.get("record", "")
+
     return {
         "home": {
             "name": home.get("name", home_key),
             "abbreviation": home.get("abbreviation", ""),
-            "record": home.get("record", ""),
+            "record": h_live_record,
             "key": home_key,
         },
         "away": {
             "name": away.get("name", away_key),
             "abbreviation": away.get("abbreviation", ""),
-            "record": away.get("record", ""),
+            "record": a_live_record,
             "key": away_key,
         },
         "expected_score": {
