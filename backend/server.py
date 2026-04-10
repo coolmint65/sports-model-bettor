@@ -1869,3 +1869,41 @@ def api_debug_nhl_raw_stats():
     except Exception as e:
         import traceback
         return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+@app.get("/api/pick-of-day/{sport}")
+def api_pick_of_day(sport: str):
+    """Get today's Pick of the Day for a sport."""
+    from engine.pick_of_day import get_or_create_potd, get_today_potd
+
+    # First try to get an existing POTD
+    potd = get_today_potd(sport)
+    if potd:
+        return potd
+
+    # No POTD yet — need to generate one from today's best bets
+    if sport == "nhl":
+        bets = api_nhl_best_bets()
+    elif sport == "mlb":
+        bets = api_best_bets()
+    else:
+        return {"error": f"Unknown sport: {sport}"}
+
+    if isinstance(bets, list):
+        potd = get_or_create_potd(sport, bets)
+        return potd or {"message": "No qualifying picks today", "sport": sport}
+    return {"error": "Could not generate bets"}
+
+
+@app.get("/api/pick-of-day/{sport}/summary")
+def api_potd_summary(sport: str):
+    """Get POTD running totals."""
+    from engine.pick_of_day import get_potd_summary
+    return get_potd_summary(sport)
+
+
+@app.post("/api/pick-of-day/{sport}/settle")
+def api_potd_settle(sport: str):
+    """Settle completed POTDs."""
+    from engine.pick_of_day import settle_potd
+    return settle_potd(sport)

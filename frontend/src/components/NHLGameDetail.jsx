@@ -309,39 +309,6 @@ function NHLPredictionResults({ data, odds, home, away }) {
         </div>
       )}
 
-      {/* Most Likely Scores — compact chip display */}
-      {d.correct_scores && d.correct_scores.length > 0 && (
-        <div className="result-card">
-          <h2>Most Likely Scores</h2>
-          <div style={{display:'flex',gap:8,flexWrap:'wrap',justifyContent:'center'}}>
-            {d.correct_scores.slice(0, 5).map((s, i) => (
-              <div key={i} style={{
-                background: i === 0 ? 'rgba(52,211,153,0.08)' : '#0f172a',
-                border: `1px solid ${i === 0 ? 'rgba(52,211,153,0.25)' : '#1e293b'}`,
-                borderRadius: 8,
-                padding: '10px 14px',
-                textAlign: 'center',
-                minWidth: 72,
-              }}>
-                <div style={{
-                  fontSize:'1.05rem',
-                  fontWeight:700,
-                  color: i === 0 ? '#34d399' : '#f8fafc',
-                }}>
-                  {s.score}
-                </div>
-                <div style={{fontSize:'0.72rem',color:'#64748b',marginTop:2}}>
-                  {(s.prob * 100).toFixed(1)}%
-                </div>
-              </div>
-            ))}
-          </div>
-          <div style={{textAlign:'center',color:'#64748b',fontSize:'0.7rem',marginTop:10}}>
-            Home-Away. Top 5 most probable exact scores (regulation).
-          </div>
-        </div>
-      )}
-
       {/* Betting Lines */}
       <div className="result-card">
         <h2>Betting Lines</h2>
@@ -720,56 +687,111 @@ function GoalieImpactCard({ gm, home, away }) {
 function getReasoning(pred, home, away) {
   const reasons = []
   const f = pred.factors || {}
+  const ctx = pred.season_context || {}
+  const hCtx = ctx.home || {}
+  const aCtx = ctx.away || {}
 
-  // Goalie advantage
+  // Goalie matchup — the biggest single-game factor in hockey
   if (pred.goalie_matchup?.home && pred.goalie_matchup?.away) {
     const h_sv = pred.goalie_matchup.home.save_pct || 0
     const a_sv = pred.goalie_matchup.away.save_pct || 0
-    if (h_sv > 0 && a_sv > 0 && Math.abs(h_sv - a_sv) > 0.015) {
+    if (h_sv > 0 && a_sv > 0) {
+      const diff = Math.abs(h_sv - a_sv)
       const better = h_sv > a_sv ? home.abbreviation : away.abbreviation
-      reasons.push(`${better} has a significant goalie advantage (${Math.max(h_sv, a_sv).toFixed(3)} vs ${Math.min(h_sv, a_sv).toFixed(3)} SV%)`)
+      const worse = h_sv > a_sv ? away.abbreviation : home.abbreviation
+      if (diff > 0.020) {
+        reasons.push(`${better}'s goalie is stopping significantly more shots than ${worse}'s (${Math.max(h_sv, a_sv).toFixed(3)} vs ${Math.min(h_sv, a_sv).toFixed(3)} save %)`)
+      } else if (diff > 0.010) {
+        reasons.push(`${better} has a slight goalie edge tonight — saves about 1 more goal per 100 shots`)
+      }
     }
   }
 
-  // Power play mismatch
-  if (f.home_pp != null && f.away_pp != null) {
-    const ppDiff = Math.abs(f.home_pp - f.away_pp) * 100
-    if (ppDiff > 4) {
-      const better = f.home_pp > f.away_pp ? home.abbreviation : away.abbreviation
-      reasons.push(`${better} has a ${ppDiff.toFixed(1)}% power play edge`)
+  // Record / quality gap — teams aren't created equal
+  const hPace = hCtx.points_pace || 0
+  const aPace = aCtx.points_pace || 0
+  if (Math.abs(hPace - aPace) > 0.12) {
+    const better = hPace > aPace ? home.name : away.name
+    const worse = hPace > aPace ? away.name : home.name
+    reasons.push(`${better} is a fundamentally better team this season than ${worse}`)
+  }
+
+  // Power play vs penalty kill mismatch
+  if (f.home_pp != null && f.away_pk != null) {
+    const h_pp = f.home_pp * 100
+    const a_pk = f.away_pk * 100
+    if (h_pp > 22 && a_pk < 78) {
+      reasons.push(`${home.abbreviation}'s power play (${h_pp.toFixed(1)}%) could feast against ${away.abbreviation}'s weak penalty kill (${a_pk.toFixed(1)}%)`)
+    }
+  }
+  if (f.away_pp != null && f.home_pk != null) {
+    const a_pp = f.away_pp * 100
+    const h_pk = f.home_pk * 100
+    if (a_pp > 22 && h_pk < 78) {
+      reasons.push(`${away.abbreviation}'s power play (${a_pp.toFixed(1)}%) could feast against ${home.abbreviation}'s weak penalty kill (${h_pk.toFixed(1)}%)`)
     }
   }
 
-  // Overall model strength
-  const hWP = pred.win_prob?.home || 0
-  const aWP = pred.win_prob?.away || 0
-  if (Math.abs(hWP - aWP) > 0.15) {
-    const favorite = hWP > aWP ? home.name : away.name
-    reasons.push(`Model strongly favors ${favorite} (${(Math.max(hWP, aWP) * 100).toFixed(0)}% win probability)`)
+  // Recent form — hot and cold streaks
+  const hL10 = hCtx.l10_pts_pct
+  const aL10 = aCtx.l10_pts_pct
+  if (hL10 != null && hL10 > 0.7) {
+    reasons.push(`${home.abbreviation} is red hot — won ${hCtx.l10_record} in their last 10 games`)
+  } else if (hL10 != null && hL10 < 0.35) {
+    reasons.push(`${home.abbreviation} is ice cold — just ${hCtx.l10_record} in their last 10`)
+  }
+  if (aL10 != null && aL10 > 0.7) {
+    reasons.push(`${away.abbreviation} is rolling — ${aCtx.l10_record} in their last 10 games`)
+  } else if (aL10 != null && aL10 < 0.35) {
+    reasons.push(`${away.abbreviation} has been struggling — ${aCtx.l10_record} in their last 10`)
   }
 
-  // Top-5 goaltending rankings
-  if (f.home_sv_rank && f.home_sv_rank <= 5) {
-    reasons.push(`${home.abbreviation} goaltending ranks top 5 in the league`)
-  }
-  if (f.away_sv_rank && f.away_sv_rank <= 5) {
-    reasons.push(`${away.abbreviation} goaltending ranks top 5 in the league`)
-  }
-
-  // Back-to-back fatigue is a big factor — surface it
+  // Back-to-back fatigue
   if (pred.rest?.home_b2b) {
-    reasons.push(`${home.abbreviation} is on a back-to-back (fatigue penalty applied)`)
+    reasons.push(`${home.abbreviation} played last night — tired legs tend to cost about half a goal`)
   }
   if (pred.rest?.away_b2b) {
-    reasons.push(`${away.abbreviation} is on a back-to-back (fatigue penalty applied)`)
+    reasons.push(`${away.abbreviation} is on back-to-back nights — expect slower play and more mistakes`)
+  }
+  if (pred.rest?.home_rest_advantage && !pred.rest?.away_rest_advantage) {
+    reasons.push(`${home.abbreviation} has had extra rest — fresh team advantage`)
+  }
+  if (pred.rest?.away_rest_advantage && !pred.rest?.home_rest_advantage) {
+    reasons.push(`${away.abbreviation} has had extra rest — fresh team advantage`)
   }
 
-  // Injuries with measurable xG impact
-  if (pred.injuries?.home_impact != null && pred.injuries.home_impact < 0.95) {
-    reasons.push(`${home.abbreviation} missing key players (-${(1 - pred.injuries.home_impact).toFixed(2)} xG)`)
+  // Injuries — plain English, no xG jargon
+  if (pred.injuries?.home_impact != null && pred.injuries.home_impact < 0.92) {
+    const pct = Math.round((1 - pred.injuries.home_impact) * 100)
+    reasons.push(`${home.abbreviation} is dealing with major injuries — their lineup is roughly ${pct}% weaker than full strength`)
+  } else if (pred.injuries?.home_impact != null && pred.injuries.home_impact < 0.97) {
+    reasons.push(`${home.abbreviation} has some players out, but nothing that moves the needle significantly`)
   }
-  if (pred.injuries?.away_impact != null && pred.injuries.away_impact < 0.95) {
-    reasons.push(`${away.abbreviation} missing key players (-${(1 - pred.injuries.away_impact).toFixed(2)} xG)`)
+  if (pred.injuries?.away_impact != null && pred.injuries.away_impact < 0.92) {
+    const pct = Math.round((1 - pred.injuries.away_impact) * 100)
+    reasons.push(`${away.abbreviation} is severely shorthanded — about ${pct}% of their scoring power is on the shelf`)
+  } else if (pred.injuries?.away_impact != null && pred.injuries.away_impact < 0.97) {
+    reasons.push(`${away.abbreviation} missing a few players, but their depth should cover it`)
+  }
+
+  // Motivation / playoff context
+  if (hCtx.fighting && aCtx.eliminated) {
+    reasons.push(`${home.abbreviation} is fighting for their playoff life while ${away.abbreviation} has nothing to play for`)
+  } else if (aCtx.fighting && hCtx.eliminated) {
+    reasons.push(`${away.abbreviation} is desperate for points — ${home.abbreviation}'s season is already over`)
+  } else if (hCtx.clinched && !aCtx.clinched && aCtx.fighting) {
+    reasons.push(`${home.abbreviation} already clinched — might not have the same urgency as ${away.abbreviation}`)
+  } else if (aCtx.clinched && !hCtx.clinched && hCtx.fighting) {
+    reasons.push(`${away.abbreviation} has their spot locked — ${home.abbreviation} needs this win more`)
+  }
+
+  // Shot volume advantage
+  if (f.home_shots_rank && f.away_shots_rank) {
+    if (f.home_shots_rank <= 5 && f.away_shots_rank >= 25) {
+      reasons.push(`${home.abbreviation} generates a ton of shots (${f.home_shots}/game) while ${away.abbreviation} gives up a lot — that creates more scoring chances`)
+    } else if (f.away_shots_rank <= 5 && f.home_shots_rank >= 25) {
+      reasons.push(`${away.abbreviation} is an elite shot-generating team (${f.away_shots}/game) — they'll pepper the net tonight`)
+    }
   }
 
   return reasons.slice(0, 4)

@@ -287,7 +287,10 @@ export default function App() {
 
       {/* ── MLB Views ── */}
       {isMLB && view === 'games' && !selectedGame && (
-        <Scoreboard games={games} loading={gamesLoading} onSelectGame={selectGame} bestBets={bestBets} />
+        <>
+          <PickOfDayCard sport="mlb" />
+          <Scoreboard games={games} loading={gamesLoading} onSelectGame={selectGame} bestBets={bestBets} />
+        </>
       )}
 
       {isMLB && selectedGame && (
@@ -318,7 +321,10 @@ export default function App() {
 
       {/* ── NHL Views ── */}
       {isNHL && view === 'games' && !nhlSelectedGame && (
-        <NHLScoreboard games={nhlGames} loading={nhlLoading} onSelectGame={selectNhlGame} bestBets={nhlBestBets} />
+        <>
+          <PickOfDayCard sport="nhl" />
+          <NHLScoreboard games={nhlGames} loading={nhlLoading} onSelectGame={selectNhlGame} bestBets={nhlBestBets} />
+        </>
       )}
 
       {isNHL && nhlSelectedGame && (
@@ -346,6 +352,94 @@ export default function App() {
       {isNHL && view === 'backtest' && (
         <Backtest data={backtest} loading={btLoading} onRun={runBacktest} />
       )}
+    </div>
+  )
+}
+
+
+// ── Pick of the Day card ──
+function PickOfDayCard({ sport }) {
+  const [potd, setPotd] = useState(null)
+  const [summary, setSummary] = useState(null)
+  const [loaded, setLoaded] = useState(false)
+
+  useEffect(() => {
+    if (loaded) return
+    setLoaded(true)
+    const a = axios.create({ baseURL: '/api' })
+    Promise.all([
+      a.get(`/pick-of-day/${sport}`),
+      a.get(`/pick-of-day/${sport}/summary`),
+    ]).then(([p, s]) => {
+      setPotd(p.data)
+      setSummary(s.data)
+    }).catch(() => {})
+  }, [sport, loaded])
+
+  if (!potd || potd.error || potd.message) return null
+
+  const s = summary || {}
+  const odds = potd.odds
+  const oddsStr = odds ? `${odds > 0 ? '+' : ''}${odds}` : ''
+
+  return (
+    <div style={{
+      background: 'linear-gradient(135deg, rgba(52,211,153,0.06) 0%, #111827 60%)',
+      border: '1px solid rgba(52,211,153,0.25)',
+      borderRadius: 12,
+      padding: '20px 24px',
+      marginBottom: 16,
+      position: 'relative',
+      overflow: 'hidden',
+    }}>
+      {/* Accent bar */}
+      <div style={{
+        position: 'absolute', top: 0, left: 0, right: 0, height: 3,
+        background: 'linear-gradient(90deg, #34d399, #60a5fa)',
+      }} />
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 20, flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#34d399', marginBottom: 6 }}>
+            {sport.toUpperCase()} PICK OF THE DAY
+          </div>
+          <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#f8fafc', lineHeight: 1.2 }}>
+            {potd.pick} <span style={{ color: '#94a3b8', fontWeight: 500, fontSize: '1rem' }}>({oddsStr})</span>
+          </div>
+          <div style={{ fontSize: '0.85rem', color: '#94a3b8', marginTop: 4 }}>
+            {potd.matchup} — <span style={{ color: '#60a5fa' }}>{potd.bet_type}</span>
+          </div>
+          <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: 6 }}>
+            Model: {(potd.model_prob * 100).toFixed(1)}% | Edge: +{potd.edge?.toFixed(1)}% | Kelly: {potd.kelly_pct}%
+          </div>
+          {potd.reasoning && (
+            <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: 8, fontStyle: 'italic', maxWidth: 500 }}>
+              {potd.reasoning}
+            </div>
+          )}
+        </div>
+
+        {/* POTD running record */}
+        {s.total > 0 && (
+          <div style={{ textAlign: 'right', minWidth: 120 }}>
+            <div style={{ fontSize: '0.62rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#64748b', marginBottom: 4 }}>
+              POTD Record
+            </div>
+            <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#e2e8f0' }}>
+              {s.wins}-{s.losses}
+            </div>
+            <div style={{
+              fontSize: '1rem', fontWeight: 700, marginTop: 2,
+              color: s.profit > 0 ? '#34d399' : s.profit < 0 ? '#ef4444' : '#94a3b8',
+            }}>
+              {s.profit > 0 ? '+' : ''}${s.profit}
+            </div>
+            <div style={{ fontSize: '0.7rem', color: '#64748b', marginTop: 2 }}>
+              {s.win_pct}% WR | {s.total} picks
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

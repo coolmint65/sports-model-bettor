@@ -400,19 +400,20 @@ function CardInsight({ bet, home, away, game }) {
     })
   }
 
-  // Injuries
+  // Injuries — plain English
   const hImp = bet.injuries?.home_impact
   const aImp = bet.injuries?.away_impact
   if (hImp != null && hImp < 0.92) {
+    const pct = Math.round((1 - hImp) * 100)
     reasons.push({
       weight: (1 - hImp) * 50,
-      text: <><strong>{home.abbreviation}</strong> hit hard by injuries (-{((1 - hImp) * 100).toFixed(0)}%)</>
+      text: <><strong>{home.abbreviation}</strong> severely shorthanded ({pct}% weaker)</>
     })
   }
   if (aImp != null && aImp < 0.92) {
     reasons.push({
       weight: (1 - aImp) * 50,
-      text: <><strong>{away.abbreviation}</strong> hit hard by injuries (-{((1 - aImp) * 100).toFixed(0)}%)</>
+      text: <><strong>{away.abbreviation}</strong> severely shorthanded ({Math.round((1 - aImp) * 100)}% weaker)</>
     })
   }
 
