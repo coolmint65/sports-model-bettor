@@ -143,6 +143,11 @@ def generate_picks(home_team_id: int, away_team_id: int,
                 })
 
     # ── First Inning (NRFI/YRFI) ──
+    # Deprioritized: backtest shows 1st INN is a money loser (12-14, 46.2%, -$400).
+    # The pitcher first-inning scoreless % blending produces unrealistic probs
+    # (80%+) that don't calibrate to actual outcomes. Kept in picks list for
+    # transparency but will never be selected as "best pick" when other bet
+    # types have any edge.
     nrfi = fi.get("nrfi", 0.5)
     nrfi_pick = "NRFI" if nrfi > 0.5 else "YRFI"
     nrfi_prob = nrfi if nrfi > 0.5 else fi.get("yrfi", 0.5)
@@ -207,8 +212,18 @@ def generate_picks(home_team_id: int, away_team_id: int,
                 "odds": away_rl_odds,
             })
 
-    # Sort by edge
-    picks.sort(key=lambda p: p["edge"], reverse=True)
+    # Assign priority based on backtested profitability.
+    # Backtest results (115 picks settled):
+    #   RL:       36-25 (59.0%)  +$752   ← priority 1 (best)
+    #   ML:       11-8  (57.9%)  +$241   ← priority 2
+    #   O/U:       3-4  (42.9%)  -$134   ← priority 3
+    #   1st INN:  12-14 (46.2%)  -$400   ← priority 4 (worst — never pick)
+    _PRIORITY = {"RL": 1, "ML": 2, "O/U": 3, "1st INN": 4}
+    for p in picks:
+        p["priority"] = _PRIORITY.get(p["type"], 5)
+
+    # Sort by priority first, then edge within priority
+    picks.sort(key=lambda p: (p["priority"], -p["edge"]))
 
     # Add confidence rating
     for p in picks:

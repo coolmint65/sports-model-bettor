@@ -1083,12 +1083,22 @@ def _compute_first_inning(home_xr: float, away_xr: float,
             p_home_zero = (pit_weight * sp_pit["first_inning_scoreless_pct"]
                           + (1 - pit_weight) * p_home_zero_poisson)
 
-    # Cap at realistic bounds — no pitcher is truly 100% or 0%
-    p_away_zero = max(0.40, min(0.92, p_away_zero))
-    p_home_zero = max(0.40, min(0.92, p_home_zero))
+    # Cap at realistic bounds. Previous bounds (0.40-0.92) produced NRFI
+    # probabilities as high as 85% which are wildly miscalibrated — the
+    # backtest showed 1st INN picks at "80%+ confidence" were actually
+    # winning 46% of the time. Real per-team P(0 runs in 1st) is 65-80%,
+    # rarely outside that range.
+    p_away_zero = max(0.55, min(0.80, p_away_zero))
+    p_home_zero = max(0.55, min(0.80, p_home_zero))
 
     # NRFI = both teams score 0 in the first
     nrfi = p_home_zero * p_away_zero
+
+    # Regress hard toward MLB baseline (~56% NRFI) — individual matchups
+    # rarely deviate more than ±10% from the league average.
+    MLB_NRFI_BASELINE = 0.56
+    nrfi = MLB_NRFI_BASELINE * 0.65 + nrfi * 0.35  # 65% baseline weight
+    nrfi = max(0.45, min(0.68, nrfi))  # Hard cap to realistic range
     yrfi = 1 - nrfi
 
     # P(exactly 1 run total in 1st)
