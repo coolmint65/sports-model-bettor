@@ -652,13 +652,22 @@ def _build_factors_with_ranks(home, away, hs, as_,
                               h_pp, a_pp, h_pk, a_pk, h_sv, a_sv,
                               h_shots, a_shots, h_fo, a_fo):
     """Build factors dict with league rankings (1st = best)."""
-    # Load all teams to compute rankings
-    all_teams = list_teams(LEAGUE)
+    # Use LIVE stats for rankings, not stale JSON files.
+    # Fall back to JSON only if live stats are unavailable.
+    _ensure_club_stats_loaded()
     all_stats = []
-    for t in all_teams:
-        team = load_team(LEAGUE, t["key"])
-        if team and team.get("stats"):
-            all_stats.append(team["stats"])
+    if _live_stats_cache:
+        for abbr, team_stats in _live_stats_cache.items():
+            if isinstance(team_stats, dict):
+                all_stats.append(team_stats)
+
+    # Fallback to JSON if live data is empty
+    if not all_stats:
+        all_teams = list_teams(LEAGUE)
+        for t in all_teams:
+            team = load_team(LEAGUE, t["key"])
+            if team and team.get("stats"):
+                all_stats.append(team["stats"])
 
     def rank_stat(val, key, higher_is_better=True):
         """Return rank out of 32 for a given stat value."""
