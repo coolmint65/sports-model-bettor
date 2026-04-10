@@ -1768,3 +1768,427 @@ body {
   .prediction-sidebar { position: static; }
   .standings-table .standing-name { display: none; }
 }
+
+
+/* ═══════════════════════════════════════════
+   Pick Tracker — Redesigned
+   ═══════════════════════════════════════════ */
+
+.history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.history-header .section-title {
+  margin: 0;
+}
+
+.history-header .bt-controls {
+  display: flex;
+  gap: 8px;
+  margin: 0;
+}
+
+/* Hero summary — big prominent P/L */
+.pick-hero {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 20px;
+  background: #111827;
+  border: 1px solid #1e293b;
+  border-radius: 12px;
+  padding: 24px;
+  margin-bottom: 20px;
+}
+
+@media (max-width: 900px) {
+  .pick-hero {
+    grid-template-columns: 1fr;
+  }
+}
+
+.pick-hero-main {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  border-right: 1px solid #1e293b;
+  padding-right: 20px;
+}
+
+@media (max-width: 900px) {
+  .pick-hero-main {
+    border-right: none;
+    border-bottom: 1px solid #1e293b;
+    padding-right: 0;
+    padding-bottom: 16px;
+  }
+}
+
+.pick-hero-profit-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #64748b;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.pick-hero-profit {
+  font-size: 2.8rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  margin-bottom: 10px;
+  color: #e2e8f0;
+}
+
+.pick-hero-profit.positive { color: #34d399; }
+.pick-hero-profit.negative { color: #ef4444; }
+
+.pick-hero-meta {
+  font-size: 0.85rem;
+  color: #94a3b8;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pick-hero-meta .sep {
+  color: #334155;
+}
+
+.pick-hero-meta .pending {
+  color: #fbbf24;
+  font-weight: 600;
+}
+
+/* Bet type tiles */
+.pick-type-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+  align-content: center;
+}
+
+.pick-type-tile {
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  padding: 12px 14px;
+  transition: all 0.15s;
+}
+
+.pick-type-tile.profitable {
+  border-color: rgba(52, 211, 153, 0.25);
+  background: linear-gradient(180deg, rgba(52, 211, 153, 0.04) 0%, #0f172a 100%);
+}
+
+.pick-type-tile.losing {
+  border-color: rgba(239, 68, 68, 0.18);
+  background: linear-gradient(180deg, rgba(239, 68, 68, 0.03) 0%, #0f172a 100%);
+}
+
+.pick-type-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #94a3b8;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.pick-type-profit {
+  font-size: 1.3rem;
+  font-weight: 700;
+  line-height: 1.1;
+  color: #e2e8f0;
+  margin-bottom: 2px;
+}
+
+.pick-type-profit.positive { color: #34d399; }
+.pick-type-profit.negative { color: #ef4444; }
+
+.pick-type-record {
+  font-size: 0.72rem;
+  color: #64748b;
+}
+
+/* Picks table */
+.picks-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.picks-table thead th {
+  text-align: left;
+  padding: 8px 10px;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #64748b;
+  font-weight: 600;
+  border-bottom: 1px solid #1e293b;
+}
+
+.picks-table td {
+  padding: 10px;
+  border-bottom: 1px solid #15202e;
+}
+
+.picks-table tr:hover td {
+  background: rgba(148, 163, 184, 0.03);
+}
+
+.picks-table tr.row-win {
+  background: rgba(52, 211, 153, 0.03);
+}
+.picks-table tr.row-loss {
+  background: rgba(239, 68, 68, 0.03);
+}
+.picks-table tr.row-pending {
+  background: rgba(251, 191, 36, 0.02);
+}
+
+.picks-table .col-date {
+  color: #64748b;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.picks-table .col-matchup {
+  font-weight: 500;
+  color: #cbd5e1;
+  white-space: nowrap;
+}
+
+.type-badge {
+  display: inline-block;
+  padding: 2px 7px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  background: #1e293b;
+  color: #94a3b8;
+  border-radius: 3px;
+}
+
+.result-pill {
+  display: inline-block;
+  min-width: 34px;
+  padding: 3px 8px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-align: center;
+  border-radius: 4px;
+  letter-spacing: 0.03em;
+}
+
+.result-pill.win {
+  background: rgba(52, 211, 153, 0.15);
+  color: #34d399;
+}
+
+.result-pill.loss {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+.result-pill.push {
+  background: rgba(148, 163, 184, 0.12);
+  color: #94a3b8;
+}
+
+.result-pill.pending {
+  background: rgba(251, 191, 36, 0.10);
+  color: #fbbf24;
+}
+
+
+/* ═══════════════════════════════════════════
+   Standings — Redesigned
+   ═══════════════════════════════════════════ */
+
+.standings-legend {
+  display: flex;
+  gap: 18px;
+  margin-bottom: 20px;
+  padding: 10px 14px;
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  flex-wrap: wrap;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  color: #94a3b8;
+}
+
+.legend-item .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.legend-item .dot.spot-division {
+  background: #34d399;
+}
+
+.legend-item .dot.spot-wildcard {
+  background: #fbbf24;
+}
+
+.legend-item .dot.spot-out {
+  background: #64748b;
+}
+
+.conference-header {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #94a3b8;
+  margin: 24px 0 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #1e293b;
+}
+
+.standings-conf-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+@media (max-width: 900px) {
+  .standings-conf-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.standings-division-card {
+  background: #111827;
+  border: 1px solid #1e293b;
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.standings-division-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #e2e8f0;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #1e293b;
+}
+
+.standings-table-v2 {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.standings-table-v2 thead th {
+  text-align: right;
+  padding: 6px 4px;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.standings-table-v2 thead th.team-col,
+.standings-table-v2 thead th.rank-col {
+  text-align: left;
+}
+
+.standings-table-v2 tbody td {
+  padding: 8px 4px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.standings-table-v2 tbody td.team-col,
+.standings-table-v2 tbody td.rank-col {
+  text-align: left;
+}
+
+.standings-table-v2 .rank-col {
+  width: 24px;
+  color: #64748b;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.standings-table-v2 .team-col {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-right: 8px;
+}
+
+.standings-table-v2 .team-logo-sm {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.standings-table-v2 .standing-abbr {
+  font-weight: 700;
+  color: #e2e8f0;
+  min-width: 34px;
+  font-size: 0.78rem;
+}
+
+.standings-table-v2 .standing-name {
+  color: #94a3b8;
+  font-size: 0.72rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 120px;
+}
+
+.standings-table-v2 .pts-col {
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+/* Playoff spot color bands — left border accent */
+.standings-table-v2 tbody tr {
+  border-left: 3px solid transparent;
+  transition: background 0.15s;
+}
+
+.standings-table-v2 tbody tr:hover {
+  background: rgba(148, 163, 184, 0.04);
+}
+
+.standings-table-v2 tbody tr.spot-division {
+  border-left-color: #34d399;
+}
+
+.standings-table-v2 tbody tr.spot-wildcard {
+  border-left-color: #fbbf24;
+}
+
+.standings-table-v2 tbody tr.spot-out {
+  border-left-color: #334155;
+}
+
+.standings-table-v2 tbody tr.spot-out td {
+  opacity: 0.75;
+}
