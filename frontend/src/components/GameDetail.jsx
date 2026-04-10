@@ -1,102 +1,41 @@
 import PredictionResults from './PredictionResults'
+import SharedGameHeader from './gameDetail/SharedGameHeader'
+import { kellyFraction, impliedFromOdds } from './gameDetail/kelly'
 
 export default function GameDetail({ game, prediction, loading, onBack }) {
-  const { home, away, status } = game
-  const isLive = status.state === 'in'
-  const isFinal = status.state === 'post'
-
   const mergedPrediction = prediction ? mergePitcherData(prediction, game) : null
 
-  return (
-    <div className="game-detail">
-      <button className="back-btn" onClick={onBack}>
-        <span className="back-arrow">&larr;</span> Back to games
-      </button>
-
-      {/* Game header */}
-      <div className="detail-header">
-        {isLive && <div className="live-badge">LIVE</div>}
-        {isFinal && <div className="final-badge">FINAL</div>}
-
-        <div className="detail-matchup">
-          <div className="detail-team">
-            {away.logo && <img src={away.logo} alt="" className="detail-logo" />}
-            <div className="detail-team-name">{away.name}</div>
-            <div className="detail-team-record">{away.record}</div>
-            {(isLive || isFinal) && (
-              <div className={`detail-score ${away.winner ? 'winner' : ''}`}>{away.score}</div>
-            )}
-          </div>
-
-          <div className="detail-at">@</div>
-
-          <div className="detail-team">
-            {home.logo && <img src={home.logo} alt="" className="detail-logo" />}
-            <div className="detail-team-name">{home.name}</div>
-            <div className="detail-team-record">{home.record}</div>
-            {(isLive || isFinal) && (
-              <div className={`detail-score ${home.winner ? 'winner' : ''}`}>{home.score}</div>
-            )}
-          </div>
-        </div>
-
-        {/* Pitching matchup */}
-        {(game.home_pitcher || game.away_pitcher) && (
-          <div className="pitching-matchup">
-            <div className="pitcher-card">
-              <div className="pitcher-label">Away SP</div>
-              <div className="pitcher-name">{game.away_pitcher?.name || 'TBD'}</div>
-              {game.away_pitcher?.stats?.length > 0 && (
-                <div className="pitcher-stats-row">
-                  {game.away_pitcher.stats.map((s, i) => (
-                    <span key={i} className="pitcher-stat">{s.name}: {s.value}</span>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="vs-label">VS</div>
-            <div className="pitcher-card">
-              <div className="pitcher-label">Home SP</div>
-              <div className="pitcher-name">{game.home_pitcher?.name || 'TBD'}</div>
-              {game.home_pitcher?.stats?.length > 0 && (
-                <div className="pitcher-stats-row">
-                  {game.home_pitcher.stats.map((s, i) => (
-                    <span key={i} className="pitcher-stat">{s.name}: {s.value}</span>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        <div className="detail-info">
-          {game.venue && <span>{game.venue}</span>}
-          {game.broadcast && <span>{game.broadcast}</span>}
-          {status.state === 'pre' && (
-            <span>{new Date(game.date).toLocaleString([], {
-              weekday: 'short', month: 'short', day: 'numeric',
-              hour: 'numeric', minute: '2-digit'
-            })}</span>
-          )}
-          {isLive && <span className="live-clock">{status.detail}</span>}
-        </div>
-
-        {game.odds && (
-          <div className="detail-odds">
-            {game.odds.home_ml && (
-              <span className="odds-chip ml">
-                {home.abbreviation} {game.odds.home_ml > 0 ? '+' : ''}{game.odds.home_ml}
-              </span>
-            )}
-            {game.odds.away_ml && (
-              <span className="odds-chip ml">
-                {away.abbreviation} {game.odds.away_ml > 0 ? '+' : ''}{game.odds.away_ml}
-              </span>
-            )}
-            {game.odds.over_under && <span className="odds-chip">O/U {game.odds.over_under}</span>}
+  const matchupExtras = (game.home_pitcher || game.away_pitcher) ? (
+    <div className="pitching-matchup">
+      <div className="pitcher-card">
+        <div className="pitcher-label">Away SP</div>
+        <div className="pitcher-name">{game.away_pitcher?.name || 'TBD'}</div>
+        {game.away_pitcher?.stats?.length > 0 && (
+          <div className="pitcher-stats-row">
+            {game.away_pitcher.stats.map((s, i) => (
+              <span key={i} className="pitcher-stat">{s.name}: {s.value}</span>
+            ))}
           </div>
         )}
       </div>
+      <div className="vs-label">VS</div>
+      <div className="pitcher-card">
+        <div className="pitcher-label">Home SP</div>
+        <div className="pitcher-name">{game.home_pitcher?.name || 'TBD'}</div>
+        {game.home_pitcher?.stats?.length > 0 && (
+          <div className="pitcher-stats-row">
+            {game.home_pitcher.stats.map((s, i) => (
+              <span key={i} className="pitcher-stat">{s.name}: {s.value}</span>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  ) : null
+
+  return (
+    <div className="game-detail">
+      <SharedGameHeader game={game} onBack={onBack} matchupExtras={matchupExtras} />
 
       {/* Model Prediction — two-column layout */}
       <div className="detail-prediction">
@@ -238,7 +177,7 @@ function PickRow({ label, pick, prob, odds, pct }) {
   let edge = null
   let kelly = null
   if (odds && prob) {
-    const implied = odds < 0 ? Math.abs(odds) / (Math.abs(odds) + 100) : 100 / (odds + 100)
+    const implied = impliedFromOdds(odds)
     edge = ((prob - implied) * 100).toFixed(1)
     if (parseFloat(edge) > 0) {
       kelly = kellyFraction(prob, odds)
@@ -270,23 +209,6 @@ function PickRow({ label, pick, prob, odds, pct }) {
       </div>
     </div>
   )
-}
-
-
-/**
- * Quarter-Kelly bet sizing. Caps at 25% of bankroll for safety.
- * Mirrors engine/accuracy.py :: compute_kelly_fraction
- */
-function kellyFraction(probWin, odds) {
-  if (!odds || probWin == null) return 0
-  const decimal = odds > 0 ? (odds / 100) + 1 : (100 / Math.abs(odds)) + 1
-  const b = decimal - 1
-  if (b <= 0) return 0
-  const p = probWin
-  const q = 1 - p
-  const kelly = (b * p - q) / b
-  if (kelly <= 0) return 0
-  return Math.max(0, Math.min(0.25, kelly * 0.25))
 }
 
 

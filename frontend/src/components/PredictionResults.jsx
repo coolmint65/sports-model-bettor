@@ -1,3 +1,6 @@
+import EdgeCallout from './gameDetail/EdgeCallout'
+import { mlToProb } from './gameDetail/kelly'
+
 export default function PredictionResults({ data, odds }) {
   const d = data
   const home = d.home
@@ -70,29 +73,7 @@ export default function PredictionResults({ data, odds }) {
         </div>
 
         {/* Edge vs Vegas callout */}
-        {bestEdge && (
-          <div className={`edge-callout ${bestEdge.rating}`}>
-            <span style={{
-              padding:'2px 8px',
-              borderRadius:4,
-              fontSize:'0.68rem',
-              fontWeight:700,
-              letterSpacing:'0.05em',
-              background: bestEdge.rating === 'strong' ? 'rgba(52,211,153,0.25)'
-                        : bestEdge.rating === 'moderate' ? 'rgba(96,165,250,0.25)'
-                        : 'rgba(251,191,36,0.25)',
-              color: bestEdge.rating === 'strong' ? '#34d399'
-                   : bestEdge.rating === 'moderate' ? '#60a5fa'
-                   : '#fbbf24',
-              marginRight:8,
-            }}>
-              {bestEdge.rating === 'strong' ? 'STRONG' : bestEdge.rating === 'moderate' ? 'MODERATE' : 'LEAN'}
-            </span>
-            <span className="edge-text">
-              {bestEdge.label} ({bestEdge.odds > 0 ? '+' : ''}{bestEdge.odds}) — +{bestEdge.edge.toFixed(1)}% edge
-            </span>
-          </div>
-        )}
+        <EdgeCallout edge={bestEdge} />
       </div>
 
       {/* ── Pitching Matchup ── */}
@@ -373,9 +354,4 @@ function getBestEdge(edge, home, away, odds, data) {
   const best = candidates.sort((a, b) => b.edge - a.edge)[0]
   best.rating = best.edge > 8 ? 'strong' : best.edge > 4 ? 'moderate' : 'lean'
   return best
-}
-
-function mlToProb(ml) {
-  if (ml < 0) return (-ml) / (-ml + 100)
-  return 100 / (ml + 100)
 }

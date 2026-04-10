@@ -1,8 +1,11 @@
+import SharedGameHeader from './gameDetail/SharedGameHeader'
+import RestBadges from './gameDetail/RestBadges'
+import EdgeCallout from './gameDetail/EdgeCallout'
+import { kellyFraction, mlToProb, impliedFromOdds } from './gameDetail/kelly'
+
 export default function NHLGameDetail({ game, prediction, loading, onBack }) {
-  const { home, away, status } = game
+  const { home, away } = game
   const pred = prediction
-  const isLive = status.state === 'in'
-  const isFinal = status.state === 'post'
 
   // Goalie data-source indicator — DailyFaceoff "confirmed" is the gold standard
   const anyConfirmed =
@@ -10,133 +13,50 @@ export default function NHLGameDetail({ game, prediction, loading, onBack }) {
     game.away_goalie?.status === 'confirmed'
   const anyGoalie = game.home_goalie || game.away_goalie
 
-  // Line movement significance
-  const lm = game.line_movement
-  const lmSignificant = lm && lm.significance && lm.significance !== 'none'
+  const matchupExtras = (
+    <>
+      {/* Goalie matchup */}
+      {anyGoalie && (
+        <div className="pitching-matchup">
+          <GoalieCard
+            label="Away G"
+            goalie={game.away_goalie}
+            predGoalie={pred?.goalie_matchup?.away}
+          />
+          <div className="vs-label">VS</div>
+          <GoalieCard
+            label="Home G"
+            goalie={game.home_goalie}
+            predGoalie={pred?.goalie_matchup?.home}
+          />
+        </div>
+      )}
+
+      {/* Goalie confirmation badge */}
+      {anyGoalie && (
+        <div style={{textAlign:'center',marginTop:6}}>
+          <span style={{
+            display:'inline-block',
+            padding:'2px 10px',
+            borderRadius:6,
+            fontSize:'0.72rem',
+            fontWeight:600,
+            background: anyConfirmed ? 'rgba(52,211,153,0.12)' : 'rgba(251,191,36,0.10)',
+            color: anyConfirmed ? '#34d399' : '#fbbf24',
+            border: `1px solid ${anyConfirmed ? 'rgba(52,211,153,0.25)' : 'rgba(251,191,36,0.20)'}`,
+          }}>
+            {anyConfirmed ? '\u2713 Confirmed goalies' : '~ Expected goalies'}
+          </span>
+        </div>
+      )}
+
+      <RestBadges rest={pred?.rest} home={home} away={away} />
+    </>
+  )
 
   return (
     <div className="game-detail">
-      <button className="back-btn" onClick={onBack}>
-        <span className="back-arrow">&larr;</span> Back to games
-      </button>
-
-      {/* Game header */}
-      <div className="detail-header">
-        {isLive && <div className="live-badge">LIVE</div>}
-        {isFinal && <div className="final-badge">FINAL</div>}
-
-        <div className="detail-matchup">
-          <div className="detail-team">
-            {away.logo && <img src={away.logo} alt="" className="detail-logo" />}
-            <div className="detail-team-name">{away.name}</div>
-            <div className="detail-team-record">{away.record}</div>
-            {(isLive || isFinal) && (
-              <div className={`detail-score ${away.winner ? 'winner' : ''}`}>{away.score}</div>
-            )}
-          </div>
-
-          <div className="detail-at">@</div>
-
-          <div className="detail-team">
-            {home.logo && <img src={home.logo} alt="" className="detail-logo" />}
-            <div className="detail-team-name">{home.name}</div>
-            <div className="detail-team-record">{home.record}</div>
-            {(isLive || isFinal) && (
-              <div className={`detail-score ${home.winner ? 'winner' : ''}`}>{home.score}</div>
-            )}
-          </div>
-        </div>
-
-        {/* Goalie matchup */}
-        {anyGoalie && (
-          <div className="pitching-matchup">
-            <GoalieCard
-              label="Away G"
-              goalie={game.away_goalie}
-              predGoalie={pred?.goalie_matchup?.away}
-            />
-            <div className="vs-label">VS</div>
-            <GoalieCard
-              label="Home G"
-              goalie={game.home_goalie}
-              predGoalie={pred?.goalie_matchup?.home}
-            />
-          </div>
-        )}
-
-        {/* Goalie confirmation badge */}
-        {anyGoalie && (
-          <div style={{textAlign:'center',marginTop:6}}>
-            <span style={{
-              display:'inline-block',
-              padding:'2px 10px',
-              borderRadius:6,
-              fontSize:'0.72rem',
-              fontWeight:600,
-              background: anyConfirmed ? 'rgba(52,211,153,0.12)' : 'rgba(251,191,36,0.10)',
-              color: anyConfirmed ? '#34d399' : '#fbbf24',
-              border: `1px solid ${anyConfirmed ? 'rgba(52,211,153,0.25)' : 'rgba(251,191,36,0.20)'}`,
-            }}>
-              {anyConfirmed ? '\u2713 Confirmed goalies' : '~ Expected goalies'}
-            </span>
-          </div>
-        )}
-
-        {/* Rest / back-to-back warning */}
-        {pred?.rest && (pred.rest.home_b2b || pred.rest.away_b2b || pred.rest.home_rest_advantage || pred.rest.away_rest_advantage) && (
-          <div style={{textAlign:'center',marginTop:6,display:'flex',justifyContent:'center',gap:8,flexWrap:'wrap'}}>
-            {pred.rest.home_b2b && (
-              <span style={{padding:'2px 10px',borderRadius:6,fontSize:'0.72rem',fontWeight:600,background:'rgba(239,68,68,0.12)',color:'#ef4444',border:'1px solid rgba(239,68,68,0.25)'}}>
-                {home.abbreviation} on back-to-back
-              </span>
-            )}
-            {pred.rest.away_b2b && (
-              <span style={{padding:'2px 10px',borderRadius:6,fontSize:'0.72rem',fontWeight:600,background:'rgba(239,68,68,0.12)',color:'#ef4444',border:'1px solid rgba(239,68,68,0.25)'}}>
-                {away.abbreviation} on back-to-back
-              </span>
-            )}
-            {pred.rest.home_rest_advantage && !pred.rest.away_rest_advantage && (
-              <span style={{padding:'2px 10px',borderRadius:6,fontSize:'0.72rem',fontWeight:600,background:'rgba(96,165,250,0.10)',color:'#60a5fa',border:'1px solid rgba(96,165,250,0.20)'}}>
-                {home.abbreviation} extra rest
-              </span>
-            )}
-            {pred.rest.away_rest_advantage && !pred.rest.home_rest_advantage && (
-              <span style={{padding:'2px 10px',borderRadius:6,fontSize:'0.72rem',fontWeight:600,background:'rgba(96,165,250,0.10)',color:'#60a5fa',border:'1px solid rgba(96,165,250,0.20)'}}>
-                {away.abbreviation} extra rest
-              </span>
-            )}
-          </div>
-        )}
-
-        <div className="detail-info">
-          {game.venue && <span>{game.venue}</span>}
-          {game.broadcast && <span>{game.broadcast}</span>}
-          {status.state === 'pre' && (
-            <span>{new Date(game.date).toLocaleString([], {
-              weekday: 'short', month: 'short', day: 'numeric',
-              hour: 'numeric', minute: '2-digit'
-            })}</span>
-          )}
-          {isLive && <span className="live-clock">{status.detail}</span>}
-        </div>
-
-        {game.odds && (
-          <div className="detail-odds">
-            {game.odds.home_ml && (
-              <span className="odds-chip ml">
-                {home.abbreviation} {game.odds.home_ml > 0 ? '+' : ''}{game.odds.home_ml}
-              </span>
-            )}
-            {game.odds.away_ml && (
-              <span className="odds-chip ml">
-                {away.abbreviation} {game.odds.away_ml > 0 ? '+' : ''}{game.odds.away_ml}
-              </span>
-            )}
-            {game.odds.over_under && <span className="odds-chip">O/U {game.odds.over_under}</span>}
-            {lmSignificant && <LineMovementBadge lm={lm} home={home} away={away} />}
-          </div>
-        )}
-      </div>
+      <SharedGameHeader game={game} onBack={onBack} matchupExtras={matchupExtras} />
 
       {/* Model Prediction — two-column layout */}
       <div className="detail-prediction">
@@ -302,29 +222,7 @@ function NHLPredictionResults({ data, odds, home, away }) {
           </div>
         </div>
 
-        {bestEdge && (
-          <div className={`edge-callout ${bestEdge.rating}`}>
-            <span className={`conf-badge conf-${bestEdge.rating}`} style={{
-              padding:'2px 8px',
-              borderRadius:4,
-              fontSize:'0.68rem',
-              fontWeight:700,
-              letterSpacing:'0.05em',
-              background: bestEdge.rating === 'strong' ? 'rgba(52,211,153,0.25)'
-                        : bestEdge.rating === 'moderate' ? 'rgba(96,165,250,0.25)'
-                        : 'rgba(251,191,36,0.25)',
-              color: bestEdge.rating === 'strong' ? '#34d399'
-                   : bestEdge.rating === 'moderate' ? '#60a5fa'
-                   : '#fbbf24',
-              marginRight:8,
-            }}>
-              {bestEdge.rating === 'strong' ? 'STRONG' : bestEdge.rating === 'moderate' ? 'MODERATE' : 'LEAN'}
-            </span>
-            <span className="edge-text">
-              {bestEdge.label} ({bestEdge.odds > 0 ? '+' : ''}{bestEdge.odds}) — +{bestEdge.edge.toFixed(1)}% edge
-            </span>
-          </div>
-        )}
+        <EdgeCallout edge={bestEdge} badgeClassName={bestEdge ? `conf-badge conf-${bestEdge.rating}` : undefined} />
       </div>
 
       {/* Key Factors with Rankings — moved up for immediate visibility */}
@@ -720,7 +618,7 @@ function PickRow({ label, pick, prob, odds, pct }) {
   let edge = null
   let kelly = null
   if (odds && prob) {
-    const implied = odds < 0 ? Math.abs(odds) / (Math.abs(odds) + 100) : 100 / (odds + 100)
+    const implied = impliedFromOdds(odds)
     edge = ((prob - implied) * 100).toFixed(1)
     // Only surface Kelly sizing when we have a positive edge
     if (parseFloat(edge) > 0) {
@@ -760,24 +658,6 @@ function PickRow({ label, pick, prob, odds, pct }) {
       </div>
     </div>
   )
-}
-
-
-/**
- * Quarter-Kelly bet sizing. Caps at 25% of bankroll for safety.
- * Mirrors engine/accuracy.py :: compute_kelly_fraction — keep in sync.
- */
-function kellyFraction(probWin, odds) {
-  if (!odds || probWin == null) return 0
-  const decimal = odds > 0 ? (odds / 100) + 1 : (100 / Math.abs(odds)) + 1
-  const b = decimal - 1
-  if (b <= 0) return 0
-  const p = probWin
-  const q = 1 - p
-  const kelly = (b * p - q) / b
-  if (kelly <= 0) return 0
-  // Quarter-Kelly, clamped to [0, 0.25]
-  return Math.max(0, Math.min(0.25, kelly / 4))
 }
 
 
@@ -829,39 +709,6 @@ function GoalieImpactCard({ gm, home, away }) {
         </div>
       )}
     </div>
-  )
-}
-
-
-function LineMovementBadge({ lm, home, away }) {
-  // Build an at-a-glance label for ML move
-  const parts = []
-  if (lm.home_ml_move != null && Math.abs(lm.home_ml_move) >= 5) {
-    const sign = lm.home_ml_move > 0 ? '+' : ''
-    parts.push(`${home.abbreviation} ML ${sign}${lm.home_ml_move}`)
-  }
-  if (lm.total_move != null && Math.abs(lm.total_move) >= 0.5) {
-    const sign = lm.total_move > 0 ? '+' : ''
-    parts.push(`Total ${sign}${lm.total_move}`)
-  }
-  if (parts.length === 0) return null
-
-  const sigColor = lm.significance === 'major' ? '#ef4444'
-                 : lm.significance === 'moderate' ? '#f59e0b'
-                 : '#94a3b8'
-  const icon = lm.significance === 'major' ? '!! ' : lm.significance === 'moderate' ? '! ' : ''
-
-  return (
-    <span className="odds-chip" style={{
-      background: 'rgba(245,158,11,0.08)',
-      color: sigColor,
-      border: `1px solid ${sigColor}33`,
-      fontWeight: 600,
-    }}
-    title={`Line has moved ${lm.significance} since opening`}
-    >
-      {icon}LINE MOVED: {parts.join(', ')}
-    </span>
   )
 }
 
@@ -997,9 +844,4 @@ function findBestEdge(data, odds, home, away) {
   const best = candidates.sort((a, b) => b.edge - a.edge)[0]
   best.rating = best.edge > 8 ? 'strong' : best.edge > 4 ? 'moderate' : 'lean'
   return best
-}
-
-function mlToProb(ml) {
-  if (ml < 0) return (-ml) / (-ml + 100)
-  return 100 / (ml + 100)
 }
