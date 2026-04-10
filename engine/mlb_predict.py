@@ -378,9 +378,13 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     except Exception as e:
         logger.debug("MLB injury data unavailable: %s", e)
 
-    # ── Floor ──
-    home_xr = max(home_xr, 1.5)
-    away_xr = max(away_xr, 1.5)
+    # ── Floor + cap ──
+    # The prediction has ~17 multiplicative factors. When they all compound
+    # in the same direction, expected runs can blow out to 7-8 runs, which
+    # creates unrealistic 93-97% ML win probabilities. Real MLB run distributions
+    # rarely exceed 6.5 per team and never drop below 2.0.
+    home_xr = max(2.0, min(6.5, home_xr))
+    away_xr = max(2.0, min(6.5, away_xr))
 
     total = home_xr + away_xr
     spread = away_xr - home_xr  # Negative = home favored
@@ -388,10 +392,17 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     # ── Win probability (Poisson-based) ──
     conf = _compute_confidence(home_pit, away_pit, home_sp_pit, away_sp_pit)
 
-    # No dampening — raw model output compared against real market odds.
-    # The DraftKings odds are the calibration, not artificial dampening.
     matrix = _build_score_matrix(home_xr, away_xr, max_runs=15)
     p_home, p_away = _win_probs_from_matrix(matrix)
+
+    # Calibration cap: MLB win probabilities rarely exceed 75% even for
+    # heavy favorites. Our backtest showed 57% actual win rate on ML picks
+    # that were "displayed" at 80-97% confidence — a clear miscalibration.
+    # Cap raw probabilities to 0.30-0.72 range to match reality.
+    # The raw matrix still computes accurately; this just prevents the
+    # display from showing overconfident numbers.
+    p_home = max(0.30, min(0.72, p_home))
+    p_away = 1 - p_home
 
     # ── Over/Under lines ──
     ou_lines = _generate_ou_lines(total, matrix)
