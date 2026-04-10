@@ -72,7 +72,22 @@ export default function PredictionResults({ data, odds }) {
         {/* Edge vs Vegas callout */}
         {bestEdge && (
           <div className={`edge-callout ${bestEdge.rating}`}>
-            <span className="edge-icon">{bestEdge.rating === 'strong' ? '!!' : bestEdge.rating === 'moderate' ? '!' : ''}</span>
+            <span style={{
+              padding:'2px 8px',
+              borderRadius:4,
+              fontSize:'0.68rem',
+              fontWeight:700,
+              letterSpacing:'0.05em',
+              background: bestEdge.rating === 'strong' ? 'rgba(52,211,153,0.25)'
+                        : bestEdge.rating === 'moderate' ? 'rgba(96,165,250,0.25)'
+                        : 'rgba(251,191,36,0.25)',
+              color: bestEdge.rating === 'strong' ? '#34d399'
+                   : bestEdge.rating === 'moderate' ? '#60a5fa'
+                   : '#fbbf24',
+              marginRight:8,
+            }}>
+              {bestEdge.rating === 'strong' ? 'STRONG' : bestEdge.rating === 'moderate' ? 'MODERATE' : 'LEAN'}
+            </span>
             <span className="edge-text">
               {bestEdge.label} ({bestEdge.odds > 0 ? '+' : ''}{bestEdge.odds}) — +{bestEdge.edge.toFixed(1)}% edge
             </span>

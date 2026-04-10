@@ -718,9 +718,14 @@ function PickRow({ label, pick, prob, odds, pct }) {
   const conf = prob > 0.60 ? 'high' : prob > 0.53 ? 'med' : 'low'
 
   let edge = null
+  let kelly = null
   if (odds && prob) {
     const implied = odds < 0 ? Math.abs(odds) / (Math.abs(odds) + 100) : 100 / (odds + 100)
     edge = ((prob - implied) * 100).toFixed(1)
+    // Only surface Kelly sizing when we have a positive edge
+    if (parseFloat(edge) > 0) {
+      kelly = kellyFraction(prob, odds)
+    }
   }
 
   return (
@@ -737,9 +742,190 @@ function PickRow({ label, pick, prob, odds, pct }) {
         {edge && parseFloat(edge) > 0 && (
           <span className="pick-edge positive">+{edge}%</span>
         )}
+        {kelly != null && kelly > 0 && (
+          <span
+            className="pick-kelly"
+            title="Quarter-Kelly bet sizing. Bet this fraction of your bankroll to maximize long-run growth while staying safe from variance."
+            style={{
+              fontSize: '0.68rem',
+              color: '#94a3b8',
+              marginTop: 2,
+              letterSpacing: '0.02em',
+              cursor: 'help',
+            }}
+          >
+            Kelly: {(kelly * 100).toFixed(1)}%
+          </span>
+        )}
       </div>
     </div>
   )
+}
+
+
+/**
+ * Quarter-Kelly bet sizing. Caps at 25% of bankroll for safety.
+ * Mirrors engine/accuracy.py :: compute_kelly_fraction — keep in sync.
+ */
+function kellyFraction(probWin, odds) {
+  if (!odds || probWin == null) return 0
+  const decimal = odds > 0 ? (odds / 100) + 1 : (100 / Math.abs(odds)) + 1
+  const b = decimal - 1
+  if (b <= 0) return 0
+  const p = probWin
+  const q = 1 - p
+  const kelly = (b * p - q) / b
+  if (kelly <= 0) return 0
+  // Quarter-Kelly, clamped to [0, 0.25]
+  return Math.max(0, Math.min(0.25, kelly / 4))
+}
+
+
+function GoalieImpactCard({ gm, home, away }) {
+  const hSv = gm.home?.save_pct || 0
+  const aSv = gm.away?.save_pct || 0
+  const diff = hSv - aSv  // positive -> home goalie is better
+  // Rough xG suppression estimate: ~30 shots/game * SV% differential
+  // (same shots * 0.015 SV% gap = ~0.45 goals suppressed)
+  const SHOTS = 30
+  const xgAdvantage = Math.abs(diff) * SHOTS
+  const better = diff > 0 ? home.abbreviation : away.abbreviation
+  const hasEdge = Math.abs(diff) >= 0.005
+
+  return (
+    <div className="result-card">
+      <h2>Goalie Impact</h2>
+      <div className="stat-row">
+        <span className="stat-label">{away.abbreviation} SV%</span>
+        <span className="stat-value">{aSv > 0 ? aSv.toFixed(3) : '-'}</span>
+      </div>
+      <div className="stat-row">
+        <span className="stat-label">{home.abbreviation} SV%</span>
+        <span className="stat-value">{hSv > 0 ? hSv.toFixed(3) : '-'}</span>
+      </div>
+      <div className="stat-row">
+        <span className="stat-label">SV% differential</span>
+        <span className="stat-value" style={{color: hasEdge ? (diff > 0 ? '#34d399' : '#60a5fa') : '#94a3b8'}}>
+          {diff >= 0 ? '+' : ''}{diff.toFixed(3)}
+        </span>
+      </div>
+      {hasEdge && (
+        <div style={{
+          marginTop:10,
+          padding:'8px 12px',
+          background: 'rgba(52,211,153,0.06)',
+          border: '1px solid rgba(52,211,153,0.15)',
+          borderRadius: 6,
+          fontSize: '0.82rem',
+          color: '#34d399',
+          textAlign: 'center',
+        }}>
+          {better} goalie edge: ~{xgAdvantage.toFixed(2)} goals suppressed per game
+        </div>
+      )}
+      {!hasEdge && (
+        <div style={{marginTop:10,textAlign:'center',color:'#64748b',fontSize:'0.78rem'}}>
+          Goalie matchup is roughly even
+        </div>
+      )}
+    </div>
+  )
+}
+
+
+function LineMovementBadge({ lm, home, away }) {
+  // Build an at-a-glance label for ML move
+  const parts = []
+  if (lm.home_ml_move != null && Math.abs(lm.home_ml_move) >= 5) {
+    const sign = lm.home_ml_move > 0 ? '+' : ''
+    parts.push(`${home.abbreviation} ML ${sign}${lm.home_ml_move}`)
+  }
+  if (lm.total_move != null && Math.abs(lm.total_move) >= 0.5) {
+    const sign = lm.total_move > 0 ? '+' : ''
+    parts.push(`Total ${sign}${lm.total_move}`)
+  }
+  if (parts.length === 0) return null
+
+  const sigColor = lm.significance === 'major' ? '#ef4444'
+                 : lm.significance === 'moderate' ? '#f59e0b'
+                 : '#94a3b8'
+  const icon = lm.significance === 'major' ? '!! ' : lm.significance === 'moderate' ? '! ' : ''
+
+  return (
+    <span className="odds-chip" style={{
+      background: 'rgba(245,158,11,0.08)',
+      color: sigColor,
+      border: `1px solid ${sigColor}33`,
+      fontWeight: 600,
+    }}
+    title={`Line has moved ${lm.significance} since opening`}
+    >
+      {icon}LINE MOVED: {parts.join(', ')}
+    </span>
+  )
+}
+
+
+/**
+ * Produce the top reasons that explain the model's lean for this game.
+ * Keeps it to at most 4 bullet points, ordered by impact.
+ */
+function getReasoning(pred, home, away) {
+  const reasons = []
+  const f = pred.factors || {}
+
+  // Goalie advantage
+  if (pred.goalie_matchup?.home && pred.goalie_matchup?.away) {
+    const h_sv = pred.goalie_matchup.home.save_pct || 0
+    const a_sv = pred.goalie_matchup.away.save_pct || 0
+    if (h_sv > 0 && a_sv > 0 && Math.abs(h_sv - a_sv) > 0.015) {
+      const better = h_sv > a_sv ? home.abbreviation : away.abbreviation
+      reasons.push(`${better} has a significant goalie advantage (${Math.max(h_sv, a_sv).toFixed(3)} vs ${Math.min(h_sv, a_sv).toFixed(3)} SV%)`)
+    }
+  }
+
+  // Power play mismatch
+  if (f.home_pp != null && f.away_pp != null) {
+    const ppDiff = Math.abs(f.home_pp - f.away_pp) * 100
+    if (ppDiff > 4) {
+      const better = f.home_pp > f.away_pp ? home.abbreviation : away.abbreviation
+      reasons.push(`${better} has a ${ppDiff.toFixed(1)}% power play edge`)
+    }
+  }
+
+  // Overall model strength
+  const hWP = pred.win_prob?.home || 0
+  const aWP = pred.win_prob?.away || 0
+  if (Math.abs(hWP - aWP) > 0.15) {
+    const favorite = hWP > aWP ? home.name : away.name
+    reasons.push(`Model strongly favors ${favorite} (${(Math.max(hWP, aWP) * 100).toFixed(0)}% win probability)`)
+  }
+
+  // Top-5 goaltending rankings
+  if (f.home_sv_rank && f.home_sv_rank <= 5) {
+    reasons.push(`${home.abbreviation} goaltending ranks top 5 in the league`)
+  }
+  if (f.away_sv_rank && f.away_sv_rank <= 5) {
+    reasons.push(`${away.abbreviation} goaltending ranks top 5 in the league`)
+  }
+
+  // Back-to-back fatigue is a big factor — surface it
+  if (pred.rest?.home_b2b) {
+    reasons.push(`${home.abbreviation} is on a back-to-back (fatigue penalty applied)`)
+  }
+  if (pred.rest?.away_b2b) {
+    reasons.push(`${away.abbreviation} is on a back-to-back (fatigue penalty applied)`)
+  }
+
+  // Injuries with measurable xG impact
+  if (pred.injuries?.home_impact != null && pred.injuries.home_impact < 0.95) {
+    reasons.push(`${home.abbreviation} missing key players (-${(1 - pred.injuries.home_impact).toFixed(2)} xG)`)
+  }
+  if (pred.injuries?.away_impact != null && pred.injuries.away_impact < 0.95) {
+    reasons.push(`${away.abbreviation} missing key players (-${(1 - pred.injuries.away_impact).toFixed(2)} xG)`)
+  }
+
+  return reasons.slice(0, 4)
 }
 
 

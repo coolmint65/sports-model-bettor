@@ -1081,9 +1081,21 @@ def generate_nhl_picks(home_key: str, away_key: str,
     Picks are prioritised: O/U (1) > PL (2) > ML (3) so that the best
     pick per game is O/U or PL unless neither has any edge.
     """
+    picks, _ = generate_nhl_picks_with_context(home_key, away_key, odds)
+    return picks
+
+
+def generate_nhl_picks_with_context(home_key: str, away_key: str,
+                                    odds: dict | None = None
+                                    ) -> tuple[list[dict], dict]:
+    """
+    Same as generate_nhl_picks but also returns a context dict with
+    `rest`, `injuries`, and other metadata so callers can surface b2b
+    warnings and injury impact without re-running the full prediction.
+    """
     pred = predict_matchup(home_key, away_key)
     if not pred:
-        return []
+        return [], {}
 
     odds = odds or {}
     wp = pred["win_prob"]
@@ -1223,4 +1235,11 @@ def generate_nhl_picks(home_key: str, away_key: str,
         else:
             p["confidence"] = "lean"
 
-    return picks
+    context = {
+        "rest": pred.get("rest", {}),
+        "injuries": {
+            "home_impact": pred.get("injuries", {}).get("home_impact", 1.0),
+            "away_impact": pred.get("injuries", {}).get("away_impact", 1.0),
+        },
+    }
+    return picks, context

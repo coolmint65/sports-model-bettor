@@ -236,9 +236,13 @@ function PickRow({ label, pick, prob, odds, pct }) {
 
   // Calculate edge vs Vegas when real odds available
   let edge = null
+  let kelly = null
   if (odds && prob) {
     const implied = odds < 0 ? Math.abs(odds) / (Math.abs(odds) + 100) : 100 / (odds + 100)
     edge = ((prob - implied) * 100).toFixed(1)
+    if (parseFloat(edge) > 0) {
+      kelly = kellyFraction(prob, odds)
+    }
   }
 
   return (
@@ -255,9 +259,34 @@ function PickRow({ label, pick, prob, odds, pct }) {
         {edge && parseFloat(edge) > 0 && (
           <span className="pick-edge positive">+{edge}%</span>
         )}
+        {kelly != null && kelly > 0 && (
+          <span
+            title="Quarter-Kelly bet sizing — fraction of bankroll to wager"
+            style={{fontSize:'0.68rem',color:'#94a3b8',marginTop:2,cursor:'help'}}
+          >
+            Kelly: {(kelly * 100).toFixed(1)}%
+          </span>
+        )}
       </div>
     </div>
   )
+}
+
+
+/**
+ * Quarter-Kelly bet sizing. Caps at 25% of bankroll for safety.
+ * Mirrors engine/accuracy.py :: compute_kelly_fraction
+ */
+function kellyFraction(probWin, odds) {
+  if (!odds || probWin == null) return 0
+  const decimal = odds > 0 ? (odds / 100) + 1 : (100 / Math.abs(odds)) + 1
+  const b = decimal - 1
+  if (b <= 0) return 0
+  const p = probWin
+  const q = 1 - p
+  const kelly = (b * p - q) / b
+  if (kelly <= 0) return 0
+  return Math.max(0, Math.min(0.25, kelly * 0.25))
 }
 
 

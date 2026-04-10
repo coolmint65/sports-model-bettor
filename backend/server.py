@@ -228,6 +228,26 @@ def _get_scoreboard(date: str = "") -> list[dict]:
         except Exception as e:
             logger.warning("ESPN per-game odds failed: %s", e)
 
+    # Track line movement for each game
+    try:
+        from engine.line_movement import get_line_movement, track_opening_odds
+        for game in games:
+            if not game.get("odds"):
+                continue
+            h = game["home"].get("abbreviation", "")
+            a = game["away"].get("abbreviation", "")
+            gdate = (game.get("date", "") or "")[:10]
+            if not (h and a and gdate):
+                continue
+            key = f"{gdate}_{a}@{h}"
+            movement = get_line_movement("mlb", key, game["odds"])
+            if movement:
+                game["line_movement"] = movement
+            else:
+                track_opening_odds("mlb", key, game["odds"])
+    except Exception as e:
+        logger.debug("MLB line movement tracking failed: %s", e)
+
     _scoreboard_cache[cache_key] = (now, games)
     return games
 
@@ -1583,7 +1603,7 @@ def api_nhl_predict(home: str = Query(...), away: str = Query(...)):
 @app.get("/api/nhl/best-bets")
 def api_nhl_best_bets():
     """Run predictions on all today's NHL games and find edges."""
-    from engine.nhl_predict import generate_nhl_picks
+    from engine.nhl_predict import generate_nhl_picks_with_context
     from engine.data import list_teams, load_team
 
     games = _get_nhl_scoreboard()
@@ -1641,7 +1661,7 @@ def api_nhl_best_bets():
                 break
 
         try:
-            picks = generate_nhl_picks(h_key, a_key, odds)
+            picks, ctx = generate_nhl_picks_with_context(h_key, a_key, odds)
         except Exception as e:
             logger.error("NHL prediction failed for %s @ %s: %s", a_abbr, h_abbr, e)
             continue
@@ -1671,6 +1691,8 @@ def api_nhl_best_bets():
             "best_pick": best,
             "all_picks": picks[:4],
             "confidence": best.get("confidence", "lean"),
+            "rest": ctx.get("rest", {}),
+            "injuries": ctx.get("injuries", {}),
         })
 
     bets.sort(key=lambda b: b["best_pick"]["edge"], reverse=True)

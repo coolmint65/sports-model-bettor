@@ -61,6 +61,12 @@ function NHLGameCard({ game, bet, onClick }) {
   const isPre = status.state === 'pre'
   const conf = bet?.confidence || 'skip'
 
+  const rest = bet?.rest || {}
+  const homeB2B = rest.home_b2b
+  const awayB2B = rest.away_b2b
+  const homeRest = rest.home_rest_advantage && !rest.away_rest_advantage
+  const awayRest = rest.away_rest_advantage && !rest.home_rest_advantage
+
   return (
     <div className={`game-card ${isLive ? 'live' : ''} card-${conf}`} onClick={onClick}>
       {isLive && <div className="live-badge">LIVE</div>}
@@ -72,6 +78,52 @@ function NHLGameCard({ game, bet, onClick }) {
           <span className="pick-badge-type">{bet.best_pick.type}</span>
           <span className="pick-badge-pick">{bet.best_pick.pick}</span>
           <span className="pick-badge-edge">+{bet.best_pick.edge}%</span>
+        </div>
+      )}
+
+      {/* Rest / back-to-back indicators */}
+      {isPre && (homeB2B || awayB2B || homeRest || awayRest) && (
+        <div style={{display:'flex',gap:4,flexWrap:'wrap',marginBottom:6}}>
+          {awayB2B && (
+            <span style={{fontSize:'0.66rem',fontWeight:700,padding:'2px 6px',borderRadius:4,background:'rgba(239,68,68,0.15)',color:'#ef4444',border:'1px solid rgba(239,68,68,0.3)'}}>
+              {away.abbreviation} B2B
+            </span>
+          )}
+          {homeB2B && (
+            <span style={{fontSize:'0.66rem',fontWeight:700,padding:'2px 6px',borderRadius:4,background:'rgba(239,68,68,0.15)',color:'#ef4444',border:'1px solid rgba(239,68,68,0.3)'}}>
+              {home.abbreviation} B2B
+            </span>
+          )}
+          {awayRest && (
+            <span style={{fontSize:'0.66rem',fontWeight:700,padding:'2px 6px',borderRadius:4,background:'rgba(96,165,250,0.12)',color:'#60a5fa',border:'1px solid rgba(96,165,250,0.25)'}}>
+              {away.abbreviation} rested
+            </span>
+          )}
+          {homeRest && (
+            <span style={{fontSize:'0.66rem',fontWeight:700,padding:'2px 6px',borderRadius:4,background:'rgba(96,165,250,0.12)',color:'#60a5fa',border:'1px solid rgba(96,165,250,0.25)'}}>
+              {home.abbreviation} rested
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Line movement indicator */}
+      {isPre && game.line_movement && game.line_movement.significance && game.line_movement.significance !== 'none' && (
+        <div style={{marginBottom:6}}>
+          <span
+            title={`Line moved ${game.line_movement.significance} since opening`}
+            style={{
+              fontSize:'0.66rem',
+              fontWeight:700,
+              padding:'2px 6px',
+              borderRadius:4,
+              background:'rgba(245,158,11,0.12)',
+              color: game.line_movement.significance === 'major' ? '#ef4444' : '#f59e0b',
+              border:'1px solid rgba(245,158,11,0.25)',
+            }}
+          >
+            LINE MOVED
+          </span>
         </div>
       )}
 
