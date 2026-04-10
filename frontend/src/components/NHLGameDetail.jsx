@@ -553,6 +553,32 @@ function NHLPredictionResults({ data, odds, home, away }) {
       {d.injuries && (d.injuries.home?.length > 0 || d.injuries.away?.length > 0) && (
         <div className="result-card">
           <h2>Injuries</h2>
+
+          {/* Quantified xG impact summary */}
+          {(d.injuries.home_impact != null && d.injuries.home_impact < 1) ||
+           (d.injuries.away_impact != null && d.injuries.away_impact < 1) ? (
+            <div style={{
+              textAlign:'center',
+              fontSize:'0.82rem',
+              marginBottom:10,
+              display:'flex',
+              justifyContent:'center',
+              gap:16,
+              flexWrap:'wrap',
+            }}>
+              {d.injuries.home_impact != null && d.injuries.home_impact < 1 && (
+                <span style={{color:'#ef4444'}}>
+                  {home.abbreviation}: -{(1 - d.injuries.home_impact).toFixed(2)} xG from injuries
+                </span>
+              )}
+              {d.injuries.away_impact != null && d.injuries.away_impact < 1 && (
+                <span style={{color:'#ef4444'}}>
+                  {away.abbreviation}: -{(1 - d.injuries.away_impact).toFixed(2)} xG from injuries
+                </span>
+              )}
+            </div>
+          ) : null}
+
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
             <div>
               <h3 style={{fontSize:'0.85rem',color:'#94a3b8',marginBottom:8}}>{home.abbreviation}</h3>
