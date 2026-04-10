@@ -16,6 +16,9 @@ if errorlevel 1 (
     goto :done
 )
 
+REM Clear stale bytecode cache so code changes take effect immediately
+for /d /r %%d in (__pycache__) do @rd /s /q "%%d" 2>nul
+
 if not exist "data\logs" mkdir "data\logs"
 
 echo Starting everything...
