@@ -145,6 +145,164 @@ body {
   gap: 12px;
 }
 
+/* Feature layout: pregame/live cards get priority, finals compact */
+.games-feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: 14px;
+}
+
+.games-section-header {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #64748b;
+  margin: 20px 0 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #1e293b;
+}
+
+.games-finals-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 6px;
+}
+
+/* Compact final-game row */
+.game-final-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-size: 0.85rem;
+}
+
+.game-final-row:hover {
+  background: #151d2e;
+  border-color: #334155;
+}
+
+.game-final-row .final-label {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #64748b;
+  padding: 2px 6px;
+  background: #1e293b;
+  border-radius: 3px;
+}
+
+.game-final-row .final-teams {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.game-final-row .final-team {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.game-final-row .final-team img {
+  width: 20px;
+  height: 20px;
+}
+
+.game-final-row .final-abbr {
+  font-weight: 600;
+  color: #94a3b8;
+  font-size: 0.8rem;
+}
+
+.game-final-row .final-abbr.winner {
+  color: #f8fafc;
+  font-weight: 700;
+}
+
+.game-final-row .final-score {
+  font-weight: 700;
+  color: #e2e8f0;
+  min-width: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.game-final-row .final-score.winner {
+  color: #34d399;
+}
+
+.game-final-row .final-dash {
+  color: #475569;
+}
+
+/* Win probability bar on pregame card */
+.wp-bar-card {
+  display: flex;
+  height: 5px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: #1e293b;
+  margin: 8px 0 4px;
+}
+
+.wp-bar-card .wp-away {
+  background: #60a5fa;
+}
+
+.wp-bar-card .wp-home {
+  background: #f59e0b;
+}
+
+.wp-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.65rem;
+  color: #64748b;
+  margin-bottom: 6px;
+}
+
+.wp-labels .wp-favored {
+  color: #e2e8f0;
+  font-weight: 700;
+}
+
+/* Insight line — top factor driving the pick */
+.card-insight {
+  font-size: 0.72rem;
+  color: #94a3b8;
+  padding: 6px 10px;
+  margin: 8px -6px;
+  background: rgba(148, 163, 184, 0.04);
+  border-left: 2px solid #475569;
+  border-radius: 3px;
+  line-height: 1.4;
+}
+
+.card-insight strong {
+  color: #cbd5e1;
+}
+
+/* Enhanced card with stronger confidence accent */
+.game-card.card-strong {
+  border-color: rgba(52, 211, 153, 0.4);
+  background: linear-gradient(180deg, rgba(52, 211, 153, 0.04) 0%, #111827 60%);
+}
+
+.game-card.card-moderate {
+  border-color: rgba(96, 165, 250, 0.32);
+  background: linear-gradient(180deg, rgba(96, 165, 250, 0.03) 0%, #111827 60%);
+}
+
 .game-card {
   background: #111827;
   border: 1px solid #1e293b;

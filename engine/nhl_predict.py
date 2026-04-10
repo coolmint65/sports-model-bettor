@@ -1441,5 +1441,9 @@ def generate_nhl_picks_with_context(home_key: str, away_key: str,
             "home_impact": pred.get("injuries", {}).get("home_impact", 1.0),
             "away_impact": pred.get("injuries", {}).get("away_impact", 1.0),
         },
+        "win_prob": pred.get("win_prob", {}),
+        "expected_score": pred.get("expected_score", {}),
+        "factors": pred.get("factors", {}),
+        "season_context": pred.get("season_context", {}),
     }
     return picks, context

@@ -24,13 +24,26 @@ export default function NHLScoreboard({ games, loading, onSelectGame, bestBets }
     }
   }
 
-  const sorted = [...games].sort((a, b) => {
+  // Split games into active (pregame/live) and finals
+  const activeGames = []
+  const finalGames = []
+  for (const g of games) {
+    if (g.status?.state === 'post' || g.status?.completed) {
+      finalGames.push(g)
+    } else {
+      activeGames.push(g)
+    }
+  }
+
+  // Sort active games by edge (highest first)
+  activeGames.sort((a, b) => {
     const aEdge = betMap[a.id]?.best_pick?.edge || -99
     const bEdge = betMap[b.id]?.best_pick?.edge || -99
     return bEdge - aEdge
   })
 
-  const edgeCount = sorted.filter(g =>
+  // Sort finals by most recent first (natural order usually works)
+  const edgeCount = activeGames.filter(g =>
     betMap[g.id]?.confidence === 'strong' || betMap[g.id]?.confidence === 'moderate'
   ).length
 
@@ -40,15 +53,67 @@ export default function NHLScoreboard({ games, loading, onSelectGame, bestBets }
         NHL Games ({games.length})
         {edgeCount > 0 && <span className="edge-count">{edgeCount} plays with edge</span>}
       </h2>
-      <div className="games-grid">
-        {sorted.map(game => (
-          <NHLGameCard
-            key={game.id}
-            game={game}
-            bet={betMap[game.id]}
-            onClick={() => onSelectGame && onSelectGame(game)}
-          />
-        ))}
+
+      {activeGames.length > 0 && (
+        <>
+          {finalGames.length > 0 && (
+            <div className="games-section-header">
+              {activeGames.some(g => g.status?.state === 'in') ? 'Live & Upcoming' : 'Upcoming'} ({activeGames.length})
+            </div>
+          )}
+          <div className="games-feature-grid">
+            {activeGames.map(game => (
+              <NHLGameCard
+                key={game.id}
+                game={game}
+                bet={betMap[game.id]}
+                onClick={() => onSelectGame && onSelectGame(game)}
+              />
+            ))}
+          </div>
+        </>
+      )}
+
+      {finalGames.length > 0 && (
+        <>
+          <div className="games-section-header">Final ({finalGames.length})</div>
+          <div className="games-finals-grid">
+            {finalGames.map(game => (
+              <NHLFinalRow
+                key={game.id}
+                game={game}
+                bet={betMap[game.id]}
+                onClick={() => onSelectGame && onSelectGame(game)}
+              />
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+
+function NHLFinalRow({ game, bet, onClick }) {
+  const { home, away } = game
+  const hs = parseInt(home.score) || 0
+  const as = parseInt(away.score) || 0
+  const homeWon = hs > as
+  return (
+    <div className="game-final-row" onClick={onClick}>
+      <span className="final-label">FINAL</span>
+      <div className="final-teams">
+        <div className="final-team">
+          {away.logo && <img src={away.logo} alt="" />}
+          <span className={`final-abbr ${!homeWon ? 'winner' : ''}`}>{away.abbreviation}</span>
+        </div>
+        <span className={`final-score ${!homeWon ? 'winner' : ''}`}>{as}</span>
+        <span className="final-dash">—</span>
+        <span className={`final-score ${homeWon ? 'winner' : ''}`}>{hs}</span>
+        <div className="final-team">
+          {home.logo && <img src={home.logo} alt="" />}
+          <span className={`final-abbr ${homeWon ? 'winner' : ''}`}>{home.abbreviation}</span>
+        </div>
       </div>
     </div>
   )
@@ -132,6 +197,16 @@ function NHLGameCard({ game, bet, onClick }) {
         <div className="game-at">@</div>
         <TeamRow team={home} isLive={isLive} isFinal={isFinal} />
       </div>
+
+      {/* Win probability bar — the "missing piece" */}
+      {isPre && bet?.win_prob?.home != null && (
+        <WinProbBar wp={bet.win_prob} home={home} away={away} />
+      )}
+
+      {/* Key insight line — shows WHY the model picked this side */}
+      {isPre && bet && bet.best_pick && conf !== 'skip' && (
+        <CardInsight bet={bet} home={home} away={away} game={game} />
+      )}
 
       {/* Starting goalies */}
       {isPre && (game.away_goalie || game.home_goalie) && (
@@ -234,6 +309,120 @@ function TeamRow({ team, isLive, isFinal }) {
       {(isLive || isFinal) && (
         <span className={`game-score ${team.winner ? 'winner' : ''}`}>{team.score}</span>
       )}
+    </div>
+  )
+}
+
+
+function WinProbBar({ wp, home, away }) {
+  const hPct = Math.round(wp.home * 100)
+  const aPct = Math.round(wp.away * 100)
+  const homeFavored = wp.home > wp.away
+
+  return (
+    <>
+      <div className="wp-labels">
+        <span className={!homeFavored ? 'wp-favored' : ''}>{away.abbreviation} {aPct}%</span>
+        <span className={homeFavored ? 'wp-favored' : ''}>{home.abbreviation} {hPct}%</span>
+      </div>
+      <div className="wp-bar-card">
+        <div className="wp-away" style={{ width: `${aPct}%` }} />
+        <div className="wp-home" style={{ width: `${hPct}%` }} />
+      </div>
+    </>
+  )
+}
+
+
+function CardInsight({ bet, home, away, game }) {
+  // Generate a short "why" reason from the strongest factor
+  const f = bet.factors || {}
+  const wp = bet.win_prob || {}
+  const ctx = bet.season_context || {}
+  const rest = bet.rest || {}
+
+  const reasons = []
+
+  // Goalie matchup
+  if (game.home_goalie?.save_pct > 0 && game.away_goalie?.save_pct > 0) {
+    const diff = Math.abs(game.home_goalie.save_pct - game.away_goalie.save_pct)
+    if (diff >= 0.010) {
+      const better = game.home_goalie.save_pct > game.away_goalie.save_pct
+        ? home.abbreviation : away.abbreviation
+      reasons.push({
+        weight: diff * 100,
+        text: <><strong>{better}</strong> has goalie edge ({(Math.max(game.home_goalie.save_pct, game.away_goalie.save_pct)).toFixed(3)})</>
+      })
+    }
+  }
+
+  // Form / L10 gap
+  const hL10 = ctx.home?.l10_pts_pct
+  const aL10 = ctx.away?.l10_pts_pct
+  if (hL10 != null && aL10 != null && Math.abs(hL10 - aL10) > 0.2) {
+    const hotter = hL10 > aL10 ? home.abbreviation : away.abbreviation
+    const hotPct = Math.max(hL10, aL10)
+    reasons.push({
+      weight: Math.abs(hL10 - aL10) * 20,
+      text: <><strong>{hotter}</strong> hot in L10 ({(hotPct * 100).toFixed(0)}%)</>
+    })
+  }
+
+  // Rest advantage
+  if (rest.home_b2b || rest.away_b2b) {
+    const tired = rest.home_b2b ? home.abbreviation : away.abbreviation
+    reasons.push({
+      weight: 5,
+      text: <><strong>{tired}</strong> on back-to-back (fatigue penalty)</>
+    })
+  }
+
+  // PP mismatch
+  const hPP = f.home_pp, aPP = f.away_pp
+  if (hPP != null && aPP != null) {
+    const ppDiff = Math.abs(hPP - aPP) * 100
+    if (ppDiff > 4) {
+      const better = hPP > aPP ? home.abbreviation : away.abbreviation
+      reasons.push({
+        weight: ppDiff,
+        text: <><strong>{better}</strong> has {ppDiff.toFixed(1)}% PP edge</>
+      })
+    }
+  }
+
+  // Motivation gap
+  const hM = ctx.home?.motivation, aM = ctx.away?.motivation
+  if (hM != null && aM != null && Math.abs(hM - aM) > 0.25) {
+    const more = hM > aM ? home.abbreviation : away.abbreviation
+    reasons.push({
+      weight: Math.abs(hM - aM) * 10,
+      text: <><strong>{more}</strong> has playoff-race motivation</>
+    })
+  }
+
+  // Injuries
+  const hImp = bet.injuries?.home_impact
+  const aImp = bet.injuries?.away_impact
+  if (hImp != null && hImp < 0.92) {
+    reasons.push({
+      weight: (1 - hImp) * 50,
+      text: <><strong>{home.abbreviation}</strong> hit hard by injuries (-{((1 - hImp) * 100).toFixed(0)}%)</>
+    })
+  }
+  if (aImp != null && aImp < 0.92) {
+    reasons.push({
+      weight: (1 - aImp) * 50,
+      text: <><strong>{away.abbreviation}</strong> hit hard by injuries (-{((1 - aImp) * 100).toFixed(0)}%)</>
+    })
+  }
+
+  if (reasons.length === 0) return null
+
+  // Show strongest
+  reasons.sort((a, b) => b.weight - a.weight)
+  return (
+    <div className="card-insight">
+      {reasons[0].text}
     </div>
   )
 }

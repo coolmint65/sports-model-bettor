@@ -1693,6 +1693,10 @@ def api_nhl_best_bets():
             "confidence": best.get("confidence", "lean"),
             "rest": ctx.get("rest", {}),
             "injuries": ctx.get("injuries", {}),
+            "win_prob": ctx.get("win_prob", {}),
+            "expected_score": ctx.get("expected_score", {}),
+            "factors": ctx.get("factors", {}),
+            "season_context": ctx.get("season_context", {}),
         })
 
     bets.sort(key=lambda b: b["best_pick"]["edge"], reverse=True)

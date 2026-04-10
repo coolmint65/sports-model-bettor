@@ -25,14 +25,25 @@ export default function Scoreboard({ games, loading, onSelectGame, bestBets }) {
     }
   }
 
-  // Sort: games with strong edge first, then moderate, then rest by time
-  const sorted = [...games].sort((a, b) => {
+  // Split games into active (pregame/live) and finals
+  const activeGames = []
+  const finalGames = []
+  for (const g of games) {
+    if (g.status?.state === 'post' || g.status?.completed) {
+      finalGames.push(g)
+    } else {
+      activeGames.push(g)
+    }
+  }
+
+  // Sort active by edge
+  activeGames.sort((a, b) => {
     const aEdge = betMap[a.id]?.best_pick?.edge || -99
     const bEdge = betMap[b.id]?.best_pick?.edge || -99
     return bEdge - aEdge
   })
 
-  const edgeCount = sorted.filter(g => betMap[g.id]?.confidence === 'strong' || betMap[g.id]?.confidence === 'moderate').length
+  const edgeCount = activeGames.filter(g => betMap[g.id]?.confidence === 'strong' || betMap[g.id]?.confidence === 'moderate').length
 
   return (
     <div className="scoreboard">
@@ -40,15 +51,66 @@ export default function Scoreboard({ games, loading, onSelectGame, bestBets }) {
         Today's Games ({games.length})
         {edgeCount > 0 && <span className="edge-count">{edgeCount} plays with edge</span>}
       </h2>
-      <div className="games-grid">
-        {sorted.map(game => (
-          <GameCard
-            key={game.id}
-            game={game}
-            bet={betMap[game.id]}
-            onClick={() => onSelectGame(game)}
-          />
-        ))}
+
+      {activeGames.length > 0 && (
+        <>
+          {finalGames.length > 0 && (
+            <div className="games-section-header">
+              {activeGames.some(g => g.status?.state === 'in') ? 'Live & Upcoming' : 'Upcoming'} ({activeGames.length})
+            </div>
+          )}
+          <div className="games-feature-grid">
+            {activeGames.map(game => (
+              <GameCard
+                key={game.id}
+                game={game}
+                bet={betMap[game.id]}
+                onClick={() => onSelectGame(game)}
+              />
+            ))}
+          </div>
+        </>
+      )}
+
+      {finalGames.length > 0 && (
+        <>
+          <div className="games-section-header">Final ({finalGames.length})</div>
+          <div className="games-finals-grid">
+            {finalGames.map(game => (
+              <MLBFinalRow
+                key={game.id}
+                game={game}
+                onClick={() => onSelectGame(game)}
+              />
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+
+function MLBFinalRow({ game, onClick }) {
+  const { home, away } = game
+  const hs = parseInt(home.score) || 0
+  const as = parseInt(away.score) || 0
+  const homeWon = hs > as
+  return (
+    <div className="game-final-row" onClick={onClick}>
+      <span className="final-label">FINAL</span>
+      <div className="final-teams">
+        <div className="final-team">
+          {away.logo && <img src={away.logo} alt="" />}
+          <span className={`final-abbr ${!homeWon ? 'winner' : ''}`}>{away.abbreviation}</span>
+        </div>
+        <span className={`final-score ${!homeWon ? 'winner' : ''}`}>{as}</span>
+        <span className="final-dash">—</span>
+        <span className={`final-score ${homeWon ? 'winner' : ''}`}>{hs}</span>
+        <div className="final-team">
+          {home.logo && <img src={home.logo} alt="" />}
+          <span className={`final-abbr ${homeWon ? 'winner' : ''}`}>{home.abbreviation}</span>
+        </div>
       </div>
     </div>
   )
