@@ -1907,3 +1907,16 @@ def api_potd_settle(sport: str):
     """Settle completed POTDs."""
     from engine.pick_of_day import settle_potd
     return settle_potd(sport)
+
+
+@app.delete("/api/pick-of-day/{sport}")
+def api_potd_reset(sport: str):
+    """Delete today's POTD so it regenerates on next request."""
+    from engine.pick_of_day import _ensure_potd_table, _get_conn
+    from datetime import datetime
+    _ensure_potd_table(sport)
+    conn = _get_conn(sport)
+    today = datetime.now().strftime("%Y-%m-%d")
+    conn.execute("DELETE FROM pick_of_day WHERE date = ?", (today,))
+    conn.commit()
+    return {"status": "cleared", "date": today, "sport": sport}
