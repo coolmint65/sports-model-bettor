@@ -1013,6 +1013,14 @@ def _run_line_probs(matrix: list[list[float]], home_xr: float = 0,
             "away_cover": round(1 - p_cover, 4),
         }
 
+    # Cap RL probabilities to realistic ranges.
+    # No team covers -1.5 more than ~75% of the time in MLB.
+    # The +1.5 side covers at most ~85%.
+    # Raw Poisson matrix with extreme xR gaps (6.5 vs 2.0) produces
+    # 90%+ cover probabilities which are miscalibrated.
+    p_home_15 = max(0.15, min(0.75, p_home_15))
+    p_away_15 = 1 - p_home_15
+
     return {
         "home_minus_1_5": round(p_home_15, 4),
         "away_plus_1_5": round(p_away_15, 4),
