@@ -492,7 +492,7 @@ if __name__ == "__main__":
     elif "--settle" in args:
         print("Settling completed NHL picks...", flush=True)
         result = settle_picks()
-        print(f"Settled: {result['settled']} ({result['wins']}W-{result['losses']}L)")
+        print(f"Settled: {result.get('settled', 0)} ({result.get('wins', 0)}W-{result.get('losses', 0)}L)")
         print(f"Pending: {result['pending_remaining']}")
 
     elif "--summary" in args:
