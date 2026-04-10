@@ -73,8 +73,9 @@ def calibrate(days: int = 30) -> dict:
     total_bias = avg_total - expected_total
     home_bias_pct = home_win_rate - expected_home_wr
 
-    # Learning rate — conservative early, more aggressive with data
-    lr = min(0.15, game_count / 500)
+    # Learning rate — learn faster with more data
+    # Reaches full rate at 200 games instead of 500
+    lr = min(0.20, game_count / 200)
 
     # Current config
     current_home_edge = _get_config("home_edge", 0.15)

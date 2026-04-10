@@ -187,8 +187,10 @@ def calibrate(season: int | None = None, days: int = 30,
     if n < 5:
         return {"error": "Not enough valid games", "games": n}
 
-    # Scale learning rate by sample size — more conservative with fewer games
-    effective_lr = learning_rate * min(n / 100, 1.0)
+    # Scale learning rate by sample size — learn faster with more data
+    # Previous: 0.05 * min(n/100, 1.0) — too conservative, took weeks
+    # New: reaches full LR at 50 games instead of 100
+    effective_lr = learning_rate * min(n / 50, 1.5)
 
     # Analyze biases
     avg_total_error = sum(total_errors) / n

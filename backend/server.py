@@ -1772,6 +1772,27 @@ def api_nhl_backtest(days: int = Query(default=0), min_edge: float = Query(defau
             bias.  If False, use current-season stats (for comparison).
     """
     try:
+        # Auto-load historical NHL season if not present
+        if season:
+            from engine.nhl_db import get_conn as nhl_conn
+            conn = nhl_conn()
+            # Try both season formats (2025 and 20252026)
+            yr = season
+            season_ids = [yr]
+            if yr < 10000:
+                season_ids.append(yr * 10000 + yr + 1)
+                season_ids.append((yr - 1) * 10000 + yr)
+            placeholders = ",".join("?" for _ in season_ids)
+            game_count = conn.execute(
+                f"SELECT COUNT(*) FROM nhl_games WHERE status = 'final' AND season IN ({placeholders})",
+                season_ids
+            ).fetchone()[0]
+            if game_count < 50:
+                logger.info("Loading NHL %s season data for backtest...", season)
+                from scrapers.nhl_api import sync_history
+                season_str = f"{yr}{yr+1}" if yr < 10000 else str(yr)
+                sync_history(season_str)
+
         from engine.nhl_backtest import run_nhl_backtest
         return run_nhl_backtest(days=days, min_edge=min_edge, season=season,
                                 pit_mode=pit)
