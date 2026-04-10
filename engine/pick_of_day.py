@@ -163,6 +163,24 @@ def select_potd(sport: str, games_with_bets: list[dict]) -> dict | None:
     candidates.sort(key=_score_pick, reverse=True)
     best = candidates[0]
 
+    # Resolve full team names for display
+    home_info = best.get("home", {})
+    away_info = best.get("away", {})
+    home_name = home_info.get("name", home_info.get("abbreviation", "Home"))
+    away_name = away_info.get("name", away_info.get("abbreviation", "Away"))
+    best["matchup_full"] = f"{away_name} at {home_name}"
+
+    # Resolve pick to full team name
+    pick_str = best.get("pick", "")
+    home_abbr = home_info.get("abbreviation", "")
+    away_abbr = away_info.get("abbreviation", "")
+    if home_abbr and pick_str.startswith(home_abbr):
+        best["pick_full"] = pick_str.replace(home_abbr, home_name, 1)
+    elif away_abbr and pick_str.startswith(away_abbr):
+        best["pick_full"] = pick_str.replace(away_abbr, away_name, 1)
+    else:
+        best["pick_full"] = pick_str
+
     # Add Kelly fraction and confidence
     best["kelly_pct"] = round(_kelly_fraction(best["prob"], best["odds"]) * 100, 1)
     best["reasoning"] = _build_reasoning(best, sport)
@@ -179,9 +197,11 @@ def _build_reasoning(pick: dict, sport: str) -> str:
 
     strength = "strong" if edge > 8 else "moderate" if edge > 5 else "lean"
 
+    pick_display = pick.get("pick_full", pick.get("pick", ""))
+
     parts = []
     parts.append(f"Highest-EV {bet_type} play on the {sport.upper()} slate today.")
-    parts.append(f"Model gives {pick.get('pick', '')} a {prob * 100:.1f}% probability "
+    parts.append(f"Model gives {pick_display} a {prob * 100:.1f}% probability "
                  f"vs market implied ({_implied_from_odds(pick.get('odds', 0)) * 100:.1f}%).")
     parts.append(f"{edge:+.1f}% edge — {strength} conviction.")
     parts.append(f"Kelly suggests {kelly}% of bankroll.")
@@ -221,7 +241,7 @@ def get_or_create_potd(sport: str, games_with_bets: list[dict],
     if not selected:
         return None
 
-    # Lock it in
+    # Lock it in — store full team names for display
     conn.execute("""
         INSERT INTO pick_of_day (
             date, game_id, matchup, bet_type, pick,
@@ -230,9 +250,9 @@ def get_or_create_potd(sport: str, games_with_bets: list[dict],
     """, (
         target_date,
         selected.get("game_id"),
-        selected.get("matchup"),
+        selected.get("matchup_full", selected.get("matchup")),
         selected.get("type"),
-        selected.get("pick"),
+        selected.get("pick_full", selected.get("pick")),
         selected.get("prob"),
         selected.get("edge"),
         selected.get("odds"),
