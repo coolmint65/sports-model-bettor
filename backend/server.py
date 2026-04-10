@@ -1799,3 +1799,66 @@ def api_nhl_odds_history(date: str = Query(default="")):
     """Get stored historical odds."""
     from engine.odds_history import get_historical_odds
     return get_historical_odds(date=date or None)
+
+
+@app.get("/api/debug/nhl-live-stats")
+def api_debug_nhl_live_stats():
+    """Debug: show what live team stats are actually being loaded."""
+    result = {}
+    try:
+        from engine.nhl_predict import (
+            _fetch_team_summary_stats,
+            _ensure_club_stats_loaded,
+            _live_stats_cache,
+        )
+
+        # Try the raw fetch first
+        raw = _fetch_team_summary_stats()
+        result["fetch_result_count"] = len(raw)
+        # Sample a few teams
+        sample_keys = list(raw.keys())[:5]
+        result["fetch_sample"] = {k: raw[k] for k in sample_keys}
+
+        # Check if FLA specifically is in the result
+        result["fla_from_fetch"] = raw.get("FLA", "NOT FOUND")
+        result["bos_from_fetch"] = raw.get("BOS", "NOT FOUND")
+        result["cbj_from_fetch"] = raw.get("CBJ", "NOT FOUND")
+        result["buf_from_fetch"] = raw.get("BUF", "NOT FOUND")
+
+        # Now force-load and check the merged cache
+        _ensure_club_stats_loaded()
+        from engine.nhl_predict import _live_stats_cache as cache
+        if cache:
+            result["cache_fla"] = cache.get("FLA", "NOT FOUND")
+            result["cache_bos"] = cache.get("BOS", "NOT FOUND")
+        else:
+            result["cache"] = "None"
+    except Exception as e:
+        import traceback
+        result["error"] = str(e)
+        result["traceback"] = traceback.format_exc()
+    return result
+
+
+@app.get("/api/debug/nhl-raw-stats")
+def api_debug_nhl_raw_stats():
+    """Debug: fetch raw NHL stats.rest response to see field names."""
+    import json
+    import urllib.error
+    import urllib.request
+    try:
+        url = ("https://api.nhle.com/stats/rest/en/team/summary"
+               "?cayenneExp=seasonId=20252026 and gameTypeId=2")
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+        # Return the first team's full row so we can see field names
+        rows = data.get("data", [])
+        return {
+            "total_teams": len(rows),
+            "first_team": rows[0] if rows else None,
+            "keys_available": list(rows[0].keys()) if rows else [],
+        }
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}

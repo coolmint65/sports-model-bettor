@@ -429,23 +429,65 @@ def _fetch_team_summary_stats() -> dict:
         logger.debug("team-stats fetch failed: %s", e)
         return {}
 
+    # Map NHL API team names to our abbreviations
+    _NAME_TO_ABBR = {
+        "Anaheim Ducks": "ANA", "Boston Bruins": "BOS", "Buffalo Sabres": "BUF",
+        "Calgary Flames": "CGY", "Carolina Hurricanes": "CAR",
+        "Chicago Blackhawks": "CHI", "Colorado Avalanche": "COL",
+        "Columbus Blue Jackets": "CBJ", "Dallas Stars": "DAL",
+        "Detroit Red Wings": "DET", "Edmonton Oilers": "EDM",
+        "Florida Panthers": "FLA", "Los Angeles Kings": "LAK",
+        "Minnesota Wild": "MIN", "Montréal Canadiens": "MTL",
+        "Montreal Canadiens": "MTL", "Nashville Predators": "NSH",
+        "New Jersey Devils": "NJD", "New York Islanders": "NYI",
+        "New York Rangers": "NYR", "Ottawa Senators": "OTT",
+        "Philadelphia Flyers": "PHI", "Pittsburgh Penguins": "PIT",
+        "San Jose Sharks": "SJS", "Seattle Kraken": "SEA",
+        "St. Louis Blues": "STL", "Tampa Bay Lightning": "TBL",
+        "Toronto Maple Leafs": "TOR", "Utah Hockey Club": "UTA",
+        "Utah Mammoth": "UTA", "Vancouver Canucks": "VAN",
+        "Vegas Golden Knights": "VGK", "Washington Capitals": "WSH",
+        "Winnipeg Jets": "WPG",
+    }
+
     result = {}
     for row in data.get("data", []):
-        abbr = row.get("teamAbbrev", row.get("teamFullName", ""))[:3].upper()
+        # NHL stats API uses teamFullName as the primary identifier
+        full_name = row.get("teamFullName", "")
+        abbr = _NAME_TO_ABBR.get(full_name, "")
+        if not abbr:
+            # Fallback: try teamAbbrev or first 3 chars of name
+            abbr = row.get("teamAbbrev") or (full_name[:3].upper() if full_name else "")
         if not abbr:
             continue
+
         stats = {}
-        # PP% and PK% come as percentages (e.g. 22.5 for 22.5%)
-        if "powerPlayPct" in row:
-            stats["pp_pct"] = round(row["powerPlayPct"], 4)
-        if "penaltyKillPct" in row:
-            stats["pk_pct"] = round(row["penaltyKillPct"], 4)
-        if "faceoffWinPct" in row:
-            stats["faceoff_pct"] = round(row["faceoffWinPct"], 4)
+        # PP% and PK% from stats.rest are decimals (0.225 for 22.5%), not percentages
+        pp = row.get("powerPlayPct")
+        if pp is not None:
+            # Normalize: if >1, assume it's a percentage (22.5 -> 0.225)
+            stats["pp_pct"] = round(pp / 100 if pp > 1 else pp, 4)
+        pk = row.get("penaltyKillPct")
+        if pk is not None:
+            stats["pk_pct"] = round(pk / 100 if pk > 1 else pk, 4)
+        fo = row.get("faceoffWinPct")
+        if fo is not None:
+            stats["faceoff_pct"] = round(fo / 100 if fo > 1 else fo, 4)
         if "shotsForPerGame" in row:
             stats["shots_per_game"] = round(row["shotsForPerGame"], 2)
         if "shotsAgainstPerGame" in row:
             stats["shots_against_per_game"] = round(row["shotsAgainstPerGame"], 2)
+
+        # Derive save%: savePct or 1 - (goalsAgainstPerGame / shotsAgainstPerGame)
+        sv = row.get("savePct")
+        if sv is not None:
+            stats["save_pct"] = round(sv / 100 if sv > 1 else sv, 4)
+        elif stats.get("shots_against_per_game") and row.get("goalsAgainstPerGame"):
+            ga_pg = row["goalsAgainstPerGame"]
+            sa_pg = stats["shots_against_per_game"]
+            if sa_pg > 0:
+                stats["save_pct"] = round(1 - (ga_pg / sa_pg), 4)
+
         if stats:
             result[abbr] = stats
     return result
