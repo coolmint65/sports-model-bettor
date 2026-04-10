@@ -132,6 +132,16 @@ def select_potd(sport: str, games_with_bets: list[dict]) -> dict | None:
             if not pick.get("odds"):
                 continue
 
+            # Safety: verify the pick team is actually in this matchup
+            pick_name = pick.get("pick", "")
+            matchup = game.get("matchup", "")
+            if pick_name and matchup and not any(
+                abbr in pick_name for abbr in matchup.replace(" @ ", "|").split("|")
+            ):
+                # Pick team not in matchup — data corruption, skip
+                logger.warning("POTD: pick '%s' not in matchup '%s', skipping", pick_name, matchup)
+                continue
+
             candidates.append({
                 "game_id": str(game.get("game_id", "")),
                 "matchup": game.get("matchup", ""),
