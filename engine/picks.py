@@ -94,8 +94,11 @@ def generate_picks(home_team_id: int, away_team_id: int,
     # Raw model probabilities — no dampening. Real odds are the calibration.
     home_wp = wp.get("home", 0.5)
     away_wp = wp.get("away", 0.5)
-    rl_home_15 = rl.get("home_minus_1_5", 0.5)
-    rl_away_15 = rl.get("away_plus_1_5", 0.5)
+    # All four RL sides
+    rl_home_minus = rl.get("home_minus_1_5", 0.5)   # P(home wins by 2+)
+    rl_home_plus = rl.get("home_plus_1_5", 0.5)     # P(home covers +1.5)
+    rl_away_minus = rl.get("away_minus_1_5", 0.5)   # P(away wins by 2+)
+    rl_away_plus = rl.get("away_plus_1_5", 0.5)     # P(away covers +1.5)
 
     picks = []
 
@@ -184,9 +187,11 @@ def generate_picks(home_team_id: int, away_team_id: int,
             home_rl_odds = home_rl_odds or -140   # Dog +1.5 costs -140
             away_rl_odds = away_rl_odds or 120    # Fav -1.5 pays +120
 
-    # Home side
+    # Home side — use the correct probability based on spread direction
     if home_rl_odds and home_rl_odds >= JUICE_WALL and home_rl_point is not None:
-        rl_prob = rl_home_15 if home_rl_point < 0 else rl_away_15
+        # home_rl_point < 0 = home is -1.5 favorite → use home_minus probability
+        # home_rl_point > 0 = home is +1.5 underdog → use home_plus probability
+        rl_prob = rl_home_minus if home_rl_point < 0 else rl_home_plus
         edge = (rl_prob - _implied(home_rl_odds)) * 100
         if edge > 0:
             sign = "+" if home_rl_point > 0 else ""
@@ -198,9 +203,11 @@ def generate_picks(home_team_id: int, away_team_id: int,
                 "odds": home_rl_odds,
             })
 
-    # Away side
+    # Away side — same logic
     if away_rl_odds and away_rl_odds >= JUICE_WALL and away_rl_point is not None:
-        rl_prob = rl_away_15 if away_rl_point > 0 else rl_home_15
+        # away_rl_point > 0 = away is +1.5 underdog → use away_plus probability
+        # away_rl_point < 0 = away is -1.5 favorite → use away_minus probability
+        rl_prob = rl_away_plus if away_rl_point > 0 else rl_away_minus
         edge = (rl_prob - _implied(away_rl_odds)) * 100
         if edge > 0:
             sign = "+" if away_rl_point > 0 else ""

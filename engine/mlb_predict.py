@@ -980,9 +980,11 @@ def _run_line_probs(matrix: list[list[float]], home_xr: float = 0,
             margin = h - a  # Positive = home wins by N
             margin_probs[margin] = margin_probs.get(margin, 0) + matrix[h][a]
 
-    # Standard -1.5 run line
-    p_home_15 = sum(p for m, p in margin_probs.items() if m >= 2)
-    p_away_15 = sum(p for m, p in margin_probs.items() if m <= 1)
+    # Standard -1.5 run line — all four sides
+    p_home_minus_15 = sum(p for m, p in margin_probs.items() if m >= 2)   # Home wins by 2+
+    p_home_plus_15 = sum(p for m, p in margin_probs.items() if m >= -1)   # Home loses by 0-1 or wins
+    p_away_minus_15 = sum(p for m, p in margin_probs.items() if m <= -2)  # Away wins by 2+
+    p_away_plus_15 = sum(p for m, p in margin_probs.items() if m <= 1)    # Away loses by 0-1 or wins
 
     # Model's projected spread (rounded to 0.5)
     model_spread = round((home_xr - away_xr) * 2) / 2
@@ -1018,12 +1020,17 @@ def _run_line_probs(matrix: list[list[float]], home_xr: float = 0,
     # The +1.5 side covers at most ~85%.
     # Raw Poisson matrix with extreme xR gaps (6.5 vs 2.0) produces
     # 90%+ cover probabilities which are miscalibrated.
-    p_home_15 = max(0.15, min(0.75, p_home_15))
-    p_away_15 = 1 - p_home_15
+    # Cap all four sides to realistic ranges
+    p_home_minus_15 = max(0.15, min(0.75, p_home_minus_15))
+    p_home_plus_15 = max(0.25, min(0.85, p_home_plus_15))
+    p_away_minus_15 = max(0.15, min(0.75, p_away_minus_15))
+    p_away_plus_15 = max(0.25, min(0.85, p_away_plus_15))
 
     return {
-        "home_minus_1_5": round(p_home_15, 4),
-        "away_plus_1_5": round(p_away_15, 4),
+        "home_minus_1_5": round(p_home_minus_15, 4),
+        "away_plus_1_5": round(p_away_plus_15, 4),
+        "home_plus_1_5": round(p_home_plus_15, 4),
+        "away_minus_1_5": round(p_away_minus_15, 4),
         "model_spread": model_spread,
         "spreads": spreads,
     }
