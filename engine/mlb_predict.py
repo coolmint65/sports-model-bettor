@@ -1020,11 +1020,13 @@ def _run_line_probs(matrix: list[list[float]], home_xr: float = 0,
     # The +1.5 side covers at most ~85%.
     # Raw Poisson matrix with extreme xR gaps (6.5 vs 2.0) produces
     # 90%+ cover probabilities which are miscalibrated.
-    # Cap all four sides to realistic ranges
-    p_home_minus_15 = max(0.15, min(0.75, p_home_minus_15))
-    p_home_plus_15 = max(0.25, min(0.85, p_home_plus_15))
-    p_away_minus_15 = max(0.15, min(0.75, p_away_minus_15))
-    p_away_plus_15 = max(0.25, min(0.85, p_away_plus_15))
+    # Cap all four sides to realistic MLB ranges.
+    # -1.5 (favorite): max ~65% cover (heavy favorites rarely win by 2+)
+    # +1.5 (underdog): max ~75% cover (even big dogs lose by 2+ sometimes)
+    p_home_minus_15 = max(0.15, min(0.65, p_home_minus_15))
+    p_home_plus_15 = max(0.30, min(0.75, p_home_plus_15))
+    p_away_minus_15 = max(0.15, min(0.65, p_away_minus_15))
+    p_away_plus_15 = max(0.30, min(0.75, p_away_plus_15))
 
     return {
         "home_minus_1_5": round(p_home_minus_15, 4),
