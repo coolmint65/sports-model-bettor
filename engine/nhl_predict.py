@@ -819,7 +819,7 @@ def predict_matchup(home_key: str, away_key: str,
         pass
 
     # ── Injury adjustment ──
-    injury_data = {"home": [], "away": []}
+    injury_data = {"home": [], "away": [], "home_impact": 1.0, "away_impact": 1.0}
     try:
         from .injuries import fetch_nhl_injuries, compute_nhl_injury_impact
         nhl_injuries = fetch_nhl_injuries()
@@ -840,17 +840,21 @@ def predict_matchup(home_key: str, away_key: str,
             h_impact = compute_nhl_injury_impact(h_abbr, h_injuries)
             home_xg *= h_impact
             injury_data["home"] = h_injuries[:5]  # Top 5 for display
+            injury_data["home_impact"] = round(h_impact, 4)
 
         if a_injuries:
             a_impact = compute_nhl_injury_impact(a_abbr, a_injuries)
             away_xg *= a_impact
             injury_data["away"] = a_injuries[:5]
+            injury_data["away_impact"] = round(a_impact, 4)
     except Exception as e:
         logger.debug("Injury data unavailable: %s", e)
 
     # ── Back-to-back / rest adjustment ──
     h_abbr_b2b = home.get("abbreviation", "")
     a_abbr_b2b = away.get("abbreviation", "")
+    h_b2b = 1.0
+    a_b2b = 1.0
     if h_abbr_b2b:
         h_b2b = _check_back_to_back(h_abbr_b2b)
         home_xg *= h_b2b
@@ -862,6 +866,16 @@ def predict_matchup(home_key: str, away_key: str,
         away_xg *= a_b2b
         if a_b2b < 1.0:
             home_xg *= (1 + (1 - a_b2b) * 0.5)
+
+    # Store rest/fatigue info for display
+    rest_data = {
+        "home_b2b": h_b2b < 1.0,
+        "away_b2b": a_b2b < 1.0,
+        "home_rest_advantage": h_b2b > 1.0,
+        "away_rest_advantage": a_b2b > 1.0,
+        "home_factor": round(h_b2b, 4),
+        "away_factor": round(a_b2b, 4),
+    }
 
     # Floor
     home_xg = max(home_xg, 1.0)
@@ -1053,6 +1067,7 @@ def predict_matchup(home_key: str, away_key: str,
         "h2h": h2h_data,
         "season_context": season_context,
         "injuries": injury_data,
+        "rest": rest_data,
     }
 
 
