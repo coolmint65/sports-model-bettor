@@ -24,13 +24,9 @@ if not exist "data\logs" mkdir "data\logs"
 echo Starting everything...
 echo.
 
-REM ── Sync: MLB (auto-closes when done) ──
-echo [1/4] MLB Sync...
-start "MLB-Sync" cmd /c "cd /d %~dp0 && call sync_mlb.bat && exit"
-
-REM ── Sync: NHL (auto-closes when done) ──
-echo [2/4] NHL Sync...
-start "NHL-Sync" cmd /c "cd /d %~dp0 && call sync_nhl.bat && exit"
+REM ── Sync: MLB then NHL (sequential to avoid DB race conditions) ──
+echo [1/4] Syncing data (auto-closes when done)...
+start "Data-Sync" cmd /c "cd /d %~dp0 && call sync_mlb.bat && call sync_nhl.bat && exit"
 
 REM ── Backend server ──
 echo [3/4] Backend API server...

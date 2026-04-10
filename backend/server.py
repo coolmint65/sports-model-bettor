@@ -43,6 +43,7 @@ app.add_middleware(
 ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports"
 _scoreboard_cache: dict[str, tuple[float, list]] = {}
 CACHE_TTL = 120
+MAX_CACHE_ENTRIES = 50  # Prevent unbounded memory growth
 
 
 def _fetch_espn_json(url: str) -> dict | None:
@@ -249,6 +250,10 @@ def _get_scoreboard(date: str = "") -> list[dict]:
         logger.debug("MLB line movement tracking failed: %s", e)
 
     _scoreboard_cache[cache_key] = (now, games)
+    # Evict oldest entries if cache grows too large
+    if len(_scoreboard_cache) > MAX_CACHE_ENTRIES:
+        oldest = min(_scoreboard_cache, key=lambda k: _scoreboard_cache[k][0])
+        del _scoreboard_cache[oldest]
     return games
 
 
@@ -847,16 +852,24 @@ def api_backtest(days: int = Query(default=0), min_edge: float = Query(default=3
 @app.post("/api/tracker/record")
 def api_record_picks():
     """Record today's model picks."""
-    from engine.tracker import record_picks
-    picks = record_picks()
-    return {"recorded": len(picks), "picks": picks}
+    try:
+        from engine.tracker import record_picks
+        picks = record_picks()
+        return {"recorded": len(picks), "picks": picks}
+    except Exception as e:
+        logger.error("Record picks failed: %s", e, exc_info=True)
+        return {"error": str(e), "recorded": 0}
 
 
 @app.post("/api/tracker/settle")
 def api_settle_picks():
     """Settle completed picks against final scores."""
-    from engine.tracker import settle_picks
-    return settle_picks()
+    try:
+        from engine.tracker import settle_picks
+        return settle_picks()
+    except Exception as e:
+        logger.error("Settle picks failed: %s", e, exc_info=True)
+        return {"error": str(e), "settled": 0}
 
 
 @app.get("/api/tracker/summary")
@@ -1190,6 +1203,10 @@ def _get_nhl_scoreboard(date: str = "") -> list[dict]:
             logger.debug("NHL API goalie fallback failed: %s", e)
 
     _scoreboard_cache[cache_key] = (now, games)
+    # Evict oldest entries if cache grows too large
+    if len(_scoreboard_cache) > MAX_CACHE_ENTRIES:
+        oldest = min(_scoreboard_cache, key=lambda k: _scoreboard_cache[k][0])
+        del _scoreboard_cache[oldest]
     return games
 
 
@@ -1724,16 +1741,24 @@ def api_nhl_pick_summary():
 @app.post("/api/nhl/tracker/record")
 def api_nhl_record_picks():
     """Record today's NHL picks."""
-    from engine.nhl_tracker import record_picks
-    picks = record_picks()
-    return {"recorded": len(picks), "picks": picks}
+    try:
+        from engine.nhl_tracker import record_picks
+        picks = record_picks()
+        return {"recorded": len(picks), "picks": picks}
+    except Exception as e:
+        logger.error("NHL record picks failed: %s", e, exc_info=True)
+        return {"error": str(e), "recorded": 0}
 
 
 @app.post("/api/nhl/tracker/settle")
 def api_nhl_settle_picks():
     """Settle completed NHL picks."""
-    from engine.nhl_tracker import settle_picks
-    return settle_picks()
+    try:
+        from engine.nhl_tracker import settle_picks
+        return settle_picks()
+    except Exception as e:
+        logger.error("NHL settle picks failed: %s", e, exc_info=True)
+        return {"error": str(e), "settled": 0}
 
 
 @app.get("/api/nhl/backtest")
