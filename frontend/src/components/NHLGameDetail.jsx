@@ -3,7 +3,16 @@ export default function NHLGameDetail({ game, prediction, loading, onBack }) {
   const pred = prediction
   const isLive = status.state === 'in'
   const isFinal = status.state === 'post'
-  const pct = n => `${(n * 100).toFixed(1)}%`
+
+  // Goalie data-source indicator — DailyFaceoff "confirmed" is the gold standard
+  const anyConfirmed =
+    game.home_goalie?.status === 'confirmed' ||
+    game.away_goalie?.status === 'confirmed'
+  const anyGoalie = game.home_goalie || game.away_goalie
+
+  // Line movement significance
+  const lm = game.line_movement
+  const lmSignificant = lm && lm.significance && lm.significance !== 'none'
 
   return (
     <div className="game-detail">
@@ -39,7 +48,7 @@ export default function NHLGameDetail({ game, prediction, loading, onBack }) {
         </div>
 
         {/* Goalie matchup */}
-        {(game.home_goalie || game.away_goalie) && (
+        {anyGoalie && (
           <div className="pitching-matchup">
             <GoalieCard
               label="Away G"
@@ -52,6 +61,50 @@ export default function NHLGameDetail({ game, prediction, loading, onBack }) {
               goalie={game.home_goalie}
               predGoalie={pred?.goalie_matchup?.home}
             />
+          </div>
+        )}
+
+        {/* Goalie confirmation badge */}
+        {anyGoalie && (
+          <div style={{textAlign:'center',marginTop:6}}>
+            <span style={{
+              display:'inline-block',
+              padding:'2px 10px',
+              borderRadius:6,
+              fontSize:'0.72rem',
+              fontWeight:600,
+              background: anyConfirmed ? 'rgba(52,211,153,0.12)' : 'rgba(251,191,36,0.10)',
+              color: anyConfirmed ? '#34d399' : '#fbbf24',
+              border: `1px solid ${anyConfirmed ? 'rgba(52,211,153,0.25)' : 'rgba(251,191,36,0.20)'}`,
+            }}>
+              {anyConfirmed ? '\u2713 Confirmed goalies' : '~ Expected goalies'}
+            </span>
+          </div>
+        )}
+
+        {/* Rest / back-to-back warning */}
+        {pred?.rest && (pred.rest.home_b2b || pred.rest.away_b2b || pred.rest.home_rest_advantage || pred.rest.away_rest_advantage) && (
+          <div style={{textAlign:'center',marginTop:6,display:'flex',justifyContent:'center',gap:8,flexWrap:'wrap'}}>
+            {pred.rest.home_b2b && (
+              <span style={{padding:'2px 10px',borderRadius:6,fontSize:'0.72rem',fontWeight:600,background:'rgba(239,68,68,0.12)',color:'#ef4444',border:'1px solid rgba(239,68,68,0.25)'}}>
+                {home.abbreviation} on back-to-back
+              </span>
+            )}
+            {pred.rest.away_b2b && (
+              <span style={{padding:'2px 10px',borderRadius:6,fontSize:'0.72rem',fontWeight:600,background:'rgba(239,68,68,0.12)',color:'#ef4444',border:'1px solid rgba(239,68,68,0.25)'}}>
+                {away.abbreviation} on back-to-back
+              </span>
+            )}
+            {pred.rest.home_rest_advantage && !pred.rest.away_rest_advantage && (
+              <span style={{padding:'2px 10px',borderRadius:6,fontSize:'0.72rem',fontWeight:600,background:'rgba(96,165,250,0.10)',color:'#60a5fa',border:'1px solid rgba(96,165,250,0.20)'}}>
+                {home.abbreviation} extra rest
+              </span>
+            )}
+            {pred.rest.away_rest_advantage && !pred.rest.home_rest_advantage && (
+              <span style={{padding:'2px 10px',borderRadius:6,fontSize:'0.72rem',fontWeight:600,background:'rgba(96,165,250,0.10)',color:'#60a5fa',border:'1px solid rgba(96,165,250,0.20)'}}>
+                {away.abbreviation} extra rest
+              </span>
+            )}
           </div>
         )}
 
@@ -80,6 +133,7 @@ export default function NHLGameDetail({ game, prediction, loading, onBack }) {
               </span>
             )}
             {game.odds.over_under && <span className="odds-chip">O/U {game.odds.over_under}</span>}
+            {lmSignificant && <LineMovementBadge lm={lm} home={home} away={away} />}
           </div>
         )}
       </div>
@@ -178,6 +232,7 @@ function NHLPredictionResults({ data, odds, home, away }) {
   const pct = n => `${(n * 100).toFixed(1)}%`
 
   const bestEdge = odds ? findBestEdge(d, odds, home, away) : null
+  const reasons = getReasoning(d, home, away)
 
   return (
     <div className="results">
@@ -197,20 +252,24 @@ function NHLPredictionResults({ data, odds, home, away }) {
       )}
 
       {/* Projected Outcome */}
-      <div className="result-card">
+      <div className="result-card" style={{minHeight: 260}}>
         <h2>Projected Outcome</h2>
         <div className="score-display">
           <div className="score-team">
             <div className="name">{home.name}</div>
             <div className="record">{home.record}</div>
-            <div className={`score ${homeWins ? 'winner' : ''}`}>{Math.round(es.home)}</div>
+            <div className={`score ${homeWins ? 'winner' : ''}`}>{es.home.toFixed(1)}</div>
           </div>
           <div className="score-vs">-</div>
           <div className="score-team">
             <div className="name">{away.name}</div>
             <div className="record">{away.record}</div>
-            <div className={`score ${!homeWins ? 'winner' : ''}`}>{Math.round(es.away)}</div>
+            <div className={`score ${!homeWins ? 'winner' : ''}`}>{es.away.toFixed(1)}</div>
           </div>
+        </div>
+
+        <div style={{textAlign:'center',color:'#64748b',fontSize:'0.75rem',marginTop:-8,marginBottom:8}}>
+          ~{(es.home + es.away).toFixed(1)} total goals expected
         </div>
 
         <div className="prob-bar-container">
@@ -245,13 +304,145 @@ function NHLPredictionResults({ data, odds, home, away }) {
 
         {bestEdge && (
           <div className={`edge-callout ${bestEdge.rating}`}>
-            <span className="edge-icon">{bestEdge.rating === 'strong' ? '!!' : bestEdge.rating === 'moderate' ? '!' : ''}</span>
+            <span className={`conf-badge conf-${bestEdge.rating}`} style={{
+              padding:'2px 8px',
+              borderRadius:4,
+              fontSize:'0.68rem',
+              fontWeight:700,
+              letterSpacing:'0.05em',
+              background: bestEdge.rating === 'strong' ? 'rgba(52,211,153,0.25)'
+                        : bestEdge.rating === 'moderate' ? 'rgba(96,165,250,0.25)'
+                        : 'rgba(251,191,36,0.25)',
+              color: bestEdge.rating === 'strong' ? '#34d399'
+                   : bestEdge.rating === 'moderate' ? '#60a5fa'
+                   : '#fbbf24',
+              marginRight:8,
+            }}>
+              {bestEdge.rating === 'strong' ? 'STRONG' : bestEdge.rating === 'moderate' ? 'MODERATE' : 'LEAN'}
+            </span>
             <span className="edge-text">
               {bestEdge.label} ({bestEdge.odds > 0 ? '+' : ''}{bestEdge.odds}) — +{bestEdge.edge.toFixed(1)}% edge
             </span>
           </div>
         )}
       </div>
+
+      {/* Key Factors with Rankings — moved up for immediate visibility */}
+      {d.factors && (
+        <div className="result-card">
+          <h2>Key Factors</h2>
+          <table className="standings-table" style={{fontSize:'0.85rem'}}>
+            <thead>
+              <tr>
+                <th style={{textAlign:'left'}}>Stat</th>
+                <th>{away.abbreviation}</th>
+                <th>Rank</th>
+                <th>{home.abbreviation}</th>
+                <th>Rank</th>
+              </tr>
+            </thead>
+            <tbody>
+              <FactorRow
+                label="Power Play"
+                awayVal={d.factors.away_pp != null ? (d.factors.away_pp * 100).toFixed(1) + '%' : '-'}
+                awayRank={d.factors.away_pp_rank}
+                homeVal={d.factors.home_pp != null ? (d.factors.home_pp * 100).toFixed(1) + '%' : '-'}
+                homeRank={d.factors.home_pp_rank}
+              />
+              <FactorRow
+                label="Penalty Kill"
+                awayVal={d.factors.away_pk != null ? (d.factors.away_pk * 100).toFixed(1) + '%' : '-'}
+                awayRank={d.factors.away_pk_rank}
+                homeVal={d.factors.home_pk != null ? (d.factors.home_pk * 100).toFixed(1) + '%' : '-'}
+                homeRank={d.factors.home_pk_rank}
+              />
+              <FactorRow
+                label="Save %"
+                awayVal={d.factors.away_sv?.toFixed(3) || '-'}
+                awayRank={d.factors.away_sv_rank}
+                homeVal={d.factors.home_sv?.toFixed(3) || '-'}
+                homeRank={d.factors.home_sv_rank}
+              />
+              <FactorRow
+                label="Shots/Game"
+                awayVal={d.factors.away_shots}
+                awayRank={d.factors.away_shots_rank}
+                homeVal={d.factors.home_shots}
+                homeRank={d.factors.home_shots_rank}
+              />
+              <FactorRow
+                label="Faceoff %"
+                awayVal={(d.factors.away_fo * 100).toFixed(1) + '%'}
+                awayRank={d.factors.away_fo_rank}
+                homeVal={(d.factors.home_fo * 100).toFixed(1) + '%'}
+                homeRank={d.factors.home_fo_rank}
+              />
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Goalie Impact */}
+      {d.goalie_matchup && (d.goalie_matchup.home || d.goalie_matchup.away) &&
+       (d.goalie_matchup.home?.save_pct || d.goalie_matchup.away?.save_pct) && (
+        <GoalieImpactCard gm={d.goalie_matchup} home={home} away={away} />
+      )}
+
+      {/* Why this pick? */}
+      {reasons.length > 0 && (
+        <div className="result-card">
+          <h2>Why this pick?</h2>
+          <ul style={{listStyle:'none',padding:0,margin:0}}>
+            {reasons.map((r, i) => (
+              <li key={i} style={{
+                padding:'8px 0',
+                borderBottom: i < reasons.length - 1 ? '1px solid #1e293b' : 'none',
+                fontSize:'0.85rem',
+                color:'#cbd5e1',
+                display:'flex',
+                alignItems:'flex-start',
+                gap:10,
+              }}>
+                <span style={{color:'#60a5fa',fontWeight:700,minWidth:14}}>{i + 1}.</span>
+                <span>{r}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Most Likely Scores — compact chip display */}
+      {d.correct_scores && d.correct_scores.length > 0 && (
+        <div className="result-card">
+          <h2>Most Likely Scores</h2>
+          <div style={{display:'flex',gap:8,flexWrap:'wrap',justifyContent:'center'}}>
+            {d.correct_scores.slice(0, 5).map((s, i) => (
+              <div key={i} style={{
+                background: i === 0 ? 'rgba(52,211,153,0.08)' : '#0f172a',
+                border: `1px solid ${i === 0 ? 'rgba(52,211,153,0.25)' : '#1e293b'}`,
+                borderRadius: 8,
+                padding: '10px 14px',
+                textAlign: 'center',
+                minWidth: 72,
+              }}>
+                <div style={{
+                  fontSize:'1.05rem',
+                  fontWeight:700,
+                  color: i === 0 ? '#34d399' : '#f8fafc',
+                }}>
+                  {s.score}
+                </div>
+                <div style={{fontSize:'0.72rem',color:'#64748b',marginTop:2}}>
+                  {(s.prob * 100).toFixed(1)}%
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{textAlign:'center',color:'#64748b',fontSize:'0.7rem',marginTop:10}}>
+            Home-Away. Top 5 most probable exact scores (regulation).
+          </div>
+        </div>
+      )}
 
       {/* Betting Lines */}
       <div className="result-card">
@@ -336,61 +527,6 @@ function NHLPredictionResults({ data, odds, home, away }) {
                   <td>{p.total.toFixed(1)}</td>
                 </tr>
               ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {/* Key Factors with Rankings */}
-      {d.factors && (
-        <div className="result-card">
-          <h2>Key Factors</h2>
-          <table className="standings-table" style={{fontSize:'0.85rem'}}>
-            <thead>
-              <tr>
-                <th style={{textAlign:'left'}}>Stat</th>
-                <th>{away.abbreviation}</th>
-                <th>Rank</th>
-                <th>{home.abbreviation}</th>
-                <th>Rank</th>
-              </tr>
-            </thead>
-            <tbody>
-              <FactorRow
-                label="Power Play"
-                awayVal={d.factors.away_pp != null ? (d.factors.away_pp * 100).toFixed(1) + '%' : '-'}
-                awayRank={d.factors.away_pp_rank}
-                homeVal={d.factors.home_pp != null ? (d.factors.home_pp * 100).toFixed(1) + '%' : '-'}
-                homeRank={d.factors.home_pp_rank}
-              />
-              <FactorRow
-                label="Penalty Kill"
-                awayVal={d.factors.away_pk != null ? (d.factors.away_pk * 100).toFixed(1) + '%' : '-'}
-                awayRank={d.factors.away_pk_rank}
-                homeVal={d.factors.home_pk != null ? (d.factors.home_pk * 100).toFixed(1) + '%' : '-'}
-                homeRank={d.factors.home_pk_rank}
-              />
-              <FactorRow
-                label="Save %"
-                awayVal={d.factors.away_sv?.toFixed(3) || '-'}
-                awayRank={d.factors.away_sv_rank}
-                homeVal={d.factors.home_sv?.toFixed(3) || '-'}
-                homeRank={d.factors.home_sv_rank}
-              />
-              <FactorRow
-                label="Shots/Game"
-                awayVal={d.factors.away_shots}
-                awayRank={d.factors.away_shots_rank}
-                homeVal={d.factors.home_shots}
-                homeRank={d.factors.home_shots_rank}
-              />
-              <FactorRow
-                label="Faceoff %"
-                awayVal={(d.factors.away_fo * 100).toFixed(1) + '%'}
-                awayRank={d.factors.away_fo_rank}
-                homeVal={(d.factors.home_fo * 100).toFixed(1) + '%'}
-                homeRank={d.factors.home_fo_rank}
-              />
             </tbody>
           </table>
         </div>
