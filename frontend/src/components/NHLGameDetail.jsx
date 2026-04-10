@@ -466,7 +466,7 @@ function NHLBettingPicks({ data, odds, home, away }) {
   const mlOdds = homeWins ? odds?.home_ml : odds?.away_ml
 
   const vegasTotal = odds?.over_under
-  let ouPick = null, ouConf = null
+  let ouPick = null, ouConf = null, ouOdds = null
   if (vegasTotal && d.over_under) {
     const vt = parseFloat(vegasTotal)
     let entry = d.over_under[String(vt)] || d.over_under[vt.toFixed(1)]
@@ -479,20 +479,48 @@ function NHLBettingPicks({ data, odds, home, away }) {
       entry = d.over_under[String(closest)] || d.over_under[closest.toFixed(1)]
     }
     if (entry) {
-      ouPick = entry.over > entry.under ? 'Over' : 'Under'
+      const isOver = entry.over > entry.under
+      ouPick = isOver ? 'Over' : 'Under'
       ouConf = Math.max(entry.over, entry.under)
+      ouOdds = isOver ? odds?.over_odds : odds?.under_odds
     }
   }
 
+  // Puck line pick — determine which side has higher probability
+  // and use the actual spread point from odds when available
   const pl = d.puck_line
-  const plPick = pl
-    ? (pl.home_minus_1_5 > 0.50
-        ? `${home.abbreviation} -1.5`
-        : `${away.abbreviation} +1.5`)
-    : null
-  const plProb = pl
-    ? Math.max(pl.home_minus_1_5, pl.away_plus_1_5)
-    : null
+  let plPick = null
+  let plProb = null
+  let plOdds = null
+  if (pl) {
+    const hPt = odds?.home_spread_point
+    const aPt = odds?.away_spread_point
+    const homeIsFav = (hPt != null && hPt < 0) || (pl.home_minus_1_5 > pl.away_minus_1_5)
+
+    if (homeIsFav) {
+      // Home is -1.5 favorite
+      if (pl.home_minus_1_5 > 0.50) {
+        plPick = `${home.abbreviation} ${hPt != null ? hPt : '-1.5'}`
+        plProb = pl.home_minus_1_5
+        plOdds = odds?.home_spread_odds
+      } else {
+        plPick = `${away.abbreviation} ${aPt != null ? (aPt > 0 ? '+' + aPt : aPt) : '+1.5'}`
+        plProb = pl.away_plus_1_5
+        plOdds = odds?.away_spread_odds
+      }
+    } else {
+      // Away is -1.5 favorite
+      if (pl.away_minus_1_5 > 0.50) {
+        plPick = `${away.abbreviation} ${aPt != null ? aPt : '-1.5'}`
+        plProb = pl.away_minus_1_5
+        plOdds = odds?.away_spread_odds
+      } else {
+        plPick = `${home.abbreviation} ${hPt != null ? (hPt > 0 ? '+' + hPt : hPt) : '+1.5'}`
+        plProb = pl.home_plus_1_5 || (1 - pl.away_minus_1_5)
+        plOdds = odds?.home_spread_odds
+      }
+    }
+  }
 
   const p1 = d.first_period
   const p1Pick = p1 ? (p1.over_15 > 0.50 ? 'Over 1.5' : 'Under 1.5') : null
@@ -505,11 +533,11 @@ function NHLBettingPicks({ data, odds, home, away }) {
       <PickRow label="Moneyline" pick={mlPick.abbreviation} prob={mlProb} odds={mlOdds} pct={pct} />
 
       {ouPick && (
-        <PickRow label={`O/U ${vegasTotal}`} pick={ouPick} prob={ouConf} pct={pct} />
+        <PickRow label={`O/U ${vegasTotal}`} pick={ouPick} prob={ouConf} odds={ouOdds} pct={pct} />
       )}
 
       {plPick && (
-        <PickRow label="Puck Line" pick={plPick} prob={plProb} pct={pct} />
+        <PickRow label="Puck Line" pick={plPick} prob={plProb} odds={plOdds} pct={pct} />
       )}
 
       {p1Pick && (
@@ -583,19 +611,36 @@ function findBestEdge(data, odds, home, away) {
     }
   }
 
-  // PL edge
-  if (data.puck_line && odds.home_spread_odds) {
-    const hProb = data.puck_line.home_minus_1_5
-    if (hProb > 0.5) {
-      const e = (hProb - mlToProb(odds.home_spread_odds)) * 100
-      if (e > 1.5) candidates.push({ label: `${home.abbreviation} -1.5`, odds: odds.home_spread_odds, edge: e })
+  // PL edge — use actual spread points to determine which prob to compare
+  if (data.puck_line && odds.home_spread_odds && odds.home_spread_point != null) {
+    const pt = odds.home_spread_point
+    // Spread point tells us which side home is on:
+    // pt = -1.5 means home is -1.5 (favorite), use home_minus_1_5 prob
+    // pt = +1.5 means home is +1.5 (underdog), use home_plus_1_5 prob
+    const hProb = pt < 0
+      ? data.puck_line.home_minus_1_5
+      : (data.puck_line.home_plus_1_5 || 1 - data.puck_line.away_minus_1_5)
+    const e = (hProb - mlToProb(odds.home_spread_odds)) * 100
+    if (e > 1.5) {
+      candidates.push({
+        label: `${home.abbreviation} ${pt > 0 ? '+' : ''}${pt}`,
+        odds: odds.home_spread_odds,
+        edge: e,
+      })
     }
   }
-  if (data.puck_line && odds.away_spread_odds) {
-    const aProb = data.puck_line.away_plus_1_5
-    if (aProb > 0.5) {
-      const e = (aProb - mlToProb(odds.away_spread_odds)) * 100
-      if (e > 1.5) candidates.push({ label: `${away.abbreviation} +1.5`, odds: odds.away_spread_odds, edge: e })
+  if (data.puck_line && odds.away_spread_odds && odds.away_spread_point != null) {
+    const pt = odds.away_spread_point
+    const aProb = pt < 0
+      ? (data.puck_line.away_minus_1_5 || 1 - data.puck_line.home_plus_1_5)
+      : data.puck_line.away_plus_1_5
+    const e = (aProb - mlToProb(odds.away_spread_odds)) * 100
+    if (e > 1.5) {
+      candidates.push({
+        label: `${away.abbreviation} ${pt > 0 ? '+' : ''}${pt}`,
+        odds: odds.away_spread_odds,
+        edge: e,
+      })
     }
   }
 
