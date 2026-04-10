@@ -1845,10 +1845,13 @@ def api_debug_nhl_raw_stats():
     """Debug: fetch raw NHL stats.rest response to see field names."""
     import json
     import urllib.error
+    import urllib.parse
     import urllib.request
     try:
-        url = ("https://api.nhle.com/stats/rest/en/team/summary"
-               "?cayenneExp=seasonId=20252026 and gameTypeId=2")
+        query = urllib.parse.urlencode({
+            "cayenneExp": "seasonId=20252026 and gameTypeId=2"
+        })
+        url = f"https://api.nhle.com/stats/rest/en/team/summary?{query}"
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())

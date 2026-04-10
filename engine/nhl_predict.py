@@ -416,12 +416,15 @@ def _fetch_team_summary_stats() -> dict:
     """
     import json
     import urllib.error
+    import urllib.parse
     import urllib.request
 
     try:
-        # Try the stats.rest endpoint for current season team stats
-        url = ("https://api.nhle.com/stats/rest/en/team/summary"
-               "?cayenneExp=seasonId=20252026 and gameTypeId=2")
+        # Python 3.14 rejects unencoded spaces in URLs — must encode the query
+        query = urllib.parse.urlencode({
+            "cayenneExp": "seasonId=20252026 and gameTypeId=2"
+        })
+        url = f"https://api.nhle.com/stats/rest/en/team/summary?{query}"
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())
