@@ -598,7 +598,11 @@ def api_best_bets():
         if not home_id or not away_id:
             continue
 
-        if game["status"].get("completed") or game["status"].get("state") == "post":
+        # Skip completed AND live games — predictions only for pregame.
+        # Live game predictions would change as the score updates, causing
+        # flickering picks and misleading the pick tracker.
+        state = game["status"].get("state", "pre")
+        if state in ("post", "in") or game["status"].get("completed"):
             continue
 
         home_pid = game.get("home_pitcher") or {}
@@ -1076,6 +1080,25 @@ def _get_nhl_scoreboard(date: str = "") -> list[dict]:
                     store_nhl_odds(odds_rows)
             except Exception as e:
                 logger.debug("Odds history storage failed: %s", e)
+
+            # Compare current odds against tracked opening odds for line movement.
+            # If we haven't seen this matchup yet, store the opening snapshot.
+            try:
+                from engine.line_movement import get_line_movement, track_opening_odds
+                for game in games:
+                    if not game.get("odds"):
+                        continue
+                    h_abbr = game["home"]["abbreviation"]
+                    a_abbr = game["away"]["abbreviation"]
+                    game_date = (game.get("date", "") or "")[:10] or target_date
+                    key = f"{game_date}_{a_abbr}@{h_abbr}"
+                    movement = get_line_movement("nhl", key, game["odds"])
+                    if movement:
+                        game["line_movement"] = movement
+                    else:
+                        track_opening_odds("nhl", key, game["odds"])
+            except Exception as e:
+                logger.debug("NHL line movement failed: %s", e)
     except Exception as e:
         logger.warning("NHL odds failed: %s", e)
 
@@ -1578,7 +1601,10 @@ def api_nhl_best_bets():
 
     bets = []
     for game in games:
-        if game["status"].get("completed") or game["status"].get("state") == "post":
+        # Skip completed AND live games — predictions only for pregame.
+        # Live games change as scores update, causing pick flickering.
+        state = game["status"].get("state", "pre")
+        if state in ("post", "in") or game["status"].get("completed"):
             continue
 
         h_abbr = game["home"]["abbreviation"]

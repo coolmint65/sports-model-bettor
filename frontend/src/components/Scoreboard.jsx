@@ -66,8 +66,8 @@ function GameCard({ game, bet, onClick }) {
       {isLive && <div className="live-badge">LIVE</div>}
       {isFinal && <div className="final-badge">FINAL</div>}
 
-      {/* Model pick badge */}
-      {bet && bet.best_pick && conf !== 'skip' && (
+      {/* Model pick badge — only for pregame games */}
+      {isPre && bet && bet.best_pick && conf !== 'skip' && (
         <div className={`pick-badge badge-${conf}`}>
           <span className="pick-badge-type">{bet.best_pick.type}</span>
           <span className="pick-badge-pick">{bet.best_pick.pick}</span>
