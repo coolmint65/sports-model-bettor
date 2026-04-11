@@ -17,25 +17,35 @@ from .nhl_db import get_conn
 logger = logging.getLogger(__name__)
 
 
-def calibrate(days: int = 30) -> dict:
+def calibrate(days: int = 0) -> dict:
     """
-    Analyze recent NHL prediction errors and adjust model weights.
-
-    Returns dict with calibration results.
+    Analyze NHL prediction errors and adjust model weights.
+    days=0 means full season (all completed games).
     """
     conn = get_conn()
-    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
 
-    # Get completed games with scores
-    games = conn.execute("""
-        SELECT g.*,
-               ht.abbreviation as home_abbr, at.abbreviation as away_abbr
-        FROM nhl_games g
-        LEFT JOIN nhl_teams ht ON g.home_team_id = ht.id
-        LEFT JOIN nhl_teams at ON g.away_team_id = at.id
-        WHERE g.status = 'final' AND g.date >= ?
-        ORDER BY g.date
-    """, (cutoff,)).fetchall()
+    if days > 0:
+        cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+        games = conn.execute("""
+            SELECT g.*,
+                   ht.abbreviation as home_abbr, at.abbreviation as away_abbr
+            FROM nhl_games g
+            LEFT JOIN nhl_teams ht ON g.home_team_id = ht.id
+            LEFT JOIN nhl_teams at ON g.away_team_id = at.id
+            WHERE g.status = 'final' AND g.date >= ?
+            ORDER BY g.date
+        """, (cutoff,)).fetchall()
+    else:
+        # Full season — learn from ALL completed games
+        games = conn.execute("""
+            SELECT g.*,
+                   ht.abbreviation as home_abbr, at.abbreviation as away_abbr
+            FROM nhl_games g
+            LEFT JOIN nhl_teams ht ON g.home_team_id = ht.id
+            LEFT JOIN nhl_teams at ON g.away_team_id = at.id
+            WHERE g.status = 'final'
+            ORDER BY g.date
+        """).fetchall()
 
     if len(games) < 10:
         return {"message": f"Not enough games ({len(games)}) for calibration", "games": len(games)}

@@ -39,7 +39,7 @@ echo.
 
 :calibrate
 echo Calibrating NHL model...
-python -m engine.nhl_calibration --days 30
+python -m engine.nhl_calibration
 echo.
 
 echo Recording today's NHL picks...

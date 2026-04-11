@@ -27,7 +27,7 @@ python -m scrapers.mlb_stats
 :calibrate
 echo.
 echo Calibrating global model...
-python -m engine.calibration --days 30
+python -m engine.calibration
 
 echo.
 echo Calibrating per-team factors...

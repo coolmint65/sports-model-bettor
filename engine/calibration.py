@@ -86,31 +86,38 @@ def save_weights(weights: dict) -> None:
     conn.commit()
 
 
-def calibrate(season: int | None = None, days: int = 30,
+def calibrate(season: int | None = None, days: int = 0,
               learning_rate: float = 0.05) -> dict:
     """
-    Analyze recent prediction errors and adjust weights.
+    Analyze prediction errors and adjust weights.
 
-    Looks at the last N days of games, compares predicted totals
-    to actual totals, and nudges weights toward better calibration.
+    Compares predicted totals to actual totals across completed games
+    and nudges weights toward better calibration.
 
     Args:
         season: Which season to calibrate on
-        days: Look back window (default 30 days)
-        learning_rate: How aggressively to adjust (0.01 = conservative, 0.10 = aggressive)
-
-    Returns calibration report.
+        days: Look back window. 0 = full season (default), 30 = last month
+        learning_rate: How aggressively to adjust
     """
     conn = get_conn()
     yr = season or datetime.now().year
-    start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
 
-    games = conn.execute("""
-        SELECT * FROM games
-        WHERE status = 'final' AND date >= ? AND season = ?
-          AND home_score IS NOT NULL AND away_score IS NOT NULL
-        ORDER BY date
-    """, (start_date, yr)).fetchall()
+    if days > 0:
+        start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+        games = conn.execute("""
+            SELECT * FROM games
+            WHERE status = 'final' AND date >= ? AND season = ?
+              AND home_score IS NOT NULL AND away_score IS NOT NULL
+            ORDER BY date
+        """, (start_date, yr)).fetchall()
+    else:
+        # Full season — learn from ALL completed games
+        games = conn.execute("""
+            SELECT * FROM games
+            WHERE status = 'final' AND season = ?
+              AND home_score IS NOT NULL AND away_score IS NOT NULL
+            ORDER BY date
+        """, (yr,)).fetchall()
 
     if len(games) < 5:
         return {"error": "Not enough games to calibrate", "games": len(games)}
