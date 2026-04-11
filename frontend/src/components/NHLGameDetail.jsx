@@ -433,12 +433,12 @@ function NHLPredictionResults({ data, odds, home, away }) {
             }}>
               {d.injuries.home_impact != null && d.injuries.home_impact < 1 && (
                 <span style={{color:'#ef4444'}}>
-                  {home.abbreviation}: -{(1 - d.injuries.home_impact).toFixed(2)} xG from injuries
+                  {home.abbreviation}: ~{Math.round((1 - d.injuries.home_impact) * 100)}% weaker from injuries
                 </span>
               )}
               {d.injuries.away_impact != null && d.injuries.away_impact < 1 && (
                 <span style={{color:'#ef4444'}}>
-                  {away.abbreviation}: -{(1 - d.injuries.away_impact).toFixed(2)} xG from injuries
+                  {away.abbreviation}: ~{Math.round((1 - d.injuries.away_impact) * 100)}% weaker from injuries
                 </span>
               )}
             </div>
