@@ -29,12 +29,38 @@ logger = logging.getLogger(__name__)
 
 SEASON = datetime.now().year
 
-# Realistic average MLB odds
+# Synthetic average MLB odds (used as FALLBACK when real historical odds are unavailable)
 AVG_FAV_ODDS = -140      # Average favorite line
 AVG_DOG_ODDS = 120       # Corresponding underdog
 RL_ODDS = -110           # Run line standard
 OU_ODDS = -110           # Over/under standard
 NRFI_ODDS = -120         # NRFI standard
+
+
+def _implied(ml: int) -> float:
+    """Convert American odds to implied probability."""
+    if ml < 0:
+        return abs(ml) / (abs(ml) + 100)
+    return 100 / (ml + 100)
+
+
+def _load_mlb_odds_map(conn) -> dict:
+    """Pre-load all historical MLB odds keyed by mlb_game_id.
+
+    Returns a dict: mlb_game_id -> odds row dict.
+    """
+    try:
+        rows = conn.execute("SELECT * FROM odds").fetchall()
+    except Exception:
+        return {}
+
+    odds_map = {}
+    for r in rows:
+        row = dict(r)
+        gid = row.get("game_id")
+        if gid is not None:
+            odds_map[gid] = row
+    return odds_map
 
 
 def run_backtest(season: int | None = None, days: int | None = None,
@@ -70,6 +96,11 @@ def run_backtest(season: int | None = None, days: int | None = None,
 
     if not games:
         return {"error": "No completed games found", "games_tested": 0}
+
+    # Pre-load historical odds for all games
+    odds_map = _load_mlb_odds_map(conn)
+    odds_real_count = 0
+    odds_synthetic_count = 0
 
     results = {
         "season": yr,
@@ -150,16 +181,29 @@ def run_backtest(season: int | None = None, days: int | None = None,
         h_abbr = home_team["abbreviation"] if home_team else str(home_id)
         a_abbr = away_team["abbreviation"] if away_team else str(away_id)
 
+        # ── Look up real historical odds for this game ──
+        game_mlb_id = game.get("mlb_game_id")
+        real_odds = odds_map.get(game_mlb_id) if game_mlb_id else None
+        game_used_real_odds = real_odds is not None
+
         # ── Moneyline ──
         fav_home = p_home > p_away
         if fav_home:
             ml_prob = p_home
-            ml_implied = abs(AVG_FAV_ODDS) / (abs(AVG_FAV_ODDS) + 100)
-            ml_odds = AVG_FAV_ODDS
+            if real_odds and real_odds.get("home_ml") is not None:
+                ml_odds = real_odds["home_ml"]
+                ml_implied = _implied(ml_odds)
+            else:
+                ml_odds = AVG_FAV_ODDS
+                ml_implied = abs(AVG_FAV_ODDS) / (abs(AVG_FAV_ODDS) + 100)
         else:
             ml_prob = p_away
-            ml_implied = 100 / (AVG_DOG_ODDS + 100)
-            ml_odds = AVG_DOG_ODDS
+            if real_odds and real_odds.get("away_ml") is not None:
+                ml_odds = real_odds["away_ml"]
+                ml_implied = _implied(ml_odds)
+            else:
+                ml_odds = AVG_DOG_ODDS
+                ml_implied = 100 / (AVG_DOG_ODDS + 100)
 
         ml_edge = (ml_prob - ml_implied) * 100
         if ml_edge >= min_edge:
@@ -168,7 +212,12 @@ def run_backtest(season: int | None = None, days: int | None = None,
             game_bets.append((ml_edge, ml_correct, ml_odds))
 
         # ── Over/Under ──
-        ou_line = round(total_pred * 2) / 2  # Round to nearest 0.5
+        # Use real O/U line if available, otherwise derive from model
+        if real_odds and real_odds.get("total") is not None:
+            ou_line = real_odds["total"]
+        else:
+            ou_line = round(total_pred * 2) / 2  # Round to nearest 0.5
+
         # Model probability for the side it picks
         p_over = 0.0
         for h in range(len(matrix)):
@@ -177,7 +226,18 @@ def run_backtest(season: int | None = None, days: int | None = None,
                     p_over += matrix[h][a]
         ou_pick_over = p_over > 0.50
         ou_prob = p_over if ou_pick_over else (1 - p_over)
-        ou_implied = abs(OU_ODDS) / (abs(OU_ODDS) + 100)
+
+        # Use real O/U odds if available
+        if real_odds and ou_pick_over and real_odds.get("over_odds") is not None:
+            ou_odds = real_odds["over_odds"]
+            ou_implied = _implied(ou_odds)
+        elif real_odds and not ou_pick_over and real_odds.get("under_odds") is not None:
+            ou_odds = real_odds["under_odds"]
+            ou_implied = _implied(ou_odds)
+        else:
+            ou_odds = OU_ODDS
+            ou_implied = abs(OU_ODDS) / (abs(OU_ODDS) + 100)
+
         ou_edge = (ou_prob - ou_implied) * 100
 
         if ou_edge >= min_edge:
@@ -185,12 +245,12 @@ def run_backtest(season: int | None = None, days: int | None = None,
                 pass  # Push, skip
             elif ou_pick_over:
                 ou_correct = actual_total > ou_line
-                _record_bet(results["over_under"], ou_correct, OU_ODDS)
-                game_bets.append((ou_edge, ou_correct, OU_ODDS))
+                _record_bet(results["over_under"], ou_correct, ou_odds)
+                game_bets.append((ou_edge, ou_correct, ou_odds))
             else:
                 ou_correct = actual_total < ou_line
-                _record_bet(results["over_under"], ou_correct, OU_ODDS)
-                game_bets.append((ou_edge, ou_correct, OU_ODDS))
+                _record_bet(results["over_under"], ou_correct, ou_odds)
+                game_bets.append((ou_edge, ou_correct, ou_odds))
 
         # ── NRFI (uses pitcher-specific + team-specific first-inning data) ──
         home_ls_raw = game.get("home_linescore")
@@ -241,7 +301,18 @@ def run_backtest(season: int | None = None, days: int | None = None,
 
         rl_pick_home = p_home_cover > 0.50
         rl_prob = p_home_cover if rl_pick_home else p_away_cover
-        rl_implied = abs(RL_ODDS) / (abs(RL_ODDS) + 100)
+
+        # Use real run line odds if available
+        if rl_pick_home and real_odds and real_odds.get("home_spread_odds") is not None:
+            rl_odds = real_odds["home_spread_odds"]
+            rl_implied = _implied(rl_odds)
+        elif not rl_pick_home and real_odds and real_odds.get("away_spread_odds") is not None:
+            rl_odds = real_odds["away_spread_odds"]
+            rl_implied = _implied(rl_odds)
+        else:
+            rl_odds = RL_ODDS
+            rl_implied = abs(RL_ODDS) / (abs(RL_ODDS) + 100)
+
         rl_edge = (rl_prob - rl_implied) * 100
 
         if rl_edge >= min_edge:
@@ -249,8 +320,8 @@ def run_backtest(season: int | None = None, days: int | None = None,
                 rl_correct = margin >= 2
             else:
                 rl_correct = margin <= 1
-            _record_bet(results["run_line"], rl_correct, RL_ODDS)
-            game_bets.append((rl_edge, rl_correct, RL_ODDS))
+            _record_bet(results["run_line"], rl_correct, rl_odds)
+            game_bets.append((rl_edge, rl_correct, rl_odds))
 
         # ── Best bet per game ──
         if game_bets:
@@ -258,9 +329,27 @@ def run_backtest(season: int | None = None, days: int | None = None,
             best_edge, best_correct, best_odds = game_bets[0]
             _record_bet(results["best_bet"], best_correct, best_odds)
 
+        # Track real vs synthetic odds usage for this game
+        if game_bets:
+            if game_used_real_odds:
+                odds_real_count += 1
+            else:
+                odds_synthetic_count += 1
+
     # ── Compute summaries ──
     for cat in ["moneyline", "over_under", "nrfi", "run_line", "best_bet"]:
         _summarize(results[cat])
+
+    # Odds source disclosure
+    total_odds_games = odds_real_count + odds_synthetic_count
+    results["odds_real_count"] = odds_real_count
+    results["odds_synthetic_count"] = odds_synthetic_count
+    if total_odds_games > 0:
+        results["odds_real_pct"] = round(odds_real_count / total_odds_games * 100, 1)
+        results["odds_synthetic_pct"] = round(odds_synthetic_count / total_odds_games * 100, 1)
+    else:
+        results["odds_real_pct"] = 0.0
+        results["odds_synthetic_pct"] = 0.0
 
     return results
 
@@ -397,6 +486,15 @@ def print_backtest(results: dict) -> None:
     print(f"{'='*60}")
     print(f"  Games tested: {results['games_tested']}")
     print(f"  Games skipped: {results['games_skipped']}")
+    real_pct = results.get('odds_real_pct', 0)
+    synth_pct = results.get('odds_synthetic_pct', 0)
+    real_n = results.get('odds_real_count', 0)
+    synth_n = results.get('odds_synthetic_count', 0)
+    print(f"  Odds source: {real_pct}% real historical ({real_n} games), "
+          f"{synth_pct}% synthetic fallback ({synth_n} games)")
+    if synth_n > 0 and real_n == 0:
+        print(f"  NOTE: No historical odds found in DB. All evaluations use synthetic pricing.")
+        print(f"        NRFI odds always use synthetic (-120) as no NRFI odds are stored.")
     print()
 
     for name, label in [("moneyline", "Moneyline"), ("over_under", "Over/Under"),

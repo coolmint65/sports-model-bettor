@@ -37,7 +37,7 @@ def get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute("PRAGMA foreign_keys = ON")
     _init_schema(conn)
     _local.conn = conn
     return conn
@@ -117,6 +117,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         model_prob REAL,
         edge REAL,
         odds INTEGER,
+        closing_odds INTEGER,
         result TEXT,
         profit REAL,
         created_at TEXT DEFAULT (datetime('now')),
@@ -161,6 +162,16 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     CREATE INDEX IF NOT EXISTS idx_nba_odds_date ON nba_odds(game_date);
     """)
     conn.commit()
+
+    # Migration: add closing_odds column to existing nba_picks tables
+    try:
+        existing = conn.execute("PRAGMA table_info(nba_picks)").fetchall()
+        col_names = [r[1] for r in existing]
+        if "closing_odds" not in col_names:
+            conn.execute("ALTER TABLE nba_picks ADD COLUMN closing_odds INTEGER")
+            conn.commit()
+    except Exception:
+        pass  # Column already exists or table just created with it
 
 
 # -- Convenience helpers --------------------------------------------------

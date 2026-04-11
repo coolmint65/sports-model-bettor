@@ -23,6 +23,57 @@ from .bankroll import ml_to_implied_prob
 ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports"
 
 
+def _compute_clv(bet_odds, closing_odds):
+    """Compute closing line value.
+    Positive CLV = got better price than closing line = sharp.
+    """
+    if not bet_odds or not closing_odds:
+        return None
+    bet_implied = abs(bet_odds) / (abs(bet_odds) + 100) if bet_odds < 0 else 100 / (bet_odds + 100)
+    close_implied = abs(closing_odds) / (abs(closing_odds) + 100) if closing_odds < 0 else 100 / (closing_odds + 100)
+    return round((close_implied - bet_implied) * 100, 2)  # positive = we got a better price
+
+
+def _fetch_closing_odds_for_pick(pick: dict, home_abbr: str, away_abbr: str) -> int | None:
+    """Fetch current odds from the odds API for a specific pick.
+
+    Returns the relevant moneyline/odds value for the pick's bet type and side,
+    or None if unavailable.
+    """
+    try:
+        from .picks import fetch_real_odds_for_games, match_odds
+        all_odds = fetch_real_odds_for_games()
+        game_odds = match_odds(home_abbr, away_abbr, all_odds)
+        if not game_odds:
+            return None
+
+        bt = pick["bet_type"]
+        pk = pick["pick"]
+
+        if bt in ("ml", "ML"):
+            if pk == home_abbr:
+                return game_odds.get("home_ml")
+            else:
+                return game_odds.get("away_ml")
+        elif bt in ("ou", "O/U"):
+            if "Over" in pk:
+                return game_odds.get("over_odds")
+            else:
+                return game_odds.get("under_odds")
+        elif bt in ("rl", "RL"):
+            pick_team = pk.split()[0] if pk.split() else ""
+            if pick_team == home_abbr:
+                return game_odds.get("home_spread_odds")
+            else:
+                return game_odds.get("away_spread_odds")
+        elif bt in ("nrfi", "1st INN"):
+            # NRFI doesn't have a standard closing line from the odds API
+            return None
+    except Exception:
+        return None
+    return None
+
+
 def _fetch_espn_scoreboard(date: str) -> list[dict]:
     """Fetch MLB scoreboard from ESPN for a given date."""
     espn_date = date.replace("-", "")
@@ -316,6 +367,13 @@ def settle_picks() -> dict:
     if not pending:
         return {"settled": 0, "message": "No pending picks"}
 
+    # Fetch current odds once for closing line capture
+    try:
+        from .picks import fetch_real_odds_for_games, match_odds
+        all_closing_odds = fetch_real_odds_for_games()
+    except Exception:
+        all_closing_odds = {}
+
     settled = 0
     wins = 0
     losses = 0
@@ -342,6 +400,29 @@ def settle_picks() -> dict:
         away_team = get_team_by_id(game.get("away_team_id"))
         h = home_team["abbreviation"] if home_team else ""
         a = away_team["abbreviation"] if away_team else ""
+
+        # Capture closing odds if not already stored
+        if not pick.get("closing_odds") and h and a:
+            try:
+                from .picks import match_odds as _match_odds
+                game_odds = _match_odds(h, a, all_closing_odds)
+                if game_odds:
+                    bt_tmp = pick["bet_type"]
+                    pk_tmp = pick["pick"]
+                    closing = None
+                    if bt_tmp in ("ml", "ML"):
+                        closing = game_odds.get("home_ml") if pk_tmp == h else game_odds.get("away_ml")
+                    elif bt_tmp in ("ou", "O/U"):
+                        closing = game_odds.get("over_odds") if "Over" in pk_tmp else game_odds.get("under_odds")
+                    elif bt_tmp in ("rl", "RL"):
+                        pick_team = pk_tmp.split()[0] if pk_tmp.split() else ""
+                        closing = game_odds.get("home_spread_odds") if pick_team == h else game_odds.get("away_spread_odds")
+                    if closing is not None:
+                        conn.execute("UPDATE picks SET closing_odds = ? WHERE id = ?",
+                                     (int(closing), pick["id"]))
+                        pick["closing_odds"] = int(closing)
+            except Exception:
+                pass
 
         result = None
         profit = 0
@@ -507,6 +588,18 @@ def get_pick_summary() -> dict:
     tw = totals["wins"] or 0
     tl = totals["losses"] or 0
 
+    # Compute CLV across all settled picks that have closing odds
+    clv_rows = conn.execute("""
+        SELECT odds, closing_odds FROM picks
+        WHERE result IS NOT NULL AND odds IS NOT NULL AND closing_odds IS NOT NULL
+    """).fetchall()
+    clv_values = []
+    for r in clv_rows:
+        clv = _compute_clv(r["odds"], r["closing_odds"])
+        if clv is not None:
+            clv_values.append(clv)
+    avg_clv = round(sum(clv_values) / len(clv_values), 2) if clv_values else None
+
     return {
         "by_type": summary,
         "overall": {
@@ -516,6 +609,8 @@ def get_pick_summary() -> dict:
             "pending": totals["pending"] or 0,
             "profit": round(totals["profit"] or 0, 2),
             "win_pct": round(tw / (tw + tl) * 100, 1) if (tw + tl) > 0 else 0,
+            "avg_clv": avg_clv,
+            "clv_sample": len(clv_values),
         },
         "recent": [dict(r) for r in recent],
     }
@@ -556,6 +651,8 @@ if __name__ == "__main__":
         print(f"  Record: {overall['wins']}-{overall['losses']} ({overall['win_pct']}%)")
         print(f"  Profit: ${overall['profit']:+.2f}")
         print(f"  Pending: {overall['pending']}")
+        if overall.get("avg_clv") is not None:
+            print(f"  Avg CLV: {overall['avg_clv']:+.2f}% ({overall['clv_sample']} picks)")
         print()
         for bt, label in [("ML", "Moneyline"), ("O/U", "Over/Under"), ("1st INN", "1st Inning"), ("RL", "Run Line")]:
             s = summary["by_type"][bt]

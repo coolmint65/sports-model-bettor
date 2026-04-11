@@ -38,7 +38,7 @@ def get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute("PRAGMA foreign_keys = ON")
     _init_schema(conn)
     _migrate(conn)
     _local.conn = conn
@@ -361,6 +361,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
         ("games", "home_linescore", "TEXT"),
         ("games", "away_linescore", "TEXT"),
         ("games", "umpire", "TEXT"),
+        ("picks", "closing_odds", "INTEGER"),
     ]
 
     # Check existing columns first to avoid ALTER TABLE errors

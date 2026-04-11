@@ -20,6 +20,17 @@ logger = logging.getLogger(__name__)
 _local = threading.local()
 
 
+def _compute_clv(bet_odds, closing_odds):
+    """Compute closing line value.
+    Positive CLV = got better price than closing line = sharp.
+    """
+    if not bet_odds or not closing_odds:
+        return None
+    bet_implied = abs(bet_odds) / (abs(bet_odds) + 100) if bet_odds < 0 else 100 / (bet_odds + 100)
+    close_implied = abs(closing_odds) / (abs(closing_odds) + 100) if closing_odds < 0 else 100 / (closing_odds + 100)
+    return round((close_implied - bet_implied) * 100, 2)  # positive = we got a better price
+
+
 def _get_nhl_db():
     """Get NHL picks DB connection (SQLite, separate from MLB)."""
     db_path = Path(__file__).resolve().parent.parent / "data" / "nhl.db"
@@ -44,12 +55,23 @@ def _get_nhl_db():
             model_prob REAL,
             edge REAL,
             odds INTEGER,
+            closing_odds INTEGER,
             result TEXT,
             profit REAL,
             created_at TEXT DEFAULT (datetime('now')),
             settled_at TEXT
         )
     """)
+
+    # Migration: add closing_odds column to existing databases
+    try:
+        existing = conn.execute("PRAGMA table_info(nhl_picks)").fetchall()
+        col_names = [r[1] for r in existing]
+        if "closing_odds" not in col_names:
+            conn.execute("ALTER TABLE nhl_picks ADD COLUMN closing_odds INTEGER")
+    except Exception:
+        pass  # Column already exists or table just created with it
+
     conn.commit()
     return conn
 
@@ -311,6 +333,72 @@ def settle_picks() -> dict:
                 "total": home_score + away_score,
             }
 
+    # Fetch current NHL odds for closing line capture
+    closing_odds_map = {}
+    try:
+        import os
+        from pathlib import Path as _Path
+        key_file = _Path(__file__).resolve().parent.parent / "data" / "odds_api_key.txt"
+        api_key = os.environ.get("ODDS_API_KEY") or (key_file.read_text().strip() if key_file.exists() else None)
+        if api_key:
+            import urllib.request as _urlreq
+            _url = (f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds/"
+                    f"?apiKey={api_key}&regions=us&markets=h2h,spreads,totals"
+                    f"&oddsFormat=american&bookmakers=draftkings")
+            _req = _urlreq.Request(_url, headers={"User-Agent": "NHLTracker/1.0"})
+            with _urlreq.urlopen(_req, timeout=15) as _resp:
+                _odds_data = json.loads(_resp.read().decode())
+
+            _NHL_ABBR = {
+                "Anaheim Ducks": "ANA", "Utah Hockey Club": "UTA",
+                "Boston Bruins": "BOS", "Buffalo Sabres": "BUF",
+                "Calgary Flames": "CGY", "Carolina Hurricanes": "CAR",
+                "Chicago Blackhawks": "CHI", "Colorado Avalanche": "COL",
+                "Columbus Blue Jackets": "CBJ", "Dallas Stars": "DAL",
+                "Detroit Red Wings": "DET", "Edmonton Oilers": "EDM",
+                "Florida Panthers": "FLA", "Los Angeles Kings": "LAK",
+                "Minnesota Wild": "MIN", "Montreal Canadiens": "MTL",
+                "Nashville Predators": "NSH", "New Jersey Devils": "NJD",
+                "New York Islanders": "NYI", "New York Rangers": "NYR",
+                "Ottawa Senators": "OTT", "Philadelphia Flyers": "PHI",
+                "Pittsburgh Penguins": "PIT", "San Jose Sharks": "SJS",
+                "Seattle Kraken": "SEA", "St. Louis Blues": "STL",
+                "Tampa Bay Lightning": "TBL", "Toronto Maple Leafs": "TOR",
+                "Vancouver Canucks": "VAN", "Vegas Golden Knights": "VGK",
+                "Washington Capitals": "WSH", "Winnipeg Jets": "WPG",
+            }
+            for _g in (_odds_data or []):
+                _home = _g.get("home_team", "")
+                _away = _g.get("away_team", "")
+                _h_ab = _NHL_ABBR.get(_home, _home[:3].upper())
+                _a_ab = _NHL_ABBR.get(_away, _away[:3].upper())
+                _key = f"{_a_ab}@{_h_ab}"
+                _res = {}
+                for _bk in _g.get("bookmakers", [])[:1]:
+                    for _mkt in _bk.get("markets", []):
+                        _mk = _mkt.get("key", "")
+                        for _o in _mkt.get("outcomes", []):
+                            if _mk == "h2h":
+                                if _o.get("name") == _home:
+                                    _res["home_ml"] = _o.get("price")
+                                elif _o.get("name") == _away:
+                                    _res["away_ml"] = _o.get("price")
+                            elif _mk == "spreads":
+                                if _o.get("name") == _home:
+                                    _res["home_spread_odds"] = _o.get("price")
+                                elif _o.get("name") == _away:
+                                    _res["away_spread_odds"] = _o.get("price")
+                            elif _mk == "totals":
+                                _nm = _o.get("name", "").lower()
+                                if "over" in _nm:
+                                    _res["over_odds"] = _o.get("price")
+                                elif "under" in _nm:
+                                    _res["under_odds"] = _o.get("price")
+                if _res:
+                    closing_odds_map[_key] = _res
+    except Exception as e:
+        logger.debug("Could not fetch NHL closing odds: %s", e)
+
     settled = 0
     wins = 0
     losses = 0
@@ -328,6 +416,39 @@ def settle_picks() -> dict:
         total = game["total"]
         h = game["home_abbr"]
         a = game["away_abbr"]
+
+        # Capture closing odds if not already stored
+        if not pick.get("closing_odds") and h and a:
+            _ALT_CL = {
+                "TB": "TBL", "TBL": "TB", "NJ": "NJD", "NJD": "NJ",
+                "SJ": "SJS", "SJS": "SJ", "LA": "LAK", "LAK": "LA",
+                "WAS": "WSH", "WSH": "WAS", "CLB": "CBJ", "CBJ": "CLB",
+                "MON": "MTL", "MTL": "MON", "NAS": "NSH", "NSH": "NAS",
+            }
+            game_cl_odds = None
+            for a_try in [a, _ALT_CL.get(a, "")]:
+                for h_try in [h, _ALT_CL.get(h, "")]:
+                    if a_try and h_try:
+                        game_cl_odds = closing_odds_map.get(f"{a_try}@{h_try}")
+                        if game_cl_odds:
+                            break
+                if game_cl_odds:
+                    break
+            if game_cl_odds:
+                bt_tmp = pick["bet_type"]
+                pk_tmp = pick["pick"]
+                closing = None
+                if bt_tmp == "ML":
+                    closing = game_cl_odds.get("home_ml") if pk_tmp == h else game_cl_odds.get("away_ml")
+                elif bt_tmp == "O/U":
+                    closing = game_cl_odds.get("over_odds") if "Over" in pk_tmp else game_cl_odds.get("under_odds")
+                elif bt_tmp == "PL":
+                    pick_team = pk_tmp.split()[0] if pk_tmp.split() else ""
+                    closing = game_cl_odds.get("home_spread_odds") if pick_team == h else game_cl_odds.get("away_spread_odds")
+                if closing is not None:
+                    conn.execute("UPDATE nhl_picks SET closing_odds = ? WHERE id = ?",
+                                 (int(closing), pick["id"]))
+                    pick["closing_odds"] = int(closing)
 
         bt = pick["bet_type"]
         pk = pick["pick"]
@@ -456,6 +577,18 @@ def get_pick_summary() -> dict:
     tw = totals["wins"] or 0
     tl = totals["losses"] or 0
 
+    # Compute CLV across all settled picks that have closing odds
+    clv_rows = conn.execute("""
+        SELECT odds, closing_odds FROM nhl_picks
+        WHERE result IS NOT NULL AND odds IS NOT NULL AND closing_odds IS NOT NULL
+    """).fetchall()
+    clv_values = []
+    for r in clv_rows:
+        clv = _compute_clv(r["odds"], r["closing_odds"])
+        if clv is not None:
+            clv_values.append(clv)
+    avg_clv = round(sum(clv_values) / len(clv_values), 2) if clv_values else None
+
     return {
         "by_type": summary,
         "overall": {
@@ -465,6 +598,8 @@ def get_pick_summary() -> dict:
             "pending": totals["pending"] or 0,
             "profit": round(totals["profit"] or 0, 2),
             "win_pct": round(tw / (tw + tl) * 100, 1) if (tw + tl) > 0 else 0,
+            "avg_clv": avg_clv,
+            "clv_sample": len(clv_values),
         },
         "recent": [dict(r) for r in recent],
     }
@@ -505,6 +640,8 @@ if __name__ == "__main__":
         print(f"  Record: {overall['wins']}-{overall['losses']} ({overall['win_pct']}%)")
         print(f"  Profit: ${overall['profit']:+.2f}")
         print(f"  Pending: {overall['pending']}")
+        if overall.get("avg_clv") is not None:
+            print(f"  Avg CLV: {overall['avg_clv']:+.2f}% ({overall['clv_sample']} picks)")
         print()
         for bt, label in [("ML", "Moneyline"), ("O/U", "Over/Under"), ("PL", "Puck Line")]:
             s = summary["by_type"][bt]

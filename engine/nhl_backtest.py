@@ -28,13 +28,48 @@ logger = logging.getLogger(__name__)
 
 SEASON = datetime.now().year if datetime.now().month >= 8 else datetime.now().year - 1
 
-# Realistic average NHL odds
+# Synthetic average NHL odds (used as FALLBACK when real historical odds are unavailable)
 AVG_FAV_ODDS = -150      # Average favorite line
 AVG_DOG_ODDS = 130       # Corresponding underdog
 PL_ODDS = -110           # Puck line standard
 OU_ODDS = -110           # Over/under standard
 
 MAX_GOALS = 10
+
+
+def _load_odds_map(games: list[dict]) -> dict:
+    """Pre-load all historical odds for the games being backtested.
+
+    Returns a dict keyed by (game_date, home_abbr, away_abbr) -> odds row dict.
+    """
+    try:
+        from .nhl_db import get_conn
+    except Exception:
+        return {}
+
+    conn = get_conn()
+    try:
+        rows = conn.execute("SELECT * FROM nhl_odds").fetchall()
+    except Exception:
+        return {}
+
+    odds_map = {}
+    for r in rows:
+        row = dict(r)
+        key = (row.get("game_date", ""), row.get("home_abbr", "").upper(),
+               row.get("away_abbr", "").upper())
+        odds_map[key] = row
+    return odds_map
+
+
+def _lookup_game_odds(odds_map: dict, game_date: str,
+                      home_abbr: str, away_abbr: str) -> dict | None:
+    """Look up real historical odds for a specific game.
+
+    Returns the odds row dict if found, else None.
+    """
+    key = (game_date, home_abbr.upper(), away_abbr.upper())
+    return odds_map.get(key)
 
 
 def _poisson(lam: float, k: int) -> float:
@@ -663,6 +698,11 @@ def run_nhl_backtest(days: int = 30, min_edge: float = 3.0,
 
     yr = season or SEASON
 
+    # Pre-load historical odds for all games
+    odds_map = _load_odds_map(games)
+    odds_real_count = 0
+    odds_synthetic_count = 0
+
     # Get DB connection for PIT mode
     pit_conn = None
     if pit_mode:
@@ -758,6 +798,11 @@ def run_nhl_backtest(days: int = 30, min_edge: float = 3.0,
             if fav_won:
                 calibration_buckets[bucket_key][1] += 1  # correct
 
+        # ── Look up real historical odds for this game ──
+        game_date = game.get("date", "")
+        real_odds = _lookup_game_odds(odds_map, game_date, home_abbr, away_abbr)
+        game_used_real_odds = real_odds is not None
+
         # ── Compute market baseline (simpler model = what bookmakers see) ──
         if pit_mode and pit_conn and home_pit and away_pit:
             market_home = _compute_market_prob(home_pit, away_pit)
@@ -769,14 +814,22 @@ def run_nhl_backtest(days: int = 30, min_edge: float = 3.0,
         fav_home = p_home > p_away
         if fav_home:
             ml_prob = p_home
-            ml_market = market_home
-            ml_odds = _prob_to_american(ml_market)  # Market odds from baseline
             ml_pick = home_abbr
+            if real_odds and real_odds.get("home_ml") is not None:
+                ml_odds = real_odds["home_ml"]
+                ml_market = _implied(ml_odds)
+            else:
+                ml_market = market_home
+                ml_odds = _prob_to_american(ml_market)
         else:
             ml_prob = p_away
-            ml_market = market_away
-            ml_odds = _prob_to_american(ml_market)
             ml_pick = away_abbr
+            if real_odds and real_odds.get("away_ml") is not None:
+                ml_odds = real_odds["away_ml"]
+                ml_market = _implied(ml_odds)
+            else:
+                ml_market = market_away
+                ml_odds = _prob_to_american(ml_market)
 
         ml_edge = (ml_prob - ml_market) * 100  # Edge = our model vs market baseline
         if ml_edge >= min_edge:
@@ -846,11 +899,37 @@ def run_nhl_backtest(days: int = 30, min_edge: float = 3.0,
                     if eff_total > ou_line:
                         p_over += matrix[h][a]
 
+        # Override O/U line with real line if available, then recompute model probs
+        if real_odds and real_odds.get("over_under") is not None:
+            ou_line = real_odds["over_under"]
+            # Recompute p_over against the real line
+            ou_xg_h = pred.get("ou_home_xg", home_xg)
+            ou_xg_a = pred.get("ou_away_xg", away_xg)
+            if b2b_adjusted:
+                ou_xg_h = max(ou_home_xg, 1.0)
+                ou_xg_a = max(ou_away_xg, 1.0)
+            ou_recomp_matrix = _score_matrix(ou_xg_h, ou_xg_a)
+            p_over = 0.0
+            for h in range(MAX_GOALS + 1):
+                for a in range(MAX_GOALS + 1):
+                    eff_total = (h + a + 1) if h == a else (h + a)
+                    if eff_total > ou_line:
+                        p_over += ou_recomp_matrix[h][a]
+
         ou_pick_over = p_over > 0.50
         ou_prob = p_over if ou_pick_over else (1 - p_over)
-        # Market baseline for O/U: assume market prices at 52.4% (-110 vig)
-        ou_market = 0.524
-        ou_odds = -110  # Standard O/U odds
+
+        # Use real O/U odds if available, otherwise fall back to synthetic -110
+        if real_odds and ou_pick_over and real_odds.get("over_odds") is not None:
+            ou_odds = real_odds["over_odds"]
+            ou_market = _implied(ou_odds)
+        elif real_odds and not ou_pick_over and real_odds.get("under_odds") is not None:
+            ou_odds = real_odds["under_odds"]
+            ou_market = _implied(ou_odds)
+        else:
+            ou_odds = OU_ODDS  # Synthetic fallback
+            ou_market = _implied(OU_ODDS)
+
         ou_edge = (ou_prob - ou_market) * 100
 
         if ou_edge >= min_edge:
@@ -880,17 +959,23 @@ def run_nhl_backtest(days: int = 30, min_edge: float = 3.0,
         pl_pick_home = p_home_cover > 0.50
         pl_prob = p_home_cover if pl_pick_home else p_away_cover
 
-        # Real puck line market pricing:
-        #   +1.5 (underdog side): typically -180, implied ~64-67%
-        #   -1.5 (favorite side): typically +150 to +170, implied ~37-40%
-        if pl_pick_home:
-            # Picking home -1.5 (favorite to win by 2+)
-            pl_market = 0.37   # Market prices -1.5 at about +170
-            pl_odds = 170      # +170 for -1.5 side
+        # Use real puck line odds if available, otherwise fall back to synthetic
+        if pl_pick_home and real_odds and real_odds.get("home_spread_odds") is not None:
+            pl_odds = real_odds["home_spread_odds"]
+            pl_market = _implied(pl_odds)
+        elif not pl_pick_home and real_odds and real_odds.get("away_spread_odds") is not None:
+            pl_odds = real_odds["away_spread_odds"]
+            pl_market = _implied(pl_odds)
         else:
-            # Picking away +1.5 (or home +1.5 -- underdog side)
-            pl_market = 0.65   # Market prices +1.5 at about -180
-            pl_odds = -180     # -180 for +1.5 side
+            # Synthetic fallback: standard puck line pricing
+            #   +1.5 (underdog side): typically -180, implied ~64-67%
+            #   -1.5 (favorite side): typically +150 to +170, implied ~37-40%
+            if pl_pick_home:
+                pl_market = 0.37   # Market prices -1.5 at about +170
+                pl_odds = 170      # +170 for -1.5 side
+            else:
+                pl_market = 0.65   # Market prices +1.5 at about -180
+                pl_odds = -180     # -180 for +1.5 side
 
         pl_edge = (pl_prob - pl_market) * 100
 
@@ -909,6 +994,13 @@ def run_nhl_backtest(days: int = 30, min_edge: float = 3.0,
             game_bets.sort(key=lambda x: x[0], reverse=True)
             best_edge, best_correct, best_odds, _, _ = game_bets[0]
             _record_bet(results["best_bet"], best_correct, best_odds)
+
+        # Track real vs synthetic odds usage for this game
+        if game_bets:
+            if game_used_real_odds:
+                odds_real_count += 1
+            else:
+                odds_synthetic_count += 1
 
     # ── Compute summaries ──
     for cat in ["moneyline", "over_under", "puck_line", "best_bet"]:
@@ -931,6 +1023,17 @@ def run_nhl_backtest(days: int = 30, min_edge: float = 3.0,
             }
     results["calibration"] = cal
     results["source"] = source
+
+    # Odds source disclosure
+    total_odds_games = odds_real_count + odds_synthetic_count
+    results["odds_real_count"] = odds_real_count
+    results["odds_synthetic_count"] = odds_synthetic_count
+    if total_odds_games > 0:
+        results["odds_real_pct"] = round(odds_real_count / total_odds_games * 100, 1)
+        results["odds_synthetic_pct"] = round(odds_synthetic_count / total_odds_games * 100, 1)
+    else:
+        results["odds_real_pct"] = 0.0
+        results["odds_synthetic_pct"] = 0.0
 
     return results
 
@@ -982,6 +1085,12 @@ def print_backtest(results: dict) -> None:
     print(f"  Games tested:  {results['games_tested']}")
     print(f"  Games skipped: {results['games_skipped']}")
     print(f"  Data source:   {results.get('source', 'unknown')}")
+    real_pct = results.get('odds_real_pct', 0)
+    synth_pct = results.get('odds_synthetic_pct', 0)
+    real_n = results.get('odds_real_count', 0)
+    synth_n = results.get('odds_synthetic_count', 0)
+    print(f"  Odds source:   {real_pct}% real historical ({real_n} games), "
+          f"{synth_pct}% synthetic fallback ({synth_n} games)")
     print()
 
     for name, label in [("moneyline", "Moneyline"), ("over_under", "Over/Under"),

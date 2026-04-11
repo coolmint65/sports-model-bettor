@@ -19,6 +19,17 @@ from datetime import datetime, timedelta
 logger = logging.getLogger(__name__)
 
 
+def _compute_clv(bet_odds, closing_odds):
+    """Compute closing line value.
+    Positive CLV = got better price than closing line = sharp.
+    """
+    if not bet_odds or not closing_odds:
+        return None
+    bet_implied = abs(bet_odds) / (abs(bet_odds) + 100) if bet_odds < 0 else 100 / (bet_odds + 100)
+    close_implied = abs(closing_odds) / (abs(closing_odds) + 100) if closing_odds < 0 else 100 / (closing_odds + 100)
+    return round((close_implied - bet_implied) * 100, 2)  # positive = we got a better price
+
+
 # ESPN alternate abbreviation map (ESPN sometimes uses different abbrs)
 _ALT_ABBRS = {
     "GS": "GSW", "GSW": "GS",
@@ -228,6 +239,58 @@ def settle_picks() -> dict:
             if q1_data:
                 final_q1[q1_data["game_id"]] = q1_data
 
+    # Fetch current NBA odds for closing line capture
+    closing_odds_map = {}
+    try:
+        import os
+        from pathlib import Path as _Path
+        key_file = _Path(__file__).resolve().parent.parent / "data" / "odds_api_key.txt"
+        api_key = os.environ.get("ODDS_API_KEY") or (key_file.read_text().strip() if key_file.exists() else None)
+        if api_key:
+            _url = (f"https://api.the-odds-api.com/v4/sports/basketball_nba/odds/"
+                    f"?apiKey={api_key}&regions=us&markets=h2h"
+                    f"&oddsFormat=american&bookmakers=draftkings")
+            req = urllib.request.Request(_url, headers={"User-Agent": "NBATracker/1.0"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                _odds_data = json.loads(resp.read().decode())
+
+            _NBA_ABBR = {
+                "Atlanta Hawks": "ATL", "Boston Celtics": "BOS",
+                "Brooklyn Nets": "BKN", "Charlotte Hornets": "CHA",
+                "Chicago Bulls": "CHI", "Cleveland Cavaliers": "CLE",
+                "Dallas Mavericks": "DAL", "Denver Nuggets": "DEN",
+                "Detroit Pistons": "DET", "Golden State Warriors": "GSW",
+                "Houston Rockets": "HOU", "Indiana Pacers": "IND",
+                "Los Angeles Clippers": "LAC", "Los Angeles Lakers": "LAL",
+                "Memphis Grizzlies": "MEM", "Miami Heat": "MIA",
+                "Milwaukee Bucks": "MIL", "Minnesota Timberwolves": "MIN",
+                "New Orleans Pelicans": "NOP", "New York Knicks": "NYK",
+                "Oklahoma City Thunder": "OKC", "Orlando Magic": "ORL",
+                "Philadelphia 76ers": "PHI", "Phoenix Suns": "PHX",
+                "Portland Trail Blazers": "POR", "Sacramento Kings": "SAC",
+                "San Antonio Spurs": "SAS", "Toronto Raptors": "TOR",
+                "Utah Jazz": "UTA", "Washington Wizards": "WAS",
+            }
+            for _g in (_odds_data or []):
+                _home = _g.get("home_team", "")
+                _away = _g.get("away_team", "")
+                _h_ab = _NBA_ABBR.get(_home, _home[:3].upper())
+                _a_ab = _NBA_ABBR.get(_away, _away[:3].upper())
+                _key = f"{_a_ab}@{_h_ab}"
+                _res = {}
+                for _bk in _g.get("bookmakers", [])[:1]:
+                    for _mkt in _bk.get("markets", []):
+                        if _mkt.get("key") == "h2h":
+                            for _o in _mkt.get("outcomes", []):
+                                if _o.get("name") == _home:
+                                    _res["home_ml"] = _o.get("price")
+                                elif _o.get("name") == _away:
+                                    _res["away_ml"] = _o.get("price")
+                if _res:
+                    closing_odds_map[_key] = _res
+    except Exception as e:
+        logger.debug("Could not fetch NBA closing odds: %s", e)
+
     settled = 0
     wins = 0
     losses = 0
@@ -246,6 +309,35 @@ def settle_picks() -> dict:
         q1_margin = game["q1_margin"]  # positive = home won Q1
         h = game["home_abbr"]
         a = game["away_abbr"]
+
+        # Capture closing odds if not already stored
+        if not pick.get("closing_odds") and h and a:
+            # Try direct and alternate abbreviations
+            game_cl_odds = None
+            for a_try in [a, _ALT_ABBRS.get(a, "")]:
+                for h_try in [h, _ALT_ABBRS.get(h, "")]:
+                    if a_try and h_try:
+                        game_cl_odds = closing_odds_map.get(f"{a_try}@{h_try}")
+                        if game_cl_odds:
+                            break
+                if game_cl_odds:
+                    break
+            if game_cl_odds:
+                bt_tmp = pick["bet_type"]
+                pk_tmp = pick["pick"]
+                closing = None
+                if bt_tmp == "Q1_ML":
+                    pick_team = pk_tmp.split()[0]
+                    is_home = (pick_team == h or pick_team == _ALT_ABBRS.get(h, ""))
+                    closing = game_cl_odds.get("home_ml") if is_home else game_cl_odds.get("away_ml")
+                elif bt_tmp in ("Q1_SPREAD", "Q1_TOTAL"):
+                    # Q1-specific lines aren't typically in the odds API h2h market;
+                    # use full-game ML as a proxy if Q1_ML, skip for spread/total
+                    closing = None
+                if closing is not None:
+                    conn.execute("UPDATE nba_picks SET closing_odds = ? WHERE id = ?",
+                                 (int(closing), pick["id"]))
+                    pick["closing_odds"] = int(closing)
 
         bt = pick["bet_type"]
         pk = pick["pick"]
@@ -405,6 +497,18 @@ def get_pick_summary() -> dict:
     tw = totals["wins"] or 0
     tl = totals["losses"] or 0
 
+    # Compute CLV across all settled picks that have closing odds
+    clv_rows = conn.execute("""
+        SELECT odds, closing_odds FROM nba_picks
+        WHERE result IS NOT NULL AND odds IS NOT NULL AND closing_odds IS NOT NULL
+    """).fetchall()
+    clv_values = []
+    for r in clv_rows:
+        clv = _compute_clv(r["odds"], r["closing_odds"])
+        if clv is not None:
+            clv_values.append(clv)
+    avg_clv = round(sum(clv_values) / len(clv_values), 2) if clv_values else None
+
     return {
         "by_type": summary,
         "overall": {
@@ -414,6 +518,8 @@ def get_pick_summary() -> dict:
             "pending": totals["pending"] or 0,
             "profit": round(totals["profit"] or 0, 2),
             "win_pct": round(tw / (tw + tl) * 100, 1) if (tw + tl) > 0 else 0,
+            "avg_clv": avg_clv,
+            "clv_sample": len(clv_values),
         },
         "recent": [dict(r) for r in recent],
     }
@@ -458,6 +564,8 @@ if __name__ == "__main__":
         print(f"  Record: {overall['wins']}-{overall['losses']} ({overall['win_pct']}%)")
         print(f"  Profit: ${overall['profit']:+.2f}")
         print(f"  Pending: {overall['pending']}")
+        if overall.get("avg_clv") is not None:
+            print(f"  Avg CLV: {overall['avg_clv']:+.2f}% ({overall['clv_sample']} picks)")
         print()
         for bt, label in [("Q1_SPREAD", "Q1 Spread"), ("Q1_TOTAL", "Q1 Total"),
                           ("Q1_ML", "Q1 Moneyline")]:
