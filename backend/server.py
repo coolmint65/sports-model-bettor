@@ -2129,7 +2129,8 @@ def _parse_nba_scoreboard(espn_data: dict) -> list[dict]:
 
         games.append(game)
       except Exception as e:
-        logger.warning("NBA parse event failed: %s", e)
+        import traceback
+        logger.warning("NBA parse event failed: %s\n%s", e, traceback.format_exc())
         continue
 
     return games
