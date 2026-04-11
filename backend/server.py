@@ -985,7 +985,7 @@ def api_pitcher(pitcher_id: int):
 
 # NHL team name → abbreviation (for Odds API matching)
 _NHL_TEAM_ABBR = {
-    "Anaheim Ducks": "ANA", "Arizona Coyotes": "ARI", "Utah Hockey Club": "UTA",
+    "Anaheim Ducks": "ANA", "Arizona Coyotes": "ARI", "Utah Hockey Club": "UTA", "Utah Mammoth": "UTA",
     "Boston Bruins": "BOS", "Buffalo Sabres": "BUF",
     "Calgary Flames": "CGY", "Carolina Hurricanes": "CAR",
     "Chicago Blackhawks": "CHI", "Colorado Avalanche": "COL",
@@ -1013,7 +1013,7 @@ _NHL_ABBR_ALTS = {
     "MON": "MTL", "MTL": "MON",
     "NAS": "NSH", "NSH": "NAS",
     "AZ": "UTA", "UTA": "AZ",
-    "UTAH": "UTA",
+    "UTAH": "UTA", "UTH": "UTA",
 }
 
 # Map ESPN abbreviation to team JSON key
@@ -1039,6 +1039,12 @@ def _nhl_espn_to_key() -> dict:
             short = team.get("short_name", "")
             if short:
                 _NHL_ESPN_TO_KEY[short.lower()] = t["key"]
+            # Also map by last word of name (e.g. "Mammoth" for Utah Mammoth)
+            name = team.get("name", "")
+            if name:
+                last_word = name.split()[-1].lower()
+                if last_word not in _NHL_ESPN_TO_KEY:
+                    _NHL_ESPN_TO_KEY[last_word] = t["key"]
     return _NHL_ESPN_TO_KEY
 
 
