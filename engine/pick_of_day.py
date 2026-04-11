@@ -324,39 +324,76 @@ def _determine_outcome(sport: str, conn, potd: dict) -> tuple[str | None, float]
     pick = potd["pick"]
     odds = potd.get("odds") or -110
 
-    # Parse matchup "AWAY @ HOME"
+    # Parse matchup — handles both "AWAY @ HOME" and "Away Team at Home Team"
     try:
-        away_abbr, home_abbr = [s.strip() for s in matchup.split("@")]
+        if " @ " in matchup:
+            away_part, home_part = [s.strip() for s in matchup.split(" @ ")]
+        elif " at " in matchup:
+            away_part, home_part = [s.strip() for s in matchup.split(" at ")]
+        else:
+            return None, 0
     except ValueError:
         return None, 0
 
-    # Find the final game
+    # Find the game — try matching by game_id first, then by date + team names
+    game_id = potd.get("game_id")
+
     if sport == "mlb":
-        row = conn.execute("""
-            SELECT g.*,
-                   ht.abbreviation as home_abbr,
-                   at.abbreviation as away_abbr
-            FROM games g
-            LEFT JOIN teams ht ON g.home_team_id = ht.mlb_id
-            LEFT JOIN teams at ON g.away_team_id = at.mlb_id
-            WHERE g.date = ? AND g.status = 'final'
-              AND (ht.abbreviation = ? OR at.abbreviation = ?)
-              AND (ht.abbreviation = ? OR at.abbreviation = ?)
-            LIMIT 1
-        """, (date, home_abbr, home_abbr, away_abbr, away_abbr)).fetchone()
-    else:  # NHL
-        row = conn.execute("""
-            SELECT g.*,
-                   ht.abbreviation as home_abbr,
-                   at.abbreviation as away_abbr
-            FROM nhl_games g
-            LEFT JOIN nhl_teams ht ON g.home_team_id = ht.id
-            LEFT JOIN nhl_teams at ON g.away_team_id = at.id
-            WHERE g.date = ? AND g.status = 'final'
-              AND (ht.abbreviation = ? OR at.abbreviation = ?)
-              AND (ht.abbreviation = ? OR at.abbreviation = ?)
-            LIMIT 1
-        """, (date, home_abbr, home_abbr, away_abbr, away_abbr)).fetchone()
+        # Try game_id match first
+        row = None
+        if game_id:
+            row = conn.execute("""
+                SELECT g.*, ht.abbreviation as home_abbr, at.abbreviation as away_abbr
+                FROM games g
+                LEFT JOIN teams ht ON g.home_team_id = ht.mlb_id
+                LEFT JOIN teams at ON g.away_team_id = at.mlb_id
+                WHERE g.mlb_game_id = ? AND g.status = 'final'
+                LIMIT 1
+            """, (game_id,)).fetchone()
+        # Fallback: search by date and team name substring
+        if not row:
+            row = conn.execute("""
+                SELECT g.*, ht.abbreviation as home_abbr, at.abbreviation as away_abbr
+                FROM games g
+                LEFT JOIN teams ht ON g.home_team_id = ht.mlb_id
+                LEFT JOIN teams at ON g.away_team_id = at.mlb_id
+                WHERE g.date = ? AND g.status = 'final'
+                  AND (ht.name LIKE ? OR ht.abbreviation = ?)
+                  AND (at.name LIKE ? OR at.abbreviation = ?)
+                LIMIT 1
+            """, (date, f"%{home_part}%", home_part, f"%{away_part}%", away_part)).fetchone()
+    elif sport == "nhl":
+        row = None
+        if game_id:
+            row = conn.execute("""
+                SELECT g.*, ht.abbreviation as home_abbr, at.abbreviation as away_abbr
+                FROM nhl_games g
+                LEFT JOIN nhl_teams ht ON g.home_team_id = ht.id
+                LEFT JOIN nhl_teams at ON g.away_team_id = at.id
+                WHERE g.game_id = ? AND g.status = 'final'
+                LIMIT 1
+            """, (game_id,)).fetchone()
+        if not row:
+            row = conn.execute("""
+                SELECT g.*, ht.abbreviation as home_abbr, at.abbreviation as away_abbr
+                FROM nhl_games g
+                LEFT JOIN nhl_teams ht ON g.home_team_id = ht.id
+                LEFT JOIN nhl_teams at ON g.away_team_id = at.id
+                WHERE g.date = ? AND g.status = 'final'
+                  AND (ht.name LIKE ? OR ht.abbreviation = ?)
+                  AND (at.name LIKE ? OR at.abbreviation = ?)
+                LIMIT 1
+            """, (date, f"%{home_part}%", home_part, f"%{away_part}%", away_part)).fetchone()
+    elif sport == "nba":
+        row = None
+        if game_id:
+            row = conn.execute("""
+                SELECT * FROM nba_games
+                WHERE game_id = ? AND status = 'final'
+                LIMIT 1
+            """, (game_id,)).fetchone()
+    else:
+        return None, 0
 
     if not row:
         return None, 0
@@ -368,9 +405,15 @@ def _determine_outcome(sport: str, conn, potd: dict) -> tuple[str | None, float]
     # Compute result based on bet type
     result = None
 
+    home_abbr = row.get("home_abbr", "")
+    away_abbr = row.get("away_abbr", "")
+
     if bet_type == "ML":
         home_won = hs > as_
-        pick_home = pick == home_abbr
+        # Pick can be abbreviation ("STL") or full name ("St. Louis Cardinals")
+        pick_home = (pick == home_abbr
+                     or home_part in pick
+                     or (home_abbr and home_abbr in pick))
         won = (pick_home and home_won) or (not pick_home and not home_won)
         result = "W" if won else "L"
 
@@ -393,16 +436,15 @@ def _determine_outcome(sport: str, conn, potd: dict) -> tuple[str | None, float]
             else:
                 result = "P"
 
-    elif bet_type == "RL" or bet_type == "PL":
-        # Parse "TEAM ±1.5"
-        parts = pick.split()
-        pick_team = parts[0]
-        try:
-            spread = float(parts[1])
-        except (IndexError, ValueError):
-            spread = 1.5
+    elif bet_type in ("RL", "PL"):
+        # Parse spread from pick string (e.g. "St. Louis Cardinals +1.5" or "STL +1.5")
+        import re
+        spread_match = re.search(r'([+-]?\d+\.?\d*)\s*$', pick)
+        spread = float(spread_match.group(1)) if spread_match else 1.5
 
-        if pick_team == home_abbr:
+        # Determine which team was picked — check if home team name/abbr is in pick
+        pick_is_home = (home_abbr and home_abbr in pick) or (home_part and home_part in pick)
+        if pick_is_home:
             margin = hs - as_
         else:
             margin = as_ - hs
