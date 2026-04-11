@@ -137,12 +137,13 @@ def select_potd(sport: str, games_with_bets: list[dict]) -> dict | None:
                 continue
 
             # Safety: verify the pick team is actually in this matchup
+            # Skip check for O/U and total picks (they don't contain team names)
             pick_name = pick.get("pick", "")
             matchup = game.get("matchup", "")
-            if pick_name and matchup and not any(
+            is_total_pick = any(x in pick_name for x in ("Over", "Under", "over", "under"))
+            if not is_total_pick and pick_name and matchup and not any(
                 abbr in pick_name for abbr in matchup.replace(" @ ", "|").split("|")
             ):
-                # Pick team not in matchup — data corruption, skip
                 logger.warning("POTD: pick '%s' not in matchup '%s', skipping", pick_name, matchup)
                 continue
 
@@ -247,7 +248,7 @@ def get_or_create_potd(sport: str, games_with_bets: list[dict],
 
     # Lock it in — store full team names for display
     conn.execute("""
-        INSERT INTO pick_of_day (
+        INSERT OR IGNORE INTO pick_of_day (
             date, game_id, matchup, bet_type, pick,
             model_prob, edge, odds, kelly_pct, reasoning
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

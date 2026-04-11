@@ -2460,3 +2460,38 @@ def api_nba_backtest(days: int = Query(default=0), min_edge: float = Query(defau
     except Exception as e:
         logger.error("NBA backtest failed: %s", e, exc_info=True)
         return {"error": str(e)}
+
+
+@app.get("/api/nba/scoreboard/debug")
+def api_nba_scoreboard_debug():
+    """Debug: show raw ESPN NBA scoreboard response."""
+    import json
+    target_date = datetime.now().strftime("%Y%m%d")
+    url = f"{ESPN_BASE}/basketball/nba/scoreboard?dates={target_date}"
+    data = _fetch_espn_json(url)
+    if not data:
+        # Try without date
+        data = _fetch_espn_json(f"{ESPN_BASE}/basketball/nba/scoreboard")
+    if not data:
+        return {"error": "ESPN returned no data", "url": url}
+    events = data.get("events", [])
+    result = {
+        "url": url,
+        "date": target_date,
+        "top_keys": list(data.keys()),
+        "event_count": len(events),
+    }
+    if events:
+        ev = events[0]
+        result["first_event_name"] = ev.get("name", "?")
+        result["first_event_date"] = ev.get("date", "?")
+        comps = ev.get("competitions", [{}])
+        if comps:
+            teams = comps[0].get("competitors", [])
+            result["first_event_teams"] = len(teams)
+            if teams:
+                result["first_team_keys"] = list(teams[0].keys())[:10]
+    else:
+        # Check if there's a day/league info
+        result["day"] = data.get("day", data.get("leagues", "?"))
+    return result
