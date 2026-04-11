@@ -164,6 +164,14 @@ def _get_scoreboard(date: str = "") -> list[dict]:
             logger.info("Fallback returned %d events", len(events))
             games = _parse_espn_scoreboard(espn_data)
 
+    # If still no games, try tomorrow
+    if not games and date == "":
+        from datetime import timedelta as _td
+        tomorrow = (datetime.now() + _td(days=1)).strftime("%Y%m%d")
+        espn_data = _fetch_espn_json(f"{ESPN_BASE}/baseball/mlb/scoreboard?dates={tomorrow}")
+        if espn_data:
+            games = _parse_espn_scoreboard(espn_data)
+
     # Secondary fallback: MLB Stats API (if ESPN is completely down)
     if not games:
         logger.warning("ESPN unavailable, falling back to MLB Stats API")
@@ -1078,6 +1086,14 @@ def _get_nhl_scoreboard(date: str = "") -> list[dict]:
     # Fallback without date
     if not games and date == "":
         espn_data = _fetch_espn_json(f"{ESPN_BASE}/hockey/nhl/scoreboard")
+        if espn_data:
+            games = _parse_nhl_scoreboard(espn_data)
+
+    # If still no games, try tomorrow
+    if not games and date == "":
+        from datetime import timedelta as _td
+        tomorrow = (datetime.now() + _td(days=1)).strftime("%Y%m%d")
+        espn_data = _fetch_espn_json(f"{ESPN_BASE}/hockey/nhl/scoreboard?dates={tomorrow}")
         if espn_data:
             games = _parse_nhl_scoreboard(espn_data)
 
@@ -2005,11 +2021,16 @@ def _get_nba_scoreboard(date: str = "") -> list[dict]:
         logger.info("ESPN NBA returned %d events", len(events))
         games = _parse_nba_scoreboard(espn_data)
 
-    # Fallback without date
+    # If no games today, try tomorrow
     if not games and date == "":
-        espn_data = _fetch_espn_json(f"{ESPN_BASE}/basketball/nba/scoreboard")
+        from datetime import timedelta as _td
+        tomorrow = (datetime.now() + _td(days=1)).strftime("%Y%m%d")
+        logger.info("No NBA games today, checking tomorrow (%s)", tomorrow)
+        espn_data = _fetch_espn_json(f"{ESPN_BASE}/basketball/nba/scoreboard?dates={tomorrow}")
         if espn_data:
             games = _parse_nba_scoreboard(espn_data)
+            if games:
+                logger.info("Found %d NBA games for tomorrow", len(games))
 
     # Fetch NBA odds from The Odds API
     try:
