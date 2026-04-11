@@ -2037,6 +2037,7 @@ def _parse_nba_scoreboard(espn_data: dict) -> list[dict]:
     """Parse ESPN NBA scoreboard response into our standard format with Q1 data."""
     games = []
     for ev in espn_data.get("events", []):
+      try:
         comp = ev.get("competitions", [{}])[0]
         teams = comp.get("competitors", [])
         if len(teams) < 2:
@@ -2047,17 +2048,26 @@ def _parse_nba_scoreboard(espn_data: dict) -> list[dict]:
 
         def parse_team(raw):
             t = raw.get("team", {})
+            if isinstance(t, str):
+                t = {"name": t}
             record = ""
             for r in raw.get("records", []):
+                if not isinstance(r, dict):
+                    continue
                 if r.get("type") == "total":
                     record = r.get("summary", "")
                     break
+            logo = t.get("logo", "")
+            if isinstance(logo, dict):
+                logo = logo.get("href", "")
+            elif isinstance(logo, list) and logo:
+                logo = logo[0].get("href", "") if isinstance(logo[0], dict) else str(logo[0])
             return {
                 "name": t.get("displayName", t.get("name", "")),
                 "abbreviation": t.get("abbreviation", ""),
-                "logo": t.get("logo", ""),
+                "logo": logo if isinstance(logo, str) else "",
                 "record": record,
-                "score": raw.get("score", ""),
+                "score": str(raw.get("score", "")),
                 "winner": raw.get("winner", False),
             }
 
@@ -2118,6 +2128,9 @@ def _parse_nba_scoreboard(espn_data: dict) -> list[dict]:
                 break
 
         games.append(game)
+      except Exception as e:
+        logger.warning("NBA parse event failed: %s", e)
+        continue
 
     return games
 
