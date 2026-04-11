@@ -2070,15 +2070,19 @@ def _parse_nba_scoreboard(espn_data: dict) -> list[dict]:
         home_ls = home_raw.get("linescores", [])
         away_ls = away_raw.get("linescores", [])
         if home_ls and len(home_ls) >= 1:
-            home_q1 = int(home_ls[0].get("value", 0))
+            v = home_ls[0]
+            home_q1 = int(v.get("value", 0)) if isinstance(v, dict) else int(v) if str(v).isdigit() else None
         if away_ls and len(away_ls) >= 1:
-            away_q1 = int(away_ls[0].get("value", 0))
+            v = away_ls[0]
+            away_q1 = int(v.get("value", 0)) if isinstance(v, dict) else int(v) if str(v).isdigit() else None
 
         # Quarter scores for display
         quarters = []
         for i in range(max(len(home_ls), len(away_ls))):
-            hv = int(home_ls[i].get("value", 0)) if i < len(home_ls) else 0
-            av = int(away_ls[i].get("value", 0)) if i < len(away_ls) else 0
+            hval = home_ls[i] if i < len(home_ls) else 0
+            aval = away_ls[i] if i < len(away_ls) else 0
+            hv = int(hval.get("value", 0)) if isinstance(hval, dict) else int(hval) if str(hval).isdigit() else 0
+            av = int(aval.get("value", 0)) if isinstance(aval, dict) else int(aval) if str(aval).isdigit() else 0
             quarters.append({"quarter": i + 1, "home": hv, "away": av})
 
         status_raw = comp.get("status", {})

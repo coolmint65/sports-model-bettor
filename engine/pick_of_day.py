@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 # Bet types that have proven profitable in backtesting
 MLB_ALLOWED_TYPES = {"RL", "ML"}
 NHL_ALLOWED_TYPES = {"O/U", "PL"}
+NBA_ALLOWED_TYPES = {"Q1_SPREAD", "Q1_TOTAL", "Q1_ML"}
 
 MIN_EDGE = 5.0  # Minimum edge % to qualify as POTD
 
@@ -43,6 +44,9 @@ def _get_conn(sport: str):
         return get_conn()
     elif sport == "nhl":
         from .nhl_db import get_conn
+        return get_conn()
+    elif sport == "nba":
+        from .nba_db import get_conn
         return get_conn()
     else:
         raise ValueError(f"Unknown sport: {sport}")
@@ -114,7 +118,7 @@ def select_potd(sport: str, games_with_bets: list[dict]) -> dict | None:
     Returns:
         POTD dict or None if no qualifying picks
     """
-    allowed_types = MLB_ALLOWED_TYPES if sport == "mlb" else NHL_ALLOWED_TYPES
+    allowed_types = {"mlb": MLB_ALLOWED_TYPES, "nhl": NHL_ALLOWED_TYPES, "nba": NBA_ALLOWED_TYPES}.get(sport, MLB_ALLOWED_TYPES)
 
     candidates = []
     for game in games_with_bets:
