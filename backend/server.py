@@ -2120,9 +2120,12 @@ def _parse_nba_scoreboard(espn_data: dict) -> list[dict]:
             },
         }
 
-        # Extract broadcast
+        # Extract broadcast — names can be strings or dicts
         for bc in comp.get("broadcasts", []):
-            names = [n.get("shortName", "") for n in bc.get("names", [])]
+            if not isinstance(bc, dict):
+                continue
+            raw_names = bc.get("names", [])
+            names = [n.get("shortName", str(n)) if isinstance(n, dict) else str(n) for n in raw_names]
             if names:
                 game["broadcast"] = ", ".join(names)
                 break
