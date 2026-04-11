@@ -99,7 +99,7 @@ function FactorRow({ label, awayVal, awayRank, homeVal, homeRank }) {
     if (r <= 27) return '#f59e0b'  // Bottom 10 = yellow
     return '#ef4444'               // Bottom 5 = red
   }
-  const rankLabel = (r) => r ? `${r}${r === 1 ? 'st' : r === 2 ? 'nd' : r === 3 ? 'rd' : 'th'}` : '-'
+  const rankLabel = (r) => r ? ordinal(r) : '-'
 
   return (
     <tr>
@@ -684,6 +684,13 @@ function GoalieImpactCard({ gm, home, away }) {
  * Produce the top reasons that explain the model's lean for this game.
  * Keeps it to at most 4 bullet points, ordered by impact.
  */
+function ordinal(n) {
+  if (!n) return ''
+  const s = ['th','st','nd','rd']
+  const v = n % 100
+  return n + (s[(v-20)%10] || s[v] || s[0])
+}
+
 function getReasoning(pred, home, away) {
   const reasons = []
   const f = pred.factors || {}
@@ -747,12 +754,12 @@ function getReasoning(pred, home, away) {
 
   // Save % rankings
   if (f.home_sv_rank && f.home_sv_rank <= 5) {
-    reasons.push(`${home.abbreviation} has one of the best goaltending units in the league (ranked ${f.home_sv_rank}th)`)
+    reasons.push(`${home.abbreviation} has one of the best goaltending units in the league (ranked ${ordinal(f.home_sv_rank)})`)
   } else if (f.home_sv_rank && f.home_sv_rank >= 28) {
     reasons.push(`${home.abbreviation}'s goaltending has been among the worst in the league this season`)
   }
   if (f.away_sv_rank && f.away_sv_rank <= 5) {
-    reasons.push(`${away.abbreviation} has elite goaltending this season (ranked ${f.away_sv_rank}th)`)
+    reasons.push(`${away.abbreviation} has elite goaltending this season (ranked ${ordinal(f.away_sv_rank)})`)
   } else if (f.away_sv_rank && f.away_sv_rank >= 28) {
     reasons.push(`${away.abbreviation}'s goaltending has been a liability all season`)
   }
@@ -822,7 +829,7 @@ function getReasoning(pred, home, away) {
   // Faceoff dominance
   if (f.home_fo_rank && f.away_fo_rank) {
     if (f.home_fo_rank <= 5 && f.away_fo_rank >= 25) {
-      reasons.push(`${home.abbreviation} dominates the faceoff circle (ranked ${f.home_fo_rank}th) which means more puck possession`)
+      reasons.push(`${home.abbreviation} dominates the faceoff circle (ranked ${ordinal(f.home_fo_rank)}) which means more puck possession`)
     } else if (f.away_fo_rank <= 5 && f.home_fo_rank >= 25) {
       reasons.push(`${away.abbreviation} wins faceoffs at an elite rate, giving them a possession edge`)
     }

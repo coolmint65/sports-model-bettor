@@ -208,7 +208,7 @@ def _build_reasoning(pick: dict, sport: str) -> str:
     parts.append(f"Highest-EV {bet_type} play on the {sport.upper()} slate today.")
     parts.append(f"Model gives {pick_display} a {prob * 100:.1f}% probability "
                  f"vs market implied ({_implied_from_odds(pick.get('odds', 0)) * 100:.1f}%).")
-    parts.append(f"{edge:+.1f}% edge — {strength} conviction.")
+    parts.append(f"{edge:+.1f}% edge, {strength} conviction.")
     parts.append(f"Kelly suggests {kelly}% of bankroll.")
     return " ".join(parts)
 
