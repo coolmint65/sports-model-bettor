@@ -617,6 +617,28 @@ def compute_p1_stats(team_id: int, season: int) -> dict | None:
     return stats
 
 
+def get_team_games_in_range(team_id: int, start_date: str, end_date: str) -> list[dict]:
+    """Get all finished games for a team between two dates (inclusive).
+
+    Each row includes home_abbr/away_abbr for convenience.
+    Dates are ISO strings like '2026-04-01'.
+    """
+    conn = get_conn()
+    rows = conn.execute("""
+        SELECT g.*,
+               ht.abbreviation AS home_abbr, ht.name AS home_name,
+               at.abbreviation AS away_abbr, at.name AS away_name
+        FROM nhl_games g
+        JOIN nhl_teams ht ON g.home_team_id = ht.id
+        JOIN nhl_teams at ON g.away_team_id = at.id
+        WHERE (g.home_team_id = ? OR g.away_team_id = ?)
+          AND g.date >= ? AND g.date <= ?
+          AND g.status = 'final'
+        ORDER BY g.date ASC
+    """, (team_id, team_id, start_date, end_date)).fetchall()
+    return [dict(r) for r in rows]
+
+
 def get_p1_stats(team_id: int, season: int) -> dict | None:
     """Retrieve cached P1 stats for a team/season from nhl_p1_stats."""
     conn = get_conn()

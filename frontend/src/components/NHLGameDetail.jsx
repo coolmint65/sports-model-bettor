@@ -174,23 +174,63 @@ function NHLPredictionResults({ data, odds, home, away }) {
       {/* Projected Outcome */}
       <div className="result-card" style={{minHeight: 260}}>
         <h2>Projected Outcome</h2>
-        <div className="score-display">
-          <div className="score-team">
-            <div className="name">{home.name}</div>
-            <div className="record">{home.record}</div>
-            <div className={`score ${homeWins ? 'winner' : ''}`}>{Math.round(es.home)}</div>
-          </div>
-          <div className="score-vs">-</div>
-          <div className="score-team">
-            <div className="name">{away.name}</div>
-            <div className="record">{away.record}</div>
-            <div className={`score ${!homeWins ? 'winner' : ''}`}>{Math.round(es.away)}</div>
-          </div>
-        </div>
+        {(() => {
+          // Hockey doesn't end in draws. If scores round equal, show OT winner.
+          let homeScore = Math.round(es.home)
+          let awayScore = Math.round(es.away)
+          const goesToOT = homeScore === awayScore
+          const regDrawPct = d.regulation_draw_prob || 0
 
-        <div style={{textAlign:'center',color:'#64748b',fontSize:'0.75rem',marginTop:-8,marginBottom:8}}>
-          ~{(es.home + es.away).toFixed(1)} total goals expected
-        </div>
+          if (goesToOT) {
+            // Break the tie: give the OT goal to the team with higher win prob
+            if (wp.home >= wp.away) {
+              homeScore += 1
+            } else {
+              awayScore += 1
+            }
+          }
+          const homeWinsDisplay = homeScore > awayScore
+
+          return (
+            <>
+              <div className="score-display">
+                <div className="score-team">
+                  <div className="name">{home.name}</div>
+                  <div className="record">{home.record}</div>
+                  <div className={`score ${homeWinsDisplay ? 'winner' : ''}`}>{homeScore}</div>
+                </div>
+                <div className="score-vs">-</div>
+                <div className="score-team">
+                  <div className="name">{away.name}</div>
+                  <div className="record">{away.record}</div>
+                  <div className={`score ${!homeWinsDisplay ? 'winner' : ''}`}>{awayScore}</div>
+                </div>
+              </div>
+
+              {goesToOT && (
+                <div style={{textAlign:'center',marginTop:-6,marginBottom:6}}>
+                  <span style={{
+                    display:'inline-block',
+                    padding:'2px 10px',
+                    borderRadius:6,
+                    fontSize:'0.72rem',
+                    fontWeight:600,
+                    background:'rgba(251,191,36,0.10)',
+                    color:'#fbbf24',
+                    border:'1px solid rgba(251,191,36,0.20)',
+                  }}>
+                    Projected to go to OT/SO
+                  </span>
+                </div>
+              )}
+
+              <div style={{textAlign:'center',color:'#64748b',fontSize:'0.75rem',marginTop: goesToOT ? 2 : -8,marginBottom:8}}>
+                ~{(es.home + es.away).toFixed(1)} regulation goals expected
+                {regDrawPct > 0.10 && ` (${pct(regDrawPct)} chance of OT)`}
+              </div>
+            </>
+          )
+        })()}
 
         <div className="prob-bar-container">
           <div className="prob-bar-labels">
@@ -202,12 +242,6 @@ function NHLPredictionResults({ data, odds, home, away }) {
             <div className="away" style={{ width: pct(wp.away) }} />
           </div>
         </div>
-
-        {d.regulation_draw_prob > 0 && (
-          <div style={{textAlign:'center',color:'#64748b',fontSize:'0.75rem',marginTop:4}}>
-            Regulation draw: {pct(d.regulation_draw_prob)} (goes to OT)
-          </div>
-        )}
 
         <div className="key-stats">
           <div className="key-stat">
@@ -374,26 +408,61 @@ function NHLPredictionResults({ data, odds, home, away }) {
       {d.periods && d.periods.length > 0 && (
         <div className="result-card">
           <h2>Period Breakdown</h2>
-          <table className="standings-table">
+          <table className="standings-table" style={{fontSize:'0.85rem'}}>
             <thead>
               <tr>
-                <th>Period</th>
-                <th>{away.abbreviation}</th>
+                <th style={{textAlign:'left'}}>Period</th>
                 <th>{home.abbreviation}</th>
+                <th>{away.abbreviation}</th>
                 <th>Total</th>
+                <th>Scoring %</th>
               </tr>
             </thead>
             <tbody>
-              {d.periods.map(p => (
-                <tr key={p.period}>
-                  <td style={{fontWeight:600}}>{p.period}</td>
-                  <td>{p.away.toFixed(1)}</td>
-                  <td>{p.home.toFixed(1)}</td>
-                  <td>{p.total.toFixed(1)}</td>
-                </tr>
-              ))}
+              {d.periods.map(p => {
+                const scoringPct = (es.home + es.away) > 0
+                  ? (p.total / (es.home + es.away)) * 100
+                  : 33
+                const homeLeads = p.home > p.away
+                return (
+                  <tr key={p.period}>
+                    <td style={{fontWeight:600,textAlign:'left'}}>
+                      {p.period === 'P1' ? '1st Period' : p.period === 'P2' ? '2nd Period' : '3rd Period'}
+                    </td>
+                    <td style={{color: homeLeads ? '#34d399' : '#cbd5e1', fontWeight: homeLeads ? 600 : 400}}>
+                      {p.home.toFixed(2)}
+                    </td>
+                    <td style={{color: !homeLeads ? '#34d399' : '#cbd5e1', fontWeight: !homeLeads ? 600 : 400}}>
+                      {p.away.toFixed(2)}
+                    </td>
+                    <td style={{fontWeight:600}}>{p.total.toFixed(2)}</td>
+                    <td style={{color:'#64748b'}}>{scoringPct.toFixed(0)}%</td>
+                  </tr>
+                )
+              })}
+              <tr style={{borderTop:'1px solid #334155',fontWeight:700}}>
+                <td style={{textAlign:'left'}}>Regulation</td>
+                <td>{es.home.toFixed(2)}</td>
+                <td>{es.away.toFixed(2)}</td>
+                <td>{(es.home + es.away).toFixed(2)}</td>
+                <td></td>
+              </tr>
             </tbody>
           </table>
+          {d.regulation_draw_prob > 0.05 && (
+            <div style={{
+              marginTop:10,
+              padding:'6px 12px',
+              background:'rgba(251,191,36,0.06)',
+              border:'1px solid rgba(251,191,36,0.15)',
+              borderRadius:6,
+              fontSize:'0.78rem',
+              color:'#fbbf24',
+              textAlign:'center',
+            }}>
+              {pct(d.regulation_draw_prob)} chance this game is tied after regulation and goes to OT
+            </div>
+          )}
         </div>
       )}
 
@@ -401,15 +470,30 @@ function NHLPredictionResults({ data, odds, home, away }) {
       {d.h2h && d.h2h.games > 0 && (
         <div className="result-card">
           <h2>Head to Head (3yr)</h2>
-          <div className="key-stats">
+          <div className="key-stats" style={{gap:24}}>
             <div className="key-stat">
-              <span className="key-value">{d.h2h.team1_wins}-{d.h2h.team2_wins}</span>
-              <span className="key-label">Record</span>
+              <span className="key-value" style={{fontSize:'1.1rem'}}>{home.abbreviation}</span>
+              <span className="key-label" style={{fontSize:'0.7rem',marginTop:2}}>
+                {d.h2h.team1_wins} {d.h2h.team1_wins === 1 ? 'Win' : 'Wins'}
+              </span>
             </div>
             <div className="key-stat">
-              <span className="key-value">{d.h2h.games}</span>
-              <span className="key-label">Games</span>
+              <span className="key-value" style={{color:'#64748b',fontSize:'0.85rem'}}>vs</span>
             </div>
+            <div className="key-stat">
+              <span className="key-value" style={{fontSize:'1.1rem'}}>{away.abbreviation}</span>
+              <span className="key-label" style={{fontSize:'0.7rem',marginTop:2}}>
+                {d.h2h.team2_wins} {d.h2h.team2_wins === 1 ? 'Win' : 'Wins'}
+              </span>
+            </div>
+          </div>
+          <div style={{textAlign:'center',color:'#64748b',fontSize:'0.72rem',marginTop:8}}>
+            {d.h2h.games} meetings over the last 3 seasons
+            {d.h2h.team1_wins > d.h2h.team2_wins
+              ? ` \u2014 ${home.abbreviation} leads the series`
+              : d.h2h.team2_wins > d.h2h.team1_wins
+                ? ` \u2014 ${away.abbreviation} leads the series`
+                : ' \u2014 Even'}
           </div>
         </div>
       )}

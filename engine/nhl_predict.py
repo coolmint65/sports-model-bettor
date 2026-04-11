@@ -20,6 +20,33 @@ LEAGUE = "NHL"
 HOME_EDGE = 0.15  # ~0.15 goal home-ice advantage
 MAX_GOALS = 10
 
+# ── NHL division & conference mappings (for Factor 7) ──
+_NHL_DIVISIONS = {
+    # Atlantic
+    "BOS": ("Atlantic", "Eastern"), "BUF": ("Atlantic", "Eastern"),
+    "DET": ("Atlantic", "Eastern"), "FLA": ("Atlantic", "Eastern"),
+    "MTL": ("Atlantic", "Eastern"), "OTT": ("Atlantic", "Eastern"),
+    "TBL": ("Atlantic", "Eastern"), "TOR": ("Atlantic", "Eastern"),
+    # Metropolitan
+    "CAR": ("Metropolitan", "Eastern"), "CBJ": ("Metropolitan", "Eastern"),
+    "NJD": ("Metropolitan", "Eastern"), "NYI": ("Metropolitan", "Eastern"),
+    "NYR": ("Metropolitan", "Eastern"), "PHI": ("Metropolitan", "Eastern"),
+    "PIT": ("Metropolitan", "Eastern"), "WSH": ("Metropolitan", "Eastern"),
+    # Central
+    "CHI": ("Central", "Western"), "COL": ("Central", "Western"),
+    "DAL": ("Central", "Western"), "MIN": ("Central", "Western"),
+    "NSH": ("Central", "Western"), "STL": ("Central", "Western"),
+    "UTA": ("Central", "Western"), "WPG": ("Central", "Western"),
+    # Pacific
+    "ANA": ("Pacific", "Western"), "CGY": ("Pacific", "Western"),
+    "EDM": ("Pacific", "Western"), "LAK": ("Pacific", "Western"),
+    "SJS": ("Pacific", "Western"), "SEA": ("Pacific", "Western"),
+    "VAN": ("Pacific", "Western"), "VGK": ("Pacific", "Western"),
+}
+
+# Empty net goal probability constant (Factor 9)
+EN_GOAL_PROB = 0.08  # ~8% of all NHL goals are empty netters
+
 
 def poisson(lam: float, k: int) -> float:
     if lam <= 0:
@@ -109,6 +136,182 @@ def _is_late_season() -> bool:
     """Last 2 weeks of regular season -- teams fighting for spots or resting."""
     now = datetime.now()
     return now.month == 4 and now.day < 17
+
+
+# ── Factor 8: Blowout tendency ──────────────────────────────
+def _compute_blowout_tendency(team_abbr: str) -> dict:
+    """What percentage of a team's wins/losses are by 2+ goals?
+
+    Uses the DB if available. Returns dict with cover rates for -1.5 and +1.5.
+    League average is roughly 35% for -1.5 (wins by 2+).
+    """
+    result = {"wins_by_2plus_pct": 0.0, "losses_by_2plus_pct": 0.0, "games": 0}
+    try:
+        from .nhl_db import get_nhl_team_by_abbr, get_conn
+        team = get_nhl_team_by_abbr(team_abbr)
+        if not team:
+            return result
+        team_id = team["id"]
+        conn = get_conn()
+        games = conn.execute("""
+            SELECT home_score, away_score, home_team_id FROM nhl_games
+            WHERE (home_team_id = ? OR away_team_id = ?) AND status = 'final'
+            ORDER BY date DESC LIMIT 30
+        """, (team_id, team_id)).fetchall()
+        if not games:
+            return result
+
+        wins = 0
+        wins_by_2 = 0
+        losses = 0
+        losses_by_2 = 0
+        for g in games:
+            h_score, a_score, h_tid = g[0] or 0, g[1] or 0, g[2]
+            is_home = (h_tid == team_id)
+            team_score = h_score if is_home else a_score
+            opp_score = a_score if is_home else h_score
+            if team_score > opp_score:
+                wins += 1
+                if team_score - opp_score >= 2:
+                    wins_by_2 += 1
+            elif opp_score > team_score:
+                losses += 1
+                if opp_score - team_score >= 2:
+                    losses_by_2 += 1
+
+        result["games"] = len(games)
+        if wins > 0:
+            result["wins_by_2plus_pct"] = round(wins_by_2 / wins, 3)
+        if losses > 0:
+            result["losses_by_2plus_pct"] = round(losses_by_2 / losses, 3)
+    except Exception as e:
+        logger.debug("Blowout tendency unavailable: %s", e)
+    return result
+
+
+# ── Factor 10: Overtime tendencies ──────────────────────────
+def _compute_ot_tendency(team_abbr: str) -> dict:
+    """Compute OT win tendency from standings data.
+
+    Uses otLosses from the live standings. A team with many OT losses relative
+    to total games is worse in OT. Returns a multiplier for the OT split.
+    League average OTL rate is ~6% of games.
+    """
+    result = {"ot_win_rate": 0.50, "otl_rate": 0.0, "ot_split_adj": 0.52}
+    try:
+        _ensure_standings_loaded()
+        if not _standings_raw_cache:
+            return result
+        for entry in _standings_raw_cache.get("standings", []):
+            abbr_obj = entry.get("teamAbbrev", {})
+            abbr = abbr_obj.get("default", "") if isinstance(abbr_obj, dict) else str(abbr_obj)
+            if abbr != team_abbr:
+                continue
+
+            wins = entry.get("wins", 0)
+            losses = entry.get("losses", 0)
+            otl = entry.get("otLosses", 0)
+            ot_wins = entry.get("otWins", 0)  # Not always present
+            gp = wins + losses + otl
+            if gp == 0:
+                return result
+
+            result["otl_rate"] = round(otl / gp, 3)
+
+            # OT games = OT wins + OT losses
+            # If otWins is not available, estimate from shootout data
+            if ot_wins > 0:
+                ot_games = ot_wins + otl
+                if ot_games > 0:
+                    result["ot_win_rate"] = round(ot_wins / ot_games, 3)
+            else:
+                # Estimate: league average OTL rate is ~6%. If a team is above
+                # that, they're bad in OT.
+                league_avg_otl_rate = 0.06
+                if result["otl_rate"] > league_avg_otl_rate * 1.5:
+                    result["ot_win_rate"] = 0.40  # Bad in OT
+                elif result["otl_rate"] < league_avg_otl_rate * 0.5:
+                    result["ot_win_rate"] = 0.60  # Good in OT
+                else:
+                    result["ot_win_rate"] = 0.50
+
+            # Convert OT win rate to the p_draw split multiplier
+            # Default is 0.52 for home, we adjust based on OT prowess
+            result["ot_split_adj"] = round(result["ot_win_rate"], 3)
+            break
+    except Exception as e:
+        logger.debug("OT tendency unavailable: %s", e)
+    return result
+
+
+# ── Factor 12: Corsi/Fenwick proxy ──────────────────────────
+def _compute_corsi_proxy(team_abbr: str) -> dict:
+    """Compute Corsi proxy from DB game data (shots + blocks).
+
+    True Corsi = shots on goal + blocked shots + missed shots.
+    We only have shots and blocks, so Corsi proxy = shots + blocks.
+    Returns the team's Corsi-for % (CF%) — share of shot attempts.
+    """
+    result = {"corsi_for_pct": 0.50, "games": 0, "source": "none"}
+    try:
+        # First check if nhl_team_stats has corsi_pct populated
+        from .nhl_db import get_nhl_team_by_abbr, get_conn
+        team = get_nhl_team_by_abbr(team_abbr)
+        if not team:
+            return result
+        team_id = team["id"]
+        conn = get_conn()
+
+        now = datetime.now()
+        season = now.year if now.month >= 9 else now.year - 1
+        season_int = int(f"{season}{season + 1}")
+
+        row = conn.execute(
+            "SELECT corsi_pct, fenwick_pct FROM nhl_team_stats WHERE team_id = ? AND season = ?",
+            (team_id, season_int)
+        ).fetchone()
+        if row and row[0] is not None:
+            result["corsi_for_pct"] = round(row[0], 3)
+            result["source"] = "team_stats"
+            return result
+
+        # Derive from recent game data: shots + blocks
+        games = conn.execute("""
+            SELECT home_shots, away_shots, home_blocks, away_blocks, home_team_id
+            FROM nhl_games
+            WHERE (home_team_id = ? OR away_team_id = ?) AND status = 'final'
+            ORDER BY date DESC LIMIT 20
+        """, (team_id, team_id)).fetchall()
+        if not games:
+            return result
+
+        total_cf = 0
+        total_ca = 0
+        for g in games:
+            h_shots = g[0] or 0
+            a_shots = g[1] or 0
+            h_blocks = g[2] or 0
+            a_blocks = g[3] or 0
+            h_tid = g[4]
+            is_home = (h_tid == team_id)
+            # Corsi proxy: team shots + opponent blocked (those were our attempts)
+            if is_home:
+                cf = h_shots + a_blocks  # our shots + shots they blocked
+                ca = a_shots + h_blocks  # their shots + shots we blocked
+            else:
+                cf = a_shots + h_blocks
+                ca = h_shots + a_blocks
+            total_cf += cf
+            total_ca += ca
+
+        total = total_cf + total_ca
+        if total > 0:
+            result["corsi_for_pct"] = round(total_cf / total, 3)
+            result["games"] = len(games)
+            result["source"] = "derived"
+    except Exception as e:
+        logger.debug("Corsi proxy unavailable: %s", e)
+    return result
 
 
 # ── Unified NHL standings cache ──────────────────────────────
@@ -1073,6 +1276,200 @@ def predict_matchup(home_key: str, away_key: str,
         "away_factor": round(a_b2b, 4),
     }
 
+    # ── Granular factors (Factors 1-12) ──────────────────────────
+    # Each factor applies a SMALL adjustment (±1-5% max individually).
+    # Factors 1-6 come from the nhl_granular module (imported in try/except).
+    # Factors 7-12 are computed directly here.
+    # All adjustments COMPOUND with existing adjustments — they do not replace.
+    granular_data = {}
+
+    # --- Factors 1-6: External granular module ---
+    try:
+        from .nhl_granular import (
+            compute_schedule_fatigue,
+            get_recent_travel,
+            compute_goalie_workload,
+            compute_special_teams_trend,
+            compute_penalty_tendency,
+            compute_shooting_regression,
+        )
+
+        game_date = datetime.now().strftime("%Y-%m-%d")
+        h_abbr_g = home.get("abbreviation", "")
+        a_abbr_g = away.get("abbreviation", "")
+
+        # Factor 1: Schedule fatigue (stacks with B2B)
+        try:
+            h_fatigue = compute_schedule_fatigue(h_abbr_g, game_date)
+            a_fatigue = compute_schedule_fatigue(a_abbr_g, game_date)
+            if isinstance(h_fatigue, dict) and h_fatigue.get("fatigue_score") is not None:
+                fatigue_mult = max(0.95, min(1.0, h_fatigue["fatigue_score"]))
+                home_xg *= fatigue_mult
+                granular_data["home_fatigue"] = h_fatigue
+            if isinstance(a_fatigue, dict) and a_fatigue.get("fatigue_score") is not None:
+                fatigue_mult = max(0.95, min(1.0, a_fatigue["fatigue_score"]))
+                away_xg *= fatigue_mult
+                granular_data["away_fatigue"] = a_fatigue
+        except Exception as e:
+            logger.debug("Factor 1 (schedule fatigue) failed: %s", e)
+
+        # Factor 2: Travel distance
+        try:
+            h_travel = get_recent_travel(h_abbr_g, game_date)
+            a_travel = get_recent_travel(a_abbr_g, game_date)
+            if isinstance(h_travel, dict) and h_travel.get("total_km") is not None:
+                # Tiny impact: cross-country trip (~5000km) -> ~5% penalty max
+                travel_adj = max(0.95, 1.0 - (h_travel["total_km"] / 100000))
+                home_xg *= travel_adj
+                granular_data["home_travel"] = h_travel
+            if isinstance(a_travel, dict) and a_travel.get("total_km") is not None:
+                travel_adj = max(0.95, 1.0 - (a_travel["total_km"] / 100000))
+                away_xg *= travel_adj
+                granular_data["away_travel"] = a_travel
+        except Exception as e:
+            logger.debug("Factor 2 (travel) failed: %s", e)
+
+        # Factor 3: Goalie workload
+        try:
+            h_goalie_wl = compute_goalie_workload(h_abbr_g, game_date)
+            a_goalie_wl = compute_goalie_workload(a_abbr_g, game_date)
+            if isinstance(h_goalie_wl, dict) and h_goalie_wl.get("workload_factor") is not None:
+                # Tired goalie concedes more — boost opponent xG
+                wl_factor = max(0.97, min(1.03, h_goalie_wl["workload_factor"]))
+                away_xg *= wl_factor
+                granular_data["home_goalie_workload"] = h_goalie_wl
+            if isinstance(a_goalie_wl, dict) and a_goalie_wl.get("workload_factor") is not None:
+                wl_factor = max(0.97, min(1.03, a_goalie_wl["workload_factor"]))
+                home_xg *= wl_factor
+                granular_data["away_goalie_workload"] = a_goalie_wl
+        except Exception as e:
+            logger.debug("Factor 3 (goalie workload) failed: %s", e)
+
+        # Factor 4: Special teams trend (PP/PK trending up/down)
+        try:
+            h_st_trend = compute_special_teams_trend(h_abbr_g, game_date)
+            a_st_trend = compute_special_teams_trend(a_abbr_g, game_date)
+            if isinstance(h_st_trend, dict) and h_st_trend.get("pp_trend_adj") is not None:
+                # Half a standard PP adjustment
+                home_xg += h_st_trend["pp_trend_adj"] * 0.5
+                granular_data["home_pp_trend"] = h_st_trend
+            if isinstance(a_st_trend, dict) and a_st_trend.get("pp_trend_adj") is not None:
+                away_xg += a_st_trend["pp_trend_adj"] * 0.5
+                granular_data["away_pp_trend"] = a_st_trend
+        except Exception as e:
+            logger.debug("Factor 4 (special teams trend) failed: %s", e)
+
+        # Factor 5: Penalty tendency (cross-referenced with opponent PP)
+        try:
+            h_pen = compute_penalty_tendency(h_abbr_g, game_date)
+            a_pen = compute_penalty_tendency(a_abbr_g, game_date)
+            if isinstance(a_pen, dict) and isinstance(h_pen, dict):
+                # If away team is undisciplined (high PIMs) and home team has good PP,
+                # boost home xG because they'll get more PP opportunities
+                a_pim_per_game = a_pen.get("pim_per_game", 0)
+                h_pp_pct = hs.get("pp_pct", league_pp)
+                if a_pim_per_game >= 10 and h_pp_pct and h_pp_pct > 0.22:
+                    # Undisciplined opponent + good PP = more goals
+                    pen_boost = min(0.05, (a_pim_per_game - 8) * 0.005 * (h_pp_pct / 0.20))
+                    home_xg *= (1 + pen_boost)
+
+                h_pim_per_game = h_pen.get("pim_per_game", 0)
+                a_pp_pct = as_.get("pp_pct", league_pp)
+                if h_pim_per_game >= 10 and a_pp_pct and a_pp_pct > 0.22:
+                    pen_boost = min(0.05, (h_pim_per_game - 8) * 0.005 * (a_pp_pct / 0.20))
+                    away_xg *= (1 + pen_boost)
+
+                granular_data["home_penalty_tendency"] = h_pen
+                granular_data["away_penalty_tendency"] = a_pen
+        except Exception as e:
+            logger.debug("Factor 5 (penalty tendency) failed: %s", e)
+
+        # Factor 6: Shooting regression
+        try:
+            h_shooting_reg = compute_shooting_regression(h_abbr_g, game_date)
+            a_shooting_reg = compute_shooting_regression(a_abbr_g, game_date)
+            if isinstance(h_shooting_reg, dict) and h_shooting_reg.get("regression_factor") is not None:
+                reg_factor = max(0.95, min(1.05, h_shooting_reg["regression_factor"]))
+                home_xg *= reg_factor
+                granular_data["home_shooting_regression"] = h_shooting_reg
+            if isinstance(a_shooting_reg, dict) and a_shooting_reg.get("regression_factor") is not None:
+                reg_factor = max(0.95, min(1.05, a_shooting_reg["regression_factor"]))
+                away_xg *= reg_factor
+                granular_data["away_shooting_regression"] = a_shooting_reg
+        except Exception as e:
+            logger.debug("Factor 6 (shooting regression) failed: %s", e)
+
+    except Exception as e:
+        logger.debug("Granular factors module (1-6) unavailable: %s", e)
+
+    # --- Factor 7: Division/Conference familiarity ---
+    try:
+        h_abbr_div = home.get("abbreviation", "")
+        a_abbr_div = away.get("abbreviation", "")
+        h_div_info = _NHL_DIVISIONS.get(h_abbr_div, ("", ""))
+        a_div_info = _NHL_DIVISIONS.get(a_abbr_div, ("", ""))
+        h_div, h_conf = h_div_info
+        a_div, a_conf = a_div_info
+
+        same_division = bool(h_div and a_div and h_div == a_div)
+        same_conference = bool(h_conf and a_conf and h_conf == a_conf)
+
+        # Division rivals play 4x/year — more familiarity means tighter games
+        # Cross-conference teams play 2x/year — more variance
+        if same_division:
+            # Same division: games are tighter, reduce xG spread slightly
+            # (the better team has less edge due to familiarity)
+            xg_gap = home_xg - away_xg
+            if abs(xg_gap) > 0.3:
+                home_xg -= xg_gap * 0.02  # Pull 2% toward the mean
+                away_xg += xg_gap * 0.02
+        elif not same_conference:
+            # Cross-conference: less familiarity, slight away disadvantage
+            away_xg *= 0.99  # 1% away penalty for unfamiliar arena/style
+
+        granular_data["division_match"] = same_division
+        granular_data["conference_match"] = same_conference
+        granular_data["home_division"] = h_div
+        granular_data["away_division"] = a_div
+    except Exception as e:
+        logger.debug("Factor 7 (division familiarity) failed: %s", e)
+
+    # --- Factor 8: Blowout tendency ---
+    try:
+        h_blowout = _compute_blowout_tendency(home.get("abbreviation", ""))
+        a_blowout = _compute_blowout_tendency(away.get("abbreviation", ""))
+        granular_data["home_blowout_tendency"] = h_blowout
+        granular_data["away_blowout_tendency"] = a_blowout
+        # Actual puck line adjustment applied after Poisson matrix below
+    except Exception as e:
+        logger.debug("Factor 8 (blowout tendency) failed: %s", e)
+
+    # --- Factor 10: OT tendency ---
+    h_ot = {"ot_win_rate": 0.50, "ot_split_adj": 0.52}
+    a_ot = {"ot_win_rate": 0.50, "ot_split_adj": 0.52}
+    try:
+        h_ot = _compute_ot_tendency(home.get("abbreviation", ""))
+        a_ot = _compute_ot_tendency(away.get("abbreviation", ""))
+        granular_data["home_ot_tendency"] = h_ot
+        granular_data["away_ot_tendency"] = a_ot
+    except Exception as e:
+        logger.debug("Factor 10 (OT tendency) failed: %s", e)
+
+    # --- Factor 12: Corsi/Fenwick proxy ---
+    try:
+        h_corsi = _compute_corsi_proxy(home.get("abbreviation", ""))
+        a_corsi = _compute_corsi_proxy(away.get("abbreviation", ""))
+        # Corsi-for% above 0.52 is good, below 0.48 is bad
+        # Apply a small xG adjustment for shot attempt dominance
+        h_cf_adj = (h_corsi.get("corsi_for_pct", 0.50) - 0.50) * 0.10
+        a_cf_adj = (a_corsi.get("corsi_for_pct", 0.50) - 0.50) * 0.10
+        home_xg *= max(0.97, min(1.03, 1 + h_cf_adj))
+        away_xg *= max(0.97, min(1.03, 1 + a_cf_adj))
+        granular_data["home_corsi"] = h_corsi
+        granular_data["away_corsi"] = a_corsi
+    except Exception as e:
+        logger.debug("Factor 12 (Corsi proxy) failed: %s", e)
+
     # Floor
     home_xg = max(home_xg, 1.0)
     away_xg = max(away_xg, 1.0)
@@ -1138,9 +1535,28 @@ def predict_matchup(home_key: str, away_key: str,
     p_away = sum(matrix[h][a] for h in range(MAX_GOALS + 1) for a in range(MAX_GOALS + 1) if a > h)
     p_draw = sum(matrix[i][i] for i in range(MAX_GOALS + 1))
 
-    # In NHL, ties go to OT — split ~50/50 with slight home edge
-    p_home_ml = p_home + p_draw * 0.52
-    p_away_ml = p_away + p_draw * 0.48
+    # In NHL, ties go to OT — split based on OT tendencies (Factor 10)
+    # Default is 52/48 home/away. Adjust based on each team's OT prowess.
+    # h_ot["ot_split_adj"] is the home team's OT win rate (0.0–1.0)
+    # a_ot["ot_split_adj"] is the away team's OT win rate (0.0–1.0)
+    # Blend them: if home is good in OT (0.60) and away is bad (0.40),
+    # home gets more of the draw probability.
+    h_ot_rate = h_ot.get("ot_split_adj", 0.52)
+    a_ot_rate = a_ot.get("ot_split_adj", 0.52)
+    # Normalize so they sum to 1.0
+    ot_total = h_ot_rate + (1 - a_ot_rate)
+    if ot_total > 0:
+        home_ot_share = h_ot_rate / ot_total
+    else:
+        home_ot_share = 0.52
+    # Clamp to reasonable range (45-60% for home)
+    home_ot_share = max(0.45, min(0.60, home_ot_share))
+    away_ot_share = 1.0 - home_ot_share
+
+    p_home_ml = p_home + p_draw * home_ot_share
+    p_away_ml = p_away + p_draw * away_ot_share
+    granular_data["ot_split_used"] = {"home": round(home_ot_share, 3),
+                                      "away": round(away_ot_share, 3)}
 
     # ── Puck line (±1.5) ──
     p_home_m15 = sum(matrix[h][a] for h in range(MAX_GOALS + 1)
@@ -1150,6 +1566,68 @@ def predict_matchup(home_key: str, away_key: str,
     p_away_m15 = sum(matrix[h][a] for h in range(MAX_GOALS + 1)
                      for a in range(MAX_GOALS + 1) if a - h >= 2)
     p_home_p15 = 1 - p_away_m15
+
+    # ── Factor 9: Empty net goal adjustment for puck line ──
+    # When a team is trailing by 1 in the last 2 minutes, they pull their
+    # goalie. ~40% of those situations result in an EN goal for the winning
+    # team, turning a 1-goal lead into 2+. This boosts the favorite's -1.5.
+    # The probability of a 1-goal game going to EN situation is roughly the
+    # probability of a 1-goal margin near game end, which correlates with
+    # the regulation-time 1-goal win probability.
+    en_adj = 0.0
+    p_home_1goal = sum(matrix[h][a] for h in range(MAX_GOALS + 1)
+                       for a in range(MAX_GOALS + 1) if h - a == 1)
+    p_away_1goal = sum(matrix[h][a] for h in range(MAX_GOALS + 1)
+                       for a in range(MAX_GOALS + 1) if a - h == 1)
+    # ~40% of 1-goal leads in last 2 min see EN goal → 2-goal margin
+    # But only ~30% of games are within 1 goal at 2-min mark when leading by 1
+    en_conversion = 0.12  # ~30% trailing by 1 * 40% EN goal chance
+    en_home_boost = p_home_1goal * en_conversion
+    en_away_boost = p_away_1goal * en_conversion
+
+    # Clamp EN adjustment to max 4%
+    en_home_boost = min(0.04, en_home_boost)
+    en_away_boost = min(0.04, en_away_boost)
+
+    p_home_m15 += en_home_boost
+    p_away_p15 -= en_home_boost
+    p_away_m15 += en_away_boost
+    p_home_p15 -= en_away_boost
+
+    en_adj = round(en_home_boost, 4)
+    granular_data["en_goal_adj"] = {
+        "home_m15_boost": round(en_home_boost, 4),
+        "away_m15_boost": round(en_away_boost, 4),
+    }
+
+    # ── Factor 8: Blowout tendency puck line adjustment ──
+    # If a team covers -1.5 at above-average rate (>35%), boost their -1.5 prob
+    try:
+        h_blowout = granular_data.get("home_blowout_tendency", {})
+        a_blowout = granular_data.get("away_blowout_tendency", {})
+        league_avg_blowout = 0.35  # ~35% of wins are by 2+
+
+        if h_blowout.get("wins_by_2plus_pct", 0) > league_avg_blowout and h_blowout.get("games", 0) >= 10:
+            excess = h_blowout["wins_by_2plus_pct"] - league_avg_blowout
+            blowout_adj = min(0.03, excess * 0.15)  # Max 3% adjustment
+            p_home_m15 += blowout_adj
+            p_away_p15 -= blowout_adj
+            granular_data["home_blowout_pl_adj"] = round(blowout_adj, 4)
+
+        if a_blowout.get("wins_by_2plus_pct", 0) > league_avg_blowout and a_blowout.get("games", 0) >= 10:
+            excess = a_blowout["wins_by_2plus_pct"] - league_avg_blowout
+            blowout_adj = min(0.03, excess * 0.15)
+            p_away_m15 += blowout_adj
+            p_home_p15 -= blowout_adj
+            granular_data["away_blowout_pl_adj"] = round(blowout_adj, 4)
+    except Exception as e:
+        logger.debug("Factor 8 puck line adjustment failed: %s", e)
+
+    # Clamp puck line probabilities to valid range
+    p_home_m15 = max(0.0, min(1.0, p_home_m15))
+    p_away_p15 = max(0.0, min(1.0, p_away_p15))
+    p_away_m15 = max(0.0, min(1.0, p_away_m15))
+    p_home_p15 = max(0.0, min(1.0, p_home_p15))
 
     # ── Totals (must account for OT goal) ──
     # NHL O/U includes overtime. Tied games go to OT where exactly 1 more
@@ -1377,6 +1855,7 @@ def predict_matchup(home_key: str, away_key: str,
         "season_context": season_context,
         "injuries": injury_data,
         "rest": rest_data,
+        "granular": granular_data,
     }
 
 
@@ -1554,5 +2033,6 @@ def generate_nhl_picks_with_context(home_key: str, away_key: str,
         "expected_score": pred.get("expected_score", {}),
         "factors": pred.get("factors", {}),
         "season_context": pred.get("season_context", {}),
+        "granular": pred.get("granular", {}),
     }
     return picks, context
