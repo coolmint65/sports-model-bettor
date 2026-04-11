@@ -444,7 +444,9 @@ if __name__ == "__main__":
         result = settle_picks()
         print(f"Settled: {result.get('settled', 0)} "
               f"({result.get('wins', 0)}W-{result.get('losses', 0)}L)")
-        print(f"Pending: {result['pending_remaining']}")
+        print(f"Pending: {result.get('pending_remaining', 0)}")
+        if result.get("message"):
+            print(f"  {result['message']}")
 
     elif "--summary" in args:
         summary = get_pick_summary()

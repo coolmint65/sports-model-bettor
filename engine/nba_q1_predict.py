@@ -75,8 +75,30 @@ def _get_team_data(abbr: str, season: int | None = None) -> dict:
 
     team = get_nba_team_by_abbr(abbr)
     if not team:
-        logger.warning("Team not found: %s", abbr)
-        return {"abbreviation": abbr, "season": season}
+        logger.warning("Team not found: %s (using defaults)", abbr)
+        return {
+            "abbreviation": abbr,
+            "season": season,
+            "team_id": 0,
+            "name": abbr,
+            "city": "",
+            "conference": "",
+            "division": "",
+            "games": 0,
+            "q1_ppg": DEFAULT_Q1_PPG,
+            "q1_opp_ppg": DEFAULT_Q1_OPP_PPG,
+            "q1_margin": 0.0,
+            "q1_home_ppg": None,
+            "q1_home_opp_ppg": None,
+            "q1_away_ppg": None,
+            "q1_away_opp_ppg": None,
+            "q1_cover_pct": None,
+            "pace": LEAGUE_AVG_PACE,
+            "off_rating": LEAGUE_AVG_OFF_RTG,
+            "def_rating": LEAGUE_AVG_DEF_RTG,
+            "fast_start_pct": None,
+            "slow_start_pct": None,
+        }
 
     q1 = get_team_q1_stats(team["id"], season)
 
@@ -357,10 +379,12 @@ def predict_q1(home_abbr: str, away_abbr: str,
     q1_ml_away = 1 - q1_ml_home
 
     # Spread cover probability
+    # Convention: spread = -2.5 means home favored by 2.5.
+    # Home covers when actual_margin + spread > 0, i.e. actual_margin > -spread.
+    # P(cover) = P(actual > -spread) = 1 - Phi((-spread - predicted) / sigma)
     spread_cover_prob = None
     if spread is not None:
-        # P(home_margin > spread)  -->  P(Z > (spread - predicted_margin) / std_dev)
-        z = (spread - predicted_margin) / Q1_STD_DEV
+        z = (-spread - predicted_margin) / Q1_STD_DEV
         spread_cover_prob = 1 - _norm_cdf(z)
 
     # Over/under probability
@@ -428,15 +452,18 @@ def q1_spread_probability(predicted_margin: float, spread: float,
                           std_dev: float = Q1_STD_DEV) -> float:
     """Probability that home team covers the Q1 spread.
 
+    Convention: spread = -2.5 means home favored by 2.5 points.
+    Home covers when actual_margin + spread > 0, i.e. actual_margin > -spread.
+
     Args:
         predicted_margin: Model's predicted Q1 margin (positive = home favored)
         spread: Posted spread for home team (negative = home favored)
         std_dev: Standard deviation of Q1 scoring margins (~5.5)
 
     Returns:
-        Probability that the actual margin exceeds the spread.
+        Probability that the home team covers the posted spread.
     """
-    z = (spread - predicted_margin) / std_dev
+    z = (-spread - predicted_margin) / std_dev
     return 1 - _norm_cdf(z)
 
 

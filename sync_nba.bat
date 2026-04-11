@@ -7,15 +7,19 @@ echo.
 
 if not exist "data\logs" mkdir "data\logs"
 
+if "%1"=="--full" goto :full
+
 REM Auto-detect first run
-python -c "from engine.nba_db import get_conn; c=get_conn(); r=c.execute('SELECT COUNT(*) FROM nba_games').fetchone()[0]; exit(0 if r > 50 else 1)" 2>nul
-if errorlevel 1 (
-    echo First run - running full NBA sync...
-    echo This fetches the full season (2-3 minutes).
-    echo.
-    python -m scrapers.nba_espn --full
-    goto :calibrate
-)
+python -c "import engine.nba_db as db; c=db.get_conn(); n=c.execute('SELECT COUNT(*) FROM nba_games').fetchone(); raise SystemExit(0 if n[0]>50 else 1)" 2>nul
+if errorlevel 1 goto :full
+goto :quick
+
+:full
+echo Running FULL NBA sync...
+python -m scrapers.nba_espn --full
+goto :calibrate
+
+:quick
 
 echo Quick NBA sync (today's games)...
 python -m scrapers.nba_espn
