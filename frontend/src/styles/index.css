@@ -2192,3 +2192,122 @@ body {
 .standings-table-v2 tbody tr.spot-out td {
   opacity: 0.75;
 }
+
+
+/* ═══════════════════════════════════════════
+   NBA Q1 Specific Styles
+   ═══════════════════════════════════════════ */
+
+/* Q1 score display on scoreboard cards */
+.q1-score-display {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 10px;
+  margin: 8px 0 4px;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.20);
+  border-radius: 6px;
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.q1-label {
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #f59e0b;
+  margin-right: 4px;
+}
+
+.q1-score-away,
+.q1-score-home {
+  color: #f8fafc;
+  font-variant-numeric: tabular-nums;
+}
+
+.q1-separator {
+  color: #64748b;
+  font-weight: 400;
+}
+
+/* Q1 final line in compact final rows */
+.q1-final-line {
+  font-size: 0.68rem;
+  color: #f59e0b;
+  text-align: center;
+  margin-top: 4px;
+  font-weight: 600;
+}
+
+/* Q1 pick badge — orange/amber accent */
+.pick-badge.q1-badge {
+  border-color: rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.06);
+}
+
+.pick-badge.q1-badge .pick-badge-type {
+  color: #f59e0b;
+}
+
+/* Q1 score accent in game detail */
+.q1-score-accent {
+  color: #f59e0b !important;
+}
+
+.q1-score-accent.winner {
+  color: #fbbf24 !important;
+}
+
+/* Q1 detail score block */
+.q1-detail-score {
+  text-align: center;
+  padding: 12px 16px;
+  margin: 12px 0;
+  background: rgba(245, 158, 11, 0.06);
+  border: 1px solid rgba(245, 158, 11, 0.18);
+  border-radius: 8px;
+}
+
+.q1-detail-label {
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #f59e0b;
+  margin-bottom: 4px;
+}
+
+.q1-detail-values {
+  font-size: 1.4rem;
+  font-weight: 800;
+  color: #f8fafc;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+}
+
+.q1-detail-sep {
+  color: #64748b;
+  font-weight: 400;
+}
+
+.q1-quarters-row {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.q1-quarter-chip {
+  font-size: 0.68rem;
+  color: #94a3b8;
+  padding: 2px 8px;
+  background: rgba(148, 163, 184, 0.08);
+  border-radius: 4px;
+  font-variant-numeric: tabular-nums;
+}

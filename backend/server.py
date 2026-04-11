@@ -1932,6 +1932,8 @@ def api_pick_of_day(sport: str):
         bets = api_nhl_best_bets()
     elif sport == "mlb":
         bets = api_best_bets()
+    elif sport == "nba":
+        bets = api_nba_best_bets()
     else:
         return {"error": f"Unknown sport: {sport}"}
 
@@ -1966,3 +1968,491 @@ def api_potd_reset(sport: str):
     conn.execute("DELETE FROM pick_of_day WHERE date = ?", (today,))
     conn.commit()
     return {"status": "cleared", "date": today, "sport": sport}
+
+
+# ══════════════════════════════════════════════════════════════
+#  NBA Q1 ENDPOINTS
+# ══════════════════════════════════════════════════════════════
+
+_nba_scoreboard_cache: dict[str, tuple[float, list]] = {}
+
+
+def _get_nba_scoreboard(date: str = "") -> list[dict]:
+    """Fetch NBA scoreboard from ESPN, enriched with Q1 scores and odds."""
+    target_date = date or datetime.now().strftime("%Y-%m-%d")
+    espn_date = target_date.replace("-", "")
+
+    cache_key = f"nba:{espn_date}"
+    now = time.time()
+    if cache_key in _nba_scoreboard_cache:
+        ts, cached = _nba_scoreboard_cache[cache_key]
+        if now - ts < CACHE_TTL:
+            return cached
+
+    url = f"{ESPN_BASE}/basketball/nba/scoreboard?dates={espn_date}"
+    logger.info("Fetching NBA scoreboard: %s", url)
+    espn_data = _fetch_espn_json(url)
+
+    games = []
+    if espn_data:
+        events = espn_data.get("events", [])
+        logger.info("ESPN NBA returned %d events", len(events))
+        games = _parse_nba_scoreboard(espn_data)
+
+    # Fallback without date
+    if not games and date == "":
+        espn_data = _fetch_espn_json(f"{ESPN_BASE}/basketball/nba/scoreboard")
+        if espn_data:
+            games = _parse_nba_scoreboard(espn_data)
+
+    # Fetch NBA odds from The Odds API
+    try:
+        nba_odds = _fetch_nba_odds()
+        if nba_odds:
+            matched = 0
+            for game in games:
+                h = game["home"]["abbreviation"]
+                a = game["away"]["abbreviation"]
+                key = f"{a}@{h}"
+                alt_keys = [key, f"{_nba_alt_abbr(a)}@{_nba_alt_abbr(h)}",
+                            f"{_nba_alt_abbr(a)}@{h}", f"{a}@{_nba_alt_abbr(h)}"]
+                for k in alt_keys:
+                    if k in nba_odds:
+                        game["odds"] = nba_odds[k]
+                        matched += 1
+                        break
+            logger.info("NBA odds: matched %d/%d games", matched, len(games))
+    except Exception as e:
+        logger.warning("NBA odds failed: %s", e)
+
+    # Cache
+    if len(_nba_scoreboard_cache) >= MAX_CACHE_ENTRIES:
+        oldest = min(_nba_scoreboard_cache, key=lambda k: _nba_scoreboard_cache[k][0])
+        del _nba_scoreboard_cache[oldest]
+    _nba_scoreboard_cache[cache_key] = (now, games)
+    return games
+
+
+def _parse_nba_scoreboard(espn_data: dict) -> list[dict]:
+    """Parse ESPN NBA scoreboard response into our standard format with Q1 data."""
+    games = []
+    for ev in espn_data.get("events", []):
+        comp = ev.get("competitions", [{}])[0]
+        teams = comp.get("competitors", [])
+        if len(teams) < 2:
+            continue
+
+        home_raw = next((t for t in teams if t.get("homeAway") == "home"), teams[0])
+        away_raw = next((t for t in teams if t.get("homeAway") == "away"), teams[1])
+
+        def parse_team(raw):
+            t = raw.get("team", {})
+            record = ""
+            for r in raw.get("records", []):
+                if r.get("type") == "total":
+                    record = r.get("summary", "")
+                    break
+            return {
+                "name": t.get("displayName", t.get("name", "")),
+                "abbreviation": t.get("abbreviation", ""),
+                "logo": t.get("logo", ""),
+                "record": record,
+                "score": raw.get("score", ""),
+                "winner": raw.get("winner", False),
+            }
+
+        home = parse_team(home_raw)
+        away = parse_team(away_raw)
+
+        # Parse Q1 scores from linescores
+        home_q1 = None
+        away_q1 = None
+        home_ls = home_raw.get("linescores", [])
+        away_ls = away_raw.get("linescores", [])
+        if home_ls and len(home_ls) >= 1:
+            home_q1 = int(home_ls[0].get("value", 0))
+        if away_ls and len(away_ls) >= 1:
+            away_q1 = int(away_ls[0].get("value", 0))
+
+        # Quarter scores for display
+        quarters = []
+        for i in range(max(len(home_ls), len(away_ls))):
+            hv = int(home_ls[i].get("value", 0)) if i < len(home_ls) else 0
+            av = int(away_ls[i].get("value", 0)) if i < len(away_ls) else 0
+            quarters.append({"quarter": i + 1, "home": hv, "away": av})
+
+        status_raw = comp.get("status", {})
+        status_type = status_raw.get("type", {})
+        state = status_type.get("state", "pre")
+        period = status_raw.get("period", 0)
+
+        game = {
+            "id": ev.get("id", ""),
+            "date": ev.get("date", ""),
+            "venue": comp.get("venue", {}).get("fullName", ""),
+            "broadcast": "",
+            "home": home,
+            "away": away,
+            "q1": {
+                "home": home_q1,
+                "away": away_q1,
+            },
+            "quarters": quarters,
+            "status": {
+                "state": state,
+                "detail": status_type.get("detail", ""),
+                "completed": status_type.get("completed", False),
+                "period": period,
+            },
+        }
+
+        # Extract broadcast
+        for bc in comp.get("broadcasts", []):
+            names = [n.get("shortName", "") for n in bc.get("names", [])]
+            if names:
+                game["broadcast"] = ", ".join(names)
+                break
+
+        games.append(game)
+
+    return games
+
+
+# NBA abbreviation aliases (ESPN vs odds providers)
+_NBA_ABBR_MAP = {
+    "GS": "GSW", "GSW": "GS",
+    "NY": "NYK", "NYK": "NY",
+    "SA": "SAS", "SAS": "SA",
+    "NO": "NOP", "NOP": "NO",
+    "PHX": "PHO", "PHO": "PHX",
+    "WSH": "WAS", "WAS": "WSH",
+    "BKN": "BRK", "BRK": "BKN",
+    "CHA": "CHO", "CHO": "CHA",
+}
+
+
+def _nba_alt_abbr(abbr: str) -> str:
+    return _NBA_ABBR_MAP.get(abbr, abbr)
+
+
+# NBA team name -> abbreviation for odds matching
+_NBA_TEAM_ABBRS = {
+    "Atlanta Hawks": "ATL", "Boston Celtics": "BOS", "Brooklyn Nets": "BKN",
+    "Charlotte Hornets": "CHA", "Chicago Bulls": "CHI", "Cleveland Cavaliers": "CLE",
+    "Dallas Mavericks": "DAL", "Denver Nuggets": "DEN", "Detroit Pistons": "DET",
+    "Golden State Warriors": "GS", "Houston Rockets": "HOU", "Indiana Pacers": "IND",
+    "LA Clippers": "LAC", "Los Angeles Clippers": "LAC",
+    "Los Angeles Lakers": "LAL", "LA Lakers": "LAL",
+    "Memphis Grizzlies": "MEM", "Miami Heat": "MIA", "Milwaukee Bucks": "MIL",
+    "Minnesota Timberwolves": "MIN", "New Orleans Pelicans": "NOP",
+    "New York Knicks": "NYK", "Oklahoma City Thunder": "OKC",
+    "Orlando Magic": "ORL", "Philadelphia 76ers": "PHI",
+    "Phoenix Suns": "PHX", "Portland Trail Blazers": "POR",
+    "Sacramento Kings": "SAC", "San Antonio Spurs": "SAS",
+    "Toronto Raptors": "TOR", "Utah Jazz": "UTA", "Washington Wizards": "WAS",
+}
+
+
+def _fetch_nba_odds() -> dict:
+    """Fetch NBA odds from The Odds API. Returns dict keyed by 'AWAY@HOME'."""
+    api_key = os.environ.get("ODDS_API_KEY", "")
+    if not api_key:
+        return {}
+
+    odds_url = (
+        f"https://api.the-odds-api.com/v4/sports/basketball_nba/odds/"
+        f"?apiKey={api_key}&regions=us&markets=h2h,spreads,totals"
+        f"&oddsFormat=american"
+    )
+
+    data = _fetch_espn_json(odds_url)
+    if not data:
+        return {}
+
+    result = {}
+    for game in data if isinstance(data, list) else []:
+        h_name = game.get("home_team", "")
+        a_name = game.get("away_team", "")
+        h_abbr = _NBA_TEAM_ABBRS.get(h_name, "")
+        a_abbr = _NBA_TEAM_ABBRS.get(a_name, "")
+        if not h_abbr or not a_abbr:
+            continue
+
+        odds_row = {}
+        for bm in game.get("bookmakers", []):
+            for mkt in bm.get("markets", []):
+                mk = mkt.get("key", "")
+                outcomes = mkt.get("outcomes", [])
+                if mk == "h2h":
+                    for o in outcomes:
+                        if o.get("name") == h_name:
+                            odds_row["home_ml"] = o.get("price")
+                        elif o.get("name") == a_name:
+                            odds_row["away_ml"] = o.get("price")
+                elif mk == "spreads":
+                    for o in outcomes:
+                        if o.get("name") == h_name:
+                            odds_row["home_spread_point"] = o.get("point")
+                            odds_row["home_spread_odds"] = o.get("price")
+                        elif o.get("name") == a_name:
+                            odds_row["away_spread_point"] = o.get("point")
+                            odds_row["away_spread_odds"] = o.get("price")
+                elif mk == "totals":
+                    for o in outcomes:
+                        if o.get("name") == "Over":
+                            odds_row["over_under"] = o.get("point")
+                            odds_row["over_odds"] = o.get("price")
+                        elif o.get("name") == "Under":
+                            odds_row["under_odds"] = o.get("price")
+            if odds_row:
+                break  # Use first bookmaker
+
+        if odds_row:
+            result[f"{a_abbr}@{h_abbr}"] = odds_row
+
+    return result
+
+
+@app.post("/api/nba/sync")
+def api_nba_sync():
+    """Refresh NBA data."""
+    try:
+        from scrapers.nba_espn import sync_nba
+        result = sync_nba()
+        return {"status": "ok", "result": result}
+    except ImportError:
+        return {"error": "NBA sync module (scrapers.nba_espn) not available yet"}
+    except Exception as e:
+        logger.error("NBA sync failed: %s", e)
+        return {"status": "error", "message": str(e)}
+
+
+@app.get("/api/nba/scoreboard")
+def api_nba_scoreboard(date: str = Query(default="")):
+    """Return today's NBA games with Q1 scores."""
+    try:
+        return _get_nba_scoreboard(date)
+    except Exception as e:
+        logger.error("NBA scoreboard failed: %s", e)
+        return []
+
+
+@app.get("/api/nba/standings")
+def api_nba_standings():
+    """Return NBA standings by conference/division from ESPN."""
+    try:
+        url = f"{ESPN_BASE}/basketball/nba/standings"
+        data = _fetch_espn_json(url)
+        if not data:
+            return []
+        return _parse_nba_standings(data)
+    except Exception as e:
+        logger.error("NBA standings failed: %s", e)
+        return []
+
+
+def _parse_nba_standings(data: dict) -> list[dict]:
+    """Parse ESPN NBA standings into conference/division structure."""
+    divisions = {}
+
+    for child in data.get("children", []):
+        conf_name = child.get("name", "")  # "Eastern Conference" etc.
+        conf_short = "Eastern" if "east" in conf_name.lower() else "Western"
+
+        for div_data in child.get("children", []):
+            div_name = div_data.get("name", "")
+            standings = div_data.get("standings", {})
+            entries = standings.get("entries", [])
+
+            div_teams = []
+            for entry in entries:
+                team_info = entry.get("team", {})
+                abbr = team_info.get("abbreviation", "")
+                name = team_info.get("displayName", team_info.get("name", ""))
+                logo = team_info.get("logos", [{}])[0].get("href", "") if team_info.get("logos") else ""
+
+                stats = {}
+                for s in entry.get("stats", []):
+                    stats[s.get("name", "")] = s.get("value", 0)
+
+                wins = int(stats.get("wins", 0))
+                losses = int(stats.get("losses", 0))
+                pct = stats.get("winPercent", stats.get("winPct", 0))
+                gb = stats.get("gamesBehind", stats.get("GB", "-"))
+                streak = stats.get("streak", "")
+                # Try common field names for last 10
+                l10 = stats.get("record-last10", stats.get("Last10Record", ""))
+                home_rec = stats.get("Home", stats.get("home", ""))
+                away_rec = stats.get("Road", stats.get("away", stats.get("road", "")))
+                ppg = stats.get("avgPointsFor", stats.get("pointsFor", 0))
+                papg = stats.get("avgPointsAgainst", stats.get("pointsAgainst", 0))
+                diff = stats.get("differential", stats.get("pointDifferential", 0))
+
+                div_teams.append({
+                    "name": name,
+                    "abbreviation": abbr,
+                    "logo": logo,
+                    "conference": conf_short,
+                    "record": f"{wins}-{losses}",
+                    "wins": wins,
+                    "losses": losses,
+                    "pct": round(pct, 3) if isinstance(pct, float) else pct,
+                    "gb": gb,
+                    "home": str(home_rec),
+                    "away": str(away_rec),
+                    "l10": str(l10),
+                    "streak": str(streak),
+                    "ppg": round(ppg, 1) if isinstance(ppg, float) else ppg,
+                    "papg": round(papg, 1) if isinstance(papg, float) else papg,
+                    "diff": round(diff, 1) if isinstance(diff, float) else diff,
+                })
+
+            # Sort by wins descending
+            div_teams.sort(key=lambda t: t["wins"], reverse=True)
+            divisions[div_name] = {
+                "name": div_name,
+                "conference": conf_short,
+                "teams": div_teams,
+            }
+
+    return list(divisions.values())
+
+
+@app.get("/api/nba/predict")
+def api_nba_predict(home: str = Query(...), away: str = Query(...)):
+    """Run NBA Q1 prediction for a specific matchup."""
+    try:
+        from engine.nba_q1_predict import predict_q1_matchup
+        result = predict_q1_matchup(home, away)
+        if not result:
+            raise HTTPException(status_code=400, detail=f"Could not predict {away} @ {home}")
+        return result
+    except ImportError:
+        return {"error": "NBA Q1 prediction engine not loaded yet"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("NBA predict failed: %s", e)
+        return {"error": str(e)}
+
+
+@app.get("/api/nba/best-bets")
+def api_nba_best_bets():
+    """Generate Q1 spread picks for all today's NBA games."""
+    try:
+        from engine.nba_q1_predict import predict_q1_matchup
+    except ImportError:
+        return []
+
+    games = _get_nba_scoreboard()
+    bets = []
+    for game in games:
+        state = game["status"].get("state", "pre")
+        if state in ("post", "in") or game["status"].get("completed"):
+            continue
+
+        h_abbr = game["home"]["abbreviation"]
+        a_abbr = game["away"]["abbreviation"]
+        odds = game.get("odds")
+
+        try:
+            pred = predict_q1_matchup(h_abbr, a_abbr)
+        except Exception as e:
+            logger.error("NBA Q1 prediction failed for %s @ %s: %s", a_abbr, h_abbr, e)
+            continue
+
+        if not pred:
+            continue
+
+        # Build picks from prediction
+        picks = pred.get("picks", [])
+        if not picks:
+            continue
+
+        best = picks[0]
+
+        bets.append({
+            "game_id": game["id"],
+            "matchup": f"{a_abbr} @ {h_abbr}",
+            "home": game["home"],
+            "away": game["away"],
+            "time": game["date"],
+            "venue": game.get("venue", ""),
+            "best_pick": best,
+            "all_picks": picks[:4],
+            "confidence": best.get("confidence", "lean"),
+            "win_prob": pred.get("win_prob", {}),
+            "expected_q1_score": pred.get("expected_q1_score", {}),
+            "factors": pred.get("factors", {}),
+            "rest": pred.get("rest", {}),
+        })
+
+    bets.sort(key=lambda b: b["best_pick"].get("edge", 0), reverse=True)
+    return bets
+
+
+@app.get("/api/nba/tracker/history")
+def api_nba_pick_history():
+    """Return recent NBA pick history."""
+    try:
+        from engine.nba_tracker import get_nba_pick_history
+        return get_nba_pick_history()
+    except ImportError:
+        return []
+    except Exception as e:
+        logger.error("NBA pick history failed: %s", e)
+        return []
+
+
+@app.get("/api/nba/tracker/summary")
+def api_nba_pick_summary():
+    """Get NBA running pick totals."""
+    try:
+        from engine.nba_tracker import get_nba_pick_summary
+        return get_nba_pick_summary()
+    except ImportError:
+        return {"overall": {"total": 0, "wins": 0, "losses": 0, "profit": 0, "win_pct": 0}, "by_type": {}}
+    except Exception as e:
+        logger.error("NBA pick summary failed: %s", e)
+        return {"overall": {"total": 0, "wins": 0, "losses": 0, "profit": 0, "win_pct": 0}, "by_type": {}}
+
+
+@app.post("/api/nba/tracker/record")
+def api_nba_record_picks():
+    """Record today's NBA picks."""
+    try:
+        from engine.nba_tracker import record_nba_picks
+        picks = record_nba_picks()
+        return {"recorded": len(picks), "picks": picks}
+    except ImportError:
+        return {"error": "NBA tracker module not loaded yet", "recorded": 0}
+    except Exception as e:
+        logger.error("NBA record picks failed: %s", e, exc_info=True)
+        return {"error": str(e), "recorded": 0}
+
+
+@app.post("/api/nba/tracker/settle")
+def api_nba_settle_picks():
+    """Settle completed NBA picks."""
+    try:
+        from engine.nba_tracker import settle_nba_picks
+        return settle_nba_picks()
+    except ImportError:
+        return {"error": "NBA tracker module not loaded yet", "settled": 0}
+    except Exception as e:
+        logger.error("NBA settle picks failed: %s", e, exc_info=True)
+        return {"error": str(e), "settled": 0}
+
+
+@app.get("/api/nba/backtest")
+def api_nba_backtest(days: int = Query(default=0), min_edge: float = Query(default=3.0),
+                     season: int | None = Query(default=None)):
+    """Run NBA Q1 backtest on historical games."""
+    try:
+        from engine.nba_backtest import run_nba_backtest
+        return run_nba_backtest(days=days, min_edge=min_edge, season=season)
+    except ImportError:
+        return {"error": "NBA backtest module not loaded yet"}
+    except Exception as e:
+        logger.error("NBA backtest failed: %s", e, exc_info=True)
+        return {"error": str(e)}

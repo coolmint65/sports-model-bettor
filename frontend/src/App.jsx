@@ -9,6 +9,9 @@ import PickHistory from './components/PickHistory'
 import NHLScoreboard from './components/NHLScoreboard'
 import NHLStandings from './components/NHLStandings'
 import NHLGameDetail from './components/NHLGameDetail'
+import NBAScoreboard from './components/NBAScoreboard'
+import NBAStandings from './components/NBAStandings'
+import NBAGameDetail from './components/NBAGameDetail'
 
 const api = axios.create({ baseURL: '/api' })
 
@@ -45,6 +48,20 @@ export default function App() {
   const [nhlPickHistory, setNhlPickHistory] = useState(null)
   const [nhlPhLoading, setNhlPhLoading] = useState(false)
 
+  // NBA state
+  const [nbaGames, setNbaGames] = useState([])
+  const [nbaLoading, setNbaLoading] = useState(true)
+  const [nbaBestBets, setNbaBestBets] = useState(null)
+  const [nbaBbLoading, setNbaBbLoading] = useState(false)
+  const [nbaStandings, setNbaStandings] = useState([])
+  const [nbaStandingsLoading, setNbaStandingsLoading] = useState(false)
+  const [nbaPrediction, setNbaPrediction] = useState(null)
+  const [nbaPredLoading, setNbaPredLoading] = useState(false)
+  const [nbaSelectedGame, setNbaSelectedGame] = useState(null)
+  const [nbaPickSummary, setNbaPickSummary] = useState(null)
+  const [nbaPickHistory, setNbaPickHistory] = useState(null)
+  const [nbaPhLoading, setNbaPhLoading] = useState(false)
+
   // Load MLB games on mount + auto-refresh every 5 min
   useEffect(() => {
     const fetchGames = () => {
@@ -80,6 +97,24 @@ export default function App() {
     const interval = setInterval(() => {
       api.get('/nhl/scoreboard').then(r => setNhlGames(r.data)).catch(() => {})
       api.get('/nhl/best-bets').then(r => setNhlBestBets(r.data)).catch(() => {})
+    }, 5 * 60 * 1000)
+    return () => clearInterval(interval)
+  }, [])
+
+  // Load NBA games on mount + auto-refresh
+  useEffect(() => {
+    setNbaLoading(true)
+    Promise.all([
+      api.get('/nba/scoreboard'),
+      api.get('/nba/best-bets'),
+    ]).then(([g, b]) => {
+      setNbaGames(Array.isArray(g.data) ? g.data : [])
+      setNbaBestBets(Array.isArray(b.data) ? b.data : null)
+    }).catch(() => setNbaGames([]))
+      .finally(() => setNbaLoading(false))
+    const interval = setInterval(() => {
+      api.get('/nba/scoreboard').then(r => setNbaGames(Array.isArray(r.data) ? r.data : [])).catch(() => {})
+      api.get('/nba/best-bets').then(r => setNbaBestBets(Array.isArray(r.data) ? r.data : null)).catch(() => {})
     }, 5 * 60 * 1000)
     return () => clearInterval(interval)
   }, [])
@@ -125,8 +160,24 @@ export default function App() {
       .finally(() => setNhlPredLoading(false))
   }, [])
 
+  // NBA handlers
+  const selectNbaGame = useCallback((game) => {
+    setNbaSelectedGame(game)
+    setView('games')
+    setNbaPrediction(null)
+    setNbaPredLoading(true)
+
+    const h = game.home.abbreviation
+    const a = game.away.abbreviation
+
+    api.get(`/nba/predict?home=${encodeURIComponent(h)}&away=${encodeURIComponent(a)}`)
+      .then(r => setNbaPrediction(r.data))
+      .catch(() => setNbaPrediction(null))
+      .finally(() => setNbaPredLoading(false))
+  }, [])
+
   const showStandings = useCallback(() => {
-    setView('standings'); setSelectedGame(null); setNhlSelectedGame(null)
+    setView('standings'); setSelectedGame(null); setNhlSelectedGame(null); setNbaSelectedGame(null)
     if (league === 'MLB' && standings.length === 0) {
       api.get('/standings').then(r => setStandings(r.data)).catch(() => {})
     }
@@ -137,10 +188,17 @@ export default function App() {
         .catch(() => {})
         .finally(() => setNhlStandingsLoading(false))
     }
-  }, [league, standings.length, nhlStandings.length])
+    if (league === 'NBA' && nbaStandings.length === 0) {
+      setNbaStandingsLoading(true)
+      api.get('/nba/standings')
+        .then(r => setNbaStandings(Array.isArray(r.data) ? r.data : []))
+        .catch(() => {})
+        .finally(() => setNbaStandingsLoading(false))
+    }
+  }, [league, standings.length, nhlStandings.length, nbaStandings.length])
 
   const showBacktest = useCallback(() => {
-    setView('backtest'); setSelectedGame(null); setNhlSelectedGame(null)
+    setView('backtest'); setSelectedGame(null); setNhlSelectedGame(null); setNbaSelectedGame(null)
   }, [])
 
   const runBacktest = useCallback((days, minEdge, season) => {
@@ -149,7 +207,7 @@ export default function App() {
     if (days) params.set('days', days)
     if (minEdge) params.set('min_edge', minEdge)
     if (season) params.set('season', season)
-    const endpoint = league === 'NHL' ? '/nhl/backtest' : '/backtest'
+    const endpoint = league === 'NHL' ? '/nhl/backtest' : league === 'NBA' ? '/nba/backtest' : '/backtest'
     api.get(`${endpoint}?${params}`)
       .then(r => setBacktest(r.data))
       .catch(() => setBacktest({ error: "Backtest failed. Try again." }))
@@ -157,24 +215,30 @@ export default function App() {
   }, [league])
 
   const showBestBets = useCallback(() => {
-    setView('best-bets'); setSelectedGame(null); setNhlSelectedGame(null)
+    setView('best-bets'); setSelectedGame(null); setNhlSelectedGame(null); setNbaSelectedGame(null)
     if (league === 'MLB') {
       setBbLoading(true)
       api.get('/best-bets')
         .then(r => setBestBets(r.data))
         .catch(() => setBestBets([]))
         .finally(() => setBbLoading(false))
-    } else {
+    } else if (league === 'NHL') {
       setNhlBbLoading(true)
       api.get('/nhl/best-bets')
         .then(r => setNhlBestBets(r.data))
         .catch(() => setNhlBestBets([]))
         .finally(() => setNhlBbLoading(false))
+    } else if (league === 'NBA') {
+      setNbaBbLoading(true)
+      api.get('/nba/best-bets')
+        .then(r => setNbaBestBets(Array.isArray(r.data) ? r.data : []))
+        .catch(() => setNbaBestBets([]))
+        .finally(() => setNbaBbLoading(false))
     }
   }, [league])
 
   const showHistory = useCallback(() => {
-    setView('history'); setSelectedGame(null); setNhlSelectedGame(null)
+    setView('history'); setSelectedGame(null); setNhlSelectedGame(null); setNbaSelectedGame(null)
     if (league === 'MLB') {
       setPhLoading(true)
       Promise.all([
@@ -185,7 +249,7 @@ export default function App() {
         setPickHistory(h.data)
       }).catch(() => {})
         .finally(() => setPhLoading(false))
-    } else {
+    } else if (league === 'NHL') {
       setNhlPhLoading(true)
       Promise.all([
         api.get('/nhl/tracker/summary'),
@@ -195,6 +259,16 @@ export default function App() {
         setNhlPickHistory(h.data)
       }).catch(() => {})
         .finally(() => setNhlPhLoading(false))
+    } else if (league === 'NBA') {
+      setNbaPhLoading(true)
+      Promise.all([
+        api.get('/nba/tracker/summary'),
+        api.get('/nba/tracker/history'),
+      ]).then(([s, h]) => {
+        setNbaPickSummary(s.data)
+        setNbaPickHistory(Array.isArray(h.data) ? h.data : [])
+      }).catch(() => {})
+        .finally(() => setNbaPhLoading(false))
     }
   }, [league])
 
@@ -204,10 +278,15 @@ export default function App() {
         api.get('/tracker/summary').then(r => setPickSummary(r.data))
         api.get('/tracker/history').then(r => setPickHistory(r.data))
       })
-    } else {
+    } else if (league === 'NHL') {
       api.post('/nhl/tracker/record').then(() => {
         api.get('/nhl/tracker/summary').then(r => setNhlPickSummary(r.data))
         api.get('/nhl/tracker/history').then(r => setNhlPickHistory(r.data))
+      })
+    } else if (league === 'NBA') {
+      api.post('/nba/tracker/record').then(() => {
+        api.get('/nba/tracker/summary').then(r => setNbaPickSummary(r.data))
+        api.get('/nba/tracker/history').then(r => setNbaPickHistory(r.data))
       })
     }
   }, [league])
@@ -218,17 +297,22 @@ export default function App() {
         api.get('/tracker/summary').then(r => setPickSummary(r.data))
         api.get('/tracker/history').then(r => setPickHistory(r.data))
       })
-    } else {
+    } else if (league === 'NHL') {
       api.post('/nhl/tracker/settle').then(() => {
         api.get('/nhl/tracker/summary').then(r => setNhlPickSummary(r.data))
         api.get('/nhl/tracker/history').then(r => setNhlPickHistory(r.data))
+      })
+    } else if (league === 'NBA') {
+      api.post('/nba/tracker/settle').then(() => {
+        api.get('/nba/tracker/summary').then(r => setNbaPickSummary(r.data))
+        api.get('/nba/tracker/history').then(r => setNbaPickHistory(r.data))
       })
     }
   }, [league])
 
   const goBack = useCallback(() => {
-    setSelectedGame(null); setNhlSelectedGame(null)
-    setPrediction(null); setNhlPrediction(null)
+    setSelectedGame(null); setNhlSelectedGame(null); setNbaSelectedGame(null)
+    setPrediction(null); setNhlPrediction(null); setNbaPrediction(null)
     setView('games')
   }, [])
 
@@ -237,12 +321,15 @@ export default function App() {
     setView('games')
     setSelectedGame(null)
     setNhlSelectedGame(null)
+    setNbaSelectedGame(null)
     setPrediction(null)
     setNhlPrediction(null)
+    setNbaPrediction(null)
   }, [])
 
   const isMLB = league === 'MLB'
   const isNHL = league === 'NHL'
+  const isNBA = league === 'NBA'
 
   return (
     <div className="app">
@@ -265,10 +352,16 @@ export default function App() {
         >
           NHL
         </button>
+        <button
+          className={`league-btn ${isNBA ? 'active' : ''}`}
+          onClick={() => switchLeague('NBA')}
+        >
+          NBA
+        </button>
       </div>
 
       <nav className="nav-tabs">
-        <button className={`nav-tab ${view === 'games' && !selectedGame && !nhlSelectedGame ? 'active' : ''}`} onClick={goBack}>
+        <button className={`nav-tab ${view === 'games' && !selectedGame && !nhlSelectedGame && !nbaSelectedGame ? 'active' : ''}`} onClick={goBack}>
           Games
         </button>
         <button className={`nav-tab ${view === 'best-bets' ? 'active' : ''}`} onClick={showBestBets}>
@@ -350,6 +443,40 @@ export default function App() {
       )}
 
       {isNHL && view === 'backtest' && (
+        <Backtest data={backtest} loading={btLoading} onRun={runBacktest} />
+      )}
+
+      {/* ── NBA Views ── */}
+      {isNBA && view === 'games' && !nbaSelectedGame && (
+        <>
+          <PickOfDayCard sport="nba" />
+          <NBAScoreboard games={nbaGames} loading={nbaLoading} onSelectGame={selectNbaGame} bestBets={nbaBestBets} />
+        </>
+      )}
+
+      {isNBA && nbaSelectedGame && (
+        <NBAGameDetail game={nbaSelectedGame} prediction={nbaPrediction} loading={nbaPredLoading} onBack={goBack} />
+      )}
+
+      {isNBA && view === 'best-bets' && (
+        <BestBets bets={nbaBestBets} loading={nbaBbLoading} />
+      )}
+
+      {isNBA && view === 'standings' && (
+        <NBAStandings divisions={nbaStandings} loading={nbaStandingsLoading} />
+      )}
+
+      {isNBA && view === 'history' && (
+        <PickHistory
+          summary={nbaPickSummary}
+          history={nbaPickHistory}
+          loading={nbaPhLoading}
+          onRecord={recordPicks}
+          onSettle={settlePicks}
+        />
+      )}
+
+      {isNBA && view === 'backtest' && (
         <Backtest data={backtest} loading={btLoading} onRun={runBacktest} />
       )}
     </div>

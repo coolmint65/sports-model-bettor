@@ -24,9 +24,9 @@ if not exist "data\logs" mkdir "data\logs"
 echo Starting everything...
 echo.
 
-REM ── Sync: MLB then NHL (sequential to avoid DB race conditions) ──
+REM ── Sync: MLB, NHL, NBA (sequential to avoid DB race conditions) ──
 echo [1/4] Syncing data (auto-closes when done)...
-start "Data-Sync" cmd /c "cd /d %~dp0 && call sync_mlb.bat && call sync_nhl.bat && exit"
+start "Data-Sync" cmd /c "cd /d %~dp0 && call sync_mlb.bat && call sync_nhl.bat && call sync_nba.bat && exit"
 
 REM ── Backend server ──
 echo [3/4] Backend API server...
@@ -48,8 +48,7 @@ echo   App running at http://localhost:5173
 echo ============================================
 echo.
 echo   4 windows launched:
-echo     MLB-Sync  - syncs data, records + settles picks (auto-closes)
-echo     NHL-Sync  - syncs data, records + settles picks (auto-closes)
+echo     Data-Sync - syncs MLB, NHL, NBA data + records/settles picks (auto-closes)
 echo     Backend   - API server on :8000 (stays open)
 echo     Frontend  - UI server on :5173 (stays open)
 echo.

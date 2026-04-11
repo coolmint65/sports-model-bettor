@@ -98,10 +98,7 @@ function NBAFinalRow({ game, bet, onClick }) {
   const hs = parseInt(home.score) || 0
   const as = parseInt(away.score) || 0
   const homeWon = hs > as
-
-  // Extract Q1 scores from linescores
-  const hQ1 = game.home_linescores?.[0] ?? null
-  const aQ1 = game.away_linescores?.[0] ?? null
+  const q1 = game.q1 || {}
 
   return (
     <div className="game-final-row" onClick={onClick}>
@@ -119,9 +116,10 @@ function NBAFinalRow({ game, bet, onClick }) {
           <span className={`final-abbr ${homeWon ? 'winner' : ''}`}>{home.abbreviation}</span>
         </div>
       </div>
-      {hQ1 != null && aQ1 != null && (
+      {/* Q1 score in final row */}
+      {q1.home != null && q1.away != null && (
         <div className="q1-final-line">
-          Q1: {aQ1} - {hQ1}
+          Q1: {away.abbreviation} {q1.away} - {home.abbreviation} {q1.home}
         </div>
       )}
     </div>
@@ -135,27 +133,14 @@ function NBAGameCard({ game, bet, onClick }) {
   const isFinal = status.state === 'post'
   const isPre = status.state === 'pre'
   const conf = bet?.confidence || 'skip'
-
-  const rest = bet?.rest || {}
-  const homeB2B = rest.home_b2b
-  const awayB2B = rest.away_b2b
-  const homeRest = rest.home_rest_advantage && !rest.away_rest_advantage
-  const awayRest = rest.away_rest_advantage && !rest.home_rest_advantage
-
-  // Q1 scores from linescores
-  const hQ1 = game.home_linescores?.[0] ?? null
-  const aQ1 = game.away_linescores?.[0] ?? null
-  const hasQ1 = hQ1 != null && aQ1 != null
-
-  // Current quarter for live games
-  const quarter = game.quarter || status.period || null
+  const q1 = game.q1 || {}
 
   return (
     <div className={`game-card ${isLive ? 'live' : ''} card-${conf}`} onClick={onClick}>
       {isLive && <div className="live-badge">LIVE</div>}
       {isFinal && <div className="final-badge">FINAL</div>}
 
-      {/* Q1 Spread pick badge — only for pregame games */}
+      {/* Q1 pick badge — only for pregame games */}
       {isPre && bet && bet.best_pick && conf !== 'skip' && (
         <div className={`pick-badge q1-badge badge-${conf}`}>
           <span className="pick-badge-type">Q1 SPREAD</span>
@@ -164,48 +149,43 @@ function NBAGameCard({ game, bet, onClick }) {
         </div>
       )}
 
-      {/* Rest / back-to-back indicators */}
-      {isPre && (homeB2B || awayB2B || homeRest || awayRest) && (
+      {/* Rest indicators */}
+      {isPre && bet?.rest && (bet.rest.home_b2b || bet.rest.away_b2b) && (
         <div style={{display:'flex',gap:4,flexWrap:'wrap',marginBottom:6}}>
-          {awayB2B && (
+          {bet.rest.away_b2b && (
             <span style={{fontSize:'0.66rem',fontWeight:700,padding:'2px 6px',borderRadius:4,background:'rgba(239,68,68,0.15)',color:'#ef4444',border:'1px solid rgba(239,68,68,0.3)'}}>
               {away.abbreviation} B2B
             </span>
           )}
-          {homeB2B && (
+          {bet.rest.home_b2b && (
             <span style={{fontSize:'0.66rem',fontWeight:700,padding:'2px 6px',borderRadius:4,background:'rgba(239,68,68,0.15)',color:'#ef4444',border:'1px solid rgba(239,68,68,0.3)'}}>
               {home.abbreviation} B2B
-            </span>
-          )}
-          {awayRest && (
-            <span style={{fontSize:'0.66rem',fontWeight:700,padding:'2px 6px',borderRadius:4,background:'rgba(96,165,250,0.12)',color:'#60a5fa',border:'1px solid rgba(96,165,250,0.25)'}}>
-              {away.abbreviation} rested
-            </span>
-          )}
-          {homeRest && (
-            <span style={{fontSize:'0.66rem',fontWeight:700,padding:'2px 6px',borderRadius:4,background:'rgba(96,165,250,0.12)',color:'#60a5fa',border:'1px solid rgba(96,165,250,0.25)'}}>
-              {home.abbreviation} rested
             </span>
           )}
         </div>
       )}
 
+      {/* Team rows */}
       <div className="game-teams">
         <NBATeamRow team={away} isLive={isLive} isFinal={isFinal} />
         <div className="game-at">@</div>
         <NBATeamRow team={home} isLive={isLive} isFinal={isFinal} />
       </div>
 
-      {/* Q1 score — prominent display for live/final */}
-      {(isLive || isFinal) && hasQ1 && (
+      {/* Q1 score display for live/final games */}
+      {(isLive || isFinal) && q1.home != null && q1.away != null && (
         <div className="q1-score-display">
-          <span className="q1-score-label">Q1:</span>
-          <span className="q1-score-value">{away.abbreviation} {aQ1} - {home.abbreviation} {hQ1}</span>
-          {isLive && quarter && (
-            <span className="q1-quarter-indicator">
-              {quarter <= 1 ? 'Q1' : `Q${quarter}`}
-            </span>
-          )}
+          <span className="q1-label">Q1</span>
+          <span className="q1-score-away">{away.abbreviation} {q1.away}</span>
+          <span className="q1-separator">-</span>
+          <span className="q1-score-home">{home.abbreviation} {q1.home}</span>
+        </div>
+      )}
+
+      {/* Quarter indicator for live games */}
+      {isLive && (
+        <div style={{textAlign:'center',fontSize:'0.72rem',color:'#94a3b8',marginTop:2}}>
+          {status.detail}
         </div>
       )}
 
@@ -214,64 +194,37 @@ function NBAGameCard({ game, bet, onClick }) {
         <Q1ProbBar wp={bet.win_prob} home={home} away={away} />
       )}
 
-      {/* Key insight line */}
-      {isPre && bet && bet.best_pick && conf !== 'skip' && (
-        <NBACardInsight bet={bet} home={home} away={away} />
-      )}
-
-      {/* Q1 Odds — only Q1 markets, not full game */}
+      {/* Odds — Q1 focused */}
       {game.odds && (
         <div className="game-odds-grid">
-          {/* Q1 Spread */}
-          {(game.odds.q1_home_spread != null || game.odds.home_spread_point != null) && (
+          {/* Spread */}
+          {(game.odds.home_spread_point != null || game.odds.away_spread_point != null) && (
             <div className="odds-line">
-              <span className="odds-label q1-odds-label">Q1 SPR</span>
+              <span className="odds-label">SPR</span>
               <span className="odds-val">
-                {away.abbreviation} {game.odds.q1_away_spread != null
-                  ? `${game.odds.q1_away_spread > 0 ? '+' : ''}${game.odds.q1_away_spread}`
-                  : game.odds.away_spread_point != null
-                    ? `${game.odds.away_spread_point > 0 ? '+' : ''}${game.odds.away_spread_point}`
-                    : '-'}
-                {game.odds.q1_away_spread_odds
-                  ? ` (${game.odds.q1_away_spread_odds > 0 ? '+' : ''}${Math.round(game.odds.q1_away_spread_odds)})`
-                  : ''}
+                {away.abbreviation} {game.odds.away_spread_point > 0 ? '+' : ''}{game.odds.away_spread_point || '-'}
+                {game.odds.away_spread_odds ? ` (${game.odds.away_spread_odds > 0 ? '+' : ''}${Math.round(game.odds.away_spread_odds)})` : ''}
               </span>
               <span className="odds-val">
-                {home.abbreviation} {game.odds.q1_home_spread != null
-                  ? `${game.odds.q1_home_spread > 0 ? '+' : ''}${game.odds.q1_home_spread}`
-                  : game.odds.home_spread_point != null
-                    ? `${game.odds.home_spread_point > 0 ? '+' : ''}${game.odds.home_spread_point}`
-                    : '-'}
-                {game.odds.q1_home_spread_odds
-                  ? ` (${game.odds.q1_home_spread_odds > 0 ? '+' : ''}${Math.round(game.odds.q1_home_spread_odds)})`
-                  : ''}
+                {home.abbreviation} {game.odds.home_spread_point > 0 ? '+' : ''}{game.odds.home_spread_point || '-'}
+                {game.odds.home_spread_odds ? ` (${game.odds.home_spread_odds > 0 ? '+' : ''}${Math.round(game.odds.home_spread_odds)})` : ''}
               </span>
             </div>
           )}
-          {/* Q1 Total */}
-          {game.odds.q1_total && (
+          {/* O/U */}
+          {game.odds.over_under && (
             <div className="odds-line">
-              <span className="odds-label q1-odds-label">Q1 O/U</span>
-              <span className="odds-val">
-                o{game.odds.q1_total}
-                {game.odds.q1_over_odds ? ` (${game.odds.q1_over_odds > 0 ? '+' : ''}${Math.round(game.odds.q1_over_odds)})` : ''}
-              </span>
-              <span className="odds-val">
-                u{game.odds.q1_total}
-                {game.odds.q1_under_odds ? ` (${game.odds.q1_under_odds > 0 ? '+' : ''}${Math.round(game.odds.q1_under_odds)})` : ''}
-              </span>
+              <span className="odds-label">O/U</span>
+              <span className="odds-val">o{game.odds.over_under} {game.odds.over_odds ? `(${Math.round(game.odds.over_odds) > 0 ? '+' : ''}${Math.round(game.odds.over_odds)})` : ''}</span>
+              <span className="odds-val">u{game.odds.over_under} {game.odds.under_odds ? `(${Math.round(game.odds.under_odds) > 0 ? '+' : ''}${Math.round(game.odds.under_odds)})` : ''}</span>
             </div>
           )}
-          {/* Q1 ML */}
-          {(game.odds.q1_home_ml || game.odds.home_ml) && (
+          {/* ML */}
+          {(game.odds.home_ml || game.odds.away_ml) && (
             <div className="odds-line">
-              <span className="odds-label q1-odds-label">Q1 ML</span>
-              <span className="odds-val">
-                {away.abbreviation} {(game.odds.q1_away_ml || game.odds.away_ml) > 0 ? '+' : ''}{game.odds.q1_away_ml || game.odds.away_ml || '-'}
-              </span>
-              <span className="odds-val">
-                {home.abbreviation} {(game.odds.q1_home_ml || game.odds.home_ml) > 0 ? '+' : ''}{game.odds.q1_home_ml || game.odds.home_ml || '-'}
-              </span>
+              <span className="odds-label">ML</span>
+              <span className="odds-val">{away.abbreviation} {game.odds.away_ml > 0 ? '+' : ''}{game.odds.away_ml || '-'}</span>
+              <span className="odds-val">{home.abbreviation} {game.odds.home_ml > 0 ? '+' : ''}{game.odds.home_ml || '-'}</span>
             </div>
           )}
         </div>
@@ -284,7 +237,6 @@ function NBAGameCard({ game, bet, onClick }) {
             {new Date(game.date).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
           </span>
         )}
-        {isLive && <span className="game-inning">{status.detail}</span>}
         {game.broadcast && <span className="game-broadcast">{game.broadcast}</span>}
       </div>
     </div>
@@ -323,76 +275,5 @@ function Q1ProbBar({ wp, home, away }) {
         <div className="wp-home" style={{ width: `${hPct}%` }} />
       </div>
     </>
-  )
-}
-
-
-function NBACardInsight({ bet, home, away }) {
-  const f = bet.factors || {}
-  const wp = bet.win_prob || {}
-  const ctx = bet.season_context || {}
-  const rest = bet.rest || {}
-
-  const reasons = []
-
-  // Q1 offensive rating edge
-  if (f.home_q1_ortg && f.away_q1_ortg) {
-    const diff = Math.abs(f.home_q1_ortg - f.away_q1_ortg)
-    if (diff > 3) {
-      const better = f.home_q1_ortg > f.away_q1_ortg ? home.abbreviation : away.abbreviation
-      reasons.push({
-        weight: diff,
-        text: <><strong>{better}</strong> has superior Q1 offense ({Math.max(f.home_q1_ortg, f.away_q1_ortg).toFixed(1)} ORtg)</>
-      })
-    }
-  }
-
-  // Pace advantage
-  if (f.home_pace && f.away_pace) {
-    const diff = Math.abs(f.home_pace - f.away_pace)
-    if (diff > 3) {
-      const faster = f.home_pace > f.away_pace ? home.abbreviation : away.abbreviation
-      reasons.push({
-        weight: diff,
-        text: <><strong>{faster}</strong> plays at a much faster pace — more Q1 possessions</>
-      })
-    }
-  }
-
-  // Recent form
-  const hL10 = ctx.home?.l10_win_pct
-  const aL10 = ctx.away?.l10_win_pct
-  if (hL10 != null && aL10 != null && Math.abs(hL10 - aL10) > 0.3) {
-    const hotter = hL10 > aL10 ? home.abbreviation : away.abbreviation
-    reasons.push({
-      weight: Math.abs(hL10 - aL10) * 20,
-      text: <><strong>{hotter}</strong> hot in L10 ({(Math.max(hL10, aL10) * 100).toFixed(0)}% WR)</>
-    })
-  }
-
-  // Rest advantage
-  if (rest.home_b2b || rest.away_b2b) {
-    const tired = rest.home_b2b ? home.abbreviation : away.abbreviation
-    reasons.push({
-      weight: 5,
-      text: <><strong>{tired}</strong> on back-to-back (fatigue penalty)</>
-    })
-  }
-
-  // Home court advantage
-  if (f.home_court_edge && f.home_court_edge > 2) {
-    reasons.push({
-      weight: f.home_court_edge,
-      text: <><strong>{home.abbreviation}</strong> strong home court edge (+{f.home_court_edge.toFixed(1)} pts)</>
-    })
-  }
-
-  if (reasons.length === 0) return null
-
-  reasons.sort((a, b) => b.weight - a.weight)
-  return (
-    <div className="card-insight">
-      {reasons[0].text}
-    </div>
   )
 }
