@@ -516,15 +516,20 @@ def _parse_espn_scoreboard(data: dict) -> list[dict]:
 
 
 # ESPN uses different abbreviations than MLB Stats API for some teams
+# Maps ESPN abbreviation → DB abbreviation (bidirectional)
 _ESPN_ABBR_MAP = {
-    "CHW": "CWS",   # White Sox
-    "WSH": "WSH",   # Nationals (sometimes WAS)
+    "CHW": "CWS",   # White Sox — ESPN sometimes uses CHW
+    "CWS": "CWS",
+    "WSH": "WSH",   # Nationals
     "WAS": "WSH",
-    "AZ": "ARI",    # Diamondbacks
+    "ARI": "AZ",    # Diamondbacks — ESPN uses ARI, DB has AZ
+    "AZ": "AZ",
     "SF": "SF",      # Giants
     "SD": "SD",      # Padres
     "TB": "TB",      # Rays
     "KC": "KC",      # Royals
+    "OAK": "ATH",   # Athletics — DB has ATH
+    "ATH": "ATH",
 }
 
 
