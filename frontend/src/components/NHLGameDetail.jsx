@@ -178,13 +178,13 @@ function NHLPredictionResults({ data, odds, home, away }) {
           <div className="score-team">
             <div className="name">{home.name}</div>
             <div className="record">{home.record}</div>
-            <div className={`score ${homeWins ? 'winner' : ''}`}>{es.home.toFixed(1)}</div>
+            <div className={`score ${homeWins ? 'winner' : ''}`}>{Math.round(es.home)}</div>
           </div>
           <div className="score-vs">-</div>
           <div className="score-team">
             <div className="name">{away.name}</div>
             <div className="record">{away.record}</div>
-            <div className={`score ${!homeWins ? 'winner' : ''}`}>{es.away.toFixed(1)}</div>
+            <div className={`score ${!homeWins ? 'winner' : ''}`}>{Math.round(es.away)}</div>
           </div>
         </div>
 
