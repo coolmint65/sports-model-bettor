@@ -490,9 +490,9 @@ function NHLPredictionResults({ data, odds, home, away }) {
           <div style={{textAlign:'center',color:'#64748b',fontSize:'0.72rem',marginTop:8}}>
             {d.h2h.games} meetings over the last 3 seasons
             {d.h2h.team1_wins > d.h2h.team2_wins
-              ? ` \u2014 ${home.abbreviation} leads the series`
+              ? ` \u2014 ${home.abbreviation} owns the matchup`
               : d.h2h.team2_wins > d.h2h.team1_wins
-                ? ` \u2014 ${away.abbreviation} leads the series`
+                ? ` \u2014 ${away.abbreviation} owns the matchup`
                 : ' \u2014 Even'}
           </div>
         </div>
