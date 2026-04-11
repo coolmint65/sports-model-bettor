@@ -181,6 +181,7 @@ body {
   cursor: pointer;
   transition: all 0.15s;
   font-size: 0.85rem;
+  flex-wrap: wrap;
 }
 
 .game-final-row:hover {
@@ -2235,11 +2236,15 @@ body {
 
 /* Q1 final line in compact final rows */
 .q1-final-line {
-  font-size: 0.68rem;
+  font-size: 0.65rem;
   color: #f59e0b;
+  width: 100%;
   text-align: center;
-  margin-top: 4px;
+  margin-top: 2px;
+  padding-top: 4px;
+  border-top: 1px solid #1e293b;
   font-weight: 600;
+  letter-spacing: 0.03em;
 }
 
 /* Q1 pick badge — orange/amber accent */
