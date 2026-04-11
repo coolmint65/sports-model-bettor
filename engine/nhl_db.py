@@ -182,7 +182,37 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     CREATE INDEX IF NOT EXISTS idx_skater_stats_player ON skater_stats(player_id, season);
     CREATE INDEX IF NOT EXISTS idx_nhl_team_stats_team ON nhl_team_stats(team_id, season);
     CREATE INDEX IF NOT EXISTS idx_nhl_players_team ON nhl_players(team_id);
+
+    -- P1 (period-level) stats per team per season
+    CREATE TABLE IF NOT EXISTS nhl_p1_stats (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        team_id INTEGER NOT NULL,
+        season INTEGER NOT NULL,
+        games INTEGER DEFAULT 0,
+        p1_goals_for REAL,
+        p1_goals_against REAL,
+        p1_goals_for_home REAL,
+        p1_goals_against_home REAL,
+        p1_goals_for_away REAL,
+        p1_goals_against_away REAL,
+        p1_scoreless_streak INTEGER DEFAULT 0,
+        p1_scoring_streak INTEGER DEFAULT 0,
+        p1_over_15_pct REAL,
+        p1_under_15_pct REAL,
+        recent_p1_gf REAL,
+        recent_p1_ga REAL,
+        UNIQUE(team_id, season)
+    );
+    CREATE INDEX IF NOT EXISTS idx_nhl_p1_stats_team ON nhl_p1_stats(team_id, season);
     """)
+    conn.commit()
+
+    # Migrate: add period score columns to nhl_games if missing
+    for col in ['home_p1', 'away_p1', 'home_p2', 'away_p2', 'home_p3', 'away_p3']:
+        try:
+            conn.execute(f"ALTER TABLE nhl_games ADD COLUMN {col} INTEGER")
+        except Exception:
+            pass  # Column already exists
     conn.commit()
 
 
@@ -359,6 +389,7 @@ def upsert_nhl_game(game_id: int, **kwargs) -> None:
         "home_faceoff_pct", "away_faceoff_pct",
         "home_hits", "away_hits", "home_blocks", "away_blocks",
         "season", "game_type",
+        "home_p1", "away_p1", "home_p2", "away_p2", "home_p3", "away_p3",
     ]
     values = {k: kwargs.get(k) for k in fields}
     values["game_id"] = game_id
@@ -451,3 +482,165 @@ def upsert_nhl_team_stats(team_id: int, season: int, **kwargs) -> None:
         kwargs.get("xgf_pct"),
     ))
     conn.commit()
+
+
+# ── P1 stats computation ──────────────────────────────────
+
+
+def compute_p1_stats(team_id: int, season: int) -> dict | None:
+    """Aggregate first-period stats for a team from nhl_games with period data.
+
+    Computes averages for P1 goals for/against overall and split by
+    home/away, scoreless/scoring streaks, over/under 1.5 percentages,
+    and recent (last 10 games) P1 averages.  Results are upserted into
+    nhl_p1_stats and also returned as a dict.
+    """
+    conn = get_conn()
+
+    # All final games this season where period scores exist
+    home_games = conn.execute("""
+        SELECT home_p1, away_p1, date FROM nhl_games
+        WHERE home_team_id = ? AND season = ? AND status = 'final'
+          AND home_p1 IS NOT NULL
+        ORDER BY date ASC
+    """, (team_id, season)).fetchall()
+
+    away_games = conn.execute("""
+        SELECT home_p1, away_p1, date FROM nhl_games
+        WHERE away_team_id = ? AND season = ? AND status = 'final'
+          AND away_p1 IS NOT NULL
+        ORDER BY date ASC
+    """, (team_id, season)).fetchall()
+
+    # Combine into a unified list: (p1_gf, p1_ga, is_home, date)
+    all_games = []
+    for g in home_games:
+        all_games.append((g["home_p1"], g["away_p1"], True, g["date"]))
+    for g in away_games:
+        all_games.append((g["away_p1"], g["home_p1"], False, g["date"]))
+
+    if not all_games:
+        return None
+
+    all_games.sort(key=lambda x: x[3])  # chronological
+    total = len(all_games)
+
+    # Overall averages
+    p1_gf_sum = sum(g[0] for g in all_games)
+    p1_ga_sum = sum(g[1] for g in all_games)
+
+    # Home/away splits
+    home_list = [g for g in all_games if g[2]]
+    away_list = [g for g in all_games if not g[2]]
+
+    p1_gf_home = (sum(g[0] for g in home_list) / len(home_list)) if home_list else 0.0
+    p1_ga_home = (sum(g[1] for g in home_list) / len(home_list)) if home_list else 0.0
+    p1_gf_away = (sum(g[0] for g in away_list) / len(away_list)) if away_list else 0.0
+    p1_ga_away = (sum(g[1] for g in away_list) / len(away_list)) if away_list else 0.0
+
+    # Scoreless / scoring streaks (from most recent game backwards)
+    scoreless_streak = 0
+    scoring_streak = 0
+    for g in reversed(all_games):
+        if g[0] == 0:
+            scoreless_streak += 1
+        else:
+            break
+    for g in reversed(all_games):
+        if g[0] > 0:
+            scoring_streak += 1
+        else:
+            break
+
+    # Over/under 1.5 total P1 goals
+    over_15_count = sum(1 for g in all_games if (g[0] + g[1]) >= 2)
+    p1_over_15_pct = over_15_count / total
+    p1_under_15_pct = 1.0 - p1_over_15_pct
+
+    # Recent 10 games
+    recent = all_games[-10:] if len(all_games) >= 10 else all_games
+    recent_gf = sum(g[0] for g in recent) / len(recent)
+    recent_ga = sum(g[1] for g in recent) / len(recent)
+
+    stats = {
+        "team_id": team_id,
+        "season": season,
+        "games": total,
+        "p1_goals_for": round(p1_gf_sum / total, 4),
+        "p1_goals_against": round(p1_ga_sum / total, 4),
+        "p1_goals_for_home": round(p1_gf_home, 4),
+        "p1_goals_against_home": round(p1_ga_home, 4),
+        "p1_goals_for_away": round(p1_gf_away, 4),
+        "p1_goals_against_away": round(p1_ga_away, 4),
+        "p1_scoreless_streak": scoreless_streak,
+        "p1_scoring_streak": scoring_streak,
+        "p1_over_15_pct": round(p1_over_15_pct, 4),
+        "p1_under_15_pct": round(p1_under_15_pct, 4),
+        "recent_p1_gf": round(recent_gf, 4),
+        "recent_p1_ga": round(recent_ga, 4),
+    }
+
+    # Upsert into nhl_p1_stats
+    conn.execute("""
+        INSERT INTO nhl_p1_stats (team_id, season, games,
+            p1_goals_for, p1_goals_against,
+            p1_goals_for_home, p1_goals_against_home,
+            p1_goals_for_away, p1_goals_against_away,
+            p1_scoreless_streak, p1_scoring_streak,
+            p1_over_15_pct, p1_under_15_pct,
+            recent_p1_gf, recent_p1_ga)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(team_id, season) DO UPDATE SET
+            games=excluded.games,
+            p1_goals_for=excluded.p1_goals_for,
+            p1_goals_against=excluded.p1_goals_against,
+            p1_goals_for_home=excluded.p1_goals_for_home,
+            p1_goals_against_home=excluded.p1_goals_against_home,
+            p1_goals_for_away=excluded.p1_goals_for_away,
+            p1_goals_against_away=excluded.p1_goals_against_away,
+            p1_scoreless_streak=excluded.p1_scoreless_streak,
+            p1_scoring_streak=excluded.p1_scoring_streak,
+            p1_over_15_pct=excluded.p1_over_15_pct,
+            p1_under_15_pct=excluded.p1_under_15_pct,
+            recent_p1_gf=excluded.recent_p1_gf,
+            recent_p1_ga=excluded.recent_p1_ga
+    """, (
+        team_id, season, total,
+        stats["p1_goals_for"], stats["p1_goals_against"],
+        stats["p1_goals_for_home"], stats["p1_goals_against_home"],
+        stats["p1_goals_for_away"], stats["p1_goals_against_away"],
+        scoreless_streak, scoring_streak,
+        stats["p1_over_15_pct"], stats["p1_under_15_pct"],
+        stats["recent_p1_gf"], stats["recent_p1_ga"],
+    ))
+    conn.commit()
+    return stats
+
+
+def get_p1_stats(team_id: int, season: int) -> dict | None:
+    """Retrieve cached P1 stats for a team/season from nhl_p1_stats."""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM nhl_p1_stats WHERE team_id = ? AND season = ?",
+        (team_id, season)).fetchone()
+    return dict(row) if row else None
+
+
+def compute_all_p1_stats(season: int) -> int:
+    """Compute P1 stats for every team that has period data this season.
+    Returns count of teams updated."""
+    conn = get_conn()
+    rows = conn.execute("""
+        SELECT DISTINCT home_team_id AS tid FROM nhl_games
+        WHERE season = ? AND status = 'final' AND home_p1 IS NOT NULL
+        UNION
+        SELECT DISTINCT away_team_id AS tid FROM nhl_games
+        WHERE season = ? AND status = 'final' AND away_p1 IS NOT NULL
+    """, (season, season)).fetchall()
+
+    count = 0
+    for row in rows:
+        result = compute_p1_stats(row["tid"], season)
+        if result:
+            count += 1
+    return count

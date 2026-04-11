@@ -590,6 +590,161 @@ def fetch_team_stats(season: str | None = None) -> int:
     return count
 
 
+# ── ESPN period scores ────────────────────────────────────
+
+
+# ESPN uses different abbreviations for some teams than our DB.
+# Our DB stores NHL API abbreviations (e.g. TBL); ESPN may use TB.
+_ESPN_TO_NHL_ABBR: dict[str, str] = {
+    "TB": "TBL", "NJ": "NJD", "SJ": "SJS", "LA": "LAK",
+    "WAS": "WSH", "CLB": "CBJ", "MON": "MTL", "NAS": "NSH",
+    "UTAH": "UTA",
+}
+
+
+def fetch_period_scores_from_espn(date_str: str) -> int:
+    """Fetch period-by-period scores for completed games on *date_str* from
+    the ESPN scoreboard and update the nhl_games table.
+
+    Parameters
+    ----------
+    date_str : str
+        Date in ``YYYY-MM-DD`` format.
+
+    Returns
+    -------
+    int
+        Number of games updated with period scores.
+    """
+    espn_date = date_str.replace("-", "")
+    url = (
+        "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl"
+        f"/scoreboard?dates={espn_date}"
+    )
+    data = _fetch(url)
+    if not data:
+        return 0
+
+    from engine.nhl_db import get_conn, get_nhl_team_by_abbr
+
+    conn = get_conn()
+    count = 0
+
+    for event in data.get("events", []):
+        comp = event.get("competitions", [{}])[0]
+        status = comp.get("status", {}).get("type", {})
+        if not status.get("completed"):
+            continue
+
+        # Collect period scores per team for this game
+        home_periods: dict[str, int] = {}
+        away_periods: dict[str, int] = {}
+
+        for c in comp.get("competitors", []):
+            team = c.get("team", {})
+            espn_abbr = team.get("abbreviation", "")
+            # Normalise ESPN abbreviation to NHL API abbreviation
+            nhl_abbr = _ESPN_TO_NHL_ABBR.get(espn_abbr, espn_abbr)
+            is_home = c.get("homeAway") == "home"
+
+            linescores = c.get("linescores", [])
+            if len(linescores) < 3:
+                continue
+
+            periods_vals: list[int] = []
+            for ls in linescores[:3]:
+                if isinstance(ls, dict):
+                    periods_vals.append(int(ls.get("value", 0)))
+                else:
+                    # May be a bare number (int or str)
+                    try:
+                        periods_vals.append(int(ls))
+                    except (ValueError, TypeError):
+                        periods_vals.append(0)
+
+            target = home_periods if is_home else away_periods
+            target["abbr"] = nhl_abbr  # type: ignore[assignment]
+            target["p1"] = periods_vals[0]
+            target["p2"] = periods_vals[1]
+            target["p3"] = periods_vals[2]
+
+        if not home_periods or not away_periods:
+            continue
+
+        # Match to a game in our DB by date + team
+        home_abbr = home_periods.get("abbr", "")
+        away_abbr = away_periods.get("abbr", "")
+        home_team = get_nhl_team_by_abbr(home_abbr) if home_abbr else None
+        away_team = get_nhl_team_by_abbr(away_abbr) if away_abbr else None
+
+        if not home_team or not away_team:
+            logger.debug(
+                "Could not resolve teams for ESPN game %s vs %s on %s",
+                home_abbr, away_abbr, date_str,
+            )
+            continue
+
+        # Find the game row
+        row = conn.execute(
+            """SELECT game_id, home_p1 FROM nhl_games
+               WHERE date = ? AND home_team_id = ? AND away_team_id = ?
+               AND status = 'final'""",
+            (date_str, home_team["id"], away_team["id"]),
+        ).fetchone()
+
+        if not row:
+            continue
+
+        # Skip if already populated
+        if row["home_p1"] is not None:
+            continue
+
+        conn.execute(
+            """UPDATE nhl_games
+               SET home_p1=?, away_p1=?, home_p2=?, away_p2=?, home_p3=?, away_p3=?
+               WHERE game_id=?""",
+            (
+                home_periods["p1"], away_periods["p1"],
+                home_periods["p2"], away_periods["p2"],
+                home_periods["p3"], away_periods["p3"],
+                row["game_id"],
+            ),
+        )
+        count += 1
+
+    if count:
+        conn.commit()
+
+    return count
+
+
+def fetch_period_scores_range(start_date: str, end_date: str) -> int:
+    """Fetch ESPN period scores for every day in [start_date, end_date].
+
+    Useful for backfilling historical period data a full season at a time.
+    Returns total number of games updated.
+    """
+    start = datetime.strptime(start_date, "%Y-%m-%d")
+    end = datetime.strptime(end_date, "%Y-%m-%d")
+    current = start
+    total = 0
+    last_month = ""
+
+    while current <= end:
+        ds = current.strftime("%Y-%m-%d")
+        month_str = current.strftime("%Y-%m")
+        if month_str != last_month:
+            _progress(f"       Period scores {month_str}...")
+            last_month = month_str
+
+        n = fetch_period_scores_from_espn(ds)
+        total += n
+        current += timedelta(days=1)
+        time.sleep(0.5)
+
+    return total
+
+
 # ── Orchestrators ──────────────────────────────────────────
 
 
@@ -630,6 +785,19 @@ def sync_nhl(full: bool = False) -> None:
 
         _progress("[6] Fetching skater stats...")
         fetch_skater_stats()
+
+        _progress("[7] Fetching period scores from ESPN...")
+        ps_total = 0
+        for d in range(7):
+            dt = (datetime.now() - timedelta(days=d)).strftime("%Y-%m-%d")
+            ps_total += fetch_period_scores_from_espn(dt)
+        if ps_total:
+            _progress(f"       Updated period scores for {ps_total} games")
+
+        _progress("[8] Computing P1 stats...")
+        from engine.nhl_db import compute_all_p1_stats
+        p1_count = compute_all_p1_stats(yr)
+        _progress(f"       P1 stats computed for {p1_count} teams")
     else:
         _progress("[2] Fetching today's games...")
         today = datetime.now().strftime("%Y-%m-%d")
@@ -638,6 +806,20 @@ def sync_nhl(full: bool = False) -> None:
         _progress("[3] Fetching yesterday's boxscores...")
         yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
         fetch_boxscores_for_date(yesterday)
+
+        _progress("[4] Fetching period scores from ESPN...")
+        ps_total = 0
+        for d in range(3):
+            dt = (datetime.now() - timedelta(days=d)).strftime("%Y-%m-%d")
+            ps_total += fetch_period_scores_from_espn(dt)
+        if ps_total:
+            _progress(f"       Updated period scores for {ps_total} games")
+
+        _progress("[5] Computing P1 stats...")
+        from engine.nhl_db import compute_all_p1_stats
+        yr = _season_start_year(_current_season_str())
+        p1_count = compute_all_p1_stats(yr)
+        _progress(f"       P1 stats computed for {p1_count} teams")
 
     elapsed = time.time() - start
     _progress(f"=== NHL sync complete in {elapsed:.0f}s ===")
@@ -681,6 +863,19 @@ def sync_history(season_str: str) -> None:
 
     _progress("[4] Fetching team stats...")
     fetch_team_stats(season_str)
+
+    _progress("[5] Fetching period scores from ESPN...")
+    end_date_ps = f"{yr + 1}-06-30"
+    today = datetime.now().strftime("%Y-%m-%d")
+    if end_date_ps > today:
+        end_date_ps = today
+    ps_total = fetch_period_scores_range(f"{yr}-10-01", end_date_ps)
+    _progress(f"       Updated period scores for {ps_total} games")
+
+    _progress("[6] Computing P1 stats...")
+    from engine.nhl_db import compute_all_p1_stats
+    p1_count = compute_all_p1_stats(yr)
+    _progress(f"       P1 stats computed for {p1_count} teams")
 
     elapsed = time.time() - start
     _progress(f"=== History load complete in {elapsed:.0f}s ===")

@@ -1174,21 +1174,119 @@ def predict_matchup(home_key: str, away_key: str,
             "under": round(1 - p_over, 4),
         }
 
-    # ── Period breakdown ──
+    # ── Period breakdown (use real P1 data when available) ──
     weights = [0.33, 0.34, 0.33]
-    periods = []
-    for i, label in enumerate(["P1", "P2", "P3"]):
-        periods.append({
-            "period": label,
-            "home": round(home_xg * weights[i], 2),
-            "away": round(away_xg * weights[i], 2),
-            "total": round((home_xg + away_xg) * weights[i], 2),
-        })
-
-    # ── First period total goals O/U ──
     p1_home = home_xg * weights[0]
     p1_away = away_xg * weights[0]
-    # Build first period goal probability matrix
+    p1_data_source = "generic"
+    h_p1_stats = None
+    a_p1_stats = None
+
+    try:
+        from .nhl_db import get_p1_stats, get_nhl_team_by_abbr as _p1_team_lookup
+
+        h_abbr_p1 = home.get("abbreviation", "")
+        a_abbr_p1 = away.get("abbreviation", "")
+
+        h_team_p1 = _p1_team_lookup(h_abbr_p1) if h_abbr_p1 else None
+        a_team_p1 = _p1_team_lookup(a_abbr_p1) if a_abbr_p1 else None
+
+        now = datetime.now()
+        p1_season = now.year if now.month >= 9 else now.year - 1
+
+        if h_team_p1:
+            h_p1_stats = get_p1_stats(h_team_p1["id"], p1_season)
+        if a_team_p1:
+            a_p1_stats = get_p1_stats(a_team_p1["id"], p1_season)
+
+        if (h_p1_stats and a_p1_stats
+                and h_p1_stats.get("games", 0) >= 10
+                and a_p1_stats.get("games", 0) >= 10):
+            # League-average P1 goals per team per game (~0.95)
+            league_p1_avg = 0.95
+
+            # Offense × opponent defense / league average
+            raw_p1_home = (
+                (h_p1_stats["p1_goals_for_home"] or league_p1_avg)
+                * (a_p1_stats["p1_goals_against_away"] or league_p1_avg)
+            ) / league_p1_avg
+            raw_p1_away = (
+                (a_p1_stats["p1_goals_for_away"] or league_p1_avg)
+                * (h_p1_stats["p1_goals_against_home"] or league_p1_avg)
+            ) / league_p1_avg
+
+            # Blend with recent form (60% season, 40% last-10)
+            if (h_p1_stats.get("recent_p1_gf") is not None
+                    and h_p1_stats["recent_p1_gf"] > 0):
+                raw_p1_home = raw_p1_home * 0.6 + h_p1_stats["recent_p1_gf"] * 0.4
+            if (a_p1_stats.get("recent_p1_gf") is not None
+                    and a_p1_stats["recent_p1_gf"] > 0):
+                raw_p1_away = raw_p1_away * 0.6 + a_p1_stats["recent_p1_gf"] * 0.4
+
+            # Scoreless-streak penalty: 25% reduction for 5+ game P1 droughts
+            if h_p1_stats.get("p1_scoreless_streak", 0) >= 5:
+                raw_p1_home *= 0.75
+            elif h_p1_stats.get("p1_scoreless_streak", 0) >= 3:
+                raw_p1_home *= 0.88
+
+            if a_p1_stats.get("p1_scoreless_streak", 0) >= 5:
+                raw_p1_away *= 0.75
+            elif a_p1_stats.get("p1_scoreless_streak", 0) >= 3:
+                raw_p1_away *= 0.88
+
+            # Rest / B2B impacts P1 more than other periods
+            # h_b2b < 1.0 means the team is on a back-to-back
+            if h_b2b < 1.0:
+                # B2B hits P1 harder: apply 1.5x the overall fatigue penalty
+                p1_fatigue = 1 + (1 - h_b2b) * 1.5
+                raw_p1_home /= p1_fatigue
+            elif h_b2b > 1.0:
+                # Rest advantage gives a small P1 boost
+                raw_p1_home *= 1 + (h_b2b - 1.0) * 0.5
+
+            if a_b2b < 1.0:
+                p1_fatigue = 1 + (1 - a_b2b) * 1.5
+                raw_p1_away /= p1_fatigue
+            elif a_b2b > 1.0:
+                raw_p1_away *= 1 + (a_b2b - 1.0) * 0.5
+
+            # Floor at 0.15 (even the worst P1 team scores sometimes)
+            p1_home = max(raw_p1_home, 0.15)
+            p1_away = max(raw_p1_away, 0.15)
+            p1_data_source = "real"
+
+    except Exception as e:
+        logger.debug("P1 real data unavailable, using generic estimate: %s", e)
+
+    periods = []
+    if p1_data_source == "real":
+        # P1 from real data; P2/P3 use remaining xG split evenly
+        remaining_home = max(home_xg - p1_home, 0.3)
+        remaining_away = max(away_xg - p1_away, 0.3)
+        periods.append({
+            "period": "P1",
+            "home": round(p1_home, 2),
+            "away": round(p1_away, 2),
+            "total": round(p1_home + p1_away, 2),
+        })
+        for label, w in [("P2", 0.52), ("P3", 0.48)]:
+            periods.append({
+                "period": label,
+                "home": round(remaining_home * w, 2),
+                "away": round(remaining_away * w, 2),
+                "total": round((remaining_home + remaining_away) * w, 2),
+            })
+    else:
+        for i, label in enumerate(["P1", "P2", "P3"]):
+            periods.append({
+                "period": label,
+                "home": round(home_xg * weights[i], 2),
+                "away": round(away_xg * weights[i], 2),
+                "total": round((home_xg + away_xg) * weights[i], 2),
+            })
+
+    # ── First period total goals O/U ──
+    # p1_home / p1_away are now set from real data or generic fallback above
     p1_total_probs = {}  # total_goals -> probability
     for hg in range(6):
         for ag in range(6):
@@ -1255,7 +1353,18 @@ def predict_matchup(home_key: str, away_key: str,
             "under_15": round(1 - p1_over_15, 4),
             "over_25": round(p1_over_25, 4),
             "under_25": round(1 - p1_over_25, 4),
+            "expected_home": round(p1_home, 3),
+            "expected_away": round(p1_away, 3),
             "expected_total": round(p1_home + p1_away, 2),
+            "data_source": p1_data_source,
+            "home_p1_scoreless_streak": (
+                h_p1_stats.get("p1_scoreless_streak", 0)
+                if h_p1_stats else 0
+            ),
+            "away_p1_scoreless_streak": (
+                a_p1_stats.get("p1_scoreless_streak", 0)
+                if a_p1_stats else 0
+            ),
         },
         "correct_scores": top_scores,
         "factors": _build_factors_with_ranks(
