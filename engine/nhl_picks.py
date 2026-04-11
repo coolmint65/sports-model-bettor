@@ -11,10 +11,9 @@ Used by: Best Bets, NHL Pick Tracker, Game Detail sidebar.
 
 import logging
 
-logger = logging.getLogger(__name__)
+from .config import NHL_JUICE_WALL as JUICE_WALL, NHL_BET_RELIABILITY
 
-# Juice wall — don't recommend bets with worse odds than this
-JUICE_WALL = -200
+logger = logging.getLogger(__name__)
 
 
 def _implied(ml: int) -> float:
@@ -71,7 +70,7 @@ def generate_nhl_picks_with_context(home_key: str, away_key: str,
         if edge > 0:
             picks.append({
                 "type": "ML", "pick": h_abbr, "prob": round(wp["home"], 4),
-                "edge": round(edge, 1), "odds": home_ml, "priority": 3,
+                "edge": round(edge, 1), "odds": home_ml,
             })
 
     if away_ml and away_ml >= JUICE_WALL:
@@ -79,7 +78,7 @@ def generate_nhl_picks_with_context(home_key: str, away_key: str,
         if edge > 0:
             picks.append({
                 "type": "ML", "pick": a_abbr, "prob": round(wp["away"], 4),
-                "edge": round(edge, 1), "odds": away_ml, "priority": 3,
+                "edge": round(edge, 1), "odds": away_ml,
             })
 
     # ── Totals (O/U) ──
@@ -112,7 +111,7 @@ def generate_nhl_picks_with_context(home_key: str, away_key: str,
             if edge > 0 and real_odds >= JUICE_WALL:
                 picks.append({
                     "type": "O/U", "pick": label, "prob": round(prob, 4),
-                    "edge": round(edge, 1), "odds": real_odds, "priority": 1,
+                    "edge": round(edge, 1), "odds": real_odds,
                 })
 
     # ── Puck Line ──
@@ -149,7 +148,6 @@ def generate_nhl_picks_with_context(home_key: str, away_key: str,
                     "type": "PL", "pick": f"{h_abbr} {home_pl_point:+.1f}",
                     "prob": round(h_pl_prob, 4),
                     "edge": round(h_edge, 1), "odds": home_pl_odds,
-                    "priority": 2,
                 })
 
     if away_pl_point is not None:
@@ -165,13 +163,13 @@ def generate_nhl_picks_with_context(home_key: str, away_key: str,
                     "type": "PL", "pick": f"{a_abbr} {away_pl_point:+.1f}",
                     "prob": round(a_pl_prob, 4),
                     "edge": round(a_edge, 1), "odds": away_pl_odds,
-                    "priority": 2,
                 })
 
-    # Sort by priority first (O/U=1 > PL=2 > ML=3), then by edge descending.
-    # This ensures the "best pick" per game prefers O/U and PL over ML,
-    # since backtesting shows ML is -6% ROI while O/U is +19% and PL is +12%.
-    picks.sort(key=lambda p: (p["priority"], -p["edge"]))
+    # Adjusted EV: edge * reliability weight
+    for p in picks:
+        reliability = NHL_BET_RELIABILITY.get(p["type"], 0.5)
+        p["adjusted_ev"] = round(p["edge"] * reliability, 2)
+    picks.sort(key=lambda p: -p["adjusted_ev"])
 
     # Assign confidence
     for p in picks:

@@ -11,6 +11,8 @@ Used by: NBA Best Bets, NBA Q1 Pick Tracker.
 
 import logging
 
+from .config import NBA_BET_RELIABILITY
+
 logger = logging.getLogger(__name__)
 
 
@@ -62,7 +64,6 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
                     "prob": round(cover_prob, 4),
                     "edge": round(edge, 1),
                     "odds": h_spread_odds,
-                    "priority": 1,
                 })
 
             away_cover_prob = 1 - cover_prob
@@ -75,7 +76,6 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
                     "prob": round(away_cover_prob, 4),
                     "edge": round(away_edge, 1),
                     "odds": a_spread_odds,
-                    "priority": 1,
                 })
 
     # ── Q1 Total ──
@@ -94,7 +94,6 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
                     "prob": round(over_prob, 4),
                     "edge": round(over_edge, 1),
                     "odds": over_odds,
-                    "priority": 2,
                 })
 
             under_prob = 1 - over_prob
@@ -107,7 +106,6 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
                     "prob": round(under_prob, 4),
                     "edge": round(under_edge, 1),
                     "odds": under_odds,
-                    "priority": 2,
                 })
 
     # ── Q1 Moneyline ──
@@ -125,7 +123,6 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
                 "prob": round(home_ml_prob, 4),
                 "edge": round(edge, 1),
                 "odds": home_ml_odds,
-                "priority": 3,
             })
 
     if away_ml_odds is not None:
@@ -139,11 +136,13 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
                 "prob": round(away_ml_prob, 4),
                 "edge": round(away_edge, 1),
                 "odds": away_ml_odds,
-                "priority": 3,
             })
 
-    # Sort by priority first (lower = better), then by edge (higher = better)
-    picks.sort(key=lambda p: (p["priority"], -p["edge"]))
+    # Adjusted EV: edge * reliability weight
+    for p in picks:
+        reliability = NBA_BET_RELIABILITY.get(p["type"], 0.5)
+        p["adjusted_ev"] = round(p["edge"] * reliability, 2)
+    picks.sort(key=lambda p: -p["adjusted_ev"])
 
     return picks
 

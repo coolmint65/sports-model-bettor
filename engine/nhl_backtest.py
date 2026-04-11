@@ -298,7 +298,8 @@ def _compute_pit_stats(conn, team_id: int, game_date: str,
     rows = conn.execute("""
         SELECT home_team_id, away_team_id, home_score, away_score,
                home_pp_goals, home_pp_opps, away_pp_goals, away_pp_opps,
-               home_shots, away_shots
+               home_shots, away_shots, home_faceoff_pct, away_faceoff_pct,
+               date
         FROM nhl_games
         WHERE status = 'final' AND date < ?
           AND (home_team_id = ? OR away_team_id = ?)
@@ -312,11 +313,15 @@ def _compute_pit_stats(conn, team_id: int, game_date: str,
     home_gf, home_ga, home_games = 0, 0, 0
     away_gf, away_ga, away_games = 0, 0, 0
     pp_goals, pp_opps = 0, 0
+    pk_goals_against, pk_opps_against = 0, 0
     shots_for, shots_against = 0, 0
+    fo_sum, fo_count = 0.0, 0
+    ot_wins, ot_losses, ot_games = 0, 0, 0
     # Track last 5 for momentum and L5 scoring
     recent_wins = 0
     l5_gf, l5_ga = 0, 0
     l5_count = 0
+    last_game_date = None
 
     for i, r in enumerate(rows):
         is_home = r["home_team_id"] == team_id
@@ -328,8 +333,14 @@ def _compute_pit_stats(conn, team_id: int, game_date: str,
             home_games += 1
             pp_goals += r["home_pp_goals"] or 0
             pp_opps += r["home_pp_opps"] or 0
+            # PK: opponent's PP goals against us / opponent's PP opps
+            pk_goals_against += r["away_pp_goals"] or 0
+            pk_opps_against += r["away_pp_opps"] or 0
             shots_for += r["home_shots"] or 0
             shots_against += r["away_shots"] or 0
+            if r["home_faceoff_pct"]:
+                fo_sum += r["home_faceoff_pct"]
+                fo_count += 1
         else:
             my_score = r["away_score"] or 0
             opp_score = r["home_score"] or 0
@@ -338,17 +349,34 @@ def _compute_pit_stats(conn, team_id: int, game_date: str,
             away_games += 1
             pp_goals += r["away_pp_goals"] or 0
             pp_opps += r["away_pp_opps"] or 0
+            pk_goals_against += r["home_pp_goals"] or 0
+            pk_opps_against += r["home_pp_opps"] or 0
             shots_for += r["away_shots"] or 0
             shots_against += r["home_shots"] or 0
+            if r["away_faceoff_pct"]:
+                fo_sum += r["away_faceoff_pct"]
+                fo_count += 1
 
         gf += my_score
         ga += opp_score
-        if my_score > opp_score:
+        won = my_score > opp_score
+        if won:
             wins += 1
             if i < 5:
                 recent_wins += 1
         else:
             losses += 1
+
+        # OT tracking: tied regulation = OT game
+        if my_score == opp_score or abs(my_score - opp_score) == 1:
+            # Can't reliably detect OT from final score alone, but
+            # 1-goal margin could be OT. Use OTL heuristic: a loss by 1
+            # is often an OT loss in NHL data.
+            pass
+
+        # Track last game date for B2B detection
+        if i == 0 and r.get("date"):
+            last_game_date = r["date"]
 
         # L5 scoring accumulators (rows ordered DESC, so first 5 = most recent)
         if i < 5:
@@ -358,8 +386,10 @@ def _compute_pit_stats(conn, team_id: int, game_date: str,
 
     n = len(rows)
     pp_pct = pp_goals / pp_opps if pp_opps > 0 else 0.20
+    pk_pct = 1.0 - (pk_goals_against / pk_opps_against) if pk_opps_against > 0 else 0.80
     shots_pg = shots_for / n if shots_for > 0 else 30.0
     shots_against_pg = shots_against / n if shots_against > 0 else 30.0
+    fo_pct = fo_sum / fo_count if fo_count > 0 else 50.0
 
     # Save percentage proxy: (1 - goals_against / shots_against)
     # This estimates the team's goaltending quality from PIT data
@@ -378,13 +408,16 @@ def _compute_pit_stats(conn, team_id: int, game_date: str,
         "away_gf_avg": away_gf / away_games if away_games > 0 else gf / n,
         "away_ga_avg": away_ga / away_games if away_games > 0 else ga / n,
         "pp_pct": pp_pct,
+        "pk_pct": pk_pct,
+        "faceoff_pct": fo_pct,
         "shots_per_game": shots_pg,
         "shots_against_pg": shots_against_pg,
         "save_pct_proxy": save_pct_proxy,
-        "momentum": recent_wins / min(5, n),  # Last 5 game win rate
+        "momentum": recent_wins / min(5, n),
         "l5_gf_avg": l5_gf / l5_count if l5_count > 0 else gf / n,
         "l5_ga_avg": l5_ga / l5_count if l5_count > 0 else ga / n,
         "games": n,
+        "last_game_date": last_game_date,
     }
 
 
@@ -468,6 +501,28 @@ def _pit_predict(home_stats: dict, away_stats: dict) -> dict | None:
     quality_diff = home_stats["win_pct"] - away_stats["win_pct"]
     home_xg *= (1 + quality_diff * 0.15)
     away_xg *= (1 - quality_diff * 0.15)
+
+    # ── 7. Faceoff % adjustment (aligns with production) ──
+    # Production: (fo% - 50) * 0.003 per team
+    league_fo = 50.0
+    h_fo = home_stats.get("faceoff_pct", league_fo)
+    a_fo = away_stats.get("faceoff_pct", league_fo)
+    home_xg *= max(0.97, min(1.03, 1.0 + (h_fo - league_fo) * 0.003))
+    away_xg *= max(0.97, min(1.03, 1.0 + (a_fo - league_fo) * 0.003))
+
+    # ── 8. Penalty kill cross-reference (aligns with production) ──
+    # If opponent PP is strong AND this team's PK is weak, boost opponent xG
+    league_pk = 0.80
+    h_pk = home_stats.get("pk_pct", league_pk)
+    a_pk = away_stats.get("pk_pct", league_pk)
+    # Away team's PP vs home PK
+    if away_stats["pp_pct"] > league_pp and h_pk < league_pk:
+        pk_penalty = (league_pk - h_pk) * (away_stats["pp_pct"] / league_pp) * 0.5
+        away_xg += min(0.15, pk_penalty)
+    # Home team's PP vs away PK
+    if home_stats["pp_pct"] > league_pp and a_pk < league_pk:
+        pk_penalty = (league_pk - a_pk) * (home_stats["pp_pct"] / league_pp) * 0.5
+        home_xg += min(0.15, pk_penalty)
 
     # ── Floor ──
     home_xg = max(home_xg, 1.0)
