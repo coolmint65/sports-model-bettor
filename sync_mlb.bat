@@ -42,6 +42,10 @@ echo Settling completed picks...
 python -m engine.tracker --settle
 
 echo.
+echo Settling POTD...
+python -c "from engine.pick_of_day import settle_potd; print(settle_potd('mlb'))" 2>nul
+
+echo.
 echo ============================================
 echo   MLB Sync Complete
 echo ============================================

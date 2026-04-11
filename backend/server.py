@@ -871,10 +871,17 @@ def api_record_picks():
 
 @app.post("/api/tracker/settle")
 def api_settle_picks():
-    """Settle completed picks against final scores."""
+    """Settle completed picks + POTD against final scores."""
     try:
         from engine.tracker import settle_picks
-        return settle_picks()
+        result = settle_picks()
+        # Also settle MLB POTD
+        try:
+            from engine.pick_of_day import settle_potd
+            settle_potd("mlb")
+        except Exception:
+            pass
+        return result
     except Exception as e:
         logger.error("Settle picks failed: %s", e, exc_info=True)
         return {"error": str(e), "settled": 0}
@@ -1774,10 +1781,16 @@ def api_nhl_record_picks():
 
 @app.post("/api/nhl/tracker/settle")
 def api_nhl_settle_picks():
-    """Settle completed NHL picks."""
+    """Settle completed NHL picks + POTD."""
     try:
         from engine.nhl_tracker import settle_picks
-        return settle_picks()
+        result = settle_picks()
+        try:
+            from engine.pick_of_day import settle_potd
+            settle_potd("nhl")
+        except Exception:
+            pass
+        return result
     except Exception as e:
         logger.error("NHL settle picks failed: %s", e, exc_info=True)
         return {"error": str(e), "settled": 0}

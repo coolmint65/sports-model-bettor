@@ -836,7 +836,7 @@ function getReasoning(pred, home, away) {
     if (homeWins > awayWins + 2) {
       reasons.push(`${home.abbreviation} has owned this matchup recently, going ${homeWins}-${awayWins} in the last ${h2h.games} meetings`)
     } else if (awayWins > homeWins + 2) {
-      reasons.push(`${away.abbreviation} has dominated this series lately, winning ${awayWins} of the last ${h2h.games} meetings`)
+      reasons.push(`${away.abbreviation} has dominated this matchup lately, winning ${awayWins} of the last ${h2h.games} meetings`)
     }
   }
 
