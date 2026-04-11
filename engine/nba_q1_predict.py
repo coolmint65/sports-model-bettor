@@ -1,0 +1,682 @@
+"""
+NBA 1st Quarter Spread Prediction Engine.
+
+Uses pace-adjusted efficiency ratings and a normal distribution model
+to predict Q1 scoring, spreads, totals, and moneylines.  Basketball
+Q1 scoring is approximately normal (unlike hockey/baseball which are
+Poisson), so we use a Gaussian CDF for spread probabilities.
+
+Factors:
+    - Pace matchup (possessions per game)
+    - Q1-specific offensive/defensive ratings
+    - Home court Q1 boost (+1.5 pts)
+    - Rest / back-to-back penalty (-1.0 pt)
+    - Recent Q1 form (last 10 games weighted 70/30 vs season)
+    - Team quality / record
+    - Conference/style matchups (pace differences)
+
+Usage:
+    python -m engine.nba_q1_predict LAL BOS
+    python -m engine.nba_q1_predict LAL BOS --spread -2.5
+"""
+
+import logging
+import math
+from datetime import datetime, timedelta
+
+logger = logging.getLogger(__name__)
+
+# ── Constants ──────────────────────────────────────────────
+
+HOME_Q1_BOOST = 1.5          # Home teams outscore by ~1.5 in Q1 historically
+B2B_PENALTY = -1.0           # Back-to-back teams start slower in Q1
+Q1_STD_DEV = 5.5             # Standard deviation for Q1 scoring margins
+LEAGUE_AVG_Q1_TOTAL = 55.0   # Approximate league-average Q1 total
+LEAGUE_AVG_PACE = 99.0       # League-average possessions per game
+LEAGUE_AVG_OFF_RTG = 112.0   # League-average offensive rating (pts per 100 poss)
+LEAGUE_AVG_DEF_RTG = 112.0   # League-average defensive rating
+RECENT_WEIGHT = 0.70         # Weight for recent form (last 10) vs season
+SEASON_WEIGHT = 0.30         # Weight for full-season averages
+
+# Default Q1 scoring if no data available
+DEFAULT_Q1_PPG = 27.5
+DEFAULT_Q1_OPP_PPG = 27.5
+
+
+# ── Math helpers ───────────────────────────────────────────
+
+
+def _norm_cdf(x: float) -> float:
+    """Standard normal CDF using math.erf (no scipy dependency)."""
+    return 0.5 * (1 + math.erf(x / math.sqrt(2)))
+
+
+def _implied_prob(american_odds: int) -> float:
+    """Convert American odds to implied probability."""
+    if american_odds < 0:
+        return abs(american_odds) / (abs(american_odds) + 100)
+    return 100 / (american_odds + 100)
+
+
+# ── Data loading helpers ───────────────────────────────────
+
+
+def _get_team_data(abbr: str, season: int | None = None) -> dict:
+    """Load team info + Q1 stats from the NBA DB.
+
+    Returns a merged dict with team info and Q1 stats, using defaults
+    where data is unavailable.
+    """
+    from .nba_db import get_nba_team_by_abbr, get_team_q1_stats
+
+    if season is None:
+        now = datetime.now()
+        season = now.year if now.month >= 9 else now.year - 1
+
+    team = get_nba_team_by_abbr(abbr)
+    if not team:
+        logger.warning("Team not found: %s", abbr)
+        return {"abbreviation": abbr, "season": season}
+
+    q1 = get_team_q1_stats(team["id"], season)
+
+    result = {
+        "team_id": team["id"],
+        "abbreviation": team["abbreviation"],
+        "name": team["name"],
+        "city": team.get("city", ""),
+        "conference": team.get("conference", ""),
+        "division": team.get("division", ""),
+        "season": season,
+    }
+
+    if q1:
+        result.update({
+            "games": q1.get("games", 0),
+            "q1_ppg": q1.get("q1_ppg") or DEFAULT_Q1_PPG,
+            "q1_opp_ppg": q1.get("q1_opp_ppg") or DEFAULT_Q1_OPP_PPG,
+            "q1_margin": q1.get("q1_margin") or 0.0,
+            "q1_home_ppg": q1.get("q1_home_ppg"),
+            "q1_home_opp_ppg": q1.get("q1_home_opp_ppg"),
+            "q1_away_ppg": q1.get("q1_away_ppg"),
+            "q1_away_opp_ppg": q1.get("q1_away_opp_ppg"),
+            "q1_cover_pct": q1.get("q1_cover_pct"),
+            "pace": q1.get("pace") or LEAGUE_AVG_PACE,
+            "off_rating": q1.get("off_rating") or LEAGUE_AVG_OFF_RTG,
+            "def_rating": q1.get("def_rating") or LEAGUE_AVG_DEF_RTG,
+            "fast_start_pct": q1.get("fast_start_pct"),
+            "slow_start_pct": q1.get("slow_start_pct"),
+        })
+    else:
+        result.update({
+            "games": 0,
+            "q1_ppg": DEFAULT_Q1_PPG,
+            "q1_opp_ppg": DEFAULT_Q1_OPP_PPG,
+            "q1_margin": 0.0,
+            "q1_home_ppg": None,
+            "q1_home_opp_ppg": None,
+            "q1_away_ppg": None,
+            "q1_away_opp_ppg": None,
+            "q1_cover_pct": None,
+            "pace": LEAGUE_AVG_PACE,
+            "off_rating": LEAGUE_AVG_OFF_RTG,
+            "def_rating": LEAGUE_AVG_DEF_RTG,
+            "fast_start_pct": None,
+            "slow_start_pct": None,
+        })
+
+    return result
+
+
+def _get_recent_q1_form(team_id: int, n: int = 10) -> dict:
+    """Compute recent Q1 form from last N games.
+
+    Returns dict with recent Q1 averages for scored, allowed, and margin.
+    """
+    from .nba_db import get_recent_nba_games
+
+    games = get_recent_nba_games(team_id, n)
+
+    if not games:
+        return {"recent_q1_scored": None, "recent_q1_allowed": None,
+                "recent_q1_margin": None, "recent_games": 0}
+
+    scored = []
+    allowed = []
+    for g in games:
+        if g.get("home_q1") is None or g.get("away_q1") is None:
+            continue
+        is_home = g["home_team_id"] == team_id
+        if is_home:
+            scored.append(g["home_q1"])
+            allowed.append(g["away_q1"])
+        else:
+            scored.append(g["away_q1"])
+            allowed.append(g["home_q1"])
+
+    if not scored:
+        return {"recent_q1_scored": None, "recent_q1_allowed": None,
+                "recent_q1_margin": None, "recent_games": 0}
+
+    avg_scored = sum(scored) / len(scored)
+    avg_allowed = sum(allowed) / len(allowed)
+
+    return {
+        "recent_q1_scored": round(avg_scored, 2),
+        "recent_q1_allowed": round(avg_allowed, 2),
+        "recent_q1_margin": round(avg_scored - avg_allowed, 2),
+        "recent_games": len(scored),
+    }
+
+
+def _check_back_to_back(team_abbr: str) -> bool:
+    """Check if a team played yesterday (back-to-back).
+
+    Uses ESPN scoreboard to check if the team had a game yesterday.
+    """
+    import json
+    import urllib.request
+    import urllib.error
+
+    try:
+        yesterday = (datetime.utcnow() - timedelta(days=1)).strftime("%Y%m%d")
+        url = (
+            "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
+            f"/scoreboard?dates={yesterday}"
+        )
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "SportsBettor/1.0",
+            "Accept": "application/json",
+        })
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+
+        for event in data.get("events", []):
+            for comp in event.get("competitions", []):
+                for team_entry in comp.get("competitors", []):
+                    t = team_entry.get("team", {})
+                    if t.get("abbreviation", "") == team_abbr:
+                        return True
+    except (urllib.error.URLError, json.JSONDecodeError, OSError) as e:
+        logger.debug("B2B check failed for %s: %s", team_abbr, e)
+
+    return False
+
+
+# ── Core prediction ────────────────────────────────────────
+
+
+def predict_q1(home_abbr: str, away_abbr: str,
+               spread: float | None = None,
+               total: float | None = None,
+               season: int | None = None) -> dict:
+    """Predict 1st quarter spread using pace-adjusted efficiency.
+
+    Q1 scoring model:
+    1. Base expected Q1 points from Q1-specific off/def ratings
+    2. Pace adjustment: faster matchups produce more Q1 points
+    3. Home court boost (+1.5 pts in Q1)
+    4. Rest/B2B adjustment (-1.0 pt for back-to-back)
+    5. Recent Q1 form (70% recent, 30% season average)
+    6. Team quality adjustment (win% proxy)
+    7. Spread = home_q1_expected - away_q1_expected
+    8. Win probability via normal distribution
+
+    Args:
+        home_abbr: Home team abbreviation (e.g. 'LAL')
+        away_abbr: Away team abbreviation (e.g. 'BOS')
+        spread: Posted Q1 spread for home team (negative = home favored)
+        total: Posted Q1 total
+        season: Season start year (default: current)
+
+    Returns:
+        Prediction dict with expected scores, probabilities, and factors.
+    """
+    home = _get_team_data(home_abbr, season)
+    away = _get_team_data(away_abbr, season)
+
+    reasoning = []
+
+    # ── Step 1: Base Q1 expected points ──
+    # Use Q1-specific home/away splits when available, else overall Q1 stats
+    home_q1_off = home.get("q1_home_ppg") or home["q1_ppg"]
+    home_q1_def = home.get("q1_home_opp_ppg") or home["q1_opp_ppg"]
+    away_q1_off = away.get("q1_away_ppg") or away["q1_ppg"]
+    away_q1_def = away.get("q1_away_opp_ppg") or away["q1_opp_ppg"]
+
+    # Opponent-adjusted: team's Q1 offense vs opponent's Q1 defense
+    # home_expected = (home_off * away_def) / league_avg
+    league_q1_avg = LEAGUE_AVG_Q1_TOTAL / 2  # ~27.5 per team
+
+    if league_q1_avg > 0:
+        home_q1_expected = (home_q1_off * away_q1_def) / league_q1_avg
+        away_q1_expected = (away_q1_off * home_q1_def) / league_q1_avg
+    else:
+        home_q1_expected = home_q1_off
+        away_q1_expected = away_q1_off
+
+    # ── Step 2: Pace adjustment ──
+    home_pace = home.get("pace", LEAGUE_AVG_PACE)
+    away_pace = away.get("pace", LEAGUE_AVG_PACE)
+    matchup_pace = (home_pace + away_pace) / 2
+    pace_factor = matchup_pace / LEAGUE_AVG_PACE
+
+    home_q1_expected *= pace_factor
+    away_q1_expected *= pace_factor
+
+    if pace_factor > 1.03:
+        reasoning.append(f"Fast-paced matchup (pace factor {pace_factor:.2f}) boosts Q1 scoring")
+    elif pace_factor < 0.97:
+        reasoning.append(f"Slow-paced matchup (pace factor {pace_factor:.2f}) suppresses Q1 scoring")
+
+    # ── Step 3: Home court Q1 boost ──
+    home_q1_expected += HOME_Q1_BOOST / 2
+    away_q1_expected -= HOME_Q1_BOOST / 2
+    reasoning.append(f"Home court Q1 boost: +{HOME_Q1_BOOST} pts for {home_abbr}")
+
+    # ── Step 4: Rest / B2B adjustment ──
+    home_rest_adj = 0.0
+    away_rest_adj = 0.0
+    home_b2b = _check_back_to_back(home_abbr)
+    away_b2b = _check_back_to_back(away_abbr)
+
+    if home_b2b:
+        home_rest_adj = B2B_PENALTY
+        home_q1_expected += B2B_PENALTY
+        reasoning.append(f"{home_abbr} on back-to-back: {B2B_PENALTY} Q1 pts")
+    if away_b2b:
+        away_rest_adj = B2B_PENALTY
+        away_q1_expected += B2B_PENALTY
+        reasoning.append(f"{away_abbr} on back-to-back: {B2B_PENALTY} Q1 pts")
+
+    # ── Step 5: Recent Q1 form (70/30 weighting) ──
+    home_recent = _get_recent_q1_form(home.get("team_id", 0), 10)
+    away_recent = _get_recent_q1_form(away.get("team_id", 0), 10)
+
+    if home_recent["recent_q1_scored"] is not None and home_recent["recent_games"] >= 5:
+        recent_off = home_recent["recent_q1_scored"]
+        season_off = home_q1_off
+        blended_off = recent_off * RECENT_WEIGHT + season_off * SEASON_WEIGHT
+        adj = blended_off - season_off
+        home_q1_expected += adj * 0.5  # Dampen to avoid overreaction
+        if abs(home_recent["recent_q1_margin"]) > 2:
+            reasoning.append(
+                f"{home_abbr} recent Q1 form: {home_recent['recent_q1_margin']:+.1f} "
+                f"avg margin L{home_recent['recent_games']}"
+            )
+
+    if away_recent["recent_q1_scored"] is not None and away_recent["recent_games"] >= 5:
+        recent_off = away_recent["recent_q1_scored"]
+        season_off = away_q1_off
+        blended_off = recent_off * RECENT_WEIGHT + season_off * SEASON_WEIGHT
+        adj = blended_off - season_off
+        away_q1_expected += adj * 0.5
+
+    # ── Step 6: Team quality adjustment ──
+    # Use Q1 fast-start percentage as a proxy for team quality in Q1
+    home_fast = home.get("fast_start_pct")
+    away_fast = away.get("fast_start_pct")
+    if home_fast is not None and away_fast is not None:
+        quality_diff = home_fast - away_fast
+        # Cap at +-1.5 points from quality difference
+        quality_adj = max(-1.5, min(1.5, quality_diff * 3.0))
+        home_q1_expected += quality_adj / 2
+        away_q1_expected -= quality_adj / 2
+        if abs(quality_adj) > 0.5:
+            reasoning.append(
+                f"Q1 quality edge: {home_abbr} wins Q1 {home_fast:.0%} vs "
+                f"{away_abbr} {away_fast:.0%}"
+            )
+
+    # ── Step 7: Efficiency rating adjustment ──
+    # Teams with better off/def ratings perform better across all quarters
+    home_off_rtg = home.get("off_rating", LEAGUE_AVG_OFF_RTG)
+    home_def_rtg = home.get("def_rating", LEAGUE_AVG_DEF_RTG)
+    away_off_rtg = away.get("off_rating", LEAGUE_AVG_OFF_RTG)
+    away_def_rtg = away.get("def_rating", LEAGUE_AVG_DEF_RTG)
+
+    # Net rating difference (scaled to Q1 impact)
+    home_net = (home_off_rtg - home_def_rtg) - (away_off_rtg - away_def_rtg)
+    # Every 10 points of net rating difference ~ 1 Q1 point
+    net_adj = home_net / 10.0
+    net_adj = max(-2.0, min(2.0, net_adj))  # Cap at +-2 points
+
+    home_q1_expected += net_adj / 2
+    away_q1_expected -= net_adj / 2
+
+    # ── Clamp expected scores to realistic range ──
+    home_q1_expected = max(18.0, min(40.0, home_q1_expected))
+    away_q1_expected = max(18.0, min(40.0, away_q1_expected))
+
+    # ── Calculate margins and probabilities ──
+    predicted_margin = home_q1_expected - away_q1_expected
+    predicted_total = home_q1_expected + away_q1_expected
+
+    # Q1 moneyline probability (home wins Q1 outright)
+    q1_ml_home = _norm_cdf(predicted_margin / Q1_STD_DEV)
+    q1_ml_away = 1 - q1_ml_home
+
+    # Spread cover probability
+    spread_cover_prob = None
+    if spread is not None:
+        # P(home_margin > spread)  -->  P(Z > (spread - predicted_margin) / std_dev)
+        z = (spread - predicted_margin) / Q1_STD_DEV
+        spread_cover_prob = 1 - _norm_cdf(z)
+
+    # Over/under probability
+    over_prob = None
+    if total is not None:
+        z = (total - predicted_total) / (Q1_STD_DEV * 1.2)  # Total variance is wider
+        over_prob = 1 - _norm_cdf(z)
+
+    # Add overall reasoning
+    if predicted_margin > 2:
+        reasoning.insert(0, f"Model favors {home_abbr} Q1 by {predicted_margin:.1f}")
+    elif predicted_margin < -2:
+        reasoning.insert(0, f"Model favors {away_abbr} Q1 by {abs(predicted_margin):.1f}")
+    else:
+        reasoning.insert(0, "Close Q1 matchup expected")
+
+    return {
+        "home_abbr": home_abbr,
+        "away_abbr": away_abbr,
+        "home_q1_expected": round(home_q1_expected, 1),
+        "away_q1_expected": round(away_q1_expected, 1),
+        "predicted_margin": round(predicted_margin, 1),
+        "predicted_total": round(predicted_total, 1),
+        "spread_cover_prob": round(spread_cover_prob, 4) if spread_cover_prob is not None else None,
+        "over_prob": round(over_prob, 4) if over_prob is not None else None,
+        "q1_ml_home": round(q1_ml_home, 4),
+        "q1_ml_away": round(q1_ml_away, 4),
+        "posted_spread": spread,
+        "posted_total": total,
+        "factors": {
+            "home_q1_off": round(home_q1_off, 1),
+            "away_q1_off": round(away_q1_off, 1),
+            "home_q1_def": round(home_q1_def, 1),
+            "away_q1_def": round(away_q1_def, 1),
+            "pace_factor": round(pace_factor, 3),
+            "matchup_pace": round(matchup_pace, 1),
+            "home_court_boost": HOME_Q1_BOOST,
+            "rest_adj": {
+                "home": home_rest_adj,
+                "away": away_rest_adj,
+            },
+            "home_b2b": home_b2b,
+            "away_b2b": away_b2b,
+            "recent_form": {
+                "home": (f"{home_recent['recent_q1_margin']:+.1f} avg Q1 margin L{home_recent['recent_games']}"
+                         if home_recent.get("recent_q1_margin") is not None else "N/A"),
+                "away": (f"{away_recent['recent_q1_margin']:+.1f} avg Q1 margin L{away_recent['recent_games']}"
+                         if away_recent.get("recent_q1_margin") is not None else "N/A"),
+            },
+            "home_off_rtg": round(home_off_rtg, 1),
+            "home_def_rtg": round(home_def_rtg, 1),
+            "away_off_rtg": round(away_off_rtg, 1),
+            "away_def_rtg": round(away_def_rtg, 1),
+            "home_games": home.get("games", 0),
+            "away_games": away.get("games", 0),
+        },
+        "reasoning": reasoning,
+    }
+
+
+# ── Pick generation ────────────────────────────────────────
+
+
+def q1_spread_probability(predicted_margin: float, spread: float,
+                          std_dev: float = Q1_STD_DEV) -> float:
+    """Probability that home team covers the Q1 spread.
+
+    Args:
+        predicted_margin: Model's predicted Q1 margin (positive = home favored)
+        spread: Posted spread for home team (negative = home favored)
+        std_dev: Standard deviation of Q1 scoring margins (~5.5)
+
+    Returns:
+        Probability that the actual margin exceeds the spread.
+    """
+    z = (spread - predicted_margin) / std_dev
+    return 1 - _norm_cdf(z)
+
+
+def generate_q1_picks(home_abbr: str, away_abbr: str,
+                      odds: dict | None = None,
+                      season: int | None = None) -> list[dict]:
+    """Generate Q1 spread, Q1 total, and Q1 ML picks with edges.
+
+    Args:
+        home_abbr: Home team abbreviation
+        away_abbr: Away team abbreviation
+        odds: Optional dict with Q1 odds:
+            - q1_spread: posted Q1 spread for home team
+            - q1_spread_home_odds: American odds for home spread
+            - q1_spread_away_odds: American odds for away spread
+            - q1_total: posted Q1 total
+            - q1_over_odds: American odds for over
+            - q1_under_odds: American odds for under
+            - home_ml: Home Q1 moneyline
+            - away_ml: Away Q1 moneyline
+        season: Season year override
+
+    Returns:
+        List of pick dicts sorted by edge (highest first).
+        Each pick: {type, pick, prob, edge, odds, priority}
+    """
+    odds = odds or {}
+    q1_spread = odds.get("q1_spread")
+    q1_total = odds.get("q1_total")
+
+    pred = predict_q1(home_abbr, away_abbr,
+                      spread=q1_spread, total=q1_total, season=season)
+
+    picks = []
+
+    # ── Q1 Spread ──
+    if q1_spread is not None:
+        h_spread_odds = odds.get("q1_spread_home_odds", -110)
+        a_spread_odds = odds.get("q1_spread_away_odds", -110)
+
+        # Home covers spread
+        cover_prob = pred["spread_cover_prob"]
+        if cover_prob is not None:
+            implied = _implied_prob(h_spread_odds)
+            edge = (cover_prob - implied) * 100
+            if edge > 0:
+                picks.append({
+                    "type": "Q1_SPREAD",
+                    "pick": f"{home_abbr} {q1_spread:+.1f} Q1",
+                    "prob": round(cover_prob, 4),
+                    "edge": round(edge, 1),
+                    "odds": h_spread_odds,
+                    "priority": 1,
+                })
+
+            # Away covers (opposite spread)
+            away_cover_prob = 1 - cover_prob
+            away_implied = _implied_prob(a_spread_odds)
+            away_edge = (away_cover_prob - away_implied) * 100
+            if away_edge > 0:
+                picks.append({
+                    "type": "Q1_SPREAD",
+                    "pick": f"{away_abbr} {-q1_spread:+.1f} Q1",
+                    "prob": round(away_cover_prob, 4),
+                    "edge": round(away_edge, 1),
+                    "odds": a_spread_odds,
+                    "priority": 1,
+                })
+
+    # ── Q1 Total ──
+    if q1_total is not None:
+        over_odds = odds.get("q1_over_odds", -110)
+        under_odds = odds.get("q1_under_odds", -110)
+
+        over_prob = pred["over_prob"]
+        if over_prob is not None:
+            # Over
+            over_implied = _implied_prob(over_odds)
+            over_edge = (over_prob - over_implied) * 100
+            if over_edge > 0:
+                picks.append({
+                    "type": "Q1_TOTAL",
+                    "pick": f"Over {q1_total} Q1",
+                    "prob": round(over_prob, 4),
+                    "edge": round(over_edge, 1),
+                    "odds": over_odds,
+                    "priority": 2,
+                })
+
+            # Under
+            under_prob = 1 - over_prob
+            under_implied = _implied_prob(under_odds)
+            under_edge = (under_prob - under_implied) * 100
+            if under_edge > 0:
+                picks.append({
+                    "type": "Q1_TOTAL",
+                    "pick": f"Under {q1_total} Q1",
+                    "prob": round(under_prob, 4),
+                    "edge": round(under_edge, 1),
+                    "odds": under_odds,
+                    "priority": 2,
+                })
+
+    # ── Q1 Moneyline ──
+    home_ml_odds = odds.get("home_ml")
+    away_ml_odds = odds.get("away_ml")
+
+    if home_ml_odds is not None:
+        home_ml_prob = pred["q1_ml_home"]
+        implied = _implied_prob(home_ml_odds)
+        edge = (home_ml_prob - implied) * 100
+        if edge > 0:
+            picks.append({
+                "type": "Q1_ML",
+                "pick": f"{home_abbr} Q1 ML",
+                "prob": round(home_ml_prob, 4),
+                "edge": round(edge, 1),
+                "odds": home_ml_odds,
+                "priority": 3,
+            })
+
+    if away_ml_odds is not None:
+        away_ml_prob = pred["q1_ml_away"]
+        implied = _implied_prob(away_ml_odds)
+        edge = (away_ml_prob - implied) * 100
+        if edge > 0:
+            picks.append({
+                "type": "Q1_ML",
+                "pick": f"{away_abbr} Q1 ML",
+                "prob": round(away_ml_prob, 4),
+                "edge": round(edge, 1),
+                "odds": away_ml_odds,
+                "priority": 3,
+            })
+
+    # Sort by priority first (lower = better), then by edge (higher = better)
+    picks.sort(key=lambda p: (p["priority"], -p["edge"]))
+
+    return picks
+
+
+def generate_q1_picks_with_context(home_abbr: str, away_abbr: str,
+                                   odds: dict | None = None,
+                                   season: int | None = None
+                                   ) -> tuple[list[dict], dict]:
+    """Same as generate_q1_picks but also returns the full prediction context.
+
+    Returns (picks_list, prediction_dict).
+    """
+    odds = odds or {}
+    q1_spread = odds.get("q1_spread")
+    q1_total = odds.get("q1_total")
+
+    pred = predict_q1(home_abbr, away_abbr,
+                      spread=q1_spread, total=q1_total, season=season)
+    picks = generate_q1_picks(home_abbr, away_abbr, odds, season)
+
+    return picks, pred
+
+
+# ── CLI entry point ────────────────────────────────────────
+
+if __name__ == "__main__":
+    import sys
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+    )
+
+    args = sys.argv[1:]
+    if len(args) < 2:
+        print("Usage: python -m engine.nba_q1_predict HOME_ABBR AWAY_ABBR [--spread X] [--total X]")
+        print("Example: python -m engine.nba_q1_predict LAL BOS --spread -2.5 --total 55.5")
+        sys.exit(1)
+
+    home = args[0].upper()
+    away = args[1].upper()
+
+    # Parse optional spread/total
+    spread_val = None
+    total_val = None
+    for i, a in enumerate(args):
+        if a == "--spread" and i + 1 < len(args):
+            spread_val = float(args[i + 1])
+        if a == "--total" and i + 1 < len(args):
+            total_val = float(args[i + 1])
+
+    print(f"\n{'='*60}")
+    print(f"  NBA Q1 Prediction: {away} @ {home}")
+    print(f"{'='*60}")
+
+    pred = predict_q1(home, away, spread=spread_val, total=total_val)
+
+    print(f"\n  Home ({home}) Q1 Expected: {pred['home_q1_expected']}")
+    print(f"  Away ({away}) Q1 Expected: {pred['away_q1_expected']}")
+    print(f"  Predicted Margin: {pred['predicted_margin']:+.1f} ({home})")
+    print(f"  Predicted Total: {pred['predicted_total']}")
+    print(f"  Q1 ML Home: {pred['q1_ml_home']:.1%}")
+    print(f"  Q1 ML Away: {pred['q1_ml_away']:.1%}")
+
+    if pred.get("spread_cover_prob") is not None:
+        print(f"  Spread Cover ({spread_val:+.1f}): {pred['spread_cover_prob']:.1%}")
+    if pred.get("over_prob") is not None:
+        print(f"  Over {total_val}: {pred['over_prob']:.1%}")
+
+    print(f"\n  Factors:")
+    factors = pred["factors"]
+    print(f"    Pace factor: {factors['pace_factor']}")
+    print(f"    Home court boost: +{factors['home_court_boost']} pts")
+    print(f"    Home B2B: {factors['home_b2b']}")
+    print(f"    Away B2B: {factors['away_b2b']}")
+    print(f"    Recent form (home): {factors['recent_form']['home']}")
+    print(f"    Recent form (away): {factors['recent_form']['away']}")
+    print(f"    Off/Def ratings: {home} {factors['home_off_rtg']}/{factors['home_def_rtg']} | "
+          f"{away} {factors['away_off_rtg']}/{factors['away_def_rtg']}")
+
+    print(f"\n  Reasoning:")
+    for r in pred["reasoning"]:
+        print(f"    - {r}")
+
+    # Generate picks if odds are provided
+    if spread_val is not None or total_val is not None:
+        odds_dict = {}
+        if spread_val is not None:
+            odds_dict["q1_spread"] = spread_val
+            odds_dict["q1_spread_home_odds"] = -110
+            odds_dict["q1_spread_away_odds"] = -110
+        if total_val is not None:
+            odds_dict["q1_total"] = total_val
+            odds_dict["q1_over_odds"] = -110
+            odds_dict["q1_under_odds"] = -110
+
+        picks = generate_q1_picks(home, away, odds_dict)
+        if picks:
+            print(f"\n  Picks with edge:")
+            for p in picks:
+                print(f"    {p['type']:12s} | {p['pick']:20s} | "
+                      f"{p['prob']:.1%} | edge: {p['edge']:+.1f}% | odds: {p['odds']}")
+        else:
+            print(f"\n  No picks with positive edge found.")
+
+    print(f"{'='*60}\n")
