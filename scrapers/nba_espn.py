@@ -162,7 +162,7 @@ def fetch_scoreboard(date: str = "") -> list[dict]:
     if not data:
         return []
 
-    from engine.nba_db import upsert_nba_game
+    from engine.nba_db import upsert_nba_game, upsert_nba_team
 
     games = []
     for event in data.get("events", []):
@@ -211,6 +211,21 @@ def fetch_scoreboard(date: str = "") -> list[dict]:
             tid = _safe_int(team_obj.get("id"))
             score = _safe_int(comp.get("score")) if status != "scheduled" else None
             is_home = comp.get("homeAway") == "home"
+
+            # Upsert team from scoreboard as a fallback when standings is
+            # unavailable (e.g. end-of-regular-season when ESPN switches to
+            # playoff bracket response). Scoreboard always has team info.
+            t_abbr = team_obj.get("abbreviation", "") or ""
+            t_name = team_obj.get("displayName", "") or ""
+            t_city = team_obj.get("location", "") or ""
+            if tid and t_abbr:
+                try:
+                    upsert_nba_team(
+                        team_id=tid, name=t_name, abbreviation=t_abbr,
+                        city=t_city, conference="", division="", venue="",
+                    )
+                except Exception:
+                    pass
 
             # Extract quarter scores from linescores
             linescores = comp.get("linescores", [])
@@ -431,7 +446,15 @@ def sync_nba(full: bool = False) -> None:
     start = time.time()
 
     _progress("[1] Fetching standings + teams...")
-    fetch_standings()
+    standings_teams = fetch_standings()
+
+    # Fallback: if standings didn't yield teams (end-of-season, ESPN
+    # schema change, etc.), pull today's scoreboard which always contains
+    # team info and will upsert via the scoreboard path.
+    if not standings_teams:
+        _progress("       standings returned no teams; falling back to scoreboard")
+        today = datetime.now().strftime("%Y%m%d")
+        fetch_scoreboard(today)
 
     season = _current_season_year()
 
