@@ -154,6 +154,41 @@ def dump_pick_flow(target_game: str | None = None):
                   f"prob={p['prob']:.3f} edge={p['edge']:+.1f} "
                   f"adj_ev={p.get('adjusted_ev', 0):+.2f} odds={p['odds']}")
 
+        # Also call predict_q1 directly so we can see internal state
+        # (reasoning array + home/away roster deltas). This tells us
+        # whether compute_q1_adjustment fired at all inside the model.
+        from engine.nba_q1_predict import predict_q1
+        try:
+            pred = predict_q1(h_abbr, a_abbr,
+                              spread=odds_dict.get("q1_spread"),
+                              total=odds_dict.get("q1_total"))
+        except Exception as e:
+            print(f"  predict_q1 CRASHED: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
+
+        factors = pred.get("factors", {})
+        home_roster = factors.get("home_roster") or {}
+        away_roster = factors.get("away_roster") or {}
+        print(f"  predict_q1 internal state:")
+        print(f"    home_q1_expected : {pred.get('home_q1_expected')}")
+        print(f"    away_q1_expected : {pred.get('away_q1_expected')}")
+        print(f"    predicted_margin : {pred.get('predicted_margin')}")
+        print(f"    predicted_total  : {pred.get('predicted_total')}")
+        print(f"    q1_ml_home       : {pred.get('q1_ml_home'):.3f}")
+        print(f"    HOME team_id     : "
+              f"(resolved via _get_team_data; see roster delta below)")
+        print(f"    home_roster_adj  : q1_delta={home_roster.get('q1_delta')} "
+              f"starters_out={home_roster.get('starters_out')} "
+              f"load_mgmt={home_roster.get('load_management')}")
+        print(f"    away_roster_adj  : q1_delta={away_roster.get('q1_delta')} "
+              f"starters_out={away_roster.get('starters_out')} "
+              f"load_mgmt={away_roster.get('load_management')}")
+        print(f"  reasoning:")
+        for r in pred.get("reasoning", []):
+            print(f"    - {r}")
+
 
 def dump_player_sample():
     """Print what's in nba_players for BOS — are MPG/PPG actually populated?"""
