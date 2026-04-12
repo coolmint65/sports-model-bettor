@@ -162,9 +162,30 @@ def _parse_provider_block(provider_entry: dict, home_abbr: str, away_abbr: str,
     if result.get("home_spread_point") is None:
         sp = provider_entry.get("spread")
         if sp is not None:
-            # ESPN's "spread" on the event is signed for the home side
-            result["home_spread_point"] = _as_float(sp)
-            result["away_spread_point"] = -_as_float(sp)
+            sp_val = _as_float(sp)
+            # ESPN's "spread" is signed for the FAVORITE, not for home.
+            # Detect which side is favored via the favorite flag (when
+            # present) or via the moneyline signs.
+            home_fav = bool(home_to.get("favorite"))
+            away_fav = bool(away_to.get("favorite"))
+            if not home_fav and not away_fav:
+                h_ml = _as_int(home_to.get("moneyLine") or home_to.get("moneyLineValue"))
+                a_ml = _as_int(away_to.get("moneyLine") or away_to.get("moneyLineValue"))
+                if h_ml is not None and a_ml is not None:
+                    # Lower (more negative) ML = favorite
+                    home_fav = h_ml < a_ml
+                    away_fav = not home_fav
+            # Spread magnitude (always positive distance)
+            mag = abs(sp_val)
+            if home_fav:
+                result["home_spread_point"] = -mag
+                result["away_spread_point"] = +mag
+            elif away_fav:
+                result["home_spread_point"] = +mag
+                result["away_spread_point"] = -mag
+            else:
+                # Can't tell — leave spread unassigned rather than guess
+                pass
     if result.get("home_spread_odds") is None:
         s = home_to.get("spreadOdds")
         if s is not None:
@@ -212,7 +233,24 @@ def _parse_provider_block(provider_entry: dict, home_abbr: str, away_abbr: str,
 
         sp = pb.get("spread")
         if sp is not None and result.get("q1_spread") is None:
-            result["q1_spread"] = _as_float(sp)
+            sp_val = _as_float(sp)
+            # generate_q1_picks treats q1_spread as the HOME spread.
+            # ESPN's period spread is for the favorite — detect and orient.
+            q_home_fav = bool(h_to.get("favorite"))
+            q_away_fav = bool(a_to.get("favorite"))
+            if not q_home_fav and not q_away_fav:
+                h_ml = _as_int(h_to.get("moneyLine"))
+                a_ml = _as_int(a_to.get("moneyLine"))
+                if h_ml is not None and a_ml is not None:
+                    q_home_fav = h_ml < a_ml
+                    q_away_fav = not q_home_fav
+            mag = abs(sp_val)
+            if q_home_fav:
+                result["q1_spread"] = -mag
+            elif q_away_fav:
+                result["q1_spread"] = +mag
+            else:
+                result["q1_spread"] = sp_val
         h_sp_odds = h_to.get("spreadOdds")
         a_sp_odds = a_to.get("spreadOdds")
         if h_sp_odds is not None and result.get("q1_spread_home_odds") is None:
