@@ -69,24 +69,44 @@ def fetch_nba_odds() -> dict:
         logger.info("No Odds API key found. Set ODDS_API_KEY env var or create data/odds_api_key.txt")
         return {}
 
-    # Q1 markets are alternate markets. Fetch both groups.
-    # Note: The Odds API documents these as "h2h_q1", "spreads_q1", "totals_q1".
-    markets = ",".join(["h2h", "spreads", "totals", "h2h_q1", "spreads_q1", "totals_q1"])
-    url = (f"{API_BASE}/sports/{NBA_SPORT}/odds/"
-           f"?apiKey={api_key}"
-           f"&regions=us"
-           f"&markets={markets}"
-           f"&oddsFormat=american"
-           f"&bookmakers={PREFERRED_BOOK}")
+    # Q1 markets (h2h_q1, spreads_q1, totals_q1) are "alternate" markets
+    # that require higher-tier plans on The Odds API and aren't exposed
+    # on the generic /odds endpoint — they must be fetched per-event or
+    # not at all on the free tier. We try them first, and if the API
+    # returns 422 (plan/endpoint mismatch) we fall back to standard
+    # full-game markets only. Full-game odds are still useful as Q1 ML
+    # proxies and for display.
+    def _build_url(markets: list[str]) -> str:
+        m = ",".join(markets)
+        return (f"{API_BASE}/sports/{NBA_SPORT}/odds/"
+                f"?apiKey={api_key}"
+                f"&regions=us"
+                f"&markets={m}"
+                f"&oddsFormat=american"
+                f"&bookmakers={PREFERRED_BOOK}")
 
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "NBAQ1PredictionEngine/1.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode())
-            remaining = resp.headers.get("x-requests-remaining", "?")
-            logger.info("Odds API (NBA): %s requests remaining this month", remaining)
-    except Exception as e:
-        logger.warning("Odds API (NBA) failed: %s", e)
+    full_markets = ["h2h", "spreads", "totals", "h2h_q1", "spreads_q1", "totals_q1"]
+    fallback_markets = ["h2h", "spreads", "totals"]
+    data = None
+    for markets in (full_markets, fallback_markets):
+        try:
+            req = urllib.request.Request(_build_url(markets),
+                                        headers={"User-Agent": "NBAQ1PredictionEngine/1.0"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode())
+                remaining = resp.headers.get("x-requests-remaining", "?")
+                logger.info("Odds API (NBA): %s requests remaining this month (markets=%s)",
+                            remaining, markets)
+                break
+        except Exception as e:
+            err = str(e)
+            if "422" in err and markets is full_markets:
+                logger.info("Odds API (NBA): Q1 markets not available on this plan, "
+                            "falling back to full-game only")
+                continue
+            logger.warning("Odds API (NBA) failed: %s", e)
+            return {}
+    if data is None:
         return {}
 
     if not data or not isinstance(data, list):

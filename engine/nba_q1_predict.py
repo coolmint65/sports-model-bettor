@@ -75,7 +75,24 @@ def _get_team_data(abbr: str, season: int | None = None) -> dict:
 
     team = get_nba_team_by_abbr(abbr)
     if not team:
-        logger.warning("Team not found: %s (using defaults)", abbr)
+        # Log once per process per abbr to avoid spam. If no teams are in
+        # the DB at all, surface an actionable hint the first time it fires.
+        if not hasattr(_get_team_data, "_warned"):
+            _get_team_data._warned = set()
+            # Check if ANY team is in the DB — if not, user hasn't run sync
+            try:
+                from .nba_db import get_conn as _nba_conn
+                n = _nba_conn().execute("SELECT COUNT(*) FROM nba_teams").fetchone()[0]
+                if n == 0:
+                    logger.warning(
+                        "NBA teams table empty — run 'sync_nba.bat --full' to "
+                        "populate team data. Predictions will use league-average "
+                        "defaults until then.")
+            except Exception:
+                pass
+        if abbr not in _get_team_data._warned:
+            _get_team_data._warned.add(abbr)
+            logger.warning("Team not found: %s (using defaults)", abbr)
         return {
             "abbreviation": abbr,
             "season": season,

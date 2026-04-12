@@ -135,18 +135,16 @@ def fetch_game_odds(event_id: str) -> dict | None:
     # ESPN doesn't provide RL juice through the API.
     # Don't guess — leave as null and let the frontend/edge calculator
     # handle it with standard -110 assumption.
-
-    # Provider info
-    provider = o.get("provider", {})
-    result["provider"] = provider.get("name", "Unknown")
+    # (Provider was set inside endpoint 1 block above; don't reference `o`
+    # here — it may be undefined if endpoint 1 returned no data.)
 
     # Log what we found
     logger.debug("Odds for %s: ML %s/%s, O/U %s (%s/%s), RL %s (%s/%s) via %s",
                 event_id,
-                result["home_ml"], result["away_ml"],
-                result["over_under"], result["over_odds"], result["under_odds"],
-                result["spread"], result["home_spread_odds"], result["away_spread_odds"],
-                result["provider"])
+                result.get("home_ml"), result.get("away_ml"),
+                result.get("over_under"), result.get("over_odds"), result.get("under_odds"),
+                result.get("spread"), result.get("home_spread_odds"),
+                result.get("away_spread_odds"), result.get("provider"))
 
     return result
 
