@@ -429,10 +429,11 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     # Calibration cap: MLB win probabilities rarely exceed 75% even for
     # heavy favorites. Our backtest showed 57% actual win rate on ML picks
     # that were "displayed" at 80-97% confidence — a clear miscalibration.
-    # Cap raw probabilities to 0.30-0.72 range to match reality.
-    # The raw matrix still computes accurately; this just prevents the
-    # display from showing overconfident numbers.
-    p_home = max(0.30, min(0.72, p_home))
+    # Cap raw probabilities via config-driven floor/cap. Calibration data
+    # (N=62 at 75%+ predicted, actual 51.6%) showed the old 0.72 cap was
+    # still letting through overconfident picks; tightened to 0.65.
+    from .config import MLB_WIN_PROB_FLOOR, MLB_WIN_PROB_CAP
+    p_home = max(MLB_WIN_PROB_FLOOR, min(MLB_WIN_PROB_CAP, p_home))
     p_away = 1 - p_home
 
     # ── Over/Under lines ──

@@ -37,7 +37,9 @@ EDGE_SKIP = 4.0  # raised from 1.5 based on tracker data
 # ── MLB config ──
 MLB_AVG_RPG = 4.6  # League average runs per game
 MLB_WIN_PROB_FLOOR = 0.30
-MLB_WIN_PROB_CAP = 0.72
+MLB_WIN_PROB_CAP = 0.65  # tightened from 0.72 — calibration data shows
+                          # 75%+ predicted = 51.6% actual across 62 picks
+
 MLB_EXPECTED_RUNS_FLOOR = 2.0
 MLB_EXPECTED_RUNS_CAP = 6.5
 
@@ -64,17 +66,15 @@ NHL_ENABLE_GRANULAR_FACTORS = False
 # MLB predict stacks 16+ multiplicative adjustments on expected runs
 # (pitcher, lineup, team cal, bullpen, bullpen fatigue, park, coors,
 # situational aggregate, umpire, weather, travel, platoon LHP, matchup
-# interaction, form, injuries). The backtest shows MLB is only
-# profitable on RL (55.6%) and is losing on ML / O/U / 1st INN — similar
-# compounding risk to what broke NHL.
+# interaction, form, injuries).
 #
-# Default: True (keep current behavior — MLB is not catastrophically
-# broken, just underperforming on 3/4 markets). Flip to False to
-# disable the "situational" group (weather, umpire, travel, matchup
-# interaction, bullpen fatigue) and run the retrospective sweep to see
-# whether ML / O/U / 1st INN WR improves. If it does, those factors are
-# net-negative and should be investigated individually.
-MLB_ENABLE_SITUATIONAL_FACTORS = True
+# Default flipped to False 2026-04 based on tracker evidence:
+#   "rl" picks (OLD code path, fewer factors):   26-15  63.4% WR  +$864
+#   "RL" picks (NEW code path, +situational):    19-21  47.5% WR  -$479
+# Same compounding pattern that broke NHL granular factors. Until each
+# factor is validated individually we default to the simpler path.
+# Flip to True to experiment with the full factor set.
+MLB_ENABLE_SITUATIONAL_FACTORS = False
 
 # ── Bet-type reliability weights ──
 # Based on live tracker results + retrospective sweep against current model.
