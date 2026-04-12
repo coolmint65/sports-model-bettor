@@ -30,29 +30,33 @@ MLB_EXPECTED_RUNS_CAP = 6.5
 NHL_HOME_EDGE = 0.15  # ~0.15 goal home-ice advantage
 NHL_MAX_GOALS = 10
 
-# Toggle: set False to skip the 12 granular factors in nhl_predict.py.
-# These were added in an attempt to improve accuracy but the tracker
-# shows the model is now 34% WR. Stripping back to the core xG +
-# goalie + rest factors until each granular factor is individually
-# validated against a baseline.
+# Granular factors (Factors 1-12 in nhl_predict.py).
+# PERMANENTLY OFF until each factor is individually validated.
+# Retrospective sweep of 41 settled picks showed enabling these factors
+# dropped WR from 53.7% to 34.1% — a ~20pt degradation. Never turn this
+# on globally again. If you want to experiment with a factor, flip it
+# on one at a time in an ablation test.
 NHL_ENABLE_GRANULAR_FACTORS = False
 
 # ── Bet-type reliability weights ──
-# Based on live tracker results. Higher = more reliable.
+# Based on live tracker results + retrospective sweep against current model.
 # Used for adjusted-EV ranking (adjusted_ev = edge * reliability).
-# Low weights demote a market in "best pick" ordering but DO NOT
-# stop picks from being generated/recorded — we still want the data.
+# Low weights demote a market in "best pick" ordering but do NOT stop
+# picks from being generated/recorded.
 MLB_BET_RELIABILITY = {
-    "RL": 1.00,     # 55.6% hit rate, +$384 — only profitable market
-    "ML": 0.50,     # 48% hit rate, -$150
-    "O/U": 0.30,    # 33.3% hit rate, -$334 (small sample)
-    "1st INN": 0.20, # 46.2% hit rate, -$400
+    "RL": 1.00,     # 55.6% hit rate, +$384 — proven profitable
+    "ML": 0.70,     # 48% hit rate, slightly losing — watch
+    "O/U": 0.50,    # 33.3% hit rate — small sample, demote
+    "1st INN": 0.30, # 46.2% hit rate, -$400 — keep but heavily demoted
 }
 
 NHL_BET_RELIABILITY = {
-    "O/U": 0.40,   # Sub-50% overall, but keep recording
-    "PL": 0.40,
-    "ML": 0.40,
+    # Retro sweep with granular OFF puts the model at 53.7% across all
+    # markets. Treat all three as roughly equal for ranking until we
+    # have enough live picks to differentiate.
+    "O/U": 1.00,
+    "PL": 1.00,
+    "ML": 0.85,
 }
 
 NBA_BET_RELIABILITY = {
@@ -61,8 +65,7 @@ NBA_BET_RELIABILITY = {
     "Q1_ML": 0.60,
 }
 
-# ── Market toggles — keep ALL on by default to collect tracker data ──
-# Only set False when a market is so broken it's not worth watching.
+# ── Weak markets — disabled by default ──
 ENABLE_MLB_NRFI = True
 ENABLE_NHL_ML = True
 ENABLE_NHL_OU = True
