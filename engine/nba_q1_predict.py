@@ -371,6 +371,52 @@ def predict_q1(home_abbr: str, away_abbr: str,
                 f"{away_abbr} {away_fast:.0%}"
             )
 
+    # ── Step 6.5: Roster availability (injuries + load management) ──
+    # Subtract Q1 impact of players who are Out/Questionable/Doubtful, and
+    # apply a bonus penalty if 3+ starters sit (load-management signal).
+    # Also apply a safety-net penalty for likely end-of-season rest spots.
+    home_roster_adj = {"q1_delta": 0.0, "starters_out": 0, "load_management": False, "out_players": []}
+    away_roster_adj = {"q1_delta": 0.0, "starters_out": 0, "load_management": False, "out_players": []}
+    try:
+        from .nba_injuries import compute_q1_adjustment, is_likely_resting_spot
+        if home.get("team_id"):
+            home_roster_adj = compute_q1_adjustment(home["team_id"], season)
+            home_q1_expected += home_roster_adj["q1_delta"]
+            if home_roster_adj["q1_delta"] < 0:
+                reasoning.append(
+                    f"{home_abbr} roster: {home_roster_adj['q1_delta']:+.1f} Q1 pts "
+                    f"({home_roster_adj['starters_out']} starter(s) out"
+                    + (f", load-mgmt spot)" if home_roster_adj["load_management"] else ")")
+                )
+        if away.get("team_id"):
+            away_roster_adj = compute_q1_adjustment(away["team_id"], season)
+            away_q1_expected += away_roster_adj["q1_delta"]
+            if away_roster_adj["q1_delta"] < 0:
+                reasoning.append(
+                    f"{away_abbr} roster: {away_roster_adj['q1_delta']:+.1f} Q1 pts "
+                    f"({away_roster_adj['starters_out']} starter(s) out"
+                    + (f", load-mgmt spot)" if away_roster_adj["load_management"] else ")")
+                )
+
+        # Schedule-based safety net: if load-mgmt wasn't already detected
+        # from injuries but the team is at end-of-season with nothing to
+        # play for, apply a small preemptive penalty.
+        today = datetime.now().strftime("%Y-%m-%d")
+        if home.get("team_id") and not home_roster_adj["load_management"]:
+            if is_likely_resting_spot(home["team_id"], today, season):
+                home_q1_expected -= 3.0
+                home_roster_adj["q1_delta"] -= 3.0
+                home_roster_adj["resting_spot"] = True
+                reasoning.append(f"{home_abbr} at end-of-regular-season: -3.0 Q1 pts (rest risk)")
+        if away.get("team_id") and not away_roster_adj["load_management"]:
+            if is_likely_resting_spot(away["team_id"], today, season):
+                away_q1_expected -= 3.0
+                away_roster_adj["q1_delta"] -= 3.0
+                away_roster_adj["resting_spot"] = True
+                reasoning.append(f"{away_abbr} at end-of-regular-season: -3.0 Q1 pts (rest risk)")
+    except Exception as e:
+        logger.debug("Roster adjustment skipped: %s", e)
+
     # ── Step 7: Efficiency rating adjustment ──
     # Teams with better off/def ratings perform better across all quarters
     home_off_rtg = home.get("off_rating", LEAGUE_AVG_OFF_RTG)
@@ -463,6 +509,8 @@ def predict_q1(home_abbr: str, away_abbr: str,
             "away_def_rtg": round(away_def_rtg, 1),
             "home_games": home.get("games", 0),
             "away_games": away.get("games", 0),
+            "home_roster": home_roster_adj,
+            "away_roster": away_roster_adj,
         },
         "reasoning": reasoning,
     }

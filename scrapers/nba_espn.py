@@ -418,6 +418,247 @@ def fetch_team_stats() -> int:
     return count
 
 
+# -- Rosters & Player Stats ------------------------------------------------
+
+
+def fetch_nba_rosters() -> int:
+    """Fetch roster + per-player season stats for every NBA team.
+
+    Computes each player's Q1 impact as:
+        q1_impact = points_per_game * min(1.0, minutes_per_game / 12.0)
+    The 12.0 divisor reflects the fact that a "full Q1" is 12 minutes; a
+    player averaging 24 MPG plays roughly half of Q1, a player averaging
+    36 MPG plays nearly all of Q1, etc.
+
+    Top-5 MPG players per team are flagged as starters.
+
+    Returns count of players stored.
+    """
+    from engine.nba_db import get_all_nba_teams, upsert_nba_player
+
+    teams = get_all_nba_teams()
+    if not teams:
+        _progress("WARNING: No NBA teams in DB. Run standings first.")
+        return 0
+
+    season = _current_season_year()
+    total_players = 0
+
+    for team in teams:
+        tid = team["id"]
+        # Skip non-franchise entries
+        if tid >= 100:
+            continue
+
+        # ESPN roster endpoint with embedded season stats
+        url = f"{ESPN_API}/teams/{tid}/roster?enable=stats"
+        data = _fetch(url)
+        if not data:
+            time.sleep(0.5)
+            continue
+
+        # Collect all athletes first so we can rank MPG for starter flagging
+        team_players: list[dict] = []
+        for entry in data.get("athletes", []):
+            # ESPN returns athletes grouped by position sometimes, flat other times
+            items = entry.get("items") if "items" in entry else [entry]
+            for athlete in items:
+                pid = _safe_int(athlete.get("id"))
+                if not pid:
+                    continue
+                name = athlete.get("displayName") or athlete.get("fullName", "")
+                if not name:
+                    continue
+                pos_obj = athlete.get("position") or {}
+                pos = pos_obj.get("abbreviation") or pos_obj.get("name", "")
+                jersey = athlete.get("jersey", "")
+
+                # Parse stats block if present
+                mpg = None
+                ppg = None
+                gp = 0
+                stats_blk = athlete.get("stats") or []
+                # Stats format: list of {name/displayName, value}
+                for s in stats_blk:
+                    nm = (s.get("name") or s.get("abbreviation") or "").lower()
+                    val = _safe_float(s.get("value"))
+                    if val is None:
+                        val = _safe_float(s.get("displayValue"))
+                    if nm in ("avgminutes", "minutespergame", "mpg"):
+                        mpg = val
+                    elif nm in ("avgpoints", "pointspergame", "ppg"):
+                        ppg = val
+                    elif nm in ("gamesplayed", "gp"):
+                        gp = _safe_int(s.get("value"), 0)
+
+                team_players.append({
+                    "player_id": pid, "name": name, "position": pos,
+                    "jersey": jersey, "mpg": mpg, "ppg": ppg, "gp": gp,
+                })
+
+        # Flag top-5 MPG as starters
+        ranked = sorted(
+            [p for p in team_players if p["mpg"] is not None],
+            key=lambda p: -p["mpg"],
+        )
+        starter_ids = {p["player_id"] for p in ranked[:5]}
+
+        # Store each player with computed Q1 impact.
+        # q1_impact = NET Q1 points lost to the team if this player is OUT
+        # (accounting for an approximate replacement player taking minutes).
+        #
+        # Derivation:
+        #   per-minute rate = PPG / MPG
+        #   Starter Q1 minutes ≈ 11 of 12 (subbed out late-Q1)
+        #   Bench Q1 minutes   ≈ MPG / 48 * 12 (proportional to role)
+        #   Replacement is ~60% as good for starters, ~30% as good for bench,
+        #   so NET loss factor is 0.40 starter / 0.70 bench.
+        for p in team_players:
+            mpg = p["mpg"]
+            ppg = p["ppg"]
+            is_starter = p["player_id"] in starter_ids
+            if mpg is not None and ppg is not None and mpg > 0 and ppg >= 0:
+                if is_starter:
+                    q1_mins = min(11.0, mpg)
+                    rate = ppg / mpg
+                    gross = q1_mins * rate
+                    q1_impact = round(gross * 0.40, 3)
+                else:
+                    q1_mins = (mpg / 48.0) * 12.0
+                    rate = ppg / mpg
+                    gross = q1_mins * rate
+                    q1_impact = round(gross * 0.70, 3)
+            else:
+                q1_impact = 0.0
+
+            upsert_nba_player(
+                player_id=p["player_id"],
+                team_id=tid,
+                name=p["name"],
+                season=season,
+                position=p["position"],
+                jersey=p["jersey"],
+                games_played=p["gp"],
+                minutes_per_game=mpg,
+                points_per_game=ppg,
+                starter=1 if is_starter else 0,
+                q1_impact=q1_impact,
+            )
+            total_players += 1
+
+        time.sleep(0.5)
+
+    _progress(f"Loaded {total_players} NBA players across {len(teams)} teams")
+    return total_players
+
+
+# -- Injuries --------------------------------------------------------------
+
+ESPN_INJURIES_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries"
+
+
+def fetch_nba_injuries() -> int:
+    """Fetch current injury report from ESPN and refresh the nba_injuries table.
+
+    Replaces the previous snapshot — any player no longer listed is treated
+    as available.  Returns the total injury row count stored.
+    """
+    from engine.nba_db import clear_nba_injuries, upsert_nba_injury, get_nba_team_by_abbr
+
+    data = _fetch(ESPN_INJURIES_URL)
+    if not data:
+        _progress("WARNING: ESPN NBA injuries endpoint returned no data")
+        return 0
+
+    # ESPN wraps teams at top-level under various keys; handle shapes.
+    team_blocks = data.get("injuries") or data.get("teams") or data.get("items") or []
+    if not team_blocks and isinstance(data, dict):
+        for key in data:
+            val = data[key]
+            if isinstance(val, list) and val and isinstance(val[0], dict) and "team" in val[0]:
+                team_blocks = val
+                break
+
+    clear_nba_injuries()
+
+    count = 0
+    for block in team_blocks:
+        if not isinstance(block, dict):
+            continue
+
+        # Extract team abbreviation — try several paths
+        team_info = block.get("team") or {}
+        abbr = team_info.get("abbreviation", "")
+        if not abbr:
+            # Try first injury's athlete.team
+            raw = block.get("injuries") or block.get("items") or []
+            for inj in raw:
+                at = (inj.get("athlete") or {}).get("team") or {}
+                if at.get("abbreviation"):
+                    abbr = at["abbreviation"]
+                    break
+
+        if not abbr:
+            continue
+
+        # Map ESPN abbr -> DB abbr (ESPN uses NOP/NYK/SAS/UTA; some DB rows
+        # may store the same — try both and fall back to ESPN's codes)
+        team = get_nba_team_by_abbr(abbr)
+        if not team:
+            # Try common alternates
+            alt = {"NO": "NOP", "NOP": "NO", "NY": "NYK", "NYK": "NY",
+                   "SA": "SAS", "SAS": "SA", "UTAH": "UTA", "UTA": "UTAH",
+                   "WAS": "WSH", "WSH": "WAS", "BRK": "BKN", "BKN": "BRK"}
+            team = get_nba_team_by_abbr(alt.get(abbr, abbr))
+        if not team:
+            logger.debug("Injury team abbr %s not in DB; skipping", abbr)
+            continue
+
+        tid = team["id"]
+        raw = block.get("injuries") or block.get("items") or []
+        for entry in raw:
+            if not isinstance(entry, dict):
+                continue
+            athlete = entry.get("athlete") or entry.get("player") or {}
+            pid = _safe_int(athlete.get("id")) or None
+            name = (athlete.get("displayName") or athlete.get("fullName")
+                    or athlete.get("name", ""))
+            if not name:
+                continue
+            pos_obj = athlete.get("position") or {}
+            pos = pos_obj.get("abbreviation") or pos_obj.get("name", "")
+
+            status = entry.get("status") or entry.get("injuryStatus") or "Unknown"
+            if isinstance(status, dict):
+                status = status.get("type") or status.get("description", "Unknown")
+
+            inj_type = entry.get("type") or entry.get("injuryType") or ""
+            if isinstance(inj_type, dict):
+                inj_type = inj_type.get("description") or inj_type.get("name", "")
+
+            details = entry.get("details") or {}
+            detail = ""
+            if isinstance(details, dict):
+                detail = details.get("detail") or details.get("returnDate", "")
+            elif isinstance(details, str):
+                detail = details
+            if not detail:
+                detail = entry.get("longComment") or entry.get("shortComment") or ""
+
+            try:
+                upsert_nba_injury(
+                    team_id=tid, name=name, status=str(status),
+                    player_id=pid, position=pos,
+                    type_=str(inj_type), detail=str(detail),
+                )
+                count += 1
+            except Exception as e:
+                logger.debug("Failed to store injury for %s/%s: %s", abbr, name, e)
+
+    _progress(f"Loaded {count} NBA injuries across {len(team_blocks)} team blocks")
+    return count
+
+
 # -- Q1 Computation --------------------------------------------------------
 
 
@@ -494,6 +735,12 @@ def sync_nba(full: bool = False) -> None:
 
         _progress("[4] Computing Q1 stats for all teams...")
         compute_all_q1_stats(season)
+
+        _progress("[5] Fetching rosters + per-player stats...")
+        fetch_nba_rosters()
+
+        _progress("[6] Fetching current injury report...")
+        fetch_nba_injuries()
     else:
         _progress("[2] Fetching today's games...")
         today = datetime.now().strftime("%Y%m%d")
@@ -504,6 +751,9 @@ def sync_nba(full: bool = False) -> None:
         yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
         yesterday_games = fetch_scoreboard(yesterday)
         _progress(f"       {len(yesterday_games)} games yesterday")
+
+        _progress("[4] Fetching current injury report...")
+        fetch_nba_injuries()
 
     elapsed = time.time() - start
     _progress(f"=== NBA sync complete in {elapsed:.0f}s ===")
@@ -534,6 +784,12 @@ def sync_history(season: int) -> None:
 
     _progress("[4] Fetching team stats...")
     fetch_team_stats()
+
+    _progress("[5] Fetching rosters + per-player stats...")
+    fetch_nba_rosters()
+
+    _progress("[6] Fetching current injury report...")
+    fetch_nba_injuries()
 
     elapsed = time.time() - start
     _progress(f"=== History load complete in {elapsed:.0f}s ===")

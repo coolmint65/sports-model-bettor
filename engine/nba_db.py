@@ -131,6 +131,40 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         updated_at TEXT DEFAULT (datetime('now'))
     );
 
+    -- NBA players (roster + per-season stats + derived Q1 impact)
+    -- q1_impact is the player's expected points in a typical Q1 given MPG.
+    -- starter=1 when the player is one of the team's top-5 MPG.
+    CREATE TABLE IF NOT EXISTS nba_players (
+        player_id INTEGER PRIMARY KEY,
+        team_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        position TEXT,
+        jersey TEXT,
+        season INTEGER NOT NULL,
+        games_played INTEGER DEFAULT 0,
+        minutes_per_game REAL,
+        points_per_game REAL,
+        starter INTEGER DEFAULT 0,
+        q1_impact REAL DEFAULT 0,
+        updated_at TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY (team_id) REFERENCES nba_teams(id)
+    );
+
+    -- NBA injury state (snapshot from ESPN injuries endpoint).
+    -- Refreshed each sync. Players absent from the latest fetch are treated
+    -- as available.
+    CREATE TABLE IF NOT EXISTS nba_injuries (
+        player_id INTEGER,
+        team_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        position TEXT,
+        status TEXT,
+        type TEXT,
+        detail TEXT,
+        fetched_at TEXT DEFAULT (datetime('now')),
+        PRIMARY KEY (team_id, name)
+    );
+
     -- NBA odds history
     CREATE TABLE IF NOT EXISTS nba_odds (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -160,6 +194,9 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     CREATE INDEX IF NOT EXISTS idx_nba_q1_stats_team ON nba_q1_stats(team_id, season);
     CREATE INDEX IF NOT EXISTS idx_nba_picks_date ON nba_picks(date);
     CREATE INDEX IF NOT EXISTS idx_nba_odds_date ON nba_odds(game_date);
+    CREATE INDEX IF NOT EXISTS idx_nba_players_team ON nba_players(team_id);
+    CREATE INDEX IF NOT EXISTS idx_nba_players_season ON nba_players(team_id, season);
+    CREATE INDEX IF NOT EXISTS idx_nba_injuries_team ON nba_injuries(team_id);
     """)
     conn.commit()
 
@@ -454,3 +491,89 @@ def compute_q1_stats_from_games(team_id: int, season: int) -> dict | None:
 
     upsert_q1_stats(team_id, season, **stats)
     return stats
+
+
+# -- Player / injury helpers ----------------------------------------------
+
+
+def upsert_nba_player(player_id: int, team_id: int, name: str,
+                      season: int, position: str = "", jersey: str = "",
+                      games_played: int = 0,
+                      minutes_per_game: float | None = None,
+                      points_per_game: float | None = None,
+                      starter: int = 0,
+                      q1_impact: float = 0.0) -> None:
+    """Insert or update a player's roster + per-season stats row."""
+    conn = get_conn()
+    conn.execute("""
+        INSERT INTO nba_players (
+            player_id, team_id, name, position, jersey, season,
+            games_played, minutes_per_game, points_per_game,
+            starter, q1_impact, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(player_id) DO UPDATE SET
+            team_id=excluded.team_id, name=excluded.name,
+            position=excluded.position, jersey=excluded.jersey,
+            season=excluded.season,
+            games_played=excluded.games_played,
+            minutes_per_game=excluded.minutes_per_game,
+            points_per_game=excluded.points_per_game,
+            starter=excluded.starter,
+            q1_impact=excluded.q1_impact,
+            updated_at=datetime('now')
+    """, (player_id, team_id, name, position, jersey, season,
+          games_played, minutes_per_game, points_per_game,
+          starter, q1_impact))
+    conn.commit()
+
+
+def get_team_players(team_id: int, season: int,
+                     starters_only: bool = False) -> list[dict]:
+    """Get all players for a team/season, ordered by MPG desc."""
+    conn = get_conn()
+    q = ("SELECT * FROM nba_players WHERE team_id = ? AND season = ?")
+    if starters_only:
+        q += " AND starter = 1"
+    q += " ORDER BY minutes_per_game DESC NULLS LAST, points_per_game DESC"
+    rows = conn.execute(q, (team_id, season)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def clear_nba_injuries() -> None:
+    """Drop the current injury snapshot before writing a fresh one."""
+    conn = get_conn()
+    conn.execute("DELETE FROM nba_injuries")
+    conn.commit()
+
+
+def upsert_nba_injury(team_id: int, name: str, status: str,
+                      player_id: int | None = None,
+                      position: str = "", type_: str = "",
+                      detail: str = "") -> None:
+    """Insert/update a single injury row."""
+    conn = get_conn()
+    conn.execute("""
+        INSERT INTO nba_injuries (
+            player_id, team_id, name, position, status, type, detail, fetched_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(team_id, name) DO UPDATE SET
+            player_id=excluded.player_id,
+            position=excluded.position,
+            status=excluded.status,
+            type=excluded.type,
+            detail=excluded.detail,
+            fetched_at=datetime('now')
+    """, (player_id, team_id, name, position, status, type_, detail))
+    conn.commit()
+
+
+def get_team_injuries(team_id: int) -> list[dict]:
+    """Get current injury rows for a team."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT * FROM nba_injuries WHERE team_id = ?",
+        (team_id,)
+    ).fetchall()
+    return [dict(r) for r in rows]
