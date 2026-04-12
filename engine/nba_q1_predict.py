@@ -9,7 +9,7 @@ Poisson), so we use a Gaussian CDF for spread probabilities.
 Factors:
     - Pace matchup (possessions per game)
     - Q1-specific offensive/defensive ratings
-    - Home court Q1 boost (+1.5 pts)
+    - Home court Q1 boost (+0.69 pts, calibrated)
     - Rest / back-to-back penalty (-1.0 pt)
     - Recent Q1 form (last 10 games weighted 70/30 vs season)
     - Team quality / record
@@ -28,19 +28,23 @@ logger = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────
 
-HOME_Q1_BOOST = 1.5          # Home teams outscore by ~1.5 in Q1 historically
+# Calibrated from 1,291-game analysis (calibration_report.py):
+#   Home Q1 margin +0.69 (not +1.5)
+#   Q1 total avg 58.8 (not 55.0)
+#   Q1 margin std dev 8.63 (not 5.5)
+HOME_Q1_BOOST = 0.69         # Home teams outscore by ~0.69 in Q1 (calibrated)
 B2B_PENALTY = -1.0           # Back-to-back teams start slower in Q1
-Q1_STD_DEV = 5.5             # Standard deviation for Q1 scoring margins
-LEAGUE_AVG_Q1_TOTAL = 55.0   # Approximate league-average Q1 total
+Q1_STD_DEV = 8.63            # Standard deviation for Q1 scoring margins (calibrated)
+LEAGUE_AVG_Q1_TOTAL = 58.8   # Average Q1 total (calibrated)
 LEAGUE_AVG_PACE = 99.0       # League-average possessions per game
 LEAGUE_AVG_OFF_RTG = 112.0   # League-average offensive rating (pts per 100 poss)
 LEAGUE_AVG_DEF_RTG = 112.0   # League-average defensive rating
 RECENT_WEIGHT = 0.70         # Weight for recent form (last 10) vs season
 SEASON_WEIGHT = 0.30         # Weight for full-season averages
 
-# Default Q1 scoring if no data available
-DEFAULT_Q1_PPG = 27.5
-DEFAULT_Q1_OPP_PPG = 27.5
+# Default Q1 scoring if no data available (calibrated: 58.8 / 2 = 29.4)
+DEFAULT_Q1_PPG = 29.4
+DEFAULT_Q1_OPP_PPG = 29.4
 
 
 # ── Math helpers ───────────────────────────────────────────
@@ -254,7 +258,7 @@ def predict_q1(home_abbr: str, away_abbr: str,
     Q1 scoring model:
     1. Base expected Q1 points from Q1-specific off/def ratings
     2. Pace adjustment: faster matchups produce more Q1 points
-    3. Home court boost (+1.5 pts in Q1)
+    3. Home court boost (+0.69 pts in Q1, calibrated)
     4. Rest/B2B adjustment (-1.0 pt for back-to-back)
     5. Recent Q1 form (70% recent, 30% season average)
     6. Team quality adjustment (win% proxy)
@@ -285,7 +289,7 @@ def predict_q1(home_abbr: str, away_abbr: str,
 
     # Opponent-adjusted: team's Q1 offense vs opponent's Q1 defense
     # home_expected = (home_off * away_def) / league_avg
-    league_q1_avg = LEAGUE_AVG_Q1_TOTAL / 2  # ~27.5 per team
+    league_q1_avg = LEAGUE_AVG_Q1_TOTAL / 2  # ~29.4 per team (calibrated)
 
     if league_q1_avg > 0:
         home_q1_expected = (home_q1_off * away_q1_def) / league_q1_avg
@@ -407,7 +411,9 @@ def predict_q1(home_abbr: str, away_abbr: str,
     # Over/under probability
     over_prob = None
     if total is not None:
-        z = (total - predicted_total) / (Q1_STD_DEV * 1.2)  # Total variance is wider
+        # Calibration showed total std dev 8.46 vs margin std dev 8.63,
+        # so total variance is actually slightly narrower (~0.98x).
+        z = (total - predicted_total) / (Q1_STD_DEV * 0.98)
         over_prob = 1 - _norm_cdf(z)
 
     # Add overall reasoning
@@ -475,7 +481,7 @@ def q1_spread_probability(predicted_margin: float, spread: float,
     Args:
         predicted_margin: Model's predicted Q1 margin (positive = home favored)
         spread: Posted spread for home team (negative = home favored)
-        std_dev: Standard deviation of Q1 scoring margins (~5.5)
+        std_dev: Standard deviation of Q1 scoring margins (~8.63, calibrated)
 
     Returns:
         Probability that the home team covers the posted spread.
