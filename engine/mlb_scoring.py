@@ -17,7 +17,13 @@ MLB_AVG_WHIP = 1.28
 MLB_AVG_K9 = 8.5
 MLB_AVG_BB9 = 3.2
 MLB_AVG_WRC_PLUS = 100     # By definition
-MLB_HOME_EDGE = 0.28       # ~0.28 runs home advantage
+
+# Home-field advantage. Pulled from config so it's tunable in one place.
+# Fallback preserves the historical 0.28 default if config is missing.
+try:
+    from .config import MLB_HOME_EDGE  # noqa: F401
+except Exception:
+    MLB_HOME_EDGE = 0.28
 
 
 # ── Poisson & probability ────────────────────────────────────

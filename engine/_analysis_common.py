@@ -39,6 +39,31 @@ def canon_result(v) -> str:
     return ""
 
 
+# Map historical lowercase bet_type values to the canonical uppercase form
+# used by engine/picks.py today. This is why the diagnostic was showing
+# "rl" and "RL" as two separate buckets — older tracker writes used lower
+# case. Always canonicalize on read so the aggregations are correct.
+_BET_TYPE_MAP = {
+    "ml": "ML", "ML": "ML",
+    "rl": "RL", "RL": "RL",
+    "ou": "O/U", "o/u": "O/U", "O/U": "O/U",
+    "nrfi": "1st INN", "NRFI": "1st INN", "1st INN": "1st INN", "1st inn": "1st INN",
+    "yrfi": "1st INN", "YRFI": "1st INN",
+    "pl": "PL", "PL": "PL",
+    "q1_spread": "Q1_SPREAD", "Q1_SPREAD": "Q1_SPREAD",
+    "q1_total": "Q1_TOTAL", "Q1_TOTAL": "Q1_TOTAL",
+    "q1_ml": "Q1_ML", "Q1_ML": "Q1_ML",
+}
+
+
+def canon_bet_type(v) -> str:
+    """Canonicalize bet_type: merges 'rl'/'RL', 'ml'/'ML', 'nrfi'/'1st INN', etc."""
+    if v is None:
+        return ""
+    s = str(v).strip()
+    return _BET_TYPE_MAP.get(s, _BET_TYPE_MAP.get(s.lower(), s))
+
+
 def db_path(sport: str) -> Path:
     return ROOT / SPORTS[sport][0]
 

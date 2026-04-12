@@ -17,16 +17,22 @@ NHL_JUICE_WALL = -200
 NBA_JUICE_WALL = -180
 
 # Minimum edge (%) to consider a pick playable
-MIN_EDGE_PCT = 1.5
+MIN_EDGE_PCT = 4.0
 
 # Confidence tier thresholds — used uniformly across MLB/NHL/NBA picks.
 # Picks with edge < EDGE_SKIP are marked confidence="skip" and will not
 # be chosen as "best pick" by tracker/best-bets endpoints.
-# Adjust after running engine.edge_report to find the real ROI cutoff.
+#
+# EDGE_SKIP raised from 1.5 -> 4.0 after engine.edge_report showed:
+#   MLB <4% edge: 2-3 record, heavy loss ($-208 on 5 picks = -42% ROI)
+#   MLB 6-10% edge: 5-7 record, -23% ROI (still losing)
+#   MLB 10%+ edge: 65-59 record, -0.91% ROI (near-breakeven — best bucket)
+# NHL has same pattern — sub-4% picks are 1-4 combined. Filtering them
+# out reduces volume but improves aggregate ROI.
 EDGE_STRONG = 8.0
-EDGE_MODERATE = 4.0
-EDGE_LEAN = 1.5
-EDGE_SKIP = 1.5  # below this, pick is skipped entirely
+EDGE_MODERATE = 6.0
+EDGE_LEAN = 4.0
+EDGE_SKIP = 4.0  # raised from 1.5 based on tracker data
 
 # ── MLB config ──
 MLB_AVG_RPG = 4.6  # League average runs per game
@@ -34,6 +40,13 @@ MLB_WIN_PROB_FLOOR = 0.30
 MLB_WIN_PROB_CAP = 0.72
 MLB_EXPECTED_RUNS_FLOOR = 2.0
 MLB_EXPECTED_RUNS_CAP = 6.5
+
+# Home-field advantage in expected runs.
+# Data point: with home_edge=0.28 the live tracker showed MLB home picks
+# at 48.9% WR / -10% ROI vs away picks at 57.4% WR / +11% ROI across 106
+# side-resolvable picks. That 20pt ROI gap says the model was overstating
+# home advantage. Pulled down from 0.28 -> 0.15 to rebalance.
+MLB_HOME_EDGE = 0.15
 
 # ── NHL config ──
 NHL_HOME_EDGE = 0.15  # ~0.15 goal home-ice advantage

@@ -176,7 +176,8 @@ def report_sport(sport: str) -> None:
         print("    (no classifiable rows)")
 
     # ── Bet type ────────────────────────────────────────────
-    bt_agg = _tally(rows, lambda r: (r.get("bet_type") or "?"))
+    from ._analysis_common import canon_bet_type
+    bt_agg = _tally(rows, lambda r: (canon_bet_type(r.get("bet_type")) or "?"))
     print("\n  By bet type:")
     if bt_agg:
         for key in sorted(bt_agg.keys()):

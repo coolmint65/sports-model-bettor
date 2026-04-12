@@ -87,11 +87,12 @@ def main() -> None:
     def res(r):
         return _canon(r["result"])
 
-    # By bet type
+    # By bet type (canonicalize so "rl"/"RL" and "nrfi"/"1st INN" merge)
+    from engine._analysis_common import canon_bet_type
     print(f"\n{'─'*60}\nBy bet type:")
     by_type: dict[str, list[int]] = {}
     for r in all_settled:
-        bt = r["bet_type"] or "?"
+        bt = canon_bet_type(r["bet_type"]) or "?"
         row = by_type.setdefault(bt, [0, 0, 0])
         c = res(r)
         if c == "win": row[0] += 1
@@ -121,7 +122,7 @@ def main() -> None:
     # ML pick direction
     ml_home_w = ml_home_l = ml_away_w = ml_away_l = 0
     for r in all_settled:
-        if r["bet_type"] != "ML":
+        if canon_bet_type(r["bet_type"]) != "ML":
             continue
         c = res(r)
         if c not in ("win", "loss"):
@@ -149,7 +150,7 @@ def main() -> None:
     # RL direction (MLB uses "RL" instead of "PL")
     rl_fav_w = rl_fav_l = rl_dog_w = rl_dog_l = 0
     for r in all_settled:
-        if r["bet_type"] != "RL":
+        if canon_bet_type(r["bet_type"]) != "RL":
             continue
         c = res(r)
         if c not in ("win", "loss"):
@@ -172,7 +173,7 @@ def main() -> None:
     # O/U direction
     ou_over_w = ou_over_l = ou_under_w = ou_under_l = 0
     for r in all_settled:
-        if r["bet_type"] != "O/U":
+        if canon_bet_type(r["bet_type"]) != "O/U":
             continue
         c = res(r)
         if c not in ("win", "loss"):
@@ -195,7 +196,7 @@ def main() -> None:
     # 1st INN (NRFI/YRFI)
     nrfi_w = nrfi_l = yrfi_w = yrfi_l = 0
     for r in all_settled:
-        if r["bet_type"] != "1st INN":
+        if canon_bet_type(r["bet_type"]) != "1st INN":
             continue
         c = res(r)
         if c not in ("win", "loss"):

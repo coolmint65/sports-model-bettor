@@ -220,13 +220,13 @@ def main() -> None:
                 # Pull the starting pitchers & venue from today's game row
                 # if available; otherwise fall back to None.
                 game_row = conn.execute("""
-                    SELECT home_starter_id, away_starter_id, venue
+                    SELECT home_pitcher_id, away_pitcher_id, venue
                     FROM games
                     WHERE home_team_id = ? AND away_team_id = ?
                     ORDER BY date DESC LIMIT 1
                 """, (h_id, a_id)).fetchone()
-                home_sp = game_row["home_starter_id"] if game_row else None
-                away_sp = game_row["away_starter_id"] if game_row else None
+                home_sp = game_row["home_pitcher_id"] if game_row else None
+                away_sp = game_row["away_pitcher_id"] if game_row else None
                 venue = game_row["venue"] if game_row else None
 
                 odds = match_odds(home_abbr, away_abbr, all_odds)
@@ -244,7 +244,9 @@ def main() -> None:
                                     away_abbr, home_abbr, e)
         current_picks = picks_cache[key]
 
-        verdict = _evaluate(row["bet_type"], row["pick"],
+        from ._analysis_common import canon_bet_type
+        bt = canon_bet_type(row["bet_type"])
+        verdict = _evaluate(bt, row["pick"],
                             current_picks, home_abbr, away_abbr)
         if verdict == "same":
             same_cnt += 1
