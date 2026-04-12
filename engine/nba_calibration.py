@@ -98,21 +98,25 @@ def calibrate(days: int = 0) -> dict:
 
     # ── Compute calibration metrics ──
 
+    # Reference values come from the live model constants so the report
+    # always compares actual outcomes to what the model currently assumes.
+    from .nba_q1_predict import HOME_Q1_BOOST, LEAGUE_AVG_Q1_TOTAL, Q1_STD_DEV
+
     # 1. Home court Q1 advantage
     avg_home_q1_margin = sum(home_q1_margins) / game_count
     home_q1_win_rate = home_wins_q1 / game_count
-    home_boost_error = avg_home_q1_margin - 1.5  # Our model assumes +1.5
+    home_boost_error = avg_home_q1_margin - HOME_Q1_BOOST
 
     # 2. Q1 total bias
     avg_q1_total = sum(q1_totals) / game_count
     avg_home_q1 = sum(home_q1_scored) / game_count
     avg_away_q1 = sum(away_q1_scored) / game_count
-    total_bias = avg_q1_total - 55.0  # Model assumes ~55 league average
+    total_bias = avg_q1_total - LEAGUE_AVG_Q1_TOTAL
 
     # 3. Q1 margin standard deviation (for spread probability calibration)
     margin_variance = sum((m - avg_home_q1_margin) ** 2 for m in home_q1_margins) / game_count
     actual_std_dev = math.sqrt(margin_variance)
-    std_dev_error = actual_std_dev - 5.5  # Our model assumes 5.5
+    std_dev_error = actual_std_dev - Q1_STD_DEV
 
     # 4. Q1 total standard deviation
     total_variance = sum((t - avg_q1_total) ** 2 for t in q1_totals) / game_count
@@ -136,20 +140,20 @@ def calibrate(days: int = 0) -> dict:
         recommendations.append(
             f"Home court Q1 boost should {direction}: "
             f"actual avg margin is {avg_home_q1_margin:+.2f} "
-            f"(model assumes +1.5, off by {home_boost_error:+.2f})"
+            f"(model assumes {HOME_Q1_BOOST:+.2f}, off by {home_boost_error:+.2f})"
         )
 
     if abs(total_bias) > 1.0:
         direction = "higher" if total_bias > 0 else "lower"
         recommendations.append(
             f"Q1 totals trending {direction}: avg {avg_q1_total:.1f} "
-            f"(model baseline 55.0, off by {total_bias:+.1f})"
+            f"(model baseline {LEAGUE_AVG_Q1_TOTAL:.1f}, off by {total_bias:+.1f})"
         )
 
     if abs(std_dev_error) > 0.3:
         recommendations.append(
             f"Q1 margin std dev is {actual_std_dev:.2f} "
-            f"(model assumes 5.5, off by {std_dev_error:+.2f}). "
+            f"(model assumes {Q1_STD_DEV:.2f}, off by {std_dev_error:+.2f}). "
             f"Update Q1_STD_DEV for better spread probabilities."
         )
 
@@ -161,20 +165,20 @@ def calibrate(days: int = 0) -> dict:
         "days": days,
         "home_q1_advantage": {
             "actual_avg_margin": round(avg_home_q1_margin, 2),
-            "model_assumes": 1.5,
+            "model_assumes": HOME_Q1_BOOST,
             "error": round(home_boost_error, 2),
             "home_q1_win_rate": round(home_q1_win_rate, 3),
         },
         "q1_totals": {
             "actual_avg_total": round(avg_q1_total, 1),
-            "model_baseline": 55.0,
+            "model_baseline": LEAGUE_AVG_Q1_TOTAL,
             "bias": round(total_bias, 1),
             "avg_home_q1": round(avg_home_q1, 1),
             "avg_away_q1": round(avg_away_q1, 1),
         },
         "q1_variance": {
             "actual_margin_std_dev": round(actual_std_dev, 2),
-            "model_assumes": 5.5,
+            "model_assumes": Q1_STD_DEV,
             "error": round(std_dev_error, 2),
             "total_std_dev": round(total_std_dev, 2),
         },
@@ -349,7 +353,7 @@ def full_calibration_report(days: int = 0) -> str:
     lines.append(f"\n  Home Court Q1 Advantage:")
     margin_val = ha.get("actual_avg_margin")
     lines.append(f"    Actual avg margin: {margin_val:+.2f}" if margin_val is not None else "    Actual avg margin: N/A")
-    lines.append(f"    Model assumes: +1.50")
+    lines.append(f"    Model assumes: {ha.get('model_assumes', 0):+.2f}")
     err_val = ha.get("error")
     lines.append(f"    Error: {err_val:+.2f}" if err_val is not None else "    Error: N/A")
     wr_val = ha.get("home_q1_win_rate", 0)
@@ -358,7 +362,7 @@ def full_calibration_report(days: int = 0) -> str:
     qt = result.get("q1_totals", {})
     lines.append(f"\n  Q1 Totals:")
     lines.append(f"    Actual avg total: {qt.get('actual_avg_total', 'N/A')}")
-    lines.append(f"    Model baseline: 55.0")
+    lines.append(f"    Model baseline: {qt.get('model_baseline', 'N/A')}")
     bias_val = qt.get("bias")
     lines.append(f"    Bias: {bias_val:+.1f}" if bias_val is not None else "    Bias: N/A")
     lines.append(f"    Avg home Q1: {qt.get('avg_home_q1', 'N/A')}")
@@ -367,7 +371,7 @@ def full_calibration_report(days: int = 0) -> str:
     qv = result.get("q1_variance", {})
     lines.append(f"\n  Q1 Variance:")
     lines.append(f"    Actual margin std dev: {qv.get('actual_margin_std_dev', 'N/A')}")
-    lines.append(f"    Model assumes: 5.50")
+    lines.append(f"    Model assumes: {qv.get('model_assumes', 'N/A')}")
     qv_err = qv.get("error")
     lines.append(f"    Error: {qv_err:+.2f}" if qv_err is not None else "    Error: N/A")
     lines.append(f"    Total std dev: {qv.get('total_std_dev', 'N/A')}")
