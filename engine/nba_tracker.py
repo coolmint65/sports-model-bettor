@@ -146,6 +146,35 @@ def record_picks(date: str | None = None, min_edge: float = 1.5) -> list[dict]:
     except Exception as e:
         logger.debug("NBA Q1 odds fetch failed: %s", e)
 
+    # If Odds API returned no Q1 markets (plan tier limitation), try
+    # DraftKings' public sportsbook API directly as a fallback. DK exposes
+    # Q1 markets for every NBA game — same schema, so we merge per-game,
+    # letting Odds API full-game lines take precedence when already set.
+    q1_present = any(
+        v.get("q1_spread") is not None or v.get("q1_total") is not None
+        or v.get("q1_home_ml") is not None
+        for v in q1_odds_map.values()
+    )
+    if not q1_present:
+        try:
+            from scrapers.nba_dk_odds import fetch_nba_dk_odds
+            dk_map = fetch_nba_dk_odds()
+            merged = 0
+            for key, dk_odds in dk_map.items():
+                existing = q1_odds_map.get(key, {})
+                # Only fill keys that aren't already populated
+                for k, v in dk_odds.items():
+                    if v is not None and existing.get(k) in (None, 0):
+                        existing[k] = v
+                q1_odds_map[key] = existing
+                if dk_odds.get("q1_spread") is not None \
+                   or dk_odds.get("q1_total") is not None \
+                   or dk_odds.get("q1_home_ml") is not None:
+                    merged += 1
+            logger.info("DraftKings NBA fallback merged Q1 markets for %d games", merged)
+        except Exception as e:
+            logger.debug("DraftKings NBA fallback failed: %s", e)
+
     recorded = []
 
     for event in events:
