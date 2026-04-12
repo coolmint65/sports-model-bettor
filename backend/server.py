@@ -2393,11 +2393,13 @@ def api_nba_predict(home: str = Query(...), away: str = Query(...)):
         return {"error": "NBA Q1 prediction engine not loaded yet"}
 
     # Pull Q1 markets so spread/total/ML picks can be evaluated against
-    # real posted lines instead of being silently skipped.
+    # real posted lines instead of being silently skipped. Uses the full
+    # Odds-API → DK → ESPN fallback chain so picks work even when the
+    # user's plan tier doesn't include Q1 markets.
     odds = {}
     try:
-        from scrapers.nba_odds import fetch_nba_odds
-        odds = (fetch_nba_odds() or {}).get(f"{away}@{home}", {}) or {}
+        from scrapers.nba_odds import fetch_all_nba_odds
+        odds = (fetch_all_nba_odds() or {}).get(f"{away}@{home}", {}) or {}
     except Exception as e:
         logger.debug("NBA Q1 odds fetch failed in predict endpoint: %s", e)
 
@@ -2421,13 +2423,12 @@ def api_nba_best_bets():
     except ImportError:
         return []
 
-    # Pull Q1 odds from The Odds API (cached 10 min). Returns {} if no
-    # API key configured or API down — predict_q1_matchup still generates
-    # picks whenever any market has odds.
+    # Pull Q1 odds using the full fallback chain (Odds API → DK → ESPN).
+    # Cached 10 min per source. Returns {} only if all three sources fail.
     nba_odds_map = {}
     try:
-        from scrapers.nba_odds import fetch_nba_odds
-        nba_odds_map = fetch_nba_odds()
+        from scrapers.nba_odds import fetch_all_nba_odds
+        nba_odds_map = fetch_all_nba_odds()
     except Exception as e:
         logger.debug("NBA odds fetch failed: %s", e)
 

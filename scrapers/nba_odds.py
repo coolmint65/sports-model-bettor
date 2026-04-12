@@ -231,3 +231,67 @@ _TEAM_MAP = {
 
 def _team_abbr(name: str) -> str:
     return _TEAM_MAP.get(name, name)
+
+
+# ── Unified fallback chain ───────────────────────────────
+
+def _has_q1_data(odds_map: dict) -> bool:
+    """True iff at least one game in the map has a Q1 market populated."""
+    for v in (odds_map or {}).values():
+        if (v.get("q1_spread") is not None
+                or v.get("q1_total") is not None
+                or v.get("q1_home_ml") is not None):
+            return True
+    return False
+
+
+def _merge_odds(base: dict, extra: dict) -> dict:
+    """Merge extra-source odds into base without overwriting populated keys."""
+    out = dict(base)
+    for key, payload in (extra or {}).items():
+        existing = out.get(key, {}) or {}
+        for k, v in (payload or {}).items():
+            if v is None:
+                continue
+            if existing.get(k) in (None, 0, ""):
+                existing[k] = v
+        out[key] = existing
+    return out
+
+
+def fetch_all_nba_odds() -> dict:
+    """Fetch NBA odds from The Odds API with ESPN + DK fallback chain.
+
+    Order:
+      1. The Odds API (fast, authoritative when plan includes Q1)
+      2. DraftKings public sportsbook API (Q1 markets, may 403 by region)
+      3. ESPN summary/core endpoints (Q1 markets via pickcenter)
+
+    Each source is merged without overwriting data from a prior source.
+    Returns a dict keyed by "AWAY@HOME" with the same schema
+    fetch_nba_odds() returns.
+    """
+    odds = fetch_nba_odds() or {}
+
+    if not _has_q1_data(odds):
+        try:
+            from .nba_dk_odds import fetch_nba_dk_odds
+            dk = fetch_nba_dk_odds()
+            if dk:
+                odds = _merge_odds(odds, dk)
+                logger.info("NBA odds fallback: merged %d DK games", len(dk))
+        except Exception as e:
+            logger.debug("DK NBA odds fallback failed: %s", e)
+
+    if not _has_q1_data(odds):
+        try:
+            from .nba_espn_odds import fetch_nba_espn_odds
+            espn = fetch_nba_espn_odds()
+            if espn:
+                odds = _merge_odds(odds, espn)
+                logger.info("NBA odds fallback: merged %d ESPN games", len(espn))
+        except Exception as e:
+            logger.debug("ESPN NBA odds fallback failed: %s", e)
+
+    return odds
+
