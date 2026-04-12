@@ -51,6 +51,21 @@ export default function PickHistory({ summary, history, loading, onRecord, onSet
               <span>{overall.win_pct}% WR</span>
               <span className="sep">|</span>
               <span>{overall.total} picks</span>
+              {overall.avg_clv != null && (
+                <>
+                  <span className="sep">|</span>
+                  <span
+                    title={`Average Closing Line Value. Positive = model is getting better prices than close (sharp). Negative = fading the market. Based on ${overall.clv_sample || 0} settled picks with closing odds.`}
+                    style={{
+                      color: overall.avg_clv > 0 ? '#34d399' : overall.avg_clv < 0 ? '#ef4444' : '#94a3b8',
+                      fontWeight: 600,
+                      cursor: 'help',
+                    }}
+                  >
+                    CLV {overall.avg_clv > 0 ? '+' : ''}{overall.avg_clv}%
+                  </span>
+                </>
+              )}
               {overall.pending > 0 && (
                 <>
                   <span className="sep">|</span>

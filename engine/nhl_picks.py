@@ -11,7 +11,13 @@ Used by: Best Bets, NHL Pick Tracker, Game Detail sidebar.
 
 import logging
 
-from .config import NHL_JUICE_WALL as JUICE_WALL, NHL_BET_RELIABILITY
+from .config import (
+    NHL_JUICE_WALL as JUICE_WALL,
+    NHL_BET_RELIABILITY,
+    ENABLE_NHL_ML,
+    ENABLE_NHL_OU,
+    ENABLE_NHL_PL,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,27 +69,27 @@ def generate_nhl_picks_with_context(home_key: str, away_key: str,
     home_ml = odds.get("home_ml")
     away_ml = odds.get("away_ml")
 
-    # ML picks are generated but given lower priority (priority 3).
-    # Backtesting shows ML is -6% ROI — O/U and PL are preferred.
-    if home_ml and home_ml >= JUICE_WALL:
-        edge = (wp["home"] - _implied(home_ml)) * 100
-        if edge > 0:
-            picks.append({
-                "type": "ML", "pick": h_abbr, "prob": round(wp["home"], 4),
-                "edge": round(edge, 1), "odds": home_ml,
-            })
+    # ML picks (disabled by default while NHL model is being rebuilt)
+    if ENABLE_NHL_ML:
+        if home_ml and home_ml >= JUICE_WALL:
+            edge = (wp["home"] - _implied(home_ml)) * 100
+            if edge > 0:
+                picks.append({
+                    "type": "ML", "pick": h_abbr, "prob": round(wp["home"], 4),
+                    "edge": round(edge, 1), "odds": home_ml,
+                })
 
-    if away_ml and away_ml >= JUICE_WALL:
-        edge = (wp["away"] - _implied(away_ml)) * 100
-        if edge > 0:
-            picks.append({
-                "type": "ML", "pick": a_abbr, "prob": round(wp["away"], 4),
-                "edge": round(edge, 1), "odds": away_ml,
-            })
+        if away_ml and away_ml >= JUICE_WALL:
+            edge = (wp["away"] - _implied(away_ml)) * 100
+            if edge > 0:
+                picks.append({
+                    "type": "ML", "pick": a_abbr, "prob": round(wp["away"], 4),
+                    "edge": round(edge, 1), "odds": away_ml,
+                })
 
     # ── Totals (O/U) ──
     vegas_total = odds.get("over_under")
-    if vegas_total and pred.get("over_under"):
+    if ENABLE_NHL_OU and vegas_total and pred.get("over_under"):
         vt = float(vegas_total)
         # Find closest line
         best_key = None
@@ -119,6 +125,11 @@ def generate_nhl_picks_with_context(home_key: str, away_key: str,
     away_pl_odds = odds.get("away_spread_odds")
     home_pl_point = odds.get("home_spread_point")
     away_pl_point = odds.get("away_spread_point")
+
+    if not ENABLE_NHL_PL:
+        # Skip PL entirely when disabled (still computed above for display parity)
+        home_pl_point = None
+        away_pl_point = None
 
     # Derive from ML if no puck line data
     if home_pl_point is None and home_ml and away_ml:

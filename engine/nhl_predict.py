@@ -1281,10 +1281,22 @@ def predict_matchup(home_key: str, away_key: str,
     # Factors 1-6 come from the nhl_granular module (imported in try/except).
     # Factors 7-12 are computed directly here.
     # All adjustments COMPOUND with existing adjustments — they do not replace.
+    #
+    # NOTE: Disabled by default. The tracker shows NHL at 34.1% WR across 47
+    # picks since these were added, so we suspect at least one factor is
+    # inverted or miscalibrated. Keeping the code intact so we can re-enable
+    # factors one at a time once each is individually validated against the
+    # pre-granular baseline. Toggle via config.NHL_ENABLE_GRANULAR_FACTORS.
     granular_data = {}
+    try:
+        from .config import NHL_ENABLE_GRANULAR_FACTORS as _GRANULAR_ON
+    except Exception:
+        _GRANULAR_ON = False
 
     # --- Factors 1-6: External granular module ---
     try:
+        if not _GRANULAR_ON:
+            raise RuntimeError("granular factors disabled in config")
         from .nhl_granular import (
             compute_schedule_fatigue,
             get_recent_travel,
@@ -1404,6 +1416,8 @@ def predict_matchup(home_key: str, away_key: str,
 
     # --- Factor 7: Division/Conference familiarity ---
     try:
+        if not _GRANULAR_ON:
+            raise RuntimeError("granular factors disabled")
         h_abbr_div = home.get("abbreviation", "")
         a_abbr_div = away.get("abbreviation", "")
         h_div_info = _NHL_DIVISIONS.get(h_abbr_div, ("", ""))
@@ -1436,6 +1450,8 @@ def predict_matchup(home_key: str, away_key: str,
 
     # --- Factor 8: Blowout tendency ---
     try:
+        if not _GRANULAR_ON:
+            raise RuntimeError("granular factors disabled")
         h_blowout = _compute_blowout_tendency(home.get("abbreviation", ""))
         a_blowout = _compute_blowout_tendency(away.get("abbreviation", ""))
         granular_data["home_blowout_tendency"] = h_blowout
@@ -1448,6 +1464,8 @@ def predict_matchup(home_key: str, away_key: str,
     h_ot = {"ot_win_rate": 0.50, "ot_split_adj": 0.52}
     a_ot = {"ot_win_rate": 0.50, "ot_split_adj": 0.52}
     try:
+        if not _GRANULAR_ON:
+            raise RuntimeError("granular factors disabled")
         h_ot = _compute_ot_tendency(home.get("abbreviation", ""))
         a_ot = _compute_ot_tendency(away.get("abbreviation", ""))
         granular_data["home_ot_tendency"] = h_ot
@@ -1457,6 +1475,8 @@ def predict_matchup(home_key: str, away_key: str,
 
     # --- Factor 12: Corsi/Fenwick proxy ---
     try:
+        if not _GRANULAR_ON:
+            raise RuntimeError("granular factors disabled")
         h_corsi = _compute_corsi_proxy(home.get("abbreviation", ""))
         a_corsi = _compute_corsi_proxy(away.get("abbreviation", ""))
         # Corsi-for% above 0.52 is good, below 0.48 is bad
@@ -1535,22 +1555,17 @@ def predict_matchup(home_key: str, away_key: str,
     p_away = sum(matrix[h][a] for h in range(MAX_GOALS + 1) for a in range(MAX_GOALS + 1) if a > h)
     p_draw = sum(matrix[i][i] for i in range(MAX_GOALS + 1))
 
-    # In NHL, ties go to OT — split based on OT tendencies (Factor 10)
-    # Default is 52/48 home/away. Adjust based on each team's OT prowess.
-    # h_ot["ot_split_adj"] is the home team's OT win rate (0.0–1.0)
-    # a_ot["ot_split_adj"] is the away team's OT win rate (0.0–1.0)
-    # Blend them: if home is good in OT (0.60) and away is bad (0.40),
-    # home gets more of the draw probability.
-    h_ot_rate = h_ot.get("ot_split_adj", 0.52)
-    a_ot_rate = a_ot.get("ot_split_adj", 0.52)
-    # Normalize so they sum to 1.0
-    ot_total = h_ot_rate + (1 - a_ot_rate)
-    if ot_total > 0:
-        home_ot_share = h_ot_rate / ot_total
+    # In NHL, ties go to OT — split 52/48 home/away by default.
+    # Factor 10 (team-specific OT tendency) adjusts this but is gated
+    # behind NHL_ENABLE_GRANULAR_FACTORS until validated.
+    if _GRANULAR_ON:
+        h_ot_rate = h_ot.get("ot_split_adj", 0.52)
+        a_ot_rate = a_ot.get("ot_split_adj", 0.52)
+        ot_total = h_ot_rate + (1 - a_ot_rate)
+        home_ot_share = h_ot_rate / ot_total if ot_total > 0 else 0.52
+        home_ot_share = max(0.45, min(0.60, home_ot_share))
     else:
         home_ot_share = 0.52
-    # Clamp to reasonable range (45-60% for home)
-    home_ot_share = max(0.45, min(0.60, home_ot_share))
     away_ot_share = 1.0 - home_ot_share
 
     p_home_ml = p_home + p_draw * home_ot_share
@@ -1568,41 +1583,31 @@ def predict_matchup(home_key: str, away_key: str,
     p_home_p15 = 1 - p_away_m15
 
     # ── Factor 9: Empty net goal adjustment for puck line ──
-    # When a team is trailing by 1 in the last 2 minutes, they pull their
-    # goalie. ~40% of those situations result in an EN goal for the winning
-    # team, turning a 1-goal lead into 2+. This boosts the favorite's -1.5.
-    # The probability of a 1-goal game going to EN situation is roughly the
-    # probability of a 1-goal margin near game end, which correlates with
-    # the regulation-time 1-goal win probability.
-    en_adj = 0.0
-    p_home_1goal = sum(matrix[h][a] for h in range(MAX_GOALS + 1)
-                       for a in range(MAX_GOALS + 1) if h - a == 1)
-    p_away_1goal = sum(matrix[h][a] for h in range(MAX_GOALS + 1)
-                       for a in range(MAX_GOALS + 1) if a - h == 1)
-    # ~40% of 1-goal leads in last 2 min see EN goal → 2-goal margin
-    # But only ~30% of games are within 1 goal at 2-min mark when leading by 1
-    en_conversion = 0.12  # ~30% trailing by 1 * 40% EN goal chance
-    en_home_boost = p_home_1goal * en_conversion
-    en_away_boost = p_away_1goal * en_conversion
+    # Disabled with the rest of the granular factors until validated.
+    if _GRANULAR_ON:
+        p_home_1goal = sum(matrix[h][a] for h in range(MAX_GOALS + 1)
+                           for a in range(MAX_GOALS + 1) if h - a == 1)
+        p_away_1goal = sum(matrix[h][a] for h in range(MAX_GOALS + 1)
+                           for a in range(MAX_GOALS + 1) if a - h == 1)
+        en_conversion = 0.12  # ~30% trailing by 1 * 40% EN goal chance
+        en_home_boost = min(0.04, p_home_1goal * en_conversion)
+        en_away_boost = min(0.04, p_away_1goal * en_conversion)
 
-    # Clamp EN adjustment to max 4%
-    en_home_boost = min(0.04, en_home_boost)
-    en_away_boost = min(0.04, en_away_boost)
+        p_home_m15 += en_home_boost
+        p_away_p15 -= en_home_boost
+        p_away_m15 += en_away_boost
+        p_home_p15 -= en_away_boost
 
-    p_home_m15 += en_home_boost
-    p_away_p15 -= en_home_boost
-    p_away_m15 += en_away_boost
-    p_home_p15 -= en_away_boost
-
-    en_adj = round(en_home_boost, 4)
-    granular_data["en_goal_adj"] = {
-        "home_m15_boost": round(en_home_boost, 4),
-        "away_m15_boost": round(en_away_boost, 4),
-    }
+        granular_data["en_goal_adj"] = {
+            "home_m15_boost": round(en_home_boost, 4),
+            "away_m15_boost": round(en_away_boost, 4),
+        }
 
     # ── Factor 8: Blowout tendency puck line adjustment ──
     # If a team covers -1.5 at above-average rate (>35%), boost their -1.5 prob
     try:
+        if not _GRANULAR_ON:
+            raise RuntimeError("granular factors disabled")
         h_blowout = granular_data.get("home_blowout_tendency", {})
         a_blowout = granular_data.get("away_blowout_tendency", {})
         league_avg_blowout = 0.35  # ~35% of wins are by 2+
