@@ -2389,12 +2389,23 @@ def api_nba_predict(home: str = Query(...), away: str = Query(...)):
     """Run NBA Q1 prediction for a specific matchup."""
     try:
         from engine.nba_q1_predict import predict_q1_matchup
-        result = predict_q1_matchup(home, away)
+    except ImportError:
+        return {"error": "NBA Q1 prediction engine not loaded yet"}
+
+    # Pull Q1 markets so spread/total/ML picks can be evaluated against
+    # real posted lines instead of being silently skipped.
+    odds = {}
+    try:
+        from scrapers.nba_odds import fetch_nba_odds
+        odds = (fetch_nba_odds() or {}).get(f"{away}@{home}", {}) or {}
+    except Exception as e:
+        logger.debug("NBA Q1 odds fetch failed in predict endpoint: %s", e)
+
+    try:
+        result = predict_q1_matchup(home, away, odds=odds)
         if not result:
             raise HTTPException(status_code=400, detail=f"Could not predict {away} @ {home}")
         return result
-    except ImportError:
-        return {"error": "NBA Q1 prediction engine not loaded yet"}
     except HTTPException:
         raise
     except Exception as e:

@@ -143,11 +143,35 @@ function NBAGameCard({ game, bet, onClick }) {
       {/* Q1 pick badge — only for pregame games */}
       {isPre && bet && bet.best_pick && conf !== 'skip' && (
         <div className={`pick-badge q1-badge badge-${conf}`}>
-          <span className="pick-badge-type">Q1 SPREAD</span>
+          <span className="pick-badge-type">
+            {bet.best_pick.type === 'Q1_SPREAD' ? 'Q1 SPREAD'
+              : bet.best_pick.type === 'Q1_TOTAL' ? 'Q1 TOTAL'
+              : bet.best_pick.type === 'Q1_ML' ? 'Q1 WINNER'
+              : 'Q1'}
+          </span>
           <span className="pick-badge-pick">{bet.best_pick.pick}</span>
           <span className="pick-badge-edge">+{bet.best_pick.edge}%</span>
         </div>
       )}
+
+      {/* Show secondary Q1 pick (e.g. spread when winner is best) */}
+      {isPre && bet?.all_picks && bet.all_picks.length > 1 && conf !== 'skip' && (() => {
+        const best = bet.best_pick
+        const second = bet.all_picks.find(p => p && p.type !== best.type && (p.confidence || 'skip') !== 'skip')
+        if (!second) return null
+        return (
+          <div className={`pick-badge q1-badge-secondary badge-${second.confidence || 'lean'}`} style={{opacity:0.9}}>
+            <span className="pick-badge-type">
+              {second.type === 'Q1_SPREAD' ? 'Q1 SPREAD'
+                : second.type === 'Q1_TOTAL' ? 'Q1 TOTAL'
+                : second.type === 'Q1_ML' ? 'Q1 WINNER'
+                : 'Q1'}
+            </span>
+            <span className="pick-badge-pick">{second.pick}</span>
+            <span className="pick-badge-edge">+{second.edge}%</span>
+          </div>
+        )
+      })()}
 
       {/* Rest indicators */}
       {isPre && bet?.rest && (bet.rest.home_b2b || bet.rest.away_b2b) && (
