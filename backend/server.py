@@ -2422,7 +2422,7 @@ def api_nba_best_bets():
         odds = game.get("odds")
 
         try:
-            pred = predict_q1_matchup(h_abbr, a_abbr)
+            pred = predict_q1_matchup(h_abbr, a_abbr, odds=odds)
         except Exception as e:
             logger.error("NBA Q1 prediction failed for %s @ %s: %s", a_abbr, h_abbr, e)
             continue

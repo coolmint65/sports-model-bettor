@@ -471,6 +471,46 @@ def q1_spread_probability(predicted_margin: float, spread: float,
 # Pick generation has been moved to engine/nba_picks.py to separate
 # game prediction from bet selection.
 from .nba_picks import generate_q1_picks, generate_q1_picks_with_context  # noqa: F401, E402
+
+
+def predict_q1_matchup(home_abbr: str, away_abbr: str,
+                       odds: dict | None = None,
+                       season: int | None = None) -> dict | None:
+    """Predict a Q1 matchup and include pick list for the server endpoint.
+
+    Returns the full prediction dict plus a "picks" key with edge-ranked
+    pick candidates. Returns None if prediction fails.
+    """
+    odds = odds or {}
+    q1_spread = odds.get("q1_spread")
+    q1_total = odds.get("q1_total")
+
+    try:
+        pred = predict_q1(home_abbr, away_abbr,
+                          spread=q1_spread, total=q1_total, season=season)
+    except Exception:
+        return None
+    if not pred:
+        return None
+
+    picks = generate_q1_picks(home_abbr, away_abbr, odds, season)
+
+    # Tag confidence (matches frontend expectations)
+    for p in picks:
+        edge = p.get("edge", 0)
+        if edge >= 6:
+            p["confidence"] = "strong"
+        elif edge >= 3:
+            p["confidence"] = "moderate"
+        elif edge >= 1:
+            p["confidence"] = "lean"
+        else:
+            p["confidence"] = "skip"
+
+    pred["picks"] = picks
+    return pred
+
+
 # ── CLI entry point ────────────────────────────────────────
 
 if __name__ == "__main__":

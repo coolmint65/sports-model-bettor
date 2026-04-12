@@ -134,7 +134,7 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
                 "type": "Q1_ML",
                 "pick": f"{away_abbr} Q1 ML",
                 "prob": round(away_ml_prob, 4),
-                "edge": round(away_edge, 1),
+                "edge": round(edge, 1),
                 "odds": away_ml_odds,
             })
 
