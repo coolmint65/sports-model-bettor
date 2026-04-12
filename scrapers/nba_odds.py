@@ -54,8 +54,32 @@ def _get_api_key() -> str | None:
     return None
 
 
+def _fetch_json(url: str) -> tuple[list | dict | None, str | None]:
+    """Fetch JSON from The Odds API. Returns (data, x-requests-remaining)."""
+    try:
+        req = urllib.request.Request(url,
+                                    headers={"User-Agent": "NBAQ1PredictionEngine/1.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+            remaining = resp.headers.get("x-requests-remaining", "?")
+            return data, remaining
+    except Exception as e:
+        logger.warning("Odds API request failed: %s (%s)", url.split("?")[0], e)
+        return None, None
+
+
 def fetch_nba_odds() -> dict:
     """Fetch NBA odds (full-game + Q1 markets) from The Odds API.
+
+    Uses a two-step flow to access period markets:
+      1. Bulk /sports/{sport}/odds — one call for h2h/spreads/totals
+         across all games. Gets event IDs.
+      2. Per-event /sports/{sport}/events/{id}/odds — one call per game
+         for h2h_q1/spreads_q1/totals_q1. Period markets are only
+         available through the per-event endpoint on every paid tier.
+
+    Results are merged per matchup. On a 15-game slate this uses ~16
+    credits per refresh; with the 10-min cache that's ~96 credits/hr.
 
     Returns dict keyed by "AWAY@HOME" abbreviation.
     """
@@ -69,52 +93,27 @@ def fetch_nba_odds() -> dict:
         logger.info("No Odds API key found. Set ODDS_API_KEY env var or create data/odds_api_key.txt")
         return {}
 
-    # Q1 markets (h2h_q1, spreads_q1, totals_q1) are "alternate" markets
-    # that require higher-tier plans on The Odds API and aren't exposed
-    # on the generic /odds endpoint — they must be fetched per-event or
-    # not at all on the free tier. We try them first, and if the API
-    # returns 422 (plan/endpoint mismatch) we fall back to standard
-    # full-game markets only. Full-game odds are still useful as Q1 ML
-    # proxies and for display.
-    def _build_url(markets: list[str]) -> str:
-        m = ",".join(markets)
-        return (f"{API_BASE}/sports/{NBA_SPORT}/odds/"
+    # Step 1: bulk full-game fetch
+    bulk_url = (f"{API_BASE}/sports/{NBA_SPORT}/odds/"
                 f"?apiKey={api_key}"
                 f"&regions=us"
-                f"&markets={m}"
+                f"&markets=h2h,spreads,totals"
                 f"&oddsFormat=american"
                 f"&bookmakers={PREFERRED_BOOK}")
-
-    full_markets = ["h2h", "spreads", "totals", "h2h_q1", "spreads_q1", "totals_q1"]
-    fallback_markets = ["h2h", "spreads", "totals"]
-    data = None
-    for markets in (full_markets, fallback_markets):
-        try:
-            req = urllib.request.Request(_build_url(markets),
-                                        headers={"User-Agent": "NBAQ1PredictionEngine/1.0"})
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                data = json.loads(resp.read().decode())
-                remaining = resp.headers.get("x-requests-remaining", "?")
-                logger.info("Odds API (NBA): %s requests remaining this month (markets=%s)",
-                            remaining, markets)
-                break
-        except Exception as e:
-            err = str(e)
-            if "422" in err and markets is full_markets:
-                logger.info("Odds API (NBA): Q1 markets not available on this plan, "
-                            "falling back to full-game only")
-                continue
-            logger.warning("Odds API (NBA) failed: %s", e)
-            return {}
+    data, remaining = _fetch_json(bulk_url)
     if data is None:
         return {}
+    logger.info("Odds API (NBA): %s requests remaining after bulk fetch", remaining)
 
     if not data or not isinstance(data, list):
         return {}
 
     odds_map: dict[str, dict] = {}
+    # game_id -> (key, home_full_name, away_full_name) for step-2 Q1 fetches
+    event_meta: dict[str, tuple[str, str, str]] = {}
 
     for game in data:
+        event_id = str(game.get("id", ""))
         home = game.get("home_team", "")
         away = game.get("away_team", "")
         h_abbr = _team_abbr(home)
@@ -200,8 +199,64 @@ def fetch_nba_odds() -> dict:
                     elif "under" in name:
                         result["q1_under_odds"] = price
 
-        if result.get("home_ml") or result.get("q1_home_ml"):
+        if result.get("home_ml"):
             odds_map[key] = result
+            if event_id:
+                event_meta[event_id] = (key, home, away)
+
+    # Step 2: per-event Q1 markets. These are only exposed through the
+    # per-event endpoint (the bulk /odds endpoint 422s on period market
+    # keys regardless of plan tier).
+    q1_markets = "h2h_q1,spreads_q1,totals_q1"
+    for event_id, (key, home_full, away_full) in event_meta.items():
+        ev_url = (f"{API_BASE}/sports/{NBA_SPORT}/events/{event_id}/odds/"
+                  f"?apiKey={api_key}"
+                  f"&regions=us"
+                  f"&markets={q1_markets}"
+                  f"&oddsFormat=american"
+                  f"&bookmakers={PREFERRED_BOOK}")
+        ev_data, _ = _fetch_json(ev_url)
+        if not ev_data or not isinstance(ev_data, dict):
+            continue
+
+        bookmakers = ev_data.get("bookmakers", []) or []
+        if not bookmakers:
+            continue
+        book = bookmakers[0]
+        result = odds_map[key]
+
+        for market in book.get("markets", []) or []:
+            mkey = market.get("key", "")
+            outcomes = market.get("outcomes", []) or []
+
+            if mkey == "h2h_q1":
+                for o in outcomes:
+                    name = o.get("name", "")
+                    price = o.get("price")
+                    if name == home_full:
+                        result["q1_home_ml"] = price
+                    elif name == away_full:
+                        result["q1_away_ml"] = price
+            elif mkey == "spreads_q1":
+                for o in outcomes:
+                    name = o.get("name", "")
+                    price = o.get("price")
+                    point = o.get("point")
+                    if name == home_full:
+                        result["q1_spread"] = point
+                        result["q1_spread_home_odds"] = price
+                    elif name == away_full:
+                        result["q1_spread_away_odds"] = price
+            elif mkey == "totals_q1":
+                for o in outcomes:
+                    name = (o.get("name", "") or "").lower()
+                    price = o.get("price")
+                    point = o.get("point")
+                    if "over" in name:
+                        result["q1_total"] = point
+                        result["q1_over_odds"] = price
+                    elif "under" in name:
+                        result["q1_under_odds"] = price
 
     logger.info("Odds API (NBA): fetched odds for %d games (%d with Q1 markets)",
                 len(odds_map),
