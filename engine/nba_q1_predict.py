@@ -415,7 +415,12 @@ def predict_q1(home_abbr: str, away_abbr: str,
                 away_roster_adj["resting_spot"] = True
                 reasoning.append(f"{away_abbr} at end-of-regular-season: -3.0 Q1 pts (rest risk)")
     except Exception as e:
-        logger.debug("Roster adjustment skipped: %s", e)
+        # Elevated from debug to warning — this was hiding real bugs in
+        # the roster adjustment chain (e.g. DB season mismatch, stats
+        # not populated) and letting predict_q1 silently return the
+        # pre-roster prediction.
+        logger.warning("Roster adjustment failed (%s/%s): %s",
+                       home_abbr, away_abbr, e, exc_info=True)
 
     # ── Step 7: Efficiency rating adjustment ──
     # Teams with better off/def ratings perform better across all quarters

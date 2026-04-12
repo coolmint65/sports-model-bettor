@@ -38,6 +38,10 @@ KEY_FILE = Path(__file__).resolve().parent.parent / "data" / "odds_api_key.txt"
 
 NBA_SPORT = "basketball_nba"
 PREFERRED_BOOK = "draftkings"
+# Multiple books for Q1 markets — DK often doesn't post Q1 until close to
+# tip, so we fall back to whoever does have it. Filter is still limited to
+# common US books that typically post Q1 markets.
+Q1_BOOKS = "draftkings,fanduel,betmgm,caesars,pointsbetus,williamhill_us"
 
 # Cache for 10 minutes to preserve API credits
 _odds_cache: dict | None = None
@@ -220,7 +224,7 @@ def fetch_nba_odds() -> dict:
                   f"&regions=us"
                   f"&markets={q1_markets}"
                   f"&oddsFormat=american"
-                  f"&bookmakers={PREFERRED_BOOK}")
+                  f"&bookmakers={Q1_BOOKS}")
         ev_data, _ = _fetch_json(ev_url)
         if not ev_data or not isinstance(ev_data, dict):
             pe_no_data += 1
@@ -231,7 +235,12 @@ def fetch_nba_odds() -> dict:
             pe_no_bookmakers += 1
             continue
         pe_success += 1
-        book = bookmakers[0]
+        # Prefer DraftKings when it has the market; otherwise accept the
+        # first book that does. Stats tracking is cleaner when odds come
+        # from a consistent source.
+        book = next((b for b in bookmakers
+                     if b.get("key") == PREFERRED_BOOK and b.get("markets")),
+                    bookmakers[0])
         result = odds_map[key]
 
         for market in book.get("markets", []) or []:
