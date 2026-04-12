@@ -421,12 +421,16 @@ def fetch_team_stats() -> int:
 # -- Rosters & Player Stats ------------------------------------------------
 
 
-# ESPN per-athlete season stats endpoint. This is the source of truth —
-# the roster endpoint's ?enable=stats payload is inconsistent (sometimes
-# empty, sometimes partial). This endpoint reliably returns season avgs.
-_ATHLETE_STATS_URL = (
-    "https://sports.core.api.espn.com/v2/sports/basketball/leagues/nba"
-    "/seasons/{season}/types/2/athletes/{athlete_id}/statistics"
+# Bulk NBA player stats endpoint (returns all active athletes with season
+# averages in one call). Used as a fallback when the roster endpoint's
+# inline stats are missing. Much cheaper than per-athlete calls and ESPN
+# doesn't rate-limit it.
+_BULK_PLAYER_STATS_URL = (
+    "https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba"
+    "/statistics/byathlete"
+    "?region=us&lang=en&contentorigin=espn"
+    "&seasontype=2&limit=800"
+    "&sort=general.avgMinutes:desc"
 )
 
 
@@ -475,32 +479,66 @@ def _parse_athlete_stats(stats_list: list) -> tuple[float | None, float | None, 
     return mpg, ppg, gp
 
 
-def _fetch_athlete_season_stats(athlete_id: int, season: int) -> dict | None:
-    """Fetch season averages for a single player.
+def _fetch_bulk_player_stats() -> dict[int, dict]:
+    """Fetch all NBA players' season averages in a single call.
 
-    Returns {"mpg": float, "ppg": float, "gp": int} or None if the player
-    has no stats (rookie call-up, two-way player, didn't play this season).
+    Returns {athlete_id: {"mpg": float, "ppg": float, "gp": int}}.
+    Returns {} if the endpoint is unreachable — callers should degrade
+    gracefully (players end up with q1_impact=0).
     """
-    url = _ATHLETE_STATS_URL.format(season=season, athlete_id=athlete_id)
-    data = _fetch(url, retries=1)
+    data = _fetch(_BULK_PLAYER_STATS_URL, retries=2)
     if not data:
-        return None
+        logger.warning("Bulk player-stats endpoint returned no data; "
+                       "rotation impact will default to 0 this sync")
+        return {}
 
-    # Response: splits.categories[*].stats[*]
-    splits = data.get("splits") or {}
-    categories = splits.get("categories") or []
-    all_stats: list[dict] = []
-    for cat in categories:
-        all_stats.extend(cat.get("stats") or [])
+    # Response shape: {"athletes": [{"athlete": {"id": ...},
+    #                                "categories": [{"name": "general",
+    #                                                "stats": ["27.5", ...],
+    #                                                "labels": ["PTS", ...]}]}]}
+    result: dict[int, dict] = {}
+    athletes = data.get("athletes") or data.get("items") or []
+    for entry in athletes:
+        ath = entry.get("athlete") or {}
+        pid = _safe_int(ath.get("id"))
+        if not pid:
+            continue
 
-    # Some responses put the stats directly at the root
-    if not all_stats:
-        all_stats = data.get("stats") or []
+        mpg: float | None = None
+        ppg: float | None = None
+        gp = 0
 
-    mpg, ppg, gp = _parse_athlete_stats(all_stats)
-    if mpg is None and ppg is None:
-        return None
-    return {"mpg": mpg, "ppg": ppg, "gp": gp}
+        categories = entry.get("categories") or []
+        for cat in categories:
+            labels = cat.get("labels") or cat.get("names") or []
+            values = cat.get("stats") or cat.get("values") or []
+            # Some responses use parallel labels/values arrays
+            if labels and values and len(labels) == len(values):
+                for lbl, val in zip(labels, values):
+                    lbl_l = str(lbl).lower().strip()
+                    fval = _safe_float(val)
+                    if lbl_l in ("min", "mpg", "avgminutes", "avg minutes") and fval is not None:
+                        mpg = fval
+                    elif lbl_l in ("pts", "ppg", "avgpoints", "avg points") and fval is not None:
+                        ppg = fval
+                    elif lbl_l in ("gp", "games", "gamesplayed"):
+                        gp = _safe_int(val, 0) or gp
+            else:
+                # Fall back to the same parser we use for roster inline stats
+                stats_list = cat.get("stats") if isinstance(cat.get("stats"), list) else []
+                m, p, g = _parse_athlete_stats(stats_list)
+                if m is not None and mpg is None:
+                    mpg = m
+                if p is not None and ppg is None:
+                    ppg = p
+                if g and not gp:
+                    gp = g
+
+        if mpg is not None or ppg is not None:
+            result[pid] = {"mpg": mpg, "ppg": ppg, "gp": gp}
+
+    logger.info("Bulk player-stats endpoint: loaded stats for %d players", len(result))
+    return result
 
 
 def fetch_nba_rosters() -> int:
@@ -526,6 +564,11 @@ def fetch_nba_rosters() -> int:
     season = _current_season_year()
     total_players = 0
     stats_fallback_count = 0
+
+    # Prefetch bulk stats for all NBA players (one call, ~800 players).
+    # We'll look up each player's MPG/PPG here if the roster endpoint's
+    # inline stats were missing or incomplete.
+    bulk_stats = _fetch_bulk_player_stats()
 
     for team in teams:
         tid = team["id"]
@@ -565,20 +608,18 @@ def fetch_nba_rosters() -> int:
                     "jersey": jersey, "mpg": mpg, "ppg": ppg, "gp": gp,
                 })
 
-        # Per-player fallback: if any rotation-age player has no MPG, fetch
-        # their stats individually from the athletes/{id}/statistics endpoint.
-        # This is the actual source of truth — the roster endpoint often
-        # omits stats entirely. We only fetch for players missing data to
-        # keep sync time reasonable (most teams hit the fallback once per
-        # sync and are cached after that).
+        # Fill in missing stats from the bulk endpoint.
         for p in team_players:
             if p["mpg"] is not None and p["ppg"] is not None:
                 continue
-            stats = _fetch_athlete_season_stats(p["player_id"], season)
-            if stats:
-                p["mpg"] = p["mpg"] if p["mpg"] is not None else stats.get("mpg")
-                p["ppg"] = p["ppg"] if p["ppg"] is not None else stats.get("ppg")
-                p["gp"] = p["gp"] or stats.get("gp", 0)
+            bs = bulk_stats.get(p["player_id"])
+            if bs:
+                if p["mpg"] is None:
+                    p["mpg"] = bs.get("mpg")
+                if p["ppg"] is None:
+                    p["ppg"] = bs.get("ppg")
+                if not p["gp"]:
+                    p["gp"] = bs.get("gp", 0) or 0
                 stats_fallback_count += 1
 
         # Flag top-5 MPG as starters
