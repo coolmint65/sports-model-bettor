@@ -63,18 +63,34 @@ NHL_MAX_GOALS = 10
 NHL_ENABLE_GRANULAR_FACTORS = False
 
 # ── MLB situational factors toggle ──
-# MLB predict stacks 16+ multiplicative adjustments on expected runs
-# (pitcher, lineup, team cal, bullpen, bullpen fatigue, park, coors,
-# situational aggregate, umpire, weather, travel, platoon LHP, matchup
-# interaction, form, injuries).
+# MLB predict stacks 16+ multiplicative adjustments on expected runs.
 #
-# Default flipped to False 2026-04 based on tracker evidence:
-#   "rl" picks (OLD code path, fewer factors):   26-15  63.4% WR  +$864
-#   "RL" picks (NEW code path, +situational):    19-21  47.5% WR  -$479
-# Same compounding pattern that broke NHL granular factors. Until each
-# factor is validated individually we default to the simpler path.
-# Flip to True to experiment with the full factor set.
-MLB_ENABLE_SITUATIONAL_FACTORS = False
+# Re-enabled 2026-04 after mlb_retrobt showed disabling them drops
+# 120/143 picks and the remaining 22 go 6-16 (27% WR). Unlike NHL
+# granular, MLB situational factors are actually load-bearing — they
+# help the model FIND edge spots, not invert them. The "rl" vs "RL"
+# 16-point WR gap was misleading (bet-type casing artifact, not a
+# model-version split).
+#
+# The real MLB improvement lever is DIRECTION filtering, not factor
+# ablation. See MLB_ALLOW_* flags below.
+MLB_ENABLE_SITUATIONAL_FACTORS = True
+
+# ── MLB direction filters ──
+# Based on 143 tracked picks showing strong per-direction biases:
+#   RL +1.5 dogs:       40-27  59.7% WR  (profitable)
+#   RL -1.5 favorites:   3- 9  25.0% WR  (disastrous)
+#   NRFI:                3- 1  75.0% WR  (profitable)
+#   YRFI:                9-14  39.1% WR  (losing)
+#   O/U Over:            2- 0           (tiny sample; hold)
+#   O/U Under:           1- 6  14.3% WR (disastrous)
+# Setting False stops that direction from being selected as a pick.
+MLB_ALLOW_RL_FAVORITE = False   # -1.5 picks disabled
+MLB_ALLOW_RL_UNDERDOG = True    # +1.5 picks — the profitable side
+MLB_ALLOW_NRFI = True           # NRFI has real edge
+MLB_ALLOW_YRFI = False          # YRFI consistently loses
+MLB_ALLOW_OU_OVER = True        # hold while sample is tiny
+MLB_ALLOW_OU_UNDER = False      # Unders hit 14% over 7 picks
 
 # ── Bet-type reliability weights ──
 # Based on live tracker results + retrospective sweep against current model.
