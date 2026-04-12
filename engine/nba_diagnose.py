@@ -189,6 +189,40 @@ def dump_pick_flow(target_game: str | None = None):
         for r in pred.get("reasoning", []):
             print(f"    - {r}")
 
+        # Bypass predict_q1's try/except and call the underlying
+        # functions directly. If compute_q1_adjustment returns -8 here
+        # but predict_q1's internal call returns 0, the bug is in the
+        # predict_q1 branch logic (team_id resolution, season, etc.).
+        print(f"  direct subsystem calls (bypass predict_q1):")
+        try:
+            from engine.nba_q1_predict import _get_team_data
+            from engine.nba_injuries import compute_q1_adjustment, is_likely_resting_spot
+            home_data = _get_team_data(h_abbr)
+            away_data = _get_team_data(a_abbr)
+            print(f"    _get_team_data({h_abbr!r}): team_id={home_data.get('team_id')} "
+                  f"season={home_data.get('season')} games={home_data.get('games')}")
+            print(f"    _get_team_data({a_abbr!r}): team_id={away_data.get('team_id')} "
+                  f"season={away_data.get('season')} games={away_data.get('games')}")
+
+            # Now call compute_q1_adjustment with same args predict_q1 would use
+            hs = home_data.get("season")
+            if home_data.get("team_id"):
+                direct_home_adj = compute_q1_adjustment(home_data["team_id"], hs)
+                print(f"    compute_q1_adjustment({home_data['team_id']}, {hs}): "
+                      f"q1_delta={direct_home_adj['q1_delta']} "
+                      f"starters_out={direct_home_adj['starters_out']} "
+                      f"out_players={len(direct_home_adj.get('out_players') or [])}")
+
+                rest_flag = is_likely_resting_spot(
+                    home_data["team_id"],
+                    datetime.now().strftime("%Y-%m-%d"),
+                    hs)
+                print(f"    is_likely_resting_spot(home): {rest_flag}")
+        except Exception as e:
+            print(f"    DIRECT CALL CRASHED: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+
 
 def dump_player_sample():
     """Print what's in nba_players for BOS — are MPG/PPG actually populated?"""
