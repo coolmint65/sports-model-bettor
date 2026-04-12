@@ -208,7 +208,13 @@ def fetch_nba_odds() -> dict:
     # per-event endpoint (the bulk /odds endpoint 422s on period market
     # keys regardless of plan tier).
     q1_markets = "h2h_q1,spreads_q1,totals_q1"
+    logger.info("Per-event Q1 fetch: attempting %d events", len(event_meta))
+    pe_attempted = 0
+    pe_no_data = 0
+    pe_no_bookmakers = 0
+    pe_success = 0
     for event_id, (key, home_full, away_full) in event_meta.items():
+        pe_attempted += 1
         ev_url = (f"{API_BASE}/sports/{NBA_SPORT}/events/{event_id}/odds/"
                   f"?apiKey={api_key}"
                   f"&regions=us"
@@ -217,11 +223,14 @@ def fetch_nba_odds() -> dict:
                   f"&bookmakers={PREFERRED_BOOK}")
         ev_data, _ = _fetch_json(ev_url)
         if not ev_data or not isinstance(ev_data, dict):
+            pe_no_data += 1
             continue
 
         bookmakers = ev_data.get("bookmakers", []) or []
         if not bookmakers:
+            pe_no_bookmakers += 1
             continue
+        pe_success += 1
         book = bookmakers[0]
         result = odds_map[key]
 
@@ -258,6 +267,8 @@ def fetch_nba_odds() -> dict:
                     elif "under" in name:
                         result["q1_under_odds"] = price
 
+    logger.info("Per-event Q1 fetch: %d attempted, %d success, %d empty-body, %d no-bookmaker",
+                pe_attempted, pe_success, pe_no_data, pe_no_bookmakers)
     logger.info("Odds API (NBA): fetched odds for %d games (%d with Q1 markets)",
                 len(odds_map),
                 sum(1 for v in odds_map.values() if v.get("q1_spread") is not None))

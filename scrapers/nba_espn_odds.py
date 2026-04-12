@@ -48,6 +48,7 @@ _NBA_NAME_TO_ABBR: dict[str, str] = {
 _ESPN_ABBR_ALT = {
     "NOP": "NO", "NYK": "NY", "SAS": "SA", "UTA": "UTAH", "WAS": "WSH",
     "BRK": "BKN", "BKN": "BKN", "CHO": "CHA",
+    "GS": "GSW",  # ESPN returns 'GS' for Golden State; internal uses GSW
 }
 
 SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"

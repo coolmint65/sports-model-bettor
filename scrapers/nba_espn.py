@@ -574,6 +574,42 @@ def _fetch_bulk_player_stats() -> dict[int, dict]:
     return result
 
 
+def _fetch_common_athlete_stats(athlete_id: int) -> dict | None:
+    """Per-player fallback: hit the common/v3 individual athlete endpoint.
+
+    This is the endpoint ESPN's player pages use. Returns season averages
+    for players who didn't qualify for the leaderboard (e.g. star players
+    who missed most of the season). Returns None on any failure so the
+    caller degrades to q1_impact=0 rather than crashing.
+    """
+    url = (f"https://site.web.api.espn.com/apis/common/v3/sports/basketball"
+           f"/nba/athletes/{athlete_id}")
+    data = _fetch(url, retries=1)
+    if not data:
+        return None
+
+    # The athlete stats live in data.statistics.splits.categories[*].stats[*]
+    # with each stat having name + value. Uses the same shape as the
+    # per-athlete statistics endpoint.
+    stats_list: list[dict] = []
+    statistics = data.get("statistics") or {}
+    splits = statistics.get("splits") or {}
+    for cat in splits.get("categories") or []:
+        stats_list.extend(cat.get("stats") or [])
+
+    # Fallback path: some responses put the stats at data.statistics.stats
+    if not stats_list:
+        stats_list = statistics.get("stats") or []
+
+    if not stats_list:
+        return None
+
+    mpg, ppg, gp = _parse_athlete_stats(stats_list)
+    if mpg is None and ppg is None:
+        return None
+    return {"mpg": mpg, "ppg": ppg, "gp": gp}
+
+
 def fetch_nba_rosters() -> int:
     """Fetch roster + per-player season stats for every NBA team.
 
@@ -641,7 +677,7 @@ def fetch_nba_rosters() -> int:
                     "jersey": jersey, "mpg": mpg, "ppg": ppg, "gp": gp,
                 })
 
-        # Fill in missing stats from the bulk endpoint.
+        # Fill in missing stats from the bulk endpoint first.
         for p in team_players:
             if p["mpg"] is not None and p["ppg"] is not None:
                 continue
@@ -653,6 +689,26 @@ def fetch_nba_rosters() -> int:
                     p["ppg"] = bs.get("ppg")
                 if not p["gp"]:
                     p["gp"] = bs.get("gp", 0) or 0
+                stats_fallback_count += 1
+
+        # Per-player fallback: for players STILL missing stats after both
+        # the inline roster payload AND the bulk leaderboard (typically
+        # stars who missed significant time this season — Tatum post-
+        # Achilles, etc.), hit the common/v3 individual athlete endpoint.
+        # This is the authoritative per-player stats source ESPN uses
+        # on their player pages. Bounded by team roster size, so ~20
+        # calls per team worst case.
+        for p in team_players:
+            if p["mpg"] is not None and p["ppg"] is not None:
+                continue
+            stats = _fetch_common_athlete_stats(p["player_id"])
+            if stats:
+                if p["mpg"] is None:
+                    p["mpg"] = stats.get("mpg")
+                if p["ppg"] is None:
+                    p["ppg"] = stats.get("ppg")
+                if not p["gp"]:
+                    p["gp"] = stats.get("gp", 0) or 0
                 stats_fallback_count += 1
 
         # Flag top-5 MPG as starters
