@@ -4,6 +4,56 @@ MLB Factors — Feature engineering and factor computation.
 Computes individual prediction factors (offense ratings, pitcher
 adjustments, bullpen factors, H2H, form, confidence, etc.).
 Extracted from mlb_predict.py for cleaner separation of concerns.
+
+────────────────────────────────────────────────────────────────────────
+STACKED-MULTIPLIER AUDIT (MLB)
+────────────────────────────────────────────────────────────────────────
+The current mlb_predict.predict_matchup() stacks the following
+multiplicative adjustments on home_xr / away_xr, in order. NHL had 12
+compounding factors and that broke the model; MLB has 16+ which is
+why RL barely works and ML/OU/1st INN lose money.
+
+"Validated" below means: has an empirical backtest tying the factor's
+output to actual outcomes with a documented WR lift. Most of these are
+plausible-sounding priors that have NOT been validated end-to-end.
+
+Multiplier name                     Range         Validated?  Notes
+────────────────────────────────────────────────────────────────────
+ 1. blended_pitcher (SP factor)     0.60 – 1.50   partial     Core signal; FIP/ERA-based.
+ 2. lineup_strength                 0.90 – 1.12   NO          wRC+/OPS proxy, assumed independent of team offense baseline but overlaps.
+ 3. team_cal offense_factor         learned       partial     From team_calibration.py; learned off past games.
+ 4. team_cal defense_factor         learned       partial     Cross-applied (opp scoring); compounds with #1.
+ 5. team_cal home_factor            learned       partial     Compounds #3/#4 conditioned on venue — double-dips home advantage.
+ 6. team_cal away_factor            learned       partial     Same as #5 for away side.
+ 7. (1 + 0.35*(bullpen-1))          ~0.89 – 1.14  partial     Opponent bullpen softens/raises scoring.
+ 8. bullpen_fatigue_penalty         1.00 – 1.05   NO          Compounds directly on top of #7 — no independence argument.   [SITUATIONAL]
+ 9. park_run_factor                 ~0.92 – 1.08  YES (known) Standard MLB research backs this.
+10. coors_boost (if Coors)          1.08          NO          Extra +8% on top of park factor — double-count risk at Coors.
+11. situational aggregate           ~0.92 – 1.08  NO          From situational.py: weather + rest + pitcher rest + lineup + platoon, already compounded internally.                                                [SITUATIONAL]
+12. umpire_factor                   ~0.95 – 1.05  NO          Applied to BOTH home and away (not differential).             [SITUATIONAL]
+13. weather_adj                     ~0.90 – 1.10  NO          Duplicates weather inside situational aggregate #11.          [SITUATIONAL]
+14. travel_fatigue (per side)       ~0.95 – 1.05  NO          Compounds with situational rest factor #11.                   [SITUATIONAL]
+15. platoon_home_adj / platoon_away 0.97 / 1.00   NO          Duplicates the platoon factor inside situational #11.
+16. matchup interaction             ~0.92 – 1.10  NO          Compound-on-compound; reads team_cal already-applied factors. [SITUATIONAL]
+17. (1 + form) (additive)           0.90 – 1.10   partial     Recent form; small range.
+18. injury impact                   ~0.92 – 1.00  partial     ESPN injury list impact.
+
+Count of multiplicative compounding layers: 16–18 (depending on how you
+count learned team-cal and form). NHL had 12; MLB has more.
+
+Flagged for independence violations (compound-on-compound):
+  • #8 bullpen_fatigue stacks on #7 bullpen_factor
+  • #10 coors stacks on #9 park factor
+  • #11 situational aggregate duplicates #13 weather and #15 platoon
+  • #12 umpire is applied symmetrically — does not differentiate sides
+  • #14 travel duplicates situational "rest" component in #11
+  • #16 matchup interaction reads already-adjusted team_cal factors (#3-#6) and multiplies again
+
+The MLB_ENABLE_SITUATIONAL_FACTORS toggle in config.py gates the group
+marked [SITUATIONAL] above (#8 bullpen fatigue, #11 situational
+aggregate, #12 umpire, #13 weather, #14 travel, #16 matchup
+interaction) so we can ablate and see if ML / O/U / 1st INN WR lifts.
+────────────────────────────────────────────────────────────────────────
 """
 
 import logging
