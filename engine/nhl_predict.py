@@ -622,17 +622,26 @@ def _fetch_team_summary_stats() -> dict:
     import urllib.parse
     import urllib.request
 
+    # Derive current season dynamically instead of hardcoding 20252026.
+    from datetime import datetime as _dt
+    _now = _dt.now()
+    _start = _now.year if _now.month >= 9 else _now.year - 1
+    _season_id = f"{_start}{_start + 1}"
     try:
         # Python 3.14 rejects unencoded spaces in URLs — must encode the query
         query = urllib.parse.urlencode({
-            "cayenneExp": "seasonId=20252026 and gameTypeId=2"
+            "cayenneExp": f"seasonId={_season_id} and gameTypeId=2"
         })
         url = f"https://api.nhle.com/stats/rest/en/team/summary?{query}"
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())
     except (urllib.error.URLError, json.JSONDecodeError, OSError) as e:
-        logger.debug("team-stats fetch failed: %s", e)
+        logger.warning("team-stats fetch failed (season %s): %s", _season_id, e)
+        return {}
+
+    if not data or not data.get("data"):
+        logger.warning("team-stats returned empty for season %s (URL: %s)", _season_id, url)
         return {}
 
     # Map NHL API team names to our abbreviations
@@ -657,7 +666,10 @@ def _fetch_team_summary_stats() -> dict:
     }
 
     result = {}
-    for row in data.get("data", []):
+    rows = data.get("data", [])
+    logger.info("team-stats returned %d rows for season %s", len(rows), _season_id)
+    unmapped = []
+    for row in rows:
         # NHL stats API uses teamFullName as the primary identifier
         full_name = row.get("teamFullName", "")
         abbr = _NAME_TO_ABBR.get(full_name, "")
@@ -665,6 +677,7 @@ def _fetch_team_summary_stats() -> dict:
             # Fallback: try teamAbbrev or first 3 chars of name
             abbr = row.get("teamAbbrev") or (full_name[:3].upper() if full_name else "")
         if not abbr:
+            unmapped.append(full_name or "<no name>")
             continue
 
         stats = {}
@@ -696,6 +709,10 @@ def _fetch_team_summary_stats() -> dict:
 
         if stats:
             result[abbr] = stats
+    if unmapped:
+        logger.warning("team-stats: %d teams had no abbreviation mapping (sample: %s)",
+                       len(unmapped), unmapped[:3])
+    logger.info("team-stats: populated stats for %d teams", len(result))
     return result
 
 

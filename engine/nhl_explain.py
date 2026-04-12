@@ -21,13 +21,24 @@ import logging
 
 
 def _find_key(abbr: str) -> str | None:
-    """Map abbreviation to team JSON key."""
+    """Map abbreviation (or alias) to team JSON key."""
     from engine.data import list_teams, load_team
+
+    # Alias map: common short forms that differ from the DB's stored abbreviation
+    ALIAS = {
+        "SJ": "SJS", "TB": "TBL", "NJ": "NJD", "LA": "LAK",
+        "WAS": "WSH", "MON": "MTL", "NAS": "NSH", "CLB": "CBJ",
+    }
+    target = ALIAS.get(abbr.upper(), abbr.upper())
+
     teams = list_teams("NHL")
     for t in teams:
         try:
             data = load_team("NHL", t["key"])
-            if data and data.get("abbreviation", "").upper() == abbr.upper():
+            if not data:
+                continue
+            stored = (data.get("abbreviation", "") or "").upper()
+            if stored == target or stored == abbr.upper():
                 return t["key"]
         except Exception:
             continue
@@ -48,11 +59,32 @@ def main() -> None:
     home_key = home_arg if len(home_arg) > 3 else _find_key(home_arg) or home_arg.lower()
     away_key = away_arg if len(away_arg) > 3 else _find_key(away_arg) or away_arg.lower()
 
-    from engine.nhl_predict import predict_matchup, _get_live_team_stats
+    from engine.nhl_predict import (
+        predict_matchup, _get_live_team_stats,
+        _ensure_club_stats_loaded, _ensure_standings_loaded,
+    )
 
     print(f"\n{'='*70}")
     print(f"  NHL Prediction Explainer: {away_arg} @ {home_arg}")
     print(f"{'='*70}")
+
+    # Force-load both caches so "?" fields surface the real problem
+    print("\n── Loading live caches ──")
+    try:
+        _ensure_standings_loaded()
+        print("  standings cache: loaded")
+    except Exception as e:
+        print(f"  standings cache: FAILED: {e}")
+    try:
+        _ensure_club_stats_loaded()
+        from engine.nhl_predict import _club_stats_cache
+        cs_count = sum(1 for k in (_club_stats_cache or {}) if not k.startswith("_"))
+        print(f"  club-stats cache: loaded ({cs_count} teams)")
+        if cs_count == 0:
+            print("  >> club-stats empty. PP/PK/SV/FO will default to league avg,")
+            print("     which means many factors run with stale or missing data.")
+    except Exception as e:
+        print(f"  club-stats cache: FAILED: {e}")
 
     # Show raw live stats first so we know what the model is reading
     live = _get_live_team_stats()
