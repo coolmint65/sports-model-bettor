@@ -36,12 +36,30 @@ def dump_bulk_stats_raw():
 
     # Top-level keys
     print(f"\nTop-level keys: {list(data.keys())}")
-    # First athlete, if any
+
+    # Print the 'categories' / 'glossary' section — this is where stat
+    # labels typically live when they're separated from per-athlete values.
+    if "categories" in data:
+        cats = data["categories"]
+        print(f"\ndata['categories'] ({len(cats)} categories):")
+        print(json.dumps(cats, indent=2)[:3000])
+    if "glossary" in data:
+        gloss = data["glossary"]
+        print(f"\ndata['glossary'] ({len(gloss) if isinstance(gloss, list) else '?'} items):")
+        print(json.dumps(gloss, indent=2)[:1500])
+
+    # First athlete — focus on the non-link/bio fields (stats live under
+    # sibling keys to 'athlete'). Strip 'links' since it blows up the output.
     for key in ("athletes", "items", "results"):
         if key in data and data[key]:
-            first = data[key][0]
-            print(f"\nFirst entry in data['{key}']:")
-            print(json.dumps(first, indent=2)[:2500])
+            first = dict(data[key][0])  # shallow copy
+            if isinstance(first.get("athlete"), dict):
+                ath = dict(first["athlete"])
+                ath.pop("links", None)
+                ath.pop("teams", None)
+                first["athlete"] = ath
+            print(f"\nFirst entry in data['{key}'] (links stripped):")
+            print(json.dumps(first, indent=2)[:5000])
             break
 
 
@@ -55,9 +73,11 @@ def dump_pick_flow(target_game: str | None = None):
     from scrapers.nba_odds import fetch_all_nba_odds
     from engine.nba_picks import generate_q1_picks
     from engine.nba_db import get_conn
+    from datetime import datetime
 
-    events = _fetch_nba_scoreboard()
-    print(f"\nEvents returned by scoreboard: {len(events)}")
+    today = datetime.now().strftime("%Y-%m-%d")
+    events = _fetch_nba_scoreboard(today)
+    print(f"\nEvents returned by scoreboard for {today}: {len(events)}")
 
     odds = fetch_all_nba_odds()
     print(f"Odds map size: {len(odds)} games")
