@@ -2410,6 +2410,16 @@ def api_nba_best_bets():
     except ImportError:
         return []
 
+    # Pull Q1 odds from The Odds API (cached 10 min). Returns {} if no
+    # API key configured or API down — predict_q1_matchup still generates
+    # picks whenever any market has odds.
+    nba_odds_map = {}
+    try:
+        from scrapers.nba_odds import fetch_nba_odds
+        nba_odds_map = fetch_nba_odds()
+    except Exception as e:
+        logger.debug("NBA odds fetch failed: %s", e)
+
     games = _get_nba_scoreboard()
     bets = []
     for game in games:
@@ -2419,7 +2429,13 @@ def api_nba_best_bets():
 
         h_abbr = game["home"]["abbreviation"]
         a_abbr = game["away"]["abbreviation"]
-        odds = game.get("odds")
+
+        # Merge scoreboard odds (if any) with Odds API Q1 odds
+        odds = dict(game.get("odds") or {})
+        market_odds = nba_odds_map.get(f"{a_abbr}@{h_abbr}") or {}
+        for k, v in market_odds.items():
+            if k not in odds or odds.get(k) is None:
+                odds[k] = v
 
         try:
             pred = predict_q1_matchup(h_abbr, a_abbr, odds=odds)

@@ -137,6 +137,15 @@ def record_picks(date: str | None = None, min_edge: float = 1.5) -> list[dict]:
         logger.info("No NBA games found for %s", target_date)
         return []
 
+    # Pull Q1 odds (spread, total, ML) from The Odds API once for the slate.
+    # When unavailable, picks fall back to -110 defaults and Q1 ML only.
+    q1_odds_map = {}
+    try:
+        from scrapers.nba_odds import fetch_nba_odds
+        q1_odds_map = fetch_nba_odds()
+    except Exception as e:
+        logger.debug("NBA Q1 odds fetch failed: %s", e)
+
     recorded = []
 
     for event in events:
@@ -171,14 +180,17 @@ def record_picks(date: str | None = None, min_edge: float = 1.5) -> list[dict]:
         if existing > 0:
             continue
 
-        # Generate picks (use default -110 odds if no real odds available)
+        # Merge real Odds API Q1 markets (when available) with -110 defaults
+        market_odds = q1_odds_map.get(f"{a_abbr}@{h_abbr}") or {}
         odds_dict = {
-            "q1_spread": None,  # No spread available without odds feed
-            "q1_total": None,
-            "q1_spread_home_odds": -110,
-            "q1_spread_away_odds": -110,
-            "q1_over_odds": -110,
-            "q1_under_odds": -110,
+            "q1_spread": market_odds.get("q1_spread"),
+            "q1_total": market_odds.get("q1_total"),
+            "q1_spread_home_odds": market_odds.get("q1_spread_home_odds", -110),
+            "q1_spread_away_odds": market_odds.get("q1_spread_away_odds", -110),
+            "q1_over_odds": market_odds.get("q1_over_odds", -110),
+            "q1_under_odds": market_odds.get("q1_under_odds", -110),
+            "home_ml": market_odds.get("q1_home_ml") or market_odds.get("home_ml"),
+            "away_ml": market_odds.get("q1_away_ml") or market_odds.get("away_ml"),
         }
 
         # Generate Q1 ML picks (always available without specific Q1 odds)
