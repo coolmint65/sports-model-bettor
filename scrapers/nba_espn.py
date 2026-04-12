@@ -224,8 +224,8 @@ def fetch_scoreboard(date: str = "") -> list[dict]:
                         team_id=tid, name=t_name, abbreviation=t_abbr,
                         city=t_city, conference="", division="", venue="",
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("upsert_nba_team failed for %s: %s", t_abbr, e)
 
             # Extract quarter scores from linescores
             linescores = comp.get("linescores", [])
@@ -454,7 +454,17 @@ def sync_nba(full: bool = False) -> None:
     if not standings_teams:
         _progress("       standings returned no teams; falling back to scoreboard")
         today = datetime.now().strftime("%Y%m%d")
-        fetch_scoreboard(today)
+        games = fetch_scoreboard(today)
+        _progress(f"       scoreboard fallback: {len(games)} games found")
+        # Verify teams were populated
+        try:
+            from engine.nba_db import get_conn as _nba_conn
+            n = _nba_conn().execute("SELECT COUNT(*) FROM nba_teams").fetchone()[0]
+            _progress(f"       nba_teams table now has {n} rows")
+            if n == 0 and games:
+                _progress("       WARNING: scoreboard had games but team upsert failed")
+        except Exception as e:
+            _progress(f"       count check failed: {e}")
 
     season = _current_season_year()
 
