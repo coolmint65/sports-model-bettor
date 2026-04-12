@@ -49,6 +49,16 @@ from .mlb_factors import (
 
 logger = logging.getLogger(__name__)
 
+# Situational-factor toggle. Default ON because MLB isn't catastrophically
+# broken the way NHL was — but the toggle exists so we can ablate the
+# weather/umpire/travel/matchup/bullpen-fatigue group and re-run the
+# retrospective sweep to see if ML / O/U / 1st INN markets improve.
+# See config.py for notes.
+try:
+    from .config import MLB_ENABLE_SITUATIONAL_FACTORS as _SITU_ON
+except Exception:
+    _SITU_ON = True  # default ON since MLB RL works
+
 SEASON = datetime.now().year
 
 # Calibrated weights — loaded from DB on first use, updated by calibration system
@@ -171,9 +181,12 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     home_bp_fatigue = _bullpen_fatigue_penalty(home_bullpen, home_recent)
     away_bp_fatigue = _bullpen_fatigue_penalty(away_bullpen, away_recent)
 
-    # Fatigue in home bullpen means away scores more (and vice versa)
-    away_xr *= home_bp_fatigue
-    home_xr *= away_bp_fatigue
+    # Fatigue in home bullpen means away scores more (and vice versa).
+    # Gated by situational-factors toggle — when OFF we still compute
+    # the dict for display/debugging but don't apply the multiplier.
+    if _SITU_ON:
+        away_xr *= home_bp_fatigue
+        home_xr *= away_bp_fatigue
 
     # ── Step 4b: Park factor ──
     park_run_factor = 1.0
@@ -259,8 +272,10 @@ def predict_matchup(home_team_id: int, away_team_id: int,
         away_pitcher_throws=away_throws,
     )
 
-    home_xr *= sit["home_multiplier"]
-    away_xr *= sit["away_multiplier"]
+    # Gated by situational-factors toggle.
+    if _SITU_ON:
+        home_xr *= sit["home_multiplier"]
+        away_xr *= sit["away_multiplier"]
 
     # ── Step 6b: Umpire tendency ──
     umpire_factor = 1.0
@@ -276,8 +291,10 @@ def predict_matchup(home_team_id: int, away_team_id: int,
             if ump_row and ump_row["umpire"]:
                 umpire_name = ump_row["umpire"]
                 umpire_factor = compute_umpire_adjustment(umpire_name)
-                home_xr *= umpire_factor
-                away_xr *= umpire_factor
+                # Gated by situational-factors toggle.
+                if _SITU_ON:
+                    home_xr *= umpire_factor
+                    away_xr *= umpire_factor
         except Exception as e:
             logger.warning("Umpire adjustment failed: %s", e)
 
@@ -289,8 +306,10 @@ def predict_matchup(home_team_id: int, away_team_id: int,
             wx_data, is_domed = get_weather_for_venue(venue)
             if wx_data and not is_domed:
                 weather_adj = compute_weather_adjustment(wx_data, venue)
-                home_xr *= weather_adj
-                away_xr *= weather_adj
+                # Gated by situational-factors toggle.
+                if _SITU_ON:
+                    home_xr *= weather_adj
+                    away_xr *= weather_adj
     except Exception as e:
         logger.warning("Weather adjustment failed: %s", e)
 
@@ -301,8 +320,10 @@ def predict_matchup(home_team_id: int, away_team_id: int,
         from .travel import compute_travel_fatigue
         home_travel = compute_travel_fatigue(home_team_id, today, SEASON)
         away_travel = compute_travel_fatigue(away_team_id, today, SEASON)
-        home_xr *= home_travel
-        away_xr *= away_travel
+        # Gated by situational-factors toggle.
+        if _SITU_ON:
+            home_xr *= home_travel
+            away_xr *= away_travel
     except Exception as e:
         logger.warning("Travel fatigue adjustment failed: %s", e)
 
@@ -328,8 +349,11 @@ def predict_matchup(home_team_id: int, away_team_id: int,
         home_pit, away_pit, home_sp_pit, away_sp_pit,
         home_adj, away_adj, venue,
     )
-    home_xr *= matchup["home_interaction"]
-    away_xr *= matchup["away_interaction"]
+    # Gated by situational-factors toggle — matchup interaction is a
+    # compound-on-compound layer and a prime suspect for over-stacking.
+    if _SITU_ON:
+        home_xr *= matchup["home_interaction"]
+        away_xr *= matchup["away_interaction"]
 
     # H2H historical record for display
     h2h_history = get_h2h_history(home_team_id, away_team_id)

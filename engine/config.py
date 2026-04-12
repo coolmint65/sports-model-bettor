@@ -38,6 +38,22 @@ NHL_MAX_GOALS = 10
 # on one at a time in an ablation test.
 NHL_ENABLE_GRANULAR_FACTORS = False
 
+# ── MLB situational factors toggle ──
+# MLB predict stacks 16+ multiplicative adjustments on expected runs
+# (pitcher, lineup, team cal, bullpen, bullpen fatigue, park, coors,
+# situational aggregate, umpire, weather, travel, platoon LHP, matchup
+# interaction, form, injuries). The backtest shows MLB is only
+# profitable on RL (55.6%) and is losing on ML / O/U / 1st INN — similar
+# compounding risk to what broke NHL.
+#
+# Default: True (keep current behavior — MLB is not catastrophically
+# broken, just underperforming on 3/4 markets). Flip to False to
+# disable the "situational" group (weather, umpire, travel, matchup
+# interaction, bullpen fatigue) and run the retrospective sweep to see
+# whether ML / O/U / 1st INN WR improves. If it does, those factors are
+# net-negative and should be investigated individually.
+MLB_ENABLE_SITUATIONAL_FACTORS = True
+
 # ── Bet-type reliability weights ──
 # Based on live tracker results + retrospective sweep against current model.
 # Used for adjusted-EV ranking (adjusted_ev = edge * reliability).
