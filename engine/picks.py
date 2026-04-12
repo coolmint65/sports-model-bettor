@@ -223,15 +223,19 @@ def generate_picks(home_team_id: int, away_team_id: int,
         p["adjusted_ev"] = round(p["edge"] * reliability, 2)
     picks.sort(key=lambda p: -p["adjusted_ev"])
 
-    # Add confidence rating
+    # Add confidence rating (thresholds centralised in engine.config)
+    from .config import EDGE_STRONG, EDGE_MODERATE, EDGE_LEAN, EDGE_SKIP
     for p in picks:
-        if p["edge"] > 8:
+        e = p["edge"]
+        if e >= EDGE_STRONG:
             p["confidence"] = "strong"
-        elif p["edge"] > 4:
+        elif e >= EDGE_MODERATE:
             p["confidence"] = "moderate"
-        elif p["edge"] > 1.5:
+        elif e >= EDGE_LEAN:
             p["confidence"] = "lean"
         else:
+            p["confidence"] = "skip"
+        if e < EDGE_SKIP:
             p["confidence"] = "skip"
 
     return picks

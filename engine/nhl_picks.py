@@ -182,14 +182,20 @@ def generate_nhl_picks_with_context(home_key: str, away_key: str,
         p["adjusted_ev"] = round(p["edge"] * reliability, 2)
     picks.sort(key=lambda p: -p["adjusted_ev"])
 
-    # Assign confidence
+    # Assign confidence (thresholds centralised in engine.config)
+    from .config import EDGE_STRONG, EDGE_MODERATE, EDGE_LEAN, EDGE_SKIP
     for p in picks:
-        if p["edge"] >= 8:
+        e = p["edge"]
+        if e >= EDGE_STRONG:
             p["confidence"] = "strong"
-        elif p["edge"] >= 4:
+        elif e >= EDGE_MODERATE:
             p["confidence"] = "moderate"
-        else:
+        elif e >= EDGE_LEAN:
             p["confidence"] = "lean"
+        else:
+            p["confidence"] = "skip"
+        if e < EDGE_SKIP:
+            p["confidence"] = "skip"
 
     context = {
         "rest": pred.get("rest", {}),

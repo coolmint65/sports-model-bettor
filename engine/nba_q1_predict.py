@@ -495,16 +495,19 @@ def predict_q1_matchup(home_abbr: str, away_abbr: str,
 
     picks = generate_q1_picks(home_abbr, away_abbr, odds, season)
 
-    # Tag confidence (matches frontend expectations)
+    # Tag confidence (thresholds centralised in engine.config)
+    from .config import EDGE_STRONG, EDGE_MODERATE, EDGE_LEAN, EDGE_SKIP
     for p in picks:
-        edge = p.get("edge", 0)
-        if edge >= 6:
+        e = p.get("edge", 0)
+        if e >= EDGE_STRONG:
             p["confidence"] = "strong"
-        elif edge >= 3:
+        elif e >= EDGE_MODERATE:
             p["confidence"] = "moderate"
-        elif edge >= 1:
+        elif e >= EDGE_LEAN:
             p["confidence"] = "lean"
         else:
+            p["confidence"] = "skip"
+        if e < EDGE_SKIP:
             p["confidence"] = "skip"
 
     pred["picks"] = picks

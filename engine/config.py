@@ -19,6 +19,15 @@ NBA_JUICE_WALL = -180
 # Minimum edge (%) to consider a pick playable
 MIN_EDGE_PCT = 1.5
 
+# Confidence tier thresholds — used uniformly across MLB/NHL/NBA picks.
+# Picks with edge < EDGE_SKIP are marked confidence="skip" and will not
+# be chosen as "best pick" by tracker/best-bets endpoints.
+# Adjust after running engine.edge_report to find the real ROI cutoff.
+EDGE_STRONG = 8.0
+EDGE_MODERATE = 4.0
+EDGE_LEAN = 1.5
+EDGE_SKIP = 1.5  # below this, pick is skipped entirely
+
 # ── MLB config ──
 MLB_AVG_RPG = 4.6  # League average runs per game
 MLB_WIN_PROB_FLOOR = 0.30
