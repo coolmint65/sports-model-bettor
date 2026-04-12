@@ -31,15 +31,35 @@ def main() -> None:
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
 
+    # First: what are the actual result values? Different trackers use
+    # different strings (win/loss, W/L, hit/miss, 1/0, etc.)
+    raw = conn.execute("""
+        SELECT result, COUNT(*) as n FROM nhl_picks
+        WHERE result IS NOT NULL
+        GROUP BY result
+    """).fetchall()
+    result_map: dict[str, int] = {(r["result"] or ""): r["n"] for r in raw}
+    print(f"\nResult column values in DB: {result_map}")
+
+    # Canonicalize: accept win/W/hit/1 as win; loss/L/miss/0 as loss; push/P/tie as push.
+    def _canon(v: str) -> str:
+        if v is None:
+            return ""
+        s = str(v).strip().lower()
+        if s in ("win", "w", "hit", "1", "true", "yes"): return "win"
+        if s in ("loss", "lose", "l", "miss", "0", "false", "no"): return "loss"
+        if s in ("push", "p", "tie", "draw"): return "push"
+        return s
+
     # Overall
     total = conn.execute("SELECT COUNT(*) FROM nhl_picks WHERE result IS NOT NULL").fetchone()[0]
     if total == 0:
         print("No settled picks yet.")
         return
 
-    wins = conn.execute("SELECT COUNT(*) FROM nhl_picks WHERE result='win'").fetchone()[0]
-    losses = conn.execute("SELECT COUNT(*) FROM nhl_picks WHERE result='loss'").fetchone()[0]
-    pushes = conn.execute("SELECT COUNT(*) FROM nhl_picks WHERE result='push'").fetchone()[0]
+    wins = sum(n for v, n in result_map.items() if _canon(v) == "win")
+    losses = sum(n for v, n in result_map.items() if _canon(v) == "loss")
+    pushes = sum(n for v, n in result_map.items() if _canon(v) == "push")
     wr = 100 * wins / (wins + losses) if (wins + losses) else 0
     flipped_wr = 100 * losses / (wins + losses) if (wins + losses) else 0
 
@@ -57,61 +77,64 @@ def main() -> None:
     elif wr >= 45 and wr <= 55:
         print(f"\n  >> WR near 50%: model has no edge, not a sign error.")
 
+    # Load all settled picks once, canonicalize result in Python
+    all_settled = conn.execute("""
+        SELECT bet_type, pick, model_prob, edge, odds, result, matchup
+        FROM nhl_picks WHERE result IS NOT NULL
+    """).fetchall()
+
+    def res(r):
+        return _canon(r["result"])
+
     # By bet type
     print(f"\n{'─'*60}\nBy bet type:")
-    rows = conn.execute("""
-        SELECT bet_type,
-               SUM(CASE WHEN result='win' THEN 1 ELSE 0 END) as w,
-               SUM(CASE WHEN result='loss' THEN 1 ELSE 0 END) as l,
-               SUM(CASE WHEN result='push' THEN 1 ELSE 0 END) as p
-        FROM nhl_picks WHERE result IS NOT NULL
-        GROUP BY bet_type
-    """).fetchall()
-    for r in rows:
-        w, l, p = r["w"] or 0, r["l"] or 0, r["p"] or 0
+    by_type: dict[str, list[int]] = {}
+    for r in all_settled:
+        bt = r["bet_type"] or "?"
+        row = by_type.setdefault(bt, [0, 0, 0])
+        c = res(r)
+        if c == "win": row[0] += 1
+        elif c == "loss": row[1] += 1
+        elif c == "push": row[2] += 1
+    for bt, (w, l, p) in sorted(by_type.items()):
         if w + l > 0:
-            print(f"  {r['bet_type']:6s}: {w}-{l}-{p}  WR={100*w/(w+l):5.1f}%  "
+            print(f"  {bt:6s}: {w}-{l}-{p}  WR={100*w/(w+l):5.1f}%  "
                   f"(flipped {100*l/(w+l):5.1f}%)")
 
     # By edge bucket
     print(f"\n{'─'*60}\nBy edge bucket (high edge = high conviction):")
-    rows = conn.execute("""
-        SELECT
-            CASE
-                WHEN edge < 2 THEN '0-2%'
-                WHEN edge < 4 THEN '2-4%'
-                WHEN edge < 6 THEN '4-6%'
-                WHEN edge < 10 THEN '6-10%'
-                ELSE '10%+'
-            END as bucket,
-            SUM(CASE WHEN result='win' THEN 1 ELSE 0 END) as w,
-            SUM(CASE WHEN result='loss' THEN 1 ELSE 0 END) as l,
-            MIN(edge) as min_edge
-        FROM nhl_picks WHERE result IS NOT NULL
-        GROUP BY bucket
-        ORDER BY min_edge
-    """).fetchall()
-    for r in rows:
-        w, l = r["w"] or 0, r["l"] or 0
+    buckets = [("0-2%", 0, 2), ("2-4%", 2, 4), ("4-6%", 4, 6),
+               ("6-10%", 6, 10), ("10%+", 10, 9999)]
+    for name, lo, hi in buckets:
+        w = l = 0
+        for r in all_settled:
+            e = r["edge"] or 0
+            if not (lo <= e < hi):
+                continue
+            c = res(r)
+            if c == "win": w += 1
+            elif c == "loss": l += 1
         if w + l > 0:
-            print(f"  edge {r['bucket']:6s}: {w}-{l}  WR={100*w/(w+l):5.1f}%")
+            print(f"  edge {name:6s}: {w}-{l}  WR={100*w/(w+l):5.1f}%")
 
     # ML pick direction
     ml_home_w = ml_home_l = ml_away_w = ml_away_l = 0
-    for r in conn.execute("""
-        SELECT matchup, pick, result FROM nhl_picks
-        WHERE bet_type='ML' AND result IN ('win','loss')
-    """):
+    for r in all_settled:
+        if r["bet_type"] != "ML":
+            continue
+        c = res(r)
+        if c not in ("win", "loss"):
+            continue
         parts = (r["matchup"] or "").split(" @ ")
         if len(parts) != 2:
             continue
         away, home = parts[0].strip(), parts[1].strip()
         pick = (r["pick"] or "").strip()
         if pick == home:
-            if r["result"] == "win": ml_home_w += 1
+            if c == "win": ml_home_w += 1
             else: ml_home_l += 1
         elif pick == away:
-            if r["result"] == "win": ml_away_w += 1
+            if c == "win": ml_away_w += 1
             else: ml_away_l += 1
 
     print(f"\n{'─'*60}\nML picks by side:")
@@ -124,16 +147,18 @@ def main() -> None:
 
     # PL direction
     pl_fav_w = pl_fav_l = pl_dog_w = pl_dog_l = 0
-    for r in conn.execute("""
-        SELECT pick, result FROM nhl_picks
-        WHERE bet_type='PL' AND result IN ('win','loss')
-    """):
+    for r in all_settled:
+        if r["bet_type"] != "PL":
+            continue
+        c = res(r)
+        if c not in ("win", "loss"):
+            continue
         pick = (r["pick"] or "").strip()
         if "-1.5" in pick:
-            if r["result"] == "win": pl_fav_w += 1
+            if c == "win": pl_fav_w += 1
             else: pl_fav_l += 1
         elif "+1.5" in pick:
-            if r["result"] == "win": pl_dog_w += 1
+            if c == "win": pl_dog_w += 1
             else: pl_dog_l += 1
     print(f"\nPL picks by side:")
     if pl_fav_w + pl_fav_l:
@@ -145,16 +170,18 @@ def main() -> None:
 
     # O/U direction
     ou_over_w = ou_over_l = ou_under_w = ou_under_l = 0
-    for r in conn.execute("""
-        SELECT pick, result FROM nhl_picks
-        WHERE bet_type='O/U' AND result IN ('win','loss')
-    """):
+    for r in all_settled:
+        if r["bet_type"] != "O/U":
+            continue
+        c = res(r)
+        if c not in ("win", "loss"):
+            continue
         pick = (r["pick"] or "").lower()
         if "over" in pick:
-            if r["result"] == "win": ou_over_w += 1
+            if c == "win": ou_over_w += 1
             else: ou_over_l += 1
         elif "under" in pick:
-            if r["result"] == "win": ou_under_w += 1
+            if c == "win": ou_under_w += 1
             else: ou_under_l += 1
     print(f"\nO/U picks by side:")
     if ou_over_w + ou_over_l:
@@ -166,14 +193,13 @@ def main() -> None:
 
     # Last 10 losses for manual inspection
     print(f"\n{'─'*60}\nLast 10 losses for inspection:")
-    rows = conn.execute("""
-        SELECT matchup, bet_type, pick, model_prob, edge, odds
-        FROM nhl_picks WHERE result='loss'
-        ORDER BY created_at DESC LIMIT 10
-    """).fetchall()
-    for r in rows:
-        print(f"  {r['matchup']:30s} {r['bet_type']:4s} {r['pick']:12s} "
-              f"p={r['model_prob']:.3f} ed={r['edge']:+.1f}% @{r['odds']:+d}")
+    losses_rows = [r for r in all_settled if res(r) == "loss"]
+    for r in losses_rows[-10:]:
+        mp = r["model_prob"] if r["model_prob"] is not None else 0
+        ed = r["edge"] if r["edge"] is not None else 0
+        od = r["odds"] if r["odds"] is not None else 0
+        print(f"  {(r['matchup'] or ''):30s} {(r['bet_type'] or ''):4s} {(r['pick'] or ''):12s} "
+              f"p={mp:.3f} ed={ed:+.1f}% @{od:+d}")
 
     print(f"\n{'='*60}\n")
 
