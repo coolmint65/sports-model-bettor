@@ -421,6 +421,88 @@ def fetch_team_stats() -> int:
 # -- Rosters & Player Stats ------------------------------------------------
 
 
+# ESPN per-athlete season stats endpoint. This is the source of truth —
+# the roster endpoint's ?enable=stats payload is inconsistent (sometimes
+# empty, sometimes partial). This endpoint reliably returns season avgs.
+_ATHLETE_STATS_URL = (
+    "https://sports.core.api.espn.com/v2/sports/basketball/leagues/nba"
+    "/seasons/{season}/types/2/athletes/{athlete_id}/statistics"
+)
+
+
+def _parse_athlete_stats(stats_list: list) -> tuple[float | None, float | None, int]:
+    """Extract (mpg, ppg, gp) from an ESPN stats blob, trying every key
+    variant ESPN has used across endpoint versions."""
+    mpg = None
+    ppg = None
+    gp = 0
+
+    def _match_mpg(nm: str) -> bool:
+        return nm in ("avgminutes", "minutespergame", "mpg",
+                      "minutes per game", "avg minutes", "min")
+
+    def _match_ppg(nm: str) -> bool:
+        return nm in ("avgpoints", "pointspergame", "ppg",
+                      "points per game", "avg points", "pts")
+
+    def _match_gp(nm: str) -> bool:
+        return nm in ("gamesplayed", "gp", "games played", "games")
+
+    for s in stats_list or []:
+        if not isinstance(s, dict):
+            continue
+        # Try every label-like field
+        labels = [
+            (s.get("name") or ""),
+            (s.get("abbreviation") or ""),
+            (s.get("shortDisplayName") or ""),
+            (s.get("displayName") or ""),
+        ]
+        labels = [l.lower().strip() for l in labels if l]
+
+        val_raw = s.get("value")
+        val = _safe_float(val_raw)
+        if val is None:
+            val = _safe_float(s.get("displayValue"))
+
+        if any(_match_mpg(l) for l in labels) and val is not None:
+            mpg = val
+        elif any(_match_ppg(l) for l in labels) and val is not None:
+            ppg = val
+        elif any(_match_gp(l) for l in labels):
+            gp = _safe_int(val_raw if val_raw is not None else val, 0)
+
+    return mpg, ppg, gp
+
+
+def _fetch_athlete_season_stats(athlete_id: int, season: int) -> dict | None:
+    """Fetch season averages for a single player.
+
+    Returns {"mpg": float, "ppg": float, "gp": int} or None if the player
+    has no stats (rookie call-up, two-way player, didn't play this season).
+    """
+    url = _ATHLETE_STATS_URL.format(season=season, athlete_id=athlete_id)
+    data = _fetch(url, retries=1)
+    if not data:
+        return None
+
+    # Response: splits.categories[*].stats[*]
+    splits = data.get("splits") or {}
+    categories = splits.get("categories") or []
+    all_stats: list[dict] = []
+    for cat in categories:
+        all_stats.extend(cat.get("stats") or [])
+
+    # Some responses put the stats directly at the root
+    if not all_stats:
+        all_stats = data.get("stats") or []
+
+    mpg, ppg, gp = _parse_athlete_stats(all_stats)
+    if mpg is None and ppg is None:
+        return None
+    return {"mpg": mpg, "ppg": ppg, "gp": gp}
+
+
 def fetch_nba_rosters() -> int:
     """Fetch roster + per-player season stats for every NBA team.
 
@@ -443,6 +525,7 @@ def fetch_nba_rosters() -> int:
 
     season = _current_season_year()
     total_players = 0
+    stats_fallback_count = 0
 
     for team in teams:
         tid = team["id"]
@@ -473,28 +556,30 @@ def fetch_nba_rosters() -> int:
                 pos = pos_obj.get("abbreviation") or pos_obj.get("name", "")
                 jersey = athlete.get("jersey", "")
 
-                # Parse stats block if present
-                mpg = None
-                ppg = None
-                gp = 0
-                stats_blk = athlete.get("stats") or []
-                # Stats format: list of {name/displayName, value}
-                for s in stats_blk:
-                    nm = (s.get("name") or s.get("abbreviation") or "").lower()
-                    val = _safe_float(s.get("value"))
-                    if val is None:
-                        val = _safe_float(s.get("displayValue"))
-                    if nm in ("avgminutes", "minutespergame", "mpg"):
-                        mpg = val
-                    elif nm in ("avgpoints", "pointspergame", "ppg"):
-                        ppg = val
-                    elif nm in ("gamesplayed", "gp"):
-                        gp = _safe_int(s.get("value"), 0)
+                # Parse inline stats if present. ESPN uses many key variants
+                # depending on endpoint version, so try every common one.
+                mpg, ppg, gp = _parse_athlete_stats(athlete.get("stats") or [])
 
                 team_players.append({
                     "player_id": pid, "name": name, "position": pos,
                     "jersey": jersey, "mpg": mpg, "ppg": ppg, "gp": gp,
                 })
+
+        # Per-player fallback: if any rotation-age player has no MPG, fetch
+        # their stats individually from the athletes/{id}/statistics endpoint.
+        # This is the actual source of truth — the roster endpoint often
+        # omits stats entirely. We only fetch for players missing data to
+        # keep sync time reasonable (most teams hit the fallback once per
+        # sync and are cached after that).
+        for p in team_players:
+            if p["mpg"] is not None and p["ppg"] is not None:
+                continue
+            stats = _fetch_athlete_season_stats(p["player_id"], season)
+            if stats:
+                p["mpg"] = p["mpg"] if p["mpg"] is not None else stats.get("mpg")
+                p["ppg"] = p["ppg"] if p["ppg"] is not None else stats.get("ppg")
+                p["gp"] = p["gp"] or stats.get("gp", 0)
+                stats_fallback_count += 1
 
         # Flag top-5 MPG as starters
         ranked = sorted(
@@ -548,7 +633,8 @@ def fetch_nba_rosters() -> int:
 
         time.sleep(0.5)
 
-    _progress(f"Loaded {total_players} NBA players across {len(teams)} teams")
+    _progress(f"Loaded {total_players} NBA players across {len(teams)} teams "
+              f"(stats fallback used for {stats_fallback_count})")
     return total_players
 
 
