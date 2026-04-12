@@ -218,7 +218,10 @@ def fetch_scoreboard(date: str = "") -> list[dict]:
             t_abbr = team_obj.get("abbreviation", "") or ""
             t_name = team_obj.get("displayName", "") or ""
             t_city = team_obj.get("location", "") or ""
-            if tid and t_abbr:
+            # Only store real NBA franchises. IDs >= 100 are All-Star,
+            # international, or G-League teams that don't have stats
+            # endpoints and shouldn't be predicted on.
+            if tid and tid < 100 and t_abbr:
                 try:
                     upsert_nba_team(
                         team_id=tid, name=t_name, abbreviation=t_abbr,
@@ -320,6 +323,10 @@ def fetch_team_stats() -> int:
 
     for team in teams:
         tid = team["id"]
+        # Skip non-regular-season teams (All-Star, international, G-League).
+        # Real NBA franchises all have ESPN IDs under 100.
+        if tid >= 100:
+            continue
         url = f"{ESPN_API}/teams/{tid}/statistics"
         data = _fetch(url)
         if not data:
@@ -444,6 +451,14 @@ def sync_nba(full: bool = False) -> None:
     """
     _progress("=== NBA Data Sync ===")
     start = time.time()
+
+    # Clean out non-franchise rows that older runs may have stored
+    # (All-Star teams, international exhibition, G-League, etc.)
+    try:
+        from engine.nba_db import get_conn as _nba_conn
+        _nba_conn().execute("DELETE FROM nba_teams WHERE id >= 100").connection.commit()
+    except Exception:
+        pass
 
     _progress("[1] Fetching standings + teams...")
     standings_teams = fetch_standings()
