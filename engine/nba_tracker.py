@@ -114,12 +114,32 @@ def _parse_q1_scores(event: dict) -> dict | None:
     return result
 
 
-def record_picks(date: str | None = None, min_edge: float = 1.5) -> list[dict]:
+# ESPN scoreboard abbreviations that don't match the Odds API / internal
+# abbrs used elsewhere. Extend this when a new mismatch shows up.
+_ESPN_TO_INTERNAL_ABBR = {
+    "GS": "GSW",     # Golden State Warriors
+    # ESPN sometimes uses these too:
+    "NOP": "NO", "NYK": "NY", "SAS": "SA", "UTA": "UTAH", "WAS": "WSH",
+}
+
+
+def _normalize_espn_abbr(abbr: str) -> str:
+    """Map an ESPN scoreboard team abbreviation to the internal form used
+    by nba_odds / nba_db / nba_picks."""
+    return _ESPN_TO_INTERNAL_ABBR.get(abbr, abbr)
+
+
+def record_picks(date: str | None = None, min_edge: float = 1.5,
+                 force: bool = False) -> list[dict]:
     """Run NBA Q1 model on today's games and record the best pick per game.
 
     Args:
         date: Target date (YYYY-MM-DD). Defaults to today.
         min_edge: Minimum edge percentage to record a pick.
+        force: If True, delete any existing pick for each game before
+            recording so the latest model/odds take precedence. Use this
+            when the model or odds have materially changed during the day
+            (e.g. starter-rest news lands after the first sync).
 
     Returns:
         List of recorded pick dicts.
@@ -163,6 +183,9 @@ def record_picks(date: str | None = None, min_edge: float = 1.5) -> list[dict]:
         for c in competitors:
             team = c.get("team", {})
             abbr = team.get("abbreviation", "")
+            # Normalize ESPN scoreboard abbrs to internal form so lookups
+            # in the odds map (keyed by internal abbrs like GSW/NO/NY) hit.
+            abbr = _normalize_espn_abbr(abbr)
             if c.get("homeAway") == "home":
                 h_abbr = abbr
             else:
@@ -173,12 +196,20 @@ def record_picks(date: str | None = None, min_edge: float = 1.5) -> list[dict]:
 
         matchup = f"{a_abbr} @ {h_abbr}"
 
-        # Skip if already recorded
-        existing = conn.execute(
-            "SELECT COUNT(*) as c FROM nba_picks WHERE game_id = ?", (game_id,)
-        ).fetchone()["c"]
-        if existing > 0:
-            continue
+        # Duplicate handling:
+        #   force=False: skip games that already have a pick recorded
+        #   force=True:  delete existing picks for this game so the new
+        #                model/odds take effect.
+        if force:
+            conn.execute("DELETE FROM nba_picks WHERE game_id = ? "
+                         "AND result IS NULL", (game_id,))
+        else:
+            existing = conn.execute(
+                "SELECT COUNT(*) as c FROM nba_picks WHERE game_id = ?",
+                (game_id,)
+            ).fetchone()["c"]
+            if existing > 0:
+                continue
 
         # Merge real Odds API Q1 markets (when available) with -110 defaults
         market_odds = q1_odds_map.get(f"{a_abbr}@{h_abbr}") or {}
@@ -550,8 +581,10 @@ if __name__ == "__main__":
     args = set(sys.argv[1:])
 
     if "--record" in args:
-        print("Recording today's NBA Q1 picks...", flush=True)
-        picks = record_picks()
+        force = "--force" in args
+        print(f"Recording today's NBA Q1 picks{' (force refresh)' if force else ''}...",
+              flush=True)
+        picks = record_picks(force=force)
         print(f"Recorded {len(picks)} NBA Q1 picks:")
         for p in picks:
             print(f"  {p['matchup']} | {p['type']:12s} | {p['pick']:20s} | "

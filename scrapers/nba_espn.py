@@ -482,9 +482,27 @@ def _parse_athlete_stats(stats_list: list) -> tuple[float | None, float | None, 
 def _fetch_bulk_player_stats() -> dict[int, dict]:
     """Fetch all NBA players' season averages in a single call.
 
+    ESPN's response shape (verified via engine.nba_diagnose):
+      data.categories = [
+        {"name": "general",   "names": ["gamesPlayed", "avgMinutes", ...]},
+        {"name": "offensive", "names": ["avgPoints", ...]},
+        {"name": "defensive", "names": [...]}
+      ]
+      data.athletes = [
+        {"athlete": {...bio...},
+         "categories": [
+           {"name": "general",   "values": [70, 36.5, ...]},
+           {"name": "offensive", "values": [27.5, ...]},
+           ...
+         ]}
+      ]
+
+    The per-athlete category 'values' array is positional against the
+    corresponding top-level category 'names' array. So we build a
+    category -> {stat_name: index} map up front and use it to pull
+    avgMinutes/avgPoints/gamesPlayed out of each athlete's values.
+
     Returns {athlete_id: {"mpg": float, "ppg": float, "gp": int}}.
-    Returns {} if the endpoint is unreachable — callers should degrade
-    gracefully (players end up with q1_impact=0).
     """
     data = _fetch(_BULK_PLAYER_STATS_URL, retries=2)
     if not data:
@@ -492,10 +510,38 @@ def _fetch_bulk_player_stats() -> dict[int, dict]:
                        "rotation impact will default to 0 this sync")
         return {}
 
-    # Response shape: {"athletes": [{"athlete": {"id": ...},
-    #                                "categories": [{"name": "general",
-    #                                                "stats": ["27.5", ...],
-    #                                                "labels": ["PTS", ...]}]}]}
+    # Build (category_name -> {stat_name: column_index}) from the top-level
+    # categories definition.
+    cat_index: dict[str, dict[str, int]] = {}
+    for cat in data.get("categories") or []:
+        cname = (cat.get("name") or "").lower()
+        names = cat.get("names") or []
+        # Map each stat name to its first-seen index (ESPN sometimes repeats
+        # shorter aliases later; we want the earliest — the per-game averages
+        # in 'general' and 'offensive' come before season totals).
+        name_to_idx: dict[str, int] = {}
+        for idx, nm in enumerate(names):
+            if isinstance(nm, str) and nm not in name_to_idx:
+                name_to_idx[nm] = idx
+        cat_index[cname] = name_to_idx
+
+    if not cat_index:
+        logger.warning("Bulk player-stats: no top-level categories metadata; "
+                       "cannot map values to stat names")
+        return {}
+
+    # Resolve the indices we care about
+    g_idx = cat_index.get("general", {})
+    o_idx = cat_index.get("offensive", {})
+    mpg_col = g_idx.get("avgMinutes")
+    gp_col = g_idx.get("gamesPlayed")
+    ppg_col = o_idx.get("avgPoints")
+    if mpg_col is None or ppg_col is None:
+        logger.warning("Bulk player-stats: couldn't find avgMinutes/avgPoints "
+                       "in categories definition (got %s)",
+                       list(cat_index.keys()))
+        return {}
+
     result: dict[int, dict] = {}
     athletes = data.get("athletes") or data.get("items") or []
     for entry in athletes:
@@ -508,31 +554,18 @@ def _fetch_bulk_player_stats() -> dict[int, dict]:
         ppg: float | None = None
         gp = 0
 
-        categories = entry.get("categories") or []
-        for cat in categories:
-            labels = cat.get("labels") or cat.get("names") or []
-            values = cat.get("stats") or cat.get("values") or []
-            # Some responses use parallel labels/values arrays
-            if labels and values and len(labels) == len(values):
-                for lbl, val in zip(labels, values):
-                    lbl_l = str(lbl).lower().strip()
-                    fval = _safe_float(val)
-                    if lbl_l in ("min", "mpg", "avgminutes", "avg minutes") and fval is not None:
-                        mpg = fval
-                    elif lbl_l in ("pts", "ppg", "avgpoints", "avg points") and fval is not None:
-                        ppg = fval
-                    elif lbl_l in ("gp", "games", "gamesplayed"):
-                        gp = _safe_int(val, 0) or gp
-            else:
-                # Fall back to the same parser we use for roster inline stats
-                stats_list = cat.get("stats") if isinstance(cat.get("stats"), list) else []
-                m, p, g = _parse_athlete_stats(stats_list)
-                if m is not None and mpg is None:
-                    mpg = m
-                if p is not None and ppg is None:
-                    ppg = p
-                if g and not gp:
-                    gp = g
+        per_cat = {(c.get("name") or "").lower(): (c.get("values") or c.get("stats") or [])
+                   for c in entry.get("categories") or []}
+
+        g_vals = per_cat.get("general") or []
+        o_vals = per_cat.get("offensive") or []
+
+        if mpg_col is not None and mpg_col < len(g_vals):
+            mpg = _safe_float(g_vals[mpg_col])
+        if gp_col is not None and gp_col < len(g_vals):
+            gp = _safe_int(g_vals[gp_col], 0)
+        if ppg_col is not None and ppg_col < len(o_vals):
+            ppg = _safe_float(o_vals[ppg_col])
 
         if mpg is not None or ppg is not None:
             result[pid] = {"mpg": mpg, "ppg": ppg, "gp": gp}
