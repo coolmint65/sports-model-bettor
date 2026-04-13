@@ -112,12 +112,16 @@ def compute_q1_adjustment(team_id: int, season: int) -> dict:
 
     # Tier 4 — load-management auto-detection.
     # Trigger when 3+ starters are flagged out at the same time (classic
-    # tanking or playoff-rest signature). Additional -2.0 Q1 penalty on
-    # top of individual impact, capped at -8.0 total.
+    # tanking or playoff-rest signature). We log this as informational
+    # context but no longer apply a scoring bonus on top — real-world
+    # data (2026-04-12 slate) showed rest-rest games averaged within
+    # 0.5 pts of baseline, so tanking doesn't deterministically lower
+    # Q1 scoring, it just widens variance. The individual player
+    # q1_impact deltas are sufficient signal on their own.
     load_management = starters_out >= 3
-    if load_management:
-        q1_delta -= 2.0
-        q1_delta = max(q1_delta, -8.0)
+    # Still cap per-team at -5 to prevent unrealistic adjustments when
+    # an extraordinary number of players are flagged out.
+    q1_delta = max(q1_delta, -5.0)
 
     return {
         "q1_delta": round(q1_delta, 2),

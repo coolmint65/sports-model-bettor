@@ -722,12 +722,16 @@ def fetch_nba_rosters() -> int:
         # q1_impact = NET Q1 points lost to the team if this player is OUT
         # (accounting for an approximate replacement player taking minutes).
         #
-        # Derivation:
+        # CALIBRATED against tonight's actual Q1 scores (2026-04-12 slate
+        # had ~10 games with heavy starter rest; actual Q1 totals averaged
+        # 59.3, only 0.5 below league baseline of 58.8 — essentially no
+        # mean shift, just wider variance). NBA bench units play at ~85%
+        # of starter efficiency, not 65% as previously assumed.
+        #
         #   per-minute rate = PPG / MPG
-        #   Starter Q1 minutes ≈ 11 of 12 (subbed out late-Q1)
-        #   Bench Q1 minutes   ≈ MPG / 48 * 12 (proportional to role)
-        #   Replacement is ~60% as good for starters, ~30% as good for bench,
-        #   so NET loss factor is 0.40 starter / 0.70 bench.
+        #   Starter Q1 minutes ≈ 11 of 12
+        #   Replacement is ~85% as good for starters (NET loss factor 0.15),
+        #   ~90% as good for bench players (NET loss factor 0.10).
         for p in team_players:
             mpg = p["mpg"]
             ppg = p["ppg"]
@@ -737,12 +741,12 @@ def fetch_nba_rosters() -> int:
                     q1_mins = min(11.0, mpg)
                     rate = ppg / mpg
                     gross = q1_mins * rate
-                    q1_impact = round(gross * 0.40, 3)
+                    q1_impact = round(gross * 0.15, 3)
                 else:
                     q1_mins = (mpg / 48.0) * 12.0
                     rate = ppg / mpg
                     gross = q1_mins * rate
-                    q1_impact = round(gross * 0.70, 3)
+                    q1_impact = round(gross * 0.10, 3)
             else:
                 q1_impact = 0.0
 
