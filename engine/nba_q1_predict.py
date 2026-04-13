@@ -392,13 +392,18 @@ def predict_q1(home_abbr: str, away_abbr: str,
         if away.get("team_id"):
             away_roster_adj = compute_q1_adjustment(away["team_id"], season)
 
-        # Combined-delta cap: when BOTH teams have significant roster
-        # impact (regardless of whether each individually trips the
-        # load-management flag), linearly summing both team deltas
-        # overstates the total Q1 drop. Historically rest-rest games
-        # drop Q1 totals by 10-12 pts, not 16+. Cap the combined delta
-        # at -12 and scale each side proportionally.
-        COMBINED_DELTA_CAP = -12.0
+        # Combined-delta cap: linearly summing both team deltas overstates
+        # the total Q1 drop. Real rest-rest games drop Q1 totals by
+        # roughly 6-8 pts, not 12-16 — when starters sit, bench players
+        # play the same minutes at ~65% efficiency rather than producing
+        # zero. So per-team drop should max around 3-4 pts, leaving Q1
+        # expected at ~25 per team (baseline ~29.4).
+        #
+        # Also makes the single heavy-rest scenario coherent: one team
+        # with -8 individual delta + a healthy opponent at ~0 produces
+        # combined -8 which sits exactly at the cap (no scaling). The
+        # cap only bites when BOTH teams contribute to the drop.
+        COMBINED_DELTA_CAP = -8.0
         combined_raw = home_roster_adj["q1_delta"] + away_roster_adj["q1_delta"]
         stack_dampened = False
         if combined_raw < COMBINED_DELTA_CAP:
