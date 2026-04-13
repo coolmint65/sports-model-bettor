@@ -195,8 +195,11 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     home_xr *= park_run_factor
     away_xr *= park_run_factor
 
-    # Coors Field specific correction — standard park factor underestimates
-    if venue and "coors" in venue.lower():
+    # Coors Field specific correction — standard park factor underestimates.
+    # Gated so factor_backtest can measure whether this 8% on-top-of-park
+    # boost actually lifts Coors-game WR or just duplicates the park factor.
+    from .config import MLB_ENABLE_COORS_BOOST
+    if MLB_ENABLE_COORS_BOOST and venue and "coors" in venue.lower():
         coors_boost = 1.08  # Additional 8% on top of park factor
         home_xr *= coors_boost
         away_xr *= coors_boost
@@ -328,17 +331,20 @@ def predict_matchup(home_team_id: int, away_team_id: int,
         logger.warning("Travel fatigue adjustment failed: %s", e)
 
     # ── Step 6e: Platoon splits (simplified) ──
-    # LHP slightly suppresses offense vs average lineup composition.
-    # This is a coarse adjustment on top of the lineup-based platoon
-    # factor in situational.py (which requires confirmed lineups).
+    # Coarse adjustment on top of the lineup-based platoon factor in
+    # situational.py (which requires confirmed lineups). Gated because
+    # this double-counts with situational when situational is active
+    # AND lineups are available.
+    from .config import MLB_ENABLE_PLATOON_DUP
     platoon_home_adj = 1.0
     platoon_away_adj = 1.0
-    if away_throws and away_throws.upper() == "L":
-        platoon_home_adj = 0.97  # LHP suppresses home offense slightly
-        home_xr *= platoon_home_adj
-    if home_throws and home_throws.upper() == "L":
-        platoon_away_adj = 0.97  # LHP suppresses away offense slightly
-        away_xr *= platoon_away_adj
+    if MLB_ENABLE_PLATOON_DUP:
+        if away_throws and away_throws.upper() == "L":
+            platoon_home_adj = 0.97  # LHP suppresses home offense slightly
+            home_xr *= platoon_home_adj
+        if home_throws and home_throws.upper() == "L":
+            platoon_away_adj = 0.97  # LHP suppresses away offense slightly
+            away_xr *= platoon_away_adj
 
     # ── Step 7: Matchup interaction ──
     # Compound effects: how do these two specific teams interact TODAY

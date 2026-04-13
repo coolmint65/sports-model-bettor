@@ -383,73 +383,73 @@ def predict_q1(home_abbr: str, away_abbr: str,
     # Subtract Q1 impact of players who are Out/Questionable/Doubtful, and
     # apply a bonus penalty if 3+ starters sit (load-management signal).
     # Also apply a safety-net penalty for likely end-of-season rest spots.
+    #
+    # GATED behind NBA_ENABLE_ROSTER_ADJUSTMENT (default False). Live
+    # data from 2026-04-12 showed heavy-rest games had +0.5 pt mean
+    # shift vs baseline — the adjustment was encoding a phantom signal
+    # that hurt picks more than it helped. Infrastructure stays intact
+    # for informational display but predictions use the base model
+    # unless this is explicitly enabled after backtest validation.
     home_roster_adj = {"q1_delta": 0.0, "starters_out": 0, "load_management": False, "out_players": []}
     away_roster_adj = {"q1_delta": 0.0, "starters_out": 0, "load_management": False, "out_players": []}
-    try:
-        from .nba_injuries import compute_q1_adjustment, is_likely_resting_spot
-        if home.get("team_id"):
-            home_roster_adj = compute_q1_adjustment(home["team_id"], season)
-        if away.get("team_id"):
-            away_roster_adj = compute_q1_adjustment(away["team_id"], season)
+    from .config import NBA_ENABLE_ROSTER_ADJUSTMENT
+    if NBA_ENABLE_ROSTER_ADJUSTMENT:
+        try:
+            from .nba_injuries import compute_q1_adjustment, is_likely_resting_spot
+            if home.get("team_id"):
+                home_roster_adj = compute_q1_adjustment(home["team_id"], season)
+            if away.get("team_id"):
+                away_roster_adj = compute_q1_adjustment(away["team_id"], season)
 
-        # Combined-delta cap: based on tonight's 2026-04-12 calibration
-        # data — ~10 games with heavy starter rest averaged Q1 totals of
-        # 59.3 vs baseline 58.8, so the actual mean shift from rest is
-        # roughly zero. Variance widens but the mean barely moves. Cap
-        # combined delta at -4 so the model only claims small edges on
-        # roster-adjusted spots; anything beyond that overstates what
-        # the historical data supports.
-        COMBINED_DELTA_CAP = -4.0
-        combined_raw = home_roster_adj["q1_delta"] + away_roster_adj["q1_delta"]
-        stack_dampened = False
-        if combined_raw < COMBINED_DELTA_CAP:
-            scale = COMBINED_DELTA_CAP / combined_raw
-            home_roster_adj["q1_delta"] = round(home_roster_adj["q1_delta"] * scale, 2)
-            away_roster_adj["q1_delta"] = round(away_roster_adj["q1_delta"] * scale, 2)
-            home_roster_adj["stack_dampened"] = True
-            away_roster_adj["stack_dampened"] = True
-            stack_dampened = True
+            # Combined-delta cap: based on 2026-04-12 calibration data
+            # (~10 heavy-rest games avg Q1 total 59.3 vs baseline 58.8).
+            # Mean barely moves; variance widens. Cap combined delta at
+            # -4 so the model only claims small edges on roster spots.
+            COMBINED_DELTA_CAP = -4.0
+            combined_raw = home_roster_adj["q1_delta"] + away_roster_adj["q1_delta"]
+            stack_dampened = False
+            if combined_raw < COMBINED_DELTA_CAP:
+                scale = COMBINED_DELTA_CAP / combined_raw
+                home_roster_adj["q1_delta"] = round(home_roster_adj["q1_delta"] * scale, 2)
+                away_roster_adj["q1_delta"] = round(away_roster_adj["q1_delta"] * scale, 2)
+                home_roster_adj["stack_dampened"] = True
+                away_roster_adj["stack_dampened"] = True
+                stack_dampened = True
 
-        if home_roster_adj["q1_delta"] < 0:
-            home_q1_expected += home_roster_adj["q1_delta"]
-            reasoning.append(
-                f"{home_abbr} roster: {home_roster_adj['q1_delta']:+.1f} Q1 pts "
-                f"({home_roster_adj['starters_out']} starter(s) out"
-                + (f", load-mgmt spot)" if home_roster_adj["load_management"] else ")")
-                + (f" [combined cap {COMBINED_DELTA_CAP:+.0f}]" if stack_dampened else "")
-            )
-        if away_roster_adj["q1_delta"] < 0:
-            away_q1_expected += away_roster_adj["q1_delta"]
-            reasoning.append(
-                f"{away_abbr} roster: {away_roster_adj['q1_delta']:+.1f} Q1 pts "
-                f"({away_roster_adj['starters_out']} starter(s) out"
-                + (f", load-mgmt spot)" if away_roster_adj["load_management"] else ")")
-                + (f" [combined cap {COMBINED_DELTA_CAP:+.0f}]" if stack_dampened else "")
-            )
+            if home_roster_adj["q1_delta"] < 0:
+                home_q1_expected += home_roster_adj["q1_delta"]
+                reasoning.append(
+                    f"{home_abbr} roster: {home_roster_adj['q1_delta']:+.1f} Q1 pts "
+                    f"({home_roster_adj['starters_out']} starter(s) out"
+                    + (f", load-mgmt spot)" if home_roster_adj["load_management"] else ")")
+                    + (f" [combined cap {COMBINED_DELTA_CAP:+.0f}]" if stack_dampened else "")
+                )
+            if away_roster_adj["q1_delta"] < 0:
+                away_q1_expected += away_roster_adj["q1_delta"]
+                reasoning.append(
+                    f"{away_abbr} roster: {away_roster_adj['q1_delta']:+.1f} Q1 pts "
+                    f"({away_roster_adj['starters_out']} starter(s) out"
+                    + (f", load-mgmt spot)" if away_roster_adj["load_management"] else ")")
+                    + (f" [combined cap {COMBINED_DELTA_CAP:+.0f}]" if stack_dampened else "")
+                )
 
-        # Schedule-based safety net: if load-mgmt wasn't already detected
-        # from injuries but the team is at end-of-season with nothing to
-        # play for, apply a small preemptive penalty.
-        today = datetime.now().strftime("%Y-%m-%d")
-        if home.get("team_id") and not home_roster_adj["load_management"]:
-            if is_likely_resting_spot(home["team_id"], today, season):
-                home_q1_expected -= 3.0
-                home_roster_adj["q1_delta"] -= 3.0
-                home_roster_adj["resting_spot"] = True
-                reasoning.append(f"{home_abbr} at end-of-regular-season: -3.0 Q1 pts (rest risk)")
-        if away.get("team_id") and not away_roster_adj["load_management"]:
-            if is_likely_resting_spot(away["team_id"], today, season):
-                away_q1_expected -= 3.0
-                away_roster_adj["q1_delta"] -= 3.0
-                away_roster_adj["resting_spot"] = True
-                reasoning.append(f"{away_abbr} at end-of-regular-season: -3.0 Q1 pts (rest risk)")
-    except Exception as e:
-        # Elevated from debug to warning — this was hiding real bugs in
-        # the roster adjustment chain (e.g. DB season mismatch, stats
-        # not populated) and letting predict_q1 silently return the
-        # pre-roster prediction.
-        logger.warning("Roster adjustment failed (%s/%s): %s",
-                       home_abbr, away_abbr, e, exc_info=True)
+            # Schedule-based safety net: end-of-regular-season rest risk.
+            today = datetime.now().strftime("%Y-%m-%d")
+            if home.get("team_id") and not home_roster_adj["load_management"]:
+                if is_likely_resting_spot(home["team_id"], today, season):
+                    home_q1_expected -= 3.0
+                    home_roster_adj["q1_delta"] -= 3.0
+                    home_roster_adj["resting_spot"] = True
+                    reasoning.append(f"{home_abbr} at end-of-regular-season: -3.0 Q1 pts (rest risk)")
+            if away.get("team_id") and not away_roster_adj["load_management"]:
+                if is_likely_resting_spot(away["team_id"], today, season):
+                    away_q1_expected -= 3.0
+                    away_roster_adj["q1_delta"] -= 3.0
+                    away_roster_adj["resting_spot"] = True
+                    reasoning.append(f"{away_abbr} at end-of-regular-season: -3.0 Q1 pts (rest risk)")
+        except Exception as e:
+            logger.warning("Roster adjustment failed (%s/%s): %s",
+                           home_abbr, away_abbr, e, exc_info=True)
 
     # ── Step 7: Efficiency rating adjustment ──
     # Teams with better off/def ratings perform better across all quarters

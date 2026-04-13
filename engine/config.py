@@ -50,6 +50,20 @@ MLB_EXPECTED_RUNS_CAP = 6.5
 # home advantage. Pulled down from 0.28 -> 0.15 to rebalance.
 MLB_HOME_EDGE = 0.15
 
+# ── NBA config ──
+# Roster availability / load-management adjustment toggle.
+# Shipped 2026-04-12 based on intuition that starter rest lowers Q1
+# scoring. Actual 15-game data from 2026-04-12 slate (heaviest rest
+# slate of the year) showed mean Q1 total of 59.3 vs baseline 58.8 —
+# a 0.5-pt shift. Variance widens but the MEAN barely moves, so the
+# model was encoding a phantom signal.
+#
+# DEFAULT OFF until a proper backtest proves the adjustment lifts
+# WR/ROI on held-out data. Infrastructure (nba_players, nba_injuries,
+# nba_injuries.py) stays intact for informational display, but
+# predict_q1 ignores it when this flag is False.
+NBA_ENABLE_ROSTER_ADJUSTMENT = False
+
 # ── NHL config ──
 NHL_HOME_EDGE = 0.15  # ~0.15 goal home-ice advantage
 NHL_MAX_GOALS = 10
@@ -75,6 +89,30 @@ NHL_ENABLE_GRANULAR_FACTORS = False
 # The real MLB improvement lever is DIRECTION filtering, not factor
 # ablation. See MLB_ALLOW_* flags below.
 MLB_ENABLE_SITUATIONAL_FACTORS = True
+
+# ── MLB per-factor ablation toggles ──
+# Individual gates for each MLB multiplier so engine.factor_backtest
+# can flip them one at a time and measure the real WR/ROI impact.
+#
+# Defaults preserve current production behavior (all True). Do NOT
+# flip these by hand — always run a backtest first and keep factors
+# that demonstrably help on held-out data. This is the discipline
+# layer that prevents intuition-driven factor stacking.
+#
+# [S] = part of the SITUATIONAL group (also gated by
+#       MLB_ENABLE_SITUATIONAL_FACTORS above)
+# [V] = validated in literature / external research
+# [?] = unvalidated — prime suspects for ablation
+MLB_ENABLE_BULLPEN_FATIGUE    = True   # [S][?] compounds with #7 bullpen
+MLB_ENABLE_SITUATIONAL_AGG    = True   # [S][?] weather+rest+platoon bundle
+MLB_ENABLE_UMPIRE_FACTOR      = True   # [S][?] applied symmetrically
+MLB_ENABLE_WEATHER_ADJ        = True   # [S][?] duplicates situational weather
+MLB_ENABLE_TRAVEL_FATIGUE     = True   # [S][?] duplicates situational rest
+MLB_ENABLE_MATCHUP_INTERACTION = True  # [S][?] compound-on-compound
+MLB_ENABLE_COORS_BOOST        = True   # [?] double-counts park at Coors
+MLB_ENABLE_PLATOON_DUP        = True   # [?] duplicates situational platoon
+MLB_ENABLE_H2H_VS_PITCHER     = True   # [?] small sample, high variance
+MLB_ENABLE_LINEUP_STRENGTH    = True   # [?] overlaps team offense baseline
 
 # ── MLB direction filters ──
 # Based on 143 tracked picks showing strong per-direction biases:
