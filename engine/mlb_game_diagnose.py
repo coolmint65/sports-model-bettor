@@ -128,31 +128,58 @@ def run(home_abbr: str, away_abbr: str,
     # toggleable factors are neutral.
     print(f"\n  RAW SOURCE DATA (not toggleable — inspect for source-of-truth bugs):")
     try:
-        from .db import get_team_stats, get_park_factor
-        from .team_calibration import load_team_adjustment
-        home_stats = get_team_stats(home_id) or {}
-        away_stats = get_team_stats(away_id) or {}
-        print(f"    HOME ({home_abbr}) stats: runs_pg={home_stats.get('runs_pg')} "
-              f"ops={home_stats.get('ops')} wrc+={home_stats.get('wrc_plus')}")
-        print(f"    AWAY ({away_abbr}) stats: runs_pg={away_stats.get('runs_pg')} "
-              f"ops={away_stats.get('ops')} wrc+={away_stats.get('wrc_plus')}")
+        from .db import get_team_record
+        from .pit_stats import compute_team_stats_at_date
+        from datetime import datetime as _dt
+        import importlib
+
+        SEASON = _dt.now().year
+        today = _dt.now().strftime("%Y-%m-%d")
+
+        home_rec = get_team_record(home_id, SEASON) or {}
+        away_rec = get_team_record(away_id, SEASON) or {}
+        print(f"    HOME ({home_abbr}) record: runs_pg={home_rec.get('runs_pg')} "
+              f"ops={home_rec.get('ops')} wrc+={home_rec.get('wrc_plus')} "
+              f"W-L={home_rec.get('wins')}-{home_rec.get('losses')}")
+        print(f"    AWAY ({away_abbr}) record: runs_pg={away_rec.get('runs_pg')} "
+              f"ops={away_rec.get('ops')} wrc+={away_rec.get('wrc_plus')} "
+              f"W-L={away_rec.get('wins')}-{away_rec.get('losses')}")
+
+        # Point-in-time stats (what predict_matchup actually uses)
+        home_pit = compute_team_stats_at_date(home_id, today, SEASON) or {}
+        away_pit = compute_team_stats_at_date(away_id, today, SEASON) or {}
+        print(f"    HOME ({home_abbr}) PIT  : runs_pg={home_pit.get('runs_pg')} "
+              f"ops={home_pit.get('ops')} games={home_pit.get('games_played')}")
+        print(f"    AWAY ({away_abbr}) PIT  : runs_pg={away_pit.get('runs_pg')} "
+              f"ops={away_pit.get('ops')} games={away_pit.get('games_played')}")
 
         # team_cal learned factors — these multiply the base offense rating
         try:
-            home_adj = load_team_adjustment(home_id) or {}
-            away_adj = load_team_adjustment(away_id) or {}
-            print(f"    HOME team_cal: offense={home_adj.get('offense_factor')} "
-                  f"defense={home_adj.get('defense_factor')} "
-                  f"home={home_adj.get('home_factor')} "
-                  f"games={home_adj.get('games_analyzed')}")
-            print(f"    AWAY team_cal: offense={away_adj.get('offense_factor')} "
-                  f"defense={away_adj.get('defense_factor')} "
-                  f"away={away_adj.get('away_factor')} "
-                  f"games={away_adj.get('games_analyzed')}")
+            tc = importlib.import_module("engine.team_calibration")
+            # Try common function names
+            load_fn = (getattr(tc, "load_team_adjustment", None)
+                       or getattr(tc, "get_team_adjustment", None)
+                       or getattr(tc, "get_adjustment", None))
+            if load_fn:
+                home_adj = load_fn(home_id) or {}
+                away_adj = load_fn(away_id) or {}
+                print(f"    HOME team_cal: offense={home_adj.get('offense_factor')} "
+                      f"defense={home_adj.get('defense_factor')} "
+                      f"home={home_adj.get('home_factor')} "
+                      f"games={home_adj.get('games_analyzed')}")
+                print(f"    AWAY team_cal: offense={away_adj.get('offense_factor')} "
+                      f"defense={away_adj.get('defense_factor')} "
+                      f"away={away_adj.get('away_factor')} "
+                      f"games={away_adj.get('games_analyzed')}")
+            else:
+                print(f"    team_cal: no loader fn found (tried load/get/get_adjustment)")
+                # Dump module attributes to help find the right name
+                print(f"    team_calibration public attrs: "
+                      f"{[a for a in dir(tc) if not a.startswith('_')][:15]}")
         except Exception as e:
-            print(f"    team_cal load failed: {e}")
+            print(f"    team_cal load failed: {type(e).__name__}: {e}")
     except Exception as e:
-        print(f"    Raw stats dump failed: {e}")
+        print(f"    Raw stats dump failed: {type(e).__name__}: {e}")
 
     # Injury impact (already logged but repeated here for one-shot view)
     inj = baseline.get("injuries") or {}
