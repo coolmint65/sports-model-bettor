@@ -150,19 +150,25 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     home_adj = get_team_adjustment(home_team_id, SEASON)
     away_adj = get_team_adjustment(away_team_id, SEASON)
 
-    # Apply offense/defense factors
-    if home_adj["games_analyzed"] >= 3:
-        home_xr *= home_adj["offense_factor"]
-        away_xr *= home_adj["defense_factor"]  # Home defense affects away scoring
-    if away_adj["games_analyzed"] >= 3:
-        away_xr *= away_adj["offense_factor"]
-        home_xr *= away_adj["defense_factor"]  # Away defense affects home scoring
+    # Apply offense/defense + home/away factors. Gated behind
+    # MLB_ENABLE_TEAM_CAL because these learned multipliers amplify
+    # 17-game-sample variance into 30%+ offense swings that overwhelm
+    # the fundamentals. Disabled by default until a backtest proves
+    # they lift WR on held-out data.
+    from .config import MLB_ENABLE_TEAM_CAL
+    if MLB_ENABLE_TEAM_CAL:
+        if home_adj["games_analyzed"] >= 3:
+            home_xr *= home_adj["offense_factor"]
+            away_xr *= home_adj["defense_factor"]  # Home defense affects away scoring
+        if away_adj["games_analyzed"] >= 3:
+            away_xr *= away_adj["offense_factor"]
+            home_xr *= away_adj["defense_factor"]  # Away defense affects home scoring
 
-    # Home/away split factors
-    if home_adj["games_analyzed"] >= 5:
-        home_xr *= home_adj["home_factor"]
-    if away_adj["games_analyzed"] >= 5:
-        away_xr *= away_adj["away_factor"]
+        # Home/away split factors
+        if home_adj["games_analyzed"] >= 5:
+            home_xr *= home_adj["home_factor"]
+        if away_adj["games_analyzed"] >= 5:
+            away_xr *= away_adj["away_factor"]
 
     # ── Step 4: Bullpen adjustment ──
     home_bp_factor = _bullpen_factor(home_bullpen)

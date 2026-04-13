@@ -90,6 +90,23 @@ NHL_ENABLE_GRANULAR_FACTORS = False
 # ablation. See MLB_ALLOW_* flags below.
 MLB_ENABLE_SITUATIONAL_FACTORS = True
 
+# Team calibration (learned offense/defense/home/away multipliers from
+# recent games). In theory this adapts the model to a team's actual
+# performance vs expected; in practice, with 17-18 games of April
+# sample, it amplifies variance into signal.
+#
+# Live example from 2026-04-13 SEA@HOU:
+#   SEA team_cal: offense 0.89x, defense 0.90x  (cold start -> penalize)
+#   HOU team_cal: offense 1.32x, defense 1.22x  (hot start -> reward)
+#   Combined swing: ~1.6 runs (SEA 4.85->4.31, HOU 4.50->5.95)
+#   Market had SEA -181 (correctly ignoring the 18-game noise).
+#   Model had HOU 65% (tricked by team_cal).
+#
+# DEFAULT OFF until a backtest proves team_cal adds WR/ROI on held-out
+# games. Fundamentals (wRC+/OPS/runs_pg, pitcher ERA, park) handle
+# most of the real signal without this layer.
+MLB_ENABLE_TEAM_CAL = False
+
 # ── MLB per-factor ablation toggles ──
 # Individual gates for each MLB multiplier so engine.factor_backtest
 # can flip them one at a time and measure the real WR/ROI impact.
