@@ -98,8 +98,20 @@ def _team_offense_rating(stats: dict) -> float:
 
 def _blended_offense(pit: dict | None, stats: dict) -> float:
     """
-    Blend PIT runs/game with league average based on sample size.
-    Small sample: mostly league avg. Large sample: mostly PIT data.
+    Blend PIT runs/game with talent-based baseline (wRC+/OPS/runs_pg
+    from team_stats) based on sample size.
+
+    TIGHTENED 2026-04: previous schedule weighted 75% PIT at 20 games,
+    which amplified early-season noise (e.g. SEA@HOU 2026-04-13 had
+    SEA 4.55 rpg with 129 wRC+ vs HOU 5.76 rpg with 102 wRC+ — the
+    talent stats disagreed with 20-game runs but the old blend let
+    runs override talent). Research says team offense doesn't
+    stabilize until ~50-70 games, so lean on baseline much longer.
+
+        gp < 10:  10% PIT / 90% baseline   (was 20/80 at gp<5)
+        gp < 30:  30% PIT / 70% baseline   (was 50/50 at gp<15, 75/25 at gp<30)
+        gp < 60:  60% PIT / 40% baseline   (new intermediate tier)
+        gp >=60:  100% PIT
     """
     base = _team_offense_rating(stats)  # From team_stats table or league avg
 
@@ -111,17 +123,13 @@ def _blended_offense(pit: dict | None, stats: dict) -> float:
 
     if gp == 0:
         return base
-    elif gp < 5:
-        # Very small sample — 20% PIT, 80% baseline
-        return pit_rpg * 0.20 + base * 0.80
-    elif gp < 15:
-        # Small sample — 50% PIT, 50% baseline
-        return pit_rpg * 0.50 + base * 0.50
+    elif gp < 10:
+        return pit_rpg * 0.10 + base * 0.90
     elif gp < 30:
-        # Moderate — 75% PIT, 25% baseline
-        return pit_rpg * 0.75 + base * 0.25
+        return pit_rpg * 0.30 + base * 0.70
+    elif gp < 60:
+        return pit_rpg * 0.60 + base * 0.40
     else:
-        # Full confidence in PIT data
         return pit_rpg
 
 
