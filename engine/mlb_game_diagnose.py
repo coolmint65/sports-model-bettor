@@ -55,11 +55,20 @@ def _today_starters(home_team_id: int, away_team_id: int) -> tuple[int | None, i
     return None, None
 
 
+def _extract_runs(p: dict) -> tuple[float, float]:
+    """Pull (home_runs, away_runs) from the prediction dict."""
+    if not p:
+        return 0.0, 0.0
+    es = p.get("expected_score") or {}
+    home = es.get("home") or p.get("home_expected_runs") or 0
+    away = es.get("away") or p.get("away_expected_runs") or 0
+    return float(home), float(away)
+
+
 def _pretty_pred(p: dict, home_abbr: str, away_abbr: str) -> str:
     if not p or "error" in p:
         return f"ERROR: {p.get('error') if p else 'no prediction'}"
-    home_runs = p.get("home_expected_runs") or 0
-    away_runs = p.get("away_expected_runs") or 0
+    home_runs, away_runs = _extract_runs(p)
     wp = p.get("win_prob") or {}
     return (f"{home_abbr} {home_runs:.2f} - {away_abbr} {away_runs:.2f} "
             f"(home wp {wp.get('home', 0):.1%})")
@@ -97,9 +106,20 @@ def run(home_abbr: str, away_abbr: str,
     if not baseline or "error" in baseline:
         return
 
-    base_home = baseline.get("home_expected_runs", 0) or 0
-    base_away = baseline.get("away_expected_runs", 0) or 0
+    base_home, base_away = _extract_runs(baseline)
     base_home_wp = (baseline.get("win_prob") or {}).get("home", 0)
+
+    # Print the top-level factor values so we can spot obvious bugs
+    # (symmetric factors, inverted signs, etc.) without running ablation.
+    print(f"\n  BASELINE FACTOR VALUES:")
+    print(f"    park_factor    : {baseline.get('park_factor')}")
+    print(f"    umpire.factor  : {(baseline.get('umpire') or {}).get('factor')}")
+    print(f"    weather_adj    : {baseline.get('weather_adj')}")
+    print(f"    travel         : {baseline.get('travel')}")
+    print(f"    platoon_adj    : {baseline.get('platoon_adj')}")
+    sit = baseline.get("situational") or {}
+    print(f"    situational.home_multiplier: {sit.get('home_multiplier')}")
+    print(f"    situational.away_multiplier: {sit.get('away_multiplier')}")
 
     factors = [
         "MLB_ENABLE_BULLPEN_FATIGUE",
@@ -135,8 +155,7 @@ def run(home_abbr: str, away_abbr: str,
             setattr(cfg, factor, original)
 
         if p and "error" not in p:
-            h = p.get("home_expected_runs", 0) or 0
-            a = p.get("away_expected_runs", 0) or 0
+            h, a = _extract_runs(p)
             hw = (p.get("win_prob") or {}).get("home", 0)
             short = factor.replace("MLB_ENABLE_", "")
             marker = ""
