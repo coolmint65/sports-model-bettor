@@ -131,9 +131,11 @@ MLB_ENABLE_TEAM_CAL = False
 # [V] = validated in literature / external research
 # [?] = unvalidated - prime suspects for ablation
 MLB_ENABLE_BULLPEN_FATIGUE    = True   # [S][?] compounds with #7 bullpen
-MLB_ENABLE_SITUATIONAL_AGG    = True   # [S][?] weather+rest+platoon bundle
+MLB_ENABLE_SITUATIONAL_AGG    = True   # [S] weather+rest+platoon bundle (includes weather)
 MLB_ENABLE_UMPIRE_FACTOR      = True   # [S][?] applied symmetrically
-MLB_ENABLE_WEATHER_ADJ        = True   # [S][?] duplicates situational weather
+MLB_ENABLE_WEATHER_ADJ        = False  # [S][!] DISABLED: duplicates situational weather.
+                                        # Weather still applies via SITUATIONAL_AGG above.
+                                        # Re-enable only if ablating the aggregate.
 MLB_ENABLE_TRAVEL_FATIGUE     = True   # [S][?] duplicates situational rest
 MLB_ENABLE_MATCHUP_INTERACTION = True  # [S][?] compound-on-compound
 MLB_ENABLE_COORS_BOOST        = True   # [?] double-counts park at Coors

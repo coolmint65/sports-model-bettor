@@ -157,14 +157,31 @@ logger = logging.getLogger(__name__)
 SEASON = datetime.now().year
 
 
-def record_picks(date: str | None = None, min_edge: float = 1.5) -> list[dict]:
+def record_picks(date: str | None = None, min_edge: float = 1.5,
+                 force: bool = False) -> list[dict]:
     """
     Run model on today's games and record the best pick per game.
     Uses the unified picks engine for consistent edge calculations.
     Falls back to ESPN scoreboard if games aren't in the DB.
+
+    Args:
+        date: Target YYYY-MM-DD (defaults to today).
+        min_edge: Minimum edge percentage to record a pick.
+        force: If True, delete any unsettled pick for each game before
+            recording so the latest model/odds take precedence. Use
+            when the model changed during the day (e.g. lineup / SP
+            update landed after the morning sync).
     """
     conn = get_conn()
     target_date = date or datetime.now().strftime("%Y-%m-%d")
+
+    # Optional hard-reset for today's unsettled picks
+    if force:
+        conn.execute(
+            "DELETE FROM picks WHERE date = ? AND result IS NULL",
+            (target_date,),
+        )
+        conn.commit()
 
     games = conn.execute("""
         SELECT * FROM games WHERE date = ?
@@ -629,8 +646,9 @@ if __name__ == "__main__":
     args = set(sys.argv[1:])
 
     if "--record" in args:
-        print("Recording today's picks...", flush=True)
-        picks = record_picks()
+        force = "--force" in args
+        print(f"Recording today's picks{' (force reset)' if force else ''}...", flush=True)
+        picks = record_picks(force=force)
         print(f"Recorded {len(picks)} picks:")
         for p in picks:
             print(f"  {p['matchup']} | {p['type']:5s} | {p['pick']:15s} | {p['prob']:.1%} | edge: {p['edge']:+.1f}%")

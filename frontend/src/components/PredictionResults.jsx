@@ -94,6 +94,29 @@ export default function PredictionResults({ data, odds }) {
         <EdgeCallout edge={bestEdge} />
       </div>
 
+      {/* ── Why this pick? (moved to top matching NHL layout) ── */}
+      {d.matchup_insights && d.matchup_insights.length > 0 && (
+        <div className="result-card">
+          <h2>Why this pick?</h2>
+          <ul style={{listStyle:'none',padding:0,margin:0}}>
+            {d.matchup_insights.map((insight, i) => (
+              <li key={i} style={{
+                padding:'8px 0',
+                borderBottom: i < d.matchup_insights.length - 1 ? '1px solid #1e293b' : 'none',
+                fontSize:'0.85rem',
+                color:'#cbd5e1',
+                display:'flex',
+                alignItems:'flex-start',
+                gap:10,
+              }}>
+                <span style={{color:'#60a5fa',fontWeight:700,minWidth:14}}>{i + 1}.</span>
+                <span>{insight}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {/* ── Pitching Matchup ── */}
       {(home.pitcher || away.pitcher) && (
         <div className="result-card">
@@ -121,6 +144,55 @@ export default function PredictionResults({ data, odds }) {
                 )}
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Confirmed Lineups ── */}
+      {d.lineups && (d.lineups.home?.length > 0 || d.lineups.away?.length > 0) && (
+        <div className="result-card">
+          <h2>Confirmed Lineups</h2>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
+            <LineupColumn abbr={home.abbreviation} lineup={d.lineups.home} />
+            <LineupColumn abbr={away.abbreviation} lineup={d.lineups.away} />
+          </div>
+          <p style={{fontSize:'0.72rem',color:'#64748b',marginTop:8,textAlign:'center'}}>
+            Lineups post ~2 hours before first pitch. Blank teams haven't posted yet.
+          </p>
+        </div>
+      )}
+
+      {/* ── Weather (non-domed venues) ── */}
+      {d.weather && (d.weather.temp_f != null || d.weather.wind_mph != null) && (
+        <div className="result-card">
+          <h2>Weather</h2>
+          <div style={{display:'flex',gap:24,flexWrap:'wrap',alignItems:'center'}}>
+            {d.weather.temp_f != null && (
+              <div>
+                <div style={{fontSize:'0.72rem',color:'#64748b',textTransform:'uppercase'}}>Temp</div>
+                <div style={{fontSize:'1.15rem',fontWeight:700,color:'#e2e8f0'}}>{Math.round(d.weather.temp_f)}&deg;F</div>
+              </div>
+            )}
+            {d.weather.wind_mph != null && (
+              <div>
+                <div style={{fontSize:'0.72rem',color:'#64748b',textTransform:'uppercase'}}>Wind</div>
+                <div style={{fontSize:'1.15rem',fontWeight:700,color:'#e2e8f0'}}>{Math.round(d.weather.wind_mph)} mph</div>
+              </div>
+            )}
+            {d.weather.adjustment != null && d.weather.adjustment !== 1 && (
+              <div>
+                <div style={{fontSize:'0.72rem',color:'#64748b',textTransform:'uppercase'}}>Run Impact</div>
+                <div style={{
+                  fontSize:'1.15rem', fontWeight:700,
+                  color: d.weather.adjustment > 1.02 ? '#34d399' : d.weather.adjustment < 0.98 ? '#ef4444' : '#e2e8f0',
+                }}>
+                  {d.weather.adjustment > 1 ? '+' : ''}{((d.weather.adjustment - 1) * 100).toFixed(1)}%
+                </div>
+              </div>
+            )}
+            <div style={{flex:1,textAlign:'right',fontSize:'0.72rem',color:'#64748b'}}>
+              {d.weather.applied ? 'Weather factor active' : 'Weather data fetched; factor currently gated off'}
+            </div>
           </div>
         </div>
       )}
@@ -234,29 +306,6 @@ export default function PredictionResults({ data, odds }) {
         </div>
       )}
 
-      {/* ── Why this pick? - parity with NHL's numbered "Why" card ── */}
-      {d.matchup_insights && d.matchup_insights.length > 0 && (
-        <div className="result-card">
-          <h2>Why this pick?</h2>
-          <ul style={{listStyle:'none',padding:0,margin:0}}>
-            {d.matchup_insights.map((insight, i) => (
-              <li key={i} style={{
-                padding:'8px 0',
-                borderBottom: i < d.matchup_insights.length - 1 ? '1px solid #1e293b' : 'none',
-                fontSize:'0.85rem',
-                color:'#cbd5e1',
-                display:'flex',
-                alignItems:'flex-start',
-                gap:10,
-              }}>
-                <span style={{color:'#60a5fa',fontWeight:700,minWidth:14}}>{i + 1}.</span>
-                <span>{insight}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
       {/* ── H2H History ── */}
       {d.h2h_history && d.h2h_history.games > 0 && (
         <div className="result-card">
@@ -294,19 +343,6 @@ export default function PredictionResults({ data, odds }) {
           )}
         </div>
       )}
-
-      {/* ── Score Predictions ── */}
-      <div className="result-card">
-        <h2>Most Likely Final Scores</h2>
-        <div className="correct-scores">
-          {d.correct_scores?.map((cs, i) => (
-            <div key={i} className="cs-chip">
-              <div className="score">{cs.home}-{cs.away}</div>
-              <div className="prob">{pct(cs.prob)}</div>
-            </div>
-          ))}
-        </div>
-      </div>
 
       {/* ── Injuries - NHL-style two-column layout with quantified impact ── */}
       {d.injuries && (d.injuries.home?.length > 0 || d.injuries.away?.length > 0) && (
@@ -437,10 +473,10 @@ export default function PredictionResults({ data, odds }) {
         )
       })()}
 
-      {/* ── Analysis (stats/context, formatted like NHL Why card) ── */}
+      {/* ── Key Takeaways (stats / context, distinct from Why this pick?) ── */}
       {d.reasoning && d.reasoning.length > 0 && (
         <div className="result-card">
-          <h2>Analysis</h2>
+          <h2>Key Takeaways</h2>
           <ul style={{listStyle:'none',padding:0,margin:0}}>
             {d.reasoning.map((r, i) => (
               <li key={i} style={{
@@ -462,6 +498,41 @@ export default function PredictionResults({ data, odds }) {
     </div>
   )
 }
+
+function LineupColumn({ abbr, lineup }) {
+  if (!lineup || lineup.length === 0) {
+    return (
+      <div>
+        <h3 style={{fontSize:'0.85rem',color:'#94a3b8',marginBottom:8}}>{abbr}</h3>
+        <span style={{color:'#64748b',fontSize:'0.8rem'}}>Lineup not posted yet</span>
+      </div>
+    )
+  }
+  return (
+    <div>
+      <h3 style={{fontSize:'0.85rem',color:'#94a3b8',marginBottom:8}}>{abbr}</h3>
+      {lineup.map((b, i) => (
+        <div key={i} style={{
+          fontSize:'0.8rem',
+          marginBottom:4,
+          display:'flex',
+          gap:8,
+          alignItems:'baseline',
+        }}>
+          <span style={{color:'#64748b',fontWeight:600,minWidth:16}}>{i + 1}.</span>
+          <span style={{fontWeight:600,color:'#e2e8f0'}}>{b.name || b.full_name || b.player || '?'}</span>
+          {b.position && (
+            <span style={{color:'#64748b',fontSize:'0.72rem'}}>{b.position}</span>
+          )}
+          {b.bats && (
+            <span style={{color:'#64748b',fontSize:'0.72rem',marginLeft:'auto'}}>{b.bats}</span>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 
 function computeEdge(wp, odds) {
   // Keep for backward compat

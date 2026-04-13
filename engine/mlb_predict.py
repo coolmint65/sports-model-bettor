@@ -578,4 +578,27 @@ def predict_matchup(home_team_id: int, away_team_id: int,
         "injuries": injury_data,
         "matchup_insights": matchup.get("insights", []),
         "reasoning": reasoning,
+        # Expose lineups and weather so the GameDetail UI can render
+        # them as dedicated cards. Lineups come from MLB Stats API
+        # (confirmed ~2hr before first pitch); weather is pulled from
+        # Open-Meteo for non-domed venues in Step 6c above.
+        "lineups": {
+            "home": home_lineup,
+            "away": away_lineup,
+        },
+        "weather": {
+            "temp_f": game_temp,
+            "wind_mph": game_wind,
+            "adjustment": round(weather_adj, 4),
+            # Weather effect is active when the situational aggregate is
+            # running (it bundles weather alongside rest + platoon). The
+            # standalone WEATHER_ADJ multiplier is off by default to
+            # avoid double-counting.
+            "applied": bool(
+                _SITU_ON and (
+                    _cfg_bool("MLB_ENABLE_SITUATIONAL_AGG")
+                    or _cfg_bool("MLB_ENABLE_WEATHER_ADJ")
+                )
+            ),
+        },
     }

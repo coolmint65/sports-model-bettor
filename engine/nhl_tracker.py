@@ -94,12 +94,26 @@ def _fetch_nhl_scoreboard(date: str) -> list[dict]:
         return []
 
 
-def record_picks(date: str | None = None, min_edge: float = 1.5) -> list[dict]:
+def record_picks(date: str | None = None, min_edge: float = 1.5,
+                 force: bool = False) -> list[dict]:
     """
     Run NHL model on today's games and record the best pick per game.
+
+    Args:
+        date: Target YYYY-MM-DD (defaults to today).
+        min_edge: Minimum edge percentage to record a pick.
+        force: If True, delete any unsettled pick for today before
+            recording so the latest model/odds take precedence.
     """
     conn = _get_nhl_db()
     target_date = date or datetime.now().strftime("%Y-%m-%d")
+
+    if force:
+        conn.execute(
+            "DELETE FROM nhl_picks WHERE date = ? AND result IS NULL",
+            (target_date,),
+        )
+        conn.commit()
 
     from engine.nhl_predict import generate_nhl_picks
     from engine.data import list_teams, load_team
@@ -618,8 +632,9 @@ if __name__ == "__main__":
     args = set(sys.argv[1:])
 
     if "--record" in args:
-        print("Recording today's NHL picks...", flush=True)
-        picks = record_picks()
+        force = "--force" in args
+        print(f"Recording today's NHL picks{' (force reset)' if force else ''}...", flush=True)
+        picks = record_picks(force=force)
         print(f"Recorded {len(picks)} NHL picks:")
         for p in picks:
             print(f"  {p['matchup']} | {p['type']:4s} | {p['pick']:15s} | {p['prob']:.1%} | edge: {p['edge']:+.1f}%")
