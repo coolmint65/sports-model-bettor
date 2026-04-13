@@ -51,6 +51,22 @@ function Q1PredictionResults({ data, odds, home, away }) {
 
   return (
     <div className="results">
+      {/* Season Context Banner - parity with NHL. Shows regular-season
+          vs playoff context when the prediction payload provides it. */}
+      {d.season_context && d.season_context.implications && (
+        <div style={{
+          background: d.season_context.phase === 'playoffs' ? '#1e3a2f' : '#1e2a3f',
+          border: `1px solid ${d.season_context.phase === 'playoffs' ? '#34d399' : '#60a5fa'}`,
+          borderRadius: 8, padding: '8px 16px', marginBottom: 12,
+          fontSize: '0.8rem', fontWeight: 600,
+          color: d.season_context.phase === 'playoffs' ? '#34d399' : '#60a5fa',
+          textAlign: 'center',
+        }}>
+          {d.season_context.phase === 'playoffs' ? 'PLAYOFF GAME' : 'LATE SEASON - Playoff Race'}
+          {' '}- Model adjusts for higher intensity
+        </div>
+      )}
+
       <div className="result-card" style={{minHeight: 240}}>
         <h2>Q1 Projected Outcome</h2>
         <div className="score-display">

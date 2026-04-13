@@ -123,6 +123,15 @@ function GameCard({ game, bet, onClick }) {
   const isPre = status.state === 'pre'
   const conf = bet?.confidence || 'skip'
 
+  // Rest / fatigue signals for MLB (back-to-back equivalents: short rest,
+  // travel fatigue, getaway day). Gated on bet.rest availability from the
+  // prediction payload so the card degrades gracefully.
+  const rest = bet?.rest || {}
+  const homeB2B = rest.home_b2b || rest.home_short_rest
+  const awayB2B = rest.away_b2b || rest.away_short_rest
+  const homeRest = rest.home_rest_advantage && !rest.away_rest_advantage
+  const awayRest = rest.away_rest_advantage && !rest.home_rest_advantage
+
   return (
     <div className={`game-card ${isLive ? 'live' : ''} card-${conf}`} onClick={onClick}>
       {isLive && <div className="live-badge">LIVE</div>}
@@ -137,11 +146,59 @@ function GameCard({ game, bet, onClick }) {
         </div>
       )}
 
+      {/* Rest / fatigue indicators (MLB equivalents of B2B / rest advantage) */}
+      {isPre && (homeB2B || awayB2B || homeRest || awayRest) && (
+        <div style={{display:'flex',gap:4,flexWrap:'wrap',marginBottom:6}}>
+          {awayB2B && (
+            <span style={{fontSize:'0.66rem',fontWeight:700,padding:'2px 6px',borderRadius:4,background:'rgba(239,68,68,0.15)',color:'#ef4444',border:'1px solid rgba(239,68,68,0.3)'}}>
+              {away.abbreviation} tired
+            </span>
+          )}
+          {homeB2B && (
+            <span style={{fontSize:'0.66rem',fontWeight:700,padding:'2px 6px',borderRadius:4,background:'rgba(239,68,68,0.15)',color:'#ef4444',border:'1px solid rgba(239,68,68,0.3)'}}>
+              {home.abbreviation} tired
+            </span>
+          )}
+          {awayRest && (
+            <span style={{fontSize:'0.66rem',fontWeight:700,padding:'2px 6px',borderRadius:4,background:'rgba(96,165,250,0.12)',color:'#60a5fa',border:'1px solid rgba(96,165,250,0.25)'}}>
+              {away.abbreviation} rested
+            </span>
+          )}
+          {homeRest && (
+            <span style={{fontSize:'0.66rem',fontWeight:700,padding:'2px 6px',borderRadius:4,background:'rgba(96,165,250,0.12)',color:'#60a5fa',border:'1px solid rgba(96,165,250,0.25)'}}>
+              {home.abbreviation} rested
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Line movement indicator (gated on availability) */}
+      {isPre && game.line_movement && game.line_movement.significance && game.line_movement.significance !== 'none' && (
+        <div style={{marginBottom:6}}>
+          <span
+            title={`Line moved ${game.line_movement.significance} since opening`}
+            style={{fontSize:'0.66rem',fontWeight:700,padding:'2px 6px',borderRadius:4,background:'rgba(245,158,11,0.12)',color: game.line_movement.significance === 'major' ? '#ef4444' : '#f59e0b',border:'1px solid rgba(245,158,11,0.25)'}}
+          >
+            LINE MOVED
+          </span>
+        </div>
+      )}
+
       <div className="game-teams">
         <TeamRow team={away} isLive={isLive} isFinal={isFinal} />
         <div className="game-at">@</div>
         <TeamRow team={home} isLive={isLive} isFinal={isFinal} />
       </div>
+
+      {/* Win probability bar - parity with NHL */}
+      {isPre && bet?.win_prob?.home != null && (
+        <WinProbBar wp={bet.win_prob} home={home} away={away} />
+      )}
+
+      {/* Key insight - one-line "why the model picked this" */}
+      {isPre && bet && bet.best_pick && conf !== 'skip' && (
+        <MLBCardInsight bet={bet} home={home} away={away} game={game} />
+      )}
 
       {/* Probable pitchers */}
       {isPre && (game.home_pitcher || game.away_pitcher) && (
@@ -228,6 +285,106 @@ function TeamRow({ team, isLive, isFinal }) {
       {(isLive || isFinal) && (
         <span className={`game-score ${team.winner ? 'winner' : ''}`}>{team.score}</span>
       )}
+    </div>
+  )
+}
+
+
+function WinProbBar({ wp, home, away }) {
+  const hPct = Math.round((wp.home || 0) * 100)
+  const aPct = Math.round((wp.away || 0) * 100)
+  const homeFavored = (wp.home || 0) > (wp.away || 0)
+
+  return (
+    <>
+      <div className="wp-labels">
+        <span className={!homeFavored ? 'wp-favored' : ''}>{away.abbreviation} {aPct}%</span>
+        <span className={homeFavored ? 'wp-favored' : ''}>{home.abbreviation} {hPct}%</span>
+      </div>
+      <div className="wp-bar-card">
+        <div className="wp-away" style={{ width: `${aPct}%` }} />
+        <div className="wp-home" style={{ width: `${hPct}%` }} />
+      </div>
+    </>
+  )
+}
+
+
+function MLBCardInsight({ bet, home, away, game }) {
+  // One-liner explaining WHY the model picked this side. MLB-specific
+  // signals: pitcher ERA gap, wRC+ gap, form, injuries, home/road
+  // splits. Mirrors NHL's CardInsight in structure.
+  const f = bet.factors || {}
+  const reasons = []
+
+  // Pitcher matchup
+  const hP = game.home_pitcher || {}
+  const aP = game.away_pitcher || {}
+  if (hP.era > 0 && aP.era > 0) {
+    const diff = Math.abs(hP.era - aP.era)
+    if (diff >= 1.0) {
+      const better = hP.era < aP.era ? home.abbreviation : away.abbreviation
+      reasons.push({
+        weight: diff * 5,
+        text: <><strong>{better}</strong> has SP ERA edge ({Math.min(hP.era, aP.era).toFixed(2)})</>
+      })
+    }
+  }
+
+  // Offense gap via wRC+
+  const hWrc = f.home_wrc_plus
+  const aWrc = f.away_wrc_plus
+  if (hWrc != null && aWrc != null && Math.abs(hWrc - aWrc) > 15) {
+    const better = hWrc > aWrc ? home.abbreviation : away.abbreviation
+    reasons.push({
+      weight: Math.abs(hWrc - aWrc) / 3,
+      text: <><strong>{better}</strong> wRC+ edge ({Math.max(hWrc, aWrc).toFixed(0)})</>
+    })
+  }
+
+  // Recent form gap
+  const hForm = f.home_form
+  const aForm = f.away_form
+  if (hForm != null && aForm != null && Math.abs(hForm - aForm) > 0.05) {
+    const hotter = hForm > aForm ? home.abbreviation : away.abbreviation
+    reasons.push({
+      weight: Math.abs(hForm - aForm) * 40,
+      text: <><strong>{hotter}</strong> running hot ({((hForm > aForm ? hForm : aForm) * 100).toFixed(0)}%)</>
+    })
+  }
+
+  // Injuries - plain English
+  const hImp = bet.injuries?.home_impact
+  const aImp = bet.injuries?.away_impact
+  if (hImp != null && hImp < 0.92) {
+    reasons.push({
+      weight: (1 - hImp) * 50,
+      text: <><strong>{home.abbreviation}</strong> shorthanded ({Math.round((1 - hImp) * 100)}% weaker)</>
+    })
+  }
+  if (aImp != null && aImp < 0.92) {
+    reasons.push({
+      weight: (1 - aImp) * 50,
+      text: <><strong>{away.abbreviation}</strong> shorthanded ({Math.round((1 - aImp) * 100)}% weaker)</>
+    })
+  }
+
+  // Park factor (distinctive venues only)
+  const park = f.park_factor
+  if (park != null && Math.abs(park - 1.0) >= 0.04) {
+    const tag = park > 1.04 ? 'hitter-friendly park' : 'pitcher-friendly park'
+    reasons.push({
+      weight: Math.abs(park - 1.0) * 20,
+      text: <>Venue: {tag} ({park.toFixed(2)})</>
+    })
+  }
+
+  if (reasons.length === 0) return null
+
+  reasons.sort((a, b) => b.weight - a.weight)
+  return (
+    <div className="card-insight">
+      {reasons[0].text}
     </div>
   )
 }

@@ -17,6 +17,24 @@ export default function PredictionResults({ data, odds }) {
 
   return (
     <div className="results">
+      {/* Season Context Banner - parity with NHL. Renders when the
+          prediction payload includes season_context (late-season,
+          playoff race, etc). Gated on availability so MLB data without
+          this key just skips the banner. */}
+      {d.season_context && d.season_context.implications && (
+        <div style={{
+          background: d.season_context.phase === 'playoffs' ? '#1e3a2f' : '#1e2a3f',
+          border: `1px solid ${d.season_context.phase === 'playoffs' ? '#34d399' : '#60a5fa'}`,
+          borderRadius: 8, padding: '8px 16px', marginBottom: 12,
+          fontSize: '0.8rem', fontWeight: 600,
+          color: d.season_context.phase === 'playoffs' ? '#34d399' : '#60a5fa',
+          textAlign: 'center',
+        }}>
+          {d.season_context.phase === 'playoffs' ? 'PLAYOFF GAME' : 'LATE SEASON - Playoff Race'}
+          {' '}- Model adjusts for higher intensity
+        </div>
+      )}
+
       {/* ── Top Card: Score + Win Prob + Edge ── */}
       <div className="result-card">
         <h2>Projected Outcome</h2>
@@ -216,12 +234,25 @@ export default function PredictionResults({ data, odds }) {
         </div>
       )}
 
-      {/* ── Matchup Insights ── */}
+      {/* ── Why this pick? - parity with NHL's numbered "Why" card ── */}
       {d.matchup_insights && d.matchup_insights.length > 0 && (
         <div className="result-card">
-          <h2>Matchup Analysis</h2>
-          <ul className="reasoning-list">
-            {d.matchup_insights.map((insight, i) => <li key={i}>{insight}</li>)}
+          <h2>Why this pick?</h2>
+          <ul style={{listStyle:'none',padding:0,margin:0}}>
+            {d.matchup_insights.map((insight, i) => (
+              <li key={i} style={{
+                padding:'8px 0',
+                borderBottom: i < d.matchup_insights.length - 1 ? '1px solid #1e293b' : 'none',
+                fontSize:'0.85rem',
+                color:'#cbd5e1',
+                display:'flex',
+                alignItems:'flex-start',
+                gap:10,
+              }}>
+                <span style={{color:'#60a5fa',fontWeight:700,minWidth:14}}>{i + 1}.</span>
+                <span>{insight}</span>
+              </li>
+            ))}
           </ul>
         </div>
       )}
