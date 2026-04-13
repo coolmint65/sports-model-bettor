@@ -2220,63 +2220,22 @@ _NBA_TEAM_ABBRS = {
 
 
 def _fetch_nba_odds() -> dict:
-    """Fetch NBA odds from The Odds API. Returns dict keyed by 'AWAY@HOME'."""
-    api_key = os.environ.get("ODDS_API_KEY", "")
-    if not api_key:
+    """Fetch NBA odds (full-game + Q1 markets) from The Odds API via the
+    unified fallback chain in scrapers.nba_odds.
+
+    Delegates to fetch_all_nba_odds so the UI scoreboard endpoint picks
+    up the same data the tracker uses — including h2h_q1, spreads_q1,
+    and totals_q1 markets via the per-event endpoint. Previously this
+    was a duplicated bulk-only fetcher that silently dropped Q1 markets,
+    which is why the Q1 model picks card kept showing (-110) defaults
+    no matter how many times the scrapers were fixed.
+    """
+    try:
+        from scrapers.nba_odds import fetch_all_nba_odds
+        return fetch_all_nba_odds() or {}
+    except Exception as e:
+        logger.warning("NBA odds unified fetch failed: %s", e)
         return {}
-
-    odds_url = (
-        f"https://api.the-odds-api.com/v4/sports/basketball_nba/odds/"
-        f"?apiKey={api_key}&regions=us&markets=h2h,spreads,totals"
-        f"&oddsFormat=american"
-    )
-
-    data = _fetch_espn_json(odds_url)
-    if not data:
-        return {}
-
-    result = {}
-    for game in data if isinstance(data, list) else []:
-        h_name = game.get("home_team", "")
-        a_name = game.get("away_team", "")
-        h_abbr = _NBA_TEAM_ABBRS.get(h_name, "")
-        a_abbr = _NBA_TEAM_ABBRS.get(a_name, "")
-        if not h_abbr or not a_abbr:
-            continue
-
-        odds_row = {}
-        for bm in game.get("bookmakers", []):
-            for mkt in bm.get("markets", []):
-                mk = mkt.get("key", "")
-                outcomes = mkt.get("outcomes", [])
-                if mk == "h2h":
-                    for o in outcomes:
-                        if o.get("name") == h_name:
-                            odds_row["home_ml"] = o.get("price")
-                        elif o.get("name") == a_name:
-                            odds_row["away_ml"] = o.get("price")
-                elif mk == "spreads":
-                    for o in outcomes:
-                        if o.get("name") == h_name:
-                            odds_row["home_spread_point"] = o.get("point")
-                            odds_row["home_spread_odds"] = o.get("price")
-                        elif o.get("name") == a_name:
-                            odds_row["away_spread_point"] = o.get("point")
-                            odds_row["away_spread_odds"] = o.get("price")
-                elif mk == "totals":
-                    for o in outcomes:
-                        if o.get("name") == "Over":
-                            odds_row["over_under"] = o.get("point")
-                            odds_row["over_odds"] = o.get("price")
-                        elif o.get("name") == "Under":
-                            odds_row["under_odds"] = o.get("price")
-            if odds_row:
-                break  # Use first bookmaker
-
-        if odds_row:
-            result[f"{a_abbr}@{h_abbr}"] = odds_row
-
-    return result
 
 
 @app.post("/api/nba/sync")
