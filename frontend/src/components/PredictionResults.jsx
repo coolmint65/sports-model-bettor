@@ -94,28 +94,43 @@ export default function PredictionResults({ data, odds }) {
         <EdgeCallout edge={bestEdge} />
       </div>
 
-      {/* ── Why this pick? (moved to top matching NHL layout) ── */}
-      {d.matchup_insights && d.matchup_insights.length > 0 && (
-        <div className="result-card">
-          <h2>Why this pick?</h2>
-          <ul style={{listStyle:'none',padding:0,margin:0}}>
-            {d.matchup_insights.map((insight, i) => (
-              <li key={i} style={{
-                padding:'8px 0',
-                borderBottom: i < d.matchup_insights.length - 1 ? '1px solid #1e293b' : 'none',
-                fontSize:'0.85rem',
-                color:'#cbd5e1',
-                display:'flex',
-                alignItems:'flex-start',
-                gap:10,
-              }}>
-                <span style={{color:'#60a5fa',fontWeight:700,minWidth:14}}>{i + 1}.</span>
-                <span>{insight}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      {/* ── Why this pick? ──
+          Merges matchup_insights (pick-specific reasoning from
+          compute_matchup_interaction, often empty) and reasoning
+          (stat context always present) into a single top-of-page
+          card. Matchup insights render first when present.
+      */}
+      {(() => {
+        const lines = []
+        if (d.matchup_insights && d.matchup_insights.length > 0) {
+          lines.push(...d.matchup_insights)
+        }
+        if (d.reasoning && d.reasoning.length > 0) {
+          lines.push(...d.reasoning)
+        }
+        if (lines.length === 0) return null
+        return (
+          <div className="result-card">
+            <h2>Why this pick?</h2>
+            <ul style={{listStyle:'none',padding:0,margin:0}}>
+              {lines.map((line, i) => (
+                <li key={i} style={{
+                  padding:'8px 0',
+                  borderBottom: i < lines.length - 1 ? '1px solid #1e293b' : 'none',
+                  fontSize:'0.85rem',
+                  color:'#cbd5e1',
+                  display:'flex',
+                  alignItems:'flex-start',
+                  gap:10,
+                }}>
+                  <span style={{color:'#60a5fa',fontWeight:700,minWidth:14}}>{i + 1}.</span>
+                  <span>{line}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )
+      })()}
 
       {/* ── Pitching Matchup ── */}
       {(home.pitcher || away.pitcher) && (
@@ -173,12 +188,43 @@ export default function PredictionResults({ data, odds }) {
                 <div style={{fontSize:'1.15rem',fontWeight:700,color:'#e2e8f0'}}>{Math.round(d.weather.temp_f)}&deg;F</div>
               </div>
             )}
-            {d.weather.wind_mph != null && (
-              <div>
-                <div style={{fontSize:'0.72rem',color:'#64748b',textTransform:'uppercase'}}>Wind</div>
-                <div style={{fontSize:'1.15rem',fontWeight:700,color:'#e2e8f0'}}>{Math.round(d.weather.wind_mph)} mph</div>
-              </div>
-            )}
+            {(() => {
+              // wind_mph can come in as a number or as a string like
+              // "SW 8 mph" or "Calm" from the DB. Parse out the first
+              // numeric chunk when present; otherwise render the raw
+              // string so we never display NaN.
+              const w = d.weather.wind_mph
+              if (w == null) return null
+              if (typeof w === 'number' && isFinite(w)) {
+                return (
+                  <div>
+                    <div style={{fontSize:'0.72rem',color:'#64748b',textTransform:'uppercase'}}>Wind</div>
+                    <div style={{fontSize:'1.15rem',fontWeight:700,color:'#e2e8f0'}}>{Math.round(w)} mph</div>
+                  </div>
+                )
+              }
+              const s = String(w).trim()
+              if (!s || s.toLowerCase() === 'nan') return null
+              const numMatch = s.match(/(-?\d+(?:\.\d+)?)/)
+              if (numMatch) {
+                // Keep the direction prefix (e.g. "SW 8 mph") but show rounded value
+                const dir = s.slice(0, numMatch.index).trim()
+                return (
+                  <div>
+                    <div style={{fontSize:'0.72rem',color:'#64748b',textTransform:'uppercase'}}>Wind</div>
+                    <div style={{fontSize:'1.15rem',fontWeight:700,color:'#e2e8f0'}}>
+                      {dir ? `${dir} ` : ''}{Math.round(parseFloat(numMatch[1]))} mph
+                    </div>
+                  </div>
+                )
+              }
+              return (
+                <div>
+                  <div style={{fontSize:'0.72rem',color:'#64748b',textTransform:'uppercase'}}>Wind</div>
+                  <div style={{fontSize:'1.15rem',fontWeight:700,color:'#e2e8f0'}}>{s}</div>
+                </div>
+              )
+            })()}
             {d.weather.adjustment != null && d.weather.adjustment !== 1 && (
               <div>
                 <div style={{fontSize:'0.72rem',color:'#64748b',textTransform:'uppercase'}}>Run Impact</div>
@@ -473,28 +519,6 @@ export default function PredictionResults({ data, odds }) {
         )
       })()}
 
-      {/* ── Key Takeaways (stats / context, distinct from Why this pick?) ── */}
-      {d.reasoning && d.reasoning.length > 0 && (
-        <div className="result-card">
-          <h2>Key Takeaways</h2>
-          <ul style={{listStyle:'none',padding:0,margin:0}}>
-            {d.reasoning.map((r, i) => (
-              <li key={i} style={{
-                padding:'8px 0',
-                borderBottom: i < d.reasoning.length - 1 ? '1px solid #1e293b' : 'none',
-                fontSize:'0.85rem',
-                color:'#cbd5e1',
-                display:'flex',
-                alignItems:'flex-start',
-                gap:10,
-              }}>
-                <span style={{color:'#60a5fa',fontWeight:700,minWidth:14}}>{i + 1}.</span>
-                <span>{r}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
     </div>
   )
 }
