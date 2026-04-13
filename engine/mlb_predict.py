@@ -144,13 +144,42 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     home_off = _blended_offense(home_pit, home_stats)
     away_off = _blended_offense(away_pit, away_stats)
 
-    # ── Step 2: Starting pitcher adjustment ──
+    # ── Step 2: Pitcher-weighted baseline expected runs ──
+    # Proper weighting: starters average ~5.5 of 9 innings (61%), bullpen
+    # the remaining ~3.5 (39%). Previously the model multiplied the full
+    # home_xr by the SP factor and then added the bullpen as a small
+    # multiplicative nudge (35% weight). That over-weighted the starter
+    # and under-weighted the bullpen - a great starter made the pick
+    # regardless of who pitched the final 3+ innings.
+    #
+    # New blend: expected_runs_scored =
+    #    team_offense * SP_factor * sp_innings_share
+    #  + team_offense * BP_factor * bp_innings_share
+    #
+    # When SP and BP factors are both 1.0 (league-average pitching), the
+    # result equals team_offense - unchanged from before. When they differ,
+    # the bullpen's ERA now carries its real innings-share weight instead
+    # of being a 35% footnote.
     home_sp_factor = _blended_pitcher(home_sp_pit, home_sp)
     away_sp_factor = _blended_pitcher(away_sp_pit, away_sp)
+    home_bp_factor = _bullpen_factor(home_bullpen)
+    away_bp_factor = _bullpen_factor(away_bullpen)
 
-    # Home offense scores against away SP, away offense against home SP
-    home_xr = home_off * away_sp_factor
-    away_xr = away_off * home_sp_factor
+    # Share of innings attributed to each unit. Sourced from MLB-wide
+    # 2024 averages: SP avg 5.4 IP, game avg 8.9 IP (rain/extras avg to 9
+    # over the season) -> SP share 0.60, BP share 0.40. Set via config
+    # so it can be re-tuned if the SP/BP usage split shifts (e.g. a
+    # league-wide trend toward openers would lower SP_SHARE).
+    from .config import MLB_SP_INNINGS_SHARE
+    SP_SHARE = MLB_SP_INNINGS_SHARE
+    BP_SHARE = 1.0 - SP_SHARE
+
+    # Home offense scores against away SP then away BP
+    home_xr = (home_off * away_sp_factor * SP_SHARE
+               + home_off * away_bp_factor * BP_SHARE)
+    # Away offense scores against home SP then home BP
+    away_xr = (away_off * home_sp_factor * SP_SHARE
+               + away_off * home_bp_factor * BP_SHARE)
 
     # ── Step 2b: Lineup-level offense adjustment ──
     # Uses individual batter wRC+/OPS when available
@@ -186,13 +215,13 @@ def predict_matchup(home_team_id: int, away_team_id: int,
         if away_adj["games_analyzed"] >= 5:
             away_xr *= away_adj["away_factor"]
 
-    # ── Step 4: Bullpen adjustment ──
-    home_bp_factor = _bullpen_factor(home_bullpen)
-    away_bp_factor = _bullpen_factor(away_bullpen)
-
-    # Bullpen covers ~35% of the game (last 3-4 innings)
-    home_xr *= (1 + 0.35 * (away_bp_factor - 1))
-    away_xr *= (1 + 0.35 * (home_bp_factor - 1))
+    # ── Step 4: Bullpen fatigue residual ──
+    # The base BP quality is now captured in Step 2's innings-weighted
+    # blend. This step applies a separate FATIGUE residual for bullpens
+    # that have pitched heavy innings in the last 3 days - an effect
+    # that isn't captured in season-long bullpen ERA.
+    home_bp_factor_unused = home_bp_factor  # kept for legibility
+    away_bp_factor_unused = away_bp_factor
 
     # ── Step 4a: Enhanced bullpen fatigue weighting ──
     # Tired bullpen = more opponent runs in late innings.

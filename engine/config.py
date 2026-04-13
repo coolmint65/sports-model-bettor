@@ -50,6 +50,16 @@ MLB_EXPECTED_RUNS_CAP = 6.5
 # home advantage. Pulled down from 0.28 -> 0.15 to rebalance.
 MLB_HOME_EDGE = 0.15
 
+# Share of game innings attributed to the starter in the runs-scored
+# projection. Based on 2024 league average of 5.4 IP per start out of
+# 8.9 game-average innings = 0.61. The remainder (0.39) is attributed
+# to the bullpen. Pre-change code applied the SP factor to 100% of
+# expected runs and the bullpen as a tiny 35% multiplier, which made
+# every pick effectively a referendum on the starter - ignoring that
+# the bullpen pitches ~40% of the game. If the SP/BP usage split
+# shifts (league-wide trend toward openers, etc.), tune here.
+MLB_SP_INNINGS_SHARE = 0.60
+
 # ── NBA config ──
 # Roster availability / load-management adjustment toggle.
 # Shipped 2026-04-12 based on intuition that starter rest lowers Q1

@@ -308,6 +308,135 @@ export default function PredictionResults({ data, odds }) {
         </div>
       </div>
 
+      {/* ── Injuries - NHL-style two-column layout with quantified impact ── */}
+      {d.injuries && (d.injuries.home?.length > 0 || d.injuries.away?.length > 0) && (
+        <div className="result-card">
+          <h2>Injuries</h2>
+
+          {/* Quantified impact summary */}
+          {((d.injuries.home_impact != null && d.injuries.home_impact < 1)
+            || (d.injuries.away_impact != null && d.injuries.away_impact < 1)) && (
+            <div style={{
+              textAlign:'center', fontSize:'0.82rem', marginBottom:10,
+              display:'flex', justifyContent:'center', gap:16, flexWrap:'wrap',
+            }}>
+              {d.injuries.home_impact != null && d.injuries.home_impact < 1 && (
+                <span style={{color:'#ef4444'}}>
+                  {home.abbreviation}: ~{Math.round((1 - d.injuries.home_impact) * 100)}% weaker from injuries
+                </span>
+              )}
+              {d.injuries.away_impact != null && d.injuries.away_impact < 1 && (
+                <span style={{color:'#ef4444'}}>
+                  {away.abbreviation}: ~{Math.round((1 - d.injuries.away_impact) * 100)}% weaker from injuries
+                </span>
+              )}
+            </div>
+          )}
+
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
+            <div>
+              <h3 style={{fontSize:'0.85rem',color:'#94a3b8',marginBottom:8}}>{home.abbreviation}</h3>
+              {d.injuries.home?.length > 0 ? d.injuries.home.map((inj, i) => (
+                <div key={i} style={{fontSize:'0.8rem',marginBottom:4,display:'flex',justifyContent:'space-between'}}>
+                  <span>
+                    <span style={{fontWeight:600}}>{inj.name}</span>
+                    {inj.position && <span style={{color:'#64748b',marginLeft:4}}>({inj.position})</span>}
+                  </span>
+                  <span style={{color: inj.status === 'Out' ? '#ef4444' : '#f59e0b',fontSize:'0.75rem'}}>
+                    {inj.status || inj.type || 'Out'}
+                  </span>
+                </div>
+              )) : <span style={{color:'#64748b',fontSize:'0.8rem'}}>No injuries reported</span>}
+            </div>
+            <div>
+              <h3 style={{fontSize:'0.85rem',color:'#94a3b8',marginBottom:8}}>{away.abbreviation}</h3>
+              {d.injuries.away?.length > 0 ? d.injuries.away.map((inj, i) => (
+                <div key={i} style={{fontSize:'0.8rem',marginBottom:4,display:'flex',justifyContent:'space-between'}}>
+                  <span>
+                    <span style={{fontWeight:600}}>{inj.name}</span>
+                    {inj.position && <span style={{color:'#64748b',marginLeft:4}}>({inj.position})</span>}
+                  </span>
+                  <span style={{color: inj.status === 'Out' ? '#ef4444' : '#f59e0b',fontSize:'0.75rem'}}>
+                    {inj.status || inj.type || 'Out'}
+                  </span>
+                </div>
+              )) : <span style={{color:'#64748b',fontSize:'0.8rem'}}>No injuries reported</span>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Key Factors - ranked stat comparison matching NHL ── */}
+      {(() => {
+        const hRec = d.home?.record_details || d.home
+        const aRec = d.away?.record_details || d.away
+        // Pull comparative stats that are almost always populated.
+        // Rank is best-of-two here (small universe) but the structure
+        // mirrors the NHL factors table visually.
+        const stats = []
+        const push = (label, hv, av, hvFmt, avFmt, higherBetter=true) => {
+          if (hv == null || av == null) return
+          const hBetter = higherBetter ? hv >= av : hv <= av
+          stats.push({label, hv, av, hvFmt: hvFmt ?? String(hv), avFmt: avFmt ?? String(av), hBetter})
+        }
+        const hF = d.factors || {}
+        const aF = d.factors || {}
+        // Offense
+        if (hF.home_wrc_plus != null || d.home?.wrc_plus != null) {
+          push('wRC+',
+            d.home?.wrc_plus ?? hF.home_wrc_plus,
+            d.away?.wrc_plus ?? hF.away_wrc_plus,
+            null, null, true)
+        }
+        if (d.home?.ops != null || d.away?.ops != null) {
+          push('OPS',
+            d.home?.ops, d.away?.ops,
+            d.home?.ops?.toFixed(3), d.away?.ops?.toFixed(3), true)
+        }
+        // Pitching
+        const hPit = d.home?.pitcher || {}
+        const aPit = d.away?.pitcher || {}
+        if (hPit.era != null && aPit.era != null) {
+          push('SP ERA',
+            hPit.era, aPit.era,
+            hPit.era.toFixed(2), aPit.era.toFixed(2), false)
+        }
+        if (hPit.whip != null && aPit.whip != null) {
+          push('SP WHIP',
+            hPit.whip, aPit.whip,
+            hPit.whip.toFixed(2), aPit.whip.toFixed(2), false)
+        }
+
+        if (stats.length === 0) return null
+        return (
+          <div className="result-card">
+            <h2>Key Factors</h2>
+            <table style={{width:'100%',fontSize:'0.82rem',borderCollapse:'collapse'}}>
+              <thead>
+                <tr style={{color:'#64748b',textAlign:'left',fontSize:'0.72rem',textTransform:'uppercase'}}>
+                  <th style={{padding:'6px 0',fontWeight:600}}></th>
+                  <th style={{padding:'6px 0',fontWeight:600,textAlign:'right'}}>{home.abbreviation}</th>
+                  <th style={{padding:'6px 0',fontWeight:600,textAlign:'right'}}>{away.abbreviation}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {stats.map((s, i) => (
+                  <tr key={i} style={{borderTop:'1px solid #1e293b'}}>
+                    <td style={{padding:'8px 0',color:'#94a3b8',fontWeight:600}}>{s.label}</td>
+                    <td style={{padding:'8px 0',textAlign:'right',fontWeight:600,color: s.hBetter ? '#34d399' : '#cbd5e1'}}>
+                      {s.hvFmt}
+                    </td>
+                    <td style={{padding:'8px 0',textAlign:'right',fontWeight:600,color: !s.hBetter ? '#34d399' : '#cbd5e1'}}>
+                      {s.avFmt}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      })()}
+
       {/* ── Analysis (stats/context, formatted like NHL Why card) ── */}
       {d.reasoning && d.reasoning.length > 0 && (
         <div className="result-card">

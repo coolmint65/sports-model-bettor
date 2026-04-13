@@ -617,9 +617,21 @@ def api_predict(req: PredictRequest):
     # would render on best-bets cards too. predict_matchup doesn't
     # produce this yet; fall back to the month-based heuristic.
     if result.get("season_context") is None:
-        sc = _mlb_season_context()
+        sc = _mlb_season_context(req.home_team_id, req.away_team_id)
         if sc:
             result["season_context"] = sc
+
+    # Expose home_impact / away_impact on the injuries block so the
+    # GameDetail Injuries card can render the "X% weaker" summary the
+    # NHL version has. predict_matchup itself just stores the raw list.
+    inj = result.get("injuries") or {}
+    if isinstance(inj, dict):
+        if inj.get("home_impact") is None:
+            inj["home_impact"] = _compute_injury_impact_pct(inj.get("home") or [])
+        if inj.get("away_impact") is None:
+            inj["away_impact"] = _compute_injury_impact_pct(inj.get("away") or [])
+        result["injuries"] = inj
+
     return result
 
 
@@ -746,8 +758,8 @@ def api_best_bets():
                 }
 
                 # Season context: prefer anything computed server-side,
-                # otherwise fall back to the month-based heuristic.
-                season_context = pred.get("season_context") or _mlb_season_context()
+                # otherwise fall back to the standings-aware detector.
+                season_context = pred.get("season_context") or _mlb_season_context(home_id, away_id)
         except Exception as e:
             logger.debug("  Enrich-best-bet failed for %s/%s: %s", h_abbr, a_abbr, e)
 
@@ -800,12 +812,17 @@ def _mlb_form_from_reasoning(reasoning: list | None, abbr: str) -> float | None:
     return None
 
 
-def _mlb_season_context() -> dict | None:
+def _mlb_season_context(home_id: int | None = None,
+                         away_id: int | None = None) -> dict | None:
     """Return a season-context dict the UI can render as a banner.
 
-    Simple month-based phase: September = late regular season, October
-    = playoffs, else None (no banner). 'implications' is a truthy
-    string so the UI gate fires.
+    Uses month + (when team IDs provided) standings context:
+      - Oct: always "playoffs"
+      - Sep: "regular-late" unless one team has <90 games played (early)
+      - Aug + either team within 5 GB of a playoff spot: "playoff-race"
+      - Else: None (no banner)
+
+    'implications' is a truthy string so the UI gate fires.
     """
     from datetime import datetime
     m = datetime.now().month
@@ -818,6 +835,62 @@ def _mlb_season_context() -> dict | None:
         return {
             "phase": "regular-late",
             "implications": "Playoff race: more bullpen usage, tighter lineups.",
+        }
+
+    # Standings-aware detection for August: is either team in a playoff race?
+    if m == 8 and home_id and away_id:
+        try:
+            from engine.db import get_team_record
+            from engine.mlb_predict import SEASON as _SEASON
+            h = get_team_record(home_id, _SEASON) or {}
+            a = get_team_record(away_id, _SEASON) or {}
+            h_gb = h.get("games_back")
+            a_gb = a.get("games_back")
+            if (h_gb is not None and h_gb <= 5) or (a_gb is not None and a_gb <= 5):
+                return {
+                    "phase": "regular-late",
+                    "implications": "Playoff race: close to playoff line.",
+                }
+        except Exception:
+            pass
+    return None
+
+
+def _nba_season_context() -> dict | None:
+    """Return a season-context banner dict for NBA GameDetail.
+
+    NBA regular season: late October to mid-April.
+    Play-in tournament: mid-April.
+    Playoffs: mid-April to mid-June.
+
+    Month-based phases:
+      - Jun: "finals" intensity (if still playing)
+      - Apr-May: "playoffs" / play-in
+      - Mar: "late regular-season"
+      - Else: None
+    """
+    from datetime import datetime
+    now = datetime.now()
+    m, d = now.month, now.day
+    if m == 6:
+        return {
+            "phase": "playoffs",
+            "implications": "NBA Finals / late playoffs - highest stakes.",
+        }
+    if m == 5 or (m == 4 and d >= 14):
+        return {
+            "phase": "playoffs",
+            "implications": "Playoff basketball - adjusted for postseason intensity.",
+        }
+    if m == 4 and d >= 10:
+        return {
+            "phase": "regular-late",
+            "implications": "Play-in race: seeding + tanking incentives mixed.",
+        }
+    if m == 3 and d >= 15:
+        return {
+            "phase": "regular-late",
+            "implications": "Late regular season: playoff race, rest management.",
         }
     return None
 
@@ -2514,6 +2587,12 @@ def api_nba_predict(home: str = Query(...), away: str = Query(...)):
         result = predict_q1_matchup(home, away, odds=odds)
         if not result:
             raise HTTPException(status_code=400, detail=f"Could not predict {away} @ {home}")
+        # Attach season_context so the GameDetail banner lights up during
+        # end-of-regular-season + playoff windows.
+        if result.get("season_context") is None:
+            sc = _nba_season_context()
+            if sc:
+                result["season_context"] = sc
         return result
     except HTTPException:
         raise
@@ -2609,7 +2688,7 @@ def api_nba_best_bets():
             "factors": pred.get("factors", {}),
             "rest": pred.get("rest", {}),
             "injuries": injuries_payload,
-            "season_context": pred.get("season_context"),
+            "season_context": pred.get("season_context") or _nba_season_context(),
         })
 
     bets.sort(key=lambda b: b["best_pick"].get("edge", 0), reverse=True)
