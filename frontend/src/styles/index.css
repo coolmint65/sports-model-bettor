@@ -1308,7 +1308,9 @@ body {
 }
 
 .reasoning-list li::before {
-  content: "\2014";
+  /* Subtle bullet dot instead of an em-dash, which reads heavy and
+     fights with the numbered "Why this pick?" card nearby. */
+  content: "\2022";
   position: absolute;
   left: 0;
   color: #64748b;

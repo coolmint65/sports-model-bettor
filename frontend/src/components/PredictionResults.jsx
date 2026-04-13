@@ -308,12 +308,25 @@ export default function PredictionResults({ data, odds }) {
         </div>
       </div>
 
-      {/* ── Analysis ── */}
+      {/* ── Analysis (stats/context, formatted like NHL Why card) ── */}
       {d.reasoning && d.reasoning.length > 0 && (
         <div className="result-card">
           <h2>Analysis</h2>
-          <ul className="reasoning-list">
-            {d.reasoning.map((r, i) => <li key={i}>{r}</li>)}
+          <ul style={{listStyle:'none',padding:0,margin:0}}>
+            {d.reasoning.map((r, i) => (
+              <li key={i} style={{
+                padding:'8px 0',
+                borderBottom: i < d.reasoning.length - 1 ? '1px solid #1e293b' : 'none',
+                fontSize:'0.85rem',
+                color:'#cbd5e1',
+                display:'flex',
+                alignItems:'flex-start',
+                gap:10,
+              }}>
+                <span style={{color:'#60a5fa',fontWeight:700,minWidth:14}}>{i + 1}.</span>
+                <span>{r}</span>
+              </li>
+            ))}
           </ul>
         </div>
       )}
