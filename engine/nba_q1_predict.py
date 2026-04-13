@@ -275,6 +275,14 @@ def predict_q1(home_abbr: str, away_abbr: str,
     Returns:
         Prediction dict with expected scores, probabilities, and factors.
     """
+    # Normalize season up-front so any downstream call (compute_q1_adjustment,
+    # is_likely_resting_spot, etc.) sees a real int, not None. _get_team_data
+    # does its own internal normalization, but the outer `season` variable
+    # would stay None and silently break SQL lookups keyed on season.
+    if season is None:
+        now = datetime.now()
+        season = now.year if now.month >= 9 else now.year - 1
+
     home = _get_team_data(home_abbr, season)
     away = _get_team_data(away_abbr, season)
 
