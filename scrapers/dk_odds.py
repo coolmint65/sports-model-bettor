@@ -18,7 +18,7 @@ import urllib.request
 
 logger = logging.getLogger(__name__)
 
-# DraftKings public sportsbook API — try multiple subdomains
+# DraftKings public sportsbook API - try multiple subdomains
 DK_URLS = [
     "https://sportsbook-nash.draftkings.com//sites/US-SB/api/v5/eventgroups/84240?format=json",
     "https://sportsbook.draftkings.com//sites/US-SB/api/v5/eventgroups/84240?format=json",

@@ -534,7 +534,7 @@ function PickOfDayCard({ sport }) {
             {potd.pick} <span style={{ color: '#94a3b8', fontWeight: 500, fontSize: '1rem' }}>({oddsStr})</span>
           </div>
           <div style={{ fontSize: '0.85rem', color: '#94a3b8', marginTop: 4 }}>
-            {potd.matchup} — <span style={{ color: '#60a5fa' }}>{potd.bet_type}</span>
+            {potd.matchup} - <span style={{ color: '#60a5fa' }}>{potd.bet_type}</span>
           </div>
           <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: 6 }}>
             {potd.model_prob != null && !isNaN(potd.model_prob) ? `Model: ${(potd.model_prob * 100).toFixed(1)}%` : ''} | Edge: +{potd.edge?.toFixed(1)}% | Kelly: {potd.kelly_pct}%

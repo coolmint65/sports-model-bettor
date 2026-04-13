@@ -126,7 +126,7 @@ def run(home_abbr: str, away_abbr: str,
     # the prediction. If team_cal has learned weird values OR team stats
     # are inverted, the ablation above shows nothing because all the
     # toggleable factors are neutral.
-    print(f"\n  RAW SOURCE DATA (not toggleable — inspect for source-of-truth bugs):")
+    print(f"\n  RAW SOURCE DATA (not toggleable - inspect for source-of-truth bugs):")
     try:
         from .db import get_team_record
         from .pit_stats import compute_team_stats_at_date
@@ -153,7 +153,7 @@ def run(home_abbr: str, away_abbr: str,
         print(f"    AWAY ({away_abbr}) PIT  : runs_pg={away_pit.get('runs_pg')} "
               f"ops={away_pit.get('ops')} games={away_pit.get('games_played')}")
 
-        # team_cal learned factors — these multiply the base offense rating
+        # team_cal learned factors - these multiply the base offense rating
         try:
             tc = importlib.import_module("engine.team_calibration")
             # Try common function names

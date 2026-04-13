@@ -121,7 +121,7 @@ def _match_key(away_abbr: str, home_abbr: str) -> str:
 def _event_teams(event: dict) -> tuple[str, str]:
     """Extract (away_abbr, home_abbr) from a DK event dict."""
     # DK events commonly have teamName1 / teamName2 (1 = away, 2 = home in their convention,
-    # but NOT guaranteed — always check via eventMetadata participant role if present).
+    # but NOT guaranteed - always check via eventMetadata participant role if present).
     away_name = event.get("teamName1") or event.get("awayTeamName") or ""
     home_name = event.get("teamName2") or event.get("homeTeamName") or ""
 
@@ -333,7 +333,7 @@ def fetch_nba_dk_odds() -> dict:
                         if len(outcomes) < 2:
                             continue
 
-                        # Offers may also carry their own label — prefer it
+                        # Offers may also carry their own label - prefer it
                         # over the subcat name for classification accuracy
                         offer_label = (offer.get("label") or "").strip()
                         effective_q1 = is_q1 or _is_q1(offer_label)

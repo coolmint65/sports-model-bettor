@@ -130,7 +130,7 @@ def update_umpire_stats(season: int | None = None) -> int:
         ump_stats[name]["total_runs"] += (g["home_score"] or 0) + (g["away_score"] or 0)
 
     # Also try to fetch umpire data from the API for games without umpire info
-    # (skip for now — only process games that already have umpire stored)
+    # (skip for now - only process games that already have umpire stored)
 
     updated = 0
     for name, stats in ump_stats.items():

@@ -559,7 +559,7 @@ def _pit_predict(home_stats: dict, away_stats: dict) -> dict | None:
         ou_home_xg = ou_home_xg * 0.6 + (ou_home_xg * l5_ga_a / season_ga_a) * 0.4
 
     # ── Goalie impact on totals (amplified vs ML) ──
-    # Only apply when save% deviates from league average — don't boost
+    # Only apply when save% deviates from league average - don't boost
     # all predictions by a flat multiplier.
     if home_stats.get("save_pct_proxy") and away_stats.get("save_pct_proxy"):
         league_sv = 0.905
@@ -601,7 +601,7 @@ def _pit_predict(home_stats: dict, away_stats: dict) -> dict | None:
     ou_pred_total = ou_home_xg + ou_away_xg
     ou_p_draw = sum(ou_matrix[i][i] for i in range(MAX_GOALS + 1))
     # O/U line: use a standard market line, NOT the model's own prediction.
-    # Using the model's predicted total as the line is circular — the model
+    # Using the model's predicted total as the line is circular - the model
     # will always have ~55% on whichever side of its own prediction.
     # Standard NHL totals are 5.5 or 6.5. Use 5.5 as the most common line.
     # (In production, we compare against the real DK line.)
@@ -907,7 +907,7 @@ def run_nhl_backtest(days: int = 30, min_edge: float = 3.0,
                 })
 
         # ── Back-to-back adjustment for O/U ──
-        # B2B teams give up more goals — boost opponent xG for totals
+        # B2B teams give up more goals - boost opponent xG for totals
         ou_home_xg = pred.get("ou_home_xg", home_xg)
         ou_away_xg = pred.get("ou_away_xg", away_xg)
         b2b_adjusted = False

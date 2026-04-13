@@ -1,5 +1,5 @@
 """
-NHL Model Calibration — learns from prediction errors to improve accuracy.
+NHL Model Calibration - learns from prediction errors to improve accuracy.
 
 Analyzes recent completed games, compares predicted vs actual scores,
 and adjusts model weights. Runs daily after settling picks.
@@ -36,7 +36,7 @@ def calibrate(days: int = 0) -> dict:
             ORDER BY g.date
         """, (cutoff,)).fetchall()
     else:
-        # Full season — learn from ALL completed games
+        # Full season - learn from ALL completed games
         games = conn.execute("""
             SELECT g.*,
                    ht.abbreviation as home_abbr, at.abbreviation as away_abbr
@@ -83,7 +83,7 @@ def calibrate(days: int = 0) -> dict:
     total_bias = avg_total - expected_total
     home_bias_pct = home_win_rate - expected_home_wr
 
-    # Learning rate — learn faster with more data
+    # Learning rate - learn faster with more data
     # Reaches full rate at 200 games instead of 500
     lr = min(0.20, game_count / 200)
 

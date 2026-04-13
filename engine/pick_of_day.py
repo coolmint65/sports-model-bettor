@@ -1,9 +1,9 @@
 """
-Pick of the Day — single highest-conviction play per sport per day.
+Pick of the Day - single highest-conviction play per sport per day.
 
 Unlike the regular pick tracker (which can record many picks), POTD is
 the ONE pick the model is most confident in. It's locked the first time
-it's generated for a given date and never changes — so we can measure
+it's generated for a given date and never changes - so we can measure
 whether the model's top-conviction plays are actually its best bets.
 
 Selection criteria:
@@ -96,7 +96,7 @@ def _kelly_fraction(prob: float, odds: int) -> float:
 def _score_pick(pick: dict) -> float:
     """Score a pick candidate for POTD selection.
 
-    Uses Kelly fraction * edge as the ranking metric — this favors picks
+    Uses Kelly fraction * edge as the ranking metric - this favors picks
     that combine high edge with favorable bet sizing.
     """
     prob = pick.get("prob", 0)
@@ -226,7 +226,7 @@ def get_or_create_potd(sport: str, games_with_bets: list[dict],
     """
     Get today's POTD, creating it if it doesn't exist.
 
-    Once created, POTD is locked for the day — subsequent calls return
+    Once created, POTD is locked for the day - subsequent calls return
     the same pick regardless of updated predictions.
     """
     _ensure_potd_table(sport)
@@ -241,12 +241,12 @@ def get_or_create_potd(sport: str, games_with_bets: list[dict],
     if existing:
         return dict(existing)
 
-    # No POTD yet — select one
+    # No POTD yet - select one
     selected = select_potd(sport, games_with_bets)
     if not selected:
         return None
 
-    # Lock it in — store full team names for display
+    # Lock it in - store full team names for display
     conn.execute("""
         INSERT OR IGNORE INTO pick_of_day (
             date, game_id, matchup, bet_type, pick,
@@ -324,7 +324,7 @@ def _determine_outcome(sport: str, conn, potd: dict) -> tuple[str | None, float]
     pick = potd["pick"]
     odds = potd.get("odds") or -110
 
-    # Parse matchup — handles both "AWAY @ HOME" and "Away Team at Home Team"
+    # Parse matchup - handles both "AWAY @ HOME" and "Away Team at Home Team"
     try:
         if " @ " in matchup:
             away_part, home_part = [s.strip() for s in matchup.split(" @ ")]
@@ -335,7 +335,7 @@ def _determine_outcome(sport: str, conn, potd: dict) -> tuple[str | None, float]
     except ValueError:
         return None, 0
 
-    # Find the game — try matching by game_id first, then by date + team names
+    # Find the game - try matching by game_id first, then by date + team names
     game_id = potd.get("game_id")
 
     if sport == "mlb":
@@ -442,7 +442,7 @@ def _determine_outcome(sport: str, conn, potd: dict) -> tuple[str | None, float]
         spread_match = re.search(r'([+-]?\d+\.?\d*)\s*$', pick)
         spread = float(spread_match.group(1)) if spread_match else 1.5
 
-        # Determine which team was picked — check if home team name/abbr is in pick
+        # Determine which team was picked - check if home team name/abbr is in pick
         pick_is_home = (home_abbr and home_abbr in pick) or (home_part and home_part in pick)
         if pick_is_home:
             margin = hs - as_
@@ -457,7 +457,7 @@ def _determine_outcome(sport: str, conn, potd: dict) -> tuple[str | None, float]
             result = "W" if covered else "L"
 
     elif bet_type == "1st INN":
-        # Use linescore if available (MLB) — inning 1 runs
+        # Use linescore if available (MLB) - inning 1 runs
         import json as _json
         if sport == "mlb":
             home_ls = row.get("home_linescore")

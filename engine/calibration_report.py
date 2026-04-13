@@ -1,5 +1,5 @@
 """
-Calibration report — compares model_prob predictions to actual hit rates.
+Calibration report - compares model_prob predictions to actual hit rates.
 
 If the model says 60%, do those picks actually hit 60% of the time? Bucket
 settled picks by their stated probability and compare the actual win rate
@@ -46,7 +46,7 @@ FLAG_MIN_N = 5
 
 
 def _prob_to_float(v) -> float | None:
-    """Accept 0.62 or 62 or '62%' — return fraction in [0,1] or None."""
+    """Accept 0.62 or 62 or '62%' - return fraction in [0,1] or None."""
     if v is None:
         return None
     try:

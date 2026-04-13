@@ -83,13 +83,13 @@ def _get_team_data(abbr: str, season: int | None = None) -> dict:
         # the DB at all, surface an actionable hint the first time it fires.
         if not hasattr(_get_team_data, "_warned"):
             _get_team_data._warned = set()
-            # Check if ANY team is in the DB — if not, user hasn't run sync
+            # Check if ANY team is in the DB - if not, user hasn't run sync
             try:
                 from .nba_db import get_conn as _nba_conn
                 n = _nba_conn().execute("SELECT COUNT(*) FROM nba_teams").fetchone()[0]
                 if n == 0:
                     logger.warning(
-                        "NBA teams table empty — run 'sync_nba.bat --full' to "
+                        "NBA teams table empty - run 'sync_nba.bat --full' to "
                         "populate team data. Predictions will use league-average "
                         "defaults until then.")
             except Exception:
@@ -386,7 +386,7 @@ def predict_q1(home_abbr: str, away_abbr: str,
     #
     # GATED behind NBA_ENABLE_ROSTER_ADJUSTMENT (default False). Live
     # data from 2026-04-12 showed heavy-rest games had +0.5 pt mean
-    # shift vs baseline — the adjustment was encoding a phantom signal
+    # shift vs baseline - the adjustment was encoding a phantom signal
     # that hurt picks more than it helped. Infrastructure stays intact
     # for informational display but predictions use the base model
     # unless this is explicitly enabled after backtest validation.

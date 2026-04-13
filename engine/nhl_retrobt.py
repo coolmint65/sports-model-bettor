@@ -14,7 +14,7 @@ This tells us how much the granular-factors-off model differs from the
 historical picks, and what the hypothetical WR would have been.
 
 Caveat: live stats (standings, records, etc.) have CHANGED since the
-original picks were made. This test isn't a perfect historical replay —
+original picks were made. This test isn't a perfect historical replay -
 it re-predicts WITH today's stats but WITHOUT the granular factors.
 It's a fast approximation to see if the architectural change matters.
 
@@ -222,7 +222,7 @@ def main() -> None:
         if delta > 0:
             print(f"     Suggests disabling granular factors was correct.")
         else:
-            print(f"     Disabling granular factors didn't help — deeper issue.")
+            print(f"     Disabling granular factors didn't help - deeper issue.")
     elif dropped_cnt >= len(picks) * 0.4:
         print(f"\n  >> Model drops >40% of past picks. Conviction has dropped,")
         print(f"     which may reduce both wins and losses. Worth watching live.")

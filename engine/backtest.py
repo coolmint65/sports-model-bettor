@@ -1,5 +1,5 @@
 """
-MLB Model Backtester — v2.
+MLB Model Backtester - v2.
 
 Runs the prediction model against historical games with:
 - Point-in-time stats (only data available before each game)
@@ -269,8 +269,8 @@ def run_backtest(season: int | None = None, days: int | None = None,
                     # 2. Team's first-inning scoring tendency
                     # 3. Generic Poisson as fallback
 
-                    # P(away scores 0 in top 1st) — driven by home SP
-                    # P(home scores 0 in bot 1st) — driven by away SP
+                    # P(away scores 0 in top 1st) - driven by home SP
+                    # P(home scores 0 in bot 1st) - driven by away SP
                     p_away_zero = _nrfi_half_prob(
                         away_pit, home_sp_pit, away_xr)
                     p_home_zero = _nrfi_half_prob(
@@ -482,7 +482,7 @@ def print_backtest(results: dict) -> None:
         return
 
     print(f"\n{'='*60}")
-    print(f"  MLB MODEL BACKTEST — {results.get('season', '?')} Season")
+    print(f"  MLB MODEL BACKTEST - {results.get('season', '?')} Season")
     print(f"{'='*60}")
     print(f"  Games tested: {results['games_tested']}")
     print(f"  Games skipped: {results['games_skipped']}")

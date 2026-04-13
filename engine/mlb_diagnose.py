@@ -1,5 +1,5 @@
 """
-MLB pick diagnostic — checks for a systematic sign error.
+MLB pick diagnostic - checks for a systematic sign error.
 
 If the model had an inverted factor, flipping every pick would turn a
 sub-50% WR into ~50%+. This script reports:

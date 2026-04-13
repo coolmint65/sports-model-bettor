@@ -44,7 +44,7 @@ _NBA_NAME_TO_ABBR: dict[str, str] = {
     "Utah Jazz": "UTAH", "Washington Wizards": "WSH",
 }
 
-# ESPN sometimes uses different abbreviations — normalize both directions
+# ESPN sometimes uses different abbreviations - normalize both directions
 _ESPN_ABBR_ALT = {
     "NOP": "NO", "NYK": "NY", "SAS": "SA", "UTA": "UTAH", "WAS": "WSH",
     "BRK": "BKN", "BKN": "BKN", "CHO": "CHA",
@@ -99,7 +99,7 @@ def _todays_events() -> list[dict]:
         if not eid:
             continue
         comp = (event.get("competitions") or [{}])[0]
-        # Skip finals/live — Q1 odds are irrelevant once the quarter has started
+        # Skip finals/live - Q1 odds are irrelevant once the quarter has started
         status = (comp.get("status") or {}).get("type") or {}
         if status.get("state") in ("post", "in"):
             continue
@@ -185,7 +185,7 @@ def _parse_provider_block(provider_entry: dict, home_abbr: str, away_abbr: str,
                 result["home_spread_point"] = +mag
                 result["away_spread_point"] = -mag
             else:
-                # Can't tell — leave spread unassigned rather than guess
+                # Can't tell - leave spread unassigned rather than guess
                 pass
     if result.get("home_spread_odds") is None:
         s = home_to.get("spreadOdds")
@@ -236,7 +236,7 @@ def _parse_provider_block(provider_entry: dict, home_abbr: str, away_abbr: str,
         if sp is not None and result.get("q1_spread") is None:
             sp_val = _as_float(sp)
             # generate_q1_picks treats q1_spread as the HOME spread.
-            # ESPN's period spread is for the favorite — detect and orient.
+            # ESPN's period spread is for the favorite - detect and orient.
             q_home_fav = bool(h_to.get("favorite"))
             q_away_fav = bool(a_to.get("favorite"))
             if not q_home_fav and not q_away_fav:
@@ -320,7 +320,7 @@ def fetch_nba_espn_odds() -> dict:
         key = f"{away_abbr}@{home_abbr}"
         result: dict = {"provider": "ESPN"}
 
-        # Try summary endpoint first — it's the most complete
+        # Try summary endpoint first - it's the most complete
         summary = _fetch(f"{SUMMARY_URL}?event={eid}")
         if summary:
             pc = summary.get("pickcenter") or []

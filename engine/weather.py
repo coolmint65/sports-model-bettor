@@ -64,7 +64,7 @@ DOMED_STADIUMS = {
 # ── Weather cache (avoid rate limiting) ────────────────────
 import time as _time
 _weather_cache: dict = {}  # key: "lat,lon" -> {"data": ..., "time": float}
-_WEATHER_CACHE_TTL = 3600  # 1 hour — weather doesn't change that fast
+_WEATHER_CACHE_TTL = 3600  # 1 hour - weather doesn't change that fast
 
 
 # ── API fetch ───────────────────────────────────────────────
@@ -161,15 +161,15 @@ def compute_weather_adjustment(weather: dict | None, venue: str | None = None) -
         # blowing out in most parks. Otherwise, cross-wind or blowing in.
         if wind_dir is not None:
             if 150 <= wind_dir <= 240:
-                # Blowing out — more runs
+                # Blowing out - more runs
                 boost = 0.02 + (wind_speed - 15) * 0.002
                 factor *= 1.0 + min(boost, 0.05)
             elif (wind_dir <= 30 or wind_dir >= 330):
-                # Blowing in — fewer runs
+                # Blowing in - fewer runs
                 penalty = 0.02 + (wind_speed - 15) * 0.002
                 factor *= 1.0 - min(penalty, 0.05)
             else:
-                # Cross-wind — slight boost (disrupts pitchers slightly)
+                # Cross-wind - slight boost (disrupts pitchers slightly)
                 factor *= 1.01
         else:
             # Unknown direction, slight boost for high wind

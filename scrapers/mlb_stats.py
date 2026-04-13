@@ -51,7 +51,7 @@ def fetch_teams() -> list[dict]:
 
     from engine.db import upsert_team
 
-    # MLB team IDs are stable — hardcode league lookup as fallback
+    # MLB team IDs are stable - hardcode league lookup as fallback
     AL_TEAMS = {108, 109, 110, 111, 114, 116, 117, 118, 133, 136, 139, 140, 141, 142, 145}
     NL_TEAMS = {112, 113, 115, 119, 120, 121, 134, 135, 137, 138, 143, 144, 146, 147, 158}
 
@@ -305,7 +305,7 @@ def fetch_standings() -> dict:
             losses = entry.get("losses", 0)
             streak_data = entry.get("streak", {})
             streak_type = streak_data.get("streakType", "W")
-            # MLB API returns "wins"/"losses" — normalize to W/L
+            # MLB API returns "wins"/"losses" - normalize to W/L
             if streak_type.startswith("win"):
                 streak_type = "W"
             elif streak_type.startswith("loss"):

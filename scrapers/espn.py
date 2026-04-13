@@ -368,11 +368,11 @@ def _fetch_team_stats(espn_sport: str, espn_league: str, team_id: str,
                         elif name == "avgpointsagainst":
                             stats["opp_ppg"] = round(_safe_float(val), 1)
                         elif name == "pointsfor":
-                            # Total season points — only use as ppg fallback
+                            # Total season points - only use as ppg fallback
                             if "ppg" not in stats:
                                 stats["total_points_for"] = round(_safe_float(val), 1)
                         elif name == "pointsagainst":
-                            # Total season points against — only use as opp_ppg fallback
+                            # Total season points against - only use as opp_ppg fallback
                             if "opp_ppg" not in stats:
                                 stats["total_points_against"] = round(_safe_float(val), 1)
         except (KeyError, TypeError, AttributeError):

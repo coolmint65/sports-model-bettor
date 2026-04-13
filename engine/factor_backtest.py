@@ -116,7 +116,7 @@ def _ablate_mlb(factor: str, picks: list[dict]) -> BacktestStats:
     from .picks import generate_picks, get_best_pick
 
     if not hasattr(cfg, factor):
-        logger.warning("Unknown factor %s — skipping", factor)
+        logger.warning("Unknown factor %s - skipping", factor)
         return BacktestStats()
 
     stats = BacktestStats()
@@ -168,14 +168,14 @@ def _ablate_mlb(factor: str, picks: list[dict]) -> BacktestStats:
             if new_best and (new_best.get("pick") != p["pick"]
                              or new_best.get("type") != p["bet_type"]):
                 stats.picks_flipped += 1
-                # Different pick — we can't know if it would've won without
+                # Different pick - we can't know if it would've won without
                 # re-settling against the actual game result. For now treat
                 # flipped picks as "skipped" (no W/L contribution).
                 # Proper fix: reconstruct the game outcome for the new pick
                 # type+direction from games table. TODO in a follow-up.
                 continue
 
-            # Same pick — outcome would have been same
+            # Same pick - outcome would have been same
             if baseline_won:
                 stats.ablated_wins += 1
             elif p["result"] == "LOSS":
@@ -200,7 +200,7 @@ def _ablate_mlb(factor: str, picks: list[dict]) -> BacktestStats:
 def _render_report(sport: str, results: dict[str, BacktestStats]) -> str:
     lines = []
     lines.append(f"\n{'=' * 72}")
-    lines.append(f"  Factor Ablation Backtest — {sport.upper()}")
+    lines.append(f"  Factor Ablation Backtest - {sport.upper()}")
     lines.append(f"{'=' * 72}")
     lines.append(
         f"\n  {'Factor':<34} {'Picks':>6} {'Flipped':>8} "
@@ -224,7 +224,7 @@ def _render_report(sport: str, results: dict[str, BacktestStats]) -> str:
         " when the"
     )
     lines.append(
-        "    factor was disabled (flipped picks are excluded — need game-"
+        "    factor was disabled (flipped picks are excluded - need game-"
         "level"
     )
     lines.append(
@@ -246,7 +246,7 @@ def _render_report(sport: str, results: dict[str, BacktestStats]) -> str:
         "    - Low 'Flipped' + worse ablated WR = factor is subtly helpful;"
     )
     lines.append(
-        "      keep on. (Rare — usually these factors are just noise.)"
+        "      keep on. (Rare - usually these factors are just noise.)"
     )
     return "\n".join(lines)
 

@@ -18,7 +18,7 @@ After each batch of games, this module:
 3. Adjusts weights toward better calibration
 4. Saves weights to DB for persistence
 
-This is NOT machine learning — it's statistical calibration.
+This is NOT machine learning - it's statistical calibration.
 Simple, transparent, and auditable.
 """
 
@@ -31,7 +31,7 @@ from .db import get_conn
 
 logger = logging.getLogger(__name__)
 
-# Default weights — these get adjusted by calibration
+# Default weights - these get adjusted by calibration
 DEFAULT_WEIGHTS = {
     "pitcher_era_weight": 1.0,      # How much pitcher ERA affects runs
     "home_edge": 0.28,              # Home advantage in runs
@@ -111,7 +111,7 @@ def calibrate(season: int | None = None, days: int = 0,
             ORDER BY date
         """, (start_date, yr)).fetchall()
     else:
-        # Full season — learn from ALL completed games
+        # Full season - learn from ALL completed games
         games = conn.execute("""
             SELECT * FROM games
             WHERE status = 'final' AND season = ?
@@ -194,8 +194,8 @@ def calibrate(season: int | None = None, days: int = 0,
     if n < 5:
         return {"error": "Not enough valid games", "games": n}
 
-    # Scale learning rate by sample size — learn faster with more data
-    # Previous: 0.05 * min(n/100, 1.0) — too conservative, took weeks
+    # Scale learning rate by sample size - learn faster with more data
+    # Previous: 0.05 * min(n/100, 1.0) - too conservative, took weeks
     # New: reaches full LR at 50 games instead of 100
     effective_lr = learning_rate * min(n / 50, 1.5)
 
@@ -245,7 +245,7 @@ def calibrate(season: int | None = None, days: int = 0,
         weights["home_edge"] = round(max(0.0, min(0.60, weights["home_edge"] - adj)), 4)
         report["adjustments"]["home_edge"] = f"{'+'if adj>0 else ''}{-adj:.4f} (home bias: {home_bias:+.2f})"
 
-    # Win accuracy — track how often we pick the right winner
+    # Win accuracy - track how often we pick the right winner
     correct_winners = 0
     total_decided = 0
     for err_h, err_a in zip(home_errors, away_errors):

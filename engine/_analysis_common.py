@@ -41,7 +41,7 @@ def canon_result(v) -> str:
 
 # Map historical lowercase bet_type values to the canonical uppercase form
 # used by engine/picks.py today. This is why the diagnostic was showing
-# "rl" and "RL" as two separate buckets — older tracker writes used lower
+# "rl" and "RL" as two separate buckets - older tracker writes used lower
 # case. Always canonicalize on read so the aggregations are correct.
 _BET_TYPE_MAP = {
     "ml": "ML", "ML": "ML",

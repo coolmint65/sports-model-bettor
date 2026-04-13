@@ -133,10 +133,10 @@ def fetch_game_odds(event_id: str) -> dict | None:
                 break
 
     # ESPN doesn't provide RL juice through the API.
-    # Don't guess — leave as null and let the frontend/edge calculator
+    # Don't guess - leave as null and let the frontend/edge calculator
     # handle it with standard -110 assumption.
     # (Provider was set inside endpoint 1 block above; don't reference `o`
-    # here — it may be undefined if endpoint 1 returned no data.)
+    # here - it may be undefined if endpoint 1 returned no data.)
 
     # Log what we found
     logger.debug("Odds for %s: ML %s/%s, O/U %s (%s/%s), RL %s (%s/%s) via %s",
@@ -171,7 +171,7 @@ def fetch_all_game_odds(games: list[dict]) -> dict:
         if odds:
             odds_map[event_id] = odds
 
-        # Be polite — small delay between requests
+        # Be polite - small delay between requests
         time.sleep(0.3)
 
     logger.info("Fetched odds for %d/%d games", len(odds_map), len(games))

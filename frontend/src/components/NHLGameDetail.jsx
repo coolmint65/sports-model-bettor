@@ -7,7 +7,7 @@ export default function NHLGameDetail({ game, prediction, loading, onBack }) {
   const { home, away } = game
   const pred = prediction
 
-  // Goalie data-source indicator — DailyFaceoff "confirmed" is the gold standard
+  // Goalie data-source indicator - DailyFaceoff "confirmed" is the gold standard
   const anyConfirmed =
     game.home_goalie?.status === 'confirmed' ||
     game.away_goalie?.status === 'confirmed'
@@ -58,7 +58,7 @@ export default function NHLGameDetail({ game, prediction, loading, onBack }) {
     <div className="game-detail">
       <SharedGameHeader game={game} onBack={onBack} matchupExtras={matchupExtras} />
 
-      {/* Model Prediction — two-column layout */}
+      {/* Model Prediction - two-column layout */}
       <div className="detail-prediction">
         {loading && (
           <div className="loading">
@@ -166,8 +166,8 @@ function NHLPredictionResults({ data, odds, home, away }) {
           color: d.season_context.phase === 'playoffs' ? '#34d399' : '#60a5fa',
           textAlign: 'center',
         }}>
-          {d.season_context.phase === 'playoffs' ? 'PLAYOFF GAME' : 'LATE SEASON — Playoff Race'}
-          {' '}— Model adjusts for higher intensity
+          {d.season_context.phase === 'playoffs' ? 'PLAYOFF GAME' : 'LATE SEASON - Playoff Race'}
+          {' '}- Model adjusts for higher intensity
         </div>
       )}
 
@@ -259,7 +259,7 @@ function NHLPredictionResults({ data, odds, home, away }) {
         <EdgeCallout edge={bestEdge} badgeClassName={bestEdge ? `conf-badge conf-${bestEdge.rating}` : undefined} />
       </div>
 
-      {/* Key Factors with Rankings — moved up for immediate visibility */}
+      {/* Key Factors with Rankings - moved up for immediate visibility */}
       {d.factors && (
         <div className="result-card">
           <h2>Key Factors</h2>
@@ -597,7 +597,7 @@ function NHLBettingPicks({ data, odds, home, away }) {
     }
   }
 
-  // Puck line pick — determine which side has higher probability
+  // Puck line pick - determine which side has higher probability
   // and use the actual spread point from odds when available
   const pl = d.puck_line
   let plPick = null
@@ -972,7 +972,7 @@ function findBestEdge(data, odds, home, away) {
     }
   }
 
-  // PL edge — use actual spread points to determine which prob to compare
+  // PL edge - use actual spread points to determine which prob to compare
   if (data.puck_line && odds.home_spread_odds && odds.home_spread_point != null) {
     const pt = odds.home_spread_point
     // Spread point tells us which side home is on:

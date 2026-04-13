@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "mlb.db"
 
-# Thread-local storage for DB connections — each thread gets its own
+# Thread-local storage for DB connections - each thread gets its own
 _local = threading.local()
 
 

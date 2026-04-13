@@ -1,5 +1,5 @@
 """
-MLB Scoring — Score matrix, Poisson math, and probability utilities.
+MLB Scoring - Score matrix, Poisson math, and probability utilities.
 
 Pure math functions with no external data dependencies.
 Extracted from mlb_predict.py for cleaner separation of concerns.
@@ -50,7 +50,7 @@ def _build_uncertain_matrix(home_xr: float, away_xr: float,
     don't have good data, preventing fake 84% edges.
     """
     if confidence >= 90:
-        # High confidence — use standard single Poisson
+        # High confidence - use standard single Poisson
         return _build_score_matrix(home_xr, away_xr, max_runs)
 
     # Uncertainty: at low confidence, each team's true scoring rate could
@@ -149,7 +149,7 @@ def _run_line_probs(matrix: list[list[float]], home_xr: float = 0,
             margin = h - a  # Positive = home wins by N
             margin_probs[margin] = margin_probs.get(margin, 0) + matrix[h][a]
 
-    # Standard -1.5 run line — all four sides
+    # Standard -1.5 run line - all four sides
     p_home_minus_15 = sum(p for m, p in margin_probs.items() if m >= 2)   # Home wins by 2+
     p_home_plus_15 = sum(p for m, p in margin_probs.items() if m >= -1)   # Home loses by 0-1 or wins
     p_away_minus_15 = sum(p for m, p in margin_probs.items() if m <= -2)  # Away wins by 2+

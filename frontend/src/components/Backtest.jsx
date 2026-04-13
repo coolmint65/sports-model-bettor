@@ -91,7 +91,7 @@ export default function Backtest({ data, loading, onRun }) {
 
   return (
     <div className="backtest-page">
-      <h2 className="section-title">Model Performance — {season} Season</h2>
+      <h2 className="section-title">Model Performance - {season} Season</h2>
       {controls}
 
       {/* Summary */}

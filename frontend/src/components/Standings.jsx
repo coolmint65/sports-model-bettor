@@ -12,7 +12,7 @@ export default function Standings({ divisions }) {
   if (filled.length === 0) {
     return (
       <div className="no-games">
-        <p>Standings data is empty — season may not have started yet.</p>
+        <p>Standings data is empty - season may not have started yet.</p>
         <p className="sub">Run <code style={{ background: '#1e293b', padding: '2px 8px', borderRadius: 4 }}>sync.bat</code> to pull the latest data.</p>
       </div>
     )

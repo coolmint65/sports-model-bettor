@@ -45,7 +45,7 @@ def compute_travel_fatigue(team_id: int, game_date: str,
     """, (team_id, team_id, three_days_ago, game_date, yr)).fetchall()
 
     if not recent:
-        # No recent games — could be start of season or long break
+        # No recent games - could be start of season or long break
         return 1.0
 
     adjustment = 0.0

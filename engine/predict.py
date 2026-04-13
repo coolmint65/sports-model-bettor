@@ -275,7 +275,7 @@ def _predict_hockey(league, home, away, hs, as_, la):
     p_away = sum(matrix[h][a] for h in range(max_g) for a in range(max_g) if a > h)
     p_draw_reg = sum(matrix[i][i] for i in range(max_g))
 
-    # In hockey, ties go to OT — adjust ML to include OT resolution
+    # In hockey, ties go to OT - adjust ML to include OT resolution
     p_home_ml = p_home + p_draw_reg * 0.5
     p_away_ml = p_away + p_draw_reg * 0.5
 

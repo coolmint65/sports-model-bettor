@@ -105,7 +105,7 @@ function MLBFinalRow({ game, onClick }) {
           <span className={`final-abbr ${!homeWon ? 'winner' : ''}`}>{away.abbreviation}</span>
         </div>
         <span className={`final-score ${!homeWon ? 'winner' : ''}`}>{as}</span>
-        <span className="final-dash">—</span>
+        <span className="final-dash">-</span>
         <span className={`final-score ${homeWon ? 'winner' : ''}`}>{hs}</span>
         <div className="final-team">
           {home.logo && <img src={home.logo} alt="" />}
@@ -128,7 +128,7 @@ function GameCard({ game, bet, onClick }) {
       {isLive && <div className="live-badge">LIVE</div>}
       {isFinal && <div className="final-badge">FINAL</div>}
 
-      {/* Model pick badge — only for pregame games */}
+      {/* Model pick badge - only for pregame games */}
       {isPre && bet && bet.best_pick && conf !== 'skip' && (
         <div className={`pick-badge badge-${conf}`}>
           <span className="pick-badge-type">{bet.best_pick.type}</span>
@@ -171,7 +171,7 @@ function GameCard({ game, bet, onClick }) {
               <span className="odds-val">u{game.odds.over_under} {game.odds.under_odds ? `(${Math.round(game.odds.under_odds) > 0 ? '+' : ''}${Math.round(game.odds.under_odds)})` : ''}</span>
             </div>
           )}
-          {/* RL — real spread points or assumed ±1.5 */}
+          {/* RL - real spread points or assumed ±1.5 */}
           {(() => {
             const hasReal = game.odds.away_spread_point != null || game.odds.home_spread_point != null
             const awayPt = game.odds.away_spread_point

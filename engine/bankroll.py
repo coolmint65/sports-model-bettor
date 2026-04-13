@@ -54,7 +54,7 @@ def kelly_fraction(model_prob: float, ml: int) -> float:
 
 def fractional_kelly(model_prob: float, ml: int, fraction: float = 0.25) -> float:
     """
-    Fractional Kelly — more conservative bet sizing.
+    Fractional Kelly - more conservative bet sizing.
 
     Default 0.25 = quarter Kelly, widely recommended to reduce variance.
     Returns fraction of bankroll to wager.
@@ -145,7 +145,7 @@ def analyze_game_bets(prediction: dict, odds: dict | None = None,
                 **analysis,
             })
 
-    # Over/Under — find the line closest to the posted total
+    # Over/Under - find the line closest to the posted total
     posted_total = odds.get("total")
     if posted_total and ou:
         total_str = str(float(posted_total))

@@ -256,7 +256,7 @@ def fetch_nhl_injuries() -> dict[str, list[dict]]:
             or []
         )
         # Sometimes the response is a flat dict with a "season" key and
-        # injuries nested under it — handle that too.
+        # injuries nested under it - handle that too.
         if not team_blocks and isinstance(data, dict):
             for key in data:
                 if isinstance(data[key], list) and len(data[key]) > 0:
@@ -401,7 +401,7 @@ def _nhl_position_tier(position: str) -> str:
         return "forward"
     if pos in _DEFENSE_POSITIONS:
         return "defense"
-    # Unknown position — treat as depth
+    # Unknown position - treat as depth
     return "depth"
 
 
@@ -425,7 +425,7 @@ def compute_nhl_injury_impact(team_abbr: str, injuries: list[dict]) -> float:
 
     Returns:
         Multiplier (e.g. 0.95 means 5% reduction in team's expected goals).
-        For goalie injuries, the *opponent* benefits — so we return a
+        For goalie injuries, the *opponent* benefits - so we return a
         multiplier > 1.0 representing the opponent's xG boost converted
         to a same-team reduction.  Callers should apply this to the
         injured team's own xG as a penalty.
@@ -551,7 +551,7 @@ def compute_mlb_injury_impact(team_id: int, injuries: list[dict]) -> float:
         if tier == "pitcher":
             pitcher_count += 1
             if pitcher_count == 1:
-                # Ace / top starter — residual impact beyond pitcher matchup
+                # Ace / top starter - residual impact beyond pitcher matchup
                 total_adjustment -= 0.10
                 logger.debug(
                     "team %s: ace pitcher %s on IL -> -0.10 runs residual",

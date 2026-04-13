@@ -19,15 +19,15 @@ NBA_JUICE_WALL = -180
 # Minimum edge (%) to consider a pick playable
 MIN_EDGE_PCT = 4.0
 
-# Confidence tier thresholds — used uniformly across MLB/NHL/NBA picks.
+# Confidence tier thresholds - used uniformly across MLB/NHL/NBA picks.
 # Picks with edge < EDGE_SKIP are marked confidence="skip" and will not
 # be chosen as "best pick" by tracker/best-bets endpoints.
 #
 # EDGE_SKIP raised from 1.5 -> 4.0 after engine.edge_report showed:
 #   MLB <4% edge: 2-3 record, heavy loss ($-208 on 5 picks = -42% ROI)
 #   MLB 6-10% edge: 5-7 record, -23% ROI (still losing)
-#   MLB 10%+ edge: 65-59 record, -0.91% ROI (near-breakeven — best bucket)
-# NHL has same pattern — sub-4% picks are 1-4 combined. Filtering them
+#   MLB 10%+ edge: 65-59 record, -0.91% ROI (near-breakeven - best bucket)
+# NHL has same pattern - sub-4% picks are 1-4 combined. Filtering them
 # out reduces volume but improves aggregate ROI.
 EDGE_STRONG = 8.0
 EDGE_MODERATE = 6.0
@@ -37,7 +37,7 @@ EDGE_SKIP = 4.0  # raised from 1.5 based on tracker data
 # ── MLB config ──
 MLB_AVG_RPG = 4.6  # League average runs per game
 MLB_WIN_PROB_FLOOR = 0.30
-MLB_WIN_PROB_CAP = 0.65  # tightened from 0.72 — calibration data shows
+MLB_WIN_PROB_CAP = 0.65  # tightened from 0.72 - calibration data shows
                           # 75%+ predicted = 51.6% actual across 62 picks
 
 MLB_EXPECTED_RUNS_FLOOR = 2.0
@@ -54,7 +54,7 @@ MLB_HOME_EDGE = 0.15
 # Roster availability / load-management adjustment toggle.
 # Shipped 2026-04-12 based on intuition that starter rest lowers Q1
 # scoring. Actual 15-game data from 2026-04-12 slate (heaviest rest
-# slate of the year) showed mean Q1 total of 59.3 vs baseline 58.8 —
+# slate of the year) showed mean Q1 total of 59.3 vs baseline 58.8 -
 # a 0.5-pt shift. Variance widens but the MEAN barely moves, so the
 # model was encoding a phantom signal.
 #
@@ -71,7 +71,7 @@ NHL_MAX_GOALS = 10
 # Granular factors (Factors 1-12 in nhl_predict.py).
 # PERMANENTLY OFF until each factor is individually validated.
 # Retrospective sweep of 41 settled picks showed enabling these factors
-# dropped WR from 53.7% to 34.1% — a ~20pt degradation. Never turn this
+# dropped WR from 53.7% to 34.1% - a ~20pt degradation. Never turn this
 # on globally again. If you want to experiment with a factor, flip it
 # on one at a time in an ablation test.
 NHL_ENABLE_GRANULAR_FACTORS = False
@@ -81,7 +81,7 @@ NHL_ENABLE_GRANULAR_FACTORS = False
 #
 # Re-enabled 2026-04 after mlb_retrobt showed disabling them drops
 # 120/143 picks and the remaining 22 go 6-16 (27% WR). Unlike NHL
-# granular, MLB situational factors are actually load-bearing — they
+# granular, MLB situational factors are actually load-bearing - they
 # help the model FIND edge spots, not invert them. The "rl" vs "RL"
 # 16-point WR gap was misleading (bet-type casing artifact, not a
 # model-version split).
@@ -112,14 +112,14 @@ MLB_ENABLE_TEAM_CAL = False
 # can flip them one at a time and measure the real WR/ROI impact.
 #
 # Defaults preserve current production behavior (all True). Do NOT
-# flip these by hand — always run a backtest first and keep factors
+# flip these by hand - always run a backtest first and keep factors
 # that demonstrably help on held-out data. This is the discipline
 # layer that prevents intuition-driven factor stacking.
 #
 # [S] = part of the SITUATIONAL group (also gated by
 #       MLB_ENABLE_SITUATIONAL_FACTORS above)
 # [V] = validated in literature / external research
-# [?] = unvalidated — prime suspects for ablation
+# [?] = unvalidated - prime suspects for ablation
 MLB_ENABLE_BULLPEN_FATIGUE    = True   # [S][?] compounds with #7 bullpen
 MLB_ENABLE_SITUATIONAL_AGG    = True   # [S][?] weather+rest+platoon bundle
 MLB_ENABLE_UMPIRE_FACTOR      = True   # [S][?] applied symmetrically
@@ -141,7 +141,7 @@ MLB_ENABLE_LINEUP_STRENGTH    = True   # [?] overlaps team offense baseline
 #   O/U Under:           1- 6  14.3% WR (disastrous)
 # Setting False stops that direction from being selected as a pick.
 MLB_ALLOW_RL_FAVORITE = False   # -1.5 picks disabled
-MLB_ALLOW_RL_UNDERDOG = True    # +1.5 picks — the profitable side
+MLB_ALLOW_RL_UNDERDOG = True    # +1.5 picks - the profitable side
 MLB_ALLOW_NRFI = True           # NRFI has real edge
 MLB_ALLOW_YRFI = False          # YRFI consistently loses
 MLB_ALLOW_OU_OVER = True        # hold while sample is tiny
@@ -153,10 +153,10 @@ MLB_ALLOW_OU_UNDER = False      # Unders hit 14% over 7 picks
 # Low weights demote a market in "best pick" ordering but do NOT stop
 # picks from being generated/recorded.
 MLB_BET_RELIABILITY = {
-    "RL": 1.00,     # 55.6% hit rate, +$384 — proven profitable
-    "ML": 0.70,     # 48% hit rate, slightly losing — watch
-    "O/U": 0.50,    # 33.3% hit rate — small sample, demote
-    "1st INN": 0.30, # 46.2% hit rate, -$400 — keep but heavily demoted
+    "RL": 1.00,     # 55.6% hit rate, +$384 - proven profitable
+    "ML": 0.70,     # 48% hit rate, slightly losing - watch
+    "O/U": 0.50,    # 33.3% hit rate - small sample, demote
+    "1st INN": 0.30, # 46.2% hit rate, -$400 - keep but heavily demoted
 }
 
 NHL_BET_RELIABILITY = {
@@ -174,7 +174,7 @@ NBA_BET_RELIABILITY = {
     "Q1_ML": 0.60,
 }
 
-# ── Weak markets — disabled by default ──
+# ── Weak markets - disabled by default ──
 ENABLE_MLB_NRFI = True
 ENABLE_NHL_ML = True
 ENABLE_NHL_OU = True

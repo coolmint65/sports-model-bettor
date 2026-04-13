@@ -108,7 +108,7 @@ function NHLFinalRow({ game, bet, onClick }) {
           <span className={`final-abbr ${!homeWon ? 'winner' : ''}`}>{away.abbreviation}</span>
         </div>
         <span className={`final-score ${!homeWon ? 'winner' : ''}`}>{as}</span>
-        <span className="final-dash">—</span>
+        <span className="final-dash">-</span>
         <span className={`final-score ${homeWon ? 'winner' : ''}`}>{hs}</span>
         <div className="final-team">
           {home.logo && <img src={home.logo} alt="" />}
@@ -137,7 +137,7 @@ function NHLGameCard({ game, bet, onClick }) {
       {isLive && <div className="live-badge">LIVE</div>}
       {isFinal && <div className="final-badge">FINAL</div>}
 
-      {/* Model pick badge — only for pregame games */}
+      {/* Model pick badge - only for pregame games */}
       {isPre && bet && bet.best_pick && conf !== 'skip' && (
         <div className={`pick-badge badge-${conf}`}>
           <span className="pick-badge-type">{bet.best_pick.type}</span>
@@ -198,12 +198,12 @@ function NHLGameCard({ game, bet, onClick }) {
         <TeamRow team={home} isLive={isLive} isFinal={isFinal} />
       </div>
 
-      {/* Win probability bar — the "missing piece" */}
+      {/* Win probability bar - the "missing piece" */}
       {isPre && bet?.win_prob?.home != null && (
         <WinProbBar wp={bet.win_prob} home={home} away={away} />
       )}
 
-      {/* Key insight line — shows WHY the model picked this side */}
+      {/* Key insight line - shows WHY the model picked this side */}
       {isPre && bet && bet.best_pick && conf !== 'skip' && (
         <CardInsight bet={bet} home={home} away={away} game={game} />
       )}
@@ -400,7 +400,7 @@ function CardInsight({ bet, home, away, game }) {
     })
   }
 
-  // Injuries — plain English
+  // Injuries - plain English
   const hImp = bet.injuries?.home_impact
   const aImp = bet.injuries?.away_impact
   if (hImp != null && hImp < 0.92) {

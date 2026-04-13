@@ -299,7 +299,7 @@ function computeEdge(wp, odds) {
 }
 
 function getBestEdge(edge, home, away, odds, data) {
-  // Find best edge across ALL bet types — ML, O/U, RL, 1st Inning
+  // Find best edge across ALL bet types - ML, O/U, RL, 1st Inning
   const candidates = []
 
   // ML

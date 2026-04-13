@@ -229,7 +229,7 @@ def get_team_adjustment(team_id: int, season: int | None = None) -> dict:
             SELECT * FROM team_adjustments WHERE team_id = ? AND season = ?
         """, (team_id, yr)).fetchone()
     except Exception:
-        # Table doesn't exist yet — return defaults
+        # Table doesn't exist yet - return defaults
         return defaults
 
     if row:

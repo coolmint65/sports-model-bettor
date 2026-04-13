@@ -89,7 +89,7 @@ def generate_picks(home_team_id: int, away_team_id: int,
     h_abbr = home.get("abbreviation", "HOME")
     a_abbr = away.get("abbreviation", "AWAY")
 
-    # Raw model probabilities — no dampening. Real odds are the calibration.
+    # Raw model probabilities - no dampening. Real odds are the calibration.
     home_wp = wp.get("home", 0.5)
     away_wp = wp.get("away", 0.5)
     # All four RL sides
@@ -196,7 +196,7 @@ def generate_picks(home_team_id: int, away_team_id: int,
     # (40-27, 59.7%) while -1.5 favorites are disastrous (3-9, 25%).
     from .config import MLB_ALLOW_RL_FAVORITE, MLB_ALLOW_RL_UNDERDOG
 
-    # Home side — use the correct probability based on spread direction
+    # Home side - use the correct probability based on spread direction
     if home_rl_odds and home_rl_odds >= JUICE_WALL and home_rl_point is not None:
         # home_rl_point < 0 = home is -1.5 favorite → use home_minus probability
         # home_rl_point > 0 = home is +1.5 underdog → use home_plus probability
@@ -215,7 +215,7 @@ def generate_picks(home_team_id: int, away_team_id: int,
                 "odds": home_rl_odds,
             })
 
-    # Away side — same logic
+    # Away side - same logic
     if away_rl_odds and away_rl_odds >= JUICE_WALL and away_rl_point is not None:
         # away_rl_point > 0 = away is +1.5 underdog → use away_plus probability
         # away_rl_point < 0 = away is -1.5 favorite → use away_minus probability

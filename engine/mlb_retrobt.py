@@ -20,7 +20,7 @@ CHANGED since the original picks were made:
   - Injuries
   - Team records, recent form, travel state
 
-So this replay is APPROXIMATE — it tells us how the model architecture
+So this replay is APPROXIMATE - it tells us how the model architecture
 has changed, not a perfect historical re-prediction. Directionally
 useful, not a literal backtest.
 
@@ -45,7 +45,7 @@ def _canon(v):
     return s
 
 
-# MLB abbreviation aliases — trackers/ESPN/OddsAPI disagree sometimes.
+# MLB abbreviation aliases - trackers/ESPN/OddsAPI disagree sometimes.
 _MLB_ALIAS = {
     "AZ": "ARI", "CHW": "CWS", "WAS": "WSH", "SFG": "SF",
     "SDP": "SD", "TBR": "TB", "KCR": "KC", "OAK": "ATH",
@@ -177,7 +177,7 @@ def main() -> None:
     print(f"  MLB_ENABLE_SITUATIONAL_FACTORS = {_SITU_ON}")
     print(f"{'='*70}")
     print(f"\n  CAVEAT: MLB depends on SP, weather, umpire, lineup, bullpen")
-    print(f"  fatigue, and injuries — all of which have shifted since the")
+    print(f"  fatigue, and injuries - all of which have shifted since the")
     print(f"  original picks. This replay is APPROXIMATE. It shows how the")
     print(f"  CURRENT architecture (today's inputs) lines up vs the logged")
     print(f"  historical picks, not a literal historical re-prediction.\n")
@@ -189,7 +189,7 @@ def main() -> None:
         logging.warning("Could not fetch odds: %s", e)
         all_odds = {}
 
-    # Cache predictions per matchup — MLB predict is expensive
+    # Cache predictions per matchup - MLB predict is expensive
     picks_cache: dict[tuple[str, str], list[dict]] = {}
 
     actual_w = actual_l = 0
@@ -285,14 +285,14 @@ def main() -> None:
             if _SITU_ON:
                 print(f"     Try flipping MLB_ENABLE_SITUATIONAL_FACTORS=False and re-running.")
             else:
-                print(f"     Disabling situational factors didn't help — deeper issue.")
+                print(f"     Disabling situational factors didn't help - deeper issue.")
     elif dropped_cnt >= len(picks_rows) * 0.4:
         print(f"\n  >> Model drops >40% of past picks. Conviction has dropped,")
         print(f"     which may reduce both wins and losses. Worth watching live.")
     else:
         print(f"\n  >> Change is within noise ({delta:+.1f}% WR). Need more live data.")
 
-    # Break down by bet type — MLB's main signal is that RL is the only
+    # Break down by bet type - MLB's main signal is that RL is the only
     # profitable market; the retro sweep should tell us whether toggling
     # factors off shifts ML/OU/1st INN toward 50%+.
     print(f"\n── Hypothetical WR by bet type ──")

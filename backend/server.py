@@ -120,7 +120,7 @@ def api_team_detail(team_id: int):
 
 
 def _get_scoreboard(date: str = "") -> list[dict]:
-    """Core scoreboard logic — reusable by other endpoints."""
+    """Core scoreboard logic - reusable by other endpoints."""
     target_date = date or datetime.now().strftime("%Y-%m-%d")
     espn_date = target_date.replace("-", "")
 
@@ -180,7 +180,7 @@ def _get_scoreboard(date: str = "") -> list[dict]:
     # Enrich with our DB data
     games = _enrich_games(games, target_date)
 
-    # Fetch real odds — try The Odds API first (has all lines with juice),
+    # Fetch real odds - try The Odds API first (has all lines with juice),
     # then ESPN per-game as fallback
     odds_matched = 0
     try:
@@ -518,17 +518,17 @@ def _parse_espn_scoreboard(data: dict) -> list[dict]:
 # ESPN uses different abbreviations than MLB Stats API for some teams
 # Maps ESPN abbreviation → DB abbreviation (bidirectional)
 _ESPN_ABBR_MAP = {
-    "CHW": "CWS",   # White Sox — ESPN sometimes uses CHW
+    "CHW": "CWS",   # White Sox - ESPN sometimes uses CHW
     "CWS": "CWS",
     "WSH": "WSH",   # Nationals
     "WAS": "WSH",
-    "ARI": "AZ",    # Diamondbacks — ESPN uses ARI, DB has AZ
+    "ARI": "AZ",    # Diamondbacks - ESPN uses ARI, DB has AZ
     "AZ": "AZ",
     "SF": "SF",      # Giants
     "SD": "SD",      # Padres
     "TB": "TB",      # Rays
     "KC": "KC",      # Royals
-    "OAK": "ATH",   # Athletics — DB has ATH
+    "OAK": "ATH",   # Athletics - DB has ATH
     "ATH": "ATH",
 }
 
@@ -636,7 +636,7 @@ def api_best_bets():
         if not home_id or not away_id:
             continue
 
-        # Skip completed AND live games — predictions only for pregame.
+        # Skip completed AND live games - predictions only for pregame.
         # Live game predictions would change as the score updates, causing
         # flickering picks and misleading the pick tracker.
         state = game["status"].get("state", "pre")
@@ -1169,7 +1169,7 @@ def _get_nhl_scoreboard(date: str = "") -> list[dict]:
     except Exception as e:
         logger.warning("NHL odds failed: %s", e)
 
-    # Enrich with starting goalies — try DailyFaceoff first, then NHL API
+    # Enrich with starting goalies - try DailyFaceoff first, then NHL API
     goalie_count = 0
     try:
         from scrapers.dailyfaceoff import get_starting_goalies
@@ -1271,7 +1271,7 @@ def _parse_nhl_scoreboard(data: dict) -> list[dict]:
             else:
                 score = str(raw_score)
 
-            # Parse record — NHL has W-L-OTL format
+            # Parse record - NHL has W-L-OTL format
             record = ""
             if c.get("records"):
                 record = c["records"][0].get("summary", "")
@@ -1488,7 +1488,7 @@ def _parse_nhl_api_standings(data: dict) -> list[dict]:
     for entry in data.get("standings", []):
         div = entry.get("divisionName", "Unknown")
 
-        # Team name — use teamCommonName (e.g. "Avalanche") + placeName (e.g. "Colorado")
+        # Team name - use teamCommonName (e.g. "Avalanche") + placeName (e.g. "Colorado")
         # teamName.default often contains the full name already, so avoid doubling
         def _nhl_str(obj):
             if isinstance(obj, dict):
@@ -1672,7 +1672,7 @@ def api_nhl_best_bets():
 
     bets = []
     for game in games:
-        # Skip completed AND live games — predictions only for pregame.
+        # Skip completed AND live games - predictions only for pregame.
         # Live games change as scores update, causing pick flickering.
         state = game["status"].get("state", "pre")
         if state in ("post", "in") or game["status"].get("completed"):
@@ -1967,7 +1967,7 @@ def api_pick_of_day(sport: str):
     if potd:
         return potd
 
-    # No POTD yet — need to generate one from today's best bets
+    # No POTD yet - need to generate one from today's best bets
     if sport == "nhl":
         bets = api_nhl_best_bets()
     elif sport == "mlb":
@@ -2165,7 +2165,7 @@ def _parse_nba_scoreboard(espn_data: dict) -> list[dict]:
             },
         }
 
-        # Extract broadcast — names can be strings or dicts
+        # Extract broadcast - names can be strings or dicts
         for bc in comp.get("broadcasts", []):
             if not isinstance(bc, dict):
                 continue
@@ -2224,7 +2224,7 @@ def _fetch_nba_odds() -> dict:
     unified fallback chain in scrapers.nba_odds.
 
     Delegates to fetch_all_nba_odds so the UI scoreboard endpoint picks
-    up the same data the tracker uses — including h2h_q1, spreads_q1,
+    up the same data the tracker uses - including h2h_q1, spreads_q1,
     and totals_q1 markets via the per-event endpoint. Previously this
     was a duplicated bulk-only fetcher that silently dropped Q1 markets,
     which is why the Q1 model picks card kept showing (-110) defaults

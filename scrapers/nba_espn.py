@@ -517,7 +517,7 @@ def _fetch_bulk_player_stats() -> dict[int, dict]:
         cname = (cat.get("name") or "").lower()
         names = cat.get("names") or []
         # Map each stat name to its first-seen index (ESPN sometimes repeats
-        # shorter aliases later; we want the earliest — the per-game averages
+        # shorter aliases later; we want the earliest - the per-game averages
         # in 'general' and 'offensive' come before season totals).
         name_to_idx: dict[str, int] = {}
         for idx, nm in enumerate(names):
@@ -693,7 +693,7 @@ def fetch_nba_rosters() -> int:
 
         # Per-player fallback: for players STILL missing stats after both
         # the inline roster payload AND the bulk leaderboard (typically
-        # stars who missed significant time this season — Tatum post-
+        # stars who missed significant time this season - Tatum post-
         # Achilles, etc.), hit the common/v3 individual athlete endpoint.
         # This is the authoritative per-player stats source ESPN uses
         # on their player pages. Bounded by team roster size, so ~20
@@ -724,7 +724,7 @@ def fetch_nba_rosters() -> int:
         #
         # CALIBRATED against tonight's actual Q1 scores (2026-04-12 slate
         # had ~10 games with heavy starter rest; actual Q1 totals averaged
-        # 59.3, only 0.5 below league baseline of 58.8 — essentially no
+        # 59.3, only 0.5 below league baseline of 58.8 - essentially no
         # mean shift, just wider variance). NBA bench units play at ~85%
         # of starter efficiency, not 65% as previously assumed.
         #
@@ -780,7 +780,7 @@ ESPN_INJURIES_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/nb
 def fetch_nba_injuries() -> int:
     """Fetch current injury report from ESPN and refresh the nba_injuries table.
 
-    Replaces the previous snapshot — any player no longer listed is treated
+    Replaces the previous snapshot - any player no longer listed is treated
     as available.  Returns the total injury row count stored.
     """
     from engine.nba_db import clear_nba_injuries, upsert_nba_injury, get_nba_team_by_abbr
@@ -806,7 +806,7 @@ def fetch_nba_injuries() -> int:
         if not isinstance(block, dict):
             continue
 
-        # Extract team abbreviation — try several paths
+        # Extract team abbreviation - try several paths
         team_info = block.get("team") or {}
         abbr = team_info.get("abbreviation", "")
         if not abbr:
@@ -822,7 +822,7 @@ def fetch_nba_injuries() -> int:
             continue
 
         # Map ESPN abbr -> DB abbr (ESPN uses NOP/NYK/SAS/UTA; some DB rows
-        # may store the same — try both and fall back to ESPN's codes)
+        # may store the same - try both and fall back to ESPN's codes)
         team = get_nba_team_by_abbr(abbr)
         if not team:
             # Try common alternates

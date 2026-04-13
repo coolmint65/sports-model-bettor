@@ -50,7 +50,7 @@ from .mlb_factors import (
 logger = logging.getLogger(__name__)
 
 # Situational-factor toggle. Default ON because MLB isn't catastrophically
-# broken the way NHL was — but the toggle exists so we can ablate the
+# broken the way NHL was - but the toggle exists so we can ablate the
 # weather/umpire/travel/matchup/bullpen-fatigue group and re-run the
 # retrospective sweep to see if ML / O/U / 1st INN markets improve.
 # See config.py for notes.
@@ -76,7 +76,7 @@ def _cfg_bool(name: str, default: bool = True) -> bool:
 _now = datetime.now()
 SEASON = _now.year if _now.month >= 3 else _now.year - 1
 
-# Calibrated weights — loaded from DB on first use, updated by calibration system
+# Calibrated weights - loaded from DB on first use, updated by calibration system
 _cached_weights = None
 
 def _get_weights() -> dict:
@@ -217,7 +217,7 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     home_xr *= park_run_factor
     away_xr *= park_run_factor
 
-    # Coors Field specific correction — standard park factor underestimates.
+    # Coors Field specific correction - standard park factor underestimates.
     # Gated so factor_backtest can measure whether this 8% on-top-of-park
     # boost actually lifts Coors-game WR or just duplicates the park factor.
     from .config import MLB_ENABLE_COORS_BOOST
@@ -257,7 +257,7 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     home_lineup = None
     away_lineup = None
     if venue:
-        # Check if game is today — try fetching lineup
+        # Check if game is today - try fetching lineup
         game_row = get_conn().execute("""
             SELECT mlb_game_id, weather_temp, weather_wind FROM games
             WHERE home_team_id = ? AND away_team_id = ? AND date = ?
@@ -388,7 +388,7 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     h2h_history = get_h2h_history(home_team_id, away_team_id)
 
     # ── Step 8: Batter vs pitcher H2H ──
-    # Gated by MLB_ENABLE_H2H_VS_PITCHER — small samples per matchup
+    # Gated by MLB_ENABLE_H2H_VS_PITCHER - small samples per matchup
     # often produce noisy adjustments. H2H data is always fetched for
     # display but only applied to xR when the toggle is on.
     h2h_adj_home, h2h_adj_away = 0.0, 0.0
@@ -461,7 +461,7 @@ def predict_matchup(home_team_id: int, away_team_id: int,
 
     # Calibration cap: MLB win probabilities rarely exceed 75% even for
     # heavy favorites. Our backtest showed 57% actual win rate on ML picks
-    # that were "displayed" at 80-97% confidence — a clear miscalibration.
+    # that were "displayed" at 80-97% confidence - a clear miscalibration.
     # Cap raw probabilities via config-driven floor/cap. Calibration data
     # (N=62 at 75%+ predicted, actual 51.6%) showed the old 0.72 cap was
     # still letting through overconfident picks; tightened to 0.65.

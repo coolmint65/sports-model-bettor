@@ -1,4 +1,4 @@
-"""Quick connectivity test for ESPN API — run this first to verify access."""
+"""Quick connectivity test for ESPN API - run this first to verify access."""
 import json
 import urllib.request
 import ssl

@@ -125,7 +125,7 @@ def fetch_teams() -> list[dict]:
 
     from engine.nhl_db import upsert_nhl_team
 
-    # NHL API standings has no numeric team ID — map from abbreviation
+    # NHL API standings has no numeric team ID - map from abbreviation
     _ABBR_TO_ID = {
         "ANA": 24, "BOS": 6, "BUF": 7, "CGY": 20, "CAR": 12,
         "CHI": 16, "COL": 21, "CBJ": 29, "DAL": 25, "DET": 17,

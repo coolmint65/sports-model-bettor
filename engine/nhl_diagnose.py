@@ -1,5 +1,5 @@
 """
-NHL pick diagnostic — checks for a systematic sign error.
+NHL pick diagnostic - checks for a systematic sign error.
 
 If the model had an inverted factor (e.g. multiplied the wrong team's xG),
 flipping every pick would turn a 34% WR into ~66%. This script reports:

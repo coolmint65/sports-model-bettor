@@ -1,5 +1,5 @@
 """
-Edge-bucket ROI analysis — find the sweet spot for edge thresholds.
+Edge-bucket ROI analysis - find the sweet spot for edge thresholds.
 
 Many models are genuinely predictive in the medium-edge range (roughly 3-7%)
 but pick up garbage at extreme edges (10%+) because extreme edges usually

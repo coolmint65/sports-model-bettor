@@ -37,7 +37,7 @@ export default function GameDetail({ game, prediction, loading, onBack }) {
     <div className="game-detail">
       <SharedGameHeader game={game} onBack={onBack} matchupExtras={matchupExtras} />
 
-      {/* Model Prediction — two-column layout */}
+      {/* Model Prediction - two-column layout */}
       <div className="detail-prediction">
         {loading && (
           <div className="loading">
@@ -200,7 +200,7 @@ function PickRow({ label, pick, prob, odds, pct }) {
         )}
         {kelly != null && kelly > 0 && (
           <span
-            title="Quarter-Kelly bet sizing — fraction of bankroll to wager"
+            title="Quarter-Kelly bet sizing - fraction of bankroll to wager"
             style={{fontSize:'0.68rem',color:'#94a3b8',marginTop:2,cursor:'help'}}
           >
             Kelly: {(kelly * 100).toFixed(1)}%

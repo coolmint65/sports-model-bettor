@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "nhl.db"
 
-# Thread-local storage for DB connections — each thread gets its own
+# Thread-local storage for DB connections - each thread gets its own
 _local = threading.local()
 
 
@@ -365,7 +365,7 @@ def upsert_nhl_game(game_id: int, **kwargs) -> None:
     """Insert or update an NHL game."""
     conn = get_conn()
 
-    # Check if game already exists — if so, just UPDATE the provided fields
+    # Check if game already exists - if so, just UPDATE the provided fields
     existing = conn.execute("SELECT 1 FROM nhl_games WHERE game_id = ?", (game_id,)).fetchone()
 
     if existing:
@@ -380,7 +380,7 @@ def upsert_nhl_game(game_id: int, **kwargs) -> None:
             conn.commit()
         return
 
-    # New game — INSERT with all provided fields
+    # New game - INSERT with all provided fields
     fields = [
         "date", "home_team_id", "away_team_id", "home_score", "away_score",
         "home_goalie_id", "away_goalie_id", "status",

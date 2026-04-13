@@ -1,5 +1,5 @@
 """
-Condition report — performance by context (side, role, bet type, line movement).
+Condition report - performance by context (side, role, bet type, line movement).
 
 Splits settled picks along several dimensions and reports WR + ROI per side
 so we can find systematic biases to filter out:

@@ -1,5 +1,5 @@
 """
-NHL Pick tracker — records model picks and settles them against results.
+NHL Pick tracker - records model picks and settles them against results.
 
 Usage:
     python -m engine.nhl_tracker --record     # Record today's picks
@@ -634,7 +634,7 @@ if __name__ == "__main__":
         summary = get_pick_summary()
         overall = summary["overall"]
         print(f"\n{'='*50}")
-        print(f"  NHL PICK TRACKER — Running Totals")
+        print(f"  NHL PICK TRACKER - Running Totals")
         print(f"{'='*50}")
         print(f"  Total picks: {overall['total']}")
         print(f"  Record: {overall['wins']}-{overall['losses']} ({overall['win_pct']}%)")

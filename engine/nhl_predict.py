@@ -250,7 +250,7 @@ def _compute_corsi_proxy(team_abbr: str) -> dict:
 
     True Corsi = shots on goal + blocked shots + missed shots.
     We only have shots and blocks, so Corsi proxy = shots + blocks.
-    Returns the team's Corsi-for % (CF%) — share of shot attempts.
+    Returns the team's Corsi-for % (CF%) - share of shot attempts.
     """
     result = {"corsi_for_pct": 0.50, "games": 0, "source": "none"}
     try:
@@ -628,7 +628,7 @@ def _fetch_team_summary_stats() -> dict:
     _start = _now.year if _now.month >= 9 else _now.year - 1
     _season_id = f"{_start}{_start + 1}"
     try:
-        # Python 3.14 rejects unencoded spaces in URLs — must encode the query
+        # Python 3.14 rejects unencoded spaces in URLs - must encode the query
         query = urllib.parse.urlencode({
             "cayenneExp": f"seasonId={_season_id} and gameTypeId=2"
         })
@@ -1052,7 +1052,7 @@ def predict_matchup(home_key: str, away_key: str,
     league_pp = la.get("pp_pct", 0.20)
     league_pk = la.get("pk_pct", 0.80)
 
-    # In playoffs, refs call fewer penalties — reduce PP impact
+    # In playoffs, refs call fewer penalties - reduce PP impact
     pp_weight = 2.5  # ~3 PP chances per game in regular season
     if _is_playoff_window():
         pp_weight = 1.8  # Fewer PP opportunities in playoffs
@@ -1114,7 +1114,7 @@ def predict_matchup(home_key: str, away_key: str,
     home_xg *= _split_adj(home, is_home=True)
     away_xg *= _split_adj(away, is_home=False)
 
-    # ── Recent form (L10) adjustment — stacks with _form_factor ──
+    # ── Recent form (L10) adjustment - stacks with _form_factor ──
     home_xg *= (1 + _compute_recent_form_from_standings(home))
     away_xg *= (1 + _compute_recent_form_from_standings(away))
 
@@ -1206,7 +1206,7 @@ def predict_matchup(home_key: str, away_key: str,
     # ── H2H adjustment ──
     h2h_adj = 0
     if h2h_data and isinstance(h2h_data, list) and len(h2h_data) >= 3:
-        # h2h_data is a list of game dicts — compute summary
+        # h2h_data is a list of game dicts - compute summary
         h2h_games = len(h2h_data)
         h_abbr_val = home.get("abbreviation", "")
         team1_wins = sum(1 for g in h2h_data
@@ -1297,7 +1297,7 @@ def predict_matchup(home_key: str, away_key: str,
     # Each factor applies a SMALL adjustment (±1-5% max individually).
     # Factors 1-6 come from the nhl_granular module (imported in try/except).
     # Factors 7-12 are computed directly here.
-    # All adjustments COMPOUND with existing adjustments — they do not replace.
+    # All adjustments COMPOUND with existing adjustments - they do not replace.
     #
     # NOTE: Disabled by default. The tracker shows NHL at 34.1% WR across 47
     # picks since these were added, so we suspect at least one factor is
@@ -1363,7 +1363,7 @@ def predict_matchup(home_key: str, away_key: str,
             h_goalie_wl = compute_goalie_workload(h_abbr_g, game_date)
             a_goalie_wl = compute_goalie_workload(a_abbr_g, game_date)
             if isinstance(h_goalie_wl, dict) and h_goalie_wl.get("workload_factor") is not None:
-                # Tired goalie concedes more — boost opponent xG
+                # Tired goalie concedes more - boost opponent xG
                 wl_factor = max(0.97, min(1.03, h_goalie_wl["workload_factor"]))
                 away_xg *= wl_factor
                 granular_data["home_goalie_workload"] = h_goalie_wl
@@ -1445,8 +1445,8 @@ def predict_matchup(home_key: str, away_key: str,
         same_division = bool(h_div and a_div and h_div == a_div)
         same_conference = bool(h_conf and a_conf and h_conf == a_conf)
 
-        # Division rivals play 4x/year — more familiarity means tighter games
-        # Cross-conference teams play 2x/year — more variance
+        # Division rivals play 4x/year - more familiarity means tighter games
+        # Cross-conference teams play 2x/year - more variance
         if same_division:
             # Same division: games are tighter, reduce xG spread slightly
             # (the better team has less edge due to familiarity)
@@ -1565,14 +1565,14 @@ def predict_matchup(home_key: str, away_key: str,
     ou_home_xg = max(ou_home_xg, 1.0)
     ou_away_xg = max(ou_away_xg, 1.0)
 
-    # ── Poisson matrix (for ML and puck line — uses standard xG) ──
+    # ── Poisson matrix (for ML and puck line - uses standard xG) ──
     matrix = _score_matrix(home_xg, away_xg)
 
     p_home = sum(matrix[h][a] for h in range(MAX_GOALS + 1) for a in range(MAX_GOALS + 1) if h > a)
     p_away = sum(matrix[h][a] for h in range(MAX_GOALS + 1) for a in range(MAX_GOALS + 1) if a > h)
     p_draw = sum(matrix[i][i] for i in range(MAX_GOALS + 1))
 
-    # In NHL, ties go to OT — split 52/48 home/away by default.
+    # In NHL, ties go to OT - split 52/48 home/away by default.
     # Factor 10 (team-specific OT tendency) adjusts this but is gated
     # behind NHL_ENABLE_GRANULAR_FACTORS until validated.
     if _GRANULAR_ON:
@@ -1663,7 +1663,7 @@ def predict_matchup(home_key: str, away_key: str,
         for h in range(MAX_GOALS + 1):
             for a in range(MAX_GOALS + 1):
                 if h == a:
-                    # Game goes to OT — total becomes h + a + 1
+                    # Game goes to OT - total becomes h + a + 1
                     actual_total = h + a + 1
                 else:
                     actual_total = h + a
@@ -1810,7 +1810,7 @@ def predict_matchup(home_key: str, away_key: str,
     top_scores = [{"score": f"{s['home']}-{s['away']}", "prob": round(s["prob"], 4)}
                   for s in scores[:5]]
 
-    # Use live records if available — JSON files have stale last-season data
+    # Use live records if available - JSON files have stale last-season data
     h_live_record = _get_live_record(home.get("abbreviation", "")) or home.get("record", "")
     a_live_record = _get_live_record(away.get("abbreviation", "")) or away.get("record", "")
 

@@ -12,12 +12,12 @@ No quick fixes. Always diagnose to the root cause and devise proper solutions. N
 
 - Never hardcode secrets or commit them to git
 - Use separate API tokens/credentials for dev, staging, and prod environments
-- Validate all input server-side — never trust client data
+- Validate all input server-side - never trust client data
 - Add rate limiting on auth and write operations
 
 ## Architecture & Code Quality
 
-- Design architecture before building — don't let it emerge from spaghetti
+- Design architecture before building - don't let it emerge from spaghetti
 - Break up large view controllers/components early
 - Wrap external API calls in a clean service layer (easier to cache, swap, or extend later)
 - Version database schema changes through proper migrations
@@ -33,13 +33,13 @@ No quick fixes. Always diagnose to the root cause and devise proper solutions. N
 
 - Maintain a real staging environment that mirrors production
 - Set CORS to specific origins, never *
-- Set up CI/CD early — deploys come from the pipeline, not a laptop
+- Set up CI/CD early - deploys come from the pipeline, not a laptop
 - Document how to run, build, and deploy the project
 
 ## Testing & Resilience
 
 - Test unhappy paths: network failures, unexpected API responses, malformed data
-- Test backup restores at least once — don't wait for an emergency
+- Test backup restores at least once - don't wait for an emergency
 - Don't assume the happy path is sufficient
 
 ## Time Handling
@@ -49,5 +49,5 @@ No quick fixes. Always diagnose to the root cause and devise proper solutions. N
 
 ## Discipline
 
-- Fix hacky code now or create a tracked ticket with a deadline — "later" never comes
+- Fix hacky code now or create a tracked ticket with a deadline - "later" never comes
 - Don't skip fundamentals just because the code compiles and runs

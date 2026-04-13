@@ -47,7 +47,7 @@ export default function EdgeCallout({ edge, badgeClassName }) {
         {label}
       </span>
       <span className="edge-text">
-        {edge.label} ({edge.odds > 0 ? '+' : ''}{edge.odds}) — +{edge.edge.toFixed(1)}% edge
+        {edge.label} ({edge.odds > 0 ? '+' : ''}{edge.odds}) - +{edge.edge.toFixed(1)}% edge
       </span>
     </div>
   )

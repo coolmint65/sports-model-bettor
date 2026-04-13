@@ -1,5 +1,5 @@
 """
-Line movement tracking — tracks opening vs current odds for edge detection.
+Line movement tracking - tracks opening vs current odds for edge detection.
 
 When a line moves significantly (e.g. -150 to -180), the market is
 telling us something. Sharp money, injury news, or lineup changes
@@ -90,7 +90,7 @@ def get_line_movement(sport: str, matchup_key: str, current_odds: dict) -> dict 
 
     opening = all_odds.get(key)
     if not opening:
-        # First time seeing this game — record opening odds
+        # First time seeing this game - record opening odds
         track_opening_odds(sport, matchup_key, current_odds)
         return None
 
@@ -150,9 +150,9 @@ def _compute_ml_shift(old_ml: int, new_ml: int) -> int:
     elif old_ml > 0 and new_ml > 0:
         return new_ml - old_ml  # +130 to +150 = +20
     elif old_ml > 0 and new_ml < 0:
-        return -(old_ml + abs(new_ml))  # Flipped sides — big move
+        return -(old_ml + abs(new_ml))  # Flipped sides - big move
     elif old_ml < 0 and new_ml > 0:
-        return abs(old_ml) + new_ml  # Flipped sides — big move
+        return abs(old_ml) + new_ml  # Flipped sides - big move
     return 0
 
 

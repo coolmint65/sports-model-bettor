@@ -1,5 +1,5 @@
 """
-Pick tracker — records model picks and settles them against results.
+Pick tracker - records model picks and settles them against results.
 
 Call record_picks() before games start to log today's picks.
 Call settle_picks() after games finish to mark W/L and calculate profit.
@@ -172,7 +172,7 @@ def record_picks(date: str | None = None, min_edge: float = 1.5) -> list[dict]:
 
     # If no games in DB, try syncing today's schedule first
     if not games:
-        logger.info("No games in DB for %s — fetching from MLB API", target_date)
+        logger.info("No games in DB for %s - fetching from MLB API", target_date)
         try:
             from scrapers.mlb_stats import fetch_schedule
             fetch_schedule(target_date, target_date)
@@ -500,7 +500,7 @@ def settle_picks() -> dict:
                 result = "L"
 
         if result is None:
-            continue  # Could not determine result — skip
+            continue  # Could not determine result - skip
 
         if result == "W":
             profit = (odds if odds > 0 else 100 / abs(odds) * 100)
@@ -645,7 +645,7 @@ if __name__ == "__main__":
         summary = get_pick_summary()
         overall = summary["overall"]
         print(f"\n{'='*50}")
-        print(f"  PICK TRACKER — Running Totals")
+        print(f"  PICK TRACKER - Running Totals")
         print(f"{'='*50}")
         print(f"  Total picks: {overall['total']}")
         print(f"  Record: {overall['wins']}-{overall['losses']} ({overall['win_pct']}%)")

@@ -20,7 +20,7 @@ _OUT_STATUSES = {
     "not with team", "dnp", "did not play",
 }
 
-# Statuses where the player might play — applied at 50% impact
+# Statuses where the player might play - applied at 50% impact
 _DOUBTFUL_STATUSES = {"doubtful"}
 _QUESTIONABLE_STATUSES = {"questionable", "day-to-day", "dtd", "probable"}
 
@@ -45,7 +45,7 @@ def _classify_status(status: str) -> float:
         if "probable" in s:
             return 0.0
         return 0.25
-    # Unknown — conservative zero
+    # Unknown - conservative zero
     return 0.0
 
 
@@ -110,10 +110,10 @@ def compute_q1_adjustment(team_id: int, season: int) -> dict:
             "starter": is_starter,
         })
 
-    # Tier 4 — load-management auto-detection.
+    # Tier 4 - load-management auto-detection.
     # Trigger when 3+ starters are flagged out at the same time (classic
     # tanking or playoff-rest signature). We log this as informational
-    # context but no longer apply a scoring bonus on top — real-world
+    # context but no longer apply a scoring bonus on top - real-world
     # data (2026-04-12 slate) showed rest-rest games averaged within
     # 0.5 pts of baseline, so tanking doesn't deterministically lower
     # Q1 scoring, it just widens variance. The individual player
@@ -139,7 +139,7 @@ def is_likely_resting_spot(team_id: int, game_date: str,
       - Team has <= 2 games remaining in the regular season after `game_date`
       - Team has played their full regular-season slate (last-game scenario)
 
-    Called as a secondary signal alongside compute_q1_adjustment — if it
+    Called as a secondary signal alongside compute_q1_adjustment - if it
     fires without injuries already predicting a resting spot, apply a
     modest -3.0 Q1 penalty as a safety net.
     """
@@ -157,7 +157,7 @@ def is_likely_resting_spot(team_id: int, game_date: str,
     """, (team_id, team_id, season, game_date)).fetchone()
     remaining = (row[0] if row else 0)
 
-    # Count completed games for context — regular season is 82 games
+    # Count completed games for context - regular season is 82 games
     row2 = conn.execute("""
         SELECT COUNT(*) AS n
         FROM nba_games
@@ -192,7 +192,7 @@ if __name__ == "__main__":
     print(f"  NBA Roster/Injury Adjustments (season {season})")
     print(f"{'=' * 72}")
     if not teams:
-        print("  No teams in DB — run 'python -m scrapers.nba_espn --full' first.")
+        print("  No teams in DB - run 'python -m scrapers.nba_espn --full' first.")
         sys.exit(0)
 
     any_adjustments = False

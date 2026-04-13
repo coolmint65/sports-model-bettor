@@ -8,7 +8,7 @@ Two components:
 
 2. Contextual Interaction: Given TODAY's specific conditions for both
    teams, how do their strengths/weaknesses interact? This isn't just
-   stacking independent factors — it identifies specific exploits:
+   stacking independent factors - it identifies specific exploits:
    - RH-heavy lineup vs LHP who struggles against righties
    - High-K pitcher vs lineup that strikes out a lot (double effect)
    - Fast team vs slow pitcher (pace mismatch)
@@ -180,12 +180,12 @@ def compute_matchup_interaction(
             offense_quality = team_rpg / 4.5  # >1 = good offense
 
             if pitcher_quality > 1.15 and offense_quality < 0.90:
-                # Ace vs weak lineup — compound suppression
+                # Ace vs weak lineup - compound suppression
                 interaction = 0.95
                 away_mult *= interaction
                 insights.append(f"Home SP dominates weak {_abbr(away_team_id)} lineup")
             elif pitcher_quality < 0.85 and offense_quality > 1.10:
-                # Bad pitcher vs good lineup — compound boost
+                # Bad pitcher vs good lineup - compound boost
                 interaction = 1.05
                 away_mult *= interaction
                 insights.append(f"{_abbr(away_team_id)} offense exploits weak home pitching")
@@ -248,9 +248,9 @@ def compute_matchup_interaction(
         away_fi = away_adj.get("first_inn_factor", 1.0)
 
         if home_fi > 1.5 and away_fi > 1.5:
-            insights.append("Both teams score early — YRFI likely")
+            insights.append("Both teams score early - YRFI likely")
         elif home_fi < 0.6 and away_fi < 0.6:
-            insights.append("Both teams quiet in 1st — NRFI likely")
+            insights.append("Both teams quiet in 1st - NRFI likely")
 
     # ── 5. H2H historical factor ──
     h2h_home = h2h_adjustment(home_team_id, away_team_id)

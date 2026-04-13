@@ -31,7 +31,7 @@ export function mlToProb(ml) {
 }
 
 /**
- * Implied probability helper used by PickRow — mirrors the inline math
+ * Implied probability helper used by PickRow - mirrors the inline math
  * that both MLB and NHL had duplicated.
  */
 export function impliedFromOdds(odds) {

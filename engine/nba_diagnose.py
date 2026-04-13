@@ -1,5 +1,5 @@
 """
-NBA diagnostic dump — run this to see why Q1 picks aren't recording
+NBA diagnostic dump - run this to see why Q1 picks aren't recording
 and why the bulk player-stats endpoint isn't populating q1_impact.
 
 Usage:
@@ -37,7 +37,7 @@ def dump_bulk_stats_raw():
     # Top-level keys
     print(f"\nTop-level keys: {list(data.keys())}")
 
-    # Print the 'categories' / 'glossary' section — this is where stat
+    # Print the 'categories' / 'glossary' section - this is where stat
     # labels typically live when they're separated from per-athlete values.
     if "categories" in data:
         cats = data["categories"]
@@ -48,7 +48,7 @@ def dump_bulk_stats_raw():
         print(f"\ndata['glossary'] ({len(gloss) if isinstance(gloss, list) else '?'} items):")
         print(json.dumps(gloss, indent=2)[:1500])
 
-    # First athlete — focus on the non-link/bio fields (stats live under
+    # First athlete - focus on the non-link/bio fields (stats live under
     # sibling keys to 'athlete'). Strip 'links' since it blows up the output.
     for key in ("athletes", "items", "results"):
         if key in data and data[key]:
@@ -118,7 +118,7 @@ def dump_pick_flow(target_game: str | None = None):
         ).fetchone()["c"]
         print(f"  Existing picks for this game_id: {existing_count}")
 
-        # Odds lookup — show both the key hit and what's in the map
+        # Odds lookup - show both the key hit and what's in the map
         market_odds = odds.get(matchup_key) or {}
         print(f"  In odds map as '{matchup_key}': "
               f"{'YES' if market_odds else 'NO'}")
@@ -225,7 +225,7 @@ def dump_pick_flow(target_game: str | None = None):
 
 
 def dump_player_sample():
-    """Print what's in nba_players for BOS — are MPG/PPG actually populated?"""
+    """Print what's in nba_players for BOS - are MPG/PPG actually populated?"""
     print(f"\n{'=' * 72}")
     print("  NBA_PLAYERS SAMPLE (BOS)")
     print(f"{'=' * 72}")

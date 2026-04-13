@@ -277,7 +277,7 @@ body {
   font-weight: 700;
 }
 
-/* Insight line — top factor driving the pick */
+/* Insight line - top factor driving the pick */
 .card-insight {
   font-size: 0.72rem;
   color: #94a3b8;
@@ -1772,7 +1772,7 @@ body {
 
 
 /* ═══════════════════════════════════════════
-   Pick Tracker — Redesigned
+   Pick Tracker - Redesigned
    ═══════════════════════════════════════════ */
 
 .history-header {
@@ -1794,7 +1794,7 @@ body {
   margin: 0;
 }
 
-/* Hero summary — big prominent P/L */
+/* Hero summary - big prominent P/L */
 .pick-hero {
   display: grid;
   grid-template-columns: 280px 1fr;
@@ -2012,7 +2012,7 @@ body {
 
 
 /* ═══════════════════════════════════════════
-   Standings — Redesigned
+   Standings - Redesigned
    ═══════════════════════════════════════════ */
 
 .standings-legend {
@@ -2168,7 +2168,7 @@ body {
   color: #f8fafc;
 }
 
-/* Playoff spot color bands — left border accent */
+/* Playoff spot color bands - left border accent */
 .standings-table-v2 tbody tr {
   border-left: 3px solid transparent;
   transition: background 0.15s;
@@ -2247,7 +2247,7 @@ body {
   letter-spacing: 0.03em;
 }
 
-/* Q1 pick badge — orange/amber accent */
+/* Q1 pick badge - orange/amber accent */
 .pick-badge.q1-badge {
   border-color: rgba(245, 158, 11, 0.35);
   background: rgba(245, 158, 11, 0.06);

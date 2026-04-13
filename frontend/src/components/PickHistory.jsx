@@ -37,7 +37,7 @@ export default function PickHistory({ summary, history, loading, onRecord, onSet
         </div>
       </div>
 
-      {/* Hero summary — big, prominent */}
+      {/* Hero summary - big, prominent */}
       {overall.total > 0 && (
         <div className="pick-hero">
           <div className="pick-hero-main">

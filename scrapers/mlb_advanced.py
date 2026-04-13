@@ -358,7 +358,7 @@ def _sync_team_vs_pitcher(conn, team_id: int, pitcher_id: int):
 
 # ── Park Factors ────────────────────────────────────────────
 
-# From FanGraphs historical data — these are relatively stable year to year.
+# From FanGraphs historical data - these are relatively stable year to year.
 # Values > 100 = hitter-friendly, < 100 = pitcher-friendly.
 # Normalized: 1.0 = neutral, >1.0 = more runs, <1.0 = fewer runs.
 PARK_FACTORS = {

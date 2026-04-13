@@ -109,7 +109,7 @@ function NBAFinalRow({ game, bet, onClick }) {
           <span className={`final-abbr ${!homeWon ? 'winner' : ''}`}>{away.abbreviation}</span>
         </div>
         <span className={`final-score ${!homeWon ? 'winner' : ''}`}>{as}</span>
-        <span className="final-dash">—</span>
+        <span className="final-dash">-</span>
         <span className={`final-score ${homeWon ? 'winner' : ''}`}>{hs}</span>
         <div className="final-team">
           {home.logo && <img src={home.logo} alt="" />}
@@ -140,7 +140,7 @@ function NBAGameCard({ game, bet, onClick }) {
       {isLive && <div className="live-badge">LIVE</div>}
       {isFinal && <div className="final-badge">FINAL</div>}
 
-      {/* Q1 pick badge — only for pregame games */}
+      {/* Q1 pick badge - only for pregame games */}
       {isPre && bet && bet.best_pick && conf !== 'skip' && (
         <div className={`pick-badge q1-badge badge-${conf}`}>
           <span className="pick-badge-type">
@@ -218,7 +218,7 @@ function NBAGameCard({ game, bet, onClick }) {
         <Q1ProbBar wp={bet.win_prob} home={home} away={away} />
       )}
 
-      {/* Odds — Q1 focused */}
+      {/* Odds - Q1 focused */}
       {game.odds && (
         <div className="game-odds-grid">
           {/* Spread */}

@@ -38,7 +38,7 @@ KEY_FILE = Path(__file__).resolve().parent.parent / "data" / "odds_api_key.txt"
 
 NBA_SPORT = "basketball_nba"
 PREFERRED_BOOK = "draftkings"
-# Multiple books for Q1 markets — DK often doesn't post Q1 until close to
+# Multiple books for Q1 markets - DK often doesn't post Q1 until close to
 # tip, so we fall back to whoever does have it. Filter is still limited to
 # common US books that typically post Q1 markets.
 Q1_BOOKS = "draftkings,fanduel,betmgm,caesars,pointsbetus,williamhill_us"
@@ -76,9 +76,9 @@ def fetch_nba_odds() -> dict:
     """Fetch NBA odds (full-game + Q1 markets) from The Odds API.
 
     Uses a two-step flow to access period markets:
-      1. Bulk /sports/{sport}/odds — one call for h2h/spreads/totals
+      1. Bulk /sports/{sport}/odds - one call for h2h/spreads/totals
          across all games. Gets event IDs.
-      2. Per-event /sports/{sport}/events/{id}/odds — one call per game
+      2. Per-event /sports/{sport}/events/{id}/odds - one call per game
          for h2h_q1/spreads_q1/totals_q1. Period markets are only
          available through the per-event endpoint on every paid tier.
 

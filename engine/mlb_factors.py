@@ -1,5 +1,5 @@
 """
-MLB Factors — Feature engineering and factor computation.
+MLB Factors - Feature engineering and factor computation.
 
 Computes individual prediction factors (offense ratings, pitcher
 adjustments, bullpen factors, H2H, form, confidence, etc.).
@@ -19,33 +19,33 @@ plausible-sounding priors that have NOT been validated end-to-end.
 
 Multiplier name                     Range         Validated?  Notes
 ────────────────────────────────────────────────────────────────────
- 1. blended_pitcher (SP factor)     0.60 – 1.50   partial     Core signal; FIP/ERA-based.
- 2. lineup_strength                 0.90 – 1.12   NO          wRC+/OPS proxy, assumed independent of team offense baseline but overlaps.
+ 1. blended_pitcher (SP factor)     0.60 - 1.50   partial     Core signal; FIP/ERA-based.
+ 2. lineup_strength                 0.90 - 1.12   NO          wRC+/OPS proxy, assumed independent of team offense baseline but overlaps.
  3. team_cal offense_factor         learned       partial     From team_calibration.py; learned off past games.
  4. team_cal defense_factor         learned       partial     Cross-applied (opp scoring); compounds with #1.
- 5. team_cal home_factor            learned       partial     Compounds #3/#4 conditioned on venue — double-dips home advantage.
+ 5. team_cal home_factor            learned       partial     Compounds #3/#4 conditioned on venue - double-dips home advantage.
  6. team_cal away_factor            learned       partial     Same as #5 for away side.
- 7. (1 + 0.35*(bullpen-1))          ~0.89 – 1.14  partial     Opponent bullpen softens/raises scoring.
- 8. bullpen_fatigue_penalty         1.00 – 1.05   NO          Compounds directly on top of #7 — no independence argument.   [SITUATIONAL]
- 9. park_run_factor                 ~0.92 – 1.08  YES (known) Standard MLB research backs this.
-10. coors_boost (if Coors)          1.08          NO          Extra +8% on top of park factor — double-count risk at Coors.
-11. situational aggregate           ~0.92 – 1.08  NO          From situational.py: weather + rest + pitcher rest + lineup + platoon, already compounded internally.                                                [SITUATIONAL]
-12. umpire_factor                   ~0.95 – 1.05  NO          Applied to BOTH home and away (not differential).             [SITUATIONAL]
-13. weather_adj                     ~0.90 – 1.10  NO          Duplicates weather inside situational aggregate #11.          [SITUATIONAL]
-14. travel_fatigue (per side)       ~0.95 – 1.05  NO          Compounds with situational rest factor #11.                   [SITUATIONAL]
+ 7. (1 + 0.35*(bullpen-1))          ~0.89 - 1.14  partial     Opponent bullpen softens/raises scoring.
+ 8. bullpen_fatigue_penalty         1.00 - 1.05   NO          Compounds directly on top of #7 - no independence argument.   [SITUATIONAL]
+ 9. park_run_factor                 ~0.92 - 1.08  YES (known) Standard MLB research backs this.
+10. coors_boost (if Coors)          1.08          NO          Extra +8% on top of park factor - double-count risk at Coors.
+11. situational aggregate           ~0.92 - 1.08  NO          From situational.py: weather + rest + pitcher rest + lineup + platoon, already compounded internally.                                                [SITUATIONAL]
+12. umpire_factor                   ~0.95 - 1.05  NO          Applied to BOTH home and away (not differential).             [SITUATIONAL]
+13. weather_adj                     ~0.90 - 1.10  NO          Duplicates weather inside situational aggregate #11.          [SITUATIONAL]
+14. travel_fatigue (per side)       ~0.95 - 1.05  NO          Compounds with situational rest factor #11.                   [SITUATIONAL]
 15. platoon_home_adj / platoon_away 0.97 / 1.00   NO          Duplicates the platoon factor inside situational #11.
-16. matchup interaction             ~0.92 – 1.10  NO          Compound-on-compound; reads team_cal already-applied factors. [SITUATIONAL]
-17. (1 + form) (additive)           0.90 – 1.10   partial     Recent form; small range.
-18. injury impact                   ~0.92 – 1.00  partial     ESPN injury list impact.
+16. matchup interaction             ~0.92 - 1.10  NO          Compound-on-compound; reads team_cal already-applied factors. [SITUATIONAL]
+17. (1 + form) (additive)           0.90 - 1.10   partial     Recent form; small range.
+18. injury impact                   ~0.92 - 1.00  partial     ESPN injury list impact.
 
-Count of multiplicative compounding layers: 16–18 (depending on how you
+Count of multiplicative compounding layers: 16-18 (depending on how you
 count learned team-cal and form). NHL had 12; MLB has more.
 
 Flagged for independence violations (compound-on-compound):
   • #8 bullpen_fatigue stacks on #7 bullpen_factor
   • #10 coors stacks on #9 park factor
   • #11 situational aggregate duplicates #13 weather and #15 platoon
-  • #12 umpire is applied symmetrically — does not differentiate sides
+  • #12 umpire is applied symmetrically - does not differentiate sides
   • #14 travel duplicates situational "rest" component in #11
   • #16 matchup interaction reads already-adjusted team_cal factors (#3-#6) and multiplies again
 
@@ -103,7 +103,7 @@ def _blended_offense(pit: dict | None, stats: dict) -> float:
 
     TIGHTENED 2026-04: previous schedule weighted 75% PIT at 20 games,
     which amplified early-season noise (e.g. SEA@HOU 2026-04-13 had
-    SEA 4.55 rpg with 129 wRC+ vs HOU 5.76 rpg with 102 wRC+ — the
+    SEA 4.55 rpg with 129 wRC+ vs HOU 5.76 rpg with 102 wRC+ - the
     talent stats disagreed with 20-game runs but the old blend let
     runs override talent). Research says team offense doesn't
     stabilize until ~50-70 games, so lean on baseline much longer.
@@ -150,7 +150,7 @@ def _blended_pitcher(sp_pit: dict | None, sp_db: dict | None) -> float:
     if starts == 0:
         return db_factor
     elif starts == 1:
-        # One start — 20% PIT, 80% baseline
+        # One start - 20% PIT, 80% baseline
         return pit_factor * 0.20 + db_factor * 0.80
     elif starts <= 3:
         # 50/50 blend
@@ -448,7 +448,7 @@ def _compute_first_inning(home_xr: float, away_xr: float,
                           + (1 - pit_weight) * p_home_zero_poisson)
 
     # Cap at realistic bounds. Previous bounds (0.40-0.92) produced NRFI
-    # probabilities as high as 85% which are wildly miscalibrated — the
+    # probabilities as high as 85% which are wildly miscalibrated - the
     # backtest showed 1st INN picks at "80%+ confidence" were actually
     # winning 46% of the time. Real per-team P(0 runs in 1st) is 65-80%,
     # rarely outside that range.
@@ -458,7 +458,7 @@ def _compute_first_inning(home_xr: float, away_xr: float,
     # NRFI = both teams score 0 in the first
     nrfi = p_home_zero * p_away_zero
 
-    # Regress hard toward MLB baseline (~56% NRFI) — individual matchups
+    # Regress hard toward MLB baseline (~56% NRFI) - individual matchups
     # rarely deviate more than ±10% from the league average.
     MLB_NRFI_BASELINE = 0.56
     nrfi = MLB_NRFI_BASELINE * 0.65 + nrfi * 0.35  # 65% baseline weight
@@ -470,7 +470,7 @@ def _compute_first_inning(home_xr: float, away_xr: float,
     p_away_one = _poisson_prob(away_1st_xr, 1)
     p_exactly_one = (p_home_one * p_away_zero) + (p_home_zero * p_away_one)
 
-    # Away team bats first — P(away scores in top 1st)
+    # Away team bats first - P(away scores in top 1st)
     p_away_scores_1st = 1 - p_away_zero
     p_home_scores_1st = 1 - p_home_zero
 
@@ -602,9 +602,9 @@ def _build_reasoning(home_team, away_team, home_stats, away_stats,
 
     if park_factor and park_factor != 1.0:
         if park_factor > 1.03:
-            reasons.append(f"Park factor {park_factor:.2f} — hitter-friendly venue")
+            reasons.append(f"Park factor {park_factor:.2f} - hitter-friendly venue")
         elif park_factor < 0.97:
-            reasons.append(f"Park factor {park_factor:.2f} — pitcher-friendly venue")
+            reasons.append(f"Park factor {park_factor:.2f} - pitcher-friendly venue")
 
     if abs(home_form) > 0.03:
         reasons.append(f"{hn} running {'hot' if home_form > 0 else 'cold'} (form {home_form:+.1%})")

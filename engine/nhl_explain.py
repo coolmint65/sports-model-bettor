@@ -166,7 +166,7 @@ def main() -> None:
     expected_dir = "home" if (h_gf - h_ga) > (a_gf - a_ga) else "away"
     actual_dir = "home" if es.get("home", 0) > es.get("away", 0) else "away"
     print(f"  xG direction aligns with team-quality direction: "
-          f"{'YES' if expected_dir == actual_dir else 'NO — possible sign flip'}")
+          f"{'YES' if expected_dir == actual_dir else 'NO - possible sign flip'}")
 
     print(f"\n{'='*70}\n")
 
