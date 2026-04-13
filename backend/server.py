@@ -613,6 +613,13 @@ def api_predict(req: PredictRequest):
     )
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
+    # Attach season_context so the GameDetail banner renders when it
+    # would render on best-bets cards too. predict_matchup doesn't
+    # produce this yet; fall back to the month-based heuristic.
+    if result.get("season_context") is None:
+        sc = _mlb_season_context()
+        if sc:
+            result["season_context"] = sc
     return result
 
 
@@ -624,6 +631,7 @@ def api_best_bets():
     games = _get_scoreboard()
 
     from engine.picks import generate_picks, get_best_pick, match_odds, fetch_real_odds_for_games
+    from engine.mlb_predict import predict_matchup
 
     all_odds = fetch_real_odds_for_games()
 
@@ -677,6 +685,72 @@ def api_best_bets():
         if not best:
             continue
 
+        # Pull the full prediction so the scoreboard card can render the
+        # NHL-parity blocks (WinProbBar, CardInsight, rest badges, injury
+        # severity). predict_matchup caches nothing internally but the
+        # cost is small vs the UI value.
+        win_prob = {}
+        rest = {}
+        factors = {}
+        injuries = {}
+        season_context = None
+        try:
+            pred = predict_matchup(
+                home_team_id=home_id, away_team_id=away_id,
+                home_pitcher_id=h_pitcher_id, away_pitcher_id=a_pitcher_id,
+                venue=game.get("venue"),
+            )
+            if pred and "error" not in pred:
+                win_prob = pred.get("win_prob") or {}
+
+                # Rest signal for MLB: travel fatigue multipliers < 1.0 mean
+                # the team is fatigued; the healthier side has a rest advantage.
+                tr = pred.get("travel") or {}
+                home_travel = tr.get("home", 1.0) or 1.0
+                away_travel = tr.get("away", 1.0) or 1.0
+                rest = {
+                    "home_short_rest": home_travel < 0.97,
+                    "away_short_rest": away_travel < 0.97,
+                    "home_rest_advantage": home_travel > away_travel + 0.02,
+                    "away_rest_advantage": away_travel > home_travel + 0.02,
+                }
+
+                # Factors surfaced in CardInsight: wRC+ gap, form, park.
+                # Pull from prediction sub-dicts + the direct team_record.
+                try:
+                    from engine.db import get_team_record
+                    from engine.mlb_predict import SEASON as _MLB_SEASON
+                    h_rec = get_team_record(home_id, _MLB_SEASON) or {}
+                    a_rec = get_team_record(away_id, _MLB_SEASON) or {}
+                except Exception:
+                    h_rec, a_rec = {}, {}
+                factors = {
+                    "home_wrc_plus": h_rec.get("wrc_plus"),
+                    "away_wrc_plus": a_rec.get("wrc_plus"),
+                    "home_form": _mlb_form_from_reasoning(pred.get("reasoning"), h_abbr),
+                    "away_form": _mlb_form_from_reasoning(pred.get("reasoning"), a_abbr),
+                    "park_factor": pred.get("park_factor"),
+                    "home_ops": h_rec.get("ops"),
+                    "away_ops": a_rec.get("ops"),
+                }
+
+                # Injury impact: convert the MLB injury multiplier to a 0-1
+                # "strength fraction" matching the NHL card's home_impact
+                # semantic (1.0 = healthy, <1 = weaker).
+                inj_data = pred.get("injuries") or {}
+                injuries = {
+                    "home_impact": _compute_injury_impact_pct(inj_data.get("home") or []),
+                    "away_impact": _compute_injury_impact_pct(inj_data.get("away") or []),
+                    "home_list": inj_data.get("home") or [],
+                    "away_list": inj_data.get("away") or [],
+                }
+
+                # Season context: prefer anything computed server-side,
+                # otherwise fall back to the month-based heuristic.
+                season_context = pred.get("season_context") or _mlb_season_context()
+        except Exception as e:
+            logger.debug("  Enrich-best-bet failed for %s/%s: %s", h_abbr, a_abbr, e)
+
         bets.append({
             "game_id": game["id"],
             "matchup": f"{a_abbr} @ {h_abbr}",
@@ -687,10 +761,84 @@ def api_best_bets():
             "best_pick": best,
             "all_picks": picks[:4],
             "confidence": best.get("confidence", "lean"),
+            "win_prob": win_prob,
+            "rest": rest,
+            "factors": factors,
+            "injuries": injuries,
+            "season_context": season_context,
         })
 
     bets.sort(key=lambda b: b["best_pick"]["edge"], reverse=True)
     return bets
+
+
+def _mlb_form_from_reasoning(reasoning: list | None, abbr: str) -> float | None:
+    """Parse the hot/cold form pct out of reasoning strings.
+
+    _build_reasoning produces lines like 'NYY running hot (form +4.5%)'
+    so we scrape the matching one. Returns signed fraction (e.g. 0.045)
+    or None when form info isn't present.
+    """
+    if not reasoning:
+        return None
+    import re
+    tag = abbr.upper()
+    pat = re.compile(r"(?:form\s*)?([+\-]?\d+(?:\.\d+)?)\s*%")
+    for line in reasoning:
+        if not isinstance(line, str):
+            continue
+        if tag not in line:
+            continue
+        if "form" not in line.lower():
+            continue
+        m = pat.search(line)
+        if m:
+            try:
+                return float(m.group(1)) / 100.0
+            except ValueError:
+                pass
+    return None
+
+
+def _mlb_season_context() -> dict | None:
+    """Return a season-context dict the UI can render as a banner.
+
+    Simple month-based phase: September = late regular season, October
+    = playoffs, else None (no banner). 'implications' is a truthy
+    string so the UI gate fires.
+    """
+    from datetime import datetime
+    m = datetime.now().month
+    if m == 10:
+        return {
+            "phase": "playoffs",
+            "implications": "Postseason intensity (small sample, high leverage).",
+        }
+    if m == 9:
+        return {
+            "phase": "regular-late",
+            "implications": "Playoff race: more bullpen usage, tighter lineups.",
+        }
+    return None
+
+
+def _compute_injury_impact_pct(inj_list: list) -> float:
+    """Map MLB injury list to a 0-1 impact multiplier matching NHL semantic.
+
+    Uses engine.injuries.compute_mlb_injury_impact conventions: each
+    starter out subtracts a small fraction. Returns a strength fraction
+    (1.0 = no injuries, 0.85 = ~15% weaker, etc).
+    """
+    if not inj_list:
+        return 1.0
+    try:
+        from engine.injuries import compute_mlb_injury_impact
+        # The function takes (team_id, injuries_list) and returns a
+        # multiplier in the ~0.70-1.00 range.
+        return float(compute_mlb_injury_impact(0, inj_list) or 1.0)
+    except Exception:
+        # Fallback heuristic: one player out = ~3% weaker, capped.
+        return max(0.70, 1.0 - min(len(inj_list) * 0.03, 0.30))
 
 
 def _implied(ml: int) -> float:
@@ -2424,6 +2572,28 @@ def api_nba_best_bets():
 
         best = picks[0]
 
+        # Surface Q1 roster/injury info as a unified "injuries" field so
+        # the scoreboard CardInsight can render shorthanded warnings the
+        # same way it does for MLB.
+        _factors = pred.get("factors") or {}
+        _home_roster = _factors.get("home_roster") or {}
+        _away_roster = _factors.get("away_roster") or {}
+
+        def _nba_roster_impact(roster: dict) -> float:
+            # Convert Q1 delta (pts) to a 0-1 strength multiplier. Q1
+            # avg ~29 pts/team, so -6 Q1 pts = ~20% weaker.
+            delta = roster.get("q1_delta") or 0
+            if delta >= 0:
+                return 1.0
+            return max(0.70, 1.0 + (delta / 29.0))
+
+        injuries_payload = {
+            "home_impact": _nba_roster_impact(_home_roster),
+            "away_impact": _nba_roster_impact(_away_roster),
+            "home_list": _home_roster.get("out_players") or [],
+            "away_list": _away_roster.get("out_players") or [],
+        }
+
         bets.append({
             "game_id": game["id"],
             "matchup": f"{a_abbr} @ {h_abbr}",
@@ -2438,6 +2608,8 @@ def api_nba_best_bets():
             "expected_q1_score": pred.get("expected_q1_score", {}),
             "factors": pred.get("factors", {}),
             "rest": pred.get("rest", {}),
+            "injuries": injuries_payload,
+            "season_context": pred.get("season_context"),
         })
 
     bets.sort(key=lambda b: b["best_pick"].get("edge", 0), reverse=True)
