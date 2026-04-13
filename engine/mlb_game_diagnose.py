@@ -121,6 +121,44 @@ def run(home_abbr: str, away_abbr: str,
     print(f"    situational.home_multiplier: {sit.get('home_multiplier')}")
     print(f"    situational.away_multiplier: {sit.get('away_multiplier')}")
 
+    # ── Raw source data: team stats + team_cal factors + pitcher/injury ──
+    # These are NOT toggleable via config (yet) but they're the source of
+    # the prediction. If team_cal has learned weird values OR team stats
+    # are inverted, the ablation above shows nothing because all the
+    # toggleable factors are neutral.
+    print(f"\n  RAW SOURCE DATA (not toggleable — inspect for source-of-truth bugs):")
+    try:
+        from .db import get_team_stats, get_park_factor
+        from .team_calibration import load_team_adjustment
+        home_stats = get_team_stats(home_id) or {}
+        away_stats = get_team_stats(away_id) or {}
+        print(f"    HOME ({home_abbr}) stats: runs_pg={home_stats.get('runs_pg')} "
+              f"ops={home_stats.get('ops')} wrc+={home_stats.get('wrc_plus')}")
+        print(f"    AWAY ({away_abbr}) stats: runs_pg={away_stats.get('runs_pg')} "
+              f"ops={away_stats.get('ops')} wrc+={away_stats.get('wrc_plus')}")
+
+        # team_cal learned factors — these multiply the base offense rating
+        try:
+            home_adj = load_team_adjustment(home_id) or {}
+            away_adj = load_team_adjustment(away_id) or {}
+            print(f"    HOME team_cal: offense={home_adj.get('offense_factor')} "
+                  f"defense={home_adj.get('defense_factor')} "
+                  f"home={home_adj.get('home_factor')} "
+                  f"games={home_adj.get('games_analyzed')}")
+            print(f"    AWAY team_cal: offense={away_adj.get('offense_factor')} "
+                  f"defense={away_adj.get('defense_factor')} "
+                  f"away={away_adj.get('away_factor')} "
+                  f"games={away_adj.get('games_analyzed')}")
+        except Exception as e:
+            print(f"    team_cal load failed: {e}")
+    except Exception as e:
+        print(f"    Raw stats dump failed: {e}")
+
+    # Injury impact (already logged but repeated here for one-shot view)
+    inj = baseline.get("injuries") or {}
+    print(f"    Injuries applied: home={len(inj.get('home') or [])} "
+          f"away={len(inj.get('away') or [])} players")
+
     factors = [
         "MLB_ENABLE_BULLPEN_FATIGUE",
         "MLB_ENABLE_SITUATIONAL_AGG",
