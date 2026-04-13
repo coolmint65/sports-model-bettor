@@ -389,22 +389,39 @@ def predict_q1(home_abbr: str, away_abbr: str,
         from .nba_injuries import compute_q1_adjustment, is_likely_resting_spot
         if home.get("team_id"):
             home_roster_adj = compute_q1_adjustment(home["team_id"], season)
-            home_q1_expected += home_roster_adj["q1_delta"]
-            if home_roster_adj["q1_delta"] < 0:
-                reasoning.append(
-                    f"{home_abbr} roster: {home_roster_adj['q1_delta']:+.1f} Q1 pts "
-                    f"({home_roster_adj['starters_out']} starter(s) out"
-                    + (f", load-mgmt spot)" if home_roster_adj["load_management"] else ")")
-                )
         if away.get("team_id"):
             away_roster_adj = compute_q1_adjustment(away["team_id"], season)
+
+        # Stacking dampener: if BOTH teams are in load-management (3+
+        # starters out each), applying both -8 caps linearly would drop
+        # Q1 expected by ~16 pts combined, which overshoots real rest-rest
+        # outcomes (historically the combined drop is more like 8-12 pts —
+        # bench units mostly neutralize each other). Scale each side's
+        # delta by 0.65 so combined stays in the 10-11 pt range.
+        both_load_mgmt = (home_roster_adj.get("load_management")
+                          and away_roster_adj.get("load_management"))
+        if both_load_mgmt:
+            home_roster_adj["q1_delta"] = round(home_roster_adj["q1_delta"] * 0.65, 2)
+            away_roster_adj["q1_delta"] = round(away_roster_adj["q1_delta"] * 0.65, 2)
+            home_roster_adj["stack_dampened"] = True
+            away_roster_adj["stack_dampened"] = True
+
+        if home_roster_adj["q1_delta"] < 0:
+            home_q1_expected += home_roster_adj["q1_delta"]
+            reasoning.append(
+                f"{home_abbr} roster: {home_roster_adj['q1_delta']:+.1f} Q1 pts "
+                f"({home_roster_adj['starters_out']} starter(s) out"
+                + (f", load-mgmt spot)" if home_roster_adj["load_management"] else ")")
+                + (" [dampened: both teams resting]" if both_load_mgmt else "")
+            )
+        if away_roster_adj["q1_delta"] < 0:
             away_q1_expected += away_roster_adj["q1_delta"]
-            if away_roster_adj["q1_delta"] < 0:
-                reasoning.append(
-                    f"{away_abbr} roster: {away_roster_adj['q1_delta']:+.1f} Q1 pts "
-                    f"({away_roster_adj['starters_out']} starter(s) out"
-                    + (f", load-mgmt spot)" if away_roster_adj["load_management"] else ")")
-                )
+            reasoning.append(
+                f"{away_abbr} roster: {away_roster_adj['q1_delta']:+.1f} Q1 pts "
+                f"({away_roster_adj['starters_out']} starter(s) out"
+                + (f", load-mgmt spot)" if away_roster_adj["load_management"] else ")")
+                + (" [dampened: both teams resting]" if both_load_mgmt else "")
+            )
 
         # Schedule-based safety net: if load-mgmt wasn't already detected
         # from injuries but the team is at end-of-season with nothing to
