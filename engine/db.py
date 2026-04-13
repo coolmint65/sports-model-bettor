@@ -377,8 +377,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
     try:
         conn.commit()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Migration commit failed: %s", e)
 
 
 # ── Convenience helpers ──────────────────────────────────────

@@ -593,7 +593,12 @@ def predict_q1_matchup(home_abbr: str, away_abbr: str,
     try:
         pred = predict_q1(home_abbr, away_abbr,
                           spread=q1_spread, total=q1_total, season=season)
-    except Exception:
+    except Exception as e:
+        # Elevated from silent swallow to warning so upstream bugs
+        # (missing DB data, schema mismatch, etc.) surface in logs
+        # instead of silently producing "no prediction available".
+        logger.warning("predict_q1 failed for %s/%s: %s",
+                       home_abbr, away_abbr, e, exc_info=True)
         return None
     if not pred:
         return None

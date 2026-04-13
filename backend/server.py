@@ -884,8 +884,8 @@ def api_settle_picks():
         try:
             from engine.pick_of_day import settle_potd
             settle_potd("mlb")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("MLB POTD settle failed: %s", e)
         return result
     except Exception as e:
         logger.error("Settle picks failed: %s", e, exc_info=True)
@@ -1793,8 +1793,8 @@ def api_nhl_settle_picks():
         try:
             from engine.pick_of_day import settle_potd
             settle_potd("nhl")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("NHL POTD settle failed: %s", e)
         return result
     except Exception as e:
         logger.error("NHL settle picks failed: %s", e, exc_info=True)

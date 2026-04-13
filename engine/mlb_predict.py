@@ -59,7 +59,22 @@ try:
 except Exception:
     _SITU_ON = True  # default ON since MLB RL works
 
-SEASON = datetime.now().year
+# Read per-factor toggles lazily from config each call so factor_backtest
+# can flip them via setattr(cfg, flag, False) without reimporting. Fetched
+# at function scope, not module scope.
+def _cfg_bool(name: str, default: bool = True) -> bool:
+    try:
+        from . import config as _cfg
+        return bool(getattr(_cfg, name, default))
+    except Exception:
+        return default
+
+
+# MLB season runs March-October. Before March, reference the previous
+# season's data so predictions/backtests don't silently return empty
+# results during the Nov-Feb off-season.
+_now = datetime.now()
+SEASON = _now.year if _now.month >= 3 else _now.year - 1
 
 # Calibrated weights — loaded from DB on first use, updated by calibration system
 _cached_weights = None
@@ -141,8 +156,9 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     # Uses individual batter wRC+/OPS when available
     home_lineup_str = _compute_lineup_strength(home_team_id, SEASON)
     away_lineup_str = _compute_lineup_strength(away_team_id, SEASON)
-    home_xr *= home_lineup_str
-    away_xr *= away_lineup_str
+    if _cfg_bool("MLB_ENABLE_LINEUP_STRENGTH"):
+        home_xr *= home_lineup_str
+        away_xr *= away_lineup_str
 
     # ── Step 3: Per-team adjustments ──
     # Each team has learned factors from their actual performance
@@ -188,9 +204,9 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     away_bp_fatigue = _bullpen_fatigue_penalty(away_bullpen, away_recent)
 
     # Fatigue in home bullpen means away scores more (and vice versa).
-    # Gated by situational-factors toggle — when OFF we still compute
-    # the dict for display/debugging but don't apply the multiplier.
-    if _SITU_ON:
+    # Gated by situational master toggle AND per-factor BULLPEN_FATIGUE
+    # flag so factor_backtest can ablate this specifically.
+    if _SITU_ON and _cfg_bool("MLB_ENABLE_BULLPEN_FATIGUE"):
         away_xr *= home_bp_fatigue
         home_xr *= away_bp_fatigue
 
@@ -281,8 +297,8 @@ def predict_matchup(home_team_id: int, away_team_id: int,
         away_pitcher_throws=away_throws,
     )
 
-    # Gated by situational-factors toggle.
-    if _SITU_ON:
+    # Gated by situational master + per-factor SITUATIONAL_AGG flag.
+    if _SITU_ON and _cfg_bool("MLB_ENABLE_SITUATIONAL_AGG"):
         home_xr *= sit["home_multiplier"]
         away_xr *= sit["away_multiplier"]
 
@@ -300,8 +316,8 @@ def predict_matchup(home_team_id: int, away_team_id: int,
             if ump_row and ump_row["umpire"]:
                 umpire_name = ump_row["umpire"]
                 umpire_factor = compute_umpire_adjustment(umpire_name)
-                # Gated by situational-factors toggle.
-                if _SITU_ON:
+                # Gated by situational master + per-factor UMPIRE_FACTOR flag.
+                if _SITU_ON and _cfg_bool("MLB_ENABLE_UMPIRE_FACTOR"):
                     home_xr *= umpire_factor
                     away_xr *= umpire_factor
         except Exception as e:
@@ -315,8 +331,8 @@ def predict_matchup(home_team_id: int, away_team_id: int,
             wx_data, is_domed = get_weather_for_venue(venue)
             if wx_data and not is_domed:
                 weather_adj = compute_weather_adjustment(wx_data, venue)
-                # Gated by situational-factors toggle.
-                if _SITU_ON:
+                # Gated by situational master + per-factor WEATHER_ADJ flag.
+                if _SITU_ON and _cfg_bool("MLB_ENABLE_WEATHER_ADJ"):
                     home_xr *= weather_adj
                     away_xr *= weather_adj
     except Exception as e:
@@ -329,8 +345,8 @@ def predict_matchup(home_team_id: int, away_team_id: int,
         from .travel import compute_travel_fatigue
         home_travel = compute_travel_fatigue(home_team_id, today, SEASON)
         away_travel = compute_travel_fatigue(away_team_id, today, SEASON)
-        # Gated by situational-factors toggle.
-        if _SITU_ON:
+        # Gated by situational master + per-factor TRAVEL_FATIGUE flag.
+        if _SITU_ON and _cfg_bool("MLB_ENABLE_TRAVEL_FATIGUE"):
             home_xr *= home_travel
             away_xr *= away_travel
     except Exception as e:
@@ -361,9 +377,10 @@ def predict_matchup(home_team_id: int, away_team_id: int,
         home_pit, away_pit, home_sp_pit, away_sp_pit,
         home_adj, away_adj, venue,
     )
-    # Gated by situational-factors toggle — matchup interaction is a
-    # compound-on-compound layer and a prime suspect for over-stacking.
-    if _SITU_ON:
+    # Gated by situational master + per-factor MATCHUP_INTERACTION.
+    # Matchup interaction is a compound-on-compound layer and a prime
+    # suspect for over-stacking.
+    if _SITU_ON and _cfg_bool("MLB_ENABLE_MATCHUP_INTERACTION"):
         home_xr *= matchup["home_interaction"]
         away_xr *= matchup["away_interaction"]
 
@@ -371,6 +388,9 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     h2h_history = get_h2h_history(home_team_id, away_team_id)
 
     # ── Step 8: Batter vs pitcher H2H ──
+    # Gated by MLB_ENABLE_H2H_VS_PITCHER — small samples per matchup
+    # often produce noisy adjustments. H2H data is always fetched for
+    # display but only applied to xR when the toggle is on.
     h2h_adj_home, h2h_adj_away = 0.0, 0.0
     h2h_data = {}
     if away_pitcher_id:
@@ -384,8 +404,9 @@ def predict_matchup(home_team_id: int, away_team_id: int,
         if away_h2h:
             h2h_data["away_vs_sp"] = _summarize_h2h(away_h2h)
 
-    home_xr += h2h_adj_home
-    away_xr += h2h_adj_away
+    if _cfg_bool("MLB_ENABLE_H2H_VS_PITCHER"):
+        home_xr += h2h_adj_home
+        away_xr += h2h_adj_away
 
     # ── Step 8: Recent form ──
     home_form = _form_adjustment(home_team_id)
