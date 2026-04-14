@@ -176,18 +176,24 @@ MLB_ENABLE_TEAM_CAL = False
 #       MLB_ENABLE_SITUATIONAL_FACTORS above)
 # [V] = validated in literature / external research
 # [?] = unvalidated - prime suspects for ablation
-MLB_ENABLE_BULLPEN_FATIGUE    = True   # [S][?] compounds with #7 bullpen
-MLB_ENABLE_SITUATIONAL_AGG    = True   # [S] weather+rest+platoon bundle (includes weather)
-MLB_ENABLE_UMPIRE_FACTOR      = True   # [S][?] applied symmetrically
-MLB_ENABLE_WEATHER_ADJ        = False  # [S][!] DISABLED: duplicates situational weather.
-                                        # Weather still applies via SITUATIONAL_AGG above.
-                                        # Re-enable only if ablating the aggregate.
-MLB_ENABLE_TRAVEL_FATIGUE     = True   # [S][?] duplicates situational rest
-MLB_ENABLE_MATCHUP_INTERACTION = True  # [S][?] compound-on-compound
-MLB_ENABLE_COORS_BOOST        = True   # [?] double-counts park at Coors
-MLB_ENABLE_PLATOON_DUP        = True   # [?] duplicates situational platoon
-MLB_ENABLE_H2H_VS_PITCHER     = True   # [?] small sample, high variance
-MLB_ENABLE_LINEUP_STRENGTH    = True   # [?] overlaps team offense baseline
+# Defaults updated 2026-04-14 from factor_backtest on 159 settled MLB
+# picks (Base WR 50.3%). Result: NO factor earned its slot. The four
+# active factors that moved probabilities all PUSHED PICKS TOWARD
+# LOSERS (Abl WR > Base WR by 0.4-0.7pp each). The remaining factors
+# moved no probability at all - pure wasted compute. The MLB model
+# wants the bare core: team offense, pitcher ERA/FIP, park factor,
+# SP/BP innings split, Poisson baseline. Format below: ablated
+# Avg Δp / Abl WR (vs Base 50.3%).
+MLB_ENABLE_BULLPEN_FATIGUE    = False  # 0.0% Δp / 50.3% (inert)
+MLB_ENABLE_SITUATIONAL_AGG    = False  # 1.0% Δp / 51.0% (HURTS: +0.7pp)
+MLB_ENABLE_UMPIRE_FACTOR      = False  # 0.0% Δp / 50.3% (inert)
+MLB_ENABLE_WEATHER_ADJ        = False  # already off (was double-counting)
+MLB_ENABLE_TRAVEL_FATIGUE     = False  # 0.5% Δp / 51.0% (HURTS: +0.7pp)
+MLB_ENABLE_MATCHUP_INTERACTION = False # 0.9% Δp / 50.7% (HURTS: +0.4pp)
+MLB_ENABLE_COORS_BOOST        = False  # 0.0% Δp / 50.0% (inert)
+MLB_ENABLE_PLATOON_DUP        = False  # 0.3% Δp / 50.3% (inert)
+MLB_ENABLE_H2H_VS_PITCHER     = False  # 0.0% Δp / 50.3% (inert)
+MLB_ENABLE_LINEUP_STRENGTH    = False  # 1.1% Δp / 51.0% (HURTS: +0.7pp)
 
 # ── MLB direction filters ──
 # Based on 143 tracked picks showing strong per-direction biases:
