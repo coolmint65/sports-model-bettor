@@ -128,20 +128,102 @@ def _fetch_settled_mlb_picks(limit: int | None = None) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def _mlb_prob_for_pick(pred: dict, bet_type: str, pick: str,
+                        home_abbr: str, away_abbr: str) -> float | None:
+    """Extract the model's probability that this MLB pick WINS.
+
+    Mirrors _nhl_prob_for_pick. Works directly off mlb_predict.predict_matchup
+    so we don't need stored odds to re-derive the prob.
+
+    Pick string formats (engine/picks.py):
+      ML       -> 'NYY' / 'BOS'
+      RL       -> 'NYY -1.5' / 'BOS +1.5'
+      O/U      -> 'Over 8.5' / 'Under 7.5'
+      1st INN  -> 'NRFI' / 'YRFI'
+    """
+    if not pred:
+        return None
+    bt = (bet_type or "").upper().strip()
+    pk = (pick or "").strip()
+    wp = pred.get("win_prob") or {}
+    rl = pred.get("run_line") or {}
+    ou = pred.get("over_under") or {}
+    fi = pred.get("first_inning") or {}
+
+    if bt == "ML":
+        if pk == home_abbr:
+            return wp.get("home")
+        if pk == away_abbr:
+            return wp.get("away")
+
+    elif bt == "RL":
+        # 'ABBR ±1.5' - matches engine/picks.py:212/231 format
+        tokens = pk.split()
+        if len(tokens) >= 2:
+            team = tokens[0]
+            spread = tokens[1]
+            is_home = (team == home_abbr)
+            is_minus = spread.startswith("-")
+            if is_home and is_minus:
+                return rl.get("home_minus_1_5")
+            if is_home and not is_minus:
+                return rl.get("home_plus_1_5")
+            if (not is_home) and is_minus:
+                return rl.get("away_minus_1_5")
+            if (not is_home) and not is_minus:
+                return rl.get("away_plus_1_5")
+
+    elif bt == "O/U":
+        tokens = pk.split()
+        if len(tokens) >= 2:
+            side = tokens[0].lower()  # 'over' / 'under'
+            try:
+                line = float(tokens[-1])
+            except ValueError:
+                line = None
+            if line is not None:
+                # over_under is keyed by the line as string; pick closest
+                best_k = None
+                best_d = 999.0
+                for k in ou:
+                    try:
+                        d = abs(float(k) - line)
+                        if d < best_d:
+                            best_d = d
+                            best_k = k
+                    except (ValueError, TypeError):
+                        continue
+                if best_k is not None:
+                    bucket = ou[best_k] or {}
+                    return bucket.get(side)
+
+    elif bt == "1st INN":
+        if pk.upper() == "NRFI":
+            return fi.get("nrfi")
+        if pk.upper() == "YRFI":
+            return fi.get("yrfi")
+
+    return None
+
+
 def _ablate_mlb(factor: str, picks: list[dict]) -> BacktestStats:
-    """Re-predict each pick with `factor` set to False, tally deltas."""
+    """Re-predict each pick with `factor` set to False, tally Δp shifts.
+
+    Method: call predict_matchup directly with factor ON then OFF, compare
+    the model's probability for the picked side. Mirrors _ablate_nhl.
+
+    The previous implementation used generate_picks with empty odds, which
+    returns nothing because the picks pipeline filters by edge against
+    market odds we don't have stored - leaving every metric at zero.
+    """
     from .mlb_predict import predict_matchup
-    from .picks import generate_picks, get_best_pick
 
     if not hasattr(cfg, factor):
         logger.warning("Unknown factor %s - skipping", factor)
         return BacktestStats()
 
     stats = BacktestStats()
-
-    # Save original state + flip to False for the ablation pass
     original = getattr(cfg, factor)
-    setattr(cfg, factor, False)
 
     try:
         for p in picks:
@@ -149,10 +231,6 @@ def _ablate_mlb(factor: str, picks: list[dict]) -> BacktestStats:
 
             home_tid = p.get("home_team_id")
             away_tid = p.get("away_team_id")
-            if not home_tid or not away_tid:
-                continue
-
-            # Baseline result is what's stored on the pick (case-insensitive)
             res = _canon_result(p["result"])
             baseline_won = (res == "win")
             baseline_profit = p.get("profit") or 0.0
@@ -162,20 +240,7 @@ def _ablate_mlb(factor: str, picks: list[dict]) -> BacktestStats:
                 stats.baseline_losses += 1
             stats.baseline_profit += baseline_profit
 
-            # Re-predict with factor OFF
-            try:
-                new_picks = generate_picks(
-                    home_team_id=home_tid,
-                    away_team_id=away_tid,
-                    home_pitcher_id=p.get("home_pitcher_id"),
-                    away_pitcher_id=p.get("away_pitcher_id"),
-                    venue=p.get("venue"),
-                    odds={"home_ml": None, "away_ml": None},  # minimal
-                )
-                new_best = get_best_pick(new_picks) if new_picks else None
-            except Exception as e:
-                logger.debug("Re-predict failed for pick %s: %s", p.get("id"), e)
-                # Treat as unchanged (baseline still wins/loses)
+            if not home_tid or not away_tid:
                 if baseline_won:
                     stats.ablated_wins += 1
                 elif res == "loss":
@@ -183,25 +248,72 @@ def _ablate_mlb(factor: str, picks: list[dict]) -> BacktestStats:
                 stats.ablated_profit += baseline_profit
                 continue
 
-            # Compare direction/type
-            if new_best and (new_best.get("pick") != p["pick"]
-                             or new_best.get("type") != p["bet_type"]):
-                stats.picks_flipped += 1
-                # Different pick - we can't know if it would've won without
-                # re-settling against the actual game result. For now treat
-                # flipped picks as "skipped" (no W/L contribution).
-                # Proper fix: reconstruct the game outcome for the new pick
-                # type+direction from games table. TODO in a follow-up.
+            split = _split_matchup(p.get("matchup") or "")
+            if not split:
+                if baseline_won:
+                    stats.ablated_wins += 1
+                elif res == "loss":
+                    stats.ablated_losses += 1
+                stats.ablated_profit += baseline_profit
+                continue
+            home_abbr, away_abbr = split
+
+            kwargs = dict(
+                home_team_id=home_tid,
+                away_team_id=away_tid,
+                home_pitcher_id=p.get("home_pitcher_id"),
+                away_pitcher_id=p.get("away_pitcher_id"),
+                venue=p.get("venue"),
+            )
+
+            # Baseline (factor ON)
+            setattr(cfg, factor, original)
+            try:
+                base_pred = predict_matchup(**kwargs)
+            except Exception as e:
+                logger.debug("base predict_matchup failed (%s, factor=%s): %s",
+                             p.get("id"), factor, e)
+                base_pred = None
+
+            # Ablated (factor OFF)
+            setattr(cfg, factor, False)
+            try:
+                abl_pred = predict_matchup(**kwargs)
+            except Exception as e:
+                logger.debug("ablated predict_matchup failed (%s, factor=%s): %s",
+                             p.get("id"), factor, e)
+                abl_pred = None
+
+            base_prob = _mlb_prob_for_pick(
+                base_pred, p["bet_type"], p["pick"], home_abbr, away_abbr)
+            abl_prob = _mlb_prob_for_pick(
+                abl_pred, p["bet_type"], p["pick"], home_abbr, away_abbr)
+
+            if base_prob is None or abl_prob is None:
+                if baseline_won:
+                    stats.ablated_wins += 1
+                elif res == "loss":
+                    stats.ablated_losses += 1
+                stats.ablated_profit += baseline_profit
                 continue
 
-            # Same pick - outcome would have been same
+            delta = abs(base_prob - abl_prob)
+            stats.total_prob_delta += delta
+            if delta > 0.02:
+                stats.picks_shifted += 1
+
+            flipped = (base_prob >= 0.5) != (abl_prob >= 0.5)
+            if flipped:
+                stats.picks_flipped += 1
+                # Counterfactual unknown; don't credit ablated W/L.
+                continue
+
             if baseline_won:
                 stats.ablated_wins += 1
             elif res == "loss":
                 stats.ablated_losses += 1
             stats.ablated_profit += baseline_profit
 
-            # Per-type tally
             bt = p["bet_type"]
             t = stats.by_type.setdefault(
                 bt, {"total": 0, "flipped": 0}
