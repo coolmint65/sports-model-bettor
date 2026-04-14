@@ -33,6 +33,11 @@ PER_EVENT_MARKETS = [
     "spreads_1st_5_innings",  # F5 RL
 ]
 
+# Bookmaker preference for per-event markets. DK posts these lines very late
+# (only hours before first pitch), while FanDuel / BetMGM / Bovada post them
+# early. Fall through the list so we always get a price when one is available.
+PER_EVENT_BOOK_PREFERENCE = ["draftkings", "fanduel", "betmgm", "bovada"]
+
 # Cache odds for 10 minutes to avoid burning API credits
 _odds_cache: dict | None = None
 _odds_cache_time: float = 0
@@ -205,15 +210,19 @@ def _fetch_per_event_markets(event_ids: dict[str, str], api_key: str) -> dict:
         matchup_key -> dict of per-event market fields (nrfi_*, f5_*)
     """
     markets_param = ",".join(PER_EVENT_MARKETS)
+    books_param = ",".join(PER_EVENT_BOOK_PREFERENCE)
     out: dict = {}
 
     for key, event_id in event_ids.items():
+        # Pull all preferred books in one call and let the parser pick the
+        # first that has data. DK posts F5/NRFI lines only in the hours
+        # before first pitch; FD/MGM/Bovada post them much earlier.
         url = (f"{API_BASE}/sports/{MLB_SPORT}/events/{event_id}/odds"
                f"?apiKey={api_key}"
                f"&regions=us"
                f"&markets={markets_param}"
                f"&oddsFormat=american"
-               f"&bookmakers={PREFERRED_BOOK}")
+               f"&bookmakers={books_param}")
         try:
             req = urllib.request.Request(url, headers={
                 "User-Agent": "MLBPredictionEngine/1.0",
@@ -234,15 +243,34 @@ def _fetch_per_event_markets(event_ids: dict[str, str], api_key: str) -> dict:
 
 
 def _parse_per_event(event: dict) -> dict:
-    """Parse per-event response into flat field dict for NRFI + F5 markets."""
+    """Parse per-event response into flat field dict for NRFI + F5 markets.
+
+    Iterates bookmakers in the configured preference order and uses the
+    first one that returns any of the requested markets. When DK hasn't
+    posted F5/NRFI lines yet, falls through to FanDuel / BetMGM / Bovada.
+    """
     home = event.get("home_team", "")
     away = event.get("away_team", "")
     bookmakers = event.get("bookmakers", [])
     if not bookmakers:
         return {}
-    book = bookmakers[0]
 
-    result: dict = {}
+    by_key = {b.get("key"): b for b in bookmakers}
+    book = None
+    for pref in PER_EVENT_BOOK_PREFERENCE:
+        if pref in by_key and by_key[pref].get("markets"):
+            book = by_key[pref]
+            break
+    if book is None:
+        # No preferred book -- fall back to the first bookmaker with markets
+        for b in bookmakers:
+            if b.get("markets"):
+                book = b
+                break
+    if book is None:
+        return {}
+
+    result: dict = {"per_event_provider": book.get("title") or book.get("key")}
 
     for market in book.get("markets", []):
         mkey = market.get("key", "")
