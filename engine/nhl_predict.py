@@ -20,6 +20,20 @@ LEAGUE = "NHL"
 HOME_EDGE = 0.15  # ~0.15 goal home-ice advantage
 MAX_GOALS = 10
 
+
+def _cfg_bool(name: str, default: bool = True) -> bool:
+    """Lazy per-factor toggle reader. Module-level so factor_backtest
+    can flip any NHL_ENABLE_* flag via setattr(cfg, name, False) at
+    runtime and the next predict_matchup call sees the new state.
+    Defined at module scope (not nested inside predict_matchup) to
+    avoid UnboundLocalError when toggle checks fire above the
+    helper's def site within the function body."""
+    try:
+        from . import config as _cfg
+        return bool(getattr(_cfg, name, default))
+    except Exception:
+        return default
+
 # ── NHL division & conference mappings (for Factor 7) ──
 _NHL_DIVISIONS = {
     # Atlantic
@@ -1324,15 +1338,10 @@ def predict_matchup(home_key: str, away_key: str,
     except Exception:
         _GRANULAR_ON = False
 
-    # Lazy per-factor toggle reader so engine.factor_backtest can flip
-    # any NHL_ENABLE_* flag via setattr(cfg, name, False) without us
-    # re-importing.
-    def _cfg_bool(name: str, default: bool = True) -> bool:
-        try:
-            from . import config as _cfg
-            return bool(getattr(_cfg, name, default))
-        except Exception:
-            return default
+    # _cfg_bool is defined at module scope below predict_matchup -
+    # do NOT re-define it here. Earlier versions had a nested def
+    # that produced UnboundLocalError when factor checks fired
+    # before this point in the function body.
 
     # --- Factors 1-6: External granular module ---
     try:
