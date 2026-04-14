@@ -440,6 +440,10 @@ def _ablate_nhl(factor: str, picks: list[dict]) -> BacktestStats:
     stats = BacktestStats()
     original = getattr(cfg, factor)
     abbr_key = _nhl_abbr_to_key()
+    # One-shot debug: show what's happening for the first pick so we
+    # can localize "all 0s" failures (missing keys, None preds, prob
+    # extraction misses) without instrumenting the entire loop.
+    debug_one = True
     try:
         for p in picks:
             stats.picks_total += 1
@@ -482,6 +486,27 @@ def _ablate_nhl(factor: str, picks: list[dict]) -> BacktestStats:
                 abl_pred = None
             abl_prob = _nhl_prob_for_pick(
                 abl_pred, p["bet_type"], p["pick"], home_abbr, away_abbr)
+
+            if debug_one:
+                debug_one = False
+                logger.warning(
+                    "[debug] first pick: matchup=%r bet_type=%r pick=%r | "
+                    "home_abbr=%r->key=%r away_abbr=%r->key=%r | "
+                    "base_pred=%s base_prob=%s abl_prob=%s",
+                    p.get("matchup"), p.get("bet_type"), p.get("pick"),
+                    home_abbr, home_key, away_abbr, away_key,
+                    "OK" if base_pred else "None",
+                    base_prob, abl_prob,
+                )
+                if base_pred:
+                    wp = base_pred.get("win_prob")
+                    pl = base_pred.get("puck_line")
+                    ou_keys = list((base_pred.get("over_under") or {}).keys())[:3]
+                    logger.warning(
+                        "[debug] base_pred keys: win_prob=%s puck_line=%s "
+                        "over_under sample keys=%s",
+                        wp, pl, ou_keys,
+                    )
 
             if base_prob is None or abl_prob is None:
                 # Can't compare - carry baseline outcome
