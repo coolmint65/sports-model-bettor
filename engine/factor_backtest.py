@@ -360,9 +360,79 @@ def _nhl_abbr_to_key() -> dict[str, str]:
     return m
 
 
+def _nhl_prob_for_pick(pred: dict, bet_type: str, pick: str,
+                        home_abbr: str, away_abbr: str) -> float | None:
+    """Extract the model's probability that this specific pick WINS.
+
+    Works off predict_matchup's return dict directly so we don't need
+    to pass odds through generate_nhl_picks (which would return nothing
+    without market lines).
+    """
+    if not pred:
+        return None
+    wp = pred.get("win_prob") or {}
+    pl = pred.get("puck_line") or {}
+    ou = pred.get("over_under") or {}
+    bt = (bet_type or "").upper()
+    pk = (pick or "").strip()
+
+    if bt == "ML":
+        if pk == home_abbr:
+            return wp.get("home")
+        if pk == away_abbr:
+            return wp.get("away")
+    elif bt == "PL":
+        # Pick strings look like "NYR -1.5" / "BOS +1.5"
+        if " -1.5" in pk or pk.endswith("-1.5"):
+            if pk.startswith(home_abbr):
+                return pl.get("home_minus_1_5")
+            if pk.startswith(away_abbr):
+                return pl.get("away_minus_1_5")
+        if " +1.5" in pk or pk.endswith("+1.5"):
+            if pk.startswith(home_abbr):
+                return pl.get("home_plus_1_5")
+            if pk.startswith(away_abbr):
+                return pl.get("away_plus_1_5")
+    elif bt == "O/U":
+        low = pk.lower()
+        # Pick strings look like "Over 6.5" / "Under 5.5"
+        tokens = pk.split()
+        if len(tokens) >= 2:
+            try:
+                line = float(tokens[-1])
+            except ValueError:
+                line = None
+            if line is not None:
+                # Find closest key in over_under dict
+                best_k = None
+                best_d = 999
+                for k in ou:
+                    try:
+                        d = abs(float(k) - line)
+                        if d < best_d:
+                            best_d = d
+                            best_k = k
+                    except (ValueError, TypeError):
+                        continue
+                if best_k:
+                    row = ou[best_k]
+                    if "over" in low:
+                        return row.get("over")
+                    if "under" in low:
+                        return row.get("under")
+    return None
+
+
 def _ablate_nhl(factor: str, picks: list[dict]) -> BacktestStats:
-    """Re-predict each NHL pick with `factor` set to False, tally deltas."""
-    from .nhl_picks import generate_nhl_picks
+    """Re-predict each NHL pick with `factor` set to False.
+
+    Method: call predict_matchup directly (not generate_nhl_picks, which
+    needs odds we don't always have stored). Compare the model's
+    probability for the picked side before vs after the ablation. If
+    the factor's removal pushes that probability below 0.5, the pick
+    would have flipped direction - we count that separately.
+    """
+    from .nhl_predict import predict_matchup
 
     if not hasattr(cfg, factor):
         logger.warning("Unknown factor %s - skipping", factor)
@@ -370,8 +440,6 @@ def _ablate_nhl(factor: str, picks: list[dict]) -> BacktestStats:
 
     stats = BacktestStats()
     original = getattr(cfg, factor)
-    setattr(cfg, factor, False)
-    # Build abbr->key map once so we don't warn on every pick.
     abbr_key = _nhl_abbr_to_key()
     try:
         for p in picks:
@@ -397,19 +465,37 @@ def _ablate_nhl(factor: str, picks: list[dict]) -> BacktestStats:
                     stats.ablated_losses += 1
                 continue
 
+            # First: baseline probability (factor ON)
+            setattr(cfg, factor, original)
             try:
-                new_picks = generate_nhl_picks(home_key, away_key, odds={})
-                new_best = new_picks[0] if new_picks else None
+                base_pred = predict_matchup(home_key, away_key)
+            except Exception:
+                base_pred = None
+            base_prob = _nhl_prob_for_pick(
+                base_pred, p["bet_type"], p["pick"], home_abbr, away_abbr)
+
+            # Then: ablated probability (factor OFF)
+            setattr(cfg, factor, False)
+            try:
+                abl_pred = predict_matchup(home_key, away_key)
             except Exception as e:
                 logger.debug("NHL re-predict failed for %s: %s", p.get("id"), e)
+                abl_pred = None
+            abl_prob = _nhl_prob_for_pick(
+                abl_pred, p["bet_type"], p["pick"], home_abbr, away_abbr)
+
+            if base_prob is None or abl_prob is None:
+                # Can't compare - carry baseline outcome
                 if baseline_won:
                     stats.ablated_wins += 1
                 elif res == "loss":
                     stats.ablated_losses += 1
                 continue
 
-            if new_best and (new_best.get("pick") != p["pick"]
-                             or new_best.get("type") != p["bet_type"]):
+            # Flip definition: factor ON said >=50% on this pick, factor
+            # OFF says <50%. Means this factor was propping up the pick
+            # above the decision boundary.
+            if base_prob >= 0.5 and abl_prob < 0.5:
                 stats.picks_flipped += 1
                 continue
 
