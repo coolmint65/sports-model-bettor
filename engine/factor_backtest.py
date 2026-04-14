@@ -77,6 +77,8 @@ FACTORS = {
 class BacktestStats:
     picks_total: int = 0
     picks_flipped: int = 0  # pick direction changed when factor disabled
+    picks_shifted: int = 0  # prob moved >2pp but didn't cross 0.5
+    total_prob_delta: float = 0.0  # sum of |base_prob - abl_prob|
     baseline_wins: int = 0
     baseline_losses: int = 0
     baseline_profit: float = 0.0
@@ -92,6 +94,10 @@ class BacktestStats:
     def ablated_wr(self) -> float:
         d = self.ablated_wins + self.ablated_losses
         return self.ablated_wins / d if d else 0.0
+
+    def avg_prob_delta(self) -> float:
+        denom = max(1, self.picks_total)
+        return self.total_prob_delta / denom
 
 
 # ── MLB backtest driver ────────────────────────────────────
@@ -213,55 +219,48 @@ def _ablate_mlb(factor: str, picks: list[dict]) -> BacktestStats:
 
 def _render_report(sport: str, results: dict[str, BacktestStats]) -> str:
     lines = []
-    lines.append(f"\n{'=' * 72}")
+    lines.append(f"\n{'=' * 78}")
     lines.append(f"  Factor Ablation Backtest - {sport.upper()}")
-    lines.append(f"{'=' * 72}")
+    lines.append(f"{'=' * 78}")
     lines.append(
-        f"\n  {'Factor':<34} {'Picks':>6} {'Flipped':>8} "
-        f"{'Base WR':>8} {'Base $':>10} {'Ablated WR*':>11}"
+        f"\n  {'Factor':<30} {'Picks':>6} {'Shifted':>8} {'Flipped':>8} "
+        f"{'Avg Δp':>8} {'Base WR':>8} {'Abl WR':>8}"
     )
-    lines.append("  " + "-" * 70)
+    lines.append("  " + "-" * 76)
 
-    for factor, stats in results.items():
+    # Sort by avg prob delta descending so the factors moving the most
+    # signal float to the top.
+    sorted_results = sorted(
+        results.items(), key=lambda kv: -kv[1].avg_prob_delta()
+    )
+    for factor, stats in sorted_results:
         short = factor.replace("MLB_ENABLE_", "").replace("NHL_ENABLE_", "") \
                       .replace("NBA_ENABLE_", "")
         lines.append(
-            f"  {short:<34} {stats.picks_total:>6d} "
-            f"{stats.picks_flipped:>8d} "
+            f"  {short:<30} {stats.picks_total:>6d} "
+            f"{stats.picks_shifted:>8d} {stats.picks_flipped:>8d} "
+            f"{stats.avg_prob_delta():>7.1%} "
             f"{stats.baseline_wr():>7.1%} "
-            f"${stats.baseline_profit:>+9.2f} "
-            f"{stats.ablated_wr():>10.1%}"
+            f"{stats.ablated_wr():>7.1%}"
         )
 
-    lines.append(
-        "\n  * Ablated WR only counts picks that did NOT change direction"
-        " when the"
-    )
-    lines.append(
-        "    factor was disabled (flipped picks are excluded - need game-"
-        "level"
-    )
-    lines.append(
-        "    outcome re-settling to score them, which is a TODO)."
-    )
     lines.append("")
-    lines.append(
-        "  Interpretation:"
-    )
-    lines.append(
-        "    - High 'Flipped' count = factor is load-bearing for pick"
-        " selection."
-    )
-    lines.append(
-        "    - Low 'Flipped' + same WR = factor isn't doing much; safe to"
-        " disable."
-    )
-    lines.append(
-        "    - Low 'Flipped' + worse ablated WR = factor is subtly helpful;"
-    )
-    lines.append(
-        "      keep on. (Rare - usually these factors are just noise.)"
-    )
+    lines.append("  Columns:")
+    lines.append("    Picks   : count of settled picks analyzed")
+    lines.append("    Shifted : picks where the factor moved win-prob > 2pp")
+    lines.append("    Flipped : picks where the factor changed the decision")
+    lines.append("              (probability crossed 0.5 boundary)")
+    lines.append("    Avg Δp  : avg absolute win-prob change across all picks")
+    lines.append("    Base WR : live tracker WR with factor ON")
+    lines.append("    Abl WR  : WR subset where ablation didn't flip the pick")
+    lines.append("")
+    lines.append("  Interpretation:")
+    lines.append("    - Factors with 'Avg Δp' near 0 aren't doing anything.")
+    lines.append("      Safe to disable; they're wasted compute.")
+    lines.append("    - High 'Avg Δp' + high 'Flipped' + Abl WR > Base WR ->")
+    lines.append("      factor is pushing picks toward losers. DISABLE.")
+    lines.append("    - High 'Avg Δp' + Abl WR < Base WR ->")
+    lines.append("      factor is actually helping. Keep on.")
     return "\n".join(lines)
 
 
@@ -492,9 +491,16 @@ def _ablate_nhl(factor: str, picks: list[dict]) -> BacktestStats:
                     stats.ablated_losses += 1
                 continue
 
-            # Flip definition: factor ON said >=50% on this pick, factor
-            # OFF says <50%. Means this factor was propping up the pick
-            # above the decision boundary.
+            # Track magnitude + direction of shift regardless of whether
+            # it crosses the 0.5 threshold. Many factors move probs by
+            # 1-5pp without causing a pick flip - that's still signal.
+            delta = abs(base_prob - abl_prob)
+            stats.total_prob_delta += delta
+            if delta > 0.02:
+                stats.picks_shifted += 1
+
+            # Flip: factor ON had this pick above 0.5, factor OFF has it
+            # below. Means the factor was the reason this pick was made.
             if base_prob >= 0.5 and abl_prob < 0.5:
                 stats.picks_flipped += 1
                 continue
