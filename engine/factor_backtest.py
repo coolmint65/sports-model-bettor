@@ -472,7 +472,11 @@ def _ablate_nhl(factor: str, picks: list[dict]) -> BacktestStats:
             setattr(cfg, factor, original)
             try:
                 base_pred = predict_matchup(home_key, away_key)
-            except Exception:
+            except Exception as e:
+                if debug_one:
+                    logger.warning("[debug] base predict_matchup raised "
+                                   "(%s/%s): %s: %s", home_key, away_key,
+                                   type(e).__name__, e, exc_info=True)
                 base_pred = None
             base_prob = _nhl_prob_for_pick(
                 base_pred, p["bet_type"], p["pick"], home_abbr, away_abbr)
@@ -482,7 +486,11 @@ def _ablate_nhl(factor: str, picks: list[dict]) -> BacktestStats:
             try:
                 abl_pred = predict_matchup(home_key, away_key)
             except Exception as e:
-                logger.debug("NHL re-predict failed for %s: %s", p.get("id"), e)
+                if debug_one:
+                    logger.warning("[debug] ablated predict_matchup raised "
+                                   "(%s/%s, factor=%s): %s: %s",
+                                   home_key, away_key, factor,
+                                   type(e).__name__, e, exc_info=True)
                 abl_pred = None
             abl_prob = _nhl_prob_for_pick(
                 abl_pred, p["bet_type"], p["pick"], home_abbr, away_abbr)
