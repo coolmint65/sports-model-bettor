@@ -1071,17 +1071,20 @@ def predict_matchup(home_key: str, away_key: str,
     if _is_playoff_window():
         pp_weight = 1.8  # Fewer PP opportunities in playoffs
 
-    # Home PP vs away PK. Gated behind NHL_ENABLE_PP_PK.
+    # PP/PK rates are read unconditionally so the factors block at the
+    # bottom of predict_matchup can always reference them. Only the xG
+    # application is gated behind NHL_ENABLE_PP_PK so the toggle can be
+    # ablated cleanly without raising UnboundLocalError downstream.
+    h_pp = hs.get("pp_pct", league_pp)
+    a_pk = as_.get("pk_pct", league_pk)
+    a_pp = as_.get("pp_pct", league_pp)
+    h_pk = hs.get("pk_pct", league_pk)
     if _cfg_bool("NHL_ENABLE_PP_PK"):
-        h_pp = hs.get("pp_pct", league_pp)
-        a_pk = as_.get("pk_pct", league_pk)
+        # Home PP vs away PK
         if h_pp is not None and h_pp > 0 and a_pk is not None and a_pk > 0:
             pp_edge = (h_pp - league_pp) + (league_pk - a_pk)
             home_xg += pp_edge * pp_weight
-
         # Away PP vs home PK
-        a_pp = as_.get("pp_pct", league_pp)
-        h_pk = hs.get("pk_pct", league_pk)
         if a_pp is not None and a_pp > 0 and h_pk is not None and h_pk > 0:
             pp_edge = (a_pp - league_pp) + (league_pk - h_pk)
             away_xg += pp_edge * pp_weight
@@ -1111,10 +1114,13 @@ def predict_matchup(home_key: str, away_key: str,
         home_xg *= max(0.90, min(1.10, h_shot_factor))
         away_xg *= max(0.90, min(1.10, a_shot_factor))
 
-    # ── Faceoff adjustment ── Gated behind NHL_ENABLE_FACEOFF.
+    # ── Faceoff adjustment ──
+    # Read unconditionally so the factors block downstream can always
+    # reference h_fo / a_fo. Only the xG application is gated behind
+    # NHL_ENABLE_FACEOFF.
+    h_fo = hs.get("faceoff_pct", 0.50)
+    a_fo = as_.get("faceoff_pct", 0.50)
     if _cfg_bool("NHL_ENABLE_FACEOFF"):
-        h_fo = hs.get("faceoff_pct", 0.50)
-        a_fo = as_.get("faceoff_pct", 0.50)
         fo_diff = (h_fo - a_fo)
         home_xg += fo_diff * 0.3  # Small but real possession edge
         away_xg -= fo_diff * 0.3
