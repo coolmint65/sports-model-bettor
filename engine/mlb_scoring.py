@@ -227,9 +227,45 @@ def _compute_f5(home_xr: float, away_xr: float,
     f5_matrix = _build_score_matrix(f5_home, f5_away, max_runs=10)
     f5_p_home, f5_p_away = _win_probs_from_matrix(f5_matrix)
 
+    # Over/Under distribution across F5 lines typically offered by DK (3.5-7.5)
+    ou_lines: dict = {}
+    base = round(f5_total * 2) / 2
+    for line in [base - 1, base - 0.5, base, base + 0.5, base + 1]:
+        if not (3.0 <= line <= 8.0):
+            continue
+        p_over = 0.0
+        for h in range(len(f5_matrix)):
+            for a in range(len(f5_matrix[0])):
+                if (h + a) > line:
+                    p_over += f5_matrix[h][a]
+        ou_lines[str(line)] = {
+            "over": round(p_over, 4),
+            "under": round(1 - p_over, 4),
+        }
+
+    # F5 run line is typically ±0.5 (home wins by 1+ = home -0.5 covers)
+    p_home_minus = 0.0  # home covers -0.5 ⇒ wins outright
+    p_home_plus = 0.0   # home covers +0.5 ⇒ wins or ties
+    for h in range(len(f5_matrix)):
+        for a in range(len(f5_matrix[0])):
+            if h > a:
+                p_home_minus += f5_matrix[h][a]
+                p_home_plus += f5_matrix[h][a]
+            elif h == a:
+                p_home_plus += f5_matrix[h][a]
+
+    run_line = {
+        "home_minus_0_5": round(p_home_minus, 4),
+        "home_plus_0_5": round(p_home_plus, 4),
+        "away_minus_0_5": round(1 - p_home_plus, 4),
+        "away_plus_0_5": round(1 - p_home_minus, 4),
+    }
+
     return {
         "home": f5_home, "away": f5_away, "total": f5_total,
         "win_prob": {"home": round(f5_p_home, 4), "away": round(f5_p_away, 4)},
+        "over_under": ou_lines,
+        "run_line": run_line,
     }
 
 

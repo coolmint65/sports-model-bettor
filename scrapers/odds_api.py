@@ -1,9 +1,9 @@
 """
 The Odds API integration for MLB odds.
 
-Free tier: 500 requests/month (plenty for ~15 games/day).
-Returns ML, O/U with juice, and RL ±1.5 with juice from
-DraftKings, FanDuel, BetMGM, and other books.
+Paid tier ($30/mo = 20K credits) supports per-event markets.
+Returns full-game ML/O/U/RL plus NRFI and F5 markets from DraftKings
+(first inning total, F5 ML, F5 O/U, F5 RL).
 
 Sign up at: https://the-odds-api.com/
 Set your API key in data/odds_api_key.txt or as environment variable ODDS_API_KEY.
@@ -25,6 +25,14 @@ KEY_FILE = Path(__file__).resolve().parent.parent / "data" / "odds_api_key.txt"
 MLB_SPORT = "baseball_mlb"
 PREFERRED_BOOK = "draftkings"
 
+# Per-event inning-specific markets (paid tier only; 1 credit per market per event)
+PER_EVENT_MARKETS = [
+    "totals_1st_1_innings",   # NRFI / YRFI
+    "h2h_1st_5_innings",      # F5 ML
+    "totals_1st_5_innings",   # F5 O/U
+    "spreads_1st_5_innings",  # F5 RL
+]
+
 # Cache odds for 10 minutes to avoid burning API credits
 _odds_cache: dict | None = None
 _odds_cache_time: float = 0
@@ -45,9 +53,13 @@ def _get_api_key() -> str | None:
     return None
 
 
-def fetch_odds() -> dict:
+def fetch_odds(include_per_event: bool = True) -> dict:
     """
     Fetch MLB odds from The Odds API.
+
+    Args:
+        include_per_event: If True (default), also fetch NRFI / F5 markets
+            via per-event endpoint. Paid tier required.
 
     Returns dict keyed by normalized matchup:
     {
@@ -56,6 +68,12 @@ def fetch_odds() -> dict:
             "over_under": 10.5, "over_odds": -103, "under_odds": -117,
             "home_spread_odds": -130, "away_spread_odds": 110,
             "spread": -1.5,
+            # Per-event markets (when include_per_event=True):
+            "nrfi_line": 0.5, "nrfi_over_odds": 115, "nrfi_under_odds": -140,
+            "f5_home_ml": -135, "f5_away_ml": 115,
+            "f5_total": 5.0, "f5_over_odds": -110, "f5_under_odds": -110,
+            "f5_spread": -0.5, "f5_home_spread_odds": -115,
+            "f5_away_spread_odds": -105,
             "provider": "DraftKings"
         }
     }
@@ -72,7 +90,7 @@ def fetch_odds() -> dict:
         logger.info("No Odds API key found. Set ODDS_API_KEY env var or create data/odds_api_key.txt")
         return {}
 
-    # Fetch all three markets in one call
+    # Fetch all three full-game markets in one call
     url = (f"{API_BASE}/sports/{MLB_SPORT}/odds/"
            f"?apiKey={api_key}"
            f"&regions=us"
@@ -97,10 +115,13 @@ def fetch_odds() -> dict:
         return {}
 
     odds_map = {}
+    # matchup_key -> odds-api event_id (used by per-event fetch)
+    event_ids: dict[str, str] = {}
 
     for game in data:
         home = game.get("home_team", "")
         away = game.get("away_team", "")
+        event_id = game.get("id", "")
 
         h_abbr = _team_abbr(home)
         a_abbr = _team_abbr(away)
@@ -154,14 +175,126 @@ def fetch_odds() -> dict:
 
         if result.get("home_ml"):
             odds_map[key] = result
+            if event_id:
+                event_ids[key] = event_id
+
+    # Per-event enrichment (NRFI + F5 markets)
+    if include_per_event and event_ids:
+        per_event = _fetch_per_event_markets(event_ids, api_key)
+        for key, markets in per_event.items():
+            if key in odds_map:
+                odds_map[key].update(markets)
 
     logger.info("Odds API: fetched odds for %d games", len(odds_map))
 
-    # Cache the results
+    # Cache the merged results
     _odds_cache = odds_map
     _odds_cache_time = time.time()
 
     return odds_map
+
+
+def _fetch_per_event_markets(event_ids: dict[str, str], api_key: str) -> dict:
+    """Fetch NRFI + F5 markets for each event. Paid tier required.
+
+    Args:
+        event_ids: matchup_key -> odds-api event_id
+        api_key: Odds API key
+
+    Returns:
+        matchup_key -> dict of per-event market fields (nrfi_*, f5_*)
+    """
+    markets_param = ",".join(PER_EVENT_MARKETS)
+    out: dict = {}
+
+    for key, event_id in event_ids.items():
+        url = (f"{API_BASE}/sports/{MLB_SPORT}/events/{event_id}/odds"
+               f"?apiKey={api_key}"
+               f"&regions=us"
+               f"&markets={markets_param}"
+               f"&oddsFormat=american"
+               f"&bookmakers={PREFERRED_BOOK}")
+        try:
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "MLBPredictionEngine/1.0",
+            })
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                event = json.loads(resp.read().decode())
+        except Exception as e:
+            logger.warning("Odds API per-event failed for %s (%s): %s", key, event_id, e)
+            continue
+
+        parsed = _parse_per_event(event)
+        if parsed:
+            out[key] = parsed
+
+    if out:
+        logger.info("Odds API: fetched per-event markets for %d games", len(out))
+    return out
+
+
+def _parse_per_event(event: dict) -> dict:
+    """Parse per-event response into flat field dict for NRFI + F5 markets."""
+    home = event.get("home_team", "")
+    away = event.get("away_team", "")
+    bookmakers = event.get("bookmakers", [])
+    if not bookmakers:
+        return {}
+    book = bookmakers[0]
+
+    result: dict = {}
+
+    for market in book.get("markets", []):
+        mkey = market.get("key", "")
+        outcomes = market.get("outcomes", [])
+
+        if mkey == "totals_1st_1_innings":  # NRFI/YRFI
+            for o in outcomes:
+                name = o.get("name", "").lower()
+                price = o.get("price")
+                point = o.get("point")
+                if "over" in name:
+                    result["nrfi_over_odds"] = price
+                    result["nrfi_line"] = point
+                elif "under" in name:
+                    result["nrfi_under_odds"] = price
+
+        elif mkey == "h2h_1st_5_innings":  # F5 ML
+            for o in outcomes:
+                name = o.get("name", "")
+                price = o.get("price")
+                if name == home:
+                    result["f5_home_ml"] = price
+                elif name == away:
+                    result["f5_away_ml"] = price
+
+        elif mkey == "totals_1st_5_innings":  # F5 O/U
+            for o in outcomes:
+                name = o.get("name", "").lower()
+                price = o.get("price")
+                point = o.get("point")
+                if "over" in name:
+                    result["f5_over_odds"] = price
+                    result["f5_total"] = point
+                elif "under" in name:
+                    result["f5_under_odds"] = price
+
+        elif mkey == "spreads_1st_5_innings":  # F5 RL
+            for o in outcomes:
+                name = o.get("name", "")
+                price = o.get("price")
+                point = o.get("point")
+                if name == home:
+                    result["f5_home_spread_odds"] = price
+                    result["f5_home_spread_point"] = point
+                elif name == away:
+                    result["f5_away_spread_odds"] = price
+                    result["f5_away_spread_point"] = point
+            # Convenience: canonical F5 spread is the home-side magnitude
+            if "f5_home_spread_point" in result:
+                result["f5_spread"] = result["f5_home_spread_point"]
+
+    return result
 
 
 # Team name to abbreviation mapping

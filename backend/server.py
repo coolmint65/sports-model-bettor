@@ -257,6 +257,15 @@ def _get_scoreboard(date: str = "") -> list[dict]:
     except Exception as e:
         logger.debug("MLB line movement tracking failed: %s", e)
 
+    # Persist today's odds (including NRFI + F5 markets) to the odds
+    # table so backtests can evaluate against real historical prices
+    # instead of synthetic -120/-110 defaults.
+    try:
+        from engine.odds_history import store_mlb_odds
+        store_mlb_odds([g for g in games if g.get("odds")])
+    except Exception as e:
+        logger.debug("MLB odds persistence failed: %s", e)
+
     _scoreboard_cache[cache_key] = (now, games)
     # Evict oldest entries if cache grows too large
     if len(_scoreboard_cache) > MAX_CACHE_ENTRIES:

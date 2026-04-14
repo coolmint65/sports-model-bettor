@@ -12,7 +12,12 @@ import logging
 from datetime import datetime
 
 from .mlb_predict import predict_matchup, MLB_AVG_RPG
-from .config import MLB_JUICE_WALL as JUICE_WALL, ENABLE_MLB_NRFI, MLB_BET_RELIABILITY
+from .config import (
+    MLB_JUICE_WALL as JUICE_WALL,
+    ENABLE_MLB_NRFI,
+    ENABLE_MLB_F5,
+    MLB_BET_RELIABILITY,
+)
 from .db import get_conn
 
 logger = logging.getLogger(__name__)
@@ -157,13 +162,19 @@ def generate_picks(home_team_id: int, away_team_id: int,
         nrfi = fi.get("nrfi", 0.5)
         nrfi_pick = "NRFI" if nrfi > 0.5 else "YRFI"
         nrfi_prob = nrfi if nrfi > 0.5 else fi.get("yrfi", 0.5)
-        nrfi_edge = (nrfi_prob - 0.545) * 100  # -120 implied
+        # NRFI = under 0.5 first-inning runs; YRFI = over.
+        # Use real DK odds when available, fall back to -120 synthetic.
+        if nrfi_pick == "NRFI":
+            nrfi_odds = odds.get("nrfi_under_odds") or -120
+        else:
+            nrfi_odds = odds.get("nrfi_over_odds") or -120
+        nrfi_edge = (nrfi_prob - _implied(nrfi_odds)) * 100
         allow = (nrfi_pick == "NRFI" and MLB_ALLOW_NRFI) or \
                 (nrfi_pick == "YRFI" and MLB_ALLOW_YRFI)
         if nrfi_edge > 1 and allow:
             picks.append({
                 "type": "1st INN", "pick": nrfi_pick, "prob": round(nrfi_prob, 4),
-                "edge": round(nrfi_edge, 1), "odds": -120,
+                "edge": round(nrfi_edge, 1), "odds": nrfi_odds,
             })
 
     # ── Run Line ──
@@ -234,6 +245,14 @@ def generate_picks(home_team_id: int, away_team_id: int,
                 "odds": away_rl_odds,
             })
 
+    # ── F5 (First 5 Innings) ──
+    # Disabled by default (ENABLE_MLB_F5 in config.py). Requires real DK
+    # F5 odds from the per-event Odds API markets -- synthetic pricing is
+    # not supported for F5 (implied probabilities vary too much by SP).
+    if ENABLE_MLB_F5:
+        f5 = pred.get("f5") or {}
+        _append_f5_picks(picks, f5, odds, h_abbr, a_abbr)
+
     # Adjusted EV: edge * reliability weight
     for p in picks:
         reliability = MLB_BET_RELIABILITY.get(p["type"], 0.5)
@@ -262,6 +281,120 @@ def get_best_pick(picks: list[dict]) -> dict | None:
     """Return the single best pick (highest edge) from a picks list."""
     playable = [p for p in picks if p.get("confidence") != "skip"]
     return playable[0] if playable else None
+
+
+def _append_f5_picks(picks: list, f5: dict, odds: dict,
+                      h_abbr: str, a_abbr: str) -> None:
+    """Generate F5 ML / O/U / RL picks from model + real DK F5 odds.
+
+    Skips any sub-market when real DK odds are missing -- F5 pricing
+    varies too much with starting pitchers to use a synthetic baseline.
+    """
+    from .config import (
+        MLB_ALLOW_F5_ML,
+        MLB_ALLOW_F5_OU_OVER, MLB_ALLOW_F5_OU_UNDER,
+        MLB_ALLOW_F5_RL_FAVORITE, MLB_ALLOW_F5_RL_UNDERDOG,
+    )
+
+    if not f5:
+        return
+
+    wp = f5.get("win_prob") or {}
+    f5_home_wp = wp.get("home", 0.5)
+    f5_away_wp = wp.get("away", 0.5)
+
+    # ── F5 Moneyline ──
+    if MLB_ALLOW_F5_ML:
+        f5_home_ml = odds.get("f5_home_ml")
+        f5_away_ml = odds.get("f5_away_ml")
+        if f5_home_ml and f5_home_ml >= JUICE_WALL:
+            edge = (f5_home_wp - _implied(f5_home_ml)) * 100
+            if edge > 0:
+                picks.append({
+                    "type": "F5 ML", "pick": h_abbr, "prob": round(f5_home_wp, 4),
+                    "edge": round(edge, 1), "odds": f5_home_ml,
+                })
+        if f5_away_ml and f5_away_ml >= JUICE_WALL:
+            edge = (f5_away_wp - _implied(f5_away_ml)) * 100
+            if edge > 0:
+                picks.append({
+                    "type": "F5 ML", "pick": a_abbr, "prob": round(f5_away_wp, 4),
+                    "edge": round(edge, 1), "odds": f5_away_ml,
+                })
+
+    # ── F5 Over/Under ──
+    f5_total_line = odds.get("f5_total")
+    if f5_total_line and f5.get("over_under"):
+        ou_data = _find_ou(f5["over_under"], f5_total_line)
+        if ou_data:
+            f5_over = ou_data.get("over", 0.5)
+            f5_under = ou_data.get("under", 0.5)
+            pick_over = f5_over > f5_under
+            ou_allowed = (pick_over and MLB_ALLOW_F5_OU_OVER) or \
+                         ((not pick_over) and MLB_ALLOW_F5_OU_UNDER)
+            ou_prob = f5_over if pick_over else f5_under
+            ou_odds = odds.get("f5_over_odds") if pick_over else odds.get("f5_under_odds")
+            if ou_odds and ou_odds >= JUICE_WALL and ou_allowed:
+                edge = (ou_prob - _implied(ou_odds)) * 100
+                if edge > 0:
+                    label = f"F5 {'Over' if pick_over else 'Under'} {f5_total_line}"
+                    picks.append({
+                        "type": "F5 O/U", "pick": label,
+                        "prob": round(ou_prob, 4),
+                        "edge": round(edge, 1), "odds": ou_odds,
+                    })
+
+    # ── F5 Run Line (typically ±0.5) ──
+    rl = f5.get("run_line") or {}
+    home_f5_rl_odds = odds.get("f5_home_spread_odds")
+    home_f5_rl_point = odds.get("f5_home_spread_point")
+    away_f5_rl_odds = odds.get("f5_away_spread_odds")
+    away_f5_rl_point = odds.get("f5_away_spread_point")
+
+    def _f5_rl_prob(point: float, side: str) -> float | None:
+        """Return model prob for covering `point` on `side` (home/away)."""
+        if point is None:
+            return None
+        # DK typically offers ±0.5; support ±1.5 too by falling back to the
+        # closest magnitude we modeled.
+        if abs(point) == 0.5:
+            if side == "home":
+                return rl.get("home_minus_0_5") if point < 0 else rl.get("home_plus_0_5")
+            else:
+                return rl.get("away_minus_0_5") if point < 0 else rl.get("away_plus_0_5")
+        return None
+
+    if home_f5_rl_odds and home_f5_rl_odds >= JUICE_WALL and home_f5_rl_point is not None:
+        is_dog = home_f5_rl_point > 0
+        allowed = (is_dog and MLB_ALLOW_F5_RL_UNDERDOG) or \
+                  ((not is_dog) and MLB_ALLOW_F5_RL_FAVORITE)
+        prob = _f5_rl_prob(home_f5_rl_point, "home")
+        if prob is not None and allowed:
+            edge = (prob - _implied(home_f5_rl_odds)) * 100
+            if edge > 0:
+                sign = "+" if home_f5_rl_point > 0 else ""
+                picks.append({
+                    "type": "F5 RL",
+                    "pick": f"{h_abbr} {sign}{home_f5_rl_point}",
+                    "prob": round(prob, 4),
+                    "edge": round(edge, 1), "odds": home_f5_rl_odds,
+                })
+
+    if away_f5_rl_odds and away_f5_rl_odds >= JUICE_WALL and away_f5_rl_point is not None:
+        is_dog = away_f5_rl_point > 0
+        allowed = (is_dog and MLB_ALLOW_F5_RL_UNDERDOG) or \
+                  ((not is_dog) and MLB_ALLOW_F5_RL_FAVORITE)
+        prob = _f5_rl_prob(away_f5_rl_point, "away")
+        if prob is not None and allowed:
+            edge = (prob - _implied(away_f5_rl_odds)) * 100
+            if edge > 0:
+                sign = "+" if away_f5_rl_point > 0 else ""
+                picks.append({
+                    "type": "F5 RL",
+                    "pick": f"{a_abbr} {sign}{away_f5_rl_point}",
+                    "prob": round(prob, 4),
+                    "edge": round(edge, 1), "odds": away_f5_rl_odds,
+                })
 
 
 def _find_ou(ou_lines: dict, vegas_total: float) -> dict | None:

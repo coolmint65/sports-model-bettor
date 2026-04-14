@@ -300,6 +300,23 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         total       REAL,       -- O/U line
         over_odds   INTEGER,
         under_odds  INTEGER,
+        -- First inning (NRFI / YRFI)
+        nrfi_line        REAL,     -- typically 0.5
+        nrfi_over_odds   INTEGER,  -- YRFI side
+        nrfi_under_odds  INTEGER,  -- NRFI side
+        -- F5 moneyline
+        f5_home_ml       INTEGER,
+        f5_away_ml       INTEGER,
+        -- F5 total
+        f5_total         REAL,
+        f5_over_odds     INTEGER,
+        f5_under_odds    INTEGER,
+        -- F5 run line
+        f5_spread                REAL,
+        f5_home_spread_point     REAL,
+        f5_home_spread_odds      INTEGER,
+        f5_away_spread_point     REAL,
+        f5_away_spread_odds      INTEGER,
         updated_at  TEXT DEFAULT (datetime('now')),
         UNIQUE(game_id, source)
     );
@@ -362,6 +379,20 @@ def _migrate(conn: sqlite3.Connection) -> None:
         ("games", "away_linescore", "TEXT"),
         ("games", "umpire", "TEXT"),
         ("picks", "closing_odds", "INTEGER"),
+        # NRFI / F5 markets (paid Odds API tier)
+        ("odds", "nrfi_line", "REAL"),
+        ("odds", "nrfi_over_odds", "INTEGER"),
+        ("odds", "nrfi_under_odds", "INTEGER"),
+        ("odds", "f5_home_ml", "INTEGER"),
+        ("odds", "f5_away_ml", "INTEGER"),
+        ("odds", "f5_total", "REAL"),
+        ("odds", "f5_over_odds", "INTEGER"),
+        ("odds", "f5_under_odds", "INTEGER"),
+        ("odds", "f5_spread", "REAL"),
+        ("odds", "f5_home_spread_point", "REAL"),
+        ("odds", "f5_home_spread_odds", "INTEGER"),
+        ("odds", "f5_away_spread_point", "REAL"),
+        ("odds", "f5_away_spread_odds", "INTEGER"),
     ]
 
     # Check existing columns first to avoid ALTER TABLE errors

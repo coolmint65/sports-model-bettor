@@ -280,14 +280,23 @@ def run_backtest(season: int | None = None, days: int | None = None,
 
                     nrfi_pick = model_nrfi > 0.50
                     nrfi_prob = model_nrfi if nrfi_pick else (1 - model_nrfi)
-                    nrfi_implied = abs(NRFI_ODDS) / (abs(NRFI_ODDS) + 100)
+
+                    # Prefer stored historical DK NRFI odds; fall back to
+                    # synthetic -120 when nothing is stored for this game.
+                    if real_odds and nrfi_pick and real_odds.get("nrfi_under_odds") is not None:
+                        nrfi_odds = real_odds["nrfi_under_odds"]
+                    elif real_odds and not nrfi_pick and real_odds.get("nrfi_over_odds") is not None:
+                        nrfi_odds = real_odds["nrfi_over_odds"]
+                    else:
+                        nrfi_odds = NRFI_ODDS
+                    nrfi_implied = _implied(nrfi_odds)
                     nrfi_edge = (nrfi_prob - nrfi_implied) * 100
 
                     if nrfi_edge >= min_edge:
                         nrfi_correct = (nrfi_pick and actual_nrfi) or \
                                        (not nrfi_pick and not actual_nrfi)
-                        _record_bet(results["nrfi"], nrfi_correct, NRFI_ODDS)
-                        game_bets.append((nrfi_edge, nrfi_correct, NRFI_ODDS))
+                        _record_bet(results["nrfi"], nrfi_correct, nrfi_odds)
+                        game_bets.append((nrfi_edge, nrfi_correct, nrfi_odds))
             except (json.JSONDecodeError, IndexError):
                 pass
 
@@ -494,7 +503,7 @@ def print_backtest(results: dict) -> None:
           f"{synth_pct}% synthetic fallback ({synth_n} games)")
     if synth_n > 0 and real_n == 0:
         print(f"  NOTE: No historical odds found in DB. All evaluations use synthetic pricing.")
-        print(f"        NRFI odds always use synthetic (-120) as no NRFI odds are stored.")
+        print(f"        NRFI/F5 odds fall back to synthetic when not stored in odds table.")
     print()
 
     for name, label in [("moneyline", "Moneyline"), ("over_under", "Over/Under"),

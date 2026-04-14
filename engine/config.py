@@ -221,6 +221,10 @@ MLB_BET_RELIABILITY = {
     "ML": 0.70,     # 48% hit rate, slightly losing - watch
     "O/U": 0.50,    # 33.3% hit rate - small sample, demote
     "1st INN": 0.30, # 46.2% hit rate, -$400 - keep but heavily demoted
+    # F5 markets - no live history yet, start conservative
+    "F5 ML":  0.60,
+    "F5 O/U": 0.50,
+    "F5 RL":  0.70,
 }
 
 NHL_BET_RELIABILITY = {
@@ -243,3 +247,13 @@ ENABLE_MLB_NRFI = True
 ENABLE_NHL_ML = True
 ENABLE_NHL_OU = True
 ENABLE_NHL_PL = True
+
+# F5 (First 5 innings) picks. Disabled by default -- no live track record yet.
+# When enabled, generates picks for F5 ML, F5 O/U, and F5 RL using real DK
+# odds from the per-event Odds API markets.
+ENABLE_MLB_F5 = False
+MLB_ALLOW_F5_ML = True
+MLB_ALLOW_F5_OU_OVER = True
+MLB_ALLOW_F5_OU_UNDER = True
+MLB_ALLOW_F5_RL_FAVORITE = True
+MLB_ALLOW_F5_RL_UNDERDOG = True
