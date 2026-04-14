@@ -93,26 +93,38 @@ function BettingPicks({ data, odds }) {
     : null
   const ouPick = ouResult?.pick
   const ouConf = ouResult?.prob
+  const ouOdds = ouResult?.pick?.startsWith('Over')
+    ? odds?.over_odds
+    : odds?.under_odds
 
   const nrfi = d.first_inning?.nrfi
   const nrfiPick = nrfi != null ? (nrfi > 0.50 ? 'NRFI' : 'YRFI') : null
   const nrfiProb = nrfi != null ? (nrfi > 0.50 ? nrfi : d.first_inning.yrfi) : null
+  // New: real DK NRFI/YRFI odds from Odds API per-event markets
+  const nrfiOdds = nrfiPick === 'NRFI'
+    ? odds?.nrfi_under_odds
+    : odds?.nrfi_over_odds
 
   const rl = d.run_line
+  const rlHomePick = rl && rl.home_minus_1_5 > 0.50
   const rlPick = rl
-    ? (rl.home_minus_1_5 > 0.50
+    ? (rlHomePick
         ? `${home.abbreviation} -1.5`
         : `${away.abbreviation} +1.5`)
     : null
   const rlProb = rl
     ? Math.max(rl.home_minus_1_5, rl.away_plus_1_5)
     : null
+  const rlOdds = rlHomePick ? odds?.home_spread_odds : odds?.away_spread_odds
 
   const f5 = d.f5
+  const f5HomePick = f5 && f5.win_prob.home > f5.win_prob.away
   const f5Pick = f5
-    ? (f5.win_prob.home > f5.win_prob.away ? home.abbreviation : away.abbreviation)
+    ? (f5HomePick ? home.abbreviation : away.abbreviation)
     : null
   const f5Prob = f5 ? Math.max(f5.win_prob.home, f5.win_prob.away) : null
+  // New: real DK F5 ML odds from Odds API per-event markets
+  const f5Odds = f5HomePick ? odds?.f5_home_ml : odds?.f5_away_ml
 
   return (
     <div className="picks-card">
@@ -131,6 +143,7 @@ function BettingPicks({ data, odds }) {
           label={`O/U ${vegasTotal}`}
           pick={ouPick}
           prob={ouConf}
+          odds={ouOdds}
           pct={pct}
         />
       )}
@@ -140,6 +153,7 @@ function BettingPicks({ data, odds }) {
           label="1st Inning"
           pick={nrfiPick}
           prob={nrfiProb}
+          odds={nrfiOdds}
           pct={pct}
         />
       )}
@@ -149,6 +163,7 @@ function BettingPicks({ data, odds }) {
           label="Run Line"
           pick={rlPick}
           prob={rlProb}
+          odds={rlOdds}
           pct={pct}
         />
       )}
@@ -158,6 +173,7 @@ function BettingPicks({ data, odds }) {
           label="F5 Winner"
           pick={f5Pick}
           prob={f5Prob}
+          odds={f5Odds}
           pct={pct}
         />
       )}
