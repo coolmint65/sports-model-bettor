@@ -253,6 +253,161 @@ def _render_report(sport: str, results: dict[str, BacktestStats]) -> str:
 
 # ── CLI ────────────────────────────────────────────────────
 
+def _fetch_settled_picks(sport: str, limit: int | None = None) -> list[dict]:
+    """Generic settled-pick loader for NHL / NBA. MLB has its own with
+    extra columns (pitcher IDs + venue) via _fetch_settled_mlb_picks."""
+    import sqlite3
+    from pathlib import Path
+    paths = {
+        "nhl": (Path(__file__).resolve().parent.parent / "data" / "nhl.db",
+                "nhl_picks"),
+        "nba": (Path(__file__).resolve().parent.parent / "data" / "nba.db",
+                "nba_picks"),
+    }
+    if sport not in paths:
+        return []
+    db_path, table = paths[sport]
+    if not db_path.exists():
+        return []
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        # Defensive: sport DB may exist but table hasn't been
+        # initialized yet (first-time install, broken migration, etc.)
+        tbl_exists = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
+            (table,)
+        ).fetchone()
+        if not tbl_exists:
+            return []
+        q = (f"SELECT id, game_id, bet_type, pick, model_prob, edge, odds, "
+             f"result, matchup FROM {table} WHERE result IS NOT NULL "
+             f"ORDER BY id DESC")
+        if limit:
+            q += f" LIMIT {limit}"
+        return [dict(r) for r in conn.execute(q).fetchall()]
+    except sqlite3.Error as e:
+        logger.warning("Failed to load settled %s picks: %s", sport, e)
+        return []
+    finally:
+        conn.close()
+
+
+def _split_matchup(matchup: str) -> tuple[str, str] | None:
+    """Parse 'AWAY @ HOME' string. Returns (home, away) or None."""
+    if not matchup:
+        return None
+    parts = matchup.split(" @ ")
+    if len(parts) != 2:
+        return None
+    return parts[1].strip(), parts[0].strip()
+
+
+def _ablate_nhl(factor: str, picks: list[dict]) -> BacktestStats:
+    """Re-predict each NHL pick with `factor` set to False, tally deltas."""
+    from .nhl_picks import generate_nhl_picks
+
+    if not hasattr(cfg, factor):
+        logger.warning("Unknown factor %s - skipping", factor)
+        return BacktestStats()
+
+    stats = BacktestStats()
+    original = getattr(cfg, factor)
+    setattr(cfg, factor, False)
+    try:
+        for p in picks:
+            stats.picks_total += 1
+            baseline_won = (p["result"] == "WIN")
+            baseline_profit = 0.0  # profit column may not exist
+            if baseline_won:
+                stats.baseline_wins += 1
+            elif p["result"] == "LOSS":
+                stats.baseline_losses += 1
+
+            split = _split_matchup(p.get("matchup"))
+            if not split:
+                continue
+            home, away = split
+
+            try:
+                new_picks = generate_nhl_picks(home, away, odds={})
+                new_best = new_picks[0] if new_picks else None
+            except Exception as e:
+                logger.debug("NHL re-predict failed for %s: %s", p.get("id"), e)
+                if baseline_won:
+                    stats.ablated_wins += 1
+                elif p["result"] == "LOSS":
+                    stats.ablated_losses += 1
+                continue
+
+            if new_best and (new_best.get("pick") != p["pick"]
+                             or new_best.get("type") != p["bet_type"]):
+                stats.picks_flipped += 1
+                continue
+
+            if baseline_won:
+                stats.ablated_wins += 1
+            elif p["result"] == "LOSS":
+                stats.ablated_losses += 1
+
+            bt = p["bet_type"]
+            t = stats.by_type.setdefault(bt, {"total": 0, "flipped": 0})
+            t["total"] += 1
+    finally:
+        setattr(cfg, factor, original)
+    return stats
+
+
+def _ablate_nba(factor: str, picks: list[dict]) -> BacktestStats:
+    """Re-predict each NBA Q1 pick with `factor` set to False."""
+    from .nba_picks import generate_q1_picks
+
+    if not hasattr(cfg, factor):
+        logger.warning("Unknown factor %s - skipping", factor)
+        return BacktestStats()
+
+    stats = BacktestStats()
+    original = getattr(cfg, factor)
+    setattr(cfg, factor, False)
+    try:
+        for p in picks:
+            stats.picks_total += 1
+            baseline_won = (p["result"] == "WIN")
+            if baseline_won:
+                stats.baseline_wins += 1
+            elif p["result"] == "LOSS":
+                stats.baseline_losses += 1
+
+            split = _split_matchup(p.get("matchup"))
+            if not split:
+                continue
+            home, away = split
+
+            try:
+                new_picks = generate_q1_picks(home, away, odds={})
+                new_best = new_picks[0] if new_picks else None
+            except Exception as e:
+                logger.debug("NBA re-predict failed for %s: %s", p.get("id"), e)
+                if baseline_won:
+                    stats.ablated_wins += 1
+                elif p["result"] == "LOSS":
+                    stats.ablated_losses += 1
+                continue
+
+            if new_best and (new_best.get("pick") != p["pick"]
+                             or new_best.get("type") != p["bet_type"]):
+                stats.picks_flipped += 1
+                continue
+
+            if baseline_won:
+                stats.ablated_wins += 1
+            elif p["result"] == "LOSS":
+                stats.ablated_losses += 1
+    finally:
+        setattr(cfg, factor, original)
+    return stats
+
+
 def run(sport: str, specific_factor: str | None = None,
         limit: int | None = None) -> None:
     logging.basicConfig(
@@ -260,28 +415,40 @@ def run(sport: str, specific_factor: str | None = None,
         format="%(levelname)-7s %(message)s",
     )
 
+    # Select loader + ablator per sport. MLB has its own loader with
+    # pitcher-metadata columns; NHL/NBA use the generic one.
     if sport == "mlb":
         picks = _fetch_settled_mlb_picks(limit=limit)
-        if not picks:
-            print(f"No settled {sport.upper()} picks found. Run the tracker for a while first.")
-            return
-        print(f"Loaded {len(picks)} settled MLB picks.")
-
-        factors = [specific_factor] if specific_factor else FACTORS["mlb"]
-        results = {}
-        for f in factors:
-            if f and hasattr(cfg, f):
-                print(f"  Ablating {f}...")
-                results[f] = _ablate_mlb(f, picks)
-
-        print(_render_report("mlb", results))
+        ablator = _ablate_mlb
+    elif sport == "nhl":
+        picks = _fetch_settled_picks("nhl", limit=limit)
+        ablator = _ablate_nhl
+    elif sport == "nba":
+        picks = _fetch_settled_picks("nba", limit=limit)
+        ablator = _ablate_nba
     else:
-        # NHL/NBA can reuse the same pattern once their pick tables have
-        # enough settled rows and matching predict signatures. For now
-        # just print a placeholder.
-        print(f"Factor backtest for {sport.upper()} not yet implemented. "
-              f"MLB implementation can be ported once the sport has "
-              f"substantive settled-pick data.")
+        print(f"Unknown sport: {sport}")
+        return
+
+    if not picks:
+        print(f"No settled {sport.upper()} picks found. Run the tracker and "
+              f"let games settle first.")
+        return
+    print(f"Loaded {len(picks)} settled {sport.upper()} picks.")
+
+    factors = [specific_factor] if specific_factor else FACTORS.get(sport, [])
+    if not factors:
+        print(f"No factors registered for {sport.upper()}. "
+              f"Add entries to FACTORS['{sport}'] in engine/factor_backtest.py.")
+        return
+
+    results = {}
+    for f in factors:
+        if f and hasattr(cfg, f):
+            print(f"  Ablating {f}...")
+            results[f] = ablator(f, picks)
+
+    print(_render_report(sport, results))
 
 
 if __name__ == "__main__":
