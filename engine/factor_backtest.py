@@ -105,11 +105,18 @@ class BacktestStats:
 def _fetch_settled_mlb_picks(limit: int | None = None) -> list[dict]:
     """Pull settled MLB picks with enough metadata to re-predict."""
     conn = get_mlb_conn()
+    # Schema reference (engine/db.py:75): the games table uses
+    # home_pitcher_id / away_pitcher_id - NOT home_starter_id. The old
+    # query referenced the wrong columns, hit "no such column", and
+    # silently fell back to a picks-only query that lacks team_ids.
+    # The ablator then bailed on every row, producing the all-zero
+    # table. Use the correct column names and DROP the silent fallback
+    # so future schema drift surfaces loudly.
     q = """
         SELECT p.id, p.game_id, p.bet_type, p.pick, p.model_prob,
                p.edge, p.odds, p.result, p.profit, p.matchup,
                g.home_team_id, g.away_team_id,
-               g.home_starter_id, g.away_starter_id, g.venue, g.date
+               g.home_pitcher_id, g.away_pitcher_id, g.venue, g.date
         FROM picks p
         LEFT JOIN games g ON p.game_id = g.mlb_game_id
         WHERE p.result IS NOT NULL
@@ -117,15 +124,7 @@ def _fetch_settled_mlb_picks(limit: int | None = None) -> list[dict]:
     """
     if limit:
         q += f" LIMIT {limit}"
-    try:
-        rows = conn.execute(q).fetchall()
-    except Exception as e:
-        logger.warning("Failed to fetch settled MLB picks with metadata: %s", e)
-        # Fall back to picks-only query
-        q2 = "SELECT * FROM picks WHERE result IS NOT NULL"
-        if limit:
-            q2 += f" LIMIT {limit}"
-        rows = conn.execute(q2).fetchall()
+    rows = conn.execute(q).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -168,8 +167,8 @@ def _ablate_mlb(factor: str, picks: list[dict]) -> BacktestStats:
                 new_picks = generate_picks(
                     home_team_id=home_tid,
                     away_team_id=away_tid,
-                    home_pitcher_id=p.get("home_starter_id"),
-                    away_pitcher_id=p.get("away_starter_id"),
+                    home_pitcher_id=p.get("home_pitcher_id"),
+                    away_pitcher_id=p.get("away_pitcher_id"),
                     venue=p.get("venue"),
                     odds={"home_ml": None, "away_ml": None},  # minimal
                 )

@@ -42,14 +42,15 @@ def _today_starters(home_team_id: int, away_team_id: int) -> tuple[int | None, i
     today = datetime.now().strftime("%Y-%m-%d")
     conn = get_conn()
     try:
+        # Schema uses pitcher_id, not starter_id (engine/db.py:84-85).
         row = conn.execute("""
-            SELECT home_starter_id, away_starter_id
+            SELECT home_pitcher_id, away_pitcher_id
             FROM games
             WHERE home_team_id = ? AND away_team_id = ? AND date >= ?
             ORDER BY date ASC LIMIT 1
         """, (home_team_id, away_team_id, today)).fetchone()
         if row:
-            return row["home_starter_id"], row["away_starter_id"]
+            return row["home_pitcher_id"], row["away_pitcher_id"]
     except Exception:
         pass
     return None, None
