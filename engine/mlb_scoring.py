@@ -9,7 +9,14 @@ import math
 
 # ── League-wide baselines ────────────────────────────────────
 
-MLB_AVG_RPG = 4.5          # Average runs per game per team
+MLB_AVG_RPG = 4.85         # Average runs per game per team.
+                            # Bumped 4.5 -> 4.85 after engine.train
+                            # surfaced O/U Unders at 3-8 (27.3% WR) -
+                            # model was projecting totals too low for
+                            # the current scoring environment. The
+                            # config.py mirror of this constant is
+                            # unused; real predictions import from here
+                            # via mlb_factors.
 MLB_AVG_ERA = 4.10
 MLB_AVG_OPS = .720
 MLB_AVG_FIP = 4.10

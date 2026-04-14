@@ -35,7 +35,11 @@ EDGE_LEAN = 4.0
 EDGE_SKIP = 4.0  # raised from 1.5 based on tracker data
 
 # ── MLB config ──
-MLB_AVG_RPG = 4.6  # League average runs per game
+# NOTE: predict_matchup imports MLB_AVG_RPG from engine.mlb_scoring,
+# not from here. This constant is unused in the live model. Keep in
+# sync with mlb_scoring.MLB_AVG_RPG for readers; don't rely on it.
+MLB_AVG_RPG = 4.85  # League average runs per game (mirror of
+                    # mlb_scoring.MLB_AVG_RPG)
 MLB_WIN_PROB_FLOOR = 0.30
 MLB_WIN_PROB_CAP = 0.58  # tightened from 0.65. engine.train on 159 picks
                           # showed 70%+ bucket (N=95) hit 52.6% actual vs 79.8%
@@ -96,6 +100,30 @@ NHL_WIN_PROB_CAP = 0.55
 # on globally again. If you want to experiment with a factor, flip it
 # on one at a time in an ablation test.
 NHL_ENABLE_GRANULAR_FACTORS = False
+
+# ── NHL per-factor ablation toggles ──
+# Individual gates for each NHL xG multiplier so factor_backtest can
+# flip each one and measure WR/ROI impact. Added 2026-04 after
+# engine.train on 47 settled picks showed 66% flip-WR (every
+# probability bucket 15-40pp below stated - systemic overconfidence).
+# NHL_WIN_PROB_CAP above is the blunt mitigation; these toggles are
+# the scalpel for finding WHICH factor is broken.
+#
+# Defaults preserve current production behavior (all True). Flip
+# individually via factor_backtest only after proving lift.
+NHL_ENABLE_GOALIE_SV         = True   # season SV% factor on xG
+NHL_ENABLE_GOALIE_STARTER    = True   # confirmed-starter SV% override
+NHL_ENABLE_GOALIE_BACKUP_PEN = True   # extra penalty when SV% << team avg
+NHL_ENABLE_PP_PK             = True   # power play / penalty kill edges
+NHL_ENABLE_SHOT_DIFF         = True   # shots-for/against volume
+NHL_ENABLE_FACEOFF           = True   # faceoff % possession edge
+NHL_ENABLE_FORM              = True   # _form_factor recent form
+NHL_ENABLE_HOME_AWAY_SPLIT   = True   # _split_adj home/road splits
+NHL_ENABLE_STANDINGS_FORM    = True   # L10 from standings
+NHL_ENABLE_VENUE_SPLIT       = True   # live home_pct vs road_pct
+NHL_ENABLE_MOTIVATION        = True   # late-season motivation gap
+NHL_ENABLE_QUALITY_DIFF      = True   # points% quality multiplier
+NHL_ENABLE_H2H               = True   # head-to-head history
 
 # ── MLB situational factors toggle ──
 # MLB predict stacks 16+ multiplicative adjustments on expected runs.

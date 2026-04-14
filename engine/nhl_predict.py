@@ -1057,29 +1057,31 @@ def predict_matchup(home_key: str, away_key: str,
     if _is_playoff_window():
         pp_weight = 1.8  # Fewer PP opportunities in playoffs
 
-    # Home PP vs away PK
-    h_pp = hs.get("pp_pct", league_pp)
-    a_pk = as_.get("pk_pct", league_pk)
-    if h_pp is not None and h_pp > 0 and a_pk is not None and a_pk > 0:
-        pp_edge = (h_pp - league_pp) + (league_pk - a_pk)
-        home_xg += pp_edge * pp_weight
+    # Home PP vs away PK. Gated behind NHL_ENABLE_PP_PK.
+    if _cfg_bool("NHL_ENABLE_PP_PK"):
+        h_pp = hs.get("pp_pct", league_pp)
+        a_pk = as_.get("pk_pct", league_pk)
+        if h_pp is not None and h_pp > 0 and a_pk is not None and a_pk > 0:
+            pp_edge = (h_pp - league_pp) + (league_pk - a_pk)
+            home_xg += pp_edge * pp_weight
 
-    # Away PP vs home PK
-    a_pp = as_.get("pp_pct", league_pp)
-    h_pk = hs.get("pk_pct", league_pk)
-    if a_pp is not None and a_pp > 0 and h_pk is not None and h_pk > 0:
-        pp_edge = (a_pp - league_pp) + (league_pk - h_pk)
-        away_xg += pp_edge * pp_weight
+        # Away PP vs home PK
+        a_pp = as_.get("pp_pct", league_pp)
+        h_pk = hs.get("pk_pct", league_pk)
+        if a_pp is not None and a_pp > 0 and h_pk is not None and h_pk > 0:
+            pp_edge = (a_pp - league_pp) + (league_pk - h_pk)
+            away_xg += pp_edge * pp_weight
 
-    # ── Goaltending / save% adjustment ──
+    # ── Goaltending / save% adjustment ── Gated behind NHL_ENABLE_GOALIE_SV.
     league_sv = la.get("save_pct", 0.905)
     h_sv = hs.get("save_pct", league_sv)
     a_sv = as_.get("save_pct", league_sv)
-    # Better save% suppresses opponent's expected goals
-    if h_sv is not None and h_sv > 0 and league_sv > 0:
-        away_xg *= max(0.85, min(1.15, league_sv / h_sv))
-    if a_sv is not None and a_sv > 0 and league_sv > 0:
-        home_xg *= max(0.85, min(1.15, league_sv / a_sv))
+    if _cfg_bool("NHL_ENABLE_GOALIE_SV"):
+        # Better save% suppresses opponent's expected goals
+        if h_sv is not None and h_sv > 0 and league_sv > 0:
+            away_xg *= max(0.85, min(1.15, league_sv / h_sv))
+        if a_sv is not None and a_sv > 0 and league_sv > 0:
+            home_xg *= max(0.85, min(1.15, league_sv / a_sv))
 
     # ── Shot volume adjustment ──
     league_shots = la.get("shots_per_game", 30.0)
@@ -1088,39 +1090,43 @@ def predict_matchup(home_key: str, away_key: str,
     h_shots_against = hs.get("shots_against_per_game", league_shots)
     a_shots_against = as_.get("shots_against_per_game", league_shots)
 
-    if league_shots > 0:
+    if league_shots > 0 and _cfg_bool("NHL_ENABLE_SHOT_DIFF"):
         # More shots = more goals; combine with opponent allowing shots
         h_shot_factor = ((h_shots / league_shots) + (a_shots_against / league_shots)) / 2
         a_shot_factor = ((a_shots / league_shots) + (h_shots_against / league_shots)) / 2
         home_xg *= max(0.90, min(1.10, h_shot_factor))
         away_xg *= max(0.90, min(1.10, a_shot_factor))
 
-    # ── Faceoff adjustment ──
-    h_fo = hs.get("faceoff_pct", 0.50)
-    a_fo = as_.get("faceoff_pct", 0.50)
-    fo_diff = (h_fo - a_fo)
-    home_xg += fo_diff * 0.3  # Small but real possession edge
-    away_xg -= fo_diff * 0.3
+    # ── Faceoff adjustment ── Gated behind NHL_ENABLE_FACEOFF.
+    if _cfg_bool("NHL_ENABLE_FACEOFF"):
+        h_fo = hs.get("faceoff_pct", 0.50)
+        a_fo = as_.get("faceoff_pct", 0.50)
+        fo_diff = (h_fo - a_fo)
+        home_xg += fo_diff * 0.3  # Small but real possession edge
+        away_xg -= fo_diff * 0.3
 
-    # ── Form + splits ──
+    # ── Form + splits ── Each gated individually.
     home_form = _form_factor(home)
     away_form = _form_factor(away)
     if _is_late_season() or _is_playoff_window():
         # Weight recent form more heavily in high-stakes games
         home_form *= (0.8 + home_motivation * 0.6)  # 0.8-1.4x based on motivation
         away_form *= (0.8 + away_motivation * 0.6)
-    home_xg *= (1 + home_form)
-    away_xg *= (1 + away_form)
-    home_xg *= _split_adj(home, is_home=True)
-    away_xg *= _split_adj(away, is_home=False)
+    if _cfg_bool("NHL_ENABLE_FORM"):
+        home_xg *= (1 + home_form)
+        away_xg *= (1 + away_form)
+    if _cfg_bool("NHL_ENABLE_HOME_AWAY_SPLIT"):
+        home_xg *= _split_adj(home, is_home=True)
+        away_xg *= _split_adj(away, is_home=False)
 
     # ── Recent form (L10) adjustment - stacks with _form_factor ──
-    home_xg *= (1 + _compute_recent_form_from_standings(home))
-    away_xg *= (1 + _compute_recent_form_from_standings(away))
+    if _cfg_bool("NHL_ENABLE_STANDINGS_FORM"):
+        home_xg *= (1 + _compute_recent_form_from_standings(home))
+        away_xg *= (1 + _compute_recent_form_from_standings(away))
 
-    # ── Motivation adjustment ──
+    # ── Motivation adjustment ── Gated behind NHL_ENABLE_MOTIVATION.
     # A team fighting for their playoff life vs an eliminated team
-    if _is_late_season() or _is_playoff_window():
+    if _cfg_bool("NHL_ENABLE_MOTIVATION") and (_is_late_season() or _is_playoff_window()):
         motivation_gap = home_motivation - away_motivation
         if abs(motivation_gap) > 0.2:
             home_xg *= (1 + motivation_gap * 0.05)  # max ±5% from motivation
@@ -1134,22 +1140,26 @@ def predict_matchup(home_key: str, away_key: str,
     away_pct = _record_to_points_pct(away_record)
     quality_diff = home_pct - away_pct
     # Strengthened from 0.15 (±3%) to 0.50 (±12%). A .650 vs .400 team
-    # should shift xG ~12%, not 3%. Previous setting was too weak to
-    # correct for teams with genuine quality gaps.
-    home_xg *= (1 + quality_diff * 0.50)
-    away_xg *= (1 - quality_diff * 0.50)
+    # should shift xG ~12%, not 3%. Gated behind NHL_ENABLE_QUALITY_DIFF
+    # so factor_backtest can measure whether the 0.50 coefficient is
+    # still correct or has overcorrected.
+    if _cfg_bool("NHL_ENABLE_QUALITY_DIFF"):
+        home_xg *= (1 + quality_diff * 0.50)
+        away_xg *= (1 - quality_diff * 0.50)
 
-    # ── Goalie matchup adjustment ──
+    # ── Goalie matchup adjustment ── Gated behind NHL_ENABLE_GOALIE_STARTER.
     # If we have specific goalie data from the DB, use it to override
-    # the generic team save% adjustment
+    # the generic team save% adjustment.
     goalie_factor = {"home": None, "away": None}
+    _apply_goalie_starter = _cfg_bool("NHL_ENABLE_GOALIE_STARTER")
     if home_goalie_info:
         g_sv = home_goalie_info.get("save_pct") or 0
         g_gaa = home_goalie_info.get("gaa") or 0
         if g_sv > 0 and league_sv > 0:
             # Better goalie suppresses opponent scoring
             goalie_adj = league_sv / g_sv
-            away_xg *= max(0.82, min(1.18, goalie_adj))
+            if _apply_goalie_starter:
+                away_xg *= max(0.82, min(1.18, goalie_adj))
             goalie_factor["home"] = {
                 "name": home_goalie_info.get("name", ""),
                 "save_pct": round(g_sv, 3),
@@ -1161,49 +1171,51 @@ def predict_matchup(home_key: str, away_key: str,
         g_gaa = away_goalie_info.get("gaa") or 0
         if g_sv > 0 and league_sv > 0:
             goalie_adj = league_sv / g_sv
-            home_xg *= max(0.82, min(1.18, goalie_adj))
+            if _apply_goalie_starter:
+                home_xg *= max(0.82, min(1.18, goalie_adj))
             goalie_factor["away"] = {
                 "name": away_goalie_info.get("name", ""),
                 "save_pct": round(g_sv, 3),
                 "gaa": round(g_gaa, 2),
             }
 
-    # ── Extra penalty for backup goalies ──
-    # If the starting goalie's SV% is significantly worse than the team's
-    # season average SV%, the opponent gets a scoring boost.
-    league_sv_ref = la.get("save_pct", 0.905)
-    if goalie_factor.get("home") and goalie_factor["home"].get("save_pct"):
-        sv_gap = goalie_factor["home"]["save_pct"] - hs.get("save_pct", league_sv_ref)
-        if sv_gap < -0.010:  # Backup is >1% worse than team avg
-            away_xg *= (1 + abs(sv_gap) * 3)  # Amplify the difference
-    if goalie_factor.get("away") and goalie_factor["away"].get("save_pct"):
-        sv_gap = goalie_factor["away"]["save_pct"] - as_.get("save_pct", league_sv_ref)
-        if sv_gap < -0.010:
-            home_xg *= (1 + abs(sv_gap) * 3)
+    # ── Extra penalty for backup goalies ── Gated behind
+    # NHL_ENABLE_GOALIE_BACKUP_PEN. Compounds on top of _GOALIE_STARTER
+    # when both are on (a prime suspect for overcounting).
+    if _cfg_bool("NHL_ENABLE_GOALIE_BACKUP_PEN"):
+        league_sv_ref = la.get("save_pct", 0.905)
+        if goalie_factor.get("home") and goalie_factor["home"].get("save_pct"):
+            sv_gap = goalie_factor["home"]["save_pct"] - hs.get("save_pct", league_sv_ref)
+            if sv_gap < -0.010:  # Backup is >1% worse than team avg
+                away_xg *= (1 + abs(sv_gap) * 3)  # Amplify the difference
+        if goalie_factor.get("away") and goalie_factor["away"].get("save_pct"):
+            sv_gap = goalie_factor["away"]["save_pct"] - as_.get("save_pct", league_sv_ref)
+            if sv_gap < -0.010:
+                home_xg *= (1 + abs(sv_gap) * 3)
 
-    # ── Live home/away venue split adjustment ──
-    # Use the live standings home/away points% to adjust xG for venue.
-    # A team much better at home vs road gets a boost when playing at home.
-    if h_abbr_for_stats in live_stats:
-        h_live = live_stats[h_abbr_for_stats]
-        h_home_pct = h_live.get("home_pts_pct")
-        h_road_pct = h_live.get("road_pts_pct")
-        if h_home_pct and h_road_pct and h_home_pct != h_road_pct:
-            # Positive = better at home, negative = better on road
-            venue_diff = h_home_pct - h_road_pct
-            # Cap at +/- 5% xG adjustment
-            home_xg *= max(0.95, min(1.05, 1 + venue_diff * 0.15))
+    # ── Live home/away venue split adjustment ── Gated behind
+    # NHL_ENABLE_VENUE_SPLIT. Duplicates NHL_ENABLE_HOME_AWAY_SPLIT
+    # somewhat (both look at home vs road performance).
+    if _cfg_bool("NHL_ENABLE_VENUE_SPLIT"):
+        if h_abbr_for_stats in live_stats:
+            h_live = live_stats[h_abbr_for_stats]
+            h_home_pct = h_live.get("home_pts_pct")
+            h_road_pct = h_live.get("road_pts_pct")
+            if h_home_pct and h_road_pct and h_home_pct != h_road_pct:
+                venue_diff = h_home_pct - h_road_pct
+                home_xg *= max(0.95, min(1.05, 1 + venue_diff * 0.15))
 
-    if a_abbr_for_stats in live_stats:
-        a_live = live_stats[a_abbr_for_stats]
-        a_home_pct = a_live.get("home_pts_pct")
-        a_road_pct = a_live.get("road_pts_pct")
-        if a_home_pct and a_road_pct and a_home_pct != a_road_pct:
-            venue_diff = a_road_pct - a_home_pct
-            # Positive = better on road, negative = worse on road
-            away_xg *= max(0.95, min(1.05, 1 + venue_diff * 0.15))
+        if a_abbr_for_stats in live_stats:
+            a_live = live_stats[a_abbr_for_stats]
+            a_home_pct = a_live.get("home_pts_pct")
+            a_road_pct = a_live.get("road_pts_pct")
+            if a_home_pct and a_road_pct and a_home_pct != a_road_pct:
+                venue_diff = a_road_pct - a_home_pct
+                away_xg *= max(0.95, min(1.05, 1 + venue_diff * 0.15))
 
-    # ── H2H adjustment ──
+    # ── H2H adjustment ── Gated behind NHL_ENABLE_H2H. Small sample
+    # so prime candidate for disabling when WR isn't showing edge.
+    _apply_h2h = _cfg_bool("NHL_ENABLE_H2H")
     h2h_adj = 0
     if h2h_data and isinstance(h2h_data, list) and len(h2h_data) >= 3:
         # h2h_data is a list of game dicts - compute summary
@@ -1214,15 +1226,17 @@ def predict_matchup(home_key: str, away_key: str,
                         or (g.get("away_abbr") == h_abbr_val and (g.get("away_score", 0) or 0) > (g.get("home_score", 0) or 0)))
         h2h_wr = team1_wins / h2h_games
         h2h_adj = (h2h_wr - 0.5) * 0.08
-        home_xg *= (1 + h2h_adj)
-        away_xg *= (1 - h2h_adj)
+        if _apply_h2h:
+            home_xg *= (1 + h2h_adj)
+            away_xg *= (1 - h2h_adj)
         # Convert to summary dict for display
         h2h_data = {"games": h2h_games, "team1_wins": team1_wins, "team2_wins": h2h_games - team1_wins}
     elif h2h_data and isinstance(h2h_data, dict) and h2h_data.get("games", 0) >= 3:
         h2h_wr = h2h_data.get("team1_wins", 0) / h2h_data["games"]
         h2h_adj = (h2h_wr - 0.5) * 0.08
-        home_xg *= (1 + h2h_adj)
-        away_xg *= (1 - h2h_adj)
+        if _apply_h2h:
+            home_xg *= (1 + h2h_adj)
+            away_xg *= (1 - h2h_adj)
 
     # ── Calibrated total adjustment ──
     try:
@@ -1309,6 +1323,16 @@ def predict_matchup(home_key: str, away_key: str,
         from .config import NHL_ENABLE_GRANULAR_FACTORS as _GRANULAR_ON
     except Exception:
         _GRANULAR_ON = False
+
+    # Lazy per-factor toggle reader so engine.factor_backtest can flip
+    # any NHL_ENABLE_* flag via setattr(cfg, name, False) without us
+    # re-importing.
+    def _cfg_bool(name: str, default: bool = True) -> bool:
+        try:
+            from . import config as _cfg
+            return bool(getattr(_cfg, name, default))
+        except Exception:
+            return default
 
     # --- Factors 1-6: External granular module ---
     try:
