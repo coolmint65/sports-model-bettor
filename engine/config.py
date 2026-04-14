@@ -111,19 +111,26 @@ NHL_ENABLE_GRANULAR_FACTORS = False
 #
 # Defaults preserve current production behavior (all True). Flip
 # individually via factor_backtest only after proving lift.
-NHL_ENABLE_GOALIE_SV         = True   # season SV% factor on xG
-NHL_ENABLE_GOALIE_STARTER    = True   # confirmed-starter SV% override
-NHL_ENABLE_GOALIE_BACKUP_PEN = True   # extra penalty when SV% << team avg
-NHL_ENABLE_PP_PK             = True   # power play / penalty kill edges
-NHL_ENABLE_SHOT_DIFF         = True   # shots-for/against volume
-NHL_ENABLE_FACEOFF           = True   # faceoff % possession edge
-NHL_ENABLE_FORM              = True   # _form_factor recent form
-NHL_ENABLE_HOME_AWAY_SPLIT   = True   # _split_adj home/road splits
-NHL_ENABLE_STANDINGS_FORM    = True   # L10 from standings
-NHL_ENABLE_VENUE_SPLIT       = True   # live home_pct vs road_pct
-NHL_ENABLE_MOTIVATION        = True   # late-season motivation gap
-NHL_ENABLE_QUALITY_DIFF      = True   # points% quality multiplier
-NHL_ENABLE_H2H               = True   # head-to-head history
+# Defaults updated 2026-04-14 from factor_backtest on 47 settled NHL
+# picks (Base WR 34.0%). Only factors that demonstrably lifted WR on
+# the held-out sample are kept ON. See ABLATION column for evidence:
+#   Avg Δp = avg absolute prob shift, Abl WR = WR with factor OFF.
+#   Abl WR < Base -> factor helps (keep ON).
+#   Abl WR > Base -> factor hurts (turn OFF).
+#   Avg Δp ~ 0    -> factor inert on this sample (turn OFF).
+NHL_ENABLE_GOALIE_SV         = False  # ablated 0.7% Δp / 34.0% WR (no signal)
+NHL_ENABLE_GOALIE_STARTER    = False  # ablated 0.0% Δp (inert - no live goalie data)
+NHL_ENABLE_GOALIE_BACKUP_PEN = False  # ablated 0.0% Δp (inert)
+NHL_ENABLE_PP_PK             = False  # ablated 1.1% Δp / 34.8% WR (mildly hurts: +0.8pp)
+NHL_ENABLE_SHOT_DIFF         = True   # ablated 4.0% Δp / 30.2% WR (HELPS: -3.8pp) - keep
+NHL_ENABLE_FACEOFF           = False  # ablated 0.1% Δp / 34.8% WR (1 wrong flip)
+NHL_ENABLE_FORM              = False  # ablated 0.0% Δp (inert)
+NHL_ENABLE_HOME_AWAY_SPLIT   = False  # ablated 0.0% Δp (inert)
+NHL_ENABLE_STANDINGS_FORM    = False  # ablated 0.0% Δp (inert)
+NHL_ENABLE_VENUE_SPLIT       = False  # ablated 0.7% Δp / 34.0% WR (no signal)
+NHL_ENABLE_MOTIVATION        = False  # ablated 0.2% Δp (inert despite late-season)
+NHL_ENABLE_QUALITY_DIFF      = False  # ablated 2.2% Δp / 34.9% WR (mildly hurts: +0.9pp)
+NHL_ENABLE_H2H               = True   # ablated 0.6% Δp / 32.6% WR (HELPS: -1.4pp) - keep
 
 # ── MLB situational factors toggle ──
 # MLB predict stacks 16+ multiplicative adjustments on expected runs.
