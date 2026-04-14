@@ -567,7 +567,15 @@ function computeEdge(wp, odds) {
 }
 
 function getBestEdge(edge, home, away, odds, data) {
-  // Find best edge across ALL bet types - ML, O/U, RL, 1st Inning
+  // Find best edge across ALL bet types - ML, O/U, RL, 1st Inning.
+  //
+  // IMPORTANT: respect engine/config.py direction-allow flags exposed
+  // via data.direction_filters. Without this, the UI happily
+  // recommended e.g. 'STRONG Under 8.5' even when MLB_ALLOW_OU_UNDER
+  // had been disabled in config (because the picks.py filter only
+  // applies on the picks-list side, not this projected-outcome badge).
+  const filters = (data && data.direction_filters) || {}
+  const allow = (key) => filters[key] !== false  // default-allow when flag missing
   const candidates = []
 
   // ML
@@ -583,26 +591,35 @@ function getBestEdge(edge, home, away, odds, data) {
     if (key) {
       const ou = data.over_under[key]
       const pickOver = ou.over > ou.under
+      const dirAllowed = pickOver ? allow('ou_over') : allow('ou_under')
       const prob = Math.max(ou.over, ou.under)
       const realOdds = pickOver ? odds.over_odds : odds.under_odds
-      if (realOdds) {
+      if (realOdds && dirAllowed) {
         const e = (prob - mlToProb(realOdds)) * 100
         if (e > 1.5) candidates.push({ label: `${pickOver ? 'Over' : 'Under'} ${vt}`, odds: realOdds, edge: e })
       }
     }
   }
 
-  // RL
+  // RL: home -1.5 = favorite side, away +1.5 = underdog side.
+  // We don't know which team is the favorite from this data alone;
+  // use the spread sign on the price's implied moneyline as a proxy:
+  // if home is the favorite they get RL_FAVORITE treatment, away gets
+  // RL_UNDERDOG. Approximation good enough for badge suppression.
+  const homeIsFav = odds.home_ml != null && (odds.home_ml < 0 ||
+                    (odds.away_ml != null && odds.home_ml < odds.away_ml))
   if (data && data.run_line && odds.home_spread_odds) {
     const prob = data.run_line.home_minus_1_5
-    if (prob > 0.5) {
+    const dirAllowed = homeIsFav ? allow('rl_favorite') : allow('rl_underdog')
+    if (prob > 0.5 && dirAllowed) {
       const e = (prob - mlToProb(odds.home_spread_odds)) * 100
       if (e > 1.5) candidates.push({ label: `${home.abbreviation} -1.5`, odds: odds.home_spread_odds, edge: e })
     }
   }
   if (data && data.run_line && odds.away_spread_odds) {
     const prob = data.run_line.away_plus_1_5
-    if (prob > 0.5) {
+    const dirAllowed = homeIsFav ? allow('rl_underdog') : allow('rl_favorite')
+    if (prob > 0.5 && dirAllowed) {
       const e = (prob - mlToProb(odds.away_spread_odds)) * 100
       if (e > 1.5) candidates.push({ label: `${away.abbreviation} +1.5`, odds: odds.away_spread_odds, edge: e })
     }
@@ -611,10 +628,12 @@ function getBestEdge(edge, home, away, odds, data) {
   // 1st Inning
   if (data && data.first_inning) {
     const nrfi = data.first_inning.nrfi
-    const nrfiProb = nrfi > 0.5 ? nrfi : data.first_inning.yrfi
+    const isNrfi = nrfi > 0.5
+    const dirAllowed = isNrfi ? allow('nrfi') : allow('yrfi')
+    const nrfiProb = isNrfi ? nrfi : data.first_inning.yrfi
     const nrfiEdge = (nrfiProb - 0.545) * 100  // -120 implied
-    if (nrfiEdge > 1.5) {
-      candidates.push({ label: nrfi > 0.5 ? 'NRFI' : 'YRFI', odds: -120, edge: nrfiEdge })
+    if (nrfiEdge > 1.5 && dirAllowed) {
+      candidates.push({ label: isNrfi ? 'NRFI' : 'YRFI', odds: -120, edge: nrfiEdge })
     }
   }
 

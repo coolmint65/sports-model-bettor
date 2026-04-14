@@ -632,6 +632,23 @@ def api_predict(req: PredictRequest):
             inj["away_impact"] = _compute_injury_impact_pct(inj.get("away") or [])
         result["injuries"] = inj
 
+    # Surface the MLB direction-allow flags so the frontend's
+    # PredictionResults / EdgeCallout can suppress recommendations for
+    # disabled directions. Without this the UI would still show e.g.
+    # 'STRONG Under 8.5' even when MLB_ALLOW_OU_UNDER=False, because
+    # the frontend's getBestEdge() recomputes from raw probabilities
+    # and bypasses picks.py's filtering. Single source of truth stays
+    # in engine.config.
+    from engine import config as _cfg
+    result["direction_filters"] = {
+        "rl_favorite": bool(getattr(_cfg, "MLB_ALLOW_RL_FAVORITE", True)),
+        "rl_underdog": bool(getattr(_cfg, "MLB_ALLOW_RL_UNDERDOG", True)),
+        "nrfi": bool(getattr(_cfg, "MLB_ALLOW_NRFI", True)),
+        "yrfi": bool(getattr(_cfg, "MLB_ALLOW_YRFI", True)),
+        "ou_over": bool(getattr(_cfg, "MLB_ALLOW_OU_OVER", True)),
+        "ou_under": bool(getattr(_cfg, "MLB_ALLOW_OU_UNDER", True)),
+    }
+
     return result
 
 

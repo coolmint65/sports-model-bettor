@@ -74,23 +74,38 @@ logger = logging.getLogger(__name__)
 
 def _team_offense_rating(stats: dict) -> float:
     """
-    Estimate runs/game from team stats.
-    Weighted blend of actual R/G + advanced metrics.
+    Estimate runs/game from team stats with sample-size shrinkage.
+
+    SHRINKAGE 2026-04-14: previously trusted runs_pg / wRC+ / OPS as if
+    they were true talent at any sample size. Live example that exposed
+    the bug: ATH @ TEX 2026-04-14 with ATH at 13 games showing wRC+ 44
+    and OPS .512 (early-season noise from a tiny sample) projected
+    ATH offense at ~2.5 rpg, total at 6.6, and produced a fake
+    78% Under 8.5 probability.
+
+    Fix: regress every offensive stat toward league mean using a
+    games-played weight w = min(1.0, gp / 60). At 13 games we use only
+    22% of the team's actual rates and 78% league prior. By ~60 games
+    (when team-level offense actually stabilizes per FanGraphs research)
+    the prior weight is gone and we trust the data.
     """
-    runs_pg = stats.get("runs_pg")
-    if runs_pg and runs_pg > 0:
-        base = runs_pg
-    else:
-        base = MLB_AVG_RPG
+    games = (stats.get("wins") or 0) + (stats.get("losses") or 0)
+    # Sample-size confidence: full credit at 60+ games, ~22% at 13 games.
+    w = min(1.0, games / 60.0) if games else 0.0
+
+    raw_rpg = stats.get("runs_pg") or MLB_AVG_RPG
+    base = w * raw_rpg + (1 - w) * MLB_AVG_RPG
 
     wrc_plus = stats.get("wrc_plus")
     ops = stats.get("ops")
 
     if wrc_plus and wrc_plus > 0:
-        wrc_factor = wrc_plus / 100
+        wrc_shrunk = w * wrc_plus + (1 - w) * MLB_AVG_WRC_PLUS
+        wrc_factor = wrc_shrunk / 100.0
         base = MLB_AVG_RPG * wrc_factor * 0.6 + base * 0.4
     elif ops and ops > 0:
-        ops_factor = ops / MLB_AVG_OPS
+        ops_shrunk = w * ops + (1 - w) * MLB_AVG_OPS
+        ops_factor = ops_shrunk / MLB_AVG_OPS
         base = MLB_AVG_RPG * ops_factor * 0.5 + base * 0.5
 
     return base
