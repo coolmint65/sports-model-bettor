@@ -1590,6 +1590,18 @@ def predict_matchup(home_key: str, away_key: str,
     granular_data["ot_split_used"] = {"home": round(home_ot_share, 3),
                                       "away": round(away_ot_share, 3)}
 
+    # ── Calibration cap (added 2026-04 after engine.train on 47 picks
+    # showed ALL probability buckets hit 15-40pp below their stated
+    # prob). The model is systematically overconfident - every bet
+    # market losing (ML 33%, O/U 35%, PL 33%), flipped-scenario WR
+    # 66% flags a sign-error-equivalent miscalibration.
+    # Capping raw win-prob pulls heavy favorites back toward 50/50.
+    # If this proves too blunt, next step is per-factor ablation via
+    # engine.factor_backtest nhl.
+    from .config import NHL_WIN_PROB_FLOOR, NHL_WIN_PROB_CAP
+    p_home_ml = max(NHL_WIN_PROB_FLOOR, min(NHL_WIN_PROB_CAP, p_home_ml))
+    p_away_ml = 1.0 - p_home_ml
+
     # ── Puck line (±1.5) ──
     p_home_m15 = sum(matrix[h][a] for h in range(MAX_GOALS + 1)
                      for a in range(MAX_GOALS + 1) if h - a >= 2)

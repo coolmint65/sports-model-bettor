@@ -37,8 +37,10 @@ EDGE_SKIP = 4.0  # raised from 1.5 based on tracker data
 # ── MLB config ──
 MLB_AVG_RPG = 4.6  # League average runs per game
 MLB_WIN_PROB_FLOOR = 0.30
-MLB_WIN_PROB_CAP = 0.65  # tightened from 0.72 - calibration data shows
-                          # 75%+ predicted = 51.6% actual across 62 picks
+MLB_WIN_PROB_CAP = 0.58  # tightened from 0.65. engine.train on 159 picks
+                          # showed 70%+ bucket (N=95) hit 52.6% actual vs 79.8%
+                          # stated - off by 27pp. 0.58 cap aligns the top
+                          # bucket with real WR (~53-58%).
 
 MLB_EXPECTED_RUNS_FLOOR = 2.0
 MLB_EXPECTED_RUNS_CAP = 6.5
@@ -77,6 +79,15 @@ NBA_ENABLE_ROSTER_ADJUSTMENT = False
 # ── NHL config ──
 NHL_HOME_EDGE = 0.15  # ~0.15 goal home-ice advantage
 NHL_MAX_GOALS = 10
+
+# Win-prob clamp matching the MLB/NBA pattern. engine.train on 47
+# settled picks showed every prob bucket hit 15-40pp below stated
+# (55-60% predicted -> 25% actual, 70%+ predicted -> 40% actual).
+# The model is systematically overconfident even with granular
+# factors off - capping raw p_home_ml prevents picks driven by
+# stated probabilities that the data says are fiction.
+NHL_WIN_PROB_FLOOR = 0.35
+NHL_WIN_PROB_CAP = 0.55
 
 # Granular factors (Factors 1-12 in nhl_predict.py).
 # PERMANENTLY OFF until each factor is individually validated.
