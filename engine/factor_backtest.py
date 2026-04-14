@@ -134,12 +134,13 @@ def _ablate_mlb(factor: str, picks: list[dict]) -> BacktestStats:
             if not home_tid or not away_tid:
                 continue
 
-            # Baseline result is what's stored on the pick
-            baseline_won = (p["result"] == "WIN")
+            # Baseline result is what's stored on the pick (case-insensitive)
+            res = _canon_result(p["result"])
+            baseline_won = (res == "win")
             baseline_profit = p.get("profit") or 0.0
             if baseline_won:
                 stats.baseline_wins += 1
-            elif p["result"] == "LOSS":
+            elif res == "loss":
                 stats.baseline_losses += 1
             stats.baseline_profit += baseline_profit
 
@@ -159,7 +160,7 @@ def _ablate_mlb(factor: str, picks: list[dict]) -> BacktestStats:
                 # Treat as unchanged (baseline still wins/loses)
                 if baseline_won:
                     stats.ablated_wins += 1
-                elif p["result"] == "LOSS":
+                elif res == "loss":
                     stats.ablated_losses += 1
                 stats.ablated_profit += baseline_profit
                 continue
@@ -178,7 +179,7 @@ def _ablate_mlb(factor: str, picks: list[dict]) -> BacktestStats:
             # Same pick - outcome would have been same
             if baseline_won:
                 stats.ablated_wins += 1
-            elif p["result"] == "LOSS":
+            elif res == "loss":
                 stats.ablated_losses += 1
             stats.ablated_profit += baseline_profit
 
@@ -303,6 +304,49 @@ def _split_matchup(matchup: str) -> tuple[str, str] | None:
     return parts[1].strip(), parts[0].strip()
 
 
+def _canon_result(v) -> str:
+    """Canonicalize WIN/LOSS/PUSH across case + variants."""
+    if v is None:
+        return ""
+    s = str(v).strip().lower()
+    if s in ("win", "w", "hit", "1", "true"):
+        return "win"
+    if s in ("loss", "lose", "l", "miss", "0", "false"):
+        return "loss"
+    if s in ("push", "p", "tie", "draw"):
+        return "push"
+    return s
+
+
+def _nhl_abbr_to_key() -> dict[str, str]:
+    """Build abbreviation -> team_key map matching the NHL tracker's
+    resolution logic. Mirrors the _ALT_ABBRS treatment so ESPN-style
+    abbrs (TBL/NJD/SJS/LAK/WSH) resolve as well as internal (TB/NJ/
+    SJ/LA/WAS)."""
+    from .data import list_teams, load_team
+    alt = {
+        "TBL": "TB", "TB": "TBL", "NJD": "NJ", "NJ": "NJD",
+        "SJS": "SJ", "SJ": "SJS", "LAK": "LA", "LA": "LAK",
+        "WSH": "WAS", "WAS": "WSH", "CBJ": "CLB", "CLB": "CBJ",
+        "MTL": "MON", "MON": "MTL", "NSH": "NAS", "NAS": "NSH",
+        "UTA": "UTAH", "UTAH": "UTA",
+    }
+    m: dict[str, str] = {}
+    try:
+        for t in list_teams("NHL"):
+            team = load_team("NHL", t["key"])
+            if not team:
+                continue
+            abbr = (team.get("abbreviation") or "").strip()
+            if abbr:
+                m[abbr] = t["key"]
+                if abbr in alt:
+                    m[alt[abbr]] = t["key"]
+    except Exception as e:
+        logger.warning("Failed to build NHL abbr map: %s", e)
+    return m
+
+
 def _ablate_nhl(factor: str, picks: list[dict]) -> BacktestStats:
     """Re-predict each NHL pick with `factor` set to False, tally deltas."""
     from .nhl_picks import generate_nhl_picks
@@ -314,29 +358,40 @@ def _ablate_nhl(factor: str, picks: list[dict]) -> BacktestStats:
     stats = BacktestStats()
     original = getattr(cfg, factor)
     setattr(cfg, factor, False)
+    # Build abbr->key map once so we don't warn on every pick.
+    abbr_key = _nhl_abbr_to_key()
     try:
         for p in picks:
             stats.picks_total += 1
-            baseline_won = (p["result"] == "WIN")
-            baseline_profit = 0.0  # profit column may not exist
+            res = _canon_result(p["result"])
+            baseline_won = (res == "win")
             if baseline_won:
                 stats.baseline_wins += 1
-            elif p["result"] == "LOSS":
+            elif res == "loss":
                 stats.baseline_losses += 1
 
             split = _split_matchup(p.get("matchup"))
             if not split:
                 continue
-            home, away = split
+            home_abbr, away_abbr = split
+            home_key = abbr_key.get(home_abbr)
+            away_key = abbr_key.get(away_abbr)
+            if not home_key or not away_key:
+                # Unresolvable teams - carry baseline outcome, don't flip
+                if baseline_won:
+                    stats.ablated_wins += 1
+                elif res == "loss":
+                    stats.ablated_losses += 1
+                continue
 
             try:
-                new_picks = generate_nhl_picks(home, away, odds={})
+                new_picks = generate_nhl_picks(home_key, away_key, odds={})
                 new_best = new_picks[0] if new_picks else None
             except Exception as e:
                 logger.debug("NHL re-predict failed for %s: %s", p.get("id"), e)
                 if baseline_won:
                     stats.ablated_wins += 1
-                elif p["result"] == "LOSS":
+                elif res == "loss":
                     stats.ablated_losses += 1
                 continue
 
@@ -347,7 +402,7 @@ def _ablate_nhl(factor: str, picks: list[dict]) -> BacktestStats:
 
             if baseline_won:
                 stats.ablated_wins += 1
-            elif p["result"] == "LOSS":
+            elif res == "loss":
                 stats.ablated_losses += 1
 
             bt = p["bet_type"]
@@ -372,10 +427,11 @@ def _ablate_nba(factor: str, picks: list[dict]) -> BacktestStats:
     try:
         for p in picks:
             stats.picks_total += 1
-            baseline_won = (p["result"] == "WIN")
+            res = _canon_result(p["result"])
+            baseline_won = (res == "win")
             if baseline_won:
                 stats.baseline_wins += 1
-            elif p["result"] == "LOSS":
+            elif res == "loss":
                 stats.baseline_losses += 1
 
             split = _split_matchup(p.get("matchup"))
@@ -390,7 +446,7 @@ def _ablate_nba(factor: str, picks: list[dict]) -> BacktestStats:
                 logger.debug("NBA re-predict failed for %s: %s", p.get("id"), e)
                 if baseline_won:
                     stats.ablated_wins += 1
-                elif p["result"] == "LOSS":
+                elif res == "loss":
                     stats.ablated_losses += 1
                 continue
 
@@ -401,7 +457,7 @@ def _ablate_nba(factor: str, picks: list[dict]) -> BacktestStats:
 
             if baseline_won:
                 stats.ablated_wins += 1
-            elif p["result"] == "LOSS":
+            elif res == "loss":
                 stats.ablated_losses += 1
     finally:
         setattr(cfg, factor, original)
