@@ -8,15 +8,19 @@
        where you cloned the repo (e.g.,
        C:\Users\you\projects\sports-model-bettor\sync.bat).
     2. Open Task Scheduler -> Action -> Import Task...
-    3. Select this file. Approve the prompts.
-    4. In the General tab, tick "Run whether user is logged on or not"
+    3. Select THIS file (UTF-8) OR sports-model-bettor.task.utf16.xml
+       if your Windows build rejects UTF-8 with "unable to switch the
+       encoding" at (1,40). Modern Windows 10/11 accepts UTF-8; older
+       builds / some enterprise policies force UTF-16.
+    4. Approve the prompts.
+    5. In the General tab, tick "Run whether user is logged on or not"
        so it fires on a sleeping/locked machine.
-    5. Verify the four triggers under the Triggers tab.
+    6. Verify the three triggers under the Triggers tab.
 
-  IF IMPORT FAILS WITH "FILE IS NOT VALID"
-    Some Windows builds insist on UTF-16. Convert with PowerShell:
-      Get-Content sports-model-bettor.task.xml |
-        Out-File -Encoding unicode sports-model-bettor.task.utf16.xml
+  REGENERATING THE UTF-16 SIBLING
+    The .utf16.xml file is derived from this one. If you edit the
+    schedule here, regenerate the sibling with:
+      python -c "import pathlib, sys; s=pathlib.Path('scripts/sports-model-bettor.task.xml').read_text('utf-8').replace('encoding=\"UTF-8\"','encoding=\"UTF-16\"',1); pathlib.Path('scripts/sports-model-bettor.task.utf16.xml').write_bytes(s.encode('utf-16'))"
 
   WHAT IT DOES
   ============
