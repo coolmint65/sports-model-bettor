@@ -9,6 +9,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import json
+import re
 import time
 import logging
 import urllib.request
@@ -467,19 +468,34 @@ def _mlb_api_scoreboard(date: str) -> list[dict]:
     return games
 
 
+_ESPN_EVENT_ID_RE = re.compile(r"(?:^|~)e:(\d+)(?:$|~)")
+
+
 def _safe_game_pk(uid: str, event_id: str) -> int:
-    """Extract a numeric game PK from ESPN uid or event id."""
-    # Try uid formats: "s:1~l:10~e:401814725" or "e:401814725"
-    for part in uid.split("~"):
-        if part.startswith("e:"):
+    """Extract a numeric game PK from ESPN uid or event id.
+
+    Supported uid formats (from ESPN docs as of 2024):
+        s:1~l:10~e:401814725   -- standard scoreboard event
+        e:401814725             -- bare event-id form
+
+    Uses an explicit regex anchored on '~e:<digits>' so a partial match
+    on a different segment (e.g. an opaque token containing 'e:') can't
+    accidentally hijack the result. Falls back to the event_id field if
+    the uid has no e:-segment, and returns 0 only when both are empty
+    or non-numeric.
+    """
+    if uid:
+        m = _ESPN_EVENT_ID_RE.search(uid)
+        if m:
             try:
-                return int(part[2:])
+                return int(m.group(1))
             except ValueError:
                 pass
-    # Fall back to event id
     try:
         return int(event_id)
     except (ValueError, TypeError):
+        if uid or event_id:
+            logger.debug("_safe_game_pk: could not parse uid=%r event_id=%r", uid, event_id)
         return 0
 
 
@@ -675,16 +691,13 @@ def _resolve_abbr(espn_abbr: str):
     return dict(row) if row else None
 
 
-# Abbreviation mapping: ESPN ↔ Odds API differences
-_ABBR_ALTS = {
-    "ARI": "AZ", "AZ": "ARI",
-    "CHW": "CWS", "CWS": "CHW",
-    "WSH": "WAS", "WAS": "WSH",
-    "ATH": "OAK", "OAK": "ATH",
-}
+# Abbreviation aliases live in engine.abbr (single canonical source).
+# Local thunk preserves the existing _alt_abbr() call sites.
+from engine.abbr import alt_abbr as _engine_alt_abbr
+
 
 def _alt_abbr(abbr: str) -> str:
-    return _ABBR_ALTS.get(abbr, abbr)
+    return _engine_alt_abbr(abbr, "mlb")
 
 
 def _enrich_games(games: list[dict], date: str) -> list[dict]:

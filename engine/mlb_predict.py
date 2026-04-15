@@ -451,13 +451,11 @@ def predict_matchup(home_team_id: int, away_team_id: int,
         h_abbr = home_team["abbreviation"] if home_team else ""
         a_abbr = away_team["abbreviation"] if away_team else ""
 
-        # Try alternate abbreviations (CWS/CHW, WSH/WAS, ARI/AZ, etc.)
-        _MLB_ALT = {"CWS": "CHW", "CHW": "CWS", "WSH": "WAS", "WAS": "WSH",
-                     "ARI": "AZ", "AZ": "ARI", "SF": "SFG", "SFG": "SF",
-                     "SD": "SDP", "SDP": "SD", "TB": "TBR", "TBR": "TB",
-                     "KC": "KCR", "KCR": "KC"}
-        h_injuries = mlb_injuries.get(h_abbr, []) or mlb_injuries.get(_MLB_ALT.get(h_abbr, ""), [])
-        a_injuries = mlb_injuries.get(a_abbr, []) or mlb_injuries.get(_MLB_ALT.get(a_abbr, ""), [])
+        # Try alternate abbreviations (CWS/CHW, WSH/WAS, ARI/AZ, etc.).
+        # Canonical alias table lives in engine.abbr.
+        from .abbr import alt_abbr as _alt
+        h_injuries = mlb_injuries.get(h_abbr, []) or mlb_injuries.get(_alt(h_abbr, "mlb"), [])
+        a_injuries = mlb_injuries.get(a_abbr, []) or mlb_injuries.get(_alt(a_abbr, "mlb"), [])
 
         if h_injuries:
             h_impact = compute_mlb_injury_impact(home_team_id, h_injuries)

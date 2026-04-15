@@ -424,16 +424,21 @@ def fetch_real_odds_for_games() -> dict:
 
 
 def match_odds(home_abbr: str, away_abbr: str, all_odds: dict) -> dict:
-    """Find odds for a specific matchup from the odds map."""
-    # ESPN/Odds API abbreviation differences
-    ALT = {"ARI": "AZ", "AZ": "ARI", "CHW": "CWS", "CWS": "CHW",
-           "WSH": "WAS", "WAS": "WSH", "ATH": "OAK", "OAK": "ATH"}
+    """Find odds for a specific matchup from the odds map.
+
+    ESPN, Odds API, and MLB Stats API disagree on a few abbreviations
+    (ARI/AZ, CHW/CWS, etc.). Try every combination of canonical and
+    aliased forms; the alias table lives in engine.abbr.
+    """
+    from .abbr import alt_abbr
+    home_alt = alt_abbr(home_abbr, "mlb")
+    away_alt = alt_abbr(away_abbr, "mlb")
 
     keys_to_try = [
         f"{away_abbr}@{home_abbr}",
-        f"{ALT.get(away_abbr, away_abbr)}@{ALT.get(home_abbr, home_abbr)}",
-        f"{ALT.get(away_abbr, away_abbr)}@{home_abbr}",
-        f"{away_abbr}@{ALT.get(home_abbr, home_abbr)}",
+        f"{away_alt}@{home_alt}",
+        f"{away_alt}@{home_abbr}",
+        f"{away_abbr}@{home_alt}",
     ]
 
     for key in keys_to_try:
