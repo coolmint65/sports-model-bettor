@@ -12,9 +12,11 @@ import json
 import time
 import logging
 import urllib.request
+from collections import defaultdict, deque
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -28,6 +30,7 @@ from engine.mlb_predict import predict_matchup
 logger = logging.getLogger(__name__)
 
 SEASON = datetime.now().year
+SERVER_STARTED_AT = time.time()
 
 app = FastAPI(title="MLB Prediction Engine")
 
@@ -37,6 +40,39 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ── Rate limiting ────────────────────────────────────────────
+# Sliding-window per-IP rate limit. The frontend is single-user / local,
+# so the cap is generous; the goal is to catch a runaway client (infinite
+# refetch loop, accidental polling) before it melts the backend or burns
+# Odds API credits, not to enforce a multi-tenant quota.
+RATE_LIMIT_WINDOW_SEC = 60
+RATE_LIMIT_MAX_REQUESTS = 240   # 4 req/sec sustained per IP
+_rate_buckets: dict[str, deque] = defaultdict(deque)
+# Endpoints exempt from the limit (cheap reads, monitoring).
+_RATE_LIMIT_EXEMPT_PREFIXES = ("/health", "/docs", "/openapi.json", "/redoc")
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    path = request.url.path
+    if not any(path.startswith(p) for p in _RATE_LIMIT_EXEMPT_PREFIXES):
+        client = (request.client.host if request.client else "unknown") or "unknown"
+        bucket = _rate_buckets[client]
+        now = time.time()
+        cutoff = now - RATE_LIMIT_WINDOW_SEC
+        while bucket and bucket[0] < cutoff:
+            bucket.popleft()
+        if len(bucket) >= RATE_LIMIT_MAX_REQUESTS:
+            retry_after = int(bucket[0] + RATE_LIMIT_WINDOW_SEC - now) + 1
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Too many requests. Slow down."},
+                headers={"Retry-After": str(max(retry_after, 1))},
+            )
+        bucket.append(now)
+    return await call_next(request)
 
 # ── ESPN integration for live scoreboard ────────────────────
 
@@ -65,16 +101,93 @@ def _fetch_espn_json(url: str) -> dict | None:
 
 @app.get("/health")
 def health():
-    conn = get_conn()
-    teams = conn.execute("SELECT COUNT(*) as c FROM teams").fetchone()["c"]
-    stats = conn.execute("SELECT COUNT(*) as c FROM team_stats").fetchone()["c"]
-    from engine.db import DB_PATH
-    return {
+    """Health check covering DB connectivity, sync recency, Odds API
+    credit balance, and per-sport row counts. Designed to be polled by
+    Task Scheduler / external monitors -- a 'degraded' status indicates
+    a sport's data is stale enough that picks may be wrong."""
+    from engine.db import DB_PATH as MLB_DB
+
+    payload: dict = {
         "status": "ok",
-        "db_path": str(DB_PATH),
-        "teams": teams,
-        "team_stats": stats,
+        "uptime_seconds": int(time.time() - SERVER_STARTED_AT),
+        "started_at": datetime.fromtimestamp(SERVER_STARTED_AT, timezone.utc).isoformat(),
+        "sports": {},
     }
+    degraded_reasons: list[str] = []
+
+    def _sport_status(label: str, db_path, picks_table: str | None,
+                       conn_factory) -> dict:
+        try:
+            conn = conn_factory()
+            teams = conn.execute("SELECT COUNT(*) AS c FROM teams").fetchone()["c"]
+            last_game_row = conn.execute(
+                "SELECT MAX(updated_at) AS t FROM games"
+            ).fetchone()
+            last_sync = last_game_row["t"] if last_game_row else None
+            picks_count = 0
+            if picks_table:
+                try:
+                    picks_count = conn.execute(
+                        f"SELECT COUNT(*) AS c FROM {picks_table}"
+                    ).fetchone()["c"]
+                except Exception:
+                    picks_count = 0
+            db_size = os.path.getsize(db_path) if os.path.exists(db_path) else 0
+            stale_hours = None
+            if last_sync:
+                try:
+                    last_dt = datetime.fromisoformat(last_sync.replace(" ", "T"))
+                    stale_hours = (datetime.now() - last_dt).total_seconds() / 3600
+                    if stale_hours > 24:
+                        degraded_reasons.append(
+                            f"{label} last sync was {stale_hours:.1f}h ago"
+                        )
+                except Exception:
+                    stale_hours = None
+            return {
+                "ok": True,
+                "db_path": str(db_path),
+                "db_size_mb": round(db_size / 1_000_000, 2),
+                "teams": teams,
+                "picks": picks_count,
+                "last_sync_at": last_sync,
+                "stale_hours": round(stale_hours, 2) if stale_hours is not None else None,
+            }
+        except Exception as e:
+            degraded_reasons.append(f"{label}: {e}")
+            return {"ok": False, "error": str(e)}
+
+    payload["sports"]["mlb"] = _sport_status("mlb", MLB_DB, "picks", get_conn)
+
+    # NHL + NBA are optional -- only report if their modules import cleanly
+    try:
+        from engine.nhl_db import get_conn as _nhl_conn, DB_PATH as NHL_DB
+        payload["sports"]["nhl"] = _sport_status("nhl", NHL_DB, "nhl_picks", _nhl_conn)
+    except Exception:
+        pass
+    try:
+        from engine.nba_db import get_conn as _nba_conn, DB_PATH as NBA_DB
+        payload["sports"]["nba"] = _sport_status("nba", NBA_DB, "nba_picks", _nba_conn)
+    except Exception:
+        pass
+
+    # Odds API credit balance (populated by scrapers.odds_api on each fetch)
+    try:
+        from scrapers.odds_api import get_credits_status
+        credits = get_credits_status()
+        payload["odds_api"] = credits
+        if credits.get("remaining") is not None and credits["remaining"] < 1000:
+            degraded_reasons.append(
+                f"Odds API credits low: {credits['remaining']} remaining"
+            )
+    except Exception as e:
+        payload["odds_api"] = {"error": str(e)}
+
+    if degraded_reasons:
+        payload["status"] = "degraded"
+        payload["degraded_reasons"] = degraded_reasons
+
+    return payload
 
 
 @app.get("/api/teams")

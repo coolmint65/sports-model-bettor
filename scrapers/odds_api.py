@@ -43,6 +43,20 @@ _odds_cache: dict | None = None
 _odds_cache_time: float = 0
 ODDS_CACHE_TTL = 600  # 10 minutes
 
+# Last-known credit balance from the x-requests-remaining response header.
+# Populated on every successful bulk fetch; surfaced via /health so we can
+# alarm before we hit the monthly cap.
+_last_credits_remaining: int | None = None
+_last_credits_at: float = 0
+
+
+def get_credits_status() -> dict:
+    """Return the most recent Odds API credit balance + age in seconds."""
+    return {
+        "remaining": _last_credits_remaining,
+        "age_seconds": int(time.time() - _last_credits_at) if _last_credits_at else None,
+    }
+
 
 def _get_api_key() -> str | None:
     """Load API key from file or environment."""
@@ -109,9 +123,15 @@ def fetch_odds(include_per_event: bool = True) -> dict:
         })
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode())
-            # Log remaining requests
+            # Log + remember remaining requests so /health can show them
             remaining = resp.headers.get("x-requests-remaining", "?")
             logger.info("Odds API: %s requests remaining this month", remaining)
+            global _last_credits_remaining, _last_credits_at
+            try:
+                _last_credits_remaining = int(remaining)
+                _last_credits_at = time.time()
+            except (TypeError, ValueError):
+                pass
     except Exception as e:
         logger.warning("Odds API failed: %s", e)
         return {}
