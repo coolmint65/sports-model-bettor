@@ -125,6 +125,31 @@ def _fetch_espn_json(url: str) -> dict | None:
 
 # ── Endpoints ───────────────────────────────────────────────
 
+@app.get("/api/model-overrides/{sport}")
+def api_model_overrides(sport: str, include_expired: bool = False):
+    """List active runtime overrides for a sport.
+
+    These are written by ``engine.train --apply`` when a direction
+    allow-flag's data is statistically below break-even. The UI can
+    surface a badge on suppressed markets so the user knows their
+    rec is being silenced by data, not by a config edit.
+    """
+    from engine.model_overrides import list_overrides
+    if sport not in ("mlb", "nhl", "nba"):
+        raise HTTPException(status_code=400, detail=f"Unknown sport: {sport}")
+    return {"sport": sport, "overrides": list_overrides(sport, include_expired)}
+
+
+@app.delete("/api/model-overrides/{sport}/{flag}")
+def api_model_override_revert(sport: str, flag: str):
+    """Manually clear an override (e.g., after investigating)."""
+    from engine.model_overrides import revert_override
+    if sport not in ("mlb", "nhl", "nba"):
+        raise HTTPException(status_code=400, detail=f"Unknown sport: {sport}")
+    cleared = revert_override(sport, flag)
+    return {"cleared": cleared, "sport": sport, "flag": flag}
+
+
 @app.get("/health")
 def health():
     """Health check covering DB connectivity, sync recency, Odds API
@@ -799,14 +824,16 @@ def api_predict(req: PredictRequest):
     # the frontend's getBestEdge() recomputes from raw probabilities
     # and bypasses picks.py's filtering. Single source of truth stays
     # in engine.config.
-    from engine import config as _cfg
+    # Surface flag values through get_flag() so any active runtime
+    # overrides (from engine.train --apply) are reflected in the UI.
+    from engine.config import get_flag as _get_flag
     result["direction_filters"] = {
-        "rl_favorite": bool(getattr(_cfg, "MLB_ALLOW_RL_FAVORITE", True)),
-        "rl_underdog": bool(getattr(_cfg, "MLB_ALLOW_RL_UNDERDOG", True)),
-        "nrfi": bool(getattr(_cfg, "MLB_ALLOW_NRFI", True)),
-        "yrfi": bool(getattr(_cfg, "MLB_ALLOW_YRFI", True)),
-        "ou_over": bool(getattr(_cfg, "MLB_ALLOW_OU_OVER", True)),
-        "ou_under": bool(getattr(_cfg, "MLB_ALLOW_OU_UNDER", True)),
+        "rl_favorite": bool(_get_flag("MLB_ALLOW_RL_FAVORITE", True)),
+        "rl_underdog": bool(_get_flag("MLB_ALLOW_RL_UNDERDOG", True)),
+        "nrfi":        bool(_get_flag("MLB_ALLOW_NRFI", True)),
+        "yrfi":        bool(_get_flag("MLB_ALLOW_YRFI", True)),
+        "ou_over":     bool(_get_flag("MLB_ALLOW_OU_OVER", True)),
+        "ou_under":    bool(_get_flag("MLB_ALLOW_OU_UNDER", True)),
     }
 
     # Run the unified picks engine so GameDetail renders the SAME rows

@@ -424,7 +424,14 @@ def section_baselines(sport: str, out: list, recs: list) -> None:
 
 # ── Main ──
 
-def run_sport(sport: str) -> list[str]:
+def run_sport(sport: str, structured_recs: list | None = None) -> list[str]:
+    """Build the report sections for one sport.
+
+    When ``structured_recs`` is passed (a list), each direction-split
+    bucket below the binomial threshold gets appended as a dict so the
+    --apply path can flip flags via engine.model_overrides without
+    reparsing the human-readable strings.
+    """
     out = [f"\n{'=' * 72}",
            f"  TRAINING REPORT - {sport.upper()}",
            f"{'=' * 72}\n"]
@@ -444,6 +451,12 @@ def run_sport(sport: str) -> list[str]:
     section_factor_hints(sport, out, recs)
     section_baselines(sport, out, recs)
 
+    if structured_recs is not None and sport == "mlb":
+        # Walk the settled picks again to build {flag, value, n, p} dicts
+        # for the direction allow-flags; auto-apply only handles MLB
+        # direction filters in this iteration.
+        structured_recs.extend(_structured_direction_recs(settled, sport))
+
     out.append(f"{'=' * 72}")
     out.append(f"  RECOMMENDATIONS ({sport.upper()})")
     out.append(f"{'=' * 72}")
@@ -457,23 +470,170 @@ def run_sport(sport: str) -> list[str]:
     return out
 
 
+def _structured_direction_recs(settled: list, sport: str) -> list[dict]:
+    """Compute auto-apply candidates for the direction allow-flags.
+
+    Returns a list of dicts with shape:
+      {flag: 'MLB_ALLOW_OU_UNDER', value: False,
+       n: 42, wins: 13, p_value: 0.004,
+       reason: 'Under WR 31.0% over 42 picks, p=0.004'}
+
+    Only emits dicts for buckets where:
+      - N >= MIN_SAMPLES (engine.model_overrides.MIN_SAMPLES)
+      - WR < the implied break-even (52.4% for -110)
+      - p_value < MAX_P_VALUE
+    The actual write happens in main() under --apply with all guard
+    rails (max-per-run cap, audit log) intact.
+    """
+    if sport != "mlb":
+        return []
+    try:
+        from .model_overrides import binomial_p_value, MIN_SAMPLES, MAX_P_VALUE
+        from ._analysis_common import canon_bet_type
+    except Exception:
+        return []
+
+    # Tally each (bet-type, side) bucket. Keyed by the flag we'd flip.
+    buckets: dict[str, dict[str, int]] = {}
+
+    def _bump(flag: str, won: bool):
+        b = buckets.setdefault(flag, {"wins": 0, "losses": 0})
+        if won:
+            b["wins"] += 1
+        else:
+            b["losses"] += 1
+
+    for r in settled:
+        bt = canon_bet_type(r.get("bet_type", ""))
+        c = _canon(r.get("result"))
+        if c not in ("win", "loss"):
+            continue
+        won = (c == "win")
+        pick = (r.get("pick") or "").strip()
+        if bt == "RL":
+            if "-1.5" in pick or " -1.5" in pick:
+                _bump("MLB_ALLOW_RL_FAVORITE", won)
+            elif "+1.5" in pick or " +1.5" in pick:
+                _bump("MLB_ALLOW_RL_UNDERDOG", won)
+        elif bt == "O/U":
+            pl = pick.lower()
+            if "over" in pl:
+                _bump("MLB_ALLOW_OU_OVER", won)
+            elif "under" in pl:
+                _bump("MLB_ALLOW_OU_UNDER", won)
+        elif bt == "1st INN":
+            if pick == "NRFI":
+                _bump("MLB_ALLOW_NRFI", won)
+            elif pick == "YRFI":
+                _bump("MLB_ALLOW_YRFI", won)
+
+    out = []
+    for flag, b in buckets.items():
+        n = b["wins"] + b["losses"]
+        if n < MIN_SAMPLES:
+            continue
+        wr = b["wins"] / n
+        if wr >= 0.524:
+            # At or above break-even: don't auto-disable.
+            continue
+        p = binomial_p_value(b["wins"], n, p_null=0.524)
+        if p >= MAX_P_VALUE:
+            continue
+        out.append({
+            "flag": flag,
+            "value": False,
+            "n": n,
+            "wins": b["wins"],
+            "losses": b["losses"],
+            "p_value": round(p, 4),
+            "reason": f"WR {wr * 100:.1f}% over {n} picks, p={p:.4f}",
+        })
+    return out
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("sport", nargs="?", default="all",
                         choices=["mlb", "nhl", "nba", "all"])
+    parser.add_argument(
+        "--apply", action="store_true",
+        help=("Auto-apply qualifying recommendations to model_overrides. "
+              "Guard rails: N >= MIN_SAMPLES, p < MAX_P_VALUE, direction "
+              "= disable only, max " "MAX_OVERRIDES_PER_RUN per call. "
+              "Overrides expire after EXPIRY_DAYS so a one-off cold "
+              "streak doesn't lock in forever."),
+    )
+    parser.add_argument(
+        "--revert", metavar="FLAG",
+        help="Manually clear an active override (e.g. MLB_ALLOW_OU_UNDER).",
+    )
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.WARNING,
+    logging.basicConfig(level=logging.INFO if args.apply else logging.WARNING,
                         format="%(levelname)-7s %(message)s")
+
+    if args.revert:
+        from .model_overrides import revert_override
+        # Try each sport until one matches; the same flag name shouldn't
+        # collide across sports because we prefix with MLB_ / NHL_ / NBA_.
+        for s in ("mlb", "nhl", "nba"):
+            if revert_override(s, args.revert):
+                print(f"Reverted {s}.{args.revert}")
+                return
+        print(f"No active override found for {args.revert}")
+        return
 
     sports = ["mlb", "nhl", "nba"] if args.sport == "all" else [args.sport]
     all_out: list[str] = []
+    structured: list[dict] = []
     for sport in sports:
-        all_out.extend(run_sport(sport))
+        all_out.extend(run_sport(sport, structured_recs=structured))
 
     print("\n".join(all_out))
+
+    if args.apply and structured:
+        from .model_overrides import (
+            apply_override, expire_stale, MAX_OVERRIDES_PER_RUN,
+        )
+        # Always expire stale overrides regardless of whether anything
+        # new gets applied -- otherwise a fresh streak gets buried under
+        # an old one that should've rolled off.
+        for sport in sports:
+            expire_stale(sport)
+
+        print(f"\n{'=' * 72}")
+        print(f"  AUTO-APPLY: {len(structured)} candidate(s) passed guard rails")
+        print(f"{'=' * 72}")
+        applied = 0
+        for rec in structured:
+            if applied >= MAX_OVERRIDES_PER_RUN:
+                print(f"  SKIPPED {rec['flag']}: per-run cap "
+                      f"({MAX_OVERRIDES_PER_RUN}) reached")
+                continue
+            apply_override(
+                "mlb", rec["flag"], rec["value"],
+                reason=rec["reason"],
+                n_samples=rec["n"],
+                p_value=rec["p_value"],
+            )
+            print(f"  APPLIED {rec['flag']} = {rec['value']}  ({rec['reason']})")
+            applied += 1
+        print(f"  {applied} override(s) applied; expires in 14d unless re-confirmed.")
+        return
+
+    if args.apply:
+        # No qualifying recs -- still expire stale ones.
+        from .model_overrides import expire_stale
+        for sport in sports:
+            n = expire_stale(sport)
+            if n:
+                print(f"\nExpired {n} stale {sport.upper()} override(s).")
+        print("\nNo new overrides to apply (no buckets passed the guard rails).")
+        return
+
     print("\nNext steps:")
-    print("  1. Apply suggested config changes in engine/config.py.")
+    print("  1. Apply suggested config changes in engine/config.py,")
+    print("     OR re-run with --apply to auto-write qualifying overrides.")
     print("  2. Run 'python -m engine.backtest' (MLB) / engine.nhl_retrobt / ")
     print("     engine.nba_q1_predict retrobt to verify.")
     print("  3. Commit the change with a message citing the report numbers.")

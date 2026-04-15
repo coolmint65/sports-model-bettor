@@ -12,12 +12,7 @@ import logging
 from datetime import datetime
 
 from .mlb_predict import predict_matchup, MLB_AVG_RPG
-from .config import (
-    MLB_JUICE_WALL as JUICE_WALL,
-    ENABLE_MLB_NRFI,
-    ENABLE_MLB_F5,
-    MLB_BET_RELIABILITY,
-)
+from .config import MLB_JUICE_WALL as JUICE_WALL, MLB_BET_RELIABILITY, get_flag
 from .db import get_conn
 
 logger = logging.getLogger(__name__)
@@ -145,10 +140,12 @@ def generate_picks(home_team_id: int, away_team_id: int,
                 real_ou_odds = -110
 
             edge = (ou_prob - ou_implied) * 100
-            # Direction filter: skip disabled sides (Overs or Unders)
-            from .config import MLB_ALLOW_OU_OVER, MLB_ALLOW_OU_UNDER
-            ou_allowed = (ou_pick_over and MLB_ALLOW_OU_OVER) or \
-                         ((not ou_pick_over) and MLB_ALLOW_OU_UNDER)
+            # Direction filter: skip disabled sides (Overs or Unders).
+            # get_flag() consults the runtime overrides table first so
+            # an auto-applied "MLB_ALLOW_OU_UNDER=False" suppresses the
+            # pick without a source-code edit.
+            ou_allowed = (ou_pick_over and get_flag("MLB_ALLOW_OU_OVER", True)) or \
+                         ((not ou_pick_over) and get_flag("MLB_ALLOW_OU_UNDER", True))
             if edge > 0 and real_ou_odds >= JUICE_WALL and ou_allowed:
                 picks.append({
                     "type": "O/U", "pick": ou_label, "prob": round(ou_prob, 4),
@@ -160,8 +157,7 @@ def generate_picks(home_team_id: int, away_team_id: int,
     # Backtest shows 1st INN is a money loser (12-14, 46.2%, -$400).
     # The pitcher first-inning scoreless % blending produces unrealistic probs
     # (80%+) that don't calibrate to actual outcomes.
-    if ENABLE_MLB_NRFI:
-        from .config import MLB_ALLOW_NRFI, MLB_ALLOW_YRFI
+    if get_flag("ENABLE_MLB_NRFI", True):
         nrfi = fi.get("nrfi", 0.5)
         nrfi_pick = "NRFI" if nrfi > 0.5 else "YRFI"
         nrfi_prob = nrfi if nrfi > 0.5 else fi.get("yrfi", 0.5)
@@ -175,8 +171,8 @@ def generate_picks(home_team_id: int, away_team_id: int,
         else:
             nrfi_odds = odds.get("nrfi_over_odds") or _nrfi_fallback_odds("YRFI")
         nrfi_edge = (nrfi_prob - _implied(nrfi_odds)) * 100
-        allow = (nrfi_pick == "NRFI" and MLB_ALLOW_NRFI) or \
-                (nrfi_pick == "YRFI" and MLB_ALLOW_YRFI)
+        allow = (nrfi_pick == "NRFI" and get_flag("MLB_ALLOW_NRFI", True)) or \
+                (nrfi_pick == "YRFI" and get_flag("MLB_ALLOW_YRFI", True))
         if nrfi_edge > 1 and allow:
             picks.append({
                 "type": "1st INN", "pick": nrfi_pick, "prob": round(nrfi_prob, 4),
@@ -211,15 +207,14 @@ def generate_picks(home_team_id: int, away_team_id: int,
 
     # Direction filter for RL: tracker data shows +1.5 dogs are profitable
     # (40-27, 59.7%) while -1.5 favorites are disastrous (3-9, 25%).
-    from .config import MLB_ALLOW_RL_FAVORITE, MLB_ALLOW_RL_UNDERDOG
 
     # Home side - use the correct probability based on spread direction
     if home_rl_odds and home_rl_odds >= JUICE_WALL and home_rl_point is not None:
         # home_rl_point < 0 = home is -1.5 favorite → use home_minus probability
         # home_rl_point > 0 = home is +1.5 underdog → use home_plus probability
         is_dog = home_rl_point > 0
-        rl_allowed = (is_dog and MLB_ALLOW_RL_UNDERDOG) or \
-                     ((not is_dog) and MLB_ALLOW_RL_FAVORITE)
+        rl_allowed = (is_dog and get_flag("MLB_ALLOW_RL_UNDERDOG", True)) or \
+                     ((not is_dog) and get_flag("MLB_ALLOW_RL_FAVORITE", True))
         rl_prob = rl_home_minus if home_rl_point < 0 else rl_home_plus
         edge = (rl_prob - _implied(home_rl_odds)) * 100
         if edge > 0 and rl_allowed:
@@ -237,8 +232,8 @@ def generate_picks(home_team_id: int, away_team_id: int,
         # away_rl_point > 0 = away is +1.5 underdog → use away_plus probability
         # away_rl_point < 0 = away is -1.5 favorite → use away_minus probability
         is_dog = away_rl_point > 0
-        rl_allowed = (is_dog and MLB_ALLOW_RL_UNDERDOG) or \
-                     ((not is_dog) and MLB_ALLOW_RL_FAVORITE)
+        rl_allowed = (is_dog and get_flag("MLB_ALLOW_RL_UNDERDOG", True)) or \
+                     ((not is_dog) and get_flag("MLB_ALLOW_RL_FAVORITE", True))
         rl_prob = rl_away_plus if away_rl_point > 0 else rl_away_minus
         edge = (rl_prob - _implied(away_rl_odds)) * 100
         if edge > 0 and rl_allowed:
@@ -255,7 +250,7 @@ def generate_picks(home_team_id: int, away_team_id: int,
     # Disabled by default (ENABLE_MLB_F5 in config.py). Requires real DK
     # F5 odds from the per-event Odds API markets -- synthetic pricing is
     # not supported for F5 (implied probabilities vary too much by SP).
-    if ENABLE_MLB_F5:
+    if get_flag("ENABLE_MLB_F5", False):
         f5 = pred.get("f5") or {}
         _append_f5_picks(picks, f5, odds, h_abbr, a_abbr)
 
@@ -296,12 +291,6 @@ def _append_f5_picks(picks: list, f5: dict, odds: dict,
     Skips any sub-market when real DK odds are missing -- F5 pricing
     varies too much with starting pitchers to use a synthetic baseline.
     """
-    from .config import (
-        MLB_ALLOW_F5_ML,
-        MLB_ALLOW_F5_OU_OVER, MLB_ALLOW_F5_OU_UNDER,
-        MLB_ALLOW_F5_RL_FAVORITE, MLB_ALLOW_F5_RL_UNDERDOG,
-    )
-
     if not f5:
         return
 
@@ -310,7 +299,7 @@ def _append_f5_picks(picks: list, f5: dict, odds: dict,
     f5_away_wp = wp.get("away", 0.5)
 
     # ── F5 Moneyline ──
-    if MLB_ALLOW_F5_ML:
+    if get_flag("MLB_ALLOW_F5_ML", True):
         f5_home_ml = odds.get("f5_home_ml")
         f5_away_ml = odds.get("f5_away_ml")
         if f5_home_ml and f5_home_ml >= JUICE_WALL:
@@ -336,8 +325,8 @@ def _append_f5_picks(picks: list, f5: dict, odds: dict,
             f5_over = ou_data.get("over", 0.5)
             f5_under = ou_data.get("under", 0.5)
             pick_over = f5_over > f5_under
-            ou_allowed = (pick_over and MLB_ALLOW_F5_OU_OVER) or \
-                         ((not pick_over) and MLB_ALLOW_F5_OU_UNDER)
+            ou_allowed = (pick_over and get_flag("MLB_ALLOW_F5_OU_OVER", True)) or \
+                         ((not pick_over) and get_flag("MLB_ALLOW_F5_OU_UNDER", True))
             ou_prob = f5_over if pick_over else f5_under
             ou_odds = odds.get("f5_over_odds") if pick_over else odds.get("f5_under_odds")
             if ou_odds and ou_odds >= JUICE_WALL and ou_allowed:
@@ -372,8 +361,8 @@ def _append_f5_picks(picks: list, f5: dict, odds: dict,
 
     if home_f5_rl_odds and home_f5_rl_odds >= JUICE_WALL and home_f5_rl_point is not None:
         is_dog = home_f5_rl_point > 0
-        allowed = (is_dog and MLB_ALLOW_F5_RL_UNDERDOG) or \
-                  ((not is_dog) and MLB_ALLOW_F5_RL_FAVORITE)
+        allowed = (is_dog and get_flag("MLB_ALLOW_F5_RL_UNDERDOG", True)) or \
+                  ((not is_dog) and get_flag("MLB_ALLOW_F5_RL_FAVORITE", True))
         prob = _f5_rl_prob(home_f5_rl_point, "home")
         if prob is not None and allowed:
             edge = (prob - _implied(home_f5_rl_odds)) * 100
@@ -388,8 +377,8 @@ def _append_f5_picks(picks: list, f5: dict, odds: dict,
 
     if away_f5_rl_odds and away_f5_rl_odds >= JUICE_WALL and away_f5_rl_point is not None:
         is_dog = away_f5_rl_point > 0
-        allowed = (is_dog and MLB_ALLOW_F5_RL_UNDERDOG) or \
-                  ((not is_dog) and MLB_ALLOW_F5_RL_FAVORITE)
+        allowed = (is_dog and get_flag("MLB_ALLOW_F5_RL_UNDERDOG", True)) or \
+                  ((not is_dog) and get_flag("MLB_ALLOW_F5_RL_FAVORITE", True))
         prob = _f5_rl_prob(away_f5_rl_point, "away")
         if prob is not None and allowed:
             edge = (prob - _implied(away_f5_rl_odds)) * 100

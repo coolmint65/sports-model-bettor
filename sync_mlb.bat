@@ -56,6 +56,10 @@ echo Settling completed picks...
 python scripts\run.py engine.tracker --settle
 
 echo.
+echo Auto-applying train recommendations (n>=30, p<0.01, disable-only)...
+python scripts\run.py engine.train mlb --apply 2>nul
+
+echo.
 echo Updating POTD closing odds (CLV capture)...
 python -c "from engine.pick_of_day import update_potd_closing_odds; print(update_potd_closing_odds('mlb'))" 2>nul
 

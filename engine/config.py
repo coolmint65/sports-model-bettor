@@ -216,6 +216,30 @@ MLB_ALLOW_OU_UNDER = False      # Unders hit 14% over 7 picks
 # Used for adjusted-EV ranking (adjusted_ev = edge * reliability).
 # Low weights demote a market in "best pick" ordering but do NOT stop
 # picks from being generated/recorded.
+def get_flag(name: str, default=None, sport: str = "mlb"):
+    """Return a config flag, consulting the runtime overrides table first.
+
+    Source-code module-level constants in this file are the human's
+    intended defaults; ``engine.train --apply`` may have written a
+    runtime override (e.g., when WR data is statistically significantly
+    below break-even). Reading via ``get_flag()`` instead of importing
+    the constant ensures every consumer respects active overrides.
+
+    Falls back to the module-level constant when no override exists,
+    and to ``default`` when the constant is missing entirely (shouldn't
+    happen in practice but keeps test/probe code from crashing).
+    """
+    try:
+        from .model_overrides import get_override
+        ov = get_override(sport, name)
+        if ov is not None:
+            return ov
+    except Exception:
+        # Override layer must never crash the prediction path.
+        pass
+    return globals().get(name, default)
+
+
 MLB_BET_RELIABILITY = {
     "RL": 1.00,     # 55.6% hit rate, +$384 - proven profitable
     "ML": 0.70,     # 48% hit rate, slightly losing - watch
