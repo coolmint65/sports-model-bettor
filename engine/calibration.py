@@ -20,6 +20,12 @@ After each batch of games, this module:
 
 This is NOT machine learning - it's statistical calibration.
 Simple, transparent, and auditable.
+
+Window selection: pass ``--auto`` (default in sync_mlb.bat) to let
+adaptive_window() pick a sensible look-back based on how far into the
+season we are. A fixed 30-day window is wrong in April (small sample,
+mostly noise) and wrong in September (too short to capture late-season
+pitching changes); see adaptive_window() for the per-phase ranges.
 """
 
 import json
@@ -84,6 +90,39 @@ def save_weights(weights: dict) -> None:
         ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=datetime('now')
     """, (WEIGHTS_KEY, json.dumps(weights)))
     conn.commit()
+
+
+# MLB regular season conventionally opens in late March. We default to
+# March 26 of the season year as the anchor; if that's wrong by a few
+# days the window choice is still correct (we're picking buckets, not
+# exact day counts).
+_SEASON_OPENER_MMDD = (3, 26)
+
+
+def adaptive_window(season: int | None = None, today: datetime | None = None) -> int:
+    """Pick a calibration look-back in days based on season progress.
+
+    Phases:
+      < 21 days into season   -> 0 (use everything we've got)
+      21-60 days               -> 30 (matches the legacy default once
+                                    the sample is large enough)
+      60-120 days              -> 45 (rolling, captures recent pitching
+                                    changes / trades / injury returns)
+      > 120 days               -> 45 (no further widening; older data
+                                    is noisier than helpful at this point)
+    """
+    today = today or datetime.now()
+    yr = season or today.year
+    opener = datetime(yr, _SEASON_OPENER_MMDD[0], _SEASON_OPENER_MMDD[1])
+    days_in = (today - opener).days
+    if days_in < 0:
+        # Off-season: there's nothing this year. Use full last-season set.
+        return 0
+    if days_in < 21:
+        return 0
+    if days_in < 60:
+        return 30
+    return 45
 
 
 def calibrate(season: int | None = None, days: int = 0,
@@ -295,12 +334,28 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
     args = sys.argv[1:]
-    days = 30
+    days: int | None = None
+    auto = False
     for i, a in enumerate(args):
         if a == "--days" and i + 1 < len(args):
             days = int(args[i + 1])
+        elif a == "--auto":
+            auto = True
 
-    print(f"Calibrating on last {days} days...", flush=True)
+    if days is None:
+        if auto:
+            days = adaptive_window()
+            print(
+                f"--auto: adaptive window picked {days or 'full-season'} days",
+                flush=True,
+            )
+        else:
+            days = 30
+
+    if days == 0:
+        print("Calibrating on the full season...", flush=True)
+    else:
+        print(f"Calibrating on last {days} days...", flush=True)
     report = calibrate(days=days)
 
     if "error" in report:

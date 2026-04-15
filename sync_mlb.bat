@@ -39,7 +39,9 @@ python -c "from engine.odds_history import drain_pending_mlb_odds; print(drain_p
 :calibrate
 echo.
 echo Calibrating global model...
-python scripts\run.py engine.calibration
+REM --auto picks the look-back window based on season progress; see
+REM engine.calibration.adaptive_window() for the per-phase ranges.
+python scripts\run.py engine.calibration --auto
 
 echo.
 echo Calibrating per-team factors...
