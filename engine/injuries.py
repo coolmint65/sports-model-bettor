@@ -392,6 +392,35 @@ def _is_player_out(status: str) -> bool:
     return False
 
 
+# Severity weights -- how much of the player's per-game impact we
+# actually attribute given the listed status. Day-to-day usually means
+# they'll start tomorrow; 60-day IL means they're gone for the season.
+# A flat presence/absence model overstates DTD impact and understates
+# season-ending injuries.
+_SEVERITY_WEIGHTS = (
+    # (substring patterns in status, weight)
+    (("60-day", "season-ending", "long-term"), 0.40),
+    (("15-day", "10-day"),                     0.60),
+    (("7-day",),                               0.80),
+    (("day-to-day", "d2d", "dtd", "questionable", "probable"), 0.95),
+)
+
+
+def _severity_weight(status: str) -> float:
+    """Return the per-player impact multiplier for an injury status.
+
+    Falls back to 1.0 (full impact) for "out" / "injured reserve" /
+    other unspecified statuses where we can't tell the timeline. That
+    matches the legacy behavior so removing all severity logic would
+    be the same as before.
+    """
+    s = (status or "").lower()
+    for patterns, weight in _SEVERITY_WEIGHTS:
+        if any(p in s for p in patterns):
+            return weight
+    return 1.0
+
+
 def _nhl_position_tier(position: str) -> str:
     """Classify an NHL player into a tier: goalie, forward, defense, depth."""
     pos = position.upper().strip()
@@ -542,44 +571,48 @@ def compute_mlb_injury_impact(team_id: int, injuries: list[dict]) -> float:
     pitcher_count = 0
     batter_count = 0
 
+    # Pitchers carry double the per-tier impact -- one missing player
+    # has outsize effect on a single game vs a missing position player
+    # who's one of nine in a lineup. Severity weights then scale by
+    # how long the player is expected to be out.
+    PITCHER_MULTIPLIER = 2.0
+
     for inj in injuries:
-        if not _is_player_out(inj.get("status", "")):
+        status = inj.get("status", "")
+        if not _is_player_out(status):
             continue
 
         tier = _mlb_player_tier(inj.get("position", ""))
+        sev = _severity_weight(status)
 
         if tier == "pitcher":
             pitcher_count += 1
             if pitcher_count == 1:
-                # Ace / top starter - residual impact beyond pitcher matchup
-                total_adjustment -= 0.10
-                logger.debug(
-                    "team %s: ace pitcher %s on IL -> -0.10 runs residual",
-                    team_id, inj.get("name"),
-                )
+                base = -0.10
             else:
-                # Additional pitchers on IL hurt rotation depth
-                total_adjustment -= 0.03
+                base = -0.03
+            delta = base * PITCHER_MULTIPLIER * sev
+            total_adjustment += delta
+            logger.debug(
+                "team %s: pitcher %s status=%r -> base=%.2f sev=%.2f delta=%.3f",
+                team_id, inj.get("name"), status, base, sev, delta,
+            )
         elif tier == "batter":
             batter_count += 1
             if batter_count <= 4:
-                # Star / cleanup hitter
-                total_adjustment -= 0.15
-                logger.debug(
-                    "team %s: star batter %s out -> -0.15 runs",
-                    team_id, inj.get("name"),
-                )
+                base = -0.15
             elif batter_count <= 9:
-                # Regular starter
-                total_adjustment -= 0.08
-                logger.debug(
-                    "team %s: starter %s out -> -0.08 runs",
-                    team_id, inj.get("name"),
-                )
+                base = -0.08
             else:
-                total_adjustment -= 0.02
+                base = -0.02
+            delta = base * sev
+            total_adjustment += delta
+            logger.debug(
+                "team %s: batter %s status=%r -> base=%.2f sev=%.2f delta=%.3f",
+                team_id, inj.get("name"), status, base, sev, delta,
+            )
         else:
-            total_adjustment -= 0.02
+            total_adjustment -= 0.02 * sev
 
     if total_adjustment == 0.0:
         return 1.0
