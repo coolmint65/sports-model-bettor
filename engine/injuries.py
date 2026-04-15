@@ -393,16 +393,19 @@ def _is_player_out(status: str) -> bool:
 
 
 # Severity weights -- how much of the player's per-game impact we
-# actually attribute given the listed status. Day-to-day usually means
-# they'll start tomorrow; 60-day IL means they're gone for the season.
-# A flat presence/absence model overstates DTD impact and understates
-# season-ending injuries.
+# actually attribute given the listed status. The weight encodes
+# P(player is missing THIS game), which scales WITH severity:
+#   60-day IL  = definitely missing (P=1.0)
+#   15-day IL  = essentially certain to miss (P=0.95)
+#   7-day IL   = will likely miss this start/game (P=0.80)
+#   day-to-day = game-time decision, often plays at reduced capacity (P=0.40)
+# Initial weights had this inverted; corrected per user review.
 _SEVERITY_WEIGHTS = (
     # (substring patterns in status, weight)
-    (("60-day", "season-ending", "long-term"), 0.40),
-    (("15-day", "10-day"),                     0.60),
+    (("60-day", "season-ending", "long-term"), 1.00),
+    (("15-day", "10-day"),                     0.95),
     (("7-day",),                               0.80),
-    (("day-to-day", "d2d", "dtd", "questionable", "probable"), 0.95),
+    (("day-to-day", "d2d", "dtd", "questionable", "probable"), 0.40),
 )
 
 
