@@ -93,10 +93,16 @@ function BettingPicks({ data }) {
   // is whichever of DK/FD/MGM/Bovada had data). Surfaced per row so the
   // user knows where each price came from.
   const odds = d?.odds || {}
+  // Runtime overrides written by engine.train --apply. When non-empty
+  // the sidebar renders a subtle notice so the user knows certain
+  // markets have been suppressed by data, not by a source-code edit.
+  const overrides = Array.isArray(d?.active_overrides) ? d.active_overrides : []
 
   return (
     <div className="picks-card">
       <h2>Model Picks</h2>
+
+      <OverrideNotice overrides={overrides} />
 
       {picks.length === 0 && (
         <div className="picks-empty" style={{padding:'1rem', color:'#94a3b8', fontSize:'0.85rem'}}>
@@ -121,6 +127,60 @@ function BettingPicks({ data }) {
       )}
     </div>
   )
+}
+
+
+// Small amber notice listing any runtime overrides currently silencing
+// picks. Individual overrides show on hover with the supporting stats
+// (N samples, p-value, days until expiry). Rendering nothing when the
+// list is empty keeps the card clean in the default case.
+function OverrideNotice({ overrides }) {
+  if (!overrides || overrides.length === 0) return null
+  const labels = overrides.map(o => _prettyFlagName(o.key))
+  const tooltip = overrides.map(o =>
+    `${o.key} = ${o.value}\n` +
+    `  ${o.reason || '(no reason recorded)'}\n` +
+    `  N=${o.n_samples ?? '?'}, p=${o.p_value ?? '?'}, ` +
+    `${o.days_remaining != null ? `${o.days_remaining}d left` : 'no expiry'}`
+  ).join('\n\n')
+  return (
+    <div
+      title={tooltip}
+      style={{
+        margin: '0.25rem 0 0.75rem',
+        padding: '0.5rem 0.75rem',
+        borderRadius: 4,
+        background: 'rgba(251,191,36,0.08)',
+        border: '1px solid rgba(251,191,36,0.35)',
+        color: '#fbbf24',
+        fontSize: '0.72rem',
+        cursor: 'help',
+        lineHeight: 1.35,
+      }}
+    >
+      <strong style={{ letterSpacing: '0.04em' }}>
+        {overrides.length === 1 ? '1 MARKET' : `${overrides.length} MARKETS`} SUPPRESSED BY DATA
+      </strong>
+      <div style={{ opacity: 0.85, marginTop: 2 }}>
+        {labels.join(', ')}
+      </div>
+    </div>
+  )
+}
+
+
+// Pretty-print a flag name for the override notice. Strips the
+// MLB_ALLOW_ prefix so "MLB_ALLOW_OU_UNDER" renders as "OU Under".
+function _prettyFlagName(flag) {
+  return String(flag)
+    .replace(/^MLB_ALLOW_/, '')
+    .replace(/^ENABLE_MLB_/, '')
+    .replace(/_/g, ' ')
+    .replace(/\bOU\b/g, 'O/U')
+    .replace(/\bRL\b/g, 'RL')
+    .replace(/\bNRFI\b/g, 'NRFI')
+    .replace(/\bYRFI\b/g, 'YRFI')
+    .replace(/\bF5\b/g, 'F5')
 }
 
 

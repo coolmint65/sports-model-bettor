@@ -836,6 +836,17 @@ def api_predict(req: PredictRequest):
         "ou_under":    bool(_get_flag("MLB_ALLOW_OU_UNDER", True)),
     }
 
+    # Surface active runtime overrides so GameDetail can show a notice
+    # ("2 markets currently suppressed by data: OU_UNDER, RL_FAVORITE")
+    # instead of silently dropping rows. Each entry carries the reason
+    # and expiry so the user can inspect via /api/model-overrides.
+    try:
+        from engine.model_overrides import list_overrides as _list_ov
+        result["active_overrides"] = _list_ov("mlb")
+    except Exception as e:
+        logger.debug("active_overrides lookup failed: %s", e)
+        result["active_overrides"] = []
+
     # Run the unified picks engine so GameDetail renders the SAME rows
     # as the Scoreboard best-bet badge and POTD selection. Without this,
     # BettingPicks / PredictionResults reimplement edge logic in JS and
