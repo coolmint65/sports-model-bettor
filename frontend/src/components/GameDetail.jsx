@@ -1,6 +1,6 @@
 import PredictionResults from './PredictionResults'
 import SharedGameHeader from './gameDetail/SharedGameHeader'
-import { kellyFraction, impliedFromOdds } from './gameDetail/kelly'
+import { kellyFraction } from './gameDetail/kelly'
 
 export default function GameDetail({ game, prediction, loading, onBack }) {
   const mergedPrediction = prediction ? mergePitcherData(prediction, game) : null
@@ -53,9 +53,11 @@ export default function GameDetail({ game, prediction, loading, onBack }) {
               <PredictionResults data={mergedPrediction} odds={game.odds} />
             </div>
 
-            {/* Right: quick picks summary */}
+            {/* Right: quick picks summary. mergedPrediction.picks comes
+                from engine.picks.generate_picks() -- same engine the
+                Scoreboard best-bet badge and POTD use. */}
             <div className="prediction-sidebar">
-              <BettingPicks data={mergedPrediction} odds={game.odds} />
+              <BettingPicks data={mergedPrediction} />
             </div>
           </div>
         )}
@@ -72,147 +74,77 @@ export default function GameDetail({ game, prediction, loading, onBack }) {
 }
 
 
-function BettingPicks({ data, odds }) {
+// Render the unified picks list from engine.picks.generate_picks() -- the
+// SAME engine the Scoreboard best-bet badge and POTD selection use. No
+// client-side edge/direction-filter logic lives here: if the engine says a
+// market has no playable edge (or the direction is disabled in config),
+// the row simply doesn't appear. This guarantees the sidebar, scoreboard
+// card, and POTD never disagree on what the model is recommending.
+function BettingPicks({ data }) {
   const d = data
-  const home = d.home
-  const away = d.away
-  const wp = d.win_prob
-  const es = d.expected_score
-  const homeWins = es.home > es.away
-  const pct = n => `${(n * 100).toFixed(1)}%`
-
-  // Determine picks
-  const mlPick = homeWins ? home : away
-  const mlProb = homeWins ? wp.home : wp.away
-  const mlOdds = homeWins ? odds?.home_ml : odds?.away_ml
-
-  const total = d.total
-  const vegasTotal = odds?.over_under
-  const ouResult = vegasTotal && d.over_under
-    ? getOUPick(d.over_under, vegasTotal, total)
+  const pct = n => n == null ? '-' : `${(n * 100).toFixed(1)}%`
+  const picks = Array.isArray(d?.picks) ? d.picks : []
+  const bestKey = d?.best_pick
+    ? `${d.best_pick.type}|${d.best_pick.pick}`
     : null
-  const ouPick = ouResult?.pick
-  const ouConf = ouResult?.prob
-  const ouOdds = ouResult?.pick?.startsWith('Over')
-    ? odds?.over_odds
-    : odds?.under_odds
-
-  const nrfi = d.first_inning?.nrfi
-  const nrfiPick = nrfi != null ? (nrfi > 0.50 ? 'NRFI' : 'YRFI') : null
-  const nrfiProb = nrfi != null ? (nrfi > 0.50 ? nrfi : d.first_inning.yrfi) : null
-  // New: real DK NRFI/YRFI odds from Odds API per-event markets
-  const nrfiOdds = nrfiPick === 'NRFI'
-    ? odds?.nrfi_under_odds
-    : odds?.nrfi_over_odds
-
-  const rl = d.run_line
-  const rlHomePick = rl && rl.home_minus_1_5 > 0.50
-  const rlPick = rl
-    ? (rlHomePick
-        ? `${home.abbreviation} -1.5`
-        : `${away.abbreviation} +1.5`)
-    : null
-  const rlProb = rl
-    ? Math.max(rl.home_minus_1_5, rl.away_plus_1_5)
-    : null
-  const rlOdds = rlHomePick ? odds?.home_spread_odds : odds?.away_spread_odds
-
-  const f5 = d.f5
-  const f5HomePick = f5 && f5.win_prob.home > f5.win_prob.away
-  const f5Pick = f5
-    ? (f5HomePick ? home.abbreviation : away.abbreviation)
-    : null
-  const f5Prob = f5 ? Math.max(f5.win_prob.home, f5.win_prob.away) : null
-  // New: real DK F5 ML odds from Odds API per-event markets
-  const f5Odds = f5HomePick ? odds?.f5_home_ml : odds?.f5_away_ml
+  const total = d?.total
 
   return (
     <div className="picks-card">
       <h2>Model Picks</h2>
 
-      <PickRow
-        label="Moneyline"
-        pick={`${mlPick.abbreviation}`}
-        prob={mlProb}
-        odds={mlOdds}
-        pct={pct}
-      />
-
-      {ouPick && (
-        <PickRow
-          label={`O/U ${vegasTotal}`}
-          pick={ouPick}
-          prob={ouConf}
-          odds={ouOdds}
-          pct={pct}
-        />
+      {picks.length === 0 && (
+        <div className="picks-empty" style={{padding:'1rem', color:'#94a3b8', fontSize:'0.85rem'}}>
+          No playable edge found on any market.
+        </div>
       )}
 
-      {nrfiPick && (
+      {picks.map((p, i) => (
         <PickRow
-          label="1st Inning"
-          pick={nrfiPick}
-          prob={nrfiProb}
-          odds={nrfiOdds}
+          key={`${p.type}-${p.pick}-${i}`}
+          engine={p}
+          isBest={bestKey === `${p.type}|${p.pick}`}
           pct={pct}
         />
-      )}
+      ))}
 
-      {rlPick && (
-        <PickRow
-          label="Run Line"
-          pick={rlPick}
-          prob={rlProb}
-          odds={rlOdds}
-          pct={pct}
-        />
+      {total != null && (
+        <div className="picks-footer">
+          Model projected total: <strong>{total.toFixed(1)}</strong>
+        </div>
       )}
-
-      {f5Pick && (
-        <PickRow
-          label="F5 Winner"
-          pick={f5Pick}
-          prob={f5Prob}
-          odds={f5Odds}
-          pct={pct}
-        />
-      )}
-
-      <div className="picks-footer">
-        Model projected total: <strong>{total.toFixed(1)}</strong>
-      </div>
     </div>
   )
 }
 
 
-function PickRow({ label, pick, prob, odds, pct }) {
-  const conf = prob > 0.60 ? 'high' : prob > 0.53 ? 'med' : 'low'
+// Engine-produced pick fields: {type, pick, prob, edge, odds, confidence,
+// adjusted_ev}. The engine already filtered for positive edge + allowed
+// direction, so the client renders fields verbatim without recomputation.
+function PickRow({ engine, isBest, pct }) {
+  const {type, pick, prob, edge, odds, confidence} = engine
+  const conf = confidence === 'strong' ? 'high'
+    : confidence === 'moderate' ? 'med'
+    : confidence === 'lean' ? 'med'
+    : 'low'
 
-  // Calculate edge vs Vegas when real odds available
-  let edge = null
-  let kelly = null
-  if (odds && prob) {
-    const implied = impliedFromOdds(odds)
-    edge = ((prob - implied) * 100).toFixed(1)
-    if (parseFloat(edge) > 0) {
-      kelly = kellyFraction(prob, odds)
-    }
-  }
+  const kelly = (odds && prob && parseFloat(edge) > 0)
+    ? kellyFraction(prob, odds)
+    : null
 
   return (
-    <div className={`pick-row conf-${conf}`}>
-      <div className="pick-label">{label}</div>
+    <div className={`pick-row conf-${conf}${isBest ? ' is-best' : ''}`}>
+      <div className="pick-label">{labelForType(type)}</div>
       <div className="pick-choice">
         <span className="pick-name">{pick}</span>
-        {odds && (
+        {odds != null && (
           <span className="pick-odds">({odds > 0 ? '+' : ''}{odds})</span>
         )}
       </div>
       <div className="pick-numbers">
         <span className={`pick-prob conf-${conf}`}>{pct(prob)}</span>
-        {edge && parseFloat(edge) > 0 && (
-          <span className="pick-edge positive">+{edge}%</span>
+        {edge != null && edge > 0 && (
+          <span className="pick-edge positive">+{edge.toFixed ? edge.toFixed(1) : edge}%</span>
         )}
         {kelly != null && kelly > 0 && (
           <span
@@ -228,30 +160,19 @@ function PickRow({ label, pick, prob, odds, pct }) {
 }
 
 
-function getOUPick(ouLines, vegasTotal, modelTotal) {
-  // Try exact match with different string formats
-  const vt = parseFloat(vegasTotal)
-  let entry = ouLines[String(vt)] || ouLines[vt.toFixed(1)] || ouLines[String(Math.round(vt))]
-
-  // If no exact match, find closest line
-  if (!entry) {
-    const lines = Object.keys(ouLines).map(Number).sort((a, b) => a - b)
-    let closest = lines[0]
-    for (const l of lines) {
-      if (Math.abs(l - vt) < Math.abs(closest - vt)) closest = l
-    }
-    entry = ouLines[String(closest)] || ouLines[closest.toFixed(1)]
+// Map engine pick types to sidebar row labels. Keep the Moneyline / O/U
+// phrasing the old UI used for familiarity.
+function labelForType(type) {
+  switch (type) {
+    case 'ML':      return 'Moneyline'
+    case 'O/U':     return 'Over/Under'
+    case '1st INN': return '1st Inning'
+    case 'RL':      return 'Run Line'
+    case 'F5 ML':   return 'F5 Winner'
+    case 'F5 O/U':  return 'F5 O/U'
+    case 'F5 RL':   return 'F5 Run Line'
+    default:        return type
   }
-
-  if (!entry) {
-    // Fallback: use model total vs vegas total
-    const pick = modelTotal > vt ? 'Over' : 'Under'
-    return { pick, prob: modelTotal > vt ? 0.55 : 0.55 }
-  }
-
-  const pick = entry.over > entry.under ? 'Over' : 'Under'
-  const prob = Math.max(entry.over, entry.under)
-  return { pick, prob }
 }
 
 

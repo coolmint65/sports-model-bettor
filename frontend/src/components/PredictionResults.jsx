@@ -1,5 +1,4 @@
 import EdgeCallout from './gameDetail/EdgeCallout'
-import { mlToProb } from './gameDetail/kelly'
 
 export default function PredictionResults({ data, odds }) {
   const d = data
@@ -11,9 +10,11 @@ export default function PredictionResults({ data, odds }) {
   const homeWins = es.home > es.away
   const pct = n => `${(n * 100).toFixed(1)}%`
 
-  // Calculate edge vs Vegas
-  const edge = odds ? computeEdge(wp, odds) : null
-  const bestEdge = edge ? getBestEdge(edge, home, away, odds, d) : null
+  // Pull the EdgeCallout pick directly from d.best_pick (produced by
+  // engine.picks.get_best_pick()). This is the SAME pick the Scoreboard
+  // best-bet badge and the POTD selector use, so the three surfaces can
+  // no longer drift.
+  const bestEdge = getBestEdge(d)
 
   return (
     <div className="results">
@@ -558,87 +559,30 @@ function LineupColumn({ abbr, lineup }) {
 }
 
 
-function computeEdge(wp, odds) {
-  // Keep for backward compat
-  const result = { home_edge: null, away_edge: null }
-  if (odds.home_ml) result.home_edge = (wp.home - mlToProb(odds.home_ml)) * 100
-  if (odds.away_ml) result.away_edge = (wp.away - mlToProb(odds.away_ml)) * 100
-  return result
+// Build the EdgeCallout payload directly from data.best_pick, which is
+// produced by engine.picks.generate_picks() and engine.picks.get_best_pick()
+// on the backend. This is the SAME pick the Scoreboard best-bet badge and
+// POTD selector use -- no client-side edge/direction-filter logic here.
+function getBestEdge(data) {
+  const bp = data?.best_pick
+  if (!bp) return null
+  // engine confidence is 'strong' | 'moderate' | 'lean' | 'skip'
+  if (bp.confidence === 'skip') return null
+  return {
+    label: _formatBestPickLabel(bp),
+    odds: bp.odds,
+    edge: bp.edge,
+    rating: bp.confidence,
+  }
 }
 
-function getBestEdge(edge, home, away, odds, data) {
-  // Find best edge across ALL bet types - ML, O/U, RL, 1st Inning.
-  //
-  // IMPORTANT: respect engine/config.py direction-allow flags exposed
-  // via data.direction_filters. Without this, the UI happily
-  // recommended e.g. 'STRONG Under 8.5' even when MLB_ALLOW_OU_UNDER
-  // had been disabled in config (because the picks.py filter only
-  // applies on the picks-list side, not this projected-outcome badge).
-  const filters = (data && data.direction_filters) || {}
-  const allow = (key) => filters[key] !== false  // default-allow when flag missing
-  const candidates = []
 
-  // ML
-  if (edge.home_edge != null && edge.home_edge > 1.5)
-    candidates.push({ label: `${home.abbreviation} ML`, odds: odds.home_ml, edge: edge.home_edge })
-  if (edge.away_edge != null && edge.away_edge > 1.5)
-    candidates.push({ label: `${away.abbreviation} ML`, odds: odds.away_ml, edge: edge.away_edge })
-
-  // O/U
-  if (data && odds.over_under && data.over_under) {
-    const vt = parseFloat(odds.over_under)
-    const key = Object.keys(data.over_under).find(k => Math.abs(parseFloat(k) - vt) < 0.5)
-    if (key) {
-      const ou = data.over_under[key]
-      const pickOver = ou.over > ou.under
-      const dirAllowed = pickOver ? allow('ou_over') : allow('ou_under')
-      const prob = Math.max(ou.over, ou.under)
-      const realOdds = pickOver ? odds.over_odds : odds.under_odds
-      if (realOdds && dirAllowed) {
-        const e = (prob - mlToProb(realOdds)) * 100
-        if (e > 1.5) candidates.push({ label: `${pickOver ? 'Over' : 'Under'} ${vt}`, odds: realOdds, edge: e })
-      }
-    }
+function _formatBestPickLabel(pick) {
+  // For ML we render "{team} ML"; for other markets the engine's pick
+  // string already contains the team + line (e.g. "Over 8.5", "NYM +1.5").
+  switch (pick.type) {
+    case 'ML':    return `${pick.pick} ML`
+    case 'F5 ML': return `${pick.pick} F5 ML`
+    default:      return pick.pick
   }
-
-  // RL: home -1.5 = favorite side, away +1.5 = underdog side.
-  // We don't know which team is the favorite from this data alone;
-  // use the spread sign on the price's implied moneyline as a proxy:
-  // if home is the favorite they get RL_FAVORITE treatment, away gets
-  // RL_UNDERDOG. Approximation good enough for badge suppression.
-  const homeIsFav = odds.home_ml != null && (odds.home_ml < 0 ||
-                    (odds.away_ml != null && odds.home_ml < odds.away_ml))
-  if (data && data.run_line && odds.home_spread_odds) {
-    const prob = data.run_line.home_minus_1_5
-    const dirAllowed = homeIsFav ? allow('rl_favorite') : allow('rl_underdog')
-    if (prob > 0.5 && dirAllowed) {
-      const e = (prob - mlToProb(odds.home_spread_odds)) * 100
-      if (e > 1.5) candidates.push({ label: `${home.abbreviation} -1.5`, odds: odds.home_spread_odds, edge: e })
-    }
-  }
-  if (data && data.run_line && odds.away_spread_odds) {
-    const prob = data.run_line.away_plus_1_5
-    const dirAllowed = homeIsFav ? allow('rl_underdog') : allow('rl_favorite')
-    if (prob > 0.5 && dirAllowed) {
-      const e = (prob - mlToProb(odds.away_spread_odds)) * 100
-      if (e > 1.5) candidates.push({ label: `${away.abbreviation} +1.5`, odds: odds.away_spread_odds, edge: e })
-    }
-  }
-
-  // 1st Inning
-  if (data && data.first_inning) {
-    const nrfi = data.first_inning.nrfi
-    const isNrfi = nrfi > 0.5
-    const dirAllowed = isNrfi ? allow('nrfi') : allow('yrfi')
-    const nrfiProb = isNrfi ? nrfi : data.first_inning.yrfi
-    const nrfiEdge = (nrfiProb - 0.545) * 100  // -120 implied
-    if (nrfiEdge > 1.5 && dirAllowed) {
-      candidates.push({ label: isNrfi ? 'NRFI' : 'YRFI', odds: -120, edge: nrfiEdge })
-    }
-  }
-
-  if (candidates.length === 0) return null
-  const best = candidates.sort((a, b) => b.edge - a.edge)[0]
-  best.rating = best.edge > 8 ? 'strong' : best.edge > 4 ? 'moderate' : 'lean'
-  return best
 }

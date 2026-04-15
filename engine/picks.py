@@ -44,7 +44,8 @@ def generate_picks(home_team_id: int, away_team_id: int,
                     home_pitcher_id: int | None = None,
                     away_pitcher_id: int | None = None,
                     venue: str | None = None,
-                    odds: dict | None = None) -> list[dict]:
+                    odds: dict | None = None,
+                    pred: dict | None = None) -> list[dict]:
     """
     Generate all betting picks for a game.
 
@@ -70,14 +71,16 @@ def generate_picks(home_team_id: int, away_team_id: int,
         ...
     ]
     """
-    # Run prediction
-    pred = predict_matchup(
-        home_team_id=home_team_id,
-        away_team_id=away_team_id,
-        home_pitcher_id=home_pitcher_id,
-        away_pitcher_id=away_pitcher_id,
-        venue=venue,
-    )
+    # Run prediction (or reuse the pre-computed one from the caller).
+    # /api/predict passes its own pred in to avoid computing twice.
+    if pred is None:
+        pred = predict_matchup(
+            home_team_id=home_team_id,
+            away_team_id=away_team_id,
+            home_pitcher_id=home_pitcher_id,
+            away_pitcher_id=away_pitcher_id,
+            venue=venue,
+        )
 
     if "error" in pred or not pred:
         return []

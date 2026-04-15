@@ -658,6 +658,47 @@ def api_predict(req: PredictRequest):
         "ou_under": bool(getattr(_cfg, "MLB_ALLOW_OU_UNDER", True)),
     }
 
+    # Run the unified picks engine so GameDetail renders the SAME rows
+    # as the Scoreboard best-bet badge and POTD selection. Without this,
+    # BettingPicks / PredictionResults reimplement edge logic in JS and
+    # drift from engine.picks (hardcoded -120 NRFI, ignored direction
+    # filters, no real F5/NRFI DK odds). Single source of truth lives
+    # in engine.picks.generate_picks().
+    try:
+        from engine.picks import (
+            generate_picks, get_best_pick, match_odds, fetch_real_odds_for_games,
+        )
+        from engine.db import get_team_by_id
+
+        home_team = get_team_by_id(req.home_team_id) or {}
+        away_team = get_team_by_id(req.away_team_id) or {}
+        h_abbr = home_team.get("abbreviation", "")
+        a_abbr = away_team.get("abbreviation", "")
+
+        all_odds = fetch_real_odds_for_games()
+        odds = match_odds(h_abbr, a_abbr, all_odds) if (h_abbr and a_abbr) else {}
+
+        picks = generate_picks(
+            home_team_id=req.home_team_id,
+            away_team_id=req.away_team_id,
+            home_pitcher_id=req.home_pitcher_id,
+            away_pitcher_id=req.away_pitcher_id,
+            venue=req.venue,
+            odds=odds or None,
+            pred=result,  # Reuse the prediction we already computed above
+        )
+        result["picks"] = picks
+        result["best_pick"] = get_best_pick(picks)
+        # Surface the odds snapshot the engine used so PickRow shows the
+        # same price GameDetail recomputes from.
+        result["odds"] = odds
+    except Exception as e:
+        logger.warning("Unified picks generation failed for %s/%s: %s",
+                       req.home_team_id, req.away_team_id, e)
+        result["picks"] = []
+        result["best_pick"] = None
+        result["odds"] = {}
+
     return result
 
 
