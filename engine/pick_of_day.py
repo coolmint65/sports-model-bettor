@@ -295,12 +295,12 @@ def update_potd_closing_odds(sport: str) -> dict:
     overwrites with the freshest available price, the LAST update before
     settle_potd() runs is effectively the closing line we record.
 
-    MLB-only for now (uses engine.picks.match_odds and the same per-event
-    odds path the rest of the MLB pipeline uses). Other sports return
-    {"updated": 0, "skipped": 0, "reason": ...}.
+    Supports mlb, nhl, nba. Dispatches to per-sport resolvers because
+    each sport sources odds from a different module (MLB: engine.picks,
+    NHL: inline odds-api fetch, NBA: scrapers.nba_odds).
     """
-    if sport != "mlb":
-        return {"updated": 0, "skipped": 0, "reason": f"{sport} not supported yet"}
+    if sport not in ("mlb", "nhl", "nba"):
+        return {"updated": 0, "skipped": 0, "reason": f"unsupported sport {sport!r}"}
 
     _ensure_potd_table(sport)
     conn = _get_conn(sport)
@@ -312,77 +312,292 @@ def update_potd_closing_odds(sport: str) -> dict:
     if not pending:
         return {"updated": 0, "skipped": 0}
 
+    resolver = {
+        "mlb": _resolve_mlb_closing_for_pending,
+        "nhl": _resolve_nhl_closing_for_pending,
+        "nba": _resolve_nba_closing_for_pending,
+    }[sport]
+
     try:
-        from .picks import fetch_real_odds_for_games, match_odds
-        from .tracker import _extract_closing_for_pick
+        pairs = resolver(pending)  # list of (pending_row_id, closing_price)
     except Exception as e:
+        logger.warning("%s POTD closing-odds resolver crashed: %s", sport, e)
         return {"updated": 0, "skipped": len(pending), "reason": str(e)}
 
-    all_odds = fetch_real_odds_for_games() or {}
-    if not all_odds:
-        return {"updated": 0, "skipped": len(pending),
-                "reason": "no current odds available"}
-
     updated = 0
-    skipped = 0
-    for row in pending:
-        row = dict(row)
-        # Matchup format: "Boston Red Sox at New York Yankees" (full name)
-        # OR "BOS @ NYY" (abbreviation form). Both end up needing the
-        # home/away abbreviations to match against the odds map.
-        a_abbr, h_abbr = _matchup_to_abbrs(row["matchup"])
-        if not (a_abbr and h_abbr):
-            skipped += 1
-            continue
-        game_odds = match_odds(h_abbr, a_abbr, all_odds)
-        if not game_odds:
-            skipped += 1
-            continue
-        closing = _extract_closing_for_pick(
-            row["bet_type"], row["pick"], h_abbr, game_odds,
-        )
+    for pid, closing in pairs:
         if closing is None:
-            skipped += 1
             continue
         conn.execute(
             "UPDATE pick_of_day SET closing_odds = ?, "
             "       closing_odds_updated_at = datetime('now') "
             "WHERE id = ?",
-            (int(closing), row["id"]),
+            (int(closing), pid),
         )
         updated += 1
 
+    skipped = len(pending) - updated
     if updated:
         conn.commit()
-        logger.info("POTD closing odds: updated %d, skipped %d", updated, skipped)
+        logger.info("POTD closing odds (%s): updated %d, skipped %d",
+                    sport, updated, skipped)
     return {"updated": updated, "skipped": skipped}
 
 
-def _matchup_to_abbrs(matchup: str) -> tuple[str | None, str | None]:
+def _resolve_mlb_closing_for_pending(pending: list) -> list[tuple]:
+    """Per-POTD (id, closing_price) pairs for MLB."""
+    from .picks import fetch_real_odds_for_games, match_odds
+    from .tracker import _extract_closing_for_pick
+    all_odds = fetch_real_odds_for_games() or {}
+    if not all_odds:
+        return [(r["id"], None) for r in pending]
+
+    out = []
+    for row in pending:
+        row = dict(row)
+        a_abbr, h_abbr = _matchup_to_abbrs(row["matchup"])
+        if not (a_abbr and h_abbr):
+            out.append((row["id"], None))
+            continue
+        game_odds = match_odds(h_abbr, a_abbr, all_odds) or {}
+        closing = _extract_closing_for_pick(
+            row["bet_type"], row["pick"], h_abbr, game_odds,
+        ) if game_odds else None
+        out.append((row["id"], closing))
+    return out
+
+
+def _resolve_nhl_closing_for_pending(pending: list) -> list[tuple]:
+    """Per-POTD (id, closing_price) pairs for NHL.
+
+    NHL odds are fetched inline via the-odds-api. Shape mirrors the MLB
+    odds dict so the same bet-type -> field extractor can be reused.
+    """
+    all_odds = _fetch_nhl_odds_map()
+    if not all_odds:
+        return [(r["id"], None) for r in pending]
+
+    out = []
+    for row in pending:
+        row = dict(row)
+        a_abbr, h_abbr = _matchup_to_abbrs(row["matchup"], sport="nhl")
+        if not (a_abbr and h_abbr):
+            out.append((row["id"], None))
+            continue
+        game_odds = _lookup_by_abbr_with_aliases(
+            h_abbr, a_abbr, all_odds, sport="nhl",
+        ) or {}
+        closing = _nhl_closing_for_bet_type(
+            row["bet_type"], row["pick"], h_abbr, game_odds,
+        ) if game_odds else None
+        out.append((row["id"], closing))
+    return out
+
+
+def _resolve_nba_closing_for_pending(pending: list) -> list[tuple]:
+    """Per-POTD (id, closing_price) pairs for NBA Q1 markets."""
+    try:
+        from scrapers.nba_odds import fetch_nba_odds
+    except Exception as e:
+        logger.warning("fetch_nba_odds unavailable: %s", e)
+        return [(r["id"], None) for r in pending]
+
+    all_odds = fetch_nba_odds() or {}
+    if not all_odds:
+        return [(r["id"], None) for r in pending]
+
+    out = []
+    for row in pending:
+        row = dict(row)
+        a_abbr, h_abbr = _matchup_to_abbrs(row["matchup"], sport="nba")
+        if not (a_abbr and h_abbr):
+            out.append((row["id"], None))
+            continue
+        game_odds = _lookup_by_abbr_with_aliases(
+            h_abbr, a_abbr, all_odds, sport="nba",
+        ) or {}
+        closing = _nba_closing_for_bet_type(
+            row["bet_type"], row["pick"], h_abbr, game_odds,
+        ) if game_odds else None
+        out.append((row["id"], closing))
+    return out
+
+
+def _fetch_nhl_odds_map() -> dict:
+    """Pull current NHL h2h/spreads/totals from the-odds-api, keyed by AWAY@HOME.
+
+    Duplicates the inline fetch in engine/nhl_tracker but returns the map
+    in a shape compatible with the MLB odds-dict convention (so the
+    bet-type extractor can work on it unmodified).
+    """
+    import os, urllib.request, json as _json
+    from pathlib import Path as _Path
+    key_file = _Path(__file__).resolve().parent.parent / "data" / "odds_api_key.txt"
+    api_key = (os.environ.get("ODDS_API_KEY")
+               or (key_file.read_text().strip() if key_file.exists() else None))
+    if not api_key:
+        return {}
+    url = ("https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds/"
+           f"?apiKey={api_key}&regions=us&markets=h2h,spreads,totals"
+           "&oddsFormat=american&bookmakers=draftkings")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "POTDClosing/1.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = _json.loads(resp.read().decode())
+    except Exception as e:
+        logger.warning("NHL odds fetch failed: %s", e)
+        return {}
+
+    _NHL_TEAM_ABBR = {
+        "Anaheim Ducks": "ANA", "Utah Hockey Club": "UTA",
+        "Boston Bruins": "BOS", "Buffalo Sabres": "BUF",
+        "Calgary Flames": "CGY", "Carolina Hurricanes": "CAR",
+        "Chicago Blackhawks": "CHI", "Colorado Avalanche": "COL",
+        "Columbus Blue Jackets": "CBJ", "Dallas Stars": "DAL",
+        "Detroit Red Wings": "DET", "Edmonton Oilers": "EDM",
+        "Florida Panthers": "FLA", "Los Angeles Kings": "LAK",
+        "Minnesota Wild": "MIN", "Montreal Canadiens": "MTL",
+        "Nashville Predators": "NSH", "New Jersey Devils": "NJD",
+        "New York Islanders": "NYI", "New York Rangers": "NYR",
+        "Ottawa Senators": "OTT", "Philadelphia Flyers": "PHI",
+        "Pittsburgh Penguins": "PIT", "San Jose Sharks": "SJS",
+        "Seattle Kraken": "SEA", "St. Louis Blues": "STL",
+        "Tampa Bay Lightning": "TBL", "Toronto Maple Leafs": "TOR",
+        "Vancouver Canucks": "VAN", "Vegas Golden Knights": "VGK",
+        "Washington Capitals": "WSH", "Winnipeg Jets": "WPG",
+    }
+    out: dict = {}
+    for g in data or []:
+        home = g.get("home_team", "")
+        away = g.get("away_team", "")
+        h_ab = _NHL_TEAM_ABBR.get(home, home[:3].upper())
+        a_ab = _NHL_TEAM_ABBR.get(away, away[:3].upper())
+        parsed = {"provider": "DraftKings"}
+        for book in g.get("bookmakers", []):
+            for market in book.get("markets", []):
+                mkey = market.get("key")
+                for o in market.get("outcomes", []):
+                    price = o.get("price")
+                    point = o.get("point")
+                    name = o.get("name", "")
+                    if mkey == "h2h":
+                        if name == home:
+                            parsed["home_ml"] = price
+                        elif name == away:
+                            parsed["away_ml"] = price
+                    elif mkey == "spreads":
+                        if name == home:
+                            parsed["home_spread_odds"] = price
+                            parsed["home_spread_point"] = point
+                        elif name == away:
+                            parsed["away_spread_odds"] = price
+                            parsed["away_spread_point"] = point
+                    elif mkey == "totals":
+                        if "over" in name.lower():
+                            parsed["over_odds"] = price
+                            parsed["over_under"] = point
+                        elif "under" in name.lower():
+                            parsed["under_odds"] = price
+        if parsed.get("home_ml"):
+            out[f"{a_ab}@{h_ab}"] = parsed
+    return out
+
+
+def _lookup_by_abbr_with_aliases(h_abbr: str, a_abbr: str,
+                                  odds_map: dict, sport: str) -> dict:
+    """Abbreviation-alias-aware lookup. Mirrors engine.picks.match_odds()
+    but works for NHL/NBA via the canonical alias table in engine.abbr."""
+    try:
+        from .abbr import alt_abbr
+    except Exception:
+        return odds_map.get(f"{a_abbr}@{h_abbr}", {})
+    h_alt = alt_abbr(h_abbr, sport)
+    a_alt = alt_abbr(a_abbr, sport)
+    for a, h in ((a_abbr, h_abbr), (a_alt, h_alt), (a_alt, h_abbr), (a_abbr, h_alt)):
+        row = odds_map.get(f"{a}@{h}")
+        if row:
+            return row
+    return {}
+
+
+def _nhl_closing_for_bet_type(bet_type: str, pick: str,
+                               home_abbr: str, game_odds: dict) -> int | None:
+    """Pick out the right NHL price for the pick's bet_type (O/U, PL, ML)."""
+    if not game_odds:
+        return None
+    bt = bet_type
+    pk = pick or ""
+    if bt in ("ml", "ML"):
+        return (game_odds.get("home_ml") if pk == home_abbr
+                else game_odds.get("away_ml"))
+    if bt in ("ou", "O/U"):
+        return (game_odds.get("over_odds") if "Over" in pk
+                else game_odds.get("under_odds"))
+    if bt in ("pl", "PL", "rl", "RL"):
+        pick_team = pk.split()[0] if pk.split() else ""
+        return (game_odds.get("home_spread_odds") if pick_team == home_abbr
+                else game_odds.get("away_spread_odds"))
+    return None
+
+
+def _nba_closing_for_bet_type(bet_type: str, pick: str,
+                               home_abbr: str, game_odds: dict) -> int | None:
+    """Pick out the right NBA Q1 price for the pick's bet_type."""
+    if not game_odds:
+        return None
+    bt = bet_type
+    pk = pick or ""
+    if bt == "Q1_ML":
+        return (game_odds.get("home_ml") if pk.startswith(home_abbr)
+                else game_odds.get("away_ml"))
+    if bt == "Q1_SPREAD":
+        # Pick format: "BOS +2.5 Q1" or "LAL -2.5 Q1". Home vs away by
+        # leading team abbreviation.
+        pick_home = pk.startswith(home_abbr)
+        return (game_odds.get("q1_spread_home_odds") if pick_home
+                else game_odds.get("q1_spread_away_odds"))
+    if bt == "Q1_TOTAL":
+        return (game_odds.get("q1_over_odds") if "Over" in pk
+                else game_odds.get("q1_under_odds"))
+    return None
+
+
+def _matchup_to_abbrs(matchup: str, sport: str = "mlb") -> tuple[str | None, str | None]:
     """Best-effort split of the matchup string into (away_abbr, home_abbr).
 
     Handles both ``"BOS @ NYY"`` and ``"Boston Red Sox at New York Yankees"``
-    by looking up team names in the MLB DB. Returns (None, None) when
-    parsing fails so the caller can skip silently.
+    by looking up team names in the sport-specific DB. Returns
+    (None, None) when parsing fails so the caller can skip silently.
     """
     if not matchup:
         return None, None
     if " @ " in matchup:
         parts = matchup.split(" @ ", 1)
         return parts[0].strip(), parts[1].strip()
-    if " at " in matchup:
-        try:
+    if " at " not in matchup:
+        return None, None
+    try:
+        away_name, home_name = matchup.split(" at ", 1)
+        if sport == "mlb":
             from .db import get_conn as _gc
-            away_name, home_name = matchup.split(" at ", 1)
-            c = _gc()
-            arow = c.execute("SELECT abbreviation FROM teams WHERE name = ?",
-                             (away_name.strip(),)).fetchone()
-            hrow = c.execute("SELECT abbreviation FROM teams WHERE name = ?",
-                             (home_name.strip(),)).fetchone()
-            if arow and hrow:
-                return arow["abbreviation"], hrow["abbreviation"]
-        except Exception:
-            pass
+            table = "teams"
+        elif sport == "nhl":
+            from .nhl_db import get_conn as _gc
+            table = "nhl_teams"
+        elif sport == "nba":
+            from .nba_db import get_conn as _gc
+            table = "nba_teams"
+        else:
+            return None, None
+        c = _gc()
+        arow = c.execute(f"SELECT abbreviation FROM {table} WHERE name = ?",
+                         (away_name.strip(),)).fetchone()
+        hrow = c.execute(f"SELECT abbreviation FROM {table} WHERE name = ?",
+                         (home_name.strip(),)).fetchone()
+        if arow and hrow:
+            return arow["abbreviation"], hrow["abbreviation"]
+    except Exception:
+        pass
     return None, None
 
 
