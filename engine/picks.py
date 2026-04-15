@@ -166,11 +166,14 @@ def generate_picks(home_team_id: int, away_team_id: int,
         nrfi_pick = "NRFI" if nrfi > 0.5 else "YRFI"
         nrfi_prob = nrfi if nrfi > 0.5 else fi.get("yrfi", 0.5)
         # NRFI = under 0.5 first-inning runs; YRFI = over.
-        # Use real DK odds when available, fall back to -120 synthetic.
+        # Prefer the real per-event DK/FD price; otherwise use the rolling
+        # median of stored historical NRFI prices (more accurate than the
+        # legacy -120 hardcode, which was DK-shaped but ignored that DK is
+        # often closer to -130/-145 on heavy NRFI matchups).
         if nrfi_pick == "NRFI":
-            nrfi_odds = odds.get("nrfi_under_odds") or -120
+            nrfi_odds = odds.get("nrfi_under_odds") or _nrfi_fallback_odds("NRFI")
         else:
-            nrfi_odds = odds.get("nrfi_over_odds") or -120
+            nrfi_odds = odds.get("nrfi_over_odds") or _nrfi_fallback_odds("YRFI")
         nrfi_edge = (nrfi_prob - _implied(nrfi_odds)) * 100
         allow = (nrfi_pick == "NRFI" and MLB_ALLOW_NRFI) or \
                 (nrfi_pick == "YRFI" and MLB_ALLOW_YRFI)
@@ -398,6 +401,62 @@ def _append_f5_picks(picks: list, f5: dict, odds: dict,
                     "prob": round(prob, 4),
                     "edge": round(edge, 1), "odds": away_f5_rl_odds,
                 })
+
+
+# NRFI/YRFI rolling-median fallback. The original code hardcoded -120
+# regardless of how the market actually priced NRFI; that's roughly
+# accurate for an average matchup but biased on heavy-NRFI games (DK
+# often hits -140 to -160). Sample the real prices we've already
+# stored in the odds table and use the median when we have enough
+# data; fall back to -120 only when the table is too sparse.
+_NRFI_FALLBACK_CACHE: dict[str, tuple[float, int]] = {}
+_NRFI_FALLBACK_TTL = 300  # 5 min -- balances staleness vs DB churn
+_NRFI_FALLBACK_DEFAULT = -120
+_NRFI_FALLBACK_MIN_SAMPLES = 5
+_NRFI_FALLBACK_LOOKBACK_DAYS = 60
+
+
+def _nrfi_fallback_odds(side: str) -> int:
+    """Return the rolling-median historical NRFI price for the given side.
+
+    side == 'NRFI' -> looks at nrfi_under_odds; 'YRFI' -> nrfi_over_odds.
+    Falls back to -120 when fewer than _NRFI_FALLBACK_MIN_SAMPLES samples
+    exist in the lookback window (typically the first few weeks of a
+    season after we start storing the per-event data).
+    """
+    import time as _time
+    cached = _NRFI_FALLBACK_CACHE.get(side)
+    if cached and (_time.time() - cached[0]) < _NRFI_FALLBACK_TTL:
+        return cached[1]
+
+    col = "nrfi_under_odds" if side == "NRFI" else "nrfi_over_odds"
+    try:
+        from datetime import timedelta
+        conn = get_conn()
+        cutoff = (datetime.now() - timedelta(days=_NRFI_FALLBACK_LOOKBACK_DAYS))\
+            .strftime("%Y-%m-%d")
+        rows = conn.execute(
+            f"SELECT o.{col} AS px "
+            "  FROM odds o JOIN games g ON g.mlb_game_id = o.game_id "
+            f" WHERE g.date >= ? AND o.{col} IS NOT NULL",
+            (cutoff,),
+        ).fetchall()
+        prices = [int(r["px"]) for r in rows if r["px"] is not None]
+    except Exception as e:
+        logger.debug("NRFI fallback query failed: %s", e)
+        prices = []
+
+    if len(prices) < _NRFI_FALLBACK_MIN_SAMPLES:
+        result = _NRFI_FALLBACK_DEFAULT
+    else:
+        sorted_p = sorted(prices)
+        n = len(sorted_p)
+        result = sorted_p[n // 2] if n % 2 else int(
+            (sorted_p[n // 2 - 1] + sorted_p[n // 2]) / 2
+        )
+
+    _NRFI_FALLBACK_CACHE[side] = (_time.time(), result)
+    return result
 
 
 def _find_ou(ou_lines: dict, vegas_total: float) -> dict | None:
