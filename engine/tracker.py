@@ -34,6 +34,47 @@ def _compute_clv(bet_odds, closing_odds):
     return round((close_implied - bet_implied) * 100, 2)  # positive = we got a better price
 
 
+def _extract_closing_for_pick(bet_type: str, pick_text: str,
+                               home_abbr: str, game_odds: dict) -> int | None:
+    """Pure helper: pick the right field out of an odds dict for a bet.
+
+    Used by both _fetch_closing_odds_for_pick (which fetches odds first)
+    and the inline settle_picks() capture path (which already has odds
+    in hand). Centralizing avoids two branches drifting apart when we
+    add new market types.
+    """
+    if not game_odds:
+        return None
+    bt = bet_type
+    pk = pick_text or ""
+    if bt in ("ml", "ML"):
+        return (game_odds.get("home_ml") if pk == home_abbr
+                else game_odds.get("away_ml"))
+    if bt in ("ou", "O/U"):
+        return (game_odds.get("over_odds") if "Over" in pk
+                else game_odds.get("under_odds"))
+    if bt in ("rl", "RL"):
+        pick_team = pk.split()[0] if pk.split() else ""
+        return (game_odds.get("home_spread_odds") if pick_team == home_abbr
+                else game_odds.get("away_spread_odds"))
+    if bt in ("nrfi", "1st INN"):
+        # NRFI / YRFI close on the per-event totals_1st_1_innings market.
+        if pk == "NRFI":
+            return game_odds.get("nrfi_under_odds")
+        return game_odds.get("nrfi_over_odds")
+    if bt == "F5 ML":
+        return (game_odds.get("f5_home_ml") if pk == home_abbr
+                else game_odds.get("f5_away_ml"))
+    if bt == "F5 O/U":
+        return (game_odds.get("f5_over_odds") if "Over" in pk
+                else game_odds.get("f5_under_odds"))
+    if bt == "F5 RL":
+        pick_team = pk.split()[0] if pk.split() else ""
+        return (game_odds.get("f5_home_spread_odds") if pick_team == home_abbr
+                else game_odds.get("f5_away_spread_odds"))
+    return None
+
+
 def _fetch_closing_odds_for_pick(pick: dict, home_abbr: str, away_abbr: str) -> int | None:
     """Fetch current odds from the odds API for a specific pick.
 
@@ -44,34 +85,11 @@ def _fetch_closing_odds_for_pick(pick: dict, home_abbr: str, away_abbr: str) -> 
         from .picks import fetch_real_odds_for_games, match_odds
         all_odds = fetch_real_odds_for_games()
         game_odds = match_odds(home_abbr, away_abbr, all_odds)
-        if not game_odds:
-            return None
-
-        bt = pick["bet_type"]
-        pk = pick["pick"]
-
-        if bt in ("ml", "ML"):
-            if pk == home_abbr:
-                return game_odds.get("home_ml")
-            else:
-                return game_odds.get("away_ml")
-        elif bt in ("ou", "O/U"):
-            if "Over" in pk:
-                return game_odds.get("over_odds")
-            else:
-                return game_odds.get("under_odds")
-        elif bt in ("rl", "RL"):
-            pick_team = pk.split()[0] if pk.split() else ""
-            if pick_team == home_abbr:
-                return game_odds.get("home_spread_odds")
-            else:
-                return game_odds.get("away_spread_odds")
-        elif bt in ("nrfi", "1st INN"):
-            # NRFI doesn't have a standard closing line from the odds API
-            return None
+        return _extract_closing_for_pick(
+            pick["bet_type"], pick["pick"], home_abbr, game_odds or {},
+        )
     except Exception:
         return None
-    return None
 
 
 def _fetch_espn_scoreboard(date: str) -> list[dict]:
@@ -418,7 +436,9 @@ def settle_picks() -> dict:
         h = home_team["abbreviation"] if home_team else ""
         a = away_team["abbreviation"] if away_team else ""
 
-        # Capture closing odds if not already stored
+        # Capture closing odds if not already stored. Delegates the
+        # bet-type -> field mapping to _fetch_closing_odds_for_pick so
+        # NRFI / F5 markets get the same treatment as ML/OU/RL.
         if not pick.get("closing_odds") and h and a:
             try:
                 from .picks import match_odds as _match_odds
@@ -426,14 +446,11 @@ def settle_picks() -> dict:
                 if game_odds:
                     bt_tmp = pick["bet_type"]
                     pk_tmp = pick["pick"]
-                    closing = None
-                    if bt_tmp in ("ml", "ML"):
-                        closing = game_odds.get("home_ml") if pk_tmp == h else game_odds.get("away_ml")
-                    elif bt_tmp in ("ou", "O/U"):
-                        closing = game_odds.get("over_odds") if "Over" in pk_tmp else game_odds.get("under_odds")
-                    elif bt_tmp in ("rl", "RL"):
-                        pick_team = pk_tmp.split()[0] if pk_tmp.split() else ""
-                        closing = game_odds.get("home_spread_odds") if pick_team == h else game_odds.get("away_spread_odds")
+                    # Reuse the per-bet-type extractor (handles NRFI/F5
+                    # via the per-event fields we now store).
+                    closing = _extract_closing_for_pick(
+                        bt_tmp, pk_tmp, h, game_odds,
+                    )
                     if closing is not None:
                         conn.execute("UPDATE picks SET closing_odds = ? WHERE id = ?",
                                      (int(closing), pick["id"]))
