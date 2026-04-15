@@ -498,14 +498,40 @@ def _determine_outcome(sport: str, conn, potd: dict) -> tuple[str | None, float]
         row = None
         if game_id:
             row = conn.execute("""
-                SELECT * FROM nba_games
-                WHERE game_id = ? AND status = 'final'
+                SELECT g.*, ht.abbreviation AS home_abbr, at.abbreviation AS away_abbr
+                FROM nba_games g
+                LEFT JOIN nba_teams ht ON g.home_team_id = ht.id
+                LEFT JOIN nba_teams at ON g.away_team_id = at.id
+                WHERE g.game_id = ? AND g.status = 'final'
                 LIMIT 1
             """, (game_id,)).fetchone()
+        # Fallback by date + team names -- the ESPN game_id stored on
+        # the POTD doesn't match the nba_games primary key, so for NBA
+        # this path is the usual one that resolves.
+        if not row:
+            row = conn.execute("""
+                SELECT g.*, ht.abbreviation AS home_abbr, at.abbreviation AS away_abbr
+                FROM nba_games g
+                LEFT JOIN nba_teams ht ON g.home_team_id = ht.id
+                LEFT JOIN nba_teams at ON g.away_team_id = at.id
+                WHERE g.date = ? AND g.status = 'final'
+                  AND (ht.name LIKE ? OR ht.abbreviation = ?)
+                  AND (at.name LIKE ? OR at.abbreviation = ?)
+                LIMIT 1
+            """, (date, f"%{home_part}%", home_part, f"%{away_part}%", away_part)).fetchone()
     else:
         return None, 0
 
     if not row:
+        # Differentiate "game not finished yet" from "we can't find
+        # this game at all" -- the latter usually means a date/team
+        # -name mismatch between the POTD row and the games table,
+        # which is silent without a log.
+        logger.debug(
+            "POTD settle: no final game row for %s %s / %s (game_id=%s, "
+            "home_part=%r, away_part=%r)",
+            sport, date, matchup, game_id, home_part, away_part,
+        )
         return None, 0
 
     row = dict(row)
@@ -584,7 +610,64 @@ def _determine_outcome(sport: str, conn, potd: dict) -> tuple[str | None, float]
             else:
                 result = "W" if not scoreless else "L"
 
+    elif bet_type == "Q1_ML":
+        # Pick format: "BOS Q1 ML" or "Boston Celtics Q1 ML" (team name
+        # resolved via _pick_full_name at create time).
+        hq1 = row.get("home_q1", 0) or 0
+        aq1 = row.get("away_q1", 0) or 0
+        pick_home = ((home_abbr and home_abbr in pick)
+                     or (home_part and home_part in pick))
+        home_won_q1 = hq1 > aq1
+        if hq1 == aq1:
+            result = "P"
+        else:
+            won = (pick_home and home_won_q1) or (not pick_home and not home_won_q1)
+            result = "W" if won else "L"
+
+    elif bet_type == "Q1_SPREAD":
+        # Pick format: "BOS -2.5 Q1" or "Boston Celtics -2.5 Q1".
+        import re as _re
+        hq1 = row.get("home_q1", 0) or 0
+        aq1 = row.get("away_q1", 0) or 0
+        # Spread is the first +/-N.N appearing anywhere in the pick.
+        m = _re.search(r"([+-]\d+\.?\d*)", pick)
+        spread = float(m.group(1)) if m else 0.0
+        pick_home = ((home_abbr and home_abbr in pick)
+                     or (home_part and home_part in pick))
+        if pick_home:
+            margin = hq1 - aq1
+        else:
+            margin = aq1 - hq1
+        covered = margin + spread > 0
+        pushed = margin + spread == 0
+        if pushed:
+            result = "P"
+        else:
+            result = "W" if covered else "L"
+
+    elif bet_type == "Q1_TOTAL":
+        # Pick format: "Over 55.5 Q1" or "Under 55.5 Q1".
+        hq1 = row.get("home_q1", 0) or 0
+        aq1 = row.get("away_q1", 0) or 0
+        q1_total = hq1 + aq1
+        import re as _re
+        m = _re.search(r"(\d+\.?\d*)", pick)
+        line = float(m.group(1)) if m else 0.0
+        is_over = "Over" in pick or "over" in pick
+        if q1_total == line:
+            result = "P"
+        elif is_over:
+            result = "W" if q1_total > line else "L"
+        else:
+            result = "W" if q1_total < line else "L"
+
     if result is None:
+        # Row was found but no outcome handler matched the bet_type.
+        # Without logging, the POTD silently stays pending forever.
+        logger.warning(
+            "POTD settle: no outcome handler for bet_type=%r on %s %s/%s",
+            bet_type, sport, date, matchup,
+        )
         return None, 0
 
     if result == "W":
