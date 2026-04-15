@@ -83,6 +83,31 @@ CACHE_TTL = 120
 MAX_CACHE_ENTRIES = 50  # Prevent unbounded memory growth
 
 
+def _odds_from_scoreboard_cache(home_abbr: str, away_abbr: str) -> dict:
+    """Look up odds for a matchup in any cached scoreboard payload.
+
+    /api/predict was triggering a full Odds API fetch on every request
+    even though /api/scoreboard had already attached the same odds to
+    each game in its cache. Try the cache first; the caller falls back
+    to fetch_real_odds_for_games() on miss. Tries alternate abbrevia-
+    tion forms (ARI/AZ etc.) so an ESPN-keyed scoreboard cache can
+    still answer an Odds-API-keyed query.
+    """
+    from engine.abbr import alt_abbr
+    candidates = {(home_abbr, away_abbr)}
+    h_alt = alt_abbr(home_abbr, "mlb")
+    a_alt = alt_abbr(away_abbr, "mlb")
+    candidates.update({(h_alt, away_abbr), (home_abbr, a_alt), (h_alt, a_alt)})
+
+    for _ts, games in _scoreboard_cache.values():
+        for g in games:
+            gh = g.get("home", {}).get("abbreviation", "")
+            ga = g.get("away", {}).get("abbreviation", "")
+            if (gh, ga) in candidates and g.get("odds"):
+                return g["odds"]
+    return {}
+
+
 def _fetch_espn_json(url: str) -> dict | None:
     for attempt in range(2):
         try:
@@ -801,8 +826,15 @@ def api_predict(req: PredictRequest):
         h_abbr = home_team.get("abbreviation", "")
         a_abbr = away_team.get("abbreviation", "")
 
-        all_odds = fetch_real_odds_for_games()
-        odds = match_odds(h_abbr, a_abbr, all_odds) if (h_abbr and a_abbr) else {}
+        # Reuse the odds the scoreboard already attached to today's games
+        # (warmed by /api/scoreboard or its background refresh) instead of
+        # triggering an Odds API fetch from inside the request handler.
+        # Falls back to fetch_real_odds_for_games() only if no scoreboard
+        # cache hit is available -- this is the cold-start path.
+        odds = _odds_from_scoreboard_cache(h_abbr, a_abbr) if (h_abbr and a_abbr) else {}
+        if not odds and h_abbr and a_abbr:
+            all_odds = fetch_real_odds_for_games()
+            odds = match_odds(h_abbr, a_abbr, all_odds)
 
         picks = generate_picks(
             home_team_id=req.home_team_id,

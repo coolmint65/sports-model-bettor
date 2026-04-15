@@ -88,6 +88,11 @@ function BettingPicks({ data }) {
     ? `${d.best_pick.type}|${d.best_pick.pick}`
     : null
   const total = d?.total
+  // Odds snapshot the engine used. Carries `provider` (full-game book,
+  // typically DraftKings) and `per_event_provider` (NRFI/F5 book, which
+  // is whichever of DK/FD/MGM/Bovada had data). Surfaced per row so the
+  // user knows where each price came from.
+  const odds = d?.odds || {}
 
   return (
     <div className="picks-card">
@@ -104,6 +109,7 @@ function BettingPicks({ data }) {
           key={`${p.type}-${p.pick}-${i}`}
           engine={p}
           isBest={bestKey === `${p.type}|${p.pick}`}
+          provider={_providerForPick(p.type, odds)}
           pct={pct}
         />
       ))}
@@ -118,10 +124,21 @@ function BettingPicks({ data }) {
 }
 
 
+// Per-event markets (NRFI / F5*) come from whichever of DK/FD/MGM/Bovada
+// had the line. Full-game markets (ML/O/U/RL) always use DraftKings.
+const _PER_EVENT_TYPES = new Set(['1st INN', 'F5 ML', 'F5 O/U', 'F5 RL'])
+function _providerForPick(type, odds) {
+  if (_PER_EVENT_TYPES.has(type)) {
+    return odds.per_event_provider || null
+  }
+  return odds.provider || null
+}
+
+
 // Engine-produced pick fields: {type, pick, prob, edge, odds, confidence,
 // adjusted_ev}. The engine already filtered for positive edge + allowed
 // direction, so the client renders fields verbatim without recomputation.
-function PickRow({ engine, isBest, pct }) {
+function PickRow({ engine, isBest, provider, pct }) {
   const {type, pick, prob, edge, odds, confidence} = engine
   const conf = confidence === 'strong' ? 'high'
     : confidence === 'moderate' ? 'med'
@@ -139,6 +156,15 @@ function PickRow({ engine, isBest, pct }) {
         <span className="pick-name">{pick}</span>
         {odds != null && (
           <span className="pick-odds">({odds > 0 ? '+' : ''}{odds})</span>
+        )}
+        {provider && (
+          <span
+            className="pick-provider"
+            title={`Price source: ${provider}`}
+            style={{fontSize:'0.62rem', color:'#64748b', marginLeft:6, letterSpacing:'0.04em'}}
+          >
+            {provider}
+          </span>
         )}
       </div>
       <div className="pick-numbers">
