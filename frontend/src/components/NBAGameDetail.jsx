@@ -1,6 +1,7 @@
 import SharedGameHeader from './gameDetail/SharedGameHeader'
 import EdgeCallout from './gameDetail/EdgeCallout'
 import { kellyFraction, impliedFromOdds } from './gameDetail/kelly'
+import ProbHistogram from './gameDetail/ProbHistogram'
 
 export default function NBAGameDetail({ game, prediction, loading, onBack }) {
   const { home, away, status } = game
@@ -230,11 +231,15 @@ function Q1BettingPicks({ data, odds, home, away }) {
     })
   }
 
+  // CI half-width on the win-probability point estimate, driven by
+  // team games played. Served on engine.nba_q1_predict.confidence_ci.
+  const ciHw = d.confidence_ci?.ci_half_width ?? null
+
   return (
     <div className="picks-card">
       <h2>Q1 Model Picks</h2>
       {picks.map((p, i) => (
-        <PickRow key={i} label={p.label} pick={p.pick} prob={p.prob} odds={p.odds} pct={pct} />
+        <PickRow key={i} label={p.label} pick={p.pick} prob={p.prob} odds={p.odds} pct={pct} ciHw={ciHw} />
       ))}
       <div className="picks-footer">
         Q1 projected total: <strong>{(d.predicted_total || 0).toFixed(1)}</strong>
@@ -243,7 +248,7 @@ function Q1BettingPicks({ data, odds, home, away }) {
   )
 }
 
-function PickRow({ label, pick, prob, odds, pct }) {
+function PickRow({ label, pick, prob, odds, pct, ciHw }) {
   const conf = prob > 0.60 ? 'high' : prob > 0.53 ? 'med' : 'low'
   let edge = null
   let kelly = null
@@ -252,6 +257,9 @@ function PickRow({ label, pick, prob, odds, pct }) {
     edge = ((prob - implied) * 100).toFixed(1)
     if (parseFloat(edge) > 0) kelly = kellyFraction(prob, odds)
   }
+
+  const probLow  = (prob != null && ciHw != null) ? Math.max(0, prob - ciHw) : null
+  const probHigh = (prob != null && ciHw != null) ? Math.min(1, prob + ciHw) : null
 
   return (
     <div className={`pick-row conf-${conf}`}>
@@ -262,6 +270,7 @@ function PickRow({ label, pick, prob, odds, pct }) {
       </div>
       <div className="pick-numbers">
         <span className={`pick-prob conf-${conf}`}>{pct(prob)}</span>
+        <ProbHistogram prob={prob} low={probLow} high={probHigh} halfWidth={ciHw} />
         {edge && parseFloat(edge) > 0 && <span className="pick-edge positive">+{edge}%</span>}
         {kelly != null && kelly > 0 && (
           <span style={{fontSize:'0.68rem',color:'#94a3b8',marginTop:2,cursor:'help'}} title="Quarter-Kelly">

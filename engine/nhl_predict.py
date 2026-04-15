@@ -1966,6 +1966,41 @@ def predict_matchup(home_key: str, away_key: str,
         "injuries": injury_data,
         "rest": rest_data,
         "granular": granular_data,
+        # CI on the win-probability point estimate. Sample size is the
+        # smaller of the two teams' games-played counts (limiting
+        # factor), parsed from the W-L-OTL record string.
+        "confidence": _nhl_prediction_confidence(h_live_record, a_live_record,
+                                                   p_home_ml, p_away_ml),
+    }
+
+
+def _nhl_prediction_confidence(home_record: str, away_record: str,
+                                 p_home: float, p_away: float) -> dict:
+    """Build a confidence dict matching MLB's shape (score, label,
+    ci_half_width, samples) using games-played from the team records.
+    """
+    from ._confidence import ci_half_width, ci_band, parse_record_games
+    h_games = parse_record_games(home_record)
+    a_games = parse_record_games(away_record)
+    n_eff = min(h_games, a_games)
+    hw = ci_half_width(n_eff)
+    pct = min(100, max(0, int(n_eff / 82 * 100))) if n_eff else 0
+    if pct >= 75:
+        label = "high"
+    elif pct >= 35:
+        label = "medium"
+    elif pct >= 10:
+        label = "low"
+    else:
+        label = "very_low"
+    return {
+        "score": pct,
+        "label": label,
+        "ci_half_width": hw,
+        "samples": {
+            "home_games": h_games,
+            "away_games": a_games,
+        },
     }
 
 

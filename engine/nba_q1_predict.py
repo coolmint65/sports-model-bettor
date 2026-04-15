@@ -666,6 +666,31 @@ def predict_q1_matchup(home_abbr: str, away_abbr: str,
         if e < EDGE_SKIP:
             p["confidence"] = "skip"
 
+    # CI band on the win-probability point estimate (data-quality
+    # uncertainty). Derived from team games played so the band narrows
+    # as the season matures. Shape matches MLB/NHL so the shared
+    # ProbHistogram renders identically.
+    try:
+        from ._confidence import ci_half_width, parse_record_games
+        h_rec = (pred.get("home", {}) or {}).get("record", "")
+        a_rec = (pred.get("away", {}) or {}).get("record", "")
+        h_games = parse_record_games(h_rec)
+        a_games = parse_record_games(a_rec)
+        n_eff = min(h_games, a_games) if (h_games and a_games) else 0
+        hw = ci_half_width(n_eff)
+        pred["confidence_ci"] = {"ci_half_width": hw,
+                                 "samples": {"home_games": h_games,
+                                             "away_games": a_games}}
+        for p in picks:
+            prob = p.get("prob")
+            if prob is None:
+                continue
+            p["prob_low"] = round(max(0.0, prob - hw), 4)
+            p["prob_high"] = round(min(1.0, prob + hw), 4)
+            p["ci_half_width"] = hw
+    except Exception as ci_err:
+        logger.debug("NBA CI annotation failed: %s", ci_err)
+
     pred["picks"] = picks
     return pred
 

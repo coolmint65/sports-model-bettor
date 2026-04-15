@@ -176,6 +176,18 @@ def generate_nhl_picks_with_context(home_key: str, away_key: str,
                     "edge": round(a_edge, 1), "odds": away_pl_odds,
                 })
 
+    # CI band on the win-probability point estimate (data-quality
+    # uncertainty). Same shape as MLB so the shared ProbHistogram
+    # component renders identically across all three sports.
+    ci_hw = (pred.get("confidence") or {}).get("ci_half_width", 0.05)
+    for p in picks:
+        prob = p.get("prob")
+        if prob is None:
+            continue
+        p["prob_low"] = round(max(0.0, prob - ci_hw), 4)
+        p["prob_high"] = round(min(1.0, prob + ci_hw), 4)
+        p["ci_half_width"] = ci_hw
+
     # Adjusted EV: edge * reliability weight
     for p in picks:
         reliability = NHL_BET_RELIABILITY.get(p["type"], 0.5)

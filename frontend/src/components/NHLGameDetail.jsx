@@ -2,6 +2,7 @@ import SharedGameHeader from './gameDetail/SharedGameHeader'
 import RestBadges from './gameDetail/RestBadges'
 import EdgeCallout from './gameDetail/EdgeCallout'
 import { kellyFraction, mlToProb, impliedFromOdds } from './gameDetail/kelly'
+import ProbHistogram from './gameDetail/ProbHistogram'
 
 export default function NHLGameDetail({ game, prediction, loading, onBack }) {
   const { home, away } = game
@@ -637,22 +638,27 @@ function NHLBettingPicks({ data, odds, home, away }) {
   const p1Pick = p1 ? (p1.over_15 > 0.50 ? 'Over 1.5' : 'Under 1.5') : null
   const p1Prob = p1 ? Math.max(p1.over_15, p1.under_15) : null
 
+  // CI half-width on the win-probability point estimate, served by
+  // engine.nhl_predict alongside the confidence score. Drives the
+  // small histogram under each pick's percentage.
+  const ciHw = d.confidence?.ci_half_width ?? null
+
   return (
     <div className="picks-card">
       <h2>Model Picks</h2>
 
-      <PickRow label="Moneyline" pick={mlPick.abbreviation} prob={mlProb} odds={mlOdds} pct={pct} />
+      <PickRow label="Moneyline" pick={mlPick.abbreviation} prob={mlProb} odds={mlOdds} pct={pct} ciHw={ciHw} />
 
       {ouPick && (
-        <PickRow label={`O/U ${vegasTotal}`} pick={ouPick} prob={ouConf} odds={ouOdds} pct={pct} />
+        <PickRow label={`O/U ${vegasTotal}`} pick={ouPick} prob={ouConf} odds={ouOdds} pct={pct} ciHw={ciHw} />
       )}
 
       {plPick && (
-        <PickRow label="Puck Line" pick={plPick} prob={plProb} odds={plOdds} pct={pct} />
+        <PickRow label="Puck Line" pick={plPick} prob={plProb} odds={plOdds} pct={pct} ciHw={ciHw} />
       )}
 
       {p1Pick && (
-        <PickRow label="1st Period" pick={p1Pick} prob={p1Prob} pct={pct} />
+        <PickRow label="1st Period" pick={p1Pick} prob={p1Prob} pct={pct} ciHw={ciHw} />
       )}
 
       <div className="picks-footer">
@@ -663,7 +669,7 @@ function NHLBettingPicks({ data, odds, home, away }) {
 }
 
 
-function PickRow({ label, pick, prob, odds, pct }) {
+function PickRow({ label, pick, prob, odds, pct, ciHw }) {
   const conf = prob > 0.60 ? 'high' : prob > 0.53 ? 'med' : 'low'
 
   let edge = null
@@ -677,6 +683,12 @@ function PickRow({ label, pick, prob, odds, pct }) {
     }
   }
 
+  // CI band from engine.nhl_predict.confidence.ci_half_width. Same
+  // shape MLB ships to GameDetail; rendered via the shared histogram
+  // component so the three sports look identical.
+  const probLow  = (prob != null && ciHw != null) ? Math.max(0, prob - ciHw) : null
+  const probHigh = (prob != null && ciHw != null) ? Math.min(1, prob + ciHw) : null
+
   return (
     <div className={`pick-row conf-${conf}`}>
       <div className="pick-label">{label}</div>
@@ -688,6 +700,7 @@ function PickRow({ label, pick, prob, odds, pct }) {
       </div>
       <div className="pick-numbers">
         <span className={`pick-prob conf-${conf}`}>{pct(prob)}</span>
+        <ProbHistogram prob={prob} low={probLow} high={probHigh} halfWidth={ciHw} />
         {edge && parseFloat(edge) > 0 && (
           <span className="pick-edge positive">+{edge}%</span>
         )}
