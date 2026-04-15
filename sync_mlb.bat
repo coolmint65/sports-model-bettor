@@ -32,6 +32,10 @@ if errorlevel 1 (
 echo Quick sync (teams, today's games, standings)...
 python scripts\run.py scrapers.mlb_stats
 
+echo.
+echo Draining pending odds (matchups now resolvable to mlb_game_id)...
+python -c "from engine.odds_history import drain_pending_mlb_odds; print(drain_pending_mlb_odds())" 2>nul
+
 :calibrate
 echo.
 echo Calibrating global model...

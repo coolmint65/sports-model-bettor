@@ -394,6 +394,27 @@ def _migrate(conn: sqlite3.Connection) -> None:
         ("odds", "f5_away_spread_point", "REAL"),
         ("odds", "f5_away_spread_odds", "INTEGER"),
     ]
+    # Pending-odds queue: holds odds payloads we couldn't link to a real
+    # mlb_game_id yet (typically because daily ingestion hasn't run for
+    # the date in question). Created via a separate CREATE TABLE since
+    # adding a brand-new table doesn't fit the (table, column, type)
+    # migration shape above.
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS pending_odds (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                game_date    TEXT NOT NULL,
+                home_team_id INTEGER,
+                away_team_id INTEGER,
+                home_abbr    TEXT,
+                away_abbr    TEXT,
+                payload      TEXT NOT NULL,    -- JSON-encoded odds dict
+                captured_at  TEXT DEFAULT (datetime('now')),
+                UNIQUE(game_date, home_team_id, away_team_id)
+            )
+        """)
+    except Exception as e:
+        logger.warning("pending_odds creation failed: %s", e)
 
     # Check existing columns first to avoid ALTER TABLE errors
     for table, column, col_type in migrations:

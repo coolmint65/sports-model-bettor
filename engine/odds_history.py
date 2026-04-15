@@ -4,8 +4,13 @@ honest backtesting against real market prices.
 
 NHL odds → nhl.db / nhl_odds table.
 MLB odds → mlb.db / odds table (including NRFI + F5 markets).
+
+When a game isn't yet in the games table (early season, fresh DB,
+ingestion lag), MLB odds are queued in pending_odds and drained on
+the next ingestion run by drain_pending_mlb_odds().
 """
 
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -34,6 +39,8 @@ def store_mlb_odds(games_with_odds: list[dict]) -> int:
     conn = get_conn()
     stored = 0
 
+    queued = 0
+
     for g in games_with_odds:
         odds = g.get("odds") or {}
         if not odds.get("home_ml"):
@@ -44,6 +51,11 @@ def store_mlb_odds(games_with_odds: list[dict]) -> int:
         if not game_id:
             game_id = _resolve_mlb_game_id(conn, g)
         if not game_id:
+            # Queue for the next sync to reconcile. This covers early-season
+            # / fresh-DB cases where ESPN has the game but the MLB Stats API
+            # ingestion hasn't created the games row yet.
+            if _enqueue_pending(conn, g, odds):
+                queued += 1
             continue
 
         try:
@@ -116,11 +128,131 @@ def store_mlb_odds(games_with_odds: list[dict]) -> int:
         except Exception as e:
             logger.warning("Failed to store MLB odds for game_id=%s: %s", game_id, e)
 
-    if stored:
+    if stored or queued:
         conn.commit()
-        logger.info("Stored %d MLB odds snapshots", stored)
+        logger.info(
+            "MLB odds: stored %d, queued %d (drain via drain_pending_mlb_odds)",
+            stored, queued,
+        )
 
     return stored
+
+
+def _enqueue_pending(conn, game: dict, odds: dict) -> bool:
+    """Park an unresolvable odds payload in pending_odds for later reconciliation."""
+    home = game.get("home") or {}
+    away = game.get("away") or {}
+    date = (game.get("date", "") or "")[:10]
+    if not date:
+        return False
+    try:
+        conn.execute("""
+            INSERT INTO pending_odds (
+                game_date, home_team_id, away_team_id,
+                home_abbr, away_abbr, payload, captured_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(game_date, home_team_id, away_team_id) DO UPDATE SET
+                payload = excluded.payload,
+                captured_at = excluded.captured_at
+        """, (
+            date,
+            home.get("team_id"),
+            away.get("team_id"),
+            home.get("abbreviation"),
+            away.get("abbreviation"),
+            json.dumps(odds, default=str),
+        ))
+        return True
+    except Exception as e:
+        logger.warning("Failed to enqueue pending odds for %s: %s", date, e)
+        return False
+
+
+def drain_pending_mlb_odds() -> dict:
+    """Re-attempt storage of any pending odds whose games table row now exists.
+
+    Called after MLB Stats API ingestion (sync_mlb.bat). Walks pending_odds,
+    re-resolves mlb_game_id by date + team IDs, and on success forwards the
+    payload through store_mlb_odds(). Anything still unresolvable stays
+    queued; rows older than the cutoff are dropped so a permanently-broken
+    matchup doesn't accumulate forever.
+
+    Returns a summary dict {drained, dropped, still_pending}.
+    """
+    try:
+        from .db import get_conn
+    except Exception:
+        return {"drained": 0, "dropped": 0, "still_pending": 0}
+
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, game_date, home_team_id, away_team_id, "
+            "       home_abbr, away_abbr, payload, captured_at "
+            "FROM pending_odds"
+        ).fetchall()
+    except Exception as e:
+        logger.warning("drain_pending_mlb_odds: cannot read queue: %s", e)
+        return {"drained": 0, "dropped": 0, "still_pending": 0}
+
+    drained = 0
+    dropped = 0
+    still_pending = 0
+    cutoff_age_days = 14   # drop entries this old; the game is unlikely to materialize
+
+    for r in rows:
+        try:
+            captured = datetime.fromisoformat(
+                r["captured_at"].replace(" ", "T")
+            )
+            age_days = (datetime.now() - captured).total_seconds() / 86400
+        except Exception:
+            age_days = 0
+
+        try:
+            payload = json.loads(r["payload"])
+        except Exception:
+            payload = None
+
+        # Try to resolve the game row now.
+        game_id = None
+        if r["home_team_id"] and r["away_team_id"]:
+            try:
+                grow = conn.execute(
+                    "SELECT mlb_game_id FROM games "
+                    "WHERE date = ? AND home_team_id = ? AND away_team_id = ? LIMIT 1",
+                    (r["game_date"], r["home_team_id"], r["away_team_id"]),
+                ).fetchone()
+                game_id = grow["mlb_game_id"] if grow else None
+            except Exception:
+                game_id = None
+
+        if game_id and payload:
+            stub_game = {
+                "mlb_game_id": game_id,
+                "date": r["game_date"],
+                "home": {"team_id": r["home_team_id"], "abbreviation": r["home_abbr"]},
+                "away": {"team_id": r["away_team_id"], "abbreviation": r["away_abbr"]},
+                "odds": payload,
+            }
+            store_mlb_odds([stub_game])
+            conn.execute("DELETE FROM pending_odds WHERE id = ?", (r["id"],))
+            drained += 1
+        elif age_days > cutoff_age_days:
+            conn.execute("DELETE FROM pending_odds WHERE id = ?", (r["id"],))
+            dropped += 1
+        else:
+            still_pending += 1
+
+    if drained or dropped:
+        conn.commit()
+        logger.info(
+            "drain_pending_mlb_odds: drained=%d dropped=%d still_pending=%d",
+            drained, dropped, still_pending,
+        )
+
+    return {"drained": drained, "dropped": dropped, "still_pending": still_pending}
 
 
 def _resolve_mlb_game_id(conn, game: dict) -> int | None:
