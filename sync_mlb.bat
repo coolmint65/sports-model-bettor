@@ -56,6 +56,10 @@ echo Settling completed picks...
 python scripts\run.py engine.tracker --settle
 
 echo.
+echo Updating POTD closing odds (CLV capture)...
+python -c "from engine.pick_of_day import update_potd_closing_odds; print(update_potd_closing_odds('mlb'))" 2>nul
+
+echo.
 echo Settling POTD...
 python -c "from engine.pick_of_day import settle_potd; print(settle_potd('mlb'))" 2>nul
 

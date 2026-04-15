@@ -75,6 +75,16 @@ def _ensure_potd_table(sport: str) -> None:
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_potd_date ON pick_of_day(date)")
+    # Migration: add closing_odds + closing_odds_updated_at columns to
+    # existing tables. Captured on each sync run while the POTD is still
+    # pending so the latest pre-settle value is effectively the closing
+    # line. CLV is computed lazily from (odds, closing_odds) -- no need
+    # to persist it.
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(pick_of_day)").fetchall()}
+    if "closing_odds" not in cols:
+        conn.execute("ALTER TABLE pick_of_day ADD COLUMN closing_odds INTEGER")
+    if "closing_odds_updated_at" not in cols:
+        conn.execute("ALTER TABLE pick_of_day ADD COLUMN closing_odds_updated_at TEXT")
     conn.commit()
 
 
@@ -274,6 +284,106 @@ def get_or_create_potd(sport: str, games_with_bets: list[dict],
     result = dict(selected)
     result["date"] = target_date
     return result
+
+
+def update_potd_closing_odds(sport: str) -> dict:
+    """Refresh closing_odds on every un-settled POTD with the latest line.
+
+    The pick selection itself stays locked from get_or_create_potd();
+    this only updates the price we'll use for CLV measurement at settle
+    time. Designed to be called on every sync run -- since each call
+    overwrites with the freshest available price, the LAST update before
+    settle_potd() runs is effectively the closing line we record.
+
+    MLB-only for now (uses engine.picks.match_odds and the same per-event
+    odds path the rest of the MLB pipeline uses). Other sports return
+    {"updated": 0, "skipped": 0, "reason": ...}.
+    """
+    if sport != "mlb":
+        return {"updated": 0, "skipped": 0, "reason": f"{sport} not supported yet"}
+
+    _ensure_potd_table(sport)
+    conn = _get_conn(sport)
+
+    pending = conn.execute(
+        "SELECT id, game_id, matchup, bet_type, pick FROM pick_of_day "
+        "WHERE result IS NULL"
+    ).fetchall()
+    if not pending:
+        return {"updated": 0, "skipped": 0}
+
+    try:
+        from .picks import fetch_real_odds_for_games, match_odds
+        from .tracker import _extract_closing_for_pick
+    except Exception as e:
+        return {"updated": 0, "skipped": len(pending), "reason": str(e)}
+
+    all_odds = fetch_real_odds_for_games() or {}
+    if not all_odds:
+        return {"updated": 0, "skipped": len(pending),
+                "reason": "no current odds available"}
+
+    updated = 0
+    skipped = 0
+    for row in pending:
+        row = dict(row)
+        # Matchup format: "Boston Red Sox at New York Yankees" (full name)
+        # OR "BOS @ NYY" (abbreviation form). Both end up needing the
+        # home/away abbreviations to match against the odds map.
+        a_abbr, h_abbr = _matchup_to_abbrs(row["matchup"])
+        if not (a_abbr and h_abbr):
+            skipped += 1
+            continue
+        game_odds = match_odds(h_abbr, a_abbr, all_odds)
+        if not game_odds:
+            skipped += 1
+            continue
+        closing = _extract_closing_for_pick(
+            row["bet_type"], row["pick"], h_abbr, game_odds,
+        )
+        if closing is None:
+            skipped += 1
+            continue
+        conn.execute(
+            "UPDATE pick_of_day SET closing_odds = ?, "
+            "       closing_odds_updated_at = datetime('now') "
+            "WHERE id = ?",
+            (int(closing), row["id"]),
+        )
+        updated += 1
+
+    if updated:
+        conn.commit()
+        logger.info("POTD closing odds: updated %d, skipped %d", updated, skipped)
+    return {"updated": updated, "skipped": skipped}
+
+
+def _matchup_to_abbrs(matchup: str) -> tuple[str | None, str | None]:
+    """Best-effort split of the matchup string into (away_abbr, home_abbr).
+
+    Handles both ``"BOS @ NYY"`` and ``"Boston Red Sox at New York Yankees"``
+    by looking up team names in the MLB DB. Returns (None, None) when
+    parsing fails so the caller can skip silently.
+    """
+    if not matchup:
+        return None, None
+    if " @ " in matchup:
+        parts = matchup.split(" @ ", 1)
+        return parts[0].strip(), parts[1].strip()
+    if " at " in matchup:
+        try:
+            from .db import get_conn as _gc
+            away_name, home_name = matchup.split(" at ", 1)
+            c = _gc()
+            arow = c.execute("SELECT abbreviation FROM teams WHERE name = ?",
+                             (away_name.strip(),)).fetchone()
+            hrow = c.execute("SELECT abbreviation FROM teams WHERE name = ?",
+                             (home_name.strip(),)).fetchone()
+            if arow and hrow:
+                return arow["abbreviation"], hrow["abbreviation"]
+        except Exception:
+            pass
+    return None, None
 
 
 def settle_potd(sport: str) -> dict:
@@ -526,11 +636,27 @@ def get_potd_summary(sport: str, limit: int = 30) -> dict:
 
 
 def get_today_potd(sport: str, date: str | None = None) -> dict | None:
-    """Fetch just today's POTD (doesn't create one)."""
+    """Fetch just today's POTD (doesn't create one).
+
+    Annotates the response with a computed `clv` field when both odds
+    and closing_odds are present, so the UI doesn't have to redo the
+    arithmetic. Positive CLV = we got a better price than the close.
+    """
     _ensure_potd_table(sport)
     conn = _get_conn(sport)
     target_date = date or datetime.now().strftime("%Y-%m-%d")
     row = conn.execute(
         "SELECT * FROM pick_of_day WHERE date = ?", (target_date,)
     ).fetchone()
-    return dict(row) if row else None
+    if not row:
+        return None
+    out = dict(row)
+    bet_odds = out.get("odds")
+    close = out.get("closing_odds")
+    if bet_odds and close:
+        bet_imp = abs(bet_odds) / (abs(bet_odds) + 100) if bet_odds < 0 \
+                  else 100 / (bet_odds + 100)
+        close_imp = abs(close) / (abs(close) + 100) if close < 0 \
+                    else 100 / (close + 100)
+        out["clv"] = round((close_imp - bet_imp) * 100, 2)
+    return out
