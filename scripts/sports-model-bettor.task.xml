@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Windows Task Scheduler import for the daily sports-model-bettor sync.
+
+  USAGE
+  =====
+    1. Edit the <Command> and <WorkingDirectory> paths below to match
+       where you cloned the repo (e.g.,
+       C:\Users\you\projects\sports-model-bettor\sync.bat).
+    2. Open Task Scheduler -> Action -> Import Task...
+    3. Select this file. Approve the prompts.
+    4. In the General tab, tick "Run whether user is logged on or not"
+       so it fires on a sleeping/locked machine.
+    5. Verify the four triggers under the Triggers tab.
+
+  IF IMPORT FAILS WITH "FILE IS NOT VALID"
+    Some Windows builds insist on UTF-16. Convert with PowerShell:
+      Get-Content sports-model-bettor.task.xml |
+        Out-File -Encoding unicode sports-model-bettor.task.utf16.xml
+
+  WHAT IT DOES
+  ============
+    Daily 8:00 AM    - sync.bat   (settle yesterday + recalibrate +
+                                    backup DBs)
+    Daily 11:00 AM   - sync.bat   (today's slate, odds, record picks)
+    Every 2h 1-9 PM  - sync.bat   (re-fetch odds + lineup changes)
+
+  All four runs use the same command -the auto-detect logic inside
+  sync_mlb.bat does either a full or quick sync as appropriate. Each
+  run writes its JSON log to data\logs\sync_mlb.jsonl (tail it with
+  `Get-Content data\logs\sync_mlb.jsonl -Wait` in PowerShell).
+
+  Why Task Scheduler over a Python scheduler:
+    - Runs even when no user is logged in.
+    - Decoupled from backend uptime: if the API server crashes, sync
+      still happens, so we don't go dark.
+-->
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Daily MLB / NHL / NBA data sync, calibration, pick recording, and DB backup for the sports-model-bettor app.</Description>
+    <URI>\sports-model-bettor\daily-sync</URI>
+  </RegistrationInfo>
+  <Triggers>
+    <CalendarTrigger>
+      <StartBoundary>2026-04-15T08:00:00</StartBoundary>
+      <Enabled>true</Enabled>
+      <ScheduleByDay>
+        <DaysInterval>1</DaysInterval>
+      </ScheduleByDay>
+    </CalendarTrigger>
+    <CalendarTrigger>
+      <StartBoundary>2026-04-15T11:00:00</StartBoundary>
+      <Enabled>true</Enabled>
+      <ScheduleByDay>
+        <DaysInterval>1</DaysInterval>
+      </ScheduleByDay>
+    </CalendarTrigger>
+    <CalendarTrigger>
+      <StartBoundary>2026-04-15T13:00:00</StartBoundary>
+      <Enabled>true</Enabled>
+      <Repetition>
+        <Interval>PT2H</Interval>
+        <Duration>PT8H</Duration>
+        <StopAtDurationEnd>true</StopAtDurationEnd>
+      </Repetition>
+      <ScheduleByDay>
+        <DaysInterval>1</DaysInterval>
+      </ScheduleByDay>
+    </CalendarTrigger>
+  </Triggers>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>true</RunOnlyIfNetworkAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT30M</ExecutionTimeLimit>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <!-- EDIT THIS PATH to where you cloned the repo. -->
+      <Command>C:\sports-model-bettor\sync.bat</Command>
+      <Arguments></Arguments>
+      <WorkingDirectory>C:\sports-model-bettor</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>

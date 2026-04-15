@@ -7,43 +7,55 @@ echo.
 
 if not exist "data\logs" mkdir "data\logs"
 
+REM Route Python logging through the structured JSON formatter so the
+REM nightly log can be tailed/grepped/jq'd. Modules that call
+REM scripts.structured_log.configure_from_env() honor these vars; bare
+REM logging.basicConfig calls keep their human-formatted output.
+set LOG_FILE=data\logs\sync_mlb.jsonl
+set LOG_LEVEL=INFO
+set PYTHONPATH=%~dp0;%PYTHONPATH%
+
 REM Auto-detect: if no final games with linescores OR no player stats, do full sync
 python -c "from engine.db import get_conn; c=get_conn(); g=c.execute('SELECT COUNT(*) as c FROM games WHERE status=\"final\" AND home_linescore IS NOT NULL').fetchone()['c']; p=c.execute('SELECT COUNT(*) FROM pitcher_stats').fetchone()[0]; exit(0 if g > 10 and p > 10 else 1)" 2>nul
 if errorlevel 1 (
     echo First run or missing data - running full MLB sync...
     echo This fetches the full season + player stats (5-10 minutes).
     echo.
-    python -m scrapers.mlb_stats --full
+    python scripts\run.py scrapers.mlb_stats --full
     echo.
     echo Running advanced stats...
-    python -m scrapers.mlb_advanced 2>nul
+    python scripts\run.py scrapers.mlb_advanced 2>nul
     echo.
     goto :calibrate
 )
 
 echo Quick sync (teams, today's games, standings)...
-python -m scrapers.mlb_stats
+python scripts\run.py scrapers.mlb_stats
 
 :calibrate
 echo.
 echo Calibrating global model...
-python -m engine.calibration
+python scripts\run.py engine.calibration
 
 echo.
 echo Calibrating per-team factors...
-python -m engine.team_calibration
+python scripts\run.py engine.team_calibration
 
 echo.
 echo Recording today's picks...
-python -m engine.tracker --record
+python scripts\run.py engine.tracker --record
 
 echo.
 echo Settling completed picks...
-python -m engine.tracker --settle
+python scripts\run.py engine.tracker --settle
 
 echo.
 echo Settling POTD...
 python -c "from engine.pick_of_day import settle_potd; print(settle_potd('mlb'))" 2>nul
+
+echo.
+echo Backing up DBs...
+python scripts\run.py scripts.backup_dbs
 
 echo.
 echo ============================================
