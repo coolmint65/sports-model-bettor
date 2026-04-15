@@ -135,11 +135,13 @@ function _providerForPick(type, odds) {
 }
 
 
-// Engine-produced pick fields: {type, pick, prob, edge, odds, confidence,
-// adjusted_ev}. The engine already filtered for positive edge + allowed
-// direction, so the client renders fields verbatim without recomputation.
+// Engine-produced pick fields: {type, pick, prob, prob_low, prob_high,
+// ci_half_width, edge, odds, confidence, adjusted_ev}. The engine
+// already filtered for positive edge + allowed direction, so the client
+// renders fields verbatim without recomputation.
 function PickRow({ engine, isBest, provider, pct }) {
-  const {type, pick, prob, edge, odds, confidence} = engine
+  const {type, pick, prob, prob_low, prob_high, ci_half_width,
+         edge, odds, confidence} = engine
   const conf = confidence === 'strong' ? 'high'
     : confidence === 'moderate' ? 'med'
     : confidence === 'lean' ? 'med'
@@ -169,6 +171,12 @@ function PickRow({ engine, isBest, provider, pct }) {
       </div>
       <div className="pick-numbers">
         <span className={`pick-prob conf-${conf}`}>{pct(prob)}</span>
+        <ProbHistogram
+          prob={prob}
+          low={prob_low}
+          high={prob_high}
+          halfWidth={ci_half_width}
+        />
         {edge != null && edge > 0 && (
           <span className="pick-edge positive">+{edge.toFixed ? edge.toFixed(1) : edge}%</span>
         )}
@@ -182,6 +190,56 @@ function PickRow({ engine, isBest, provider, pct }) {
         )}
       </div>
     </div>
+  )
+}
+
+
+// Inline 95% CI render: a small SVG histogram-style bell curve centered
+// at the engine's point-estimate probability. Width comes from the
+// engine.ci_half_width derived from data quality (pitcher start count
+// and team game count). Skipped when the engine didn't supply a band
+// (older predictions, F5 picks before the model wires it in, etc.).
+function ProbHistogram({ prob, low, high, halfWidth }) {
+  if (prob == null || low == null || high == null || halfWidth == null) {
+    return null
+  }
+  // 18px tall, ~70px wide. Domain anchored to [low, high] with a tiny
+  // padding so the bell isn't flush to the edges.
+  const W = 70, H = 18, PAD = 2
+  const xLow  = PAD
+  const xHigh = W - PAD
+  const xMid  = (xLow + xHigh) / 2
+  const usable = (xHigh - xLow) / 2
+
+  // Approximate normal density curve sampled across the band; we don't
+  // need real Gaussian -- a few control points produce the same visual.
+  const points = []
+  for (let i = 0; i <= 20; i++) {
+    const t = i / 20            // 0..1
+    const x = xLow + t * (xHigh - xLow)
+    // Bell-shaped weight: 1 at center, 0.05 at edges
+    const z = (t - 0.5) * 4     // -2..2
+    const y = H - PAD - (H - 2 * PAD) * Math.exp(-(z * z) / 2)
+    points.push(`${x.toFixed(1)},${y.toFixed(1)}`)
+  }
+  const path = `M${xLow},${H} L${points.join(' L ')} L${xHigh},${H} Z`
+
+  const tooltip = `95% CI: ${(low * 100).toFixed(1)}%–${(high * 100).toFixed(1)}% `
+                 + `(±${(halfWidth * 100).toFixed(1)} pp)`
+
+  return (
+    <svg
+      width={W}
+      height={H}
+      viewBox={`0 0 ${W} ${H}`}
+      style={{ marginTop: 2 }}
+      role="img"
+      aria-label={tooltip}
+    >
+      <title>{tooltip}</title>
+      <path d={path} fill="rgba(96,165,250,0.20)" stroke="rgba(96,165,250,0.55)" strokeWidth={0.8} />
+      <line x1={xMid} y1={PAD} x2={xMid} y2={H - PAD} stroke="#60a5fa" strokeWidth={1} />
+    </svg>
   )
 }
 

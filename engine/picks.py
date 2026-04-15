@@ -85,7 +85,12 @@ def generate_picks(home_team_id: int, away_team_id: int,
     rl = pred.get("run_line", {})
     fi = pred.get("first_inning", {})
     total = pred.get("total", 0)
-    conf_score = pred.get("confidence", {}).get("score", 50)
+    conf = pred.get("confidence", {}) or {}
+    conf_score = conf.get("score", 50)
+    # CI half-width on the win-prob estimate, driven by data quality
+    # (pitcher-start + team-game sample sizes). Surface via prob_low /
+    # prob_high so the UI can render a band around the point estimate.
+    ci_hw = conf.get("ci_half_width", 0.05)
 
     home = pred.get("home", {})
     away = pred.get("away", {})
@@ -253,6 +258,17 @@ def generate_picks(home_team_id: int, away_team_id: int,
     if get_flag("ENABLE_MLB_F5", False):
         f5 = pred.get("f5") or {}
         _append_f5_picks(picks, f5, odds, h_abbr, a_abbr)
+
+    # Annotate each pick with a probability band so the UI can render a
+    # confidence histogram around the point estimate. Clamp to [0, 1]
+    # (a -0.04 lower bound on a 0.51 prediction is just 0).
+    for p in picks:
+        prob = p.get("prob")
+        if prob is None:
+            continue
+        p["prob_low"]  = round(max(0.0, prob - ci_hw), 4)
+        p["prob_high"] = round(min(1.0, prob + ci_hw), 4)
+        p["ci_half_width"] = ci_hw
 
     # Adjusted EV: edge * reliability weight
     for p in picks:

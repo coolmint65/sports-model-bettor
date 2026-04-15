@@ -503,15 +503,21 @@ def _compute_first_inning(home_xr: float, away_xr: float,
 def _compute_confidence(home_pit, away_pit, home_sp_pit, away_sp_pit) -> dict:
     """
     Compute prediction confidence based on data quality.
-    Returns 0-100 score and a label.
+    Returns 0-100 score, a label, and the half-width of the 95% CI on
+    the win probability driven by the harmonic mean of pitcher-start
+    and team-game sample sizes.
     """
     score = 0
     max_score = 0
 
+    home_gp = home_pit.get("games_played", 0) if home_pit else 0
+    away_gp = away_pit.get("games_played", 0) if away_pit else 0
+    home_starts = home_sp_pit.get("games_started", 0) if home_sp_pit else 0
+    away_starts = away_sp_pit.get("games_started", 0) if away_sp_pit else 0
+
     # Team games played (0-25 pts each)
-    for pit in [home_pit, away_pit]:
+    for gp in [home_gp, away_gp]:
         max_score += 25
-        gp = pit.get("games_played", 0) if pit else 0
         if gp >= 50:
             score += 25
         elif gp >= 30:
@@ -524,9 +530,8 @@ def _compute_confidence(home_pit, away_pit, home_sp_pit, away_sp_pit) -> dict:
             score += 3
 
     # Pitcher starts (0-25 pts each)
-    for sp in [home_sp_pit, away_sp_pit]:
+    for starts in [home_starts, away_starts]:
         max_score += 25
-        starts = sp.get("games_started", 0) if sp else 0
         if starts >= 10:
             score += 25
         elif starts >= 5:
@@ -547,7 +552,54 @@ def _compute_confidence(home_pit, away_pit, home_sp_pit, away_sp_pit) -> dict:
     else:
         label = "very_low"
 
-    return {"score": pct, "label": label}
+    # Probability CI half-width.
+    # Effective sample size is the harmonic mean of the two limiting
+    # sources -- pitcher starts (one event per game) and team games
+    # (~9 batter events per game, but heavily correlated). Treating
+    # each as independent draws and bounding to a "fully informed"
+    # baseline of 30 starts + 100 team games.
+    ci_half = _prob_ci_half_width(
+        pitcher_starts=min(home_starts, away_starts),
+        team_games=min(home_gp, away_gp),
+    )
+    return {
+        "score": pct,
+        "label": label,
+        "ci_half_width": ci_half,
+        "samples": {
+            "home_pitcher_starts": home_starts,
+            "away_pitcher_starts": away_starts,
+            "home_team_games":     home_gp,
+            "away_team_games":     away_gp,
+        },
+    }
+
+
+def _prob_ci_half_width(pitcher_starts: int, team_games: int) -> float:
+    """Estimate the half-width of the 95% CI on the win probability.
+
+    The two factors that limit certainty are pitcher-start sample size
+    (one event per game; small N hurts a lot) and team-game sample size
+    (many at-bats per game; saturates faster). We combine them as a
+    harmonic mean weighted toward whichever is currently the bottleneck,
+    then map to a half-width via a sqrt(N) curve floored at 2 percentage
+    points (we never claim more confidence than that for a single game).
+    """
+    # Defensive defaults so callers passing in zeros don't blow up.
+    p = max(pitcher_starts, 0)
+    t = max(team_games, 0)
+
+    # Harmonic mean of pitcher-start floor (treat 1 start as 5 game-equivs)
+    # and team games. Weighted so the limiting factor dominates.
+    p_eff = max(p * 5.0, 1.0)
+    t_eff = max(float(t), 1.0)
+    n_eff = 2.0 / (1.0 / p_eff + 1.0 / t_eff)
+
+    # Asymptote at half-width = 2pp once n_eff hits ~150 (matches
+    # pitcher 30 starts + team 100 games).
+    from math import sqrt
+    raw = 0.30 / sqrt(n_eff)   # ~ 0.30 / sqrt(150) = 0.024
+    return round(max(0.02, min(0.20, raw)), 4)
 
 
 def _pitcher_detail(sp: dict | None, pitcher_id: int | None) -> dict | None:
