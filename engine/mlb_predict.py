@@ -27,6 +27,31 @@ from .db import (
     get_recent_games, get_team_h2h_vs_pitcher,
 )
 
+
+# MLB postseason adjustment. Regular season runs late March through
+# late September; wild card / division series / LCS / World Series run
+# October through early November. Historical postseason RPG is ~4.0
+# vs. ~4.4 regular season (-9%) because only top-of-rotation starters
+# pitch, bullpens shorten, and October weather suppresses ball flight.
+MLB_POSTSEASON_SCORING_FACTOR = 0.91
+
+
+def _is_mlb_postseason(today: datetime | None = None) -> bool:
+    """True during the MLB postseason window (October + first week of Nov).
+
+    The cutover isn't exact -- the regular season can end Sept 28 or Oct 2
+    depending on the schedule -- but early October is universally
+    postseason-only (regular season never extends past Oct 3). A small
+    false-positive window in late Sept is preferable to missing a
+    World Series game on Oct 31.
+    """
+    today = today or datetime.now()
+    if today.month == 10:
+        return True
+    if today.month == 11 and today.day <= 7:
+        return True
+    return False
+
 # ── Scoring / probability functions (re-exported for external callers) ──
 from .mlb_scoring import (
     MLB_AVG_RPG, MLB_AVG_ERA, MLB_AVG_OPS, MLB_AVG_FIP,
@@ -254,6 +279,16 @@ def predict_matchup(home_team_id: int, away_team_id: int,
         coors_boost = 1.08  # Additional 8% on top of park factor
         home_xr *= coors_boost
         away_xr *= coors_boost
+
+    # Postseason scoring environment: top-of-rotation starters pitch far
+    # more often (short series, off-days), bullpens shorten, October
+    # cold weather flattens ball flight. Historical postseason RPG is
+    # ~4.0 vs. ~4.4 regular season (~9% lower). Home advantage is
+    # essentially unchanged in MLB postseason (~54% vs ~54%), so only
+    # the scoring shrinkage is applied here.
+    if _is_mlb_postseason():
+        home_xr *= MLB_POSTSEASON_SCORING_FACTOR
+        away_xr *= MLB_POSTSEASON_SCORING_FACTOR
 
     # ── Step 5: Home advantage ──
     w = _get_weights()

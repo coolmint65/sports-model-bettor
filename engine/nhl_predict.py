@@ -140,16 +140,38 @@ def _compute_recent_form_from_standings(team: dict) -> float:
 
 
 def _is_playoff_window() -> bool:
-    """NHL playoffs typically start mid-April."""
+    """NHL playoffs run mid-April through mid-June.
+
+    Fixed an off-by-one: the old expression ``month >= 4 and day >= 10``
+    only returned True for days 10-31 of ANY month from April on, which
+    meant May 1-9 and June 1-9 were mis-classified as regular season.
+    """
     now = datetime.now()
-    # Regular season ends ~April 17, playoffs run through June
-    return now.month >= 4 and now.day >= 10
+    if now.month == 4:
+        return now.day >= 10
+    return now.month in (5, 6)
 
 
 def _is_late_season() -> bool:
     """Last 2 weeks of regular season -- teams fighting for spots or resting."""
     now = datetime.now()
     return now.month == 4 and now.day < 17
+
+
+# ── Playoff adjustments ─────────────────────────────────────
+# NHL playoffs historically differ from the regular season on three
+# measurable axes:
+#   1. Total goals/game drops from ~6.2 to ~5.6 (-9%) -- tighter
+#      defensive systems, top goalies play every night.
+#   2. Home win rate drops from ~55% to ~51% -- the field is filtered
+#      down to 16 evenly-matched teams; crowd advantage is smaller when
+#      quality gap is smaller. The previous code ran this the wrong
+#      direction (home_edge *= 1.10 on the "high-stakes" hunch).
+#   3. Power-play count drops ~25-30% -- refs swallow whistles.
+#      (This one was already modelled correctly via pp_weight.)
+NHL_PLAYOFF_SCORING_FACTOR = 0.93   # multiplies both teams' xG
+NHL_PLAYOFF_HOME_EDGE_FACTOR = 0.92  # scales home_edge DOWN in playoffs
+NHL_LATE_SEASON_HOME_EDGE_FACTOR = 1.05  # mild late-season crowd bump
 
 
 # ── Factor 8: Blowout tendency ──────────────────────────────
@@ -1044,14 +1066,22 @@ def predict_matchup(home_key: str, away_key: str,
     home_motivation = season_context.get("home", {}).get("motivation", 0.8)
     away_motivation = season_context.get("away", {}).get("motivation", 0.8)
 
-    if _is_late_season() or _is_playoff_window():
-        home_edge *= 1.10  # Home ice matters more in high-stakes games
+    # Playoffs and late regular season have DIFFERENT dynamics; the
+    # previous code conflated them and applied a "high-stakes" home-ice
+    # bump to both, which runs backwards in playoffs where parity
+    # shrinks the home advantage. Split them explicitly.
+    in_playoffs = _is_playoff_window()
+    in_late_reg = _is_late_season() and not in_playoffs
+    if in_playoffs:
+        home_edge *= NHL_PLAYOFF_HOME_EDGE_FACTOR
+    elif in_late_reg:
+        home_edge *= NHL_LATE_SEASON_HOME_EDGE_FACTOR
 
-        # Motivation gap: a desperate team vs a resting team
-        # If home is fighting (1.0) and away is eliminated (0.2), home gets a boost
-        motivation_gap = home_motivation - away_motivation
-        # Cap at ±5% xG adjustment from motivation difference
-        # Positive = home more motivated, negative = away more motivated
+    # Motivation gap: a desperate team vs a resting team
+    # If home is fighting (1.0) and away is eliminated (0.2), home gets a boost
+    motivation_gap = home_motivation - away_motivation
+    # Cap at ±5% xG adjustment from motivation difference
+    # Positive = home more motivated, negative = away more motivated
 
     # Base expected goals
     home_off = hs.get("goals_for_avg", avg_gf)
@@ -1061,6 +1091,13 @@ def predict_matchup(home_key: str, away_key: str,
 
     home_xg = _expected_goals(home_off, away_def, avg_ga) + home_edge / 2
     away_xg = _expected_goals(away_off, home_def, avg_ga) - home_edge / 2
+
+    # Playoff scoring environment: tighter systems + elite goaltenders
+    # every night drops league GF/G from ~6.2 to ~5.6. Apply symmetric
+    # shrinkage so both sides move together.
+    if in_playoffs:
+        home_xg *= NHL_PLAYOFF_SCORING_FACTOR
+        away_xg *= NHL_PLAYOFF_SCORING_FACTOR
 
     # ── Special teams adjustment ──
     league_pp = la.get("pp_pct", 0.20)

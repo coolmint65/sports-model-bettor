@@ -42,6 +42,15 @@ LEAGUE_AVG_DEF_RTG = 112.0   # League-average defensive rating
 RECENT_WEIGHT = 0.70         # Weight for recent form (last 10) vs season
 SEASON_WEIGHT = 0.30         # Weight for full-season averages
 
+# NBA playoff adjustments. Historical playoff data (last 5 postseasons)
+# shows pace drops ~3 possessions/game and total scoring ~3% relative
+# to the regular season. The dominant driver is tighter half-court
+# defense and shorter rotations (8 man vs 10). Q1 specifically shrinks
+# slightly less than later quarters because starters play the full Q1
+# in both contexts, but the pace drop still propagates.
+NBA_PLAYOFF_PACE_FACTOR = 0.97    # ~3 fewer possessions / 100 poss
+NBA_PLAYOFF_SCORING_FACTOR = 0.97  # symmetric scoring shrinkage
+
 # Default Q1 scoring if no data available (calibrated: 58.8 / 2 = 29.4)
 DEFAULT_Q1_PPG = 29.4
 DEFAULT_Q1_OPP_PPG = 29.4
@@ -60,6 +69,25 @@ def _implied_prob(american_odds: int) -> float:
     if american_odds < 0:
         return abs(american_odds) / (abs(american_odds) + 100)
     return 100 / (american_odds + 100)
+
+
+def _is_nba_playoffs(today: datetime | None = None) -> bool:
+    """True during the NBA postseason window (mid-April through mid-June).
+
+    The NBA regular season ends ~April 13; play-in runs April 15-19;
+    playoffs proper April 20 - early June; Finals through mid/late June.
+    This check returns True for the entire playoff window including the
+    play-in (play-in games share the tighter-defense / shorter-rotation
+    dynamics that justify the adjustment).
+    """
+    today = today or datetime.now()
+    if today.month == 4:
+        return today.day >= 15
+    if today.month == 5:
+        return True
+    if today.month == 6:
+        return today.day <= 25
+    return False
 
 
 # ── Data loading helpers ───────────────────────────────────
@@ -312,8 +340,26 @@ def predict_q1(home_abbr: str, away_abbr: str,
     matchup_pace = (home_pace + away_pace) / 2
     pace_factor = matchup_pace / LEAGUE_AVG_PACE
 
+    # Playoff pace shrinkage: tighter defense, shorter rotations, more
+    # half-court sets. Applied AFTER the matchup pace_factor so a
+    # normally-fast team still reads as relatively fast vs. a slow team
+    # in the same round, just at a lower absolute level.
+    in_playoffs = _is_nba_playoffs()
+    if in_playoffs:
+        pace_factor *= NBA_PLAYOFF_PACE_FACTOR
+        reasoning.append(
+            f"Playoff pace shrinkage applied (x{NBA_PLAYOFF_PACE_FACTOR:.2f})"
+        )
+
     home_q1_expected *= pace_factor
     away_q1_expected *= pace_factor
+
+    # Symmetric playoff scoring shrinkage on top of the pace effect --
+    # even when possessions stay constant, half-court offense is less
+    # efficient under playoff defensive intensity.
+    if in_playoffs:
+        home_q1_expected *= NBA_PLAYOFF_SCORING_FACTOR
+        away_q1_expected *= NBA_PLAYOFF_SCORING_FACTOR
 
     if pace_factor > 1.03:
         reasoning.append(f"Fast-paced matchup (pace factor {pace_factor:.2f}) boosts Q1 scoring")
