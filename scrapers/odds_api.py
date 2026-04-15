@@ -25,6 +25,14 @@ KEY_FILE = Path(__file__).resolve().parent.parent / "data" / "odds_api_key.txt"
 MLB_SPORT = "baseball_mlb"
 PREFERRED_BOOK = "draftkings"
 
+# Full-game pricing now uses a trimmed-mean consensus across the same
+# four books we fall back through for per-event markets. DK still
+# anchors the point lines (over/under and run line) since that's where
+# the user actually bets; only the price (juice) is consensus-averaged.
+# This dampens single-book stale-line skew without making the displayed
+# point spreads inconsistent with the user's sportsbook.
+CONSENSUS_BOOKS = ["draftkings", "fanduel", "betmgm", "bovada"]
+
 # Per-event inning-specific markets (paid tier only; 1 credit per market per event)
 PER_EVENT_MARKETS = [
     "totals_1st_1_innings",   # NRFI / YRFI
@@ -109,13 +117,15 @@ def fetch_odds(include_per_event: bool = True) -> dict:
         logger.info("No Odds API key found. Set ODDS_API_KEY env var or create data/odds_api_key.txt")
         return {}
 
-    # Fetch all three full-game markets in one call
+    # Fetch full-game markets across all CONSENSUS_BOOKS so we can
+    # trim-mean the prices. Costs 1 credit per market regardless of how
+    # many books we request.
     url = (f"{API_BASE}/sports/{MLB_SPORT}/odds/"
            f"?apiKey={api_key}"
            f"&regions=us"
            f"&markets=h2h,spreads,totals"
            f"&oddsFormat=american"
-           f"&bookmakers={PREFERRED_BOOK}")
+           f"&bookmakers={','.join(CONSENSUS_BOOKS)}")
 
     try:
         req = urllib.request.Request(url, headers={
@@ -152,52 +162,14 @@ def fetch_odds(include_per_event: bool = True) -> dict:
         a_abbr = _team_abbr(away)
         key = f"{a_abbr}@{h_abbr}"
 
-        result = {"provider": "DraftKings"}
-
         bookmakers = game.get("bookmakers", [])
         if not bookmakers:
             continue
 
-        book = bookmakers[0]  # First (and only since we filtered) bookmaker
-
-        for market in book.get("markets", []):
-            mkey = market.get("key", "")
-            outcomes = market.get("outcomes", [])
-
-            if mkey == "h2h":  # Moneyline
-                for o in outcomes:
-                    name = o.get("name", "")
-                    price = o.get("price", 0)
-                    if name == home:
-                        result["home_ml"] = price
-                    elif name == away:
-                        result["away_ml"] = price
-
-            elif mkey == "spreads":  # Run Line
-                for o in outcomes:
-                    name = o.get("name", "")
-                    price = o.get("price", 0)
-                    point = o.get("point", 0)
-                    if name == home:
-                        result["home_spread_odds"] = price
-                        result["home_spread_point"] = point
-                    elif name == away:
-                        result["away_spread_odds"] = price
-                        result["away_spread_point"] = point
-                # Keep generic spread for backward compat
-                result["spread"] = 1.5
-
-            elif mkey == "totals":  # Over/Under
-                for o in outcomes:
-                    name = o.get("name", "").lower()
-                    price = o.get("price", 0)
-                    point = o.get("point", 0)
-                    if "over" in name:
-                        result["over_odds"] = price
-                        result["over_under"] = point
-                    elif "under" in name:
-                        result["under_odds"] = price
-
+        # Consensus aggregation: trim-mean across CONSENSUS_BOOKS.
+        # Point lines anchor to DK (where the user bets); only prices
+        # get consensus-averaged.
+        result = _consensus_aggregate(home, away, bookmakers)
         if result.get("home_ml"):
             odds_map[key] = result
             if event_id:
@@ -217,6 +189,174 @@ def fetch_odds(include_per_event: bool = True) -> dict:
     _odds_cache_time = time.time()
 
     return odds_map
+
+
+def _trim_mean(prices: list[int | float]) -> int | None:
+    """Symmetric trimmed mean: drop highest and lowest, average the rest.
+
+    Falls back gracefully on small samples:
+      0 prices -> None
+      1 price  -> that price
+      2 prices -> mean of both (no trim possible)
+      3+ prices -> drop high + low, mean the rest
+    Returns an int (American-odds prices are integers).
+    """
+    if not prices:
+        return None
+    if len(prices) == 1:
+        return int(prices[0])
+    if len(prices) == 2:
+        return int(round((prices[0] + prices[1]) / 2))
+    s = sorted(prices)
+    trimmed = s[1:-1]
+    return int(round(sum(trimmed) / len(trimmed)))
+
+
+def _consensus_aggregate(home: str, away: str, bookmakers: list) -> dict:
+    """Build a single odds dict from multiple books via trimmed-mean prices.
+
+    Anchors point lines (over_under, run-line spread) to DK so the
+    displayed line matches the book the user is presumably betting at.
+    Falls back to the first book that has a line if DK isn't present.
+    Trim-means the price at the anchored line across books that offer
+    the same line (so we never average prices on different totals).
+    """
+    by_key = {b.get("key"): b for b in bookmakers if b.get("key")}
+    dk = by_key.get(PREFERRED_BOOK)
+
+    # Per-book extracted markets, keyed by bookmaker key.
+    extracted: dict[str, dict] = {}
+    for bk_key, bk in by_key.items():
+        extracted[bk_key] = _extract_book_markets(bk, home, away)
+
+    # ── ML (no point line, straight trim-mean) ──
+    home_mls = [v["home_ml"] for v in extracted.values() if v.get("home_ml")]
+    away_mls = [v["away_ml"] for v in extracted.values() if v.get("away_ml")]
+
+    # ── Totals: anchor line to DK (or first book), then trim-mean prices
+    # at that line. Skip prices for books on a different line so we
+    # never average -110 at 8.5 with -108 at 9. ──
+    anchor_total = None
+    if dk and extracted.get(PREFERRED_BOOK, {}).get("over_under") is not None:
+        anchor_total = extracted[PREFERRED_BOOK]["over_under"]
+    else:
+        for v in extracted.values():
+            if v.get("over_under") is not None:
+                anchor_total = v["over_under"]
+                break
+
+    over_prices, under_prices = [], []
+    if anchor_total is not None:
+        for v in extracted.values():
+            if v.get("over_under") == anchor_total:
+                if v.get("over_odds") is not None:
+                    over_prices.append(v["over_odds"])
+                if v.get("under_odds") is not None:
+                    under_prices.append(v["under_odds"])
+
+    # ── Spreads (run line). MLB run line is essentially always +/-1.5;
+    # anchor to DK and trim-mean prices at that magnitude. ──
+    anchor_home_spread = None
+    if dk and extracted.get(PREFERRED_BOOK, {}).get("home_spread_point") is not None:
+        anchor_home_spread = extracted[PREFERRED_BOOK]["home_spread_point"]
+    else:
+        for v in extracted.values():
+            if v.get("home_spread_point") is not None:
+                anchor_home_spread = v["home_spread_point"]
+                break
+
+    home_sp_prices, away_sp_prices = [], []
+    if anchor_home_spread is not None:
+        for v in extracted.values():
+            if v.get("home_spread_point") == anchor_home_spread:
+                if v.get("home_spread_odds") is not None:
+                    home_sp_prices.append(v["home_spread_odds"])
+                if v.get("away_spread_odds") is not None:
+                    away_sp_prices.append(v["away_spread_odds"])
+
+    # Provider label tracks what actually contributed (so the UI / health
+    # endpoint shows the real consensus, not a hardcoded "DraftKings").
+    contributing = sorted({k for k, v in extracted.items() if v.get("home_ml")})
+    provider = "Consensus (" + "/".join(
+        _SHORT_BOOK_NAMES.get(k, k) for k in contributing
+    ) + ")" if len(contributing) > 1 else (
+        _BOOK_TITLES.get(contributing[0], contributing[0]) if contributing else "Unknown"
+    )
+
+    result = {
+        "provider": provider,
+        "consensus_books": contributing,
+        "home_ml": _trim_mean(home_mls),
+        "away_ml": _trim_mean(away_mls),
+        "over_under": anchor_total,
+        "over_odds": _trim_mean(over_prices),
+        "under_odds": _trim_mean(under_prices),
+        "spread": 1.5,  # back-compat
+        "home_spread_point": anchor_home_spread,
+        "away_spread_point": (-anchor_home_spread) if anchor_home_spread is not None else None,
+        "home_spread_odds": _trim_mean(home_sp_prices),
+        "away_spread_odds": _trim_mean(away_sp_prices),
+    }
+    return result
+
+
+def _extract_book_markets(book: dict, home: str, away: str) -> dict:
+    """Pull the standard h2h / spreads / totals fields out of one book's payload."""
+    out: dict = {}
+    for market in book.get("markets", []):
+        mkey = market.get("key", "")
+        outcomes = market.get("outcomes", [])
+        if mkey == "h2h":
+            for o in outcomes:
+                name = o.get("name", "")
+                price = o.get("price")
+                if name == home and price is not None:
+                    out["home_ml"] = price
+                elif name == away and price is not None:
+                    out["away_ml"] = price
+        elif mkey == "spreads":
+            for o in outcomes:
+                name = o.get("name", "")
+                price = o.get("price")
+                point = o.get("point")
+                if name == home:
+                    if price is not None:
+                        out["home_spread_odds"] = price
+                    if point is not None:
+                        out["home_spread_point"] = point
+                elif name == away:
+                    if price is not None:
+                        out["away_spread_odds"] = price
+                    if point is not None:
+                        out["away_spread_point"] = point
+        elif mkey == "totals":
+            for o in outcomes:
+                name = o.get("name", "").lower()
+                price = o.get("price")
+                point = o.get("point")
+                if "over" in name:
+                    if price is not None:
+                        out["over_odds"] = price
+                    if point is not None:
+                        out["over_under"] = point
+                elif "under" in name:
+                    if price is not None:
+                        out["under_odds"] = price
+    return out
+
+
+_BOOK_TITLES = {
+    "draftkings": "DraftKings",
+    "fanduel":    "FanDuel",
+    "betmgm":     "BetMGM",
+    "bovada":     "Bovada",
+}
+_SHORT_BOOK_NAMES = {
+    "draftkings": "DK",
+    "fanduel":    "FD",
+    "betmgm":     "MGM",
+    "bovada":     "Bov",
+}
 
 
 def _fetch_per_event_markets(event_ids: dict[str, str], api_key: str) -> dict:
