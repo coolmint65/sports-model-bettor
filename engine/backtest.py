@@ -110,6 +110,11 @@ def run_backtest(season: int | None = None, days: int | None = None,
         "over_under": _empty_cat(),
         "nrfi": _empty_cat(),
         "run_line": _empty_cat(),
+        # F5 markets - need real DK F5 odds + first-five-innings linescore
+        # to score; categories may be empty until enough stored data exists
+        "f5_ml": _empty_cat(),
+        "f5_ou": _empty_cat(),
+        "f5_rl": _empty_cat(),
         # Best-bet-per-game summary
         "best_bet": _empty_cat(),
     }
@@ -300,6 +305,18 @@ def run_backtest(season: int | None = None, days: int | None = None,
             except (json.JSONDecodeError, IndexError):
                 pass
 
+        # ── F5 markets (require linescores + stored F5 odds) ──
+        if has_linescore:
+            try:
+                _eval_f5(
+                    results, game, real_odds, home_xr, away_xr,
+                    home_score, away_score, min_edge, game_bets,
+                )
+            except Exception as _e:
+                # Backtest is read-only; never let an F5 quirk skip the
+                # whole game's other categories.
+                pass
+
         # ── Run Line ──
         p_home_cover = 0.0
         for h in range(len(matrix)):
@@ -346,7 +363,8 @@ def run_backtest(season: int | None = None, days: int | None = None,
                 odds_synthetic_count += 1
 
     # ── Compute summaries ──
-    for cat in ["moneyline", "over_under", "nrfi", "run_line", "best_bet"]:
+    for cat in ["moneyline", "over_under", "nrfi", "run_line",
+                "f5_ml", "f5_ou", "f5_rl", "best_bet"]:
         _summarize(results[cat])
 
     # Odds source disclosure
@@ -361,6 +379,99 @@ def run_backtest(season: int | None = None, days: int | None = None,
         results["odds_synthetic_pct"] = 0.0
 
     return results
+
+
+def _eval_f5(results: dict, game: dict, real_odds: dict | None,
+             home_xr: float, away_xr: float,
+             home_score: int, away_score: int,
+             min_edge: float, game_bets: list) -> None:
+    """Score F5 ML / O/U / RL against the actual first-five-innings totals.
+
+    Skips silently when the linescore is missing or has fewer than 5
+    innings recorded (early scratch, suspended games), and when no real
+    F5 odds are stored for the game (synthetic pricing isn't supported
+    for F5 because implied probabilities vary too much by SP).
+    """
+    home_ls_raw = game.get("home_linescore")
+    away_ls_raw = game.get("away_linescore")
+    if not (home_ls_raw and away_ls_raw):
+        return
+
+    h_inn = json.loads(home_ls_raw)
+    a_inn = json.loads(away_ls_raw)
+    if len(h_inn) < 5 or len(a_inn) < 5:
+        return
+
+    actual_f5_home = sum(h_inn[:5])
+    actual_f5_away = sum(a_inn[:5])
+    actual_f5_total = actual_f5_home + actual_f5_away
+    actual_f5_margin = actual_f5_home - actual_f5_away
+
+    # Re-use the same model used by the runtime path. Defensive: if the
+    # SP factors aren't easy to derive in backtest context, default to
+    # 1.0 (which makes the F5 split = full-game proportions).
+    from .mlb_scoring import _compute_f5
+    f5 = _compute_f5(home_xr, away_xr, 1.0, 1.0)
+    f5_home_wp = f5["win_prob"]["home"]
+    f5_away_wp = f5["win_prob"]["away"]
+
+    # F5 ML
+    if real_odds:
+        if f5_home_wp >= f5_away_wp:
+            f5_ml_prob = f5_home_wp
+            f5_ml_odds = real_odds.get("f5_home_ml")
+            f5_ml_correct = actual_f5_margin > 0
+        else:
+            f5_ml_prob = f5_away_wp
+            f5_ml_odds = real_odds.get("f5_away_ml")
+            f5_ml_correct = actual_f5_margin < 0
+        if f5_ml_odds is not None:
+            edge = (f5_ml_prob - _implied(f5_ml_odds)) * 100
+            if edge >= min_edge:
+                _record_bet(results["f5_ml"], f5_ml_correct, f5_ml_odds)
+                game_bets.append((edge, f5_ml_correct, f5_ml_odds))
+
+    # F5 O/U
+    if real_odds and real_odds.get("f5_total") is not None:
+        f5_line = real_odds["f5_total"]
+        ou_table = f5.get("over_under") or {}
+        # Find the closest modeled line to what DK posted.
+        best_key = min(
+            ou_table.keys(),
+            key=lambda k: abs(float(k) - f5_line),
+            default=None,
+        )
+        ou_data = ou_table.get(best_key) if best_key else None
+        if ou_data:
+            pick_over = ou_data["over"] >= ou_data["under"]
+            ou_prob = max(ou_data["over"], ou_data["under"])
+            ou_odds = (real_odds.get("f5_over_odds") if pick_over
+                       else real_odds.get("f5_under_odds"))
+            if ou_odds is not None and actual_f5_total != f5_line:
+                edge = (ou_prob - _implied(ou_odds)) * 100
+                if edge >= min_edge:
+                    correct = (actual_f5_total > f5_line) if pick_over \
+                              else (actual_f5_total < f5_line)
+                    _record_bet(results["f5_ou"], correct, ou_odds)
+                    game_bets.append((edge, correct, ou_odds))
+
+    # F5 RL (typically +/- 0.5)
+    if real_odds and real_odds.get("f5_home_spread_point") is not None:
+        rl = f5.get("run_line") or {}
+        home_pt = real_odds["f5_home_spread_point"]
+        if abs(home_pt) == 0.5:
+            home_prob = (rl.get("home_minus_0_5") if home_pt < 0
+                          else rl.get("home_plus_0_5"))
+            home_odds = real_odds.get("f5_home_spread_odds")
+            if home_prob is not None and home_odds is not None:
+                edge = (home_prob - _implied(home_odds)) * 100
+                if edge >= min_edge:
+                    if home_pt < 0:
+                        correct = actual_f5_margin > 0
+                    else:
+                        correct = actual_f5_margin >= 0
+                    _record_bet(results["f5_rl"], correct, home_odds)
+                    game_bets.append((edge, correct, home_odds))
 
 
 def _predict_from_pit(home_pit, away_pit, home_sp_pit, away_sp_pit):
@@ -507,7 +618,8 @@ def print_backtest(results: dict) -> None:
     print()
 
     for name, label in [("moneyline", "Moneyline"), ("over_under", "Over/Under"),
-                         ("nrfi", "NRFI/YRFI"), ("run_line", "Run Line")]:
+                         ("nrfi", "NRFI/YRFI"), ("run_line", "Run Line"),
+                         ("f5_ml", "F5 ML"), ("f5_ou", "F5 O/U"), ("f5_rl", "F5 RL")]:
         bt = results[name]
         if bt["total_bets"] == 0:
             print(f"  {label}: No qualifying bets")
