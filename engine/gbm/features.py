@@ -302,7 +302,7 @@ def _umpire_stats(conn, umpire_name: str, game_date: str) -> dict:
         season = _season_from_date(game_date)
         if season is not None:
             row = conn.execute(
-                "SELECT run_factor, NULL AS k_pct, NULL AS bb_pct, over_pct "
+                "SELECT run_factor, over_pct "
                 "FROM umpire_season_stats WHERE name = ? AND season = ?",
                 (umpire_name, season - 1),
             ).fetchone()

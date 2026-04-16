@@ -135,12 +135,20 @@ def update_umpire_stats(season: int | None = None) -> int:
 
 
 def _rebuild_season(conn, yr: int) -> int:
-    """Aggregate one season's games into umpire_season_stats."""
+    """Aggregate one season's games into umpire_season_stats.
+
+    Joins to odds.total so we can derive over_pct alongside rpg. Multiple
+    odds rows per game (one per book) get averaged into a single line so
+    the over/under decision is book-agnostic. Pushes (actual == line) are
+    excluded from the over_pct denominator.
+    """
     games = conn.execute("""
-        SELECT umpire, home_score, away_score
-        FROM games
-        WHERE season = ? AND status = 'final' AND umpire IS NOT NULL
-          AND home_score IS NOT NULL AND away_score IS NOT NULL
+        SELECT g.umpire, g.home_score, g.away_score, AVG(o.total) AS line
+        FROM games g
+        LEFT JOIN odds o ON o.game_id = g.mlb_game_id
+        WHERE g.season = ? AND g.status = 'final' AND g.umpire IS NOT NULL
+          AND g.home_score IS NOT NULL AND g.away_score IS NOT NULL
+        GROUP BY g.mlb_game_id
     """, (yr,)).fetchall()
     if not games:
         return 0
@@ -150,9 +158,22 @@ def _rebuild_season(conn, yr: int) -> int:
         name = g["umpire"]
         if not name:
             continue
-        bucket = ump_stats.setdefault(name, {"games": 0, "total_runs": 0})
+        bucket = ump_stats.setdefault(name, {
+            "games": 0, "total_runs": 0,
+            "games_with_line": 0, "overs": 0,
+        })
+        actual = (g["home_score"] or 0) + (g["away_score"] or 0)
         bucket["games"] += 1
-        bucket["total_runs"] += (g["home_score"] or 0) + (g["away_score"] or 0)
+        bucket["total_runs"] += actual
+
+        line = g["line"]
+        if line is not None:
+            if actual > line:
+                bucket["overs"] += 1
+                bucket["games_with_line"] += 1
+            elif actual < line:
+                bucket["games_with_line"] += 1
+            # ties (pushes) excluded from the denominator
 
     # Wipe prior rows for this season so re-runs are idempotent (e.g. if
     # a game's umpire was corrected after a prior aggregate, stale entries
@@ -165,10 +186,18 @@ def _rebuild_season(conn, yr: int) -> int:
             continue
         rpg = s["total_runs"] / s["games"]
         run_factor = rpg / MLB_AVG_RPG_TOTAL
+        # Require at least 5 lined games before over_pct is trustworthy
+        # enough to expose; below that, leave NULL so the feature
+        # extractor falls back to the league-average default.
+        over_pct = (round(s["overs"] / s["games_with_line"], 4)
+                    if s["games_with_line"] >= 5 else None)
         conn.execute("""
-            INSERT INTO umpire_season_stats (name, season, games, rpg, run_factor)
-            VALUES (?, ?, ?, ?, ?)
-        """, (name, yr, s["games"], round(rpg, 2), round(run_factor, 4)))
+            INSERT INTO umpire_season_stats
+                (name, season, games, rpg, run_factor,
+                 games_with_line, overs, over_pct)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (name, yr, s["games"], round(rpg, 2), round(run_factor, 4),
+              s["games_with_line"], s["overs"], over_pct))
         rows_written += 1
 
     logger.info("  season %d: %d umpires, %d games", yr, rows_written, len(games))
@@ -179,12 +208,16 @@ def _rebuild_all_time_rollup(conn) -> int:
     """Recompute the `umpires` table as career aggregates across seasons.
 
     The all-time rollup backs inference-time `compute_umpire_adjustment()`
-    and the legacy factor-model path. It sums games / total_runs across
-    all seasons in umpire_season_stats so a single DB row reflects an
-    umpire's full observed career in our data.
+    and the legacy factor-model path. Sums games / total_runs / overs /
+    games_with_line across all seasons in umpire_season_stats so a single
+    DB row reflects an umpire's full observed career in our data.
     """
     rows = conn.execute(
-        "SELECT name, SUM(games) AS games, SUM(games * rpg) AS total_runs "
+        "SELECT name, "
+        "       SUM(games) AS games, "
+        "       SUM(games * rpg) AS total_runs, "
+        "       SUM(games_with_line) AS gwl, "
+        "       SUM(overs) AS overs "
         "FROM umpire_season_stats GROUP BY name"
     ).fetchall()
     if not rows:
@@ -194,13 +227,16 @@ def _rebuild_all_time_rollup(conn) -> int:
     for r in rows:
         games_n = r["games"] or 0
         tot_runs = r["total_runs"] or 0.0
+        gwl = r["gwl"] or 0
+        overs = r["overs"] or 0
         if games_n < 1:
             continue
         rpg = tot_runs / games_n
         run_factor = rpg / MLB_AVG_RPG_TOTAL
+        over_pct = round(overs / gwl, 4) if gwl >= 5 else None
         conn.execute("""
-            INSERT INTO umpires (name, games, rpg, run_factor)
-            VALUES (?, ?, ?, ?)
-        """, (r["name"], games_n, round(rpg, 2), round(run_factor, 4)))
+            INSERT INTO umpires (name, games, rpg, run_factor, over_pct)
+            VALUES (?, ?, ?, ?, ?)
+        """, (r["name"], games_n, round(rpg, 2), round(run_factor, 4), over_pct))
 
     return len(rows)

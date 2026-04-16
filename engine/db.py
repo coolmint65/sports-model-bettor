@@ -402,16 +402,27 @@ def _migrate(conn: sqlite3.Connection) -> None:
     try:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS umpire_season_stats (
-                name       TEXT NOT NULL,
-                season     INTEGER NOT NULL,
-                games      INTEGER DEFAULT 0,
-                rpg        REAL,
-                run_factor REAL,
-                over_pct   REAL,
-                updated_at TEXT DEFAULT (datetime('now')),
+                name             TEXT NOT NULL,
+                season           INTEGER NOT NULL,
+                games            INTEGER DEFAULT 0,
+                rpg              REAL,
+                run_factor       REAL,
+                games_with_line  INTEGER DEFAULT 0,
+                overs            INTEGER DEFAULT 0,
+                over_pct         REAL,
+                updated_at       TEXT DEFAULT (datetime('now')),
                 PRIMARY KEY (name, season)
             )
         """)
+        # Add columns to pre-existing tables that lack them.
+        try:
+            conn.execute("ALTER TABLE umpire_season_stats ADD COLUMN games_with_line INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE umpire_season_stats ADD COLUMN overs INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_ump_season ON umpire_season_stats(season)"
         )
