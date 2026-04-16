@@ -31,7 +31,8 @@ def diagnose_mlb(sample_size: int = 500) -> dict:
     rows = conn.execute(
         "SELECT mlb_game_id, date, home_team_id, away_team_id, "
         "       home_pitcher_id, away_pitcher_id, venue, "
-        "       home_score, away_score, home_linescore, away_linescore "
+        "       home_score, away_score, home_linescore, away_linescore, "
+        "       weather_temp, weather_wind, umpire "
         "FROM games WHERE status = 'final' "
         "ORDER BY RANDOM() LIMIT ?",
         (sample_size,),
