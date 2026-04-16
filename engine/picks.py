@@ -92,6 +92,42 @@ def generate_picks(home_team_id: int, away_team_id: int,
     # prob_high so the UI can render a band around the point estimate.
     ci_hw = conf.get("ci_half_width", 0.05)
 
+    # Phase B: if Monte Carlo shadow ran, override inning-specific
+    # market probabilities with the MC numbers. The factor model's
+    # NRFI/F5/F3 are Poisson approximations blended with pitcher
+    # priors; MC simulates at-bats directly, so its inning splits are
+    # strictly more faithful to the game's actual stochastic process.
+    # Full-game ML / O/U / RL stay on the factor model for now -- we
+    # don't flip those until the backtest (mc_backtest) shows a
+    # consistent edge there too.
+    mc = pred.get("mc") or {}
+    if mc and "error" not in mc:
+        if mc.get("nrfi"):
+            # NRFI field on the prediction drives the "1st INN" pick.
+            fi = {"nrfi": mc["nrfi"]["nrfi"], "yrfi": mc["nrfi"]["yrfi"]}
+        if mc.get("f5"):
+            # F5 markets also flow from MC when present (the factor-
+            # model f5 was a crude SP-depth multiplier on xR).
+            # Translate MC's ±0.5 run-line convention into the legacy
+            # home_minus_0_5 / home_plus_0_5 keys that
+            # _append_f5_picks expects.
+            f5_rl = mc["f5"]["run_line"]
+            mc_f5 = {
+                "home": mc["f5"]["expected_runs"]["home"],
+                "away": mc["f5"]["expected_runs"]["away"],
+                "total": mc["f5"]["expected_runs"]["total"],
+                "win_prob": mc["f5"]["win_prob"],
+                "over_under": mc["f5"]["over_under"],
+                "run_line": {
+                    "home_minus_0_5": f5_rl.get("home_-0.5", 0.5),
+                    "home_plus_0_5":  f5_rl.get("home_+0.5", 0.5),
+                    "away_minus_0_5": 1.0 - f5_rl.get("home_+0.5", 0.5),
+                    "away_plus_0_5":  1.0 - f5_rl.get("home_-0.5", 0.5),
+                },
+            }
+            # Update the prediction so downstream _append_f5_picks sees it.
+            pred["f5"] = mc_f5
+
     home = pred.get("home", {})
     away = pred.get("away", {})
     h_abbr = home.get("abbreviation", "HOME")
