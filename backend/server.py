@@ -898,6 +898,81 @@ def api_predict(req: PredictRequest):
         logger.debug("MLB ensemble blend failed: %s", e)
         result["ensemble"] = {}
 
+    # Log component probabilities per market so engine.ensemble_auto_tune
+    # can grade each signal against actual outcomes once the game ends
+    # and produce tuned blend weights. Logging runs unconditionally
+    # (even when MC/GBM didn't run -- the missing components are stored
+    # as NULL and dropped at tune time if coverage is under 50%).
+    try:
+        from engine.prediction_log import log_signals as _log_signals
+        from engine.db import get_conn as _gc
+        mc = result.get("mc") or {}
+        gbm = result.get("gbm") or {}
+        if "error" in mc: mc = {}
+        if "error" in gbm: gbm = {}
+        # Look up the mlb_game_id for this matchup on today's slate so
+        # the signal row can JOIN against games cleanly later. We don't
+        # always have this pre-prediction -- if missing, store 0 so the
+        # row isn't orphaned (the daily settle pass can still compute
+        # outcomes on games that ARE logged with a real id).
+        from datetime import datetime as _dt
+        today = _dt.now().strftime("%Y-%m-%d")
+        _mlb_id = _gc().execute(
+            "SELECT mlb_game_id FROM games "
+            "WHERE date = ? AND home_team_id = ? AND away_team_id = ? "
+            "LIMIT 1",
+            (today, req.home_team_id, req.away_team_id),
+        ).fetchone()
+        game_id = _mlb_id["mlb_game_id"] if _mlb_id else None
+
+        signals = {}
+        # home_win
+        factor_hw = (result.get("win_prob") or {}).get("home")
+        mc_hw = (mc.get("win_prob") or {}).get("home")
+        gbm_hw = gbm.get("home_win")
+        if factor_hw is not None or mc_hw is not None or gbm_hw is not None:
+            signals["home_win"] = {
+                "factor": factor_hw, "mc": mc_hw, "gbm": gbm_hw,
+            }
+        # total (expected runs)
+        factor_t = result.get("total")
+        mc_t = (mc.get("expected_runs") or {}).get("total")
+        gbm_t = gbm.get("total_runs")
+        if factor_t is not None or mc_t is not None or gbm_t is not None:
+            signals["total"] = {
+                "factor": factor_t, "mc": mc_t, "gbm": gbm_t,
+            }
+        # NRFI
+        factor_n = (result.get("first_inning") or {}).get("nrfi")
+        mc_n = (mc.get("nrfi") or {}).get("nrfi")
+        gbm_n = gbm.get("nrfi_hit")
+        if factor_n is not None or mc_n is not None or gbm_n is not None:
+            signals["nrfi"] = {
+                "factor": factor_n, "mc": mc_n, "gbm": gbm_n,
+            }
+        # F5 home_win
+        factor_f5 = ((result.get("f5") or {}).get("win_prob") or {}).get("home")
+        mc_f5 = ((mc.get("f5") or {}).get("win_prob") or {}).get("home")
+        gbm_f5 = gbm.get("f5_home_win")
+        if factor_f5 is not None or mc_f5 is not None or gbm_f5 is not None:
+            signals["f5_home_win"] = {
+                "factor": factor_f5, "mc": mc_f5, "gbm": gbm_f5,
+            }
+        # F5 total
+        factor_f5t = (result.get("f5") or {}).get("total")
+        mc_f5t = ((mc.get("f5") or {}).get("expected_runs") or {}).get("total")
+        gbm_f5t = gbm.get("f5_total")
+        if factor_f5t is not None or mc_f5t is not None or gbm_f5t is not None:
+            signals["f5_total"] = {
+                "factor": factor_f5t, "mc": mc_f5t, "gbm": gbm_f5t,
+            }
+
+        if signals:
+            _log_signals("mlb", game_id, today,
+                         req.home_team_id, req.away_team_id, signals)
+    except Exception as e:
+        logger.debug("prediction signal logging failed: %s", e)
+
     # Run the unified picks engine so GameDetail renders the SAME rows
     # as the Scoreboard best-bet badge and POTD selection. Without this,
     # BettingPicks / PredictionResults reimplement edge logic in JS and

@@ -416,6 +416,37 @@ def _migrate(conn: sqlite3.Connection) -> None:
     except Exception as e:
         logger.warning("pending_odds creation failed: %s", e)
 
+    # Per-prediction component probabilities. Written by /api/predict
+    # every time a prediction is served; joined back against the games
+    # table at tune time to grade each signal against actual outcomes
+    # and pick the best ensemble blend weights.
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS prediction_signals (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                sport       TEXT NOT NULL,     -- 'mlb' / 'nhl' / 'nba'
+                game_id     INTEGER,           -- mlb_game_id when MLB
+                game_date   TEXT NOT NULL,
+                home_team_id INTEGER,
+                away_team_id INTEGER,
+                market      TEXT NOT NULL,     -- 'home_win', 'total', 'nrfi',
+                                                --   'f5_home_win', 'f5_total'
+                factor_prob REAL,
+                mc_prob     REAL,
+                gbm_prob    REAL,
+                captured_at TEXT DEFAULT (datetime('now')),
+                UNIQUE(sport, game_id, market, game_date)
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pred_signals_sport_market "
+            "  ON prediction_signals(sport, market)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pred_signals_date "
+            "  ON prediction_signals(game_date)")
+    except Exception as e:
+        logger.warning("prediction_signals creation failed: %s", e)
+
     # Check existing columns first to avoid ALTER TABLE errors
     for table, column, col_type in migrations:
         try:

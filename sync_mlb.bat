@@ -68,6 +68,10 @@ echo Settling POTD...
 python -c "from engine.pick_of_day import settle_potd; print(settle_potd('mlb'))" 2>nul
 
 echo.
+echo Auto-tuning ensemble weights (skipped when < 200 settled signals/market)...
+python scripts\run.py engine.ensemble_auto_tune mlb -v 2>nul
+
+echo.
 echo Backing up DBs...
 python scripts\run.py scripts.backup_dbs
 

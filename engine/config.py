@@ -283,19 +283,19 @@ MLB_ALLOW_F5_RL_FAVORITE = True
 MLB_ALLOW_F5_RL_UNDERDOG = True
 
 # Monte Carlo simulators (engine.mc_mlb / mc_nhl / mc_nba).
-# All off by default while we shadow against the factor models; flip on
-# via these flags or the override table once the backtest comparison
-# justifies it. Counts are per-game per-prediction.
-ENABLE_MLB_MC = False
+# MLB is live; NHL/NBA still shadow-only while their MC calibration
+# accumulates outcome data.
+ENABLE_MLB_MC = True
 MLB_MC_N_SIMS = 50_000
 ENABLE_NHL_MC = False
 NHL_MC_N_SIMS = 50_000
 ENABLE_NBA_MC = False
 NBA_MC_N_SIMS = 50_000
 
-# Gradient-boosted-tree (GBM) model (engine.gbm). Off by default until
-# the training script has run and artifacts exist in data/models/.
-# Turn on once engine.gbm.train has completed for the sport.
-ENABLE_MLB_GBM = False
-ENABLE_NHL_GBM = False   # placeholder -- training pipeline is MLB-only for now
+# Gradient-boosted-tree (GBM) model (engine.gbm). MLB GBM trained on
+# ~7500 historical games (Brier 0.2413 home_win, 0.2361 F5 home_win).
+# Turn on the per-sport flag once engine.gbm.train has produced
+# artifacts for that sport.
+ENABLE_MLB_GBM = True
+ENABLE_NHL_GBM = False   # training pipeline not built yet
 ENABLE_NBA_GBM = False
