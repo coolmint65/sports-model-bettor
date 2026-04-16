@@ -888,6 +888,16 @@ def api_predict(req: PredictRequest):
                            req.home_team_id, req.away_team_id, e, exc_info=True)
             result["gbm"] = {"error": str(e)}
 
+    # Ensemble blend of factor + MC + GBM signals. Runs whenever at least
+    # one non-factor signal landed; no flag needed because it just
+    # aggregates what's already on the response.
+    try:
+        from engine.ensemble import ensemble_mlb
+        result["ensemble"] = ensemble_mlb(result)
+    except Exception as e:
+        logger.debug("MLB ensemble blend failed: %s", e)
+        result["ensemble"] = {}
+
     # Run the unified picks engine so GameDetail renders the SAME rows
     # as the Scoreboard best-bet badge and POTD selection. Without this,
     # BettingPicks / PredictionResults reimplement edge logic in JS and
@@ -2190,6 +2200,12 @@ def api_nhl_predict(home: str = Query(...), away: str = Query(...)):
             logger.warning("NHL MC shadow failed for %s/%s: %s", home, away, e)
             result["mc"] = {"error": str(e)}
 
+    try:
+        from engine.ensemble import ensemble_nhl
+        result["ensemble"] = ensemble_nhl(result)
+    except Exception as e:
+        logger.debug("NHL ensemble blend failed: %s", e)
+
     return result
 
 
@@ -2928,6 +2944,12 @@ def api_nba_predict(home: str = Query(...), away: str = Query(...)):
             except Exception as e:
                 logger.warning("NBA MC shadow failed for %s/%s: %s", home, away, e)
                 result["mc"] = {"error": str(e)}
+
+        try:
+            from engine.ensemble import ensemble_nba
+            result["ensemble"] = ensemble_nba(result)
+        except Exception as e:
+            logger.debug("NBA ensemble blend failed: %s", e)
 
         return result
     except HTTPException:
