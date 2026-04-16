@@ -56,6 +56,21 @@ _DEFAULTS = {
     "is_playoff": 0,
     "home_form_last_10_pct": 0.500,
     "away_form_last_10_pct": 0.500,
+    # Games-table-derived features (always available for all backfilled
+    # seasons because they query the games table, not player stat tables).
+    "home_season_win_pct": 0.500,
+    "away_season_win_pct": 0.500,
+    "home_run_diff_pg": 0.0,
+    "away_run_diff_pg": 0.0,
+    "home_scoring_std": 2.5,
+    "away_scoring_std": 2.5,
+    "home_home_win_pct": 0.540,
+    "away_away_win_pct": 0.460,
+    "sp_era_diff": 0.0,              # home SP ERA minus away SP ERA
+    "home_sp_era_last_3": 4.10,
+    "away_sp_era_last_3": 4.10,
+    "home_rest_days": 1,
+    "away_rest_days": 1,
 }
 
 
@@ -140,6 +155,35 @@ def extract_mlb_features(conn, game: dict) -> dict[str, float] | None:
     # PIT-correct answer (exclude games on or after the target date).
     features["home_form_last_10_pct"] = _form_last_10(conn, home_id, date)
     features["away_form_last_10_pct"] = _form_last_10(conn, away_id, date)
+
+    # ── Games-table-derived features (always available) ──
+    # These query the games table which is fully backfilled for all
+    # historical seasons, so they never fall back to defaults.
+    h_season = _team_season_stats(conn, home_id, season, date)
+    a_season = _team_season_stats(conn, away_id, season, date)
+    features["home_season_win_pct"] = h_season.get("win_pct", 0.500)
+    features["away_season_win_pct"] = a_season.get("win_pct", 0.500)
+    features["home_run_diff_pg"] = h_season.get("run_diff_pg", 0.0)
+    features["away_run_diff_pg"] = a_season.get("run_diff_pg", 0.0)
+    features["home_scoring_std"] = h_season.get("scoring_std", 2.5)
+    features["away_scoring_std"] = a_season.get("scoring_std", 2.5)
+    features["home_home_win_pct"] = h_season.get("home_win_pct", 0.540)
+    features["away_away_win_pct"] = a_season.get("away_win_pct", 0.460)
+
+    # SP ERA differential (strong signal: positive = away SP is better)
+    features["sp_era_diff"] = features["home_sp_era"] - features["away_sp_era"]
+
+    # SP ERA last 3 starts (games-table-derived, PIT-correct)
+    if game.get("home_pitcher_id"):
+        features["home_sp_era_last_3"] = _sp_era_last_n(
+            conn, game["home_pitcher_id"], date, n=3)
+    if game.get("away_pitcher_id"):
+        features["away_sp_era_last_3"] = _sp_era_last_n(
+            conn, game["away_pitcher_id"], date, n=3)
+
+    # Rest days since last game
+    features["home_rest_days"] = _rest_days(conn, home_id, date)
+    features["away_rest_days"] = _rest_days(conn, away_id, date)
 
     return features
 
@@ -326,6 +370,121 @@ def _is_postseason(date_str: str) -> bool:
     if d.month == 11 and d.day <= 7:
         return True
     return False
+
+
+def _team_season_stats(conn, team_id: int, season: int,
+                        as_of_date: str) -> dict:
+    """Compute team aggregate stats from the games table, PIT-correct.
+
+    Returns win_pct, run_diff_pg, scoring_std, home_win_pct, away_win_pct.
+    Only counts games strictly before as_of_date.
+    """
+    out = {}
+    try:
+        rows = conn.execute(
+            "SELECT home_team_id, away_team_id, home_score, away_score "
+            "FROM games "
+            "WHERE (home_team_id = ? OR away_team_id = ?) "
+            "  AND season = ? AND status = 'final' AND date < ? "
+            "  AND home_score IS NOT NULL AND away_score IS NOT NULL",
+            (team_id, team_id, season, as_of_date),
+        ).fetchall()
+        if not rows:
+            return out
+        wins = 0
+        home_wins = 0
+        home_games = 0
+        away_wins = 0
+        away_games = 0
+        runs_scored = []
+        runs_allowed = []
+        for r in rows:
+            is_home = (r["home_team_id"] == team_id)
+            hs, as_ = r["home_score"], r["away_score"]
+            if is_home:
+                home_games += 1
+                runs_scored.append(hs)
+                runs_allowed.append(as_)
+                if hs > as_:
+                    wins += 1
+                    home_wins += 1
+            else:
+                away_games += 1
+                runs_scored.append(as_)
+                runs_allowed.append(hs)
+                if as_ > hs:
+                    wins += 1
+                    away_wins += 1
+        n = len(rows)
+        out["win_pct"] = round(wins / n, 3)
+        rs_mean = sum(runs_scored) / n
+        ra_mean = sum(runs_allowed) / n
+        out["run_diff_pg"] = round(rs_mean - ra_mean, 3)
+        if n > 1:
+            from statistics import stdev as _std
+            out["scoring_std"] = round(_std(runs_scored), 3)
+        else:
+            out["scoring_std"] = 2.5
+        out["home_win_pct"] = round(home_wins / max(home_games, 1), 3)
+        out["away_win_pct"] = round(away_wins / max(away_games, 1), 3)
+    except Exception as e:
+        logger.debug("_team_season_stats failed: %s", e)
+    return out
+
+
+def _sp_era_last_n(conn, pitcher_id: int, as_of_date: str,
+                    n: int = 3) -> float:
+    """Compute a pitcher's ERA over their last N starts, from the games table.
+
+    PIT-correct: only uses games before as_of_date.
+    Returns 4.10 if insufficient data.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT home_team_id, away_team_id, home_score, away_score, "
+            "       home_pitcher_id, away_pitcher_id "
+            "FROM games "
+            "WHERE (home_pitcher_id = ? OR away_pitcher_id = ?) "
+            "  AND status = 'final' AND date < ? "
+            "  AND home_score IS NOT NULL "
+            "ORDER BY date DESC LIMIT ?",
+            (pitcher_id, pitcher_id, as_of_date, n),
+        ).fetchall()
+        if not rows:
+            return 4.10
+        # Approximate ERA from runs allowed in starts
+        # (runs allowed per start / ~6 innings per start * 9)
+        total_ra = 0
+        for r in rows:
+            if r["home_pitcher_id"] == pitcher_id:
+                total_ra += r["away_score"]
+            else:
+                total_ra += r["home_score"]
+        avg_ra = total_ra / len(rows)
+        # Convert to ERA: assume ~5.5 IP per start
+        era_approx = avg_ra * 9 / 5.5
+        return round(max(0.0, min(15.0, era_approx)), 2)
+    except Exception:
+        return 4.10
+
+
+def _rest_days(conn, team_id: int, as_of_date: str) -> int:
+    """Days since the team's last game before as_of_date."""
+    try:
+        row = conn.execute(
+            "SELECT date FROM games "
+            "WHERE (home_team_id = ? OR away_team_id = ?) "
+            "  AND status = 'final' AND date < ? "
+            "ORDER BY date DESC LIMIT 1",
+            (team_id, team_id, as_of_date),
+        ).fetchone()
+        if row and row["date"]:
+            last = datetime.strptime(row["date"][:10], "%Y-%m-%d")
+            today = datetime.strptime(as_of_date[:10], "%Y-%m-%d")
+            return max(0, (today - last).days)
+    except Exception:
+        pass
+    return 1
 
 
 FEATURE_NAMES = sorted(_DEFAULTS.keys())
