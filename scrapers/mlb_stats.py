@@ -383,7 +383,13 @@ def fetch_player_stats(player_id: int, season: int | None = None,
 
 def sync_pitcher_stats(player_id: int, team_id: int | None = None,
                         season: int | None = None) -> dict | None:
-    """Fetch and store pitcher stats for a season."""
+    """Fetch and store pitcher stats for a season.
+
+    Computes rate stats (K%, BB%, FIP) from the raw counting stats the
+    MLB Stats API returns, so we don't depend on FanGraphs' flaky
+    leaders-legacy endpoint to populate them. GBM feature extraction
+    reads these rate columns directly.
+    """
     yr = season or SEASON
     raw = fetch_player_stats(player_id, yr, "pitching")
     if not raw:
@@ -391,13 +397,35 @@ def sync_pitcher_stats(player_id: int, team_id: int | None = None,
 
     from engine.db import get_conn
 
+    # Derived rate stats (league FIP constant ~3.10 averaged over recent years)
+    k = _safe_int(raw.get("strikeOuts"))
+    bb = _safe_int(raw.get("baseOnBalls"))
+    hr = _safe_int(raw.get("homeRuns"))
+    hbp = _safe_int(raw.get("hitByPitch"))
+    ip = _safe_float(raw.get("inningsPitched")) or 0.0
+    bf = _safe_int(raw.get("battersFaced"))
+    # Fallback: estimate BF from IP + baserunners if the API omitted it
+    if not bf and ip > 0:
+        bf = int(round(ip * 3 + _safe_int(raw.get("hits")) + bb + hbp))
+    k_pct = round(k / bf, 4) if bf > 0 else None
+    bb_pct = round(bb / bf, 4) if bf > 0 else None
+    fip = (round((13 * hr + 3 * (bb + hbp) - 2 * k) / ip + 3.10, 2)
+           if ip > 0 else None)
+    # BABIP = (H - HR) / (AB - K - HR + SF). SF usually missing; approximate.
+    ab_against = _safe_int(raw.get("atBats")) or max(0, bf - bb - hbp)
+    bip_denom = ab_against - k - hr
+    hits = _safe_int(raw.get("hits"))
+    babip = (round(max(0.0, (hits - hr) / bip_denom), 4)
+             if bip_denom > 0 else None)
+
     conn = get_conn()
     conn.execute("""
         INSERT INTO pitcher_stats (player_id, season, team_id,
             games, games_started, wins, losses, saves,
             innings, hits, runs, earned_runs, walks, strikeouts, home_runs,
-            era, whip, k_per_9, bb_per_9, hr_per_9)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            era, whip, k_per_9, bb_per_9, hr_per_9,
+            k_pct, bb_pct, fip, babip)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(player_id, season) DO UPDATE SET
             team_id=excluded.team_id,
             games=excluded.games, games_started=excluded.games_started,
@@ -408,6 +436,10 @@ def sync_pitcher_stats(player_id: int, team_id: int | None = None,
             era=excluded.era, whip=excluded.whip,
             k_per_9=excluded.k_per_9, bb_per_9=excluded.bb_per_9,
             hr_per_9=excluded.hr_per_9,
+            k_pct=COALESCE(excluded.k_pct, pitcher_stats.k_pct),
+            bb_pct=COALESCE(excluded.bb_pct, pitcher_stats.bb_pct),
+            fip=COALESCE(excluded.fip, pitcher_stats.fip),
+            babip=COALESCE(excluded.babip, pitcher_stats.babip),
             updated_at=datetime('now')
     """, (
         player_id, yr, team_id,
@@ -428,6 +460,7 @@ def sync_pitcher_stats(player_id: int, team_id: int | None = None,
         _safe_float(raw.get("strikeoutsPer9Inn")),
         _safe_float(raw.get("walksPer9Inn")),
         _safe_float(raw.get("homeRunsPer9")),
+        k_pct, bb_pct, fip, babip,
     ))
     conn.commit()
     return raw
@@ -435,7 +468,13 @@ def sync_pitcher_stats(player_id: int, team_id: int | None = None,
 
 def sync_batter_stats(player_id: int, team_id: int | None = None,
                        season: int | None = None) -> dict | None:
-    """Fetch and store batter stats for a season."""
+    """Fetch and store batter stats for a season.
+
+    Also computes K%, BB%, ISO, BABIP from the basic counting stats so
+    the GBM feature extractor gets real values without waiting for the
+    FanGraphs leaderboard (which pybaseball's legacy endpoint can't
+    reach since FanGraphs started returning 403 on leaders-legacy.aspx).
+    """
     yr = season or SEASON
     raw = fetch_player_stats(player_id, yr, "hitting")
     if not raw:
@@ -443,13 +482,34 @@ def sync_batter_stats(player_id: int, team_id: int | None = None,
 
     from engine.db import get_conn
 
+    pa = _safe_int(raw.get("plateAppearances"))
+    ab = _safe_int(raw.get("atBats"))
+    h = _safe_int(raw.get("hits"))
+    d = _safe_int(raw.get("doubles"))
+    t = _safe_int(raw.get("triples"))
+    hr = _safe_int(raw.get("homeRuns"))
+    k = _safe_int(raw.get("strikeOuts"))
+    bb = _safe_int(raw.get("baseOnBalls"))
+    sf = _safe_int(raw.get("sacFlies"))
+    avg = _safe_float(raw.get("avg"))
+    slg = _safe_float(raw.get("slg"))
+
+    k_pct = round(k / pa, 4) if pa > 0 else None
+    bb_pct = round(bb / pa, 4) if pa > 0 else None
+    iso = (round(slg - avg, 4) if (slg is not None and avg is not None)
+           else None)
+    bip_denom = ab - k - hr + sf
+    babip = (round(max(0.0, (h - hr) / bip_denom), 4)
+             if bip_denom > 0 else None)
+
     conn = get_conn()
     conn.execute("""
         INSERT INTO batter_stats (player_id, season, team_id,
             games, plate_appearances, at_bats, hits, doubles, triples,
             home_runs, rbi, stolen_bases, walks, strikeouts,
-            avg, obp, slg, ops)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            avg, obp, slg, ops,
+            k_pct, bb_pct, iso, babip)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(player_id, season) DO UPDATE SET
             team_id=excluded.team_id,
             games=excluded.games, plate_appearances=excluded.plate_appearances,
@@ -460,24 +520,23 @@ def sync_batter_stats(player_id: int, team_id: int | None = None,
             strikeouts=excluded.strikeouts,
             avg=excluded.avg, obp=excluded.obp, slg=excluded.slg,
             ops=excluded.ops,
+            k_pct=COALESCE(excluded.k_pct, batter_stats.k_pct),
+            bb_pct=COALESCE(excluded.bb_pct, batter_stats.bb_pct),
+            iso=COALESCE(excluded.iso, batter_stats.iso),
+            babip=COALESCE(excluded.babip, batter_stats.babip),
             updated_at=datetime('now')
     """, (
         player_id, yr, team_id,
         _safe_int(raw.get("gamesPlayed")),
-        _safe_int(raw.get("plateAppearances")),
-        _safe_int(raw.get("atBats")),
-        _safe_int(raw.get("hits")),
-        _safe_int(raw.get("doubles")),
-        _safe_int(raw.get("triples")),
-        _safe_int(raw.get("homeRuns")),
+        pa, ab, h, d, t, hr,
         _safe_int(raw.get("rbi")),
         _safe_int(raw.get("stolenBases")),
-        _safe_int(raw.get("baseOnBalls")),
-        _safe_int(raw.get("strikeOuts")),
-        _safe_float(raw.get("avg")),
+        bb, k,
+        avg,
         _safe_float(raw.get("obp")),
-        _safe_float(raw.get("slg")),
+        slg,
         _safe_float(raw.get("ops")),
+        k_pct, bb_pct, iso, babip,
     ))
     conn.commit()
     return raw
