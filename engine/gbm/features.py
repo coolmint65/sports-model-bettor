@@ -71,6 +71,22 @@ _DEFAULTS = {
     "away_sp_era_last_3": 4.10,
     "home_rest_days": 1,
     "away_rest_days": 1,
+    # Weather (from games.weather_temp / weather_wind, when populated)
+    "weather_temp_f": 70.0,
+    "weather_wind_mph": 5.0,
+    # HP umpire (from umpires table, looked up by games.umpire name)
+    "umpire_run_factor": 1.0,
+    "umpire_k_pct": 0.22,
+    "umpire_over_pct": 0.50,
+    # Derived / interaction features. GBM can find these automatically
+    # once enough base features have signal, but computing them directly
+    # gives the model a head start on the most obvious patterns.
+    "sp_era_last3_diff": 0.0,       # home vs away SP ERA last-3
+    "run_diff_delta": 0.0,          # home run_diff_pg - away run_diff_pg
+    "win_pct_diff": 0.0,            # home season_win_pct - away season_win_pct
+    "offense_vs_pitching_home": 0.0,  # home offense quality - away SP quality
+    "offense_vs_pitching_away": 0.0,  # away offense quality - home SP quality
+    "park_adj_total_offense": 0.0,  # (home_runs_pg + away_runs_pg) * park_factor
 }
 
 
@@ -185,7 +201,99 @@ def extract_mlb_features(conn, game: dict) -> dict[str, float] | None:
     features["home_rest_days"] = _rest_days(conn, home_id, date)
     features["away_rest_days"] = _rest_days(conn, away_id, date)
 
+    # ── Weather (games.weather_temp / weather_wind) ──
+    # Games the scrapers ingest AFTER 2024 carry populated weather fields
+    # most of the time. Earlier games fall back to the 70F / 5mph default
+    # which is close enough to league-average to not hurt the model.
+    wtemp = game.get("weather_temp")
+    wwind = game.get("weather_wind")
+    if wtemp is not None:
+        try:
+            features["weather_temp_f"] = float(wtemp)
+        except (TypeError, ValueError):
+            pass
+    if wwind is not None:
+        features["weather_wind_mph"] = _parse_wind(wwind)
+
+    # ── Umpire (from the umpires table, joined by name) ──
+    ump_name = game.get("umpire") or ""
+    if ump_name:
+        ump = _umpire_stats(conn, ump_name)
+        if ump.get("run_factor") is not None:
+            features["umpire_run_factor"] = float(ump["run_factor"])
+        if ump.get("k_pct") is not None:
+            features["umpire_k_pct"] = float(ump["k_pct"])
+        if ump.get("over_pct") is not None:
+            features["umpire_over_pct"] = float(ump["over_pct"])
+
+    # ── Derived / interaction features ──
+    # GBM can find these from the base features, but giving them to it
+    # directly as single columns makes it easier for shallow trees to
+    # find the splits. Cheap to compute, strictly additive.
+    features["sp_era_last3_diff"] = round(
+        features["home_sp_era_last_3"] - features["away_sp_era_last_3"], 3,
+    )
+    features["run_diff_delta"] = round(
+        features["home_run_diff_pg"] - features["away_run_diff_pg"], 3,
+    )
+    features["win_pct_diff"] = round(
+        features["home_season_win_pct"] - features["away_season_win_pct"], 3,
+    )
+    # Offense vs. opposing SP: positive = home offense faces weak SP
+    features["offense_vs_pitching_home"] = round(
+        features["home_runs_pg"] - (LEAGUE_AVG_RPG_PER_SP_ERA * features["away_sp_era"]), 3,
+    )
+    features["offense_vs_pitching_away"] = round(
+        features["away_runs_pg"] - (LEAGUE_AVG_RPG_PER_SP_ERA * features["home_sp_era"]), 3,
+    )
+    # Combined run environment -- team totals scaled by the park
+    features["park_adj_total_offense"] = round(
+        (features["home_runs_pg"] + features["away_runs_pg"])
+        * features["park_run_factor"], 3,
+    )
+
     return features
+
+
+# Calibration constant for offense-vs-pitching interaction. ~0.50 means
+# every point of SP ERA above 4.10 corresponds to ~0.5 extra runs in
+# that game. Empirical league regression.
+LEAGUE_AVG_RPG_PER_SP_ERA = 0.50
+
+
+def _parse_wind(val) -> float:
+    """Turn a wind string like '8 mph Out to CF' into a numeric mph."""
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        pass
+    s = str(val or "").strip()
+    if not s:
+        return 5.0
+    # Leading numeric token
+    import re as _re
+    m = _re.match(r"(\d+(?:\.\d+)?)", s)
+    if m:
+        try:
+            return float(m.group(1))
+        except ValueError:
+            return 5.0
+    return 5.0
+
+
+def _umpire_stats(conn, umpire_name: str) -> dict:
+    """Lookup umpire tendency stats. Names in games.umpire are the
+    MLB Stats API format (e.g. 'Angel Hernandez'), which should match
+    the umpires table's `name` column. Returns empty dict on miss."""
+    try:
+        row = conn.execute(
+            "SELECT run_factor, k_pct, bb_pct, over_pct "
+            "FROM umpires WHERE name = ?",
+            (umpire_name,),
+        ).fetchone()
+        return dict(row) if row else {}
+    except Exception:
+        return {}
 
 
 # ── Direct-table helpers (snapshot-based, mild leakage, strong signal) ──

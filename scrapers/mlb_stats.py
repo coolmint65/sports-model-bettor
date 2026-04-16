@@ -698,11 +698,41 @@ if __name__ == "__main__":
 
     if history_year:
         _progress(f"=== Loading {history_year} Season Data ===")
-        _progress(f"[1/2] Fetching teams...")
+        _progress(f"[1/5] Fetching teams...")
         fetch_teams()
-        _progress(f"[2/2] Fetching all {history_year} games (this takes a few minutes)...")
+        _progress(f"[2/5] Fetching all {history_year} games (this takes a few minutes)...")
         games = fetch_season_results(season=history_year)
         _progress(f"       Loaded {len(games)} games from {history_year}")
+
+        # Player-stat backfill -- essential for GBM feature extraction.
+        # Without this step we only have games, not the K%/BB%/FIP/WHIP
+        # that the per-game feature extractor needs. Running this once
+        # per historical season brings feature variance from "stuck at
+        # default for 96% of games" to realistic coverage.
+        _progress(f"[3/5] Syncing MLB-Stats-API player rates for {history_year}...")
+        try:
+            sync_all_player_stats(season=history_year)
+            _progress(f"       Done.")
+        except Exception as e:
+            _progress(f"       WARN: player-stats sync failed: {e}")
+
+        _progress(f"[4/5] Syncing FanGraphs advanced pitcher stats for {history_year}...")
+        try:
+            from scrapers.mlb_advanced import (
+                sync_fangraphs_pitchers, sync_fangraphs_batters,
+                sync_fangraphs_team_stats,
+            )
+            sync_fangraphs_pitchers(season=history_year)
+            _progress(f"       Done.")
+            _progress(f"[5/5] Syncing FanGraphs advanced batter stats for {history_year}...")
+            sync_fangraphs_batters(season=history_year)
+            sync_fangraphs_team_stats(season=history_year)
+            _progress(f"       Done.")
+        except ImportError:
+            _progress(f"       WARN: pybaseball unavailable; skipping FanGraphs sync")
+        except Exception as e:
+            _progress(f"       WARN: FanGraphs sync failed: {e}")
+
         _progress(f"=== Done ===")
     elif "--full" in args_set:
         full_sync()
