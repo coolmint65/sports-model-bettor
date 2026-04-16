@@ -38,6 +38,12 @@ python -c "from engine.odds_history import drain_pending_mlb_odds; print(drain_p
 
 :calibrate
 echo.
+echo Refreshing umpire tendency table from recent games...
+REM Run after both full and quick sync paths so GBM's umpire features
+REM see fresh run_factor / k_pct / over_pct on every sync.
+python -c "from engine.umpire import update_umpire_stats; print(update_umpire_stats())" 2>nul
+
+echo.
 echo Calibrating global model...
 REM --auto picks the look-back window based on season progress; see
 REM engine.calibration.adaptive_window() for the per-phase ranges.

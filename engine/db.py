@@ -499,8 +499,9 @@ def upsert_game(mlb_game_id: int, **kwargs) -> None:
     conn = get_conn()
     fields = ["date", "home_team_id", "away_team_id", "home_score", "away_score",
               "status", "home_pitcher_id", "away_pitcher_id", "venue", "day_night",
-              "weather_temp", "weather_wind", "winning_pitcher", "losing_pitcher",
-              "save_pitcher", "season", "home_linescore", "away_linescore"]
+              "weather_temp", "weather_wind", "umpire", "winning_pitcher",
+              "losing_pitcher", "save_pitcher", "season", "home_linescore",
+              "away_linescore"]
     values = {k: kwargs.get(k) for k in fields}
     values["mlb_game_id"] = mlb_game_id
 

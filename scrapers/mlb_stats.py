@@ -223,6 +223,149 @@ def fetch_today() -> list[dict]:
     return fetch_schedule(today, today)
 
 
+# ── Umpire ingestion ────────────────────────────────────────
+# HP umpire is only exposed by /game/{pk}/boxscore, not the schedule hydrate.
+# We walk games missing an ump and call the boxscore endpoint. Rate-limited.
+# Umpires are typically assigned 30-90 min pre-game, so re-running the sync
+# throughout the day will progressively fill today's slate.
+
+def sync_missing_umpires(date_from: str | None = None,
+                         date_to: str | None = None,
+                         limit: int | None = None,
+                         sleep_s: float = 0.25) -> int:
+    """Populate games.umpire for games missing it.
+
+    Args:
+        date_from, date_to: YYYY-MM-DD bounds (inclusive). None = no bound.
+        limit: max games to process this call.
+        sleep_s: delay between boxscore calls.
+
+    Only touches games with status in ('live','final','scheduled') since
+    the MLB Stats API publishes officials as soon as they're assigned.
+
+    Returns number of games updated.
+    """
+    from engine.db import get_conn
+
+    conn = get_conn()
+    where = ["umpire IS NULL"]
+    params: list = []
+    if date_from:
+        where.append("date >= ?")
+        params.append(date_from)
+    if date_to:
+        where.append("date <= ?")
+        params.append(date_to)
+    sql = f"SELECT mlb_game_id FROM games WHERE {' AND '.join(where)} ORDER BY date DESC"
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+
+    rows = conn.execute(sql, params).fetchall()
+    if not rows:
+        return 0
+
+    updated = 0
+    for i, r in enumerate(rows):
+        pk = r["mlb_game_id"]
+        ump_name = _fetch_hp_umpire(pk)
+        if ump_name:
+            conn.execute(
+                "UPDATE games SET umpire = ?, updated_at = datetime('now') "
+                "WHERE mlb_game_id = ?",
+                (ump_name, pk),
+            )
+            updated += 1
+        if (i + 1) % 25 == 0:
+            conn.commit()
+        time.sleep(sleep_s)
+
+    conn.commit()
+    logger.info("Umpire backfill: %d/%d games updated", updated, len(rows))
+    return updated
+
+
+def _fetch_hp_umpire(game_pk: int) -> str | None:
+    """Return HP umpire name for a game, or None if not yet assigned."""
+    data = _fetch(f"{MLB_API}/game/{game_pk}/boxscore")
+    if not data:
+        return None
+    for official in data.get("officials", []):
+        if official.get("officialType") == "Home Plate":
+            person = official.get("official", {})
+            name = person.get("fullName")
+            if name:
+                return name
+    return None
+
+
+# ── Weather backfill ────────────────────────────────────────
+# fetch_schedule() populates weather on every run for new games, but rows
+# ingested before the weather hydrate landed (pre-2025) carry NULLs. This
+# re-pulls the schedule in month-sized chunks and UPDATEs only the weather
+# columns where they're NULL, preserving every other column on the row.
+
+def backfill_weather(season: int, sleep_s: float = 0.3) -> int:
+    """Backfill weather_temp / weather_wind for games with NULL weather in SEASON.
+
+    Returns number of rows updated.
+    """
+    from engine.db import get_conn
+
+    conn = get_conn()
+    needs_fill = conn.execute(
+        "SELECT COUNT(*) as c FROM games WHERE season = ? AND weather_temp IS NULL",
+        (season,),
+    ).fetchone()["c"]
+    if not needs_fill:
+        _progress(f"       No NULL-weather rows for {season}")
+        return 0
+    _progress(f"       {needs_fill} games in {season} need weather")
+
+    # Walk the season month-by-month. MLB regular season spans March-October.
+    updated = 0
+    month_ranges = [(f"{season}-{m:02d}-01",
+                     f"{season}-{m:02d}-{_days_in_month(season, m)}")
+                    for m in range(3, 11)]
+
+    for start, end in month_ranges:
+        url = (f"{MLB_API}/schedule?sportId=1"
+               f"&startDate={start}&endDate={end}"
+               f"&hydrate=weather")
+        data = _fetch(url)
+        if not data:
+            continue
+        for date_entry in data.get("dates", []):
+            for g in date_entry.get("games", []):
+                pk = g.get("gamePk")
+                weather = g.get("weather", {}) or {}
+                temp = _safe_float(weather.get("temp"))
+                wind = weather.get("wind", "")
+                if temp is None and not wind:
+                    continue
+                # COALESCE keeps existing non-null values intact.
+                cur = conn.execute(
+                    "UPDATE games "
+                    "SET weather_temp = COALESCE(weather_temp, ?), "
+                    "    weather_wind = COALESCE(NULLIF(weather_wind, ''), ?), "
+                    "    updated_at = datetime('now') "
+                    "WHERE mlb_game_id = ? "
+                    "  AND (weather_temp IS NULL OR weather_wind IS NULL OR weather_wind = '')",
+                    (temp, wind, pk),
+                )
+                if cur.rowcount:
+                    updated += 1
+        conn.commit()
+        time.sleep(sleep_s)
+
+    _progress(f"       Season {season}: backfilled weather on {updated} games")
+    return updated
+
+
+def _days_in_month(year: int, month: int) -> int:
+    import calendar
+    return calendar.monthrange(year, month)[1]
+
+
 def fetch_game_lineups(game_pk: int) -> dict | None:
     """
     Fetch confirmed lineups for a specific game from the live feed.
@@ -680,8 +823,16 @@ def full_sync():
     _progress("[4/5] Fetching standings...")
     fetch_standings()
 
-    _progress("[5/5] Fetching player stats (this takes a while)...")
+    _progress("[5/6] Fetching player stats (this takes a while)...")
     sync_all_player_stats()
+
+    _progress("[6/6] Syncing HP umpires for today's games...")
+    today = datetime.now().strftime("%Y-%m-%d")
+    try:
+        n = sync_missing_umpires(date_from=today, date_to=today)
+        _progress(f"       Umpires populated: {n}")
+    except Exception as e:
+        _progress(f"       WARN: umpire sync failed: {e}")
 
     elapsed = time.time() - start
     _progress(f"=== Sync complete in {elapsed:.0f} seconds ===")
@@ -696,15 +847,23 @@ def quick_sync():
     teams = fetch_teams()
     _progress(f"       Loaded {len(teams)} teams")
 
-    _progress("[2/3] Fetching today's games + schedule...")
+    _progress("[2/5] Fetching today's games + schedule...")
     games = fetch_today()
     _progress(f"       Found {len(games)} games today")
 
-    _progress("[3/4] Fetching standings...")
+    _progress("[3/5] Fetching standings...")
     fetch_standings()
 
-    _progress("[4/4] Computing bullpen fatigue...")
+    _progress("[4/5] Computing bullpen fatigue...")
     compute_bullpen_fatigue()
+
+    _progress("[5/5] Syncing HP umpires for today's games...")
+    today = datetime.now().strftime("%Y-%m-%d")
+    try:
+        n = sync_missing_umpires(date_from=today, date_to=today)
+        _progress(f"       Umpires populated: {n}")
+    except Exception as e:
+        _progress(f"       WARN: umpire sync failed: {e}")
 
     elapsed = time.time() - start
     _progress(f"=== Quick sync done in {elapsed:.0f} seconds ===")
@@ -714,20 +873,28 @@ def daily_sync():
     """Quick daily update: today's games, standings, probable pitchers."""
     _progress("=== MLB Daily Sync ===")
 
-    _progress("[1/3] Today's games...")
+    _progress("[1/5] Today's games...")
     games = fetch_today()
     _progress(f"       Found {len(games)} games")
 
-    _progress("[2/3] Standings...")
+    _progress("[2/5] Standings...")
     fetch_standings()
 
     # Also fetch tomorrow for probable pitchers
     tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-    _progress("[3/3] Tomorrow's schedule...")
+    _progress("[3/5] Tomorrow's schedule...")
     fetch_schedule(tomorrow, tomorrow)
 
-    _progress("[4/4] Computing bullpen fatigue...")
+    _progress("[4/5] Computing bullpen fatigue...")
     compute_bullpen_fatigue()
+
+    _progress("[5/5] Syncing HP umpires for today's games...")
+    today = datetime.now().strftime("%Y-%m-%d")
+    try:
+        n = sync_missing_umpires(date_from=today, date_to=today)
+        _progress(f"       Umpires populated: {n}")
+    except Exception as e:
+        _progress(f"       WARN: umpire sync failed: {e}")
 
     _progress("=== Daily sync complete ===")
 
@@ -749,11 +916,22 @@ if __name__ == "__main__":
     args = sys.argv[1:]
     args_set = set(args)
 
-    # Parse --history YEAR
+    # Parse --history YEAR / --backfill-umpires [YEAR] / --backfill-weather YEAR
     history_year = None
+    ump_backfill_year = None
+    ump_backfill_all = False
+    weather_backfill_year = None
     for i, a in enumerate(args):
         if a == "--history" and i + 1 < len(args):
             history_year = int(args[i + 1])
+        elif a == "--backfill-umpires":
+            # Optional year arg; no arg means all seasons with NULL umps
+            if i + 1 < len(args) and args[i + 1].isdigit():
+                ump_backfill_year = int(args[i + 1])
+            else:
+                ump_backfill_all = True
+        elif a == "--backfill-weather" and i + 1 < len(args):
+            weather_backfill_year = int(args[i + 1])
 
     if history_year:
         _progress(f"=== Loading {history_year} Season Data ===")
@@ -793,6 +971,26 @@ if __name__ == "__main__":
             _progress(f"       WARN: FanGraphs sync failed: {e}")
 
         _progress(f"=== Done ===")
+    elif ump_backfill_year is not None or ump_backfill_all:
+        from engine.umpire import update_umpire_stats
+        if ump_backfill_year:
+            _progress(f"=== Umpire backfill for season {ump_backfill_year} ===")
+            date_from = f"{ump_backfill_year}-01-01"
+            date_to = f"{ump_backfill_year}-12-31"
+            n = sync_missing_umpires(date_from=date_from, date_to=date_to)
+            _progress(f"       Populated games.umpire on {n} rows")
+            update_umpire_stats(season=ump_backfill_year)
+        else:
+            _progress("=== Umpire backfill (all seasons with NULL umps) ===")
+            n = sync_missing_umpires()
+            _progress(f"       Populated games.umpire on {n} rows")
+            update_umpire_stats()
+        _progress("=== Done ===")
+    elif weather_backfill_year is not None:
+        _progress(f"=== Weather backfill for season {weather_backfill_year} ===")
+        n = backfill_weather(weather_backfill_year)
+        _progress(f"       Updated {n} rows")
+        _progress("=== Done ===")
     elif "--full" in args_set:
         full_sync()
     elif "--today" in args_set or "--daily" in args_set:
