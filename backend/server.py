@@ -847,6 +847,27 @@ def api_predict(req: PredictRequest):
         logger.debug("active_overrides lookup failed: %s", e)
         result["active_overrides"] = []
 
+    # Monte Carlo shadow prediction. Runs independently of the factor
+    # model and lands on the response under "mc". Gated by
+    # config.ENABLE_MLB_MC so we can shadow-test without affecting
+    # pick generation until the comparison shows it's worth flipping.
+    if _get_flag("ENABLE_MLB_MC", False):
+        try:
+            from engine.mc_mlb_run import run_mlb_mc
+            import engine.config as _cfg
+            result["mc"] = run_mlb_mc(
+                home_team_id=req.home_team_id,
+                away_team_id=req.away_team_id,
+                home_pitcher_id=req.home_pitcher_id,
+                away_pitcher_id=req.away_pitcher_id,
+                venue=req.venue,
+                n_sims=int(getattr(_cfg, "MLB_MC_N_SIMS", 50_000)),
+            )
+        except Exception as e:
+            logger.warning("MC shadow prediction failed for %s/%s: %s",
+                           req.home_team_id, req.away_team_id, e, exc_info=True)
+            result["mc"] = {"error": str(e)}
+
     # Run the unified picks engine so GameDetail renders the SAME rows
     # as the Scoreboard best-bet badge and POTD selection. Without this,
     # BettingPicks / PredictionResults reimplement edge logic in JS and

@@ -281,3 +281,9 @@ MLB_ALLOW_F5_OU_OVER = True
 MLB_ALLOW_F5_OU_UNDER = True
 MLB_ALLOW_F5_RL_FAVORITE = True
 MLB_ALLOW_F5_RL_UNDERDOG = True
+
+# Monte Carlo simulator (engine.mc_mlb). Off by default while we
+# shadow it against the factor model; flip on via this flag or the
+# override table once the backtest comparison justifies it.
+ENABLE_MLB_MC = False
+MLB_MC_N_SIMS = 50_000
