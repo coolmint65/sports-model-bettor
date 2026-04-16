@@ -292,3 +292,10 @@ ENABLE_NHL_MC = False
 NHL_MC_N_SIMS = 50_000
 ENABLE_NBA_MC = False
 NBA_MC_N_SIMS = 50_000
+
+# Gradient-boosted-tree (GBM) model (engine.gbm). Off by default until
+# the training script has run and artifacts exist in data/models/.
+# Turn on once engine.gbm.train has completed for the sport.
+ENABLE_MLB_GBM = False
+ENABLE_NHL_GBM = False   # placeholder -- training pipeline is MLB-only for now
+ENABLE_NBA_GBM = False

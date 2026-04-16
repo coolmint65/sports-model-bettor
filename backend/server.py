@@ -868,6 +868,26 @@ def api_predict(req: PredictRequest):
                            req.home_team_id, req.away_team_id, e, exc_info=True)
             result["mc"] = {"error": str(e)}
 
+    # GBM shadow prediction. Requires a trained artifact in
+    # data/models/ (run engine.gbm.train beforehand). Off by default.
+    if _get_flag("ENABLE_MLB_GBM", False):
+        try:
+            from engine.gbm.predict import predict_mlb as _gbm_predict
+            from engine.db import get_conn as _gc
+            result["gbm"] = _gbm_predict(_gc(), {
+                "mlb_game_id": 0,
+                "date": datetime.now().strftime("%Y-%m-%d"),
+                "home_team_id": req.home_team_id,
+                "away_team_id": req.away_team_id,
+                "home_pitcher_id": req.home_pitcher_id,
+                "away_pitcher_id": req.away_pitcher_id,
+                "venue": req.venue,
+            })
+        except Exception as e:
+            logger.warning("GBM shadow prediction failed for %s/%s: %s",
+                           req.home_team_id, req.away_team_id, e, exc_info=True)
+            result["gbm"] = {"error": str(e)}
+
     # Run the unified picks engine so GameDetail renders the SAME rows
     # as the Scoreboard best-bet badge and POTD selection. Without this,
     # BettingPicks / PredictionResults reimplement edge logic in JS and

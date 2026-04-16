@@ -3,3 +3,5 @@ uvicorn>=0.30.0
 pydantic>=2.9.0
 pybaseball>=2.2.7
 numpy>=1.26.0
+pandas>=2.0.0
+xgboost>=2.0.0
