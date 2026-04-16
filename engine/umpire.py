@@ -95,62 +95,112 @@ def compute_umpire_adjustment(umpire_name: str) -> float:
 
 def update_umpire_stats(season: int | None = None) -> int:
     """
-    Iterate through completed games in the DB, find the HP umpire for each,
-    and compute their avg runs/game, K rate, BB rate. Store in the umpires table.
+    Rebuild umpire tendency aggregates from final games.
 
-    Returns the number of umpires updated.
+    Writes per-season rows to umpire_season_stats(name, season, ...) so
+    training-time feature extraction can do strict point-in-time lookup
+    (use season S-1 stats for a game in season S, avoiding look-ahead
+    leak). Also refreshes the all-time `umpires` rollup, which inference
+    today reads through compute_umpire_adjustment().
+
+    Args:
+        season: If provided, rebuild only that season's rows. If None,
+            rebuild every season present in the games table.
+
+    Returns total (name, season) rows written.
     """
     conn = get_conn()
-    yr = season or datetime.now().year
+    if season is None:
+        seasons = [r["season"] for r in conn.execute(
+            "SELECT DISTINCT season FROM games "
+            "WHERE umpire IS NOT NULL AND status = 'final' AND season IS NOT NULL "
+            "ORDER BY season"
+        ).fetchall()]
+    else:
+        seasons = [season]
 
-    # Get all final games with an umpire recorded
+    if not seasons:
+        logger.info("update_umpire_stats: no seasons with umpire data")
+        return 0
+
+    total_rows = 0
+    for yr in seasons:
+        total_rows += _rebuild_season(conn, yr)
+
+    _rebuild_all_time_rollup(conn)
+    conn.commit()
+    logger.info("update_umpire_stats: wrote %d (name, season) rows across %d seasons",
+                total_rows, len(seasons))
+    return total_rows
+
+
+def _rebuild_season(conn, yr: int) -> int:
+    """Aggregate one season's games into umpire_season_stats."""
     games = conn.execute("""
-        SELECT mlb_game_id, home_score, away_score, umpire
+        SELECT umpire, home_score, away_score
         FROM games
         WHERE season = ? AND status = 'final' AND umpire IS NOT NULL
           AND home_score IS NOT NULL AND away_score IS NOT NULL
     """, (yr,)).fetchall()
-
     if not games:
-        logger.info("No completed games with umpire data for season %s", yr)
         return 0
 
-    # Aggregate stats per umpire
     ump_stats: dict[str, dict] = {}
     for g in games:
         name = g["umpire"]
         if not name:
             continue
-        if name not in ump_stats:
-            ump_stats[name] = {
-                "games": 0,
-                "total_runs": 0,
-            }
-        ump_stats[name]["games"] += 1
-        ump_stats[name]["total_runs"] += (g["home_score"] or 0) + (g["away_score"] or 0)
+        bucket = ump_stats.setdefault(name, {"games": 0, "total_runs": 0})
+        bucket["games"] += 1
+        bucket["total_runs"] += (g["home_score"] or 0) + (g["away_score"] or 0)
 
-    # Also try to fetch umpire data from the API for games without umpire info
-    # (skip for now - only process games that already have umpire stored)
+    # Wipe prior rows for this season so re-runs are idempotent (e.g. if
+    # a game's umpire was corrected after a prior aggregate, stale entries
+    # for that umpire in the season would linger otherwise).
+    conn.execute("DELETE FROM umpire_season_stats WHERE season = ?", (yr,))
 
-    updated = 0
-    for name, stats in ump_stats.items():
-        if stats["games"] < 1:
+    rows_written = 0
+    for name, s in ump_stats.items():
+        if s["games"] < 1:
             continue
-
-        rpg = stats["total_runs"] / stats["games"]
+        rpg = s["total_runs"] / s["games"]
         run_factor = rpg / MLB_AVG_RPG_TOTAL
-
         conn.execute("""
-            INSERT INTO umpires (name, games, rpg, run_factor, updated_at)
-            VALUES (?, ?, ?, ?, datetime('now'))
-            ON CONFLICT(name) DO UPDATE SET
-                games = excluded.games,
-                rpg = excluded.rpg,
-                run_factor = excluded.run_factor,
-                updated_at = excluded.updated_at
-        """, (name, stats["games"], round(rpg, 2), round(run_factor, 4)))
-        updated += 1
+            INSERT INTO umpire_season_stats (name, season, games, rpg, run_factor)
+            VALUES (?, ?, ?, ?, ?)
+        """, (name, yr, s["games"], round(rpg, 2), round(run_factor, 4)))
+        rows_written += 1
 
-    conn.commit()
-    logger.info("Updated %d umpires for season %d", updated, yr)
-    return updated
+    logger.info("  season %d: %d umpires, %d games", yr, rows_written, len(games))
+    return rows_written
+
+
+def _rebuild_all_time_rollup(conn) -> int:
+    """Recompute the `umpires` table as career aggregates across seasons.
+
+    The all-time rollup backs inference-time `compute_umpire_adjustment()`
+    and the legacy factor-model path. It sums games / total_runs across
+    all seasons in umpire_season_stats so a single DB row reflects an
+    umpire's full observed career in our data.
+    """
+    rows = conn.execute(
+        "SELECT name, SUM(games) AS games, SUM(games * rpg) AS total_runs "
+        "FROM umpire_season_stats GROUP BY name"
+    ).fetchall()
+    if not rows:
+        return 0
+
+    conn.execute("DELETE FROM umpires")
+    for r in rows:
+        games_n = r["games"] or 0
+        tot_runs = r["total_runs"] or 0.0
+        if games_n < 1:
+            continue
+        rpg = tot_runs / games_n
+        run_factor = rpg / MLB_AVG_RPG_TOTAL
+        conn.execute("""
+            INSERT INTO umpires (name, games, rpg, run_factor)
+            VALUES (?, ?, ?, ?)
+        """, (r["name"], games_n, round(rpg, 2), round(run_factor, 4)))
+
+    return len(rows)

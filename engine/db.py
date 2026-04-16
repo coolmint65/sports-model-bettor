@@ -401,6 +401,28 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # migration shape above.
     try:
         conn.execute("""
+            CREATE TABLE IF NOT EXISTS umpire_season_stats (
+                name       TEXT NOT NULL,
+                season     INTEGER NOT NULL,
+                games      INTEGER DEFAULT 0,
+                rpg        REAL,
+                run_factor REAL,
+                over_pct   REAL,
+                updated_at TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (name, season)
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ump_season ON umpire_season_stats(season)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_games_umpire ON games(umpire, date)"
+        )
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS pending_odds (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 game_date    TEXT NOT NULL,

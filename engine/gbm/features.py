@@ -215,10 +215,14 @@ def extract_mlb_features(conn, game: dict) -> dict[str, float] | None:
     if wwind is not None:
         features["weather_wind_mph"] = _parse_wind(wwind)
 
-    # ── Umpire (from the umpires table, joined by name) ──
+    # ── Umpire (point-in-time: prior season's tendency only) ──
+    # Look up the ump's aggregates from the season BEFORE this game to
+    # avoid look-ahead leak during training. Inference today sees the
+    # most recent completed season, which is exactly what's "knowable"
+    # before the first pitch.
     ump_name = game.get("umpire") or ""
     if ump_name:
-        ump = _umpire_stats(conn, ump_name)
+        ump = _umpire_stats(conn, ump_name, game.get("date") or "")
         if ump.get("run_factor") is not None:
             features["umpire_run_factor"] = float(ump["run_factor"])
         if ump.get("k_pct") is not None:
@@ -281,11 +285,31 @@ def _parse_wind(val) -> float:
     return 5.0
 
 
-def _umpire_stats(conn, umpire_name: str) -> dict:
-    """Lookup umpire tendency stats. Names in games.umpire are the
-    MLB Stats API format (e.g. 'Angel Hernandez'), which should match
-    the umpires table's `name` column. Returns empty dict on miss."""
+def _umpire_stats(conn, umpire_name: str, game_date: str) -> dict:
+    """Point-in-time lookup of umpire tendencies.
+
+    Extracts the season from game_date (YYYY-MM-DD) and returns the
+    umpire's aggregates from season S-1. This preserves strict
+    historical ordering: for a 2025 game we use 2024-season tendencies
+    (fully observed before 2025 began), never 2025-season or later.
+
+    Falls back to the all-time `umpires` rollup only if game_date is
+    empty/invalid -- a posture that lets callers who legitimately have
+    no date (e.g. ad-hoc diagnostics) still look up stats. Returns {}
+    on miss so the feature extractor leaves the default values in place.
+    """
     try:
+        season = _season_from_date(game_date)
+        if season is not None:
+            row = conn.execute(
+                "SELECT run_factor, NULL AS k_pct, NULL AS bb_pct, over_pct "
+                "FROM umpire_season_stats WHERE name = ? AND season = ?",
+                (umpire_name, season - 1),
+            ).fetchone()
+            if row:
+                return dict(row)
+            return {}
+        # Dateless lookup: fall back to all-time rollup.
         row = conn.execute(
             "SELECT run_factor, k_pct, bb_pct, over_pct "
             "FROM umpires WHERE name = ?",
@@ -294,6 +318,16 @@ def _umpire_stats(conn, umpire_name: str) -> dict:
         return dict(row) if row else {}
     except Exception:
         return {}
+
+
+def _season_from_date(game_date: str) -> int | None:
+    """Extract season year from a YYYY-MM-DD string, or None if unparseable."""
+    if not game_date or len(game_date) < 4:
+        return None
+    try:
+        return int(game_date[:4])
+    except ValueError:
+        return None
 
 
 # ── Direct-table helpers (snapshot-based, mild leakage, strong signal) ──
