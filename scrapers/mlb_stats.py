@@ -264,7 +264,11 @@ def sync_missing_umpires(date_from: str | None = None,
     if not rows:
         return 0
 
+    total = len(rows)
+    _progress(f"       Walking {total} games for HP umpire (rate ~{sleep_s:.2f}s/game, ETA {total * (sleep_s + 0.3) / 60:.1f} min)")
+
     updated = 0
+    misses = 0
     for i, r in enumerate(rows):
         pk = r["mlb_game_id"]
         ump_name = _fetch_hp_umpire(pk)
@@ -275,12 +279,16 @@ def sync_missing_umpires(date_from: str | None = None,
                 (ump_name, pk),
             )
             updated += 1
+        else:
+            misses += 1
         if (i + 1) % 25 == 0:
             conn.commit()
+            _progress(f"       [{i+1}/{total}] filled={updated} missed={misses}")
         time.sleep(sleep_s)
 
     conn.commit()
-    logger.info("Umpire backfill: %d/%d games updated", updated, len(rows))
+    _progress(f"       Done: {updated}/{total} umpires populated ({misses} games had no HP ump listed)")
+    logger.info("Umpire backfill: %d/%d games updated", updated, total)
     return updated
 
 
