@@ -2153,6 +2153,23 @@ def api_nhl_predict(home: str = Query(...), away: str = Query(...)):
     result = nhl_predict(home_key, away_key)
     if not result:
         raise HTTPException(status_code=400, detail=f"Could not predict {away} @ {home}")
+
+    # NHL Monte Carlo shadow prediction (gated on ENABLE_NHL_MC).
+    from engine.config import get_flag as _get_flag
+    if _get_flag("ENABLE_NHL_MC", False, sport="nhl"):
+        try:
+            from engine.mc_nhl_run import run_nhl_mc
+            import engine.config as _cfg
+            home_abbr = (result.get("home") or {}).get("abbreviation") or home
+            away_abbr = (result.get("away") or {}).get("abbreviation") or away
+            result["mc"] = run_nhl_mc(
+                home_abbr, away_abbr,
+                n_sims=int(getattr(_cfg, "NHL_MC_N_SIMS", 50_000)),
+            )
+        except Exception as e:
+            logger.warning("NHL MC shadow failed for %s/%s: %s", home, away, e)
+            result["mc"] = {"error": str(e)}
+
     return result
 
 
@@ -2877,6 +2894,21 @@ def api_nba_predict(home: str = Query(...), away: str = Query(...)):
             sc = _nba_season_context()
             if sc:
                 result["season_context"] = sc
+
+        # NBA Q1 Monte Carlo shadow (gated on ENABLE_NBA_MC).
+        from engine.config import get_flag as _get_flag
+        if _get_flag("ENABLE_NBA_MC", False, sport="nba"):
+            try:
+                from engine.mc_nba_run import run_nba_q1_mc
+                import engine.config as _cfg
+                result["mc"] = run_nba_q1_mc(
+                    home, away,
+                    n_sims=int(getattr(_cfg, "NBA_MC_N_SIMS", 50_000)),
+                )
+            except Exception as e:
+                logger.warning("NBA MC shadow failed for %s/%s: %s", home, away, e)
+                result["mc"] = {"error": str(e)}
+
         return result
     except HTTPException:
         raise

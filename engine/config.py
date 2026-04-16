@@ -282,8 +282,13 @@ MLB_ALLOW_F5_OU_UNDER = True
 MLB_ALLOW_F5_RL_FAVORITE = True
 MLB_ALLOW_F5_RL_UNDERDOG = True
 
-# Monte Carlo simulator (engine.mc_mlb). Off by default while we
-# shadow it against the factor model; flip on via this flag or the
-# override table once the backtest comparison justifies it.
+# Monte Carlo simulators (engine.mc_mlb / mc_nhl / mc_nba).
+# All off by default while we shadow against the factor models; flip on
+# via these flags or the override table once the backtest comparison
+# justifies it. Counts are per-game per-prediction.
 ENABLE_MLB_MC = False
 MLB_MC_N_SIMS = 50_000
+ENABLE_NHL_MC = False
+NHL_MC_N_SIMS = 50_000
+ENABLE_NBA_MC = False
+NBA_MC_N_SIMS = 50_000
