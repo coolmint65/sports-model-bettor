@@ -62,10 +62,15 @@ _DEFAULTS = {
 def extract_mlb_features(conn, game: dict) -> dict[str, float] | None:
     """Build the feature dict for one completed MLB game.
 
-    Uses point-in-time stats computed AS OF game.date so the feature
-    values are what the model would have seen at prediction time.
-    Returns None when critical inputs (team IDs, date) are missing so
-    the trainer can skip the row cleanly.
+    Uses point-in-time stats when the PIT helpers return them, and
+    falls back to the season snapshot in batter_stats / pitcher_stats
+    / bullpen / team_stats when PIT returns None. The season-end
+    fallback introduces mild leakage for mid-season games (a May
+    prediction sees June's ERA) but is still far more informative
+    than the league-average defaults we used before. A strict-PIT
+    pass can replace this once per-date snapshotting is implemented.
+
+    Returns None when critical inputs (team IDs, date) are missing.
     """
     date = game.get("date")
     home_id = game.get("home_team_id")
@@ -74,41 +79,50 @@ def extract_mlb_features(conn, game: dict) -> dict[str, float] | None:
         return None
 
     features: dict[str, float] = dict(_DEFAULTS)
+    season = _season_of(date)
 
-    # Point-in-time team stats
+    # ── Team offensive + defensive rates (PIT first, snapshot fallback) ──
     try:
         from engine.pit_stats import compute_team_stats_at_date
-        home_stats = compute_team_stats_at_date(home_id, date, _season_of(date)) or {}
-        away_stats = compute_team_stats_at_date(away_id, date, _season_of(date)) or {}
-        features["home_runs_pg"] = _num(home_stats.get("runs_pg"), 4.5)
-        features["away_runs_pg"] = _num(away_stats.get("runs_pg"), 4.5)
-        features["home_runs_allowed_pg"] = _num(home_stats.get("runs_allowed_pg"), 4.5)
-        features["away_runs_allowed_pg"] = _num(away_stats.get("runs_allowed_pg"), 4.5)
+        home_pit = compute_team_stats_at_date(home_id, date, season) or {}
+        away_pit = compute_team_stats_at_date(away_id, date, season) or {}
+        features["home_runs_pg"] = _num(home_pit.get("runs_pg"), 4.5)
+        features["away_runs_pg"] = _num(away_pit.get("runs_pg"), 4.5)
+        features["home_runs_allowed_pg"] = _num(home_pit.get("runs_allowed_pg"),
+                                                  _team_runs_allowed(conn, home_id, season))
+        features["away_runs_allowed_pg"] = _num(away_pit.get("runs_allowed_pg"),
+                                                  _team_runs_allowed(conn, away_id, season))
     except Exception as e:
         logger.debug("team PIT stats failed for game %s: %s", game.get("mlb_game_id"), e)
 
-    # Pitcher PIT stats
+    # Team OPS / wRC+ / bullpen ERA from snapshot tables (season-end leakage
+    # accepted). These are the signals that move the needle for GBM.
+    features["home_ops"] = _team_ops(conn, home_id, season)
+    features["away_ops"] = _team_ops(conn, away_id, season)
+    features["home_wrc_plus"] = _team_wrc_plus(conn, home_id, season)
+    features["away_wrc_plus"] = _team_wrc_plus(conn, away_id, season)
+    features["home_bullpen_era"] = _bullpen_era(conn, home_id, season)
+    features["away_bullpen_era"] = _bullpen_era(conn, away_id, season)
+
+    # Pitcher features -- PIT first, fall back to season-end snapshot
+    # in pitcher_stats for anything the PIT helper didn't compute.
     try:
         from engine.pit_stats import compute_pitcher_stats_at_date
-        season = _season_of(date)
-        if game.get("home_pitcher_id"):
-            sp = compute_pitcher_stats_at_date(game["home_pitcher_id"], date, season) or {}
-            features["home_sp_era"] = _num(sp.get("era"), 4.10)
-            features["home_sp_fip"] = _num(sp.get("fip"), 4.10)
-            features["home_sp_k_pct"] = _num(sp.get("k_pct"), 0.225)
-            features["home_sp_bb_pct"] = _num(sp.get("bb_pct"), 0.085)
-            features["home_sp_whip"] = _num(sp.get("whip"), 1.30)
-            features["home_sp_games_started"] = _num(sp.get("games_started"), 0)
-        if game.get("away_pitcher_id"):
-            sp = compute_pitcher_stats_at_date(game["away_pitcher_id"], date, season) or {}
-            features["away_sp_era"] = _num(sp.get("era"), 4.10)
-            features["away_sp_fip"] = _num(sp.get("fip"), 4.10)
-            features["away_sp_k_pct"] = _num(sp.get("k_pct"), 0.225)
-            features["away_sp_bb_pct"] = _num(sp.get("bb_pct"), 0.085)
-            features["away_sp_whip"] = _num(sp.get("whip"), 1.30)
-            features["away_sp_games_started"] = _num(sp.get("games_started"), 0)
+        for side, pid_key in (("home", "home_pitcher_id"), ("away", "away_pitcher_id")):
+            pid = game.get(pid_key)
+            if not pid:
+                continue
+            pit = compute_pitcher_stats_at_date(pid, date, season) or {}
+            snap = _pitcher_snapshot(conn, pid, season)
+            features[f"{side}_sp_era"] = _num(pit.get("era"), snap.get("era", 4.10))
+            features[f"{side}_sp_fip"] = _num(pit.get("fip"), snap.get("fip", 4.10))
+            features[f"{side}_sp_k_pct"] = _num(pit.get("k_pct"), snap.get("k_pct", 0.225))
+            features[f"{side}_sp_bb_pct"] = _num(pit.get("bb_pct"), snap.get("bb_pct", 0.085))
+            features[f"{side}_sp_whip"] = _num(pit.get("whip"), snap.get("whip", 1.30))
+            features[f"{side}_sp_games_started"] = _num(pit.get("games_started"),
+                                                         snap.get("games_started", 0))
     except Exception as e:
-        logger.debug("pitcher PIT stats failed for game %s: %s", game.get("mlb_game_id"), e)
+        logger.debug("pitcher stats failed for game %s: %s", game.get("mlb_game_id"), e)
 
     # Park factor (venue-based)
     try:
@@ -122,19 +136,122 @@ def extract_mlb_features(conn, game: dict) -> dict[str, float] | None:
     features["days_into_season"] = _days_into_season(date)
     features["is_playoff"] = 1 if _is_postseason(date) else 0
 
-    # Recent form (last 10 team games, point-in-time)
-    try:
-        from engine.db import get_recent_games
-        features["home_form_last_10_pct"] = _form_pct(
-            get_recent_games(home_id, date, n=10) or []
-        )
-        features["away_form_last_10_pct"] = _form_pct(
-            get_recent_games(away_id, date, n=10) or []
-        )
-    except Exception:
-        pass
+    # Recent form -- query the games table directly so we always get a
+    # PIT-correct answer (exclude games on or after the target date).
+    features["home_form_last_10_pct"] = _form_last_10(conn, home_id, date)
+    features["away_form_last_10_pct"] = _form_last_10(conn, away_id, date)
 
     return features
+
+
+# ── Direct-table helpers (snapshot-based, mild leakage, strong signal) ──
+
+def _pitcher_snapshot(conn, pitcher_id: int, season: int) -> dict:
+    """Season-end snapshot from pitcher_stats. Used as a fallback when
+    the PIT helper returns Nones for most rate fields (which it does
+    for backfilled historical games without per-date rollups)."""
+    try:
+        row = conn.execute(
+            "SELECT era, fip, k_pct, bb_pct, whip, games_started, hr_per_9, babip "
+            "FROM pitcher_stats WHERE player_id = ? AND season = ?",
+            (pitcher_id, season),
+        ).fetchone()
+        return dict(row) if row else {}
+    except Exception:
+        return {}
+
+
+def _team_ops(conn, team_id: int, season: int) -> float:
+    """Team OPS = weighted mean of batter OPS rows for the team+season."""
+    try:
+        row = conn.execute(
+            "SELECT SUM(ops * at_bats) / NULLIF(SUM(at_bats), 0) AS wops "
+            "FROM batter_stats WHERE team_id = ? AND season = ?",
+            (team_id, season),
+        ).fetchone()
+        if row and row["wops"]:
+            return float(row["wops"])
+    except Exception:
+        pass
+    return 0.720
+
+
+def _team_wrc_plus(conn, team_id: int, season: int) -> float:
+    """Team wRC+ -- weighted by PA if available, AB otherwise."""
+    try:
+        row = conn.execute(
+            "SELECT SUM(wrc_plus * at_bats) / NULLIF(SUM(at_bats), 0) AS wrc "
+            "FROM batter_stats WHERE team_id = ? AND season = ? "
+            "  AND wrc_plus IS NOT NULL AND at_bats > 0",
+            (team_id, season),
+        ).fetchone()
+        if row and row["wrc"]:
+            return float(row["wrc"])
+    except Exception:
+        pass
+    return 100.0
+
+
+def _bullpen_era(conn, team_id: int, season: int) -> float:
+    """Bullpen ERA for the team+season from the bullpen table."""
+    try:
+        row = conn.execute(
+            "SELECT era FROM bullpen WHERE team_id = ? AND season = ?",
+            (team_id, season),
+        ).fetchone()
+        if row and row["era"]:
+            return float(row["era"])
+    except Exception:
+        pass
+    return 4.20
+
+
+def _team_runs_allowed(conn, team_id: int, season: int) -> float:
+    """Season runs allowed per game from the games table (PIT-ish: we use
+    ALL finished games of the season, so for mid-season games this is
+    leaky. Strict PIT is a later upgrade)."""
+    try:
+        row = conn.execute(
+            "SELECT AVG(CASE WHEN home_team_id = ? THEN away_score "
+            "              WHEN away_team_id = ? THEN home_score "
+            "              END) AS ra "
+            "FROM games WHERE (home_team_id = ? OR away_team_id = ?) "
+            "  AND season = ? AND status = 'final'",
+            (team_id, team_id, team_id, team_id, season),
+        ).fetchone()
+        if row and row["ra"]:
+            return float(row["ra"])
+    except Exception:
+        pass
+    return 4.5
+
+
+def _form_last_10(conn, team_id: int, as_of_date: str) -> float:
+    """Last-10 win pct, AS OF as_of_date (exclusive). Strict PIT: we
+    only look at games strictly before the target date."""
+    try:
+        rows = conn.execute(
+            "SELECT home_team_id, away_team_id, home_score, away_score "
+            "FROM games "
+            "WHERE (home_team_id = ? OR away_team_id = ?) "
+            "  AND status = 'final' AND date < ? "
+            "  AND home_score IS NOT NULL AND away_score IS NOT NULL "
+            "ORDER BY date DESC LIMIT 10",
+            (team_id, team_id, as_of_date),
+        ).fetchall()
+        if not rows:
+            return 0.500
+        wins = 0
+        for r in rows:
+            is_home = (r["home_team_id"] == team_id)
+            hs, as_ = r["home_score"], r["away_score"]
+            if is_home and hs > as_:
+                wins += 1
+            elif not is_home and as_ > hs:
+                wins += 1
+        return wins / len(rows)
+    except Exception:
+        return 0.500
 
 
 def extract_target(game: dict) -> dict[str, Any]:
@@ -209,13 +326,6 @@ def _is_postseason(date_str: str) -> bool:
     if d.month == 11 and d.day <= 7:
         return True
     return False
-
-
-def _form_pct(recent_games: list) -> float:
-    if not recent_games:
-        return 0.500
-    wins = sum(1 for g in recent_games if g.get("won"))
-    return wins / len(recent_games)
 
 
 FEATURE_NAMES = sorted(_DEFAULTS.keys())
