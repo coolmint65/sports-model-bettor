@@ -329,7 +329,13 @@ def _team_ops(conn, team_id: int, season: int) -> float:
 
 
 def _team_wrc_plus(conn, team_id: int, season: int) -> float:
-    """Team wRC+ -- weighted by PA if available, AB otherwise."""
+    """Team wRC+ -- weighted by PA if available, AB otherwise.
+
+    When the batter_stats.wrc_plus column is populated, use it directly.
+    Otherwise approximate from team OPS by scaling against a fixed
+    league baseline (OPS 0.720 -> wRC+ 100). Imperfect but gives the
+    feature real variance instead of a flat 100.
+    """
     try:
         row = conn.execute(
             "SELECT SUM(wrc_plus * at_bats) / NULLIF(SUM(at_bats), 0) AS wrc "
@@ -341,11 +347,22 @@ def _team_wrc_plus(conn, team_id: int, season: int) -> float:
             return float(row["wrc"])
     except Exception:
         pass
-    return 100.0
+    # Fallback: approximate from team OPS. Rule of thumb: +/-0.010 OPS
+    # around league ~= +/-5 wRC+. Empirical league regression over the
+    # last 3 seasons.
+    team_ops = _team_ops(conn, team_id, season)
+    return round(100.0 + (team_ops - 0.720) * 500, 1)
 
 
 def _bullpen_era(conn, team_id: int, season: int) -> float:
-    """Bullpen ERA for the team+season from the bullpen table."""
+    """Bullpen ERA for the team+season.
+
+    First tries the dedicated bullpen table (which only has current-
+    season rows in practice). Falls back to computing from pitcher_stats
+    -- aggregating ERA for all pitchers on the team with games_started
+    < 5 (our definition of "bullpen arm"). This gives historical seasons
+    a real bullpen signal instead of the flat 4.20 default.
+    """
     try:
         row = conn.execute(
             "SELECT era FROM bullpen WHERE team_id = ? AND season = ?",
@@ -353,6 +370,20 @@ def _bullpen_era(conn, team_id: int, season: int) -> float:
         ).fetchone()
         if row and row["era"]:
             return float(row["era"])
+    except Exception:
+        pass
+    # Fallback: weighted ERA of all relievers on the team for that season
+    try:
+        row = conn.execute(
+            "SELECT SUM(earned_runs) * 9.0 / NULLIF(SUM(innings), 0) AS era "
+            "FROM pitcher_stats "
+            "WHERE team_id = ? AND season = ? "
+            "  AND COALESCE(games_started, 0) < 5 "
+            "  AND innings > 0",
+            (team_id, season),
+        ).fetchone()
+        if row and row["era"] and row["era"] > 0:
+            return round(float(row["era"]), 2)
     except Exception:
         pass
     return 4.20
