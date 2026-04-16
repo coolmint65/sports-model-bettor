@@ -92,50 +92,61 @@ def generate_picks(home_team_id: int, away_team_id: int,
     # prob_high so the UI can render a band around the point estimate.
     ci_hw = conf.get("ci_half_width", 0.05)
 
-    # Phase B: if Monte Carlo shadow ran, override inning-specific
-    # market probabilities with the MC numbers. The factor model's
-    # NRFI/F5/F3 are Poisson approximations blended with pitcher
-    # priors; MC simulates at-bats directly, so its inning splits are
-    # strictly more faithful to the game's actual stochastic process.
-    # Full-game ML / O/U / RL stay on the factor model for now -- we
-    # don't flip those until the backtest (mc_backtest) shows a
-    # consistent edge there too.
+    # Monte Carlo shadow: replace the factor model's full F5 distribution
+    # (expected_runs, over_under, run_line) with MC's at-bat-level sim.
+    # MC captures inning-level stochasticity that the factor Poisson
+    # blend can't. NRFI and F5-ML *scalar* probabilities fall through
+    # to the ensemble block below, which blends MC + factor + GBM with
+    # per-market tuned weights (strictly better than 100% MC).
     mc = pred.get("mc") or {}
-    if mc and "error" not in mc:
-        if mc.get("nrfi"):
-            # NRFI field on the prediction drives the "1st INN" pick.
-            fi = {"nrfi": mc["nrfi"]["nrfi"], "yrfi": mc["nrfi"]["yrfi"]}
-        if mc.get("f5"):
-            # F5 markets also flow from MC when present (the factor-
-            # model f5 was a crude SP-depth multiplier on xR).
-            # Translate MC's ±0.5 run-line convention into the legacy
-            # home_minus_0_5 / home_plus_0_5 keys that
-            # _append_f5_picks expects.
-            f5_rl = mc["f5"]["run_line"]
-            mc_f5 = {
-                "home": mc["f5"]["expected_runs"]["home"],
-                "away": mc["f5"]["expected_runs"]["away"],
-                "total": mc["f5"]["expected_runs"]["total"],
-                "win_prob": mc["f5"]["win_prob"],
-                "over_under": mc["f5"]["over_under"],
-                "run_line": {
-                    "home_minus_0_5": f5_rl.get("home_-0.5", 0.5),
-                    "home_plus_0_5":  f5_rl.get("home_+0.5", 0.5),
-                    "away_minus_0_5": 1.0 - f5_rl.get("home_+0.5", 0.5),
-                    "away_plus_0_5":  1.0 - f5_rl.get("home_-0.5", 0.5),
-                },
-            }
-            # Update the prediction so downstream _append_f5_picks sees it.
-            pred["f5"] = mc_f5
+    if mc and "error" not in mc and mc.get("f5"):
+        f5_rl = mc["f5"]["run_line"]
+        mc_f5 = {
+            "home": mc["f5"]["expected_runs"]["home"],
+            "away": mc["f5"]["expected_runs"]["away"],
+            "total": mc["f5"]["expected_runs"]["total"],
+            "win_prob": mc["f5"]["win_prob"],
+            "over_under": mc["f5"]["over_under"],
+            "run_line": {
+                "home_minus_0_5": f5_rl.get("home_-0.5", 0.5),
+                "home_plus_0_5":  f5_rl.get("home_+0.5", 0.5),
+                "away_minus_0_5": 1.0 - f5_rl.get("home_+0.5", 0.5),
+                "away_plus_0_5":  1.0 - f5_rl.get("home_-0.5", 0.5),
+            },
+        }
+        pred["f5"] = mc_f5
 
     home = pred.get("home", {})
     away = pred.get("away", {})
     h_abbr = home.get("abbreviation", "HOME")
     a_abbr = away.get("abbreviation", "AWAY")
 
-    # Raw model probabilities - no dampening. Real odds are the calibration.
-    home_wp = wp.get("home", 0.5)
-    away_wp = wp.get("away", 0.5)
+    # Scalar market probabilities route through the ensemble (factor +
+    # MC + GBM with per-market tuned weights) when the caller populated
+    # pred["ensemble"]; otherwise they fall back to the factor model.
+    # O/U and RL distributions stay on factor -- ensemble only blends
+    # scalar EVs and probabilities, not full distributions.
+    ens = pred.get("ensemble") or {}
+
+    # Moneyline home WP
+    if ens.get("home_win") is not None:
+        home_wp = float(ens["home_win"])
+        away_wp = 1.0 - home_wp
+    else:
+        home_wp = wp.get("home", 0.5)
+        away_wp = wp.get("away", 0.5)
+
+    # NRFI scalar (blended across all three components)
+    if ens.get("nrfi") is not None:
+        fi = {"nrfi": float(ens["nrfi"]), "yrfi": 1.0 - float(ens["nrfi"])}
+
+    # F5 home-win scalar: blend into the MC-derived distribution above
+    # so _append_f5_picks reads the blended prob, but keeps MC's O/U
+    # and RL distributions (which the ensemble can't express).
+    if ens.get("f5_home_win") is not None and pred.get("f5"):
+        pred["f5"].setdefault("win_prob", {})
+        pred["f5"]["win_prob"]["home"] = float(ens["f5_home_win"])
+        pred["f5"]["win_prob"]["away"] = 1.0 - float(ens["f5_home_win"])
     # All four RL sides
     rl_home_minus = rl.get("home_minus_1_5", 0.5)   # P(home wins by 2+)
     rl_home_plus = rl.get("home_plus_1_5", 0.5)     # P(home covers +1.5)

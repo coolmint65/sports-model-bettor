@@ -3,6 +3,7 @@ import RestBadges from './gameDetail/RestBadges'
 import EdgeCallout from './gameDetail/EdgeCallout'
 import { kellyFraction, mlToProb, impliedFromOdds } from './gameDetail/kelly'
 import ProbHistogram from './gameDetail/ProbHistogram'
+import ModelSignals from './gameDetail/ModelSignals'
 
 export default function NHLGameDetail({ game, prediction, loading, onBack }) {
   const { home, away } = game
@@ -259,6 +260,11 @@ function NHLPredictionResults({ data, odds, home, away }) {
 
         <EdgeCallout edge={bestEdge} badgeClassName={bestEdge ? `conf-badge conf-${bestEdge.rating}` : undefined} />
       </div>
+
+      {/* Model Signals: factor / MC breakdown for home_win + total.
+          GBM column stays blank until the NHL GBM pipeline ships.
+          Renders nothing when pred.ensemble is empty. */}
+      <ModelSignals pred={d} sport="nhl" home={home} away={away} />
 
       {/* Key Factors with Rankings - moved up for immediate visibility */}
       {d.factors && (

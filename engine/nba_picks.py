@@ -46,6 +46,24 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
     pred = predict_q1(home_abbr, away_abbr,
                       spread=q1_spread, total=q1_total, season=season)
 
+    # Compute the ensemble blend (factor + MC when ENABLE_NBA_MC is
+    # on; GBM isn't wired for NBA yet). Safe when MC didn't run --
+    # ensemble_nba returns factor-only values in that case.
+    try:
+        from .ensemble import ensemble_nba
+        pred["ensemble"] = ensemble_nba(pred)
+    except Exception as e:
+        logger.debug("NBA ensemble blend failed: %s", e)
+        pred["ensemble"] = {}
+
+    # Route Q1 ML through the ensemble when present. Spread cover
+    # and total over/under distributions stay on the factor model
+    # (ensemble only blends scalar home_win + total_expected).
+    ens = pred.get("ensemble") or {}
+    if ens.get("q1_home_win") is not None:
+        pred["q1_ml_home"] = float(ens["q1_home_win"])
+        pred["q1_ml_away"] = 1.0 - float(ens["q1_home_win"])
+
     picks = []
 
     # ── Q1 Spread ──

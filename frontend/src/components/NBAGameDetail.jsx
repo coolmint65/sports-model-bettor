@@ -2,6 +2,7 @@ import SharedGameHeader from './gameDetail/SharedGameHeader'
 import EdgeCallout from './gameDetail/EdgeCallout'
 import { kellyFraction, impliedFromOdds } from './gameDetail/kelly'
 import ProbHistogram from './gameDetail/ProbHistogram'
+import ModelSignals from './gameDetail/ModelSignals'
 
 export default function NBAGameDetail({ game, prediction, loading, onBack }) {
   const { home, away, status } = game
@@ -120,6 +121,11 @@ function Q1PredictionResults({ data, odds, home, away }) {
 
         <EdgeCallout edge={bestEdge} />
       </div>
+
+      {/* Model Signals: factor / MC breakdown for Q1 home_win + total.
+          GBM column stays blank until NBA GBM is trained. Renders
+          nothing when pred.ensemble is empty. */}
+      <ModelSignals pred={d} sport="nba" home={home} away={away} />
 
       {/* Key Factors */}
       {d.factors && (

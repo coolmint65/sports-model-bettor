@@ -1,4 +1,5 @@
 import EdgeCallout from './gameDetail/EdgeCallout'
+import ModelSignals from './gameDetail/ModelSignals'
 
 export default function PredictionResults({ data, odds }) {
   const d = data
@@ -448,6 +449,12 @@ export default function PredictionResults({ data, odds }) {
           </div>
         </div>
       )}
+
+      {/* ── Model Signals: factor / MC / GBM breakdown ──
+          Renders the three component models side-by-side with the
+          ensemble blend the picks layer actually uses. Null-safe
+          so pre-flag-flip cached predictions just skip the card. */}
+      <ModelSignals pred={d} sport="mlb" home={home} away={away} />
 
       {/* ── Key Factors - ranked stat comparison matching NHL ── */}
       {(() => {

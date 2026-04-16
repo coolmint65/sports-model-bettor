@@ -56,9 +56,27 @@ def generate_nhl_picks_with_context(home_key: str, away_key: str,
     if not pred:
         return [], {}
 
+    # Compute the ensemble blend (factor + MC when ENABLE_NHL_MC is
+    # on; GBM isn't wired for NHL yet). Safe to call even when MC
+    # didn't run -- ensemble_nhl just returns factor-only values.
+    try:
+        from .ensemble import ensemble_nhl
+        pred["ensemble"] = ensemble_nhl(pred)
+    except Exception as e:
+        logger.debug("NHL ensemble blend failed: %s", e)
+        pred["ensemble"] = {}
+
     odds = odds or {}
     wp = pred["win_prob"]
     pl = pred["puck_line"]
+
+    # Route ML home WP through the ensemble when present; otherwise
+    # the original factor-only win_prob dict is used. O/U and PL
+    # distributions stay on the factor model.
+    ens = pred.get("ensemble") or {}
+    if ens.get("home_win") is not None:
+        wp = {"home": float(ens["home_win"]),
+              "away": 1.0 - float(ens["home_win"])}
 
     h_abbr = pred["home"]["abbreviation"]
     a_abbr = pred["away"]["abbreviation"]
