@@ -245,6 +245,42 @@ export default function PredictionResults({ data, odds }) {
         </div>
       )}
 
+      {/* ── HP Umpire tendency ── */}
+      {/* Factor is the all-time rollup from `umpires`, clamped ±5%. Name
+          is the MLB Stats API HP ump pulled pre-game. Factor > 1.0 means
+          this ump's games historically score above league average (hitter
+          friendly / big zone); < 1.0 means pitcher-friendly. The GBM
+          model uses a separate point-in-time (prior-season) lookup that
+          isn't clamped -- display here is the legacy factor-path value
+          so bettors see a stable career tendency. */}
+      {d.umpire && d.umpire.name && (
+        <div className="result-card">
+          <h2>HP Umpire</h2>
+          <div style={{display:'flex',gap:24,flexWrap:'wrap',alignItems:'center'}}>
+            <div>
+              <div style={{fontSize:'0.72rem',color:'#64748b',textTransform:'uppercase'}}>Umpire</div>
+              <div style={{fontSize:'1.15rem',fontWeight:700,color:'#e2e8f0'}}>{d.umpire.name}</div>
+            </div>
+            {d.umpire.factor != null && (
+              <div>
+                <div style={{fontSize:'0.72rem',color:'#64748b',textTransform:'uppercase'}}>Run Factor</div>
+                <div style={{
+                  fontSize:'1.15rem', fontWeight:700,
+                  color: d.umpire.factor > 1.01 ? '#34d399' : d.umpire.factor < 0.99 ? '#ef4444' : '#e2e8f0',
+                }}>
+                  {d.umpire.factor > 1 ? '+' : ''}{((d.umpire.factor - 1) * 100).toFixed(1)}%
+                </div>
+              </div>
+            )}
+            <div style={{flex:1,textAlign:'right',fontSize:'0.72rem',color:'#64748b'}}>
+              {d.umpire.factor != null && d.umpire.factor !== 1
+                ? 'Lean: ' + (d.umpire.factor > 1 ? 'hitter-friendly' : 'pitcher-friendly')
+                : 'No historical lean (or new umpire)'}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Betting Lines ── */}
       <div className="result-card">
         <h2>Betting Lines</h2>
