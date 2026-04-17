@@ -272,10 +272,14 @@ ENABLE_NHL_ML = True
 ENABLE_NHL_OU = True
 ENABLE_NHL_PL = True
 
-# F5 (First 5 innings) picks. Disabled by default -- no live track record yet.
-# When enabled, generates picks for F5 ML, F5 O/U, and F5 RL using real DK
-# odds from the per-event Odds API markets.
-ENABLE_MLB_F5 = False
+# F5 (First 5 innings) picks. Go-live decision (Apr 2026): historical
+# F5 odds coverage too thin to backtest (0 lined games 2023-2025, ~20
+# in early 2026 from the per-event Odds API capture), so we flip on
+# and let the live tracker build the track record. Picks only generate
+# for games where stored DK F5 odds exist, so volume ramps with odds-API
+# coverage. Per-direction allow flags below stay open until a market
+# shows clear EV-negative behavior in the tracker.
+ENABLE_MLB_F5 = True
 MLB_ALLOW_F5_ML = True
 MLB_ALLOW_F5_OU_OVER = True
 MLB_ALLOW_F5_OU_UNDER = True
