@@ -2453,6 +2453,25 @@ def api_nhl_predict(home: str = Query(...), away: str = Query(...)):
             logger.warning("NHL MC shadow failed for %s/%s: %s", home, away, e)
             result["mc"] = {"error": str(e)}
 
+    # NHL GBM prediction (gated on ENABLE_NHL_GBM; requires trained
+    # artifacts in data/models/nhl_gbm_*_latest.json).
+    if _get_flag("ENABLE_NHL_GBM", False, sport="nhl"):
+        try:
+            from engine.gbm.predict import predict_nhl as _gbm_predict_nhl
+            from engine.nhl_db import get_conn as _nhl_conn
+            home_tid = (result.get("home") or {}).get("id")
+            away_tid = (result.get("away") or {}).get("id")
+            if home_tid and away_tid:
+                result["gbm"] = _gbm_predict_nhl(_nhl_conn(), {
+                    "home_team_id": int(home_tid),
+                    "away_team_id": int(away_tid),
+                    "date": datetime.now().strftime("%Y-%m-%d"),
+                    "game_type": 2,
+                })
+        except Exception as e:
+            logger.warning("NHL GBM shadow failed for %s/%s: %s", home, away, e)
+            result["gbm"] = {"error": str(e)}
+
     try:
         from engine.ensemble import ensemble_nhl
         result["ensemble"] = ensemble_nhl(result)
@@ -3197,6 +3216,23 @@ def api_nba_predict(home: str = Query(...), away: str = Query(...)):
             except Exception as e:
                 logger.warning("NBA MC shadow failed for %s/%s: %s", home, away, e)
                 result["mc"] = {"error": str(e)}
+
+        # NBA GBM shadow (gated on ENABLE_NBA_GBM).
+        if _get_flag("ENABLE_NBA_GBM", False, sport="nba"):
+            try:
+                from engine.gbm.predict import predict_nba as _gbm_predict_nba
+                from engine.nba_db import get_conn as _nba_conn
+                home_tid = (result.get("home") or {}).get("id")
+                away_tid = (result.get("away") or {}).get("id")
+                if home_tid and away_tid:
+                    result["gbm"] = _gbm_predict_nba(_nba_conn(), {
+                        "home_team_id": int(home_tid),
+                        "away_team_id": int(away_tid),
+                        "date": datetime.now().strftime("%Y-%m-%d"),
+                    })
+            except Exception as e:
+                logger.warning("NBA GBM shadow failed for %s/%s: %s", home, away, e)
+                result["gbm"] = {"error": str(e)}
 
         try:
             from engine.ensemble import ensemble_nba

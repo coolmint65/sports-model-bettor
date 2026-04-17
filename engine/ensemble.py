@@ -36,11 +36,18 @@ _DEFAULT_WEIGHTS = {
     ("mlb", "nrfi"):        {"factor": 0.10, "mc": 0.55, "gbm": 0.35},
     ("mlb", "f5_home_win"): {"factor": 0.10, "mc": 0.55, "gbm": 0.35},
     ("mlb", "f5_total"):    {"factor": 0.10, "mc": 0.55, "gbm": 0.35},
-    # NHL + NBA start MC/factor-only; GBM pipeline hasn't been built.
-    ("nhl", "home_win"):    {"factor": 0.50, "mc": 0.50},
-    ("nhl", "total"):       {"factor": 0.50, "mc": 0.50},
-    ("nba", "q1_home_win"): {"factor": 0.50, "mc": 0.50},
-    ("nba", "q1_total"):    {"factor": 0.50, "mc": 0.50},
+    # NHL: three-way blend once GBM artifacts ship. When GBM is missing,
+    # blend() redistributes its weight across the remaining signals.
+    ("nhl", "home_win"):       {"factor": 0.40, "mc": 0.30, "gbm": 0.30},
+    ("nhl", "total"):          {"factor": 0.40, "mc": 0.30, "gbm": 0.30},
+    ("nhl", "p1_home_win"):    {"factor": 0.30, "mc": 0.40, "gbm": 0.30},
+    ("nhl", "p1_total"):       {"factor": 0.30, "mc": 0.40, "gbm": 0.30},
+    # NBA: same three-way default for each market; Q1 markets lean a
+    # bit more on MC because the factor model is Q1-specific.
+    ("nba", "q1_home_win"):    {"factor": 0.30, "mc": 0.40, "gbm": 0.30},
+    ("nba", "q1_total"):       {"factor": 0.30, "mc": 0.40, "gbm": 0.30},
+    ("nba", "q1_margin"):      {"factor": 0.30, "mc": 0.40, "gbm": 0.30},
+    ("nba", "home_win"):       {"factor": 0.40, "mc": 0.30, "gbm": 0.30},
 }
 
 
@@ -173,51 +180,101 @@ def ensemble_mlb(pred: dict) -> dict:
 
 
 def ensemble_nhl(pred: dict) -> dict:
-    """NHL ensemble: factor + MC (no GBM yet)."""
+    """NHL ensemble: factor + MC + GBM. Missing components (e.g. GBM not
+    yet trained) have their weight redistributed by blend()."""
     mc = (pred.get("mc") or {})
+    gbm = (pred.get("gbm") or {})
     if "error" in mc: mc = {}
+    if "error" in gbm: gbm = {}
     out: dict[str, Any] = {"weights_used": {}}
 
     factor_wp = (pred.get("win_prob") or {}).get("home")
     mc_wp = (mc.get("win_prob") or {}).get("home")
+    gbm_wp = gbm.get("home_win")
     w = weights_for("nhl", "home_win")
-    wp = blend({"factor": factor_wp, "mc": mc_wp}, w)
+    wp = blend({"factor": factor_wp, "mc": mc_wp, "gbm": gbm_wp}, w)
     if wp is not None:
         out["home_win"] = round(wp, 4)
         out["weights_used"]["home_win"] = w
 
     factor_total = pred.get("total")
     mc_total = (mc.get("expected_goals") or {}).get("total")
+    gbm_total = gbm.get("total_goals")
     w = weights_for("nhl", "total")
-    tot = blend({"factor": factor_total, "mc": mc_total}, w)
+    tot = blend({"factor": factor_total, "mc": mc_total, "gbm": gbm_total}, w)
     if tot is not None:
         out["total_expected"] = round(tot, 3)
         out["weights_used"]["total"] = w
+
+    # Period-1 markets
+    factor_p1_wp = (pred.get("p1") or {}).get("home_win") or \
+                   ((pred.get("p1") or {}).get("win_prob") or {}).get("home")
+    mc_p1_wp = ((mc.get("p1") or {}).get("win_prob") or {}).get("home")
+    gbm_p1_wp = gbm.get("p1_home_win")
+    w = weights_for("nhl", "p1_home_win")
+    p1_wp = blend({"factor": factor_p1_wp, "mc": mc_p1_wp, "gbm": gbm_p1_wp}, w)
+    if p1_wp is not None:
+        out["p1_home_win"] = round(p1_wp, 4)
+        out["weights_used"]["p1_home_win"] = w
+
+    factor_p1_tot = (pred.get("p1") or {}).get("total")
+    mc_p1_tot = ((mc.get("p1") or {}).get("expected_goals") or {}).get("total")
+    gbm_p1_tot = gbm.get("p1_total_goals")
+    w = weights_for("nhl", "p1_total")
+    p1_tot = blend({"factor": factor_p1_tot, "mc": mc_p1_tot, "gbm": gbm_p1_tot}, w)
+    if p1_tot is not None:
+        out["p1_total_expected"] = round(p1_tot, 3)
+        out["weights_used"]["p1_total"] = w
 
     return out
 
 
 def ensemble_nba(pred: dict) -> dict:
-    """NBA Q1 ensemble: factor + MC."""
+    """NBA Q1 ensemble: factor + MC + GBM."""
     mc = (pred.get("mc") or {})
+    gbm = (pred.get("gbm") or {})
     if "error" in mc: mc = {}
+    if "error" in gbm: gbm = {}
     out: dict[str, Any] = {"weights_used": {}}
 
-    # Factor Q1 home wp comes from predict_q1 output; check likely keys.
+    # Q1 ML
     factor_wp = pred.get("q1_ml_home") or (pred.get("win_prob") or {}).get("home")
     mc_wp = (mc.get("win_prob") or {}).get("home")
+    gbm_wp = gbm.get("q1_home_win")
     w = weights_for("nba", "q1_home_win")
-    wp = blend({"factor": factor_wp, "mc": mc_wp}, w)
+    wp = blend({"factor": factor_wp, "mc": mc_wp, "gbm": gbm_wp}, w)
     if wp is not None:
         out["q1_home_win"] = round(wp, 4)
         out["weights_used"]["q1_home_win"] = w
 
+    # Q1 total
     factor_total = pred.get("predicted_total") or pred.get("q1_total")
     mc_total = (mc.get("expected_points") or {}).get("total")
+    gbm_total = gbm.get("q1_total_points")
     w = weights_for("nba", "q1_total")
-    tot = blend({"factor": factor_total, "mc": mc_total}, w)
+    tot = blend({"factor": factor_total, "mc": mc_total, "gbm": gbm_total}, w)
     if tot is not None:
         out["q1_total_expected"] = round(tot, 3)
         out["weights_used"]["q1_total"] = w
+
+    # Q1 margin (home minus away) -- regression, no factor/MC signal today
+    # so GBM stands alone here. Exposed for completeness so callers can
+    # reason about Q1 spread value.
+    gbm_margin = gbm.get("q1_margin")
+    if gbm_margin is not None:
+        w = weights_for("nba", "q1_margin")
+        margin = blend({"gbm": gbm_margin}, w)
+        if margin is not None:
+            out["q1_margin_expected"] = round(margin, 3)
+            out["weights_used"]["q1_margin"] = w
+
+    # Full-game ML -- GBM-only for now; factor model is Q1-focused.
+    gbm_full_wp = gbm.get("home_win")
+    if gbm_full_wp is not None:
+        w = weights_for("nba", "home_win")
+        full_wp = blend({"gbm": gbm_full_wp}, w)
+        if full_wp is not None:
+            out["home_win"] = round(full_wp, 4)
+            out["weights_used"]["home_win"] = w
 
     return out

@@ -116,12 +116,97 @@ _MLB_TARGETS = [
     ("f5_total",     "regression"),
 ]
 
+_NHL_TARGETS = [
+    ("home_win",        "classification"),
+    ("total_goals",     "regression"),
+    ("p1_home_win",     "classification"),
+    ("p1_total_goals",  "regression"),
+]
+
+_NBA_TARGETS = [
+    ("home_win",         "classification"),
+    ("q1_home_win",      "classification"),
+    ("q1_total_points",  "regression"),
+    ("q1_margin",        "regression"),
+]
+
+
+def predict_nhl(conn, game_payload: dict) -> dict[str, Any]:
+    """Run all NHL GBM targets on one matchup. Mirrors predict_mlb.
+
+    game_payload keys: home_team_id, away_team_id, date, season, game_type.
+    The conn must be the NHL DB connection (engine.nhl_db.get_conn()).
+    """
+    try:
+        import pandas as pd
+    except ImportError:
+        return {"error": "pandas not installed"}
+
+    from .features_nhl import extract_nhl_features, NHL_FEATURE_NAMES
+    features = extract_nhl_features(conn, game_payload)
+    if not features:
+        return {"error": "feature extraction failed"}
+
+    X = pd.DataFrame([{k: features[k] for k in NHL_FEATURE_NAMES}])
+
+    out: dict[str, Any] = {}
+    for target_name, _ in _NHL_TARGETS:
+        entry = _load_latest("nhl", target_name)
+        if entry is None:
+            continue
+        model = entry["model"]
+        meta = entry["meta"]
+        try:
+            if meta.get("task") == "classification":
+                out[target_name] = round(float(model.predict_proba(X)[0, 1]), 4)
+            else:
+                out[target_name] = round(float(model.predict(X)[0]), 3)
+        except Exception as e:
+            out[target_name] = {"error": str(e)}
+
+    return out
+
+
+def predict_nba(conn, game_payload: dict) -> dict[str, Any]:
+    """Run all NBA GBM targets on one matchup. Mirrors predict_mlb.
+
+    game_payload keys: home_team_id, away_team_id, date, season.
+    The conn must be the NBA DB connection (engine.nba_db.get_conn()).
+    """
+    try:
+        import pandas as pd
+    except ImportError:
+        return {"error": "pandas not installed"}
+
+    from .features_nba import extract_nba_features, NBA_FEATURE_NAMES
+    features = extract_nba_features(conn, game_payload)
+    if not features:
+        return {"error": "feature extraction failed"}
+
+    X = pd.DataFrame([{k: features[k] for k in NBA_FEATURE_NAMES}])
+
+    out: dict[str, Any] = {}
+    for target_name, _ in _NBA_TARGETS:
+        entry = _load_latest("nba", target_name)
+        if entry is None:
+            continue
+        model = entry["model"]
+        meta = entry["meta"]
+        try:
+            if meta.get("task") == "classification":
+                out[target_name] = round(float(model.predict_proba(X)[0, 1]), 4)
+            else:
+                out[target_name] = round(float(model.predict(X)[0]), 3)
+        except Exception as e:
+            out[target_name] = {"error": str(e)}
+
+    return out
+
 
 def is_available(sport: str = "mlb") -> bool:
     """True if at least one latest-artifact exists for this sport."""
-    if sport == "mlb":
-        return any(
-            (_MODELS_DIR / f"mlb_gbm_{t[0]}_latest.json").exists()
-            for t in _MLB_TARGETS
-        )
-    return False
+    targets = {"mlb": _MLB_TARGETS, "nhl": _NHL_TARGETS, "nba": _NBA_TARGETS}.get(sport, [])
+    return any(
+        (_MODELS_DIR / f"{sport}_gbm_{t[0]}_latest.json").exists()
+        for t in targets
+    )

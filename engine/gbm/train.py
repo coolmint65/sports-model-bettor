@@ -40,6 +40,18 @@ SPORT_TARGETS = {
         ("total_runs",   "regression"),
         ("f5_total",     "regression"),
     ],
+    "nhl": [
+        ("home_win",        "classification"),
+        ("total_goals",     "regression"),
+        ("p1_home_win",     "classification"),
+        ("p1_total_goals",  "regression"),
+    ],
+    "nba": [
+        ("home_win",         "classification"),
+        ("q1_home_win",      "classification"),
+        ("q1_total_points",  "regression"),
+        ("q1_margin",        "regression"),
+    ],
 }
 
 
@@ -87,8 +99,8 @@ def train_sport(sport: str, target: str | None = None,
         return report
 
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    from .features import FEATURE_NAMES
-    X_full = games_df[FEATURE_NAMES].astype(float)
+    feature_names = _feature_names_for(sport)
+    X_full = games_df[feature_names].astype(float)
 
     # Chronological split: last 15% is validation
     n = len(X_full)
@@ -162,7 +174,7 @@ def train_sport(sport: str, target: str | None = None,
             "task": task,
             "n_train": len(y_train),
             "n_val": len(y_val),
-            "feature_names": FEATURE_NAMES,
+            "feature_names": feature_names,
             "trained_at": datetime.now().isoformat(timespec="seconds"),
             "metric": metric,
             "elapsed_sec": round(elapsed, 2),
@@ -229,7 +241,105 @@ def _load_dataset(sport: str, days: int | None = None):
         df_f = pd.DataFrame(feats)
         df_t = pd.DataFrame(targets)
         return df_f, df_t
+
+    if sport == "nhl":
+        from engine.nhl_db import get_conn as _nhl_conn
+        conn = _nhl_conn()
+        q = (
+            "SELECT game_id, date, home_team_id, away_team_id, "
+            "       home_score, away_score, "
+            "       home_p1, away_p1, home_p2, away_p2, home_p3, away_p3, "
+            "       home_shots, away_shots, "
+            "       home_pp_goals, home_pp_opps, away_pp_goals, away_pp_opps, "
+            "       home_faceoff_pct, away_faceoff_pct, season, game_type "
+            "FROM nhl_games WHERE status = 'final' "
+            "  AND home_score IS NOT NULL AND away_score IS NOT NULL"
+        )
+        params = ()
+        if days:
+            cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+            q += " AND date >= ?"
+            params = (cutoff,)
+        q += " ORDER BY date ASC"
+        rows = [dict(r) for r in conn.execute(q, params).fetchall()]
+
+        from .features_nhl import extract_nhl_features, extract_nhl_target
+
+        feats = []
+        targets = []
+        for g in rows:
+            f = extract_nhl_features(conn, g)
+            if not f:
+                continue
+            t = extract_nhl_target(g)
+            if not t:
+                continue
+            f["_date"] = g["date"]
+            feats.append(f)
+            targets.append(t)
+
+        if not feats:
+            return None, None
+        df_f = pd.DataFrame(feats)
+        df_t = pd.DataFrame(targets)
+        return df_f, df_t
+
+    if sport == "nba":
+        from engine.nba_db import get_conn as _nba_conn
+        conn = _nba_conn()
+        q = (
+            "SELECT game_id, date, home_team_id, away_team_id, "
+            "       home_score, away_score, "
+            "       home_q1, away_q1, home_q2, away_q2, "
+            "       home_q3, away_q3, home_q4, away_q4, "
+            "       home_pace, away_pace, season "
+            "FROM nba_games WHERE status = 'final' "
+            "  AND home_score IS NOT NULL AND away_score IS NOT NULL"
+        )
+        params = ()
+        if days:
+            cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+            q += " AND date >= ?"
+            params = (cutoff,)
+        q += " ORDER BY date ASC"
+        rows = [dict(r) for r in conn.execute(q, params).fetchall()]
+
+        from .features_nba import extract_nba_features, extract_nba_target
+
+        feats = []
+        targets = []
+        for g in rows:
+            f = extract_nba_features(conn, g)
+            if not f:
+                continue
+            t = extract_nba_target(g)
+            if not t:
+                continue
+            f["_date"] = g["date"]
+            feats.append(f)
+            targets.append(t)
+
+        if not feats:
+            return None, None
+        df_f = pd.DataFrame(feats)
+        df_t = pd.DataFrame(targets)
+        return df_f, df_t
+
     return None, None
+
+
+def _feature_names_for(sport: str) -> list[str]:
+    """Return the feature-name list for the given sport."""
+    if sport == "mlb":
+        from .features import FEATURE_NAMES
+        return FEATURE_NAMES
+    if sport == "nhl":
+        from .features_nhl import NHL_FEATURE_NAMES
+        return NHL_FEATURE_NAMES
+    if sport == "nba":
+        from .features_nba import NBA_FEATURE_NAMES
+        return NBA_FEATURE_NAMES
+    raise ValueError(f"Unknown sport: {sport}")
 
 
 def _params_for(task: str) -> dict:
