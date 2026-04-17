@@ -61,6 +61,10 @@ export default function App() {
   const [nbaPickSummary, setNbaPickSummary] = useState(null)
   const [nbaPickHistory, setNbaPickHistory] = useState(null)
   const [nbaPhLoading, setNbaPhLoading] = useState(false)
+  // Live progress of the in-flight /best-bets call so the loading
+  // spinner can render "Computing 8/15 games (53%)" instead of an
+  // indeterminate spinner during the multi-minute MLB cold load.
+  const [bbProgress, setBbProgress] = useState(null)
 
   // Load MLB games on mount + auto-refresh every 5 min
   useEffect(() => {
@@ -68,6 +72,15 @@ export default function App() {
       api.get('/scoreboard').then(r => setGames(r.data)).catch(() => {})
     }
     setGamesLoading(true)
+
+    // Poll /best-bets/progress until /best-bets returns. 750ms cadence
+    // is fast enough to feel responsive without hammering the backend.
+    const pollHandle = setInterval(() => {
+      api.get('/best-bets/progress')
+        .then(r => setBbProgress(r.data))
+        .catch(() => {})
+    }, 750)
+
     Promise.all([
       api.get('/scoreboard'),
       api.get('/best-bets'),
@@ -75,7 +88,12 @@ export default function App() {
       setGames(g.data)
       setBestBets(b.data)
     }).catch(() => setGames([]))
-      .finally(() => setGamesLoading(false))
+      .finally(() => {
+        clearInterval(pollHandle)
+        setBbProgress(null)
+        setGamesLoading(false)
+      })
+
     const interval = setInterval(() => {
       fetchGames()
       api.get('/best-bets').then(r => setBestBets(r.data)).catch(() => {})
@@ -382,7 +400,7 @@ export default function App() {
       {isMLB && view === 'games' && !selectedGame && (
         <>
           <PickOfDayCard sport="mlb" />
-          <Scoreboard games={games} loading={gamesLoading} onSelectGame={selectGame} bestBets={bestBets} />
+          <Scoreboard games={games} loading={gamesLoading} progress={bbProgress} onSelectGame={selectGame} bestBets={bestBets} />
         </>
       )}
 

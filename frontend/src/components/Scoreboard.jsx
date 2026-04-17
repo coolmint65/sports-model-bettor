@@ -1,9 +1,21 @@
-export default function Scoreboard({ games, loading, onSelectGame, bestBets }) {
+export default function Scoreboard({ games, loading, progress, onSelectGame, bestBets }) {
   if (loading) {
+    // Progress is the live snapshot from /api/best-bets/progress -- shows
+    // X / N games and a percent so the cold-load wait isn't a black box.
+    const total = progress?.total || 0
+    const done = progress?.done || 0
+    const pct = total ? Math.min(100, Math.round((done / total) * 100)) : null
+    const phase = progress?.phase
+    let label = "Loading today's slate..."
+    if (phase === 'predicting' && total > 0) {
+      label = `Computing predictions: ${done}/${total} games (${pct}%)`
+    } else if (phase === 'building') {
+      label = 'Assembling picks...'
+    }
     return (
       <div className="loading">
         <div className="spinner" />
-        <p>Loading today's slate...</p>
+        <p>{label}</p>
       </div>
     )
   }

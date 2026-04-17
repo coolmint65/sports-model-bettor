@@ -786,17 +786,93 @@ class PredictRequest(BaseModel):
     venue: str | None = None
 
 
+# Per-game prediction cache. Dashboard load (/api/best-bets) runs the
+# full MC+GBM chain across ~15 games, which is multi-minute cold. Repeat
+# refreshes within the TTL hit memory and return instantly. Game-state
+# inputs (umpire, lineups, weather) only update a few times an hour, so
+# 5 minutes is well under the noise floor of "what could have changed".
+import threading as _threading
+_PRED_CACHE: dict = {}
+_PRED_CACHE_LOCK = _threading.Lock()
+_PRED_CACHE_TTL_S = 300
+
+# /api/best-bets progress state for the spinner. Frontend polls
+# /api/best-bets/progress to render a percentage instead of an
+# indeterminate spinner during the multi-minute cold load. Single-flight:
+# concurrent dashboard requests share the same counter, which is fine
+# because they're predicting the same slate.
+_BB_PROGRESS: dict = {"total": 0, "done": 0, "phase": "idle",
+                      "started_at": None, "finished_at": None}
+_BB_PROGRESS_LOCK = _threading.Lock()
+
+
+def _bb_progress_set(**fields) -> None:
+    with _BB_PROGRESS_LOCK:
+        _BB_PROGRESS.update(fields)
+
+
+def _bb_progress_increment() -> None:
+    with _BB_PROGRESS_LOCK:
+        _BB_PROGRESS["done"] = _BB_PROGRESS.get("done", 0) + 1
+
+
+def _bb_progress_snapshot() -> dict:
+    with _BB_PROGRESS_LOCK:
+        return dict(_BB_PROGRESS)
+
+
+def _pred_cache_get(key: tuple):
+    import time as _time
+    with _PRED_CACHE_LOCK:
+        entry = _PRED_CACHE.get(key)
+        if not entry:
+            return None
+        if _time.time() - entry[0] > _PRED_CACHE_TTL_S:
+            _PRED_CACHE.pop(key, None)
+            return None
+        return entry[1]
+
+
+def _pred_cache_put(key: tuple, value: dict) -> None:
+    import time as _time
+    with _PRED_CACHE_LOCK:
+        _PRED_CACHE[key] = (_time.time(), value)
+        # Cap cache size at 64 to bound memory; evict oldest by walltime.
+        if len(_PRED_CACHE) > 64:
+            oldest = min(_PRED_CACHE.items(), key=lambda kv: kv[1][0])[0]
+            _PRED_CACHE.pop(oldest, None)
+
+
 def _predict_mlb_full(home_team_id: int, away_team_id: int,
                       home_pitcher_id: int | None,
                       away_pitcher_id: int | None,
-                      venue: str | None) -> dict:
+                      venue: str | None,
+                      use_cache: bool = True,
+                      mc_n_sims: int | None = None) -> dict:
     """Run the full MLB prediction chain: factor + MC + GBM + ensemble.
 
     Single source of truth shared by /api/predict and /api/best-bets so
     dashboard picks blend MC + GBM like the GameDetail drill-down. If the
     factor model returns an error, the dict is returned as-is; callers
     guard with `if "error" in result` as usual.
+
+    `use_cache=True` (default) returns memoized results for the same
+    (home, away, pitcher pair, venue) tuple within _PRED_CACHE_TTL_S.
+    Pass False from on-demand handlers that need a guaranteed fresh
+    prediction.
+
+    `mc_n_sims=None` defers to MLB_MC_N_SIMS in config (default 50k).
+    /api/best-bets passes 5_000 because the ensemble blend just needs a
+    stable mean, not the tail-quality MC sim count appropriate for the
+    GameDetail drill-down's correct-score / inning grids.
     """
+    cache_key = (home_team_id, away_team_id, home_pitcher_id,
+                 away_pitcher_id, venue, mc_n_sims)
+    if use_cache:
+        cached = _pred_cache_get(cache_key)
+        if cached is not None:
+            return cached
+
     result = predict_matchup(
         home_team_id=home_team_id,
         away_team_id=away_team_id,
@@ -851,6 +927,8 @@ def _predict_mlb_full(home_team_id: int, away_team_id: int,
         logger.debug("MLB ensemble blend failed: %s", e)
         result["ensemble"] = {}
 
+    if use_cache:
+        _pred_cache_put(cache_key, result)
     return result
 
 
@@ -1041,54 +1119,47 @@ def api_predict(req: PredictRequest):
     return result
 
 
-@app.get("/api/best-bets")
-def api_best_bets():
+@app.get("/api/best-bets/progress")
+def api_best_bets_progress():
+    """Spinner support: live progress of an in-flight /api/best-bets run."""
+    snap = _bb_progress_snapshot()
+    total = snap.get("total") or 0
+    done = snap.get("done") or 0
+    snap["pct"] = round(done / total * 100, 1) if total else 0.0
+    return snap
+
+
+def _bb_predict_one(game: dict, all_odds) -> dict | None:
+    """Compute the full prediction + odds payload for a single game.
+
+    Returns a dict with everything /api/best-bets needs (pred, h/a IDs,
+    odds, abbreviations) or None if the game should be skipped (live,
+    completed, missing IDs, prediction error).
     """
-    Run predictions on all today's games using the unified picks engine.
-    """
-    games = _get_scoreboard()
+    from engine.picks import match_odds
+    home_id = game["home"].get("team_id")
+    away_id = game["away"].get("team_id")
+    if not home_id or not away_id:
+        return None
 
-    from engine.picks import generate_picks, get_best_pick, match_odds, fetch_real_odds_for_games
-    from engine.mlb_predict import predict_matchup
+    state = game["status"].get("state", "pre")
+    if state in ("post", "in") or game["status"].get("completed"):
+        return None
 
-    all_odds = fetch_real_odds_for_games()
+    home_pid = game.get("home_pitcher") or {}
+    away_pid = game.get("away_pitcher") or {}
+    try:
+        h_pitcher_id = int(home_pid["id"]) if home_pid.get("id") else None
+        a_pitcher_id = int(away_pid["id"]) if away_pid.get("id") else None
+    except (ValueError, TypeError):
+        h_pitcher_id = None
+        a_pitcher_id = None
 
-    bets = []
-    logger.info("Best bets: analyzing %d games", len(games))
+    h_abbr = game["home"]["abbreviation"]
+    a_abbr = game["away"]["abbreviation"]
+    game_odds = game.get("odds") or match_odds(h_abbr, a_abbr, all_odds)
 
-    for game in games:
-        home_id = game["home"].get("team_id")
-        away_id = game["away"].get("team_id")
-        if not home_id or not away_id:
-            continue
-
-        # Skip completed AND live games - predictions only for pregame.
-        # Live game predictions would change as the score updates, causing
-        # flickering picks and misleading the pick tracker.
-        state = game["status"].get("state", "pre")
-        if state in ("post", "in") or game["status"].get("completed"):
-            continue
-
-        home_pid = game.get("home_pitcher") or {}
-        away_pid = game.get("away_pitcher") or {}
-        try:
-            h_pitcher_id = int(home_pid["id"]) if home_pid.get("id") else None
-            a_pitcher_id = int(away_pid["id"]) if away_pid.get("id") else None
-        except (ValueError, TypeError):
-            h_pitcher_id = None
-            a_pitcher_id = None
-
-        h_abbr = game["home"]["abbreviation"]
-        a_abbr = game["away"]["abbreviation"]
-
-        game_odds = game.get("odds") or match_odds(h_abbr, a_abbr, all_odds)
-
-        # Compute the full factor + MC + GBM + ensemble prediction ONCE
-        # and pass it into both pick generation and the card-enrich block
-        # below. Previously picks came from a separate factor-only call
-        # while card UI data came from another predict_matchup call, so
-        # the dashboard ignored MC/GBM/ensemble signal entirely and also
-        # double-ran the factor model per game.
+    try:
         pred = _predict_mlb_full(
             home_team_id=home_id,
             away_team_id=away_id,
@@ -1096,10 +1167,86 @@ def api_best_bets():
             away_pitcher_id=a_pitcher_id,
             venue=game.get("venue"),
         )
-        if "error" in pred:
-            logger.error("  Prediction failed for %s: %s",
-                         game.get("short_name", "?"), pred["error"])
-            continue
+    except Exception as e:
+        logger.error("  Prediction crashed for %s: %s",
+                     game.get("short_name", "?"), e, exc_info=True)
+        return None
+
+    if "error" in pred:
+        logger.error("  Prediction failed for %s: %s",
+                     game.get("short_name", "?"), pred["error"])
+        return None
+
+    return {
+        "game": game,
+        "home_id": home_id, "away_id": away_id,
+        "h_pitcher_id": h_pitcher_id, "a_pitcher_id": a_pitcher_id,
+        "h_abbr": h_abbr, "a_abbr": a_abbr,
+        "odds": game_odds,
+        "pred": pred,
+    }
+
+
+@app.get("/api/best-bets")
+def api_best_bets():
+    """
+    Run predictions on all today's games using the unified picks engine.
+
+    Per-game predictions run in parallel (ThreadPoolExecutor) so cold
+    dashboard load isn't N x serial MC sims. Progress is published
+    via /api/best-bets/progress so the frontend can render a percentage.
+    """
+    import time as _time
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    games = _get_scoreboard()
+
+    from engine.picks import generate_picks, get_best_pick, fetch_real_odds_for_games
+
+    all_odds = fetch_real_odds_for_games()
+
+    # Determine the predictable subset up front so the progress total is
+    # accurate (don't count games we'll skip).
+    predictable = [
+        g for g in games
+        if g["home"].get("team_id") and g["away"].get("team_id")
+        and g["status"].get("state", "pre") not in ("post", "in")
+        and not g["status"].get("completed")
+    ]
+
+    _bb_progress_set(total=len(predictable), done=0, phase="predicting",
+                     started_at=_time.time(), finished_at=None)
+    logger.info("Best bets: analyzing %d games (parallel)", len(predictable))
+
+    # Up to 8 workers in parallel: predict_matchup is DB-bound, MC sims
+    # are largely numpy (releases the GIL), GBM is XGBoost C++ (releases
+    # the GIL). 8 is well-tuned for a typical 10-15 game slate.
+    prepped: list[dict] = []
+    with ThreadPoolExecutor(max_workers=8, thread_name_prefix="bb-pred") as pool:
+        futures = {pool.submit(_bb_predict_one, g, all_odds): g for g in predictable}
+        for fut in as_completed(futures):
+            try:
+                row = fut.result()
+            except Exception as e:
+                logger.error("  Worker crashed: %s", e, exc_info=True)
+                row = None
+            _bb_progress_increment()
+            if row:
+                prepped.append(row)
+
+    _bb_progress_set(phase="building")
+
+    bets = []
+    for row in prepped:
+        game = row["game"]
+        home_id = row["home_id"]
+        away_id = row["away_id"]
+        h_pitcher_id = row["h_pitcher_id"]
+        a_pitcher_id = row["a_pitcher_id"]
+        h_abbr = row["h_abbr"]
+        a_abbr = row["a_abbr"]
+        game_odds = row["odds"]
+        pred = row["pred"]
 
         try:
             picks = generate_picks(
@@ -1199,6 +1346,8 @@ def api_best_bets():
         })
 
     bets.sort(key=lambda b: b["best_pick"]["edge"], reverse=True)
+    import time as _time
+    _bb_progress_set(phase="idle", finished_at=_time.time())
     return bets
 
 
