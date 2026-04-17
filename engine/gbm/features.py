@@ -74,10 +74,11 @@ _DEFAULTS = {
     # Weather (from games.weather_temp / weather_wind, when populated)
     "weather_temp_f": 70.0,
     "weather_wind_mph": 5.0,
-    # HP umpire (from umpires table, looked up by games.umpire name)
+    # HP umpire run-factor only. umpire_k_pct / umpire_over_pct were
+    # dropped: we have no historical strikeout or O/U-line data to
+    # compute them against (odds.total is only populated going forward).
+    # Re-add if/when a historical totals backfill lands.
     "umpire_run_factor": 1.0,
-    "umpire_k_pct": 0.22,
-    "umpire_over_pct": 0.50,
     # Derived / interaction features. GBM can find these automatically
     # once enough base features have signal, but computing them directly
     # gives the model a head start on the most obvious patterns.
@@ -225,10 +226,6 @@ def extract_mlb_features(conn, game: dict) -> dict[str, float] | None:
         ump = _umpire_stats(conn, ump_name, game.get("date") or "")
         if ump.get("run_factor") is not None:
             features["umpire_run_factor"] = float(ump["run_factor"])
-        if ump.get("k_pct") is not None:
-            features["umpire_k_pct"] = float(ump["k_pct"])
-        if ump.get("over_pct") is not None:
-            features["umpire_over_pct"] = float(ump["over_pct"])
 
     # ── Derived / interaction features ──
     # GBM can find these from the base features, but giving them to it
@@ -302,7 +299,7 @@ def _umpire_stats(conn, umpire_name: str, game_date: str) -> dict:
         season = _season_from_date(game_date)
         if season is not None:
             row = conn.execute(
-                "SELECT run_factor, over_pct "
+                "SELECT run_factor "
                 "FROM umpire_season_stats WHERE name = ? AND season = ?",
                 (umpire_name, season - 1),
             ).fetchone()
