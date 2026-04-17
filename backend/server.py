@@ -786,10 +786,78 @@ class PredictRequest(BaseModel):
     venue: str | None = None
 
 
+def _predict_mlb_full(home_team_id: int, away_team_id: int,
+                      home_pitcher_id: int | None,
+                      away_pitcher_id: int | None,
+                      venue: str | None) -> dict:
+    """Run the full MLB prediction chain: factor + MC + GBM + ensemble.
+
+    Single source of truth shared by /api/predict and /api/best-bets so
+    dashboard picks blend MC + GBM like the GameDetail drill-down. If the
+    factor model returns an error, the dict is returned as-is; callers
+    guard with `if "error" in result` as usual.
+    """
+    result = predict_matchup(
+        home_team_id=home_team_id,
+        away_team_id=away_team_id,
+        home_pitcher_id=home_pitcher_id,
+        away_pitcher_id=away_pitcher_id,
+        venue=venue,
+    )
+    if "error" in result:
+        return result
+
+    from engine.config import get_flag as _get_flag
+
+    if _get_flag("ENABLE_MLB_MC", False):
+        try:
+            from engine.mc_mlb_run import run_mlb_mc
+            import engine.config as _cfg
+            result["mc"] = run_mlb_mc(
+                home_team_id=home_team_id,
+                away_team_id=away_team_id,
+                home_pitcher_id=home_pitcher_id,
+                away_pitcher_id=away_pitcher_id,
+                venue=venue,
+                n_sims=int(getattr(_cfg, "MLB_MC_N_SIMS", 50_000)),
+            )
+        except Exception as e:
+            logger.warning("MC prediction failed for %s/%s: %s",
+                           home_team_id, away_team_id, e, exc_info=True)
+            result["mc"] = {"error": str(e)}
+
+    if _get_flag("ENABLE_MLB_GBM", False):
+        try:
+            from engine.gbm.predict import predict_mlb as _gbm_predict
+            from engine.db import get_conn as _gc
+            result["gbm"] = _gbm_predict(_gc(), {
+                "mlb_game_id": 0,
+                "date": datetime.now().strftime("%Y-%m-%d"),
+                "home_team_id": home_team_id,
+                "away_team_id": away_team_id,
+                "home_pitcher_id": home_pitcher_id,
+                "away_pitcher_id": away_pitcher_id,
+                "venue": venue,
+            })
+        except Exception as e:
+            logger.warning("GBM prediction failed for %s/%s: %s",
+                           home_team_id, away_team_id, e, exc_info=True)
+            result["gbm"] = {"error": str(e)}
+
+    try:
+        from engine.ensemble import ensemble_mlb
+        result["ensemble"] = ensemble_mlb(result)
+    except Exception as e:
+        logger.debug("MLB ensemble blend failed: %s", e)
+        result["ensemble"] = {}
+
+    return result
+
+
 @app.post("/api/predict")
 def api_predict(req: PredictRequest):
     """Run a game prediction."""
-    result = predict_matchup(
+    result = _predict_mlb_full(
         home_team_id=req.home_team_id,
         away_team_id=req.away_team_id,
         home_pitcher_id=req.home_pitcher_id,
@@ -846,57 +914,6 @@ def api_predict(req: PredictRequest):
     except Exception as e:
         logger.debug("active_overrides lookup failed: %s", e)
         result["active_overrides"] = []
-
-    # Monte Carlo shadow prediction. Runs independently of the factor
-    # model and lands on the response under "mc". Gated by
-    # config.ENABLE_MLB_MC so we can shadow-test without affecting
-    # pick generation until the comparison shows it's worth flipping.
-    if _get_flag("ENABLE_MLB_MC", False):
-        try:
-            from engine.mc_mlb_run import run_mlb_mc
-            import engine.config as _cfg
-            result["mc"] = run_mlb_mc(
-                home_team_id=req.home_team_id,
-                away_team_id=req.away_team_id,
-                home_pitcher_id=req.home_pitcher_id,
-                away_pitcher_id=req.away_pitcher_id,
-                venue=req.venue,
-                n_sims=int(getattr(_cfg, "MLB_MC_N_SIMS", 50_000)),
-            )
-        except Exception as e:
-            logger.warning("MC shadow prediction failed for %s/%s: %s",
-                           req.home_team_id, req.away_team_id, e, exc_info=True)
-            result["mc"] = {"error": str(e)}
-
-    # GBM shadow prediction. Requires a trained artifact in
-    # data/models/ (run engine.gbm.train beforehand). Off by default.
-    if _get_flag("ENABLE_MLB_GBM", False):
-        try:
-            from engine.gbm.predict import predict_mlb as _gbm_predict
-            from engine.db import get_conn as _gc
-            result["gbm"] = _gbm_predict(_gc(), {
-                "mlb_game_id": 0,
-                "date": datetime.now().strftime("%Y-%m-%d"),
-                "home_team_id": req.home_team_id,
-                "away_team_id": req.away_team_id,
-                "home_pitcher_id": req.home_pitcher_id,
-                "away_pitcher_id": req.away_pitcher_id,
-                "venue": req.venue,
-            })
-        except Exception as e:
-            logger.warning("GBM shadow prediction failed for %s/%s: %s",
-                           req.home_team_id, req.away_team_id, e, exc_info=True)
-            result["gbm"] = {"error": str(e)}
-
-    # Ensemble blend of factor + MC + GBM signals. Runs whenever at least
-    # one non-factor signal landed; no flag needed because it just
-    # aggregates what's already on the response.
-    try:
-        from engine.ensemble import ensemble_mlb
-        result["ensemble"] = ensemble_mlb(result)
-    except Exception as e:
-        logger.debug("MLB ensemble blend failed: %s", e)
-        result["ensemble"] = {}
 
     # Log component probabilities per market so engine.ensemble_auto_tune
     # can grade each signal against actual outcomes once the game ends
@@ -1066,6 +1083,24 @@ def api_best_bets():
 
         game_odds = game.get("odds") or match_odds(h_abbr, a_abbr, all_odds)
 
+        # Compute the full factor + MC + GBM + ensemble prediction ONCE
+        # and pass it into both pick generation and the card-enrich block
+        # below. Previously picks came from a separate factor-only call
+        # while card UI data came from another predict_matchup call, so
+        # the dashboard ignored MC/GBM/ensemble signal entirely and also
+        # double-ran the factor model per game.
+        pred = _predict_mlb_full(
+            home_team_id=home_id,
+            away_team_id=away_id,
+            home_pitcher_id=h_pitcher_id,
+            away_pitcher_id=a_pitcher_id,
+            venue=game.get("venue"),
+        )
+        if "error" in pred:
+            logger.error("  Prediction failed for %s: %s",
+                         game.get("short_name", "?"), pred["error"])
+            continue
+
         try:
             picks = generate_picks(
                 home_team_id=home_id,
@@ -1074,9 +1109,10 @@ def api_best_bets():
                 away_pitcher_id=a_pitcher_id,
                 venue=game.get("venue"),
                 odds=game_odds,
+                pred=pred,
             )
         except Exception as e:
-            logger.error("  Prediction failed for %s: %s", game.get("short_name", "?"), e)
+            logger.error("  Pick generation failed for %s: %s", game.get("short_name", "?"), e)
             continue
 
         if not picks:
@@ -1086,21 +1122,14 @@ def api_best_bets():
         if not best:
             continue
 
-        # Pull the full prediction so the scoreboard card can render the
-        # NHL-parity blocks (WinProbBar, CardInsight, rest badges, injury
-        # severity). predict_matchup caches nothing internally but the
-        # cost is small vs the UI value.
+        # Card-enrich: derive rest / factors / injuries / season_context
+        # from the prediction we already computed above.
         win_prob = {}
         rest = {}
         factors = {}
         injuries = {}
         season_context = None
         try:
-            pred = predict_matchup(
-                home_team_id=home_id, away_team_id=away_id,
-                home_pitcher_id=h_pitcher_id, away_pitcher_id=a_pitcher_id,
-                venue=game.get("venue"),
-            )
             if pred and "error" not in pred:
                 win_prob = pred.get("win_prob") or {}
 
