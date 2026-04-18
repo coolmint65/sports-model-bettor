@@ -118,6 +118,33 @@ def reload_weights():
     _cached_weights = None
 
 
+def _calibrate_win_prob(raw: float, floor: float, cap: float,
+                        compress: float = 0.35) -> float:
+    """Soft-compress an over-confident win probability.
+
+    Below `floor`, raw is squashed toward floor by `compress`. Above
+    `cap`, raw is squashed toward cap by the same factor. Inside
+    [floor, cap] raw passes through unchanged. The compression is
+    monotonic, so a 0.85 raw still reads as a stronger favorite than
+    0.70, but both end up clustered just above `cap` where empirical
+    win rates actually live.
+
+    With the default compress=0.35 and cap=0.58:
+        raw 0.50 -> 0.500 (unchanged)
+        raw 0.58 -> 0.580 (unchanged, at boundary)
+        raw 0.65 -> 0.605 (0.58 + 0.07*0.35)
+        raw 0.75 -> 0.640 (0.58 + 0.17*0.35)
+        raw 0.90 -> 0.692 (0.58 + 0.32*0.35)
+    """
+    if raw < floor:
+        deficit = floor - raw
+        return max(0.0, floor - deficit * compress)
+    if raw > cap:
+        excess = raw - cap
+        return min(1.0, cap + excess * compress)
+    return raw
+
+
 # ── Core prediction ──────────────────────────────────────────
 
 def predict_matchup(home_team_id: int, away_team_id: int,
@@ -521,14 +548,16 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     matrix = _build_score_matrix(home_xr, away_xr, max_runs=15)
     p_home, p_away = _win_probs_from_matrix(matrix)
 
-    # Calibration cap: MLB win probabilities rarely exceed 75% even for
-    # heavy favorites. Our backtest showed 57% actual win rate on ML picks
-    # that were "displayed" at 80-97% confidence - a clear miscalibration.
-    # Cap raw probabilities via config-driven floor/cap. Calibration data
-    # (N=62 at 75%+ predicted, actual 51.6%) showed the old 0.72 cap was
-    # still letting through overconfident picks; tightened to 0.65.
+    # Calibration: MLB win probabilities are systematically over-confident
+    # at the extremes -- a backtest showed the 70%+ bucket hit only 52.6%
+    # actual vs 79.8% stated. Earlier we hard-clamped at MLB_WIN_PROB_CAP
+    # (0.58), but that flattened every above-cap matchup to the same value
+    # so distinct games looked identical to the user. Switched to a
+    # piecewise compression: below the floor / above the cap we squash the
+    # tail toward the boundary by a fixed factor, preserving ordering so
+    # a "stronger" favorite still reads stronger than a "weaker" one.
     from .config import MLB_WIN_PROB_FLOOR, MLB_WIN_PROB_CAP
-    p_home = max(MLB_WIN_PROB_FLOOR, min(MLB_WIN_PROB_CAP, p_home))
+    p_home = _calibrate_win_prob(p_home, MLB_WIN_PROB_FLOOR, MLB_WIN_PROB_CAP)
     p_away = 1 - p_home
 
     # ── Over/Under lines ──
