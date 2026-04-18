@@ -155,10 +155,26 @@ def refresh_calibration(sport: str = "mlb") -> dict:
         return summary
 
     try:
-        rows = get_conn().execute(
+        # UNION the live picks table with synthetic backfilled samples.
+        # The samples table is filled by scripts/backfill_calibration.py
+        # so we have meaningful per-bucket sample counts even before the
+        # real tracker has settled hundreds of picks. The calibrator
+        # treats both rows identically -- one (bet_type, model_prob,
+        # result) tuple is one sample regardless of source.
+        conn = get_conn()
+        rows = conn.execute(
             f"SELECT bet_type, model_prob, result FROM {table_name} "
             "WHERE result IN ('W', 'L') AND model_prob IS NOT NULL"
         ).fetchall()
+        try:
+            extra = conn.execute(
+                "SELECT bet_type, model_prob, result FROM calibration_samples "
+                "WHERE result IN ('W', 'L') AND model_prob IS NOT NULL"
+            ).fetchall()
+            rows = list(rows) + list(extra)
+        except Exception:
+            # Table not present in this DB yet -- fine, just use real picks.
+            pass
     except Exception as e:
         logger.warning("calibration: query on %s failed: %s",
                        table_name, e)
