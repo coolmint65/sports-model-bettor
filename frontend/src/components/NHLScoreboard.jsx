@@ -1,3 +1,5 @@
+import EdgeBadge from './primitives/EdgeBadge'
+
 // League-average NHL SV% is ~0.905. Color + tooltip labels anchor the
 // user's eye so a ".915" starter is recognized as above average without
 // needing to remember the league baseline.
@@ -167,17 +169,10 @@ function NHLGameCard({ game, bet, onClick }) {
       {isFinal && <div className="final-badge">FINAL</div>}
 
       {/* Model pick badge - only for pregame games */}
-      {isPre && bet && bet.best_pick && conf !== 'skip' && (
-        <div className={`pick-badge badge-${conf}`}>
-          <span className="pick-badge-type">{bet.best_pick.type}</span>
-          <span className="pick-badge-pick">{bet.best_pick.pick}</span>
-          <span className="pick-badge-edge">+{bet.best_pick.edge}%</span>
-        </div>
-      )}
-      {isPre && !(bet && bet.best_pick && conf !== 'skip') && (
-        <div className="pick-badge pick-badge-none" title="Model found no +EV play in the calibrated edges">
-          <span className="pick-badge-type">NO PICK</span>
-        </div>
+      {isPre && (
+        bet && bet.best_pick && conf !== 'skip'
+          ? <EdgeBadge pick={bet.best_pick} confidence={conf} />
+          : <EdgeBadge empty />
       )}
 
       {/* Rest / back-to-back indicators */}

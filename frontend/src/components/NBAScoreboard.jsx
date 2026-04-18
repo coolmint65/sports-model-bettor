@@ -1,3 +1,5 @@
+import EdgeBadge from './primitives/EdgeBadge'
+
 export default function NBAScoreboard({ games, loading, progress, onSelectGame, bestBets }) {
   if (loading) {
     const total = progress?.total || 0
@@ -152,22 +154,10 @@ function NBAGameCard({ game, bet, onClick }) {
       {isFinal && <div className="final-badge">FINAL</div>}
 
       {/* Q1 pick badge - only for pregame games */}
-      {isPre && !(bet && bet.best_pick && conf !== 'skip') && (
-        <div className="pick-badge pick-badge-none" title="Model found no +EV play in the calibrated edges">
-          <span className="pick-badge-type">NO PICK</span>
-        </div>
-      )}
-      {isPre && bet && bet.best_pick && conf !== 'skip' && (
-        <div className={`pick-badge q1-badge badge-${conf}`}>
-          <span className="pick-badge-type">
-            {bet.best_pick.type === 'Q1_SPREAD' ? 'Q1 SPREAD'
-              : bet.best_pick.type === 'Q1_TOTAL' ? 'Q1 TOTAL'
-              : bet.best_pick.type === 'Q1_ML' ? 'Q1 WINNER'
-              : 'Q1'}
-          </span>
-          <span className="pick-badge-pick">{bet.best_pick.pick}</span>
-          <span className="pick-badge-edge">+{bet.best_pick.edge}%</span>
-        </div>
+      {isPre && (
+        bet && bet.best_pick && conf !== 'skip'
+          ? <EdgeBadge pick={bet.best_pick} confidence={conf} accent="q1" />
+          : <EdgeBadge empty />
       )}
 
       {/* One-pick-per-card rule: the scoreboard shows only the highest-

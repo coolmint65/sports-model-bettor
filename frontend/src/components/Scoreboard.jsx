@@ -1,3 +1,5 @@
+import EdgeBadge from './primitives/EdgeBadge'
+
 export default function Scoreboard({ games, loading, progress, onSelectGame, bestBets }) {
   if (loading) {
     // Progress is the live snapshot from /api/best-bets/progress -- shows
@@ -155,17 +157,10 @@ function GameCard({ game, bet, onClick }) {
       {/* Model pick badge - only for pregame games. When no pick survives
           calibration (no +EV play for this game), show a muted "no pick"
           chip instead of silently leaving the card look half-rendered. */}
-      {isPre && bet && bet.best_pick && conf !== 'skip' && (
-        <div className={`pick-badge badge-${conf}`}>
-          <span className="pick-badge-type">{bet.best_pick.type}</span>
-          <span className="pick-badge-pick">{bet.best_pick.pick}</span>
-          <span className="pick-badge-edge">+{bet.best_pick.edge}%</span>
-        </div>
-      )}
-      {isPre && !(bet && bet.best_pick && conf !== 'skip') && (
-        <div className="pick-badge pick-badge-none" title="Model found no +EV play in the calibrated edges">
-          <span className="pick-badge-type">NO PICK</span>
-        </div>
+      {isPre && (
+        bet && bet.best_pick && conf !== 'skip'
+          ? <EdgeBadge pick={bet.best_pick} confidence={conf} />
+          : <EdgeBadge empty />
       )}
 
       {/* Rest / fatigue indicators (MLB equivalents of B2B / rest advantage) */}
