@@ -1,5 +1,4 @@
-import EdgeBadge from './primitives/EdgeBadge'
-import WinProbBar from './primitives/WinProbBar'
+import GameCard from './primitives/GameCard'
 
 // League-average NHL SV% is ~0.905. Color + tooltip labels anchor the
 // user's eye so a ".915" starter is recognized as above average without
@@ -152,231 +151,100 @@ function NHLFinalRow({ game, bet, onClick }) {
 }
 
 function NHLGameCard({ game, bet, onClick }) {
-  const { home, away, status } = game
-  const isLive = status.state === 'in'
-  const isFinal = status.state === 'post'
-  const isPre = status.state === 'pre'
-  const conf = bet?.confidence || 'skip'
+  const { home, away } = game
 
-  const rest = bet?.rest || {}
-  const homeB2B = rest.home_b2b
-  const awayB2B = rest.away_b2b
-  const homeRest = rest.home_rest_advantage && !rest.away_rest_advantage
-  const awayRest = rest.away_rest_advantage && !rest.home_rest_advantage
+  const starters = (game.away_goalie || game.home_goalie) ? (
+    <div className="game-pitchers">
+      <GoalieSlot g={game.away_goalie} />
+      <span className="vs">vs</span>
+      <GoalieSlot g={game.home_goalie} />
+    </div>
+  ) : null
+
+  const odds = game.odds ? <NHLOddsGrid odds={game.odds} home={home} away={away} /> : null
+
+  const insight = <CardInsight bet={bet} home={home} away={away} game={game} />
 
   return (
-    <div className={`game-card ${isLive ? 'live' : ''} card-${conf}`} onClick={onClick}>
-      {isLive && <div className="live-badge">LIVE</div>}
-      {isFinal && <div className="final-badge">FINAL</div>}
-
-      {/* Model pick badge - only for pregame games */}
-      {isPre && (
-        bet && bet.best_pick && conf !== 'skip'
-          ? <EdgeBadge pick={bet.best_pick} confidence={conf} />
-          : <EdgeBadge empty />
-      )}
-
-      {/* Rest / back-to-back indicators */}
-      {isPre && (homeB2B || awayB2B || homeRest || awayRest) && (
-        <div style={{display:'flex',gap:4,flexWrap:'wrap',marginBottom:6}}>
-          {awayB2B && (
-            <span style={{fontSize:'0.66rem',fontWeight:700,padding:'2px 6px',borderRadius:4,background:'rgba(239,68,68,0.15)',color:'#ef4444',border:'1px solid rgba(239,68,68,0.3)'}}>
-              {away.abbreviation} B2B
-            </span>
-          )}
-          {homeB2B && (
-            <span style={{fontSize:'0.66rem',fontWeight:700,padding:'2px 6px',borderRadius:4,background:'rgba(239,68,68,0.15)',color:'#ef4444',border:'1px solid rgba(239,68,68,0.3)'}}>
-              {home.abbreviation} B2B
-            </span>
-          )}
-          {awayRest && (
-            <span style={{fontSize:'0.66rem',fontWeight:700,padding:'2px 6px',borderRadius:4,background:'rgba(96,165,250,0.12)',color:'#60a5fa',border:'1px solid rgba(96,165,250,0.25)'}}>
-              {away.abbreviation} rested
-            </span>
-          )}
-          {homeRest && (
-            <span style={{fontSize:'0.66rem',fontWeight:700,padding:'2px 6px',borderRadius:4,background:'rgba(96,165,250,0.12)',color:'#60a5fa',border:'1px solid rgba(96,165,250,0.25)'}}>
-              {home.abbreviation} rested
-            </span>
-          )}
-        </div>
-      )}
-
-      {/* Line movement indicator */}
-      {isPre && game.line_movement && game.line_movement.significance && game.line_movement.significance !== 'none' && (
-        <div style={{marginBottom:6}}>
-          <span
-            title={`Line moved ${game.line_movement.significance} since opening`}
-            style={{
-              fontSize:'0.66rem',
-              fontWeight:700,
-              padding:'2px 6px',
-              borderRadius:4,
-              background:'rgba(245,158,11,0.12)',
-              color: game.line_movement.significance === 'major' ? '#ef4444' : '#f59e0b',
-              border:'1px solid rgba(245,158,11,0.25)',
-            }}
-          >
-            LINE MOVED
-          </span>
-        </div>
-      )}
-
-      <div className="game-teams">
-        <TeamRow team={away} isLive={isLive} isFinal={isFinal} />
-        <div className="game-at">@</div>
-        <TeamRow team={home} isLive={isLive} isFinal={isFinal} />
-      </div>
-
-      {/* Win probability bar - the "missing piece" */}
-      {isPre && bet?.win_prob?.home != null && (
-        <WinProbBar wp={bet.win_prob} home={home} away={away} />
-      )}
-
-      {/* Key insight line - shows WHY the model picked this side */}
-      {isPre && bet && bet.best_pick && conf !== 'skip' && (
-        <CardInsight bet={bet} home={home} away={away} game={game} />
-      )}
-
-      {/* Starting goalies */}
-      {isPre && (game.away_goalie || game.home_goalie) && (
-        <div className="game-pitchers">
-          <span className="pitcher">
-            {game.away_goalie?.name || 'TBD'}
-            {game.away_goalie?.status === 'confirmed' && (
-              <span
-                style={{color:'#34d399',marginLeft:4,fontSize:'0.7rem',cursor:'help'}}
-                title="Confirmed starter (DailyFaceoff)"
-                aria-label="Confirmed starting goalie"
-              >✓</span>
-            )}
-            {game.away_goalie?.status === 'expected' && (
-              <span
-                style={{color:'#fbbf24',marginLeft:4,fontSize:'0.7rem',cursor:'help'}}
-                title="Projected starter (not yet confirmed)"
-                aria-label="Projected starting goalie, not confirmed"
-              >~</span>
-            )}
-            {game.away_goalie?.save_pct > 0 && (
-              <span
-                style={{
-                  color: svPctColor(game.away_goalie.save_pct),
-                  fontSize:'0.7rem', marginLeft:6,
-                  cursor:'help',
-                }}
-                title={`League average: ~0.905. This starter ${svPctLabel(game.away_goalie.save_pct)}.`}
-              >
-                {game.away_goalie.save_pct.toFixed(3)} SV%
-              </span>
-            )}
-          </span>
-          <span className="vs">vs</span>
-          <span className="pitcher">
-            {game.home_goalie?.name || 'TBD'}
-            {game.home_goalie?.status === 'confirmed' && (
-              <span
-                style={{color:'#34d399',marginLeft:4,fontSize:'0.7rem',cursor:'help'}}
-                title="Confirmed starter (DailyFaceoff)"
-                aria-label="Confirmed starting goalie"
-              >✓</span>
-            )}
-            {game.home_goalie?.status === 'expected' && (
-              <span
-                style={{color:'#fbbf24',marginLeft:4,fontSize:'0.7rem',cursor:'help'}}
-                title="Projected starter (not yet confirmed)"
-                aria-label="Projected starting goalie, not confirmed"
-              >~</span>
-            )}
-            {game.home_goalie?.save_pct > 0 && (
-              <span
-                style={{
-                  color: svPctColor(game.home_goalie.save_pct),
-                  fontSize:'0.7rem', marginLeft:6,
-                  cursor:'help',
-                }}
-                title={`League average: ~0.905. This starter ${svPctLabel(game.home_goalie.save_pct)}.`}
-              >
-                {game.home_goalie.save_pct.toFixed(3)} SV%
-              </span>
-            )}
-          </span>
-        </div>
-      )}
-
-      {/* Odds */}
-      {game.odds && (
-        <div className="game-odds-grid">
-          {/* ML */}
-          {(game.odds.home_ml || game.odds.away_ml) && (
-            <div className="odds-line">
-              <span className="odds-label">ML</span>
-              <span className="odds-val">{away.abbreviation} {game.odds.away_ml > 0 ? '+' : ''}{game.odds.away_ml || '-'}</span>
-              <span className="odds-val">{home.abbreviation} {game.odds.home_ml > 0 ? '+' : ''}{game.odds.home_ml || '-'}</span>
-            </div>
-          )}
-          {/* O/U */}
-          {game.odds.over_under && (
-            <div className="odds-line">
-              <span className="odds-label">O/U</span>
-              <span className="odds-val">o{game.odds.over_under} {game.odds.over_odds ? `(${Math.round(game.odds.over_odds) > 0 ? '+' : ''}${Math.round(game.odds.over_odds)})` : ''}</span>
-              <span className="odds-val">u{game.odds.over_under} {game.odds.under_odds ? `(${Math.round(game.odds.under_odds) > 0 ? '+' : ''}${Math.round(game.odds.under_odds)})` : ''}</span>
-            </div>
-          )}
-          {/* Puck Line */}
-          {(() => {
-            const hasReal = game.odds.away_spread_point != null || game.odds.home_spread_point != null
-            const awayPt = game.odds.away_spread_point
-            const homePt = game.odds.home_spread_point
-            const awayOdds = game.odds.away_spread_odds
-            const homeOdds = game.odds.home_spread_odds
-
-            const homeFav = game.odds.home_ml && game.odds.away_ml && game.odds.home_ml < game.odds.away_ml
-            const dAwayPt = hasReal ? awayPt : (homeFav ? 1.5 : -1.5)
-            const dHomePt = hasReal ? homePt : (homeFav ? -1.5 : 1.5)
-            const dAwayOdds = awayOdds || (dAwayPt > 0 ? -180 : 150)
-            const dHomeOdds = homeOdds || (dHomePt > 0 ? -180 : 150)
-
-            return (
-              <div className="odds-line">
-                <span className="odds-label">PL</span>
-                <span className="odds-val">
-                  {away.abbreviation} {dAwayPt > 0 ? '+' : ''}{dAwayPt}
-                  {` (${dAwayOdds > 0 ? '+' : ''}${Math.round(dAwayOdds)})`}
-                </span>
-                <span className="odds-val">
-                  {home.abbreviation} {dHomePt > 0 ? '+' : ''}{dHomePt}
-                  {` (${dHomeOdds > 0 ? '+' : ''}${Math.round(dHomeOdds)})`}
-                </span>
-              </div>
-            )
-          })()}
-        </div>
-      )}
-
-      {/* Game time or status */}
-      <div className="game-meta">
-        {isPre && (
-          <span className="game-time">
-            {new Date(game.date).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
-          </span>
-        )}
-        {isLive && <span className="game-inning">{status.detail}</span>}
-        {game.broadcast && <span className="game-broadcast">{game.broadcast}</span>}
-      </div>
-    </div>
+    <GameCard
+      game={game}
+      bet={bet}
+      onClick={onClick}
+      insight={insight}
+      starters={starters}
+      odds={odds}
+      restTiredLabel="B2B"
+    />
   )
 }
 
-function TeamRow({ team, isLive, isFinal }) {
+function GoalieSlot({ g }) {
+  if (!g?.name) return <span className="pitcher">TBD</span>
   return (
-    <div className="game-team">
-      {team.logo && <img src={team.logo} alt="" className="team-logo" />}
-      <span className="team-abbr">{team.abbreviation}</span>
-      <span className="team-name">{team.name}</span>
-      <span className="team-record">{team.record}</span>
-      {(isLive || isFinal) && (
-        <span className={`game-score ${team.winner ? 'winner' : ''}`}>{team.score}</span>
+    <span className="pitcher">
+      {g.name}
+      {g.status === 'confirmed' && (
+        <span
+          className="goalie-mark goalie-confirmed"
+          title="Confirmed starter (DailyFaceoff)"
+          aria-label="Confirmed starting goalie"
+        >✓</span>
       )}
+      {g.status === 'expected' && (
+        <span
+          className="goalie-mark goalie-expected"
+          title="Projected starter (not yet confirmed)"
+          aria-label="Projected starting goalie, not confirmed"
+        >~</span>
+      )}
+      {g.save_pct > 0 && (
+        <span
+          className="goalie-svpct"
+          style={{ color: svPctColor(g.save_pct) }}
+          title={`League average: ~0.905. This starter ${svPctLabel(g.save_pct)}.`}
+        >
+          {g.save_pct.toFixed(3)} SV%
+        </span>
+      )}
+    </span>
+  )
+}
+
+function NHLOddsGrid({ odds, home, away }) {
+  const hasReal = odds.away_spread_point != null || odds.home_spread_point != null
+  const homeFav = odds.home_ml && odds.away_ml && odds.home_ml < odds.away_ml
+  const dAwayPt = hasReal ? odds.away_spread_point : (homeFav ? 1.5 : -1.5)
+  const dHomePt = hasReal ? odds.home_spread_point : (homeFav ? -1.5 : 1.5)
+  const dAwayOdds = odds.away_spread_odds || (dAwayPt > 0 ? -180 : 150)
+  const dHomeOdds = odds.home_spread_odds || (dHomePt > 0 ? -180 : 150)
+
+  return (
+    <div className="game-odds-grid">
+      {(odds.home_ml || odds.away_ml) && (
+        <div className="odds-line">
+          <span className="odds-label">ML</span>
+          <span className="odds-val">{away.abbreviation} {odds.away_ml > 0 ? '+' : ''}{odds.away_ml || '-'}</span>
+          <span className="odds-val">{home.abbreviation} {odds.home_ml > 0 ? '+' : ''}{odds.home_ml || '-'}</span>
+        </div>
+      )}
+      {odds.over_under && (
+        <div className="odds-line">
+          <span className="odds-label">O/U</span>
+          <span className="odds-val">o{odds.over_under} {odds.over_odds ? `(${Math.round(odds.over_odds) > 0 ? '+' : ''}${Math.round(odds.over_odds)})` : ''}</span>
+          <span className="odds-val">u{odds.over_under} {odds.under_odds ? `(${Math.round(odds.under_odds) > 0 ? '+' : ''}${Math.round(odds.under_odds)})` : ''}</span>
+        </div>
+      )}
+      <div className="odds-line">
+        <span className="odds-label">PL</span>
+        <span className="odds-val">
+          {away.abbreviation} {dAwayPt > 0 ? '+' : ''}{dAwayPt}
+          {` (${dAwayOdds > 0 ? '+' : ''}${Math.round(dAwayOdds)})`}
+        </span>
+        <span className="odds-val">
+          {home.abbreviation} {dHomePt > 0 ? '+' : ''}{dHomePt}
+          {` (${dHomeOdds > 0 ? '+' : ''}${Math.round(dHomeOdds)})`}
+        </span>
+      </div>
     </div>
   )
 }

@@ -1,5 +1,4 @@
-import EdgeBadge from './primitives/EdgeBadge'
-import WinProbBar from './primitives/WinProbBar'
+import GameCard from './primitives/GameCard'
 
 export default function Scoreboard({ games, loading, progress, onSelectGame, bestBets }) {
   if (loading) {
@@ -79,7 +78,7 @@ export default function Scoreboard({ games, loading, progress, onSelectGame, bes
           )}
           <div className="games-feature-grid">
             {activeGames.map(game => (
-              <GameCard
+              <MLBGameCard
                 key={game.id}
                 game={game}
                 bet={betMap[game.id]}
@@ -134,175 +133,70 @@ function MLBFinalRow({ game, onClick }) {
   )
 }
 
-function GameCard({ game, bet, onClick }) {
-  const { home, away, status } = game
-  const isLive = status.state === 'in'
-  const isFinal = status.state === 'post'
-  const isPre = status.state === 'pre'
-  const conf = bet?.confidence || 'skip'
+function MLBGameCard({ game, bet, onClick }) {
+  const { home, away } = game
 
-  // Rest / fatigue signals for MLB (back-to-back equivalents: short rest,
-  // travel fatigue, getaway day). Gated on bet.rest availability from the
-  // prediction payload so the card degrades gracefully.
-  const rest = bet?.rest || {}
-  const homeB2B = rest.home_b2b || rest.home_short_rest
-  const awayB2B = rest.away_b2b || rest.away_short_rest
-  const homeRest = rest.home_rest_advantage && !rest.away_rest_advantage
-  const awayRest = rest.away_rest_advantage && !rest.home_rest_advantage
+  const starters = (game.home_pitcher || game.away_pitcher) ? (
+    <div className="game-pitchers">
+      <span className="pitcher">{game.away_pitcher?.name || 'TBD'}</span>
+      <span className="vs">vs</span>
+      <span className="pitcher">{game.home_pitcher?.name || 'TBD'}</span>
+    </div>
+  ) : null
+
+  const odds = game.odds ? <MLBOddsGrid odds={game.odds} home={home} away={away} /> : null
+
+  const insight = <MLBCardInsight bet={bet} home={home} away={away} game={game} />
 
   return (
-    <div className={`game-card ${isLive ? 'live' : ''} card-${conf}`} onClick={onClick}>
-      {isLive && <div className="live-badge">LIVE</div>}
-      {isFinal && <div className="final-badge">FINAL</div>}
-
-      {/* Model pick badge - only for pregame games. When no pick survives
-          calibration (no +EV play for this game), show a muted "no pick"
-          chip instead of silently leaving the card look half-rendered. */}
-      {isPre && (
-        bet && bet.best_pick && conf !== 'skip'
-          ? <EdgeBadge pick={bet.best_pick} confidence={conf} />
-          : <EdgeBadge empty />
-      )}
-
-      {/* Rest / fatigue indicators (MLB equivalents of B2B / rest advantage) */}
-      {isPre && (homeB2B || awayB2B || homeRest || awayRest) && (
-        <div style={{display:'flex',gap:4,flexWrap:'wrap',marginBottom:6}}>
-          {awayB2B && (
-            <span style={{fontSize:'0.66rem',fontWeight:700,padding:'2px 6px',borderRadius:4,background:'rgba(239,68,68,0.15)',color:'#ef4444',border:'1px solid rgba(239,68,68,0.3)'}}>
-              {away.abbreviation} tired
-            </span>
-          )}
-          {homeB2B && (
-            <span style={{fontSize:'0.66rem',fontWeight:700,padding:'2px 6px',borderRadius:4,background:'rgba(239,68,68,0.15)',color:'#ef4444',border:'1px solid rgba(239,68,68,0.3)'}}>
-              {home.abbreviation} tired
-            </span>
-          )}
-          {awayRest && (
-            <span style={{fontSize:'0.66rem',fontWeight:700,padding:'2px 6px',borderRadius:4,background:'rgba(96,165,250,0.12)',color:'#60a5fa',border:'1px solid rgba(96,165,250,0.25)'}}>
-              {away.abbreviation} rested
-            </span>
-          )}
-          {homeRest && (
-            <span style={{fontSize:'0.66rem',fontWeight:700,padding:'2px 6px',borderRadius:4,background:'rgba(96,165,250,0.12)',color:'#60a5fa',border:'1px solid rgba(96,165,250,0.25)'}}>
-              {home.abbreviation} rested
-            </span>
-          )}
-        </div>
-      )}
-
-      {/* Line movement indicator (gated on availability) */}
-      {isPre && game.line_movement && game.line_movement.significance && game.line_movement.significance !== 'none' && (
-        <div style={{marginBottom:6}}>
-          <span
-            title={`Line moved ${game.line_movement.significance} since opening`}
-            style={{fontSize:'0.66rem',fontWeight:700,padding:'2px 6px',borderRadius:4,background:'rgba(245,158,11,0.12)',color: game.line_movement.significance === 'major' ? '#ef4444' : '#f59e0b',border:'1px solid rgba(245,158,11,0.25)'}}
-          >
-            LINE MOVED
-          </span>
-        </div>
-      )}
-
-      <div className="game-teams">
-        <TeamRow team={away} isLive={isLive} isFinal={isFinal} />
-        <div className="game-at">@</div>
-        <TeamRow team={home} isLive={isLive} isFinal={isFinal} />
-      </div>
-
-      {/* Win probability bar - parity with NHL */}
-      {isPre && bet?.win_prob?.home != null && (
-        <WinProbBar wp={bet.win_prob} home={home} away={away} />
-      )}
-
-      {/* Key insight - one-line "why the model picked this" */}
-      {isPre && bet && bet.best_pick && conf !== 'skip' && (
-        <MLBCardInsight bet={bet} home={home} away={away} game={game} />
-      )}
-
-      {/* Probable pitchers */}
-      {isPre && (game.home_pitcher || game.away_pitcher) && (
-        <div className="game-pitchers">
-          <span className="pitcher">{game.away_pitcher?.name || 'TBD'}</span>
-          <span className="vs">vs</span>
-          <span className="pitcher">{game.home_pitcher?.name || 'TBD'}</span>
-        </div>
-      )}
-
-      {/* Odds */}
-      {game.odds && (
-        <div className="game-odds-grid">
-          {/* ML */}
-          {(game.odds.home_ml || game.odds.away_ml) && (
-            <div className="odds-line">
-              <span className="odds-label">ML</span>
-              <span className="odds-val">{away.abbreviation} {game.odds.away_ml > 0 ? '+' : ''}{game.odds.away_ml || '-'}</span>
-              <span className="odds-val">{home.abbreviation} {game.odds.home_ml > 0 ? '+' : ''}{game.odds.home_ml || '-'}</span>
-            </div>
-          )}
-          {/* O/U */}
-          {game.odds.over_under && (
-            <div className="odds-line">
-              <span className="odds-label">O/U</span>
-              <span className="odds-val">o{game.odds.over_under} {game.odds.over_odds ? `(${Math.round(game.odds.over_odds) > 0 ? '+' : ''}${Math.round(game.odds.over_odds)})` : ''}</span>
-              <span className="odds-val">u{game.odds.over_under} {game.odds.under_odds ? `(${Math.round(game.odds.under_odds) > 0 ? '+' : ''}${Math.round(game.odds.under_odds)})` : ''}</span>
-            </div>
-          )}
-          {/* RL - real spread points or assumed ±1.5 */}
-          {(() => {
-            const hasReal = game.odds.away_spread_point != null || game.odds.home_spread_point != null
-            const awayPt = game.odds.away_spread_point
-            const homePt = game.odds.home_spread_point
-            const awayOdds = game.odds.away_spread_odds
-            const homeOdds = game.odds.home_spread_odds
-
-            // If no real RL, derive from ML: favorite gets -1.5, underdog gets +1.5
-            const homeFav = game.odds.home_ml && game.odds.away_ml && game.odds.home_ml < game.odds.away_ml
-            const dAwayPt = hasReal ? awayPt : (homeFav ? 1.5 : -1.5)
-            const dHomePt = hasReal ? homePt : (homeFav ? -1.5 : 1.5)
-            const dAwayOdds = awayOdds || (dAwayPt > 0 ? -140 : 120)
-            const dHomeOdds = homeOdds || (dHomePt > 0 ? -140 : 120)
-
-            return (
-              <div className="odds-line">
-                <span className="odds-label">RL</span>
-                <span className="odds-val">
-                  {away.abbreviation} {dAwayPt > 0 ? '+' : ''}{dAwayPt}
-                  {` (${dAwayOdds > 0 ? '+' : ''}${Math.round(dAwayOdds)})`}
-                </span>
-                <span className="odds-val">
-                  {home.abbreviation} {dHomePt > 0 ? '+' : ''}{dHomePt}
-                  {` (${dHomeOdds > 0 ? '+' : ''}${Math.round(dHomeOdds)})`}
-                </span>
-              </div>
-            )
-          })()}
-        </div>
-      )}
-
-      {/* Game time or status */}
-      <div className="game-meta">
-        {isPre && (
-          <span className="game-time">
-            {new Date(game.date).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
-          </span>
-        )}
-        {isLive && <span className="game-inning">{status.detail}</span>}
-        {game.broadcast && <span className="game-broadcast">{game.broadcast}</span>}
-      </div>
-    </div>
+    <GameCard
+      game={game}
+      bet={bet}
+      onClick={onClick}
+      insight={insight}
+      starters={starters}
+      odds={odds}
+    />
   )
 }
 
-function TeamRow({ team, isLive, isFinal }) {
+function MLBOddsGrid({ odds, home, away }) {
+  // MLB runline fallback: when sportsbook hasn't posted a real RL we
+  // synthesize ±1.5 off the ML side so the user still sees a spread line.
+  const hasReal = odds.away_spread_point != null || odds.home_spread_point != null
+  const homeFav = odds.home_ml && odds.away_ml && odds.home_ml < odds.away_ml
+  const dAwayPt = hasReal ? odds.away_spread_point : (homeFav ? 1.5 : -1.5)
+  const dHomePt = hasReal ? odds.home_spread_point : (homeFav ? -1.5 : 1.5)
+  const dAwayOdds = odds.away_spread_odds || (dAwayPt > 0 ? -140 : 120)
+  const dHomeOdds = odds.home_spread_odds || (dHomePt > 0 ? -140 : 120)
+
   return (
-    <div className="game-team">
-      {team.logo && <img src={team.logo} alt="" className="team-logo" />}
-      <span className="team-abbr">{team.abbreviation}</span>
-      <span className="team-name">{team.name}</span>
-      <span className="team-record">{team.record}</span>
-      {team.streak && <span className="team-streak">{team.streak}</span>}
-      {(isLive || isFinal) && (
-        <span className={`game-score ${team.winner ? 'winner' : ''}`}>{team.score}</span>
+    <div className="game-odds-grid">
+      {(odds.home_ml || odds.away_ml) && (
+        <div className="odds-line">
+          <span className="odds-label">ML</span>
+          <span className="odds-val">{away.abbreviation} {odds.away_ml > 0 ? '+' : ''}{odds.away_ml || '-'}</span>
+          <span className="odds-val">{home.abbreviation} {odds.home_ml > 0 ? '+' : ''}{odds.home_ml || '-'}</span>
+        </div>
       )}
+      {odds.over_under && (
+        <div className="odds-line">
+          <span className="odds-label">O/U</span>
+          <span className="odds-val">o{odds.over_under} {odds.over_odds ? `(${Math.round(odds.over_odds) > 0 ? '+' : ''}${Math.round(odds.over_odds)})` : ''}</span>
+          <span className="odds-val">u{odds.over_under} {odds.under_odds ? `(${Math.round(odds.under_odds) > 0 ? '+' : ''}${Math.round(odds.under_odds)})` : ''}</span>
+        </div>
+      )}
+      <div className="odds-line">
+        <span className="odds-label">RL</span>
+        <span className="odds-val">
+          {away.abbreviation} {dAwayPt > 0 ? '+' : ''}{dAwayPt}
+          {` (${dAwayOdds > 0 ? '+' : ''}${Math.round(dAwayOdds)})`}
+        </span>
+        <span className="odds-val">
+          {home.abbreviation} {dHomePt > 0 ? '+' : ''}{dHomePt}
+          {` (${dHomeOdds > 0 ? '+' : ''}${Math.round(dHomeOdds)})`}
+        </span>
+      </div>
     </div>
   )
 }

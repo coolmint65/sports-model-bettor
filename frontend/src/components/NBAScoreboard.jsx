@@ -1,5 +1,4 @@
-import EdgeBadge from './primitives/EdgeBadge'
-import WinProbBar from './primitives/WinProbBar'
+import GameCard from './primitives/GameCard'
 
 export default function NBAScoreboard({ games, loading, progress, onSelectGame, bestBets }) {
   if (loading) {
@@ -145,50 +144,10 @@ function NBAGameCard({ game, bet, onClick }) {
   const { home, away, status } = game
   const isLive = status.state === 'in'
   const isFinal = status.state === 'post'
-  const isPre = status.state === 'pre'
-  const conf = bet?.confidence || 'skip'
   const q1 = game.q1 || {}
 
-  return (
-    <div className={`game-card ${isLive ? 'live' : ''} card-${conf}`} onClick={onClick}>
-      {isLive && <div className="live-badge">LIVE</div>}
-      {isFinal && <div className="final-badge">FINAL</div>}
-
-      {/* Q1 pick badge - only for pregame games */}
-      {isPre && (
-        bet && bet.best_pick && conf !== 'skip'
-          ? <EdgeBadge pick={bet.best_pick} confidence={conf} accent="q1" />
-          : <EdgeBadge empty />
-      )}
-
-      {/* One-pick-per-card rule: the scoreboard shows only the highest-
-          conviction play for the game. Secondary picks are still in the
-          response (bet.all_picks) so the GameDetail drilldown can list
-          them; the card is reserved for "this is THE play" signal. */}
-{/* Rest indicators */}
-      {isPre && bet?.rest && (bet.rest.home_b2b || bet.rest.away_b2b) && (
-        <div style={{display:'flex',gap:4,flexWrap:'wrap',marginBottom:6}}>
-          {bet.rest.away_b2b && (
-            <span style={{fontSize:'0.66rem',fontWeight:700,padding:'2px 6px',borderRadius:4,background:'rgba(239,68,68,0.15)',color:'#ef4444',border:'1px solid rgba(239,68,68,0.3)'}}>
-              {away.abbreviation} B2B
-            </span>
-          )}
-          {bet.rest.home_b2b && (
-            <span style={{fontSize:'0.66rem',fontWeight:700,padding:'2px 6px',borderRadius:4,background:'rgba(239,68,68,0.15)',color:'#ef4444',border:'1px solid rgba(239,68,68,0.3)'}}>
-              {home.abbreviation} B2B
-            </span>
-          )}
-        </div>
-      )}
-
-      {/* Team rows */}
-      <div className="game-teams">
-        <NBATeamRow team={away} isLive={isLive} isFinal={isFinal} />
-        <div className="game-at">@</div>
-        <NBATeamRow team={home} isLive={isLive} isFinal={isFinal} />
-      </div>
-
-      {/* Q1 score display for live/final games */}
+  const liveExtras = (
+    <>
       {(isLive || isFinal) && q1.home != null && q1.away != null && (
         <div className="q1-score-display">
           <span className="q1-label">Q1</span>
@@ -197,78 +156,56 @@ function NBAGameCard({ game, bet, onClick }) {
           <span className="q1-score-home">{home.abbreviation} {q1.home}</span>
         </div>
       )}
-
-      {/* Quarter indicator for live games */}
       {isLive && (
-        <div style={{textAlign:'center',fontSize:'0.72rem',color:'#94a3b8',marginTop:2}}>
-          {status.detail}
-        </div>
+        <div className="live-quarter-indicator">{status.detail}</div>
       )}
+    </>
+  )
 
-      {/* Win probability bar */}
-      {isPre && bet?.win_prob?.home != null && (
-        <WinProbBar wp={bet.win_prob} home={home} away={away} />
-      )}
+  const odds = game.odds ? <NBAOddsGrid odds={game.odds} home={home} away={away} /> : null
 
-      {/* Odds - Q1 focused */}
-      {game.odds && (
-        <div className="game-odds-grid">
-          {/* Spread */}
-          {(game.odds.home_spread_point != null || game.odds.away_spread_point != null) && (
-            <div className="odds-line">
-              <span className="odds-label">SPR</span>
-              <span className="odds-val">
-                {away.abbreviation} {game.odds.away_spread_point > 0 ? '+' : ''}{game.odds.away_spread_point || '-'}
-                {game.odds.away_spread_odds ? ` (${game.odds.away_spread_odds > 0 ? '+' : ''}${Math.round(game.odds.away_spread_odds)})` : ''}
-              </span>
-              <span className="odds-val">
-                {home.abbreviation} {game.odds.home_spread_point > 0 ? '+' : ''}{game.odds.home_spread_point || '-'}
-                {game.odds.home_spread_odds ? ` (${game.odds.home_spread_odds > 0 ? '+' : ''}${Math.round(game.odds.home_spread_odds)})` : ''}
-              </span>
-            </div>
-          )}
-          {/* O/U */}
-          {game.odds.over_under && (
-            <div className="odds-line">
-              <span className="odds-label">O/U</span>
-              <span className="odds-val">o{game.odds.over_under} {game.odds.over_odds ? `(${Math.round(game.odds.over_odds) > 0 ? '+' : ''}${Math.round(game.odds.over_odds)})` : ''}</span>
-              <span className="odds-val">u{game.odds.over_under} {game.odds.under_odds ? `(${Math.round(game.odds.under_odds) > 0 ? '+' : ''}${Math.round(game.odds.under_odds)})` : ''}</span>
-            </div>
-          )}
-          {/* ML */}
-          {(game.odds.home_ml || game.odds.away_ml) && (
-            <div className="odds-line">
-              <span className="odds-label">ML</span>
-              <span className="odds-val">{away.abbreviation} {game.odds.away_ml > 0 ? '+' : ''}{game.odds.away_ml || '-'}</span>
-              <span className="odds-val">{home.abbreviation} {game.odds.home_ml > 0 ? '+' : ''}{game.odds.home_ml || '-'}</span>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Game time or status */}
-      <div className="game-meta">
-        {isPre && (
-          <span className="game-time">
-            {new Date(game.date).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
-          </span>
-        )}
-        {game.broadcast && <span className="game-broadcast">{game.broadcast}</span>}
-      </div>
-    </div>
+  return (
+    <GameCard
+      game={game}
+      bet={bet}
+      onClick={onClick}
+      pickAccent="q1"
+      restTiredLabel="B2B"
+      liveExtras={liveExtras}
+      odds={odds}
+    />
   )
 }
 
-
-function NBATeamRow({ team, isLive, isFinal }) {
+function NBAOddsGrid({ odds, home, away }) {
   return (
-    <div className="game-team">
-      {team.logo && <img src={team.logo} alt="" className="team-logo" />}
-      <span className="team-abbr">{team.abbreviation}</span>
-      <span className="team-name">{team.name}</span>
-      <span className="team-record">{team.record}</span>
-      {(isLive || isFinal) && (
-        <span className={`game-score ${team.winner ? 'winner' : ''}`}>{team.score}</span>
+    <div className="game-odds-grid">
+      {(odds.home_spread_point != null || odds.away_spread_point != null) && (
+        <div className="odds-line">
+          <span className="odds-label">SPR</span>
+          <span className="odds-val">
+            {away.abbreviation} {odds.away_spread_point > 0 ? '+' : ''}{odds.away_spread_point || '-'}
+            {odds.away_spread_odds ? ` (${odds.away_spread_odds > 0 ? '+' : ''}${Math.round(odds.away_spread_odds)})` : ''}
+          </span>
+          <span className="odds-val">
+            {home.abbreviation} {odds.home_spread_point > 0 ? '+' : ''}{odds.home_spread_point || '-'}
+            {odds.home_spread_odds ? ` (${odds.home_spread_odds > 0 ? '+' : ''}${Math.round(odds.home_spread_odds)})` : ''}
+          </span>
+        </div>
+      )}
+      {odds.over_under && (
+        <div className="odds-line">
+          <span className="odds-label">O/U</span>
+          <span className="odds-val">o{odds.over_under} {odds.over_odds ? `(${Math.round(odds.over_odds) > 0 ? '+' : ''}${Math.round(odds.over_odds)})` : ''}</span>
+          <span className="odds-val">u{odds.over_under} {odds.under_odds ? `(${Math.round(odds.under_odds) > 0 ? '+' : ''}${Math.round(odds.under_odds)})` : ''}</span>
+        </div>
+      )}
+      {(odds.home_ml || odds.away_ml) && (
+        <div className="odds-line">
+          <span className="odds-label">ML</span>
+          <span className="odds-val">{away.abbreviation} {odds.away_ml > 0 ? '+' : ''}{odds.away_ml || '-'}</span>
+          <span className="odds-val">{home.abbreviation} {odds.home_ml > 0 ? '+' : ''}{odds.home_ml || '-'}</span>
+        </div>
       )}
     </div>
   )

@@ -388,6 +388,66 @@ button:focus-visible {
   font-size: 0.68rem;
 }
 
+/* ── Rest / fatigue chips (used by all three sports) ── */
+.rest-chips {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.rest-chip {
+  font-size: 0.66rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+}
+.rest-chip-warn {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--red-400);
+  border-color: rgba(239, 68, 68, 0.3);
+}
+.rest-chip-info {
+  background: rgba(96, 165, 250, 0.12);
+  color: var(--blue-300);
+  border-color: rgba(96, 165, 250, 0.25);
+}
+
+/* ── Line-moved chip (MLB + NHL) ── */
+.line-moved-chip-wrap { margin-bottom: 6px; }
+.line-moved-chip {
+  font-size: 0.66rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--amber-400);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+}
+.line-moved-chip.line-moved-major { color: var(--red-400); }
+
+/* ── NHL goalie marks on scorecard ── */
+.goalie-mark {
+  margin-left: 4px;
+  font-size: 0.7rem;
+  cursor: help;
+}
+.goalie-confirmed { color: var(--green-300); }
+.goalie-expected  { color: var(--amber-300); }
+.goalie-svpct {
+  font-size: 0.7rem;
+  margin-left: 6px;
+  cursor: help;
+}
+
+/* ── NBA live quarter indicator on scorecard ── */
+.live-quarter-indicator {
+  text-align: center;
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+  margin-top: 2px;
+}
+
 .edge-count {
   font-size: 0.75rem;
   font-weight: 500;
