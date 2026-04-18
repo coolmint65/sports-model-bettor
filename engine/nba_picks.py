@@ -23,6 +23,28 @@ def _implied_prob(american_odds: int) -> float:
     return 100 / (american_odds + 100)
 
 
+def _valid_odds(ml) -> bool:
+    """|ml| >= 100 shape check. See engine/picks.py for rationale."""
+    if ml is None:
+        return False
+    try:
+        ml = int(ml)
+    except (TypeError, ValueError):
+        return False
+    return abs(ml) >= 100
+
+
+def _sanitize_odds(odds: dict | None) -> dict:
+    """Null out _ml / _odds fields that aren't valid American prices."""
+    if not odds:
+        return {}
+    cleaned = dict(odds)
+    for k, v in list(cleaned.items()):
+        if (k.endswith("_ml") or k.endswith("_odds")) and not _valid_odds(v):
+            cleaned[k] = None
+    return cleaned
+
+
 def generate_q1_picks(home_abbr: str, away_abbr: str,
                       odds: dict | None = None,
                       season: int | None = None,
@@ -44,7 +66,7 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
     """
     from .nba_q1_predict import predict_q1
 
-    odds = odds or {}
+    odds = _sanitize_odds(odds)
     q1_spread = odds.get("q1_spread")
     q1_total = odds.get("q1_total")
 
@@ -178,7 +200,7 @@ def generate_q1_picks_with_context(home_abbr: str, away_abbr: str,
     """Generate Q1 picks and return both picks and the full prediction context."""
     from .nba_q1_predict import predict_q1
 
-    odds = odds or {}
+    odds = _sanitize_odds(odds)
     q1_spread = odds.get("q1_spread")
     q1_total = odds.get("q1_total")
 

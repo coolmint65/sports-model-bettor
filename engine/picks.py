@@ -25,6 +25,37 @@ def _implied(ml: int) -> float:
     return 100 / (ml + 100)
 
 
+def _valid_odds(ml) -> bool:
+    """Shape check: real American odds are |ml| >= 100.
+
+    Guards against garbage values (-2, +3, 0) that some upstream odds
+    parsers have leaked into the odds dict. Left unguarded, -2 reads as
+    1.96% implied, which inflates edge by ~70pp and triggers a $5000
+    profit on a $100 "win" via the payout formula.
+    """
+    if ml is None:
+        return False
+    try:
+        ml = int(ml)
+    except (TypeError, ValueError):
+        return False
+    return abs(ml) >= 100
+
+
+def _sanitize_odds(odds: dict | None) -> dict:
+    """Null out any *_ml / *_odds field that fails the _valid_odds shape
+    check. Run once at the top of generate_picks so every downstream
+    guard (which already tests `if x and x >= JUICE_WALL`) naturally
+    skips invalid values without extra inline checks."""
+    if not odds:
+        return {}
+    cleaned = dict(odds)
+    for k, v in list(cleaned.items()):
+        if (k.endswith("_ml") or k.endswith("_odds")) and not _valid_odds(v):
+            cleaned[k] = None
+    return cleaned
+
+
 def _payout(odds: int, won: bool) -> float:
     """Calculate profit on a $100 bet."""
     if won:
@@ -80,7 +111,7 @@ def generate_picks(home_team_id: int, away_team_id: int,
     if "error" in pred or not pred:
         return []
 
-    odds = odds or {}
+    odds = _sanitize_odds(odds)
     wp = pred.get("win_prob", {})
     rl = pred.get("run_line", {})
     fi = pred.get("first_inning", {})

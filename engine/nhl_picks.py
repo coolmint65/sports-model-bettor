@@ -29,6 +29,28 @@ def _implied(ml: int) -> float:
     return 100 / (ml + 100)
 
 
+def _valid_odds(ml) -> bool:
+    """|ml| >= 100 shape check. See engine/picks.py for rationale."""
+    if ml is None:
+        return False
+    try:
+        ml = int(ml)
+    except (TypeError, ValueError):
+        return False
+    return abs(ml) >= 100
+
+
+def _sanitize_odds(odds: dict | None) -> dict:
+    """Null out _ml / _odds fields that aren't valid American prices."""
+    if not odds:
+        return {}
+    cleaned = dict(odds)
+    for k, v in list(cleaned.items()):
+        if (k.endswith("_ml") or k.endswith("_odds")) and not _valid_odds(v):
+            cleaned[k] = None
+    return cleaned
+
+
 def generate_nhl_picks(home_key: str, away_key: str,
                        odds: dict | None = None) -> list[dict]:
     """
@@ -73,7 +95,7 @@ def generate_nhl_picks_with_context(home_key: str, away_key: str,
         logger.debug("NHL ensemble blend failed: %s", e)
         pred["ensemble"] = {}
 
-    odds = odds or {}
+    odds = _sanitize_odds(odds)
     wp = pred["win_prob"]
     pl = pred["puck_line"]
 

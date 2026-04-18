@@ -281,6 +281,11 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
         best = picks[0]
         if best["edge"] < min_edge:
             continue
+        from .nhl_picks import _valid_odds as _nhl_valid
+        if not _nhl_valid(best.get("odds")):
+            logger.warning("Skipping NHL pick with invalid odds=%s for %s",
+                           best.get("odds"), matchup)
+            continue
 
         conn.execute("""
             INSERT INTO nhl_picks (game_id, date, matchup, bet_type, pick,

@@ -229,7 +229,10 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
         return []
 
     # Fetch real odds once for all games
-    from .picks import generate_picks, get_best_pick, fetch_real_odds_for_games, match_odds
+    from .picks import (
+        generate_picks, get_best_pick, fetch_real_odds_for_games,
+        match_odds, _valid_odds,
+    )
 
     all_odds = fetch_real_odds_for_games()
 
@@ -277,9 +280,17 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
             odds=game_odds,
         )
 
-        # Take the best pick
+        # Take the best pick. Defense-in-depth odds sanity check -- if a
+        # pick somehow slipped through generate_picks with |odds| < 100
+        # (nonsense American price), don't record it. generate_picks now
+        # sanitizes the odds dict, but guard at the write boundary too so
+        # this can never re-manifest without a fresh bug upstream.
         best = get_best_pick(picks)
         if not best or best["edge"] < min_edge:
+            continue
+        if not _valid_odds(best.get("odds")):
+            logger.warning("Skipping pick with invalid odds=%s for %s",
+                           best.get("odds"), matchup)
             continue
 
         conn.execute("""
@@ -302,7 +313,10 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
 def _record_from_scoreboard(conn, scoreboard: list, target_date: str,
                             min_edge: float) -> list[dict]:
     """Record picks using live scoreboard data when DB has no games."""
-    from .picks import generate_picks, get_best_pick, match_odds, fetch_real_odds_for_games
+    from .picks import (
+        generate_picks, get_best_pick, match_odds, fetch_real_odds_for_games,
+        _valid_odds,
+    )
 
     all_odds = fetch_real_odds_for_games()
     recorded = []
