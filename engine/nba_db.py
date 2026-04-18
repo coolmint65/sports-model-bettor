@@ -197,6 +197,22 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     CREATE INDEX IF NOT EXISTS idx_nba_players_team ON nba_players(team_id);
     CREATE INDEX IF NOT EXISTS idx_nba_players_season ON nba_players(team_id, season);
     CREATE INDEX IF NOT EXISTS idx_nba_injuries_team ON nba_injuries(team_id);
+
+    -- Synthetic calibration samples backfilled from historical games.
+    -- Mirrors the MLB / NHL versions. See engine/empirical_calibration.py.
+    CREATE TABLE IF NOT EXISTS calibration_samples (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        game_id     TEXT NOT NULL,
+        date        TEXT NOT NULL,
+        bet_type    TEXT NOT NULL,
+        pick        TEXT,
+        model_prob  REAL NOT NULL,
+        result      TEXT NOT NULL,
+        created_at  TEXT DEFAULT (datetime('now')),
+        UNIQUE(game_id, bet_type)
+    );
+    CREATE INDEX IF NOT EXISTS idx_nba_calsamp_bet_prob
+        ON calibration_samples(bet_type, model_prob);
     """)
     conn.commit()
 

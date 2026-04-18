@@ -204,6 +204,24 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         UNIQUE(team_id, season)
     );
     CREATE INDEX IF NOT EXISTS idx_nhl_p1_stats_team ON nhl_p1_stats(team_id, season);
+
+    -- Synthetic calibration samples backfilled from historical games.
+    -- Mirrors the MLB calibration_samples table (engine/db.py); the
+    -- calibrator UNIONs this with nhl_picks so pick probabilities get
+    -- recalibrated against observed outcomes. Not real picks.
+    CREATE TABLE IF NOT EXISTS calibration_samples (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        game_id     INTEGER NOT NULL,
+        date        TEXT NOT NULL,
+        bet_type    TEXT NOT NULL,
+        pick        TEXT,
+        model_prob  REAL NOT NULL,
+        result      TEXT NOT NULL,
+        created_at  TEXT DEFAULT (datetime('now')),
+        UNIQUE(game_id, bet_type)
+    );
+    CREATE INDEX IF NOT EXISTS idx_nhl_calsamp_bet_prob
+        ON calibration_samples(bet_type, model_prob);
     """)
     conn.commit()
 
