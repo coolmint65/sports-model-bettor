@@ -235,6 +235,25 @@ def generate_nhl_picks_with_context(home_key: str, away_key: str,
         p["prob_high"] = round(min(1.0, prob + ci_hw), 4)
         p["ci_half_width"] = ci_hw
 
+    # Empirical recalibration. Same shape as engine/picks.py: replace
+    # each pick's prob with the bucket's empirical NHL win-rate from the
+    # nhl_picks tracker, then recompute edge against the calibrated
+    # prob. Buckets without enough samples (MIN_BUCKET_N) pass through
+    # unchanged so cold-start picks aren't penalised.
+    from .empirical_calibration import calibrate as _calibrate
+    for p in picks:
+        prob = p.get("prob")
+        odds = p.get("odds")
+        if prob is None:
+            continue
+        cal = _calibrate(p["type"], float(prob), sport="nhl")
+        p["prob_raw"] = round(float(prob), 4)
+        p["prob"] = round(float(cal), 4)
+        if odds is not None and _valid_odds(odds):
+            p["edge"] = round((cal - _implied(int(odds))) * 100, 1)
+    # Drop picks that flipped to negative edge after calibration.
+    picks = [p for p in picks if (p.get("edge") or 0) > 0]
+
     # Adjusted EV: edge * reliability weight
     for p in picks:
         reliability = NHL_BET_RELIABILITY.get(p["type"], 0.5)

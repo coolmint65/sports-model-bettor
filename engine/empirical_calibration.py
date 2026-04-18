@@ -37,7 +37,11 @@ logger = logging.getLogger(__name__)
 # Minimum samples per (bet_type, bucket) before we trust the empirical
 # real_wr enough to override the model's raw prediction. Below this we
 # pass the raw prob through unchanged so we don't over-fit small samples.
-MIN_BUCKET_N = 5
+# Set to 10 because at N=5-9 a single bad streak can make a bucket look
+# like 15% real WR when underlying truth is closer to 50%; that level of
+# noise actively misleads the picks engine. 10 trades cold-start coverage
+# for fewer false-positive recalibrations.
+MIN_BUCKET_N = 10
 
 # Buckets are open-on-the-right intervals: [lo, hi). The "raw" bucket
 # label is also used as the lookup key.
@@ -52,10 +56,18 @@ _BUCKETS = [
     (0.80, 1.01),
 ]
 
-# Loaded calibration: {bet_type_normalized: [(lo, hi, real_wr), ...]}
-_TABLE: dict[str, list[tuple[float, float, float]]] = {}
+# Per-sport calibration tables: {sport: {bet_type: [(lo, hi, real_wr)]}}
+_TABLE: dict[str, dict[str, list[tuple[float, float, float]]]] = {}
 _TABLE_LOCK = threading.Lock()
-_TABLE_LOADED = False
+_TABLE_LOADED: dict[str, bool] = {}
+
+# Per-sport pick-table location. Each sport has its own SQLite DB and
+# its own picks-table name. Adding a sport = one entry here.
+_SPORT_SOURCES = {
+    "mlb": ("engine.db",     "picks"),
+    "nhl": ("engine.nhl_db", "nhl_picks"),
+    "nba": ("engine.nba_db", "nba_picks"),
+}
 
 
 def _normalize_bet_type(bt: str) -> str:
@@ -69,26 +81,29 @@ def _normalize_bet_type(bt: str) -> str:
     return bt
 
 
-def calibrate(bet_type: str, raw_prob: float) -> float:
-    """Map a raw model probability to the empirical win-rate bucket.
+def calibrate(bet_type: str, raw_prob: float, sport: str = "mlb") -> float:
+    """Map a raw model probability to the empirical win-rate bucket
+    for `sport`.
 
     Falls back to raw passthrough when:
-      - The calibration table hasn't been built yet (cold start)
-      - This bet_type has no data
+      - The sport's calibration table hasn't been built yet (cold start)
+      - This bet_type has no data for the sport
       - The matched bucket has fewer than MIN_BUCKET_N samples
     """
     if raw_prob is None:
         return raw_prob
-    if not _TABLE_LOADED:
+    if not _TABLE_LOADED.get(sport):
         # Lazy-load on first call so callers don't need to know about it.
         try:
-            refresh_calibration()
+            refresh_calibration(sport)
         except Exception as e:
-            logger.debug("calibration load failed; passthrough: %s", e)
+            logger.debug("calibration load failed (%s): passthrough: %s",
+                         sport, e)
             return raw_prob
 
     bt = _normalize_bet_type(bet_type)
-    rows = _TABLE.get(bt)
+    sport_table = _TABLE.get(sport, {})
+    rows = sport_table.get(bt)
     if not rows:
         return raw_prob
 
@@ -102,7 +117,8 @@ def calibrate(bet_type: str, raw_prob: float) -> float:
     return rows[-1][2]
 
 
-def calibrated_edge(bet_type: str, raw_prob: float, odds: int) -> float:
+def calibrated_edge(bet_type: str, raw_prob: float, odds: int,
+                    sport: str = "mlb") -> float:
     """Edge = calibrated_prob - implied_prob, in percentage points.
 
     Use this everywhere the picks pipeline currently does
@@ -114,36 +130,45 @@ def calibrated_edge(bet_type: str, raw_prob: float, odds: int) -> float:
         implied = abs(odds) / (abs(odds) + 100)
     else:
         implied = 100.0 / (odds + 100)
-    cal = calibrate(bet_type, raw_prob)
+    cal = calibrate(bet_type, raw_prob, sport=sport)
     return (cal - implied) * 100.0
 
 
-def refresh_calibration() -> dict:
-    """Rebuild _TABLE from the picks table. Returns a summary dict for
-    callers that want to log how many buckets were filled."""
-    global _TABLE_LOADED
-    summary = {"buckets_filled": 0, "buckets_passthrough": 0,
-               "total_rows": 0}
+def refresh_calibration(sport: str = "mlb") -> dict:
+    """Rebuild the calibration table for `sport` from its picks table.
+    Returns a summary dict for callers that want to log progress."""
+    summary = {"sport": sport, "buckets_filled": 0,
+               "buckets_passthrough": 0, "total_rows": 0}
+    src = _SPORT_SOURCES.get(sport)
+    if not src:
+        logger.warning("calibration: unknown sport %r", sport)
+        return summary
+    db_module_name, table_name = src
+
     try:
-        from .db import get_conn
+        import importlib
+        db_module = importlib.import_module(db_module_name)
+        get_conn = db_module.get_conn
     except Exception as e:
-        logger.warning("calibration: cannot import db: %s", e)
+        logger.warning("calibration: cannot import %s: %s",
+                       db_module_name, e)
         return summary
 
     try:
         rows = get_conn().execute(
-            "SELECT bet_type, model_prob, result FROM picks "
+            f"SELECT bet_type, model_prob, result FROM {table_name} "
             "WHERE result IN ('W', 'L') AND model_prob IS NOT NULL"
         ).fetchall()
     except Exception as e:
-        logger.warning("calibration: query failed: %s", e)
+        logger.warning("calibration: query on %s failed: %s",
+                       table_name, e)
         return summary
 
     summary["total_rows"] = len(rows)
     if not rows:
         with _TABLE_LOCK:
-            _TABLE.clear()
-            _TABLE_LOADED = True
+            _TABLE[sport] = {}
+            _TABLE_LOADED[sport] = True
         return summary
 
     # Count W and total per (bet_type, bucket).
@@ -178,21 +203,28 @@ def refresh_calibration() -> dict:
         new_table[bt].sort(key=lambda row: row[0])
 
     with _TABLE_LOCK:
-        _TABLE.clear()
-        _TABLE.update(new_table)
-        _TABLE_LOADED = True
+        _TABLE[sport] = dict(new_table)
+        _TABLE_LOADED[sport] = True
 
-    logger.info("calibration: built table from %d rows -- %d buckets "
+    logger.info("calibration[%s]: built from %d rows -- %d buckets "
                 "filled, %d passthrough",
-                summary["total_rows"], summary["buckets_filled"],
+                sport, summary["total_rows"], summary["buckets_filled"],
                 summary["buckets_passthrough"])
     return summary
 
 
-def snapshot() -> dict:
-    """Return the current calibration table for debugging / health."""
+def refresh_all_sports() -> dict:
+    """Refresh every sport in _SPORT_SOURCES. Returns per-sport summaries."""
+    return {sport: refresh_calibration(sport) for sport in _SPORT_SOURCES}
+
+
+def snapshot(sport: str | None = None) -> dict:
+    """Return the calibration table for `sport`, or all sports when None."""
     with _TABLE_LOCK:
-        return {bt: list(rows) for bt, rows in _TABLE.items()}
+        if sport is None:
+            return {s: {bt: list(rows) for bt, rows in tbl.items()}
+                    for s, tbl in _TABLE.items()}
+        return {bt: list(rows) for bt, rows in _TABLE.get(sport, {}).items()}
 
 
 def _bucket_for(p: float) -> tuple[float, float] | None:

@@ -184,6 +184,21 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
                 "odds": away_ml_odds,
             })
 
+    # Empirical recalibration from the nba_picks tracker. See
+    # engine/picks.py for the same pattern applied to MLB.
+    from .empirical_calibration import calibrate as _calibrate
+    for p in picks:
+        prob = p.get("prob")
+        odds = p.get("odds")
+        if prob is None:
+            continue
+        cal = _calibrate(p["type"], float(prob), sport="nba")
+        p["prob_raw"] = round(float(prob), 4)
+        p["prob"] = round(float(cal), 4)
+        if odds is not None and _valid_odds(odds):
+            p["edge"] = round((cal - _implied_prob(int(odds))) * 100, 1)
+    picks = [p for p in picks if (p.get("edge") or 0) > 0]
+
     # Adjusted EV: edge * reliability weight
     for p in picks:
         reliability = NBA_BET_RELIABILITY.get(p["type"], 0.5)

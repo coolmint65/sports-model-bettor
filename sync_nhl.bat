@@ -50,6 +50,10 @@ echo Settling completed NHL picks...
 python -m engine.nhl_tracker --settle
 
 echo.
+echo Refreshing empirical NHL pick-prob calibration...
+python -c "from engine.empirical_calibration import refresh_calibration; print(refresh_calibration('nhl'))" 2>nul
+
+echo.
 echo Updating POTD closing odds (CLV capture)...
 python -c "from engine.pick_of_day import update_potd_closing_odds; print(update_potd_closing_odds('nhl'))" 2>nul
 

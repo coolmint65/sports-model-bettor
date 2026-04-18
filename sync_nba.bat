@@ -38,6 +38,10 @@ echo Settling completed NBA picks...
 python -m engine.nba_tracker --settle
 
 echo.
+echo Refreshing empirical NBA pick-prob calibration...
+python -c "from engine.empirical_calibration import refresh_calibration; print(refresh_calibration('nba'))" 2>nul
+
+echo.
 echo Updating POTD closing odds (CLV capture)...
 python -c "from engine.pick_of_day import update_potd_closing_odds; print(update_potd_closing_odds('nba'))" 2>nul
 
