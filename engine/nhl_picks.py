@@ -43,22 +43,29 @@ def generate_nhl_picks(home_key: str, away_key: str,
 
 
 def generate_nhl_picks_with_context(home_key: str, away_key: str,
-                                    odds: dict | None = None
+                                    odds: dict | None = None,
+                                    pred: dict | None = None,
                                     ) -> tuple[list[dict], dict]:
     """
     Generate NHL picks and return both the picks list and a context dict
     with rest, injuries, and other metadata so callers can surface b2b
     warnings and injury impact without re-running the full prediction.
+
+    When `pred` is provided the factor pipeline is skipped; callers that
+    pre-compute MC + GBM alongside the factor model pass the augmented
+    dict in so ensemble_nhl() blends all three signals. Without it we
+    fall back to factor-only (legacy behavior).
     """
     from .nhl_predict import predict_matchup
 
-    pred = predict_matchup(home_key, away_key)
+    if pred is None:
+        pred = predict_matchup(home_key, away_key)
     if not pred:
         return [], {}
 
-    # Compute the ensemble blend (factor + MC when ENABLE_NHL_MC is
-    # on; GBM isn't wired for NHL yet). Safe to call even when MC
-    # didn't run -- ensemble_nhl just returns factor-only values.
+    # Compute the ensemble blend. pred may already carry factor + MC +
+    # GBM (when the backend helper ran them); if only factor is present
+    # ensemble_nhl collapses to factor-only.
     try:
         from .ensemble import ensemble_nhl
         pred["ensemble"] = ensemble_nhl(pred)

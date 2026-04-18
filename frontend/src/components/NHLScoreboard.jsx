@@ -1,9 +1,19 @@
-export default function NHLScoreboard({ games, loading, onSelectGame, bestBets }) {
+export default function NHLScoreboard({ games, loading, progress, onSelectGame, bestBets }) {
   if (loading) {
+    const total = progress?.total || 0
+    const done = progress?.done || 0
+    const pct = total ? Math.min(100, Math.round((done / total) * 100)) : null
+    const phase = progress?.phase
+    let label = 'Loading NHL games...'
+    if (phase === 'predicting' && total > 0) {
+      label = `Computing predictions: ${done}/${total} games (${pct}%)`
+    } else if (phase === 'building') {
+      label = 'Assembling picks...'
+    }
     return (
       <div className="loading">
         <div className="spinner" />
-        <p>Loading NHL games...</p>
+        <p>{label}</p>
       </div>
     )
   }

@@ -626,30 +626,37 @@ from .nba_picks import generate_q1_picks, generate_q1_picks_with_context  # noqa
 
 def predict_q1_matchup(home_abbr: str, away_abbr: str,
                        odds: dict | None = None,
-                       season: int | None = None) -> dict | None:
+                       season: int | None = None,
+                       pred: dict | None = None) -> dict | None:
     """Predict a Q1 matchup and include pick list for the server endpoint.
 
     Returns the full prediction dict plus a "picks" key with edge-ranked
     pick candidates. Returns None if prediction fails.
+
+    When `pred` is provided the factor pipeline is skipped; callers that
+    pre-compute MC + GBM alongside the factor model pass the augmented
+    dict in so ensemble_nba() blends all three signals through
+    generate_q1_picks. Without it we fall back to factor-only.
     """
     odds = odds or {}
     q1_spread = odds.get("q1_spread")
     q1_total = odds.get("q1_total")
 
-    try:
-        pred = predict_q1(home_abbr, away_abbr,
-                          spread=q1_spread, total=q1_total, season=season)
-    except Exception as e:
-        # Elevated from silent swallow to warning so upstream bugs
-        # (missing DB data, schema mismatch, etc.) surface in logs
-        # instead of silently producing "no prediction available".
-        logger.warning("predict_q1 failed for %s/%s: %s",
-                       home_abbr, away_abbr, e, exc_info=True)
-        return None
+    if pred is None:
+        try:
+            pred = predict_q1(home_abbr, away_abbr,
+                              spread=q1_spread, total=q1_total, season=season)
+        except Exception as e:
+            # Elevated from silent swallow to warning so upstream bugs
+            # (missing DB data, schema mismatch, etc.) surface in logs
+            # instead of silently producing "no prediction available".
+            logger.warning("predict_q1 failed for %s/%s: %s",
+                           home_abbr, away_abbr, e, exc_info=True)
+            return None
     if not pred:
         return None
 
-    picks = generate_q1_picks(home_abbr, away_abbr, odds, season)
+    picks = generate_q1_picks(home_abbr, away_abbr, odds, season, pred=pred)
 
     # Tag confidence (thresholds centralised in engine.config)
     from .config import EDGE_STRONG, EDGE_MODERATE, EDGE_LEAN, EDGE_SKIP

@@ -796,29 +796,36 @@ _PRED_CACHE: dict = {}
 _PRED_CACHE_LOCK = _threading.Lock()
 _PRED_CACHE_TTL_S = 300
 
-# /api/best-bets progress state for the spinner. Frontend polls
-# /api/best-bets/progress to render a percentage instead of an
-# indeterminate spinner during the multi-minute cold load. Single-flight:
-# concurrent dashboard requests share the same counter, which is fine
-# because they're predicting the same slate.
-_BB_PROGRESS: dict = {"total": 0, "done": 0, "phase": "idle",
-                      "started_at": None, "finished_at": None}
+# Per-sport /best-bets progress state for the spinner. Frontend polls
+# /api/<sport>/best-bets/progress to render a percentage instead of an
+# indeterminate spinner during the multi-minute cold load. Each sport
+# has its own counter so parallel dashboard mounts don't stomp on each
+# other's totals.
+_BB_PROGRESS: dict = {
+    "mlb": {"total": 0, "done": 0, "phase": "idle",
+            "started_at": None, "finished_at": None},
+    "nhl": {"total": 0, "done": 0, "phase": "idle",
+            "started_at": None, "finished_at": None},
+    "nba": {"total": 0, "done": 0, "phase": "idle",
+            "started_at": None, "finished_at": None},
+}
 _BB_PROGRESS_LOCK = _threading.Lock()
 
 
-def _bb_progress_set(**fields) -> None:
+def _bb_progress_set(sport: str = "mlb", **fields) -> None:
     with _BB_PROGRESS_LOCK:
-        _BB_PROGRESS.update(fields)
+        _BB_PROGRESS.setdefault(sport, {}).update(fields)
 
 
-def _bb_progress_increment() -> None:
+def _bb_progress_increment(sport: str = "mlb") -> None:
     with _BB_PROGRESS_LOCK:
-        _BB_PROGRESS["done"] = _BB_PROGRESS.get("done", 0) + 1
+        bucket = _BB_PROGRESS.setdefault(sport, {})
+        bucket["done"] = bucket.get("done", 0) + 1
 
 
-def _bb_progress_snapshot() -> dict:
+def _bb_progress_snapshot(sport: str = "mlb") -> dict:
     with _BB_PROGRESS_LOCK:
-        return dict(_BB_PROGRESS)
+        return dict(_BB_PROGRESS.get(sport, {}))
 
 
 def _pred_cache_get(key: tuple):
@@ -926,6 +933,123 @@ def _predict_mlb_full(home_team_id: int, away_team_id: int,
     except Exception as e:
         logger.debug("MLB ensemble blend failed: %s", e)
         result["ensemble"] = {}
+
+    if use_cache:
+        _pred_cache_put(cache_key, result)
+    return result
+
+
+def _predict_nhl_full(home_key: str, away_key: str,
+                     use_cache: bool = True) -> dict | None:
+    """Run factor + MC + GBM for NHL so generate_nhl_picks_with_context
+    can blend via ensemble_nhl. Same caching shape as MLB."""
+    cache_key = ("nhl", home_key, away_key)
+    if use_cache:
+        cached = _pred_cache_get(cache_key)
+        if cached is not None:
+            return cached
+
+    from engine.nhl_predict import predict_matchup as _nhl_pm
+    result = _nhl_pm(home_key, away_key)
+    if not result:
+        return None
+
+    from engine.config import get_flag as _get_flag
+
+    if _get_flag("ENABLE_NHL_MC", False, sport="nhl"):
+        try:
+            from engine.mc_nhl_run import run_nhl_mc
+            import engine.config as _cfg
+            home_abbr = (result.get("home") or {}).get("abbreviation") or home_key
+            away_abbr = (result.get("away") or {}).get("abbreviation") or away_key
+            result["mc"] = run_nhl_mc(
+                home_abbr, away_abbr,
+                n_sims=int(getattr(_cfg, "NHL_MC_N_SIMS", 50_000)),
+            )
+        except Exception as e:
+            logger.warning("NHL MC failed for %s/%s: %s", home_key, away_key, e)
+            result["mc"] = {"error": str(e)}
+
+    if _get_flag("ENABLE_NHL_GBM", False, sport="nhl"):
+        try:
+            from engine.gbm.predict import predict_nhl as _gbm_predict_nhl
+            from engine.nhl_db import get_conn as _nhl_conn
+            home_tid = (result.get("home") or {}).get("id")
+            away_tid = (result.get("away") or {}).get("id")
+            if home_tid and away_tid:
+                result["gbm"] = _gbm_predict_nhl(_nhl_conn(), {
+                    "home_team_id": int(home_tid),
+                    "away_team_id": int(away_tid),
+                    "date": datetime.now().strftime("%Y-%m-%d"),
+                    "game_type": 2,
+                })
+        except Exception as e:
+            logger.warning("NHL GBM failed for %s/%s: %s", home_key, away_key, e)
+            result["gbm"] = {"error": str(e)}
+
+    if use_cache:
+        _pred_cache_put(cache_key, result)
+    return result
+
+
+def _predict_nba_full(home_abbr: str, away_abbr: str,
+                     odds: dict | None = None,
+                     use_cache: bool = True) -> dict | None:
+    """Run factor + MC + GBM for NBA Q1 so generate_q1_picks can blend
+    via ensemble_nba. Cached per (home, away) tuple; odds are pulled
+    fresh each time since they change intra-day."""
+    # Cache on pred only -- picks are rebuilt each request because they
+    # depend on live odds. The factor+MC+GBM chain doesn't need odds so
+    # caching it independently keeps the cache hit rate high.
+    cache_key = ("nba", home_abbr, away_abbr)
+    if use_cache:
+        cached = _pred_cache_get(cache_key)
+        if cached is not None:
+            return cached
+
+    from engine.nba_q1_predict import predict_q1
+    odds = odds or {}
+    q1_spread = odds.get("q1_spread")
+    q1_total = odds.get("q1_total")
+    try:
+        result = predict_q1(home_abbr, away_abbr,
+                            spread=q1_spread, total=q1_total)
+    except Exception as e:
+        logger.warning("NBA Q1 factor predict failed for %s/%s: %s",
+                       home_abbr, away_abbr, e)
+        return None
+    if not result:
+        return None
+
+    from engine.config import get_flag as _get_flag
+
+    if _get_flag("ENABLE_NBA_MC", False, sport="nba"):
+        try:
+            from engine.mc_nba_run import run_nba_q1_mc
+            import engine.config as _cfg
+            result["mc"] = run_nba_q1_mc(
+                home_abbr, away_abbr,
+                n_sims=int(getattr(_cfg, "NBA_MC_N_SIMS", 50_000)),
+            )
+        except Exception as e:
+            logger.warning("NBA MC failed for %s/%s: %s", home_abbr, away_abbr, e)
+            result["mc"] = {"error": str(e)}
+
+    if _get_flag("ENABLE_NBA_GBM", False, sport="nba"):
+        try:
+            from engine.gbm.predict import predict_nba as _gbm_predict_nba
+            from engine.nba_db import get_conn as _nba_conn
+            home_tid = (result.get("home") or {}).get("id")
+            away_tid = (result.get("away") or {}).get("id")
+            if home_tid and away_tid:
+                result["gbm"] = _gbm_predict_nba(_nba_conn(), {
+                    "home_team_id": int(home_tid),
+                    "away_team_id": int(away_tid),
+                    "date": datetime.now().strftime("%Y-%m-%d"),
+                })
+        except Exception as e:
+            logger.warning("NBA GBM failed for %s/%s: %s", home_abbr, away_abbr, e)
+            result["gbm"] = {"error": str(e)}
 
     if use_cache:
         _pred_cache_put(cache_key, result)
@@ -1120,13 +1244,28 @@ def api_predict(req: PredictRequest):
 
 
 @app.get("/api/best-bets/progress")
-def api_best_bets_progress():
-    """Spinner support: live progress of an in-flight /api/best-bets run."""
-    snap = _bb_progress_snapshot()
+def api_best_bets_progress(sport: str = "mlb"):
+    """Spinner support: live progress of an in-flight /api/<sport>/best-bets run.
+
+    Default sport is mlb for back-compat with the original single-sport
+    endpoint. Frontend passes ?sport=nhl or ?sport=nba for those mounts.
+    """
+    snap = _bb_progress_snapshot(sport)
     total = snap.get("total") or 0
     done = snap.get("done") or 0
     snap["pct"] = round(done / total * 100, 1) if total else 0.0
+    snap["sport"] = sport
     return snap
+
+
+@app.get("/api/nhl/best-bets/progress")
+def api_nhl_best_bets_progress():
+    return api_best_bets_progress(sport="nhl")
+
+
+@app.get("/api/nba/best-bets/progress")
+def api_nba_best_bets_progress():
+    return api_best_bets_progress(sport="nba")
 
 
 def _bb_predict_one(game: dict, all_odds) -> dict | None:
@@ -2483,14 +2622,21 @@ def api_nhl_predict(home: str = Query(...), away: str = Query(...)):
 
 @app.get("/api/nhl/best-bets")
 def api_nhl_best_bets():
-    """Run predictions on all today's NHL games and find edges."""
-    from engine.nhl_predict import generate_nhl_picks_with_context
-    from engine.data import list_teams, load_team
+    """Run predictions on all today's NHL games and find edges.
+
+    Parallel fan-out so cold load isn't N x serial. Each game's
+    factor+MC+GBM chain runs in a worker, then picks are assembled
+    serially on the main thread (generate_nhl_picks_with_context reads
+    the augmented pred and blends via ensemble_nhl).
+    """
+    import time as _time
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from engine.nhl_picks import generate_nhl_picks_with_context
 
     games = _get_nhl_scoreboard()
     key_map = _nhl_espn_to_key()
 
-    # Fetch starting goalies from DailyFaceoff
+    # Fetch starting goalies from DailyFaceoff once up front.
     df_goalies = {}
     try:
         from scrapers.dailyfaceoff import get_starting_goalies, match_goalie_to_player
@@ -2500,59 +2646,80 @@ def api_nhl_best_bets():
     except Exception as e:
         logger.debug("DailyFaceoff unavailable: %s", e)
 
-    bets = []
+    predictable = []
     for game in games:
-        # Skip completed AND live games - predictions only for pregame.
-        # Live games change as scores update, causing pick flickering.
         state = game["status"].get("state", "pre")
         if state in ("post", "in") or game["status"].get("completed"):
             continue
-
         h_abbr = game["home"]["abbreviation"]
         a_abbr = game["away"]["abbreviation"]
-
         h_key = key_map.get(h_abbr)
         a_key = key_map.get(a_abbr)
-
         if not h_key or not a_key:
             h_name = game["home"]["name"].split()[-1].lower()
             a_name = game["away"]["name"].split()[-1].lower()
             h_key = h_key or key_map.get(h_name, h_name)
             a_key = a_key or key_map.get(a_name, a_name)
+        predictable.append({
+            "game": game, "h_abbr": h_abbr, "a_abbr": a_abbr,
+            "h_key": h_key, "a_key": a_key,
+            "odds": game.get("odds"),
+        })
 
-        odds = game.get("odds")
+    _bb_progress_set("nhl", total=len(predictable), done=0, phase="predicting",
+                     started_at=_time.time(), finished_at=None)
+    logger.info("NHL best bets: analyzing %d games (parallel)", len(predictable))
 
-        # Match DailyFaceoff goalies to player IDs
-        home_goalie_id = None
-        away_goalie_id = None
+    def _predict_one(row):
+        try:
+            return (row, _predict_nhl_full(row["h_key"], row["a_key"]))
+        except Exception as e:
+            logger.error("NHL predict crashed for %s @ %s: %s",
+                         row["a_abbr"], row["h_abbr"], e, exc_info=True)
+            return (row, None)
+
+    prepped = []
+    with ThreadPoolExecutor(max_workers=8, thread_name_prefix="nhl-bb") as pool:
+        futures = [pool.submit(_predict_one, r) for r in predictable]
+        for fut in as_completed(futures):
+            row, pred = fut.result()
+            _bb_progress_increment("nhl")
+            if pred is not None:
+                row["pred"] = pred
+                prepped.append(row)
+
+    _bb_progress_set("nhl", phase="building")
+
+    bets = []
+    for row in prepped:
+        game = row["game"]
+        h_abbr = row["h_abbr"]
+        a_abbr = row["a_abbr"]
+        odds = row["odds"]
+        pred = row["pred"]
+
         home_goalie_name = None
         away_goalie_name = None
-
-        # Try DailyFaceoff first, then alt abbreviations
         for h_try in [h_abbr, _nhl_alt_abbr(h_abbr)]:
             if h_try in df_goalies:
                 home_goalie_name = df_goalies[h_try]["name"]
-                home_goalie_id = match_goalie_to_player(home_goalie_name, h_abbr) if df_goalies else None
                 break
-
         for a_try in [a_abbr, _nhl_alt_abbr(a_abbr)]:
             if a_try in df_goalies:
                 away_goalie_name = df_goalies[a_try]["name"]
-                away_goalie_id = match_goalie_to_player(away_goalie_name, a_abbr) if df_goalies else None
                 break
 
         try:
-            picks, ctx = generate_nhl_picks_with_context(h_key, a_key, odds)
+            picks, ctx = generate_nhl_picks_with_context(
+                row["h_key"], row["a_key"], odds, pred=pred,
+            )
         except Exception as e:
-            logger.error("NHL prediction failed for %s @ %s: %s", a_abbr, h_abbr, e)
+            logger.error("NHL picks failed for %s @ %s: %s", a_abbr, h_abbr, e)
             continue
-
         if not picks:
             continue
+        best = picks[0]
 
-        best = picks[0]  # Already sorted by edge
-
-        # Build goalie info for display
         goalie_info = {}
         if home_goalie_name:
             h_gs = df_goalies.get(h_abbr, df_goalies.get(_nhl_alt_abbr(h_abbr), {}))
@@ -2581,6 +2748,7 @@ def api_nhl_best_bets():
         })
 
     bets.sort(key=lambda b: b["best_pick"]["edge"], reverse=True)
+    _bb_progress_set("nhl", phase="idle", finished_at=_time.time())
     return bets
 
 
@@ -3250,14 +3418,19 @@ def api_nba_predict(home: str = Query(...), away: str = Query(...)):
 
 @app.get("/api/nba/best-bets")
 def api_nba_best_bets():
-    """Generate Q1 spread picks for all today's NBA games."""
+    """Generate Q1 spread picks for all today's NBA games.
+
+    Parallel fan-out so dashboard cold load isn't N x serial. Each game
+    runs factor + MC + GBM in a worker, then predict_q1_matchup reuses
+    the augmented pred for pick generation (blending via ensemble_nba).
+    """
+    import time as _time
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     try:
         from engine.nba_q1_predict import predict_q1_matchup
     except ImportError:
         return []
 
-    # Pull Q1 odds using the full fallback chain (Odds API → DK → ESPN).
-    # Cached 10 min per source. Returns {} only if all three sources fail.
     nba_odds_map = {}
     try:
         from scrapers.nba_odds import fetch_all_nba_odds
@@ -3266,24 +3439,61 @@ def api_nba_best_bets():
         logger.debug("NBA odds fetch failed: %s", e)
 
     games = _get_nba_scoreboard()
-    bets = []
+
+    predictable = []
     for game in games:
         state = game["status"].get("state", "pre")
         if state in ("post", "in") or game["status"].get("completed"):
             continue
-
         h_abbr = game["home"]["abbreviation"]
         a_abbr = game["away"]["abbreviation"]
-
-        # Merge scoreboard odds (if any) with Odds API Q1 odds
         odds = dict(game.get("odds") or {})
         market_odds = nba_odds_map.get(f"{a_abbr}@{h_abbr}") or {}
         for k, v in market_odds.items():
             if k not in odds or odds.get(k) is None:
                 odds[k] = v
+        predictable.append({
+            "game": game, "h_abbr": h_abbr, "a_abbr": a_abbr, "odds": odds,
+        })
+
+    _bb_progress_set("nba", total=len(predictable), done=0, phase="predicting",
+                     started_at=_time.time(), finished_at=None)
+    logger.info("NBA best bets: analyzing %d games (parallel)", len(predictable))
+
+    def _predict_one(row):
+        try:
+            return (row, _predict_nba_full(row["h_abbr"], row["a_abbr"], row["odds"]))
+        except Exception as e:
+            logger.error("NBA predict crashed for %s @ %s: %s",
+                         row["a_abbr"], row["h_abbr"], e, exc_info=True)
+            return (row, None)
+
+    prepped = []
+    with ThreadPoolExecutor(max_workers=8, thread_name_prefix="nba-bb") as pool:
+        futures = [pool.submit(_predict_one, r) for r in predictable]
+        for fut in as_completed(futures):
+            row, pred_full = fut.result()
+            _bb_progress_increment("nba")
+            if pred_full is not None:
+                row["pred_full"] = pred_full
+                prepped.append(row)
+
+    _bb_progress_set("nba", phase="building")
+
+    bets = []
+    for row in prepped:
+        game = row["game"]
+        h_abbr = row["h_abbr"]
+        a_abbr = row["a_abbr"]
+        odds = row["odds"]
+        pred_full = row["pred_full"]
 
         try:
-            pred = predict_q1_matchup(h_abbr, a_abbr, odds=odds)
+            # predict_q1_matchup wraps factor pred with picks + confidence
+            # tags + CI band. Passing pred_full (which carries mc/gbm)
+            # makes generate_q1_picks blend all three signals through
+            # ensemble_nba instead of re-running predict_q1 factor-only.
+            pred = predict_q1_matchup(h_abbr, a_abbr, odds=odds, pred=pred_full)
         except Exception as e:
             logger.error("NBA Q1 prediction failed for %s @ %s: %s", a_abbr, h_abbr, e)
             continue
@@ -3291,7 +3501,6 @@ def api_nba_best_bets():
         if not pred:
             continue
 
-        # Build picks from prediction
         picks = pred.get("picks", [])
         if not picks:
             continue
@@ -3339,6 +3548,7 @@ def api_nba_best_bets():
         })
 
     bets.sort(key=lambda b: b["best_pick"].get("edge", 0), reverse=True)
+    _bb_progress_set("nba", phase="idle", finished_at=_time.time())
     return bets
 
 

@@ -25,7 +25,8 @@ def _implied_prob(american_odds: int) -> float:
 
 def generate_q1_picks(home_abbr: str, away_abbr: str,
                       odds: dict | None = None,
-                      season: int | None = None) -> list[dict]:
+                      season: int | None = None,
+                      pred: dict | None = None) -> list[dict]:
     """Generate Q1 spread, Q1 total, and Q1 ML picks with edges.
 
     Args:
@@ -33,6 +34,10 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
         away_abbr: Away team abbreviation
         odds: Optional dict with Q1 odds
         season: Season year override
+        pred: Optional pre-computed factor prediction (may carry mc / gbm
+            subkeys). When provided we skip the inline predict_q1 call so
+            ensemble_nba() blends factor + MC + GBM rather than re-running
+            the factor model.
 
     Returns:
         List of pick dicts sorted by priority then edge.
@@ -43,12 +48,13 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
     q1_spread = odds.get("q1_spread")
     q1_total = odds.get("q1_total")
 
-    pred = predict_q1(home_abbr, away_abbr,
-                      spread=q1_spread, total=q1_total, season=season)
+    if pred is None:
+        pred = predict_q1(home_abbr, away_abbr,
+                          spread=q1_spread, total=q1_total, season=season)
 
-    # Compute the ensemble blend (factor + MC when ENABLE_NBA_MC is
-    # on; GBM isn't wired for NBA yet). Safe when MC didn't run --
-    # ensemble_nba returns factor-only values in that case.
+    # Compute the ensemble blend. pred may already carry factor + MC +
+    # GBM (when the backend helper ran them); if only factor is present
+    # ensemble_nba collapses to factor-only.
     try:
         from .ensemble import ensemble_nba
         pred["ensemble"] = ensemble_nba(pred)

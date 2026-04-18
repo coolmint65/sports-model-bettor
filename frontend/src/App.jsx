@@ -61,10 +61,13 @@ export default function App() {
   const [nbaPickSummary, setNbaPickSummary] = useState(null)
   const [nbaPickHistory, setNbaPickHistory] = useState(null)
   const [nbaPhLoading, setNbaPhLoading] = useState(false)
-  // Live progress of the in-flight /best-bets call so the loading
-  // spinner can render "Computing 8/15 games (53%)" instead of an
-  // indeterminate spinner during the multi-minute MLB cold load.
+  // Live progress of in-flight /best-bets calls so the loading spinner
+  // can render "Computing 8/15 games (53%)" instead of an indeterminate
+  // spinner during the multi-minute cold load. One slot per sport so
+  // the three parallel mount promises don't stomp on each other.
   const [bbProgress, setBbProgress] = useState(null)
+  const [nhlBbProgress, setNhlBbProgress] = useState(null)
+  const [nbaBbProgress, setNbaBbProgress] = useState(null)
 
   // Load MLB games on mount + auto-refresh every 5 min
   useEffect(() => {
@@ -104,6 +107,11 @@ export default function App() {
   // Load NHL games on mount + auto-refresh
   useEffect(() => {
     setNhlLoading(true)
+    const pollHandle = setInterval(() => {
+      api.get('/nhl/best-bets/progress')
+        .then(r => setNhlBbProgress(r.data))
+        .catch(() => {})
+    }, 750)
     Promise.all([
       api.get('/nhl/scoreboard'),
       api.get('/nhl/best-bets'),
@@ -111,7 +119,11 @@ export default function App() {
       setNhlGames(g.data)
       setNhlBestBets(b.data)
     }).catch(() => setNhlGames([]))
-      .finally(() => setNhlLoading(false))
+      .finally(() => {
+        clearInterval(pollHandle)
+        setNhlBbProgress(null)
+        setNhlLoading(false)
+      })
     const interval = setInterval(() => {
       api.get('/nhl/scoreboard').then(r => setNhlGames(r.data)).catch(() => {})
       api.get('/nhl/best-bets').then(r => setNhlBestBets(r.data)).catch(() => {})
@@ -122,6 +134,11 @@ export default function App() {
   // Load NBA games on mount + auto-refresh
   useEffect(() => {
     setNbaLoading(true)
+    const pollHandle = setInterval(() => {
+      api.get('/nba/best-bets/progress')
+        .then(r => setNbaBbProgress(r.data))
+        .catch(() => {})
+    }, 750)
     Promise.all([
       api.get('/nba/scoreboard'),
       api.get('/nba/best-bets'),
@@ -129,7 +146,11 @@ export default function App() {
       setNbaGames(Array.isArray(g.data) ? g.data : [])
       setNbaBestBets(Array.isArray(b.data) ? b.data : null)
     }).catch(() => setNbaGames([]))
-      .finally(() => setNbaLoading(false))
+      .finally(() => {
+        clearInterval(pollHandle)
+        setNbaBbProgress(null)
+        setNbaLoading(false)
+      })
     const interval = setInterval(() => {
       api.get('/nba/scoreboard').then(r => setNbaGames(Array.isArray(r.data) ? r.data : [])).catch(() => {})
       api.get('/nba/best-bets').then(r => setNbaBestBets(Array.isArray(r.data) ? r.data : null)).catch(() => {})
@@ -434,7 +455,7 @@ export default function App() {
       {isNHL && view === 'games' && !nhlSelectedGame && (
         <>
           <PickOfDayCard sport="nhl" />
-          <NHLScoreboard games={nhlGames} loading={nhlLoading} onSelectGame={selectNhlGame} bestBets={nhlBestBets} />
+          <NHLScoreboard games={nhlGames} loading={nhlLoading} progress={nhlBbProgress} onSelectGame={selectNhlGame} bestBets={nhlBestBets} />
         </>
       )}
 
@@ -468,7 +489,7 @@ export default function App() {
       {isNBA && view === 'games' && !nbaSelectedGame && (
         <>
           <PickOfDayCard sport="nba" />
-          <NBAScoreboard games={nbaGames} loading={nbaLoading} onSelectGame={selectNbaGame} bestBets={nbaBestBets} />
+          <NBAScoreboard games={nbaGames} loading={nbaLoading} progress={nbaBbProgress} onSelectGame={selectNbaGame} bestBets={nbaBestBets} />
         </>
       )}
 
