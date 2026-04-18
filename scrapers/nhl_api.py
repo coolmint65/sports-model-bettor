@@ -902,13 +902,78 @@ if __name__ == "__main__":
     args = sys.argv[1:]
     args_set = set(args)
 
-    # Parse --history SEASON
+    # Parse --history SEASON and --backfill-periods [SEASON]
     history_season = None
+    periods_arg: str | None | bool = None
     for i, a in enumerate(args):
         if a == "--history" and i + 1 < len(args):
             history_season = args[i + 1]
+        elif a == "--backfill-periods":
+            if i + 1 < len(args) and args[i + 1].isdigit():
+                periods_arg = args[i + 1]
+            else:
+                periods_arg = True  # all seasons
 
-    if history_season:
+    if periods_arg is not None:
+        # Walk final games missing period scores and fill via ESPN.
+        # `periods_arg` is a year (e.g. "2024") for a single season
+        # (covers 2024-25 Oct->Jun), or True to walk every season
+        # represented in nhl_games.
+        from engine.nhl_db import get_conn, compute_all_p1_stats
+
+        conn = get_conn()
+        if periods_arg is True:
+            yrs = [r["yr"] for r in conn.execute(
+                "SELECT DISTINCT SUBSTR(date, 1, 4) AS yr FROM nhl_games "
+                "WHERE status = 'final' AND home_p1 IS NULL "
+                "ORDER BY yr"
+            ).fetchall()]
+            _progress(f"=== NHL period-score backfill (all {len(yrs)} years) ===")
+        else:
+            yrs = [str(periods_arg)]
+            _progress(f"=== NHL period-score backfill for {periods_arg} ===")
+
+        total_filled = 0
+        for yr_str in yrs:
+            try:
+                yr = int(yr_str)
+            except ValueError:
+                continue
+            start_date = f"{yr}-10-01"
+            # NHL season runs Oct YYYY -> Jun YYYY+1; cap at today.
+            end_date = f"{yr + 1}-06-30"
+            today = datetime.now().strftime("%Y-%m-%d")
+            if end_date > today:
+                end_date = today
+            # Also walk the early-year half (Jan-Jun YYYY), which is the
+            # back half of season YYYY-1. Queries are idempotent due to
+            # the UPDATE ... WHERE home_p1 IS NULL guard downstream.
+            n = fetch_period_scores_range(start_date, end_date)
+            _progress(f"  {yr}-{yr+1} season: {n} games updated")
+            total_filled += n
+
+            # Also walk Jan-Sep YYYY to cover the back half of the prior
+            # season (which uses YYYY in its date prefix).
+            prior_end = f"{yr}-09-30"
+            prior_start = f"{yr}-01-01"
+            if prior_start <= prior_end:
+                n2 = fetch_period_scores_range(prior_start, prior_end)
+                if n2:
+                    _progress(f"  {yr-1}-{yr} tail: {n2} games updated")
+                    total_filled += n2
+
+            # Recompute P1 stats for this season (the nhl_p1_stats
+            # tendency table is derived from home_p1/away_p1, so it
+            # needs to refresh after the backfill).
+            try:
+                season_ending = yr + 1
+                p1_count = compute_all_p1_stats(season_ending)
+                _progress(f"  Recomputed P1 stats for {p1_count} teams in season {season_ending}")
+            except Exception as e:
+                _progress(f"  WARN: compute_all_p1_stats failed for {yr+1}: {e}")
+
+        _progress(f"=== Done: {total_filled} games updated with period scores ===")
+    elif history_season:
         sync_history(history_season)
     elif "--full" in args_set:
         sync_nhl(full=True)

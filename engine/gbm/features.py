@@ -285,10 +285,16 @@ def _parse_wind(val) -> float:
 def _umpire_stats(conn, umpire_name: str, game_date: str) -> dict:
     """Point-in-time lookup of umpire tendencies.
 
-    Extracts the season from game_date (YYYY-MM-DD) and returns the
-    umpire's aggregates from season S-1. This preserves strict
-    historical ordering: for a 2025 game we use 2024-season tendencies
-    (fully observed before 2025 began), never 2025-season or later.
+    Blends the umpire's aggregates from seasons S-1 .. S-3 (inclusive)
+    with an exponential decay so recent data dominates but older seasons
+    still lend sample size to umps with thin recent exposure. Strict
+    historical ordering preserved -- we never look at season S or later,
+    so there's no training leak.
+
+    Weight per season = games_in_season * decay^(years_back - 1), with
+    decay=0.6 meaning S-2 is weighted 60% of S-1 and S-3 is 36% per game.
+    A 5-game minimum per season excludes tiny samples that would swing
+    the blend.
 
     Falls back to the all-time `umpires` rollup only if game_date is
     empty/invalid -- a posture that lets callers who legitimately have
@@ -298,13 +304,26 @@ def _umpire_stats(conn, umpire_name: str, game_date: str) -> dict:
     try:
         season = _season_from_date(game_date)
         if season is not None:
-            row = conn.execute(
-                "SELECT run_factor "
-                "FROM umpire_season_stats WHERE name = ? AND season = ?",
-                (umpire_name, season - 1),
-            ).fetchone()
-            if row:
-                return dict(row)
+            rows = conn.execute(
+                "SELECT season, games, run_factor "
+                "FROM umpire_season_stats "
+                "WHERE name = ? AND season < ? AND season >= ? AND games >= 5",
+                (umpire_name, season, season - 3),
+            ).fetchall()
+            if not rows:
+                return {}
+            decay = 0.6
+            num = 0.0
+            denom = 0.0
+            for r in rows:
+                if r["run_factor"] is None:
+                    continue
+                years_back = season - r["season"]
+                weight = (r["games"] or 0) * (decay ** (years_back - 1))
+                num += float(r["run_factor"]) * weight
+                denom += weight
+            if denom > 0:
+                return {"run_factor": round(num / denom, 4)}
             return {}
         # Dateless lookup: fall back to all-time rollup.
         row = conn.execute(
