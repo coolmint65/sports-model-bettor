@@ -314,6 +314,16 @@ body {
   position: relative;
 }
 
+/* Keyboard focus. Previously invisible -- sighted keyboard users had
+   no way to see which card was selected. Uses a blue ring (brand
+   accent) thick enough to be visible against the dark card bg. */
+.game-card:focus-visible,
+.nav-tab:focus-visible,
+button:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: 2px;
+}
+
 .game-card:hover {
   border-color: #334155;
   background: #151d2e;

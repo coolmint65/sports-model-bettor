@@ -1,3 +1,21 @@
+// League-average NHL SV% is ~0.905. Color + tooltip labels anchor the
+// user's eye so a ".915" starter is recognized as above average without
+// needing to remember the league baseline.
+function svPctColor(sv) {
+  if (sv >= 0.915) return '#34d399'   // elite green
+  if (sv >= 0.905) return '#94a3b8'   // average slate
+  if (sv >= 0.895) return '#fbbf24'   // below-average amber
+  return '#ef4444'                    // poor red
+}
+function svPctLabel(sv) {
+  if (sv >= 0.920) return 'is elite (top ~10%)'
+  if (sv >= 0.910) return 'is above average'
+  if (sv >= 0.900) return 'is league average'
+  if (sv >= 0.890) return 'is below average'
+  return 'has struggled this season'
+}
+
+
 export default function NHLScoreboard({ games, loading, progress, onSelectGame, bestBets }) {
   if (loading) {
     const total = progress?.total || 0
@@ -229,10 +247,29 @@ function NHLGameCard({ game, bet, onClick }) {
         <div className="game-pitchers">
           <span className="pitcher">
             {game.away_goalie?.name || 'TBD'}
-            {game.away_goalie?.status === 'confirmed' && <span style={{color:'#34d399',marginLeft:4,fontSize:'0.7rem'}}>✓</span>}
-            {game.away_goalie?.status === 'expected' && <span style={{color:'#fbbf24',marginLeft:4,fontSize:'0.7rem'}}>~</span>}
+            {game.away_goalie?.status === 'confirmed' && (
+              <span
+                style={{color:'#34d399',marginLeft:4,fontSize:'0.7rem',cursor:'help'}}
+                title="Confirmed starter (DailyFaceoff)"
+                aria-label="Confirmed starting goalie"
+              >✓</span>
+            )}
+            {game.away_goalie?.status === 'expected' && (
+              <span
+                style={{color:'#fbbf24',marginLeft:4,fontSize:'0.7rem',cursor:'help'}}
+                title="Projected starter (not yet confirmed)"
+                aria-label="Projected starting goalie, not confirmed"
+              >~</span>
+            )}
             {game.away_goalie?.save_pct > 0 && (
-              <span style={{color:'#64748b',fontSize:'0.7rem',marginLeft:6}}>
+              <span
+                style={{
+                  color: svPctColor(game.away_goalie.save_pct),
+                  fontSize:'0.7rem', marginLeft:6,
+                  cursor:'help',
+                }}
+                title={`League average: ~0.905. This starter ${svPctLabel(game.away_goalie.save_pct)}.`}
+              >
                 {game.away_goalie.save_pct.toFixed(3)} SV%
               </span>
             )}
@@ -240,10 +277,29 @@ function NHLGameCard({ game, bet, onClick }) {
           <span className="vs">vs</span>
           <span className="pitcher">
             {game.home_goalie?.name || 'TBD'}
-            {game.home_goalie?.status === 'confirmed' && <span style={{color:'#34d399',marginLeft:4,fontSize:'0.7rem'}}>✓</span>}
-            {game.home_goalie?.status === 'expected' && <span style={{color:'#fbbf24',marginLeft:4,fontSize:'0.7rem'}}>~</span>}
+            {game.home_goalie?.status === 'confirmed' && (
+              <span
+                style={{color:'#34d399',marginLeft:4,fontSize:'0.7rem',cursor:'help'}}
+                title="Confirmed starter (DailyFaceoff)"
+                aria-label="Confirmed starting goalie"
+              >✓</span>
+            )}
+            {game.home_goalie?.status === 'expected' && (
+              <span
+                style={{color:'#fbbf24',marginLeft:4,fontSize:'0.7rem',cursor:'help'}}
+                title="Projected starter (not yet confirmed)"
+                aria-label="Projected starting goalie, not confirmed"
+              >~</span>
+            )}
             {game.home_goalie?.save_pct > 0 && (
-              <span style={{color:'#64748b',fontSize:'0.7rem',marginLeft:6}}>
+              <span
+                style={{
+                  color: svPctColor(game.home_goalie.save_pct),
+                  fontSize:'0.7rem', marginLeft:6,
+                  cursor:'help',
+                }}
+                title={`League average: ~0.905. This starter ${svPctLabel(game.home_goalie.save_pct)}.`}
+              >
                 {game.home_goalie.save_pct.toFixed(3)} SV%
               </span>
             )}
