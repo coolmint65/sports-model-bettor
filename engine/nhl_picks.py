@@ -251,6 +251,19 @@ def generate_nhl_picks_with_context(home_key: str, away_key: str,
         p["prob"] = round(float(cal), 4)
         if odds is not None and _valid_odds(odds):
             p["edge"] = round((cal - _implied(int(odds))) * 100, 1)
+
+    # Keep pred["win_prob"] consistent with the calibrated ML pick prob
+    # so the Projected Outcome panel and the pick card display the same
+    # number. See engine/picks.py for rationale.
+    wp = pred.get("win_prob") or {}
+    home_wp = wp.get("home")
+    if home_wp is not None:
+        cal_home = float(_calibrate("ML", float(home_wp), sport="nhl"))
+        pred["win_prob"] = {
+            "home": round(cal_home, 4),
+            "away": round(1.0 - cal_home, 4),
+        }
+
     # Drop picks that flipped to negative edge after calibration.
     picks = [p for p in picks if (p.get("edge") or 0) > 0]
 

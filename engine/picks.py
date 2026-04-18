@@ -356,6 +356,21 @@ def generate_picks(home_team_id: int, away_team_id: int,
         if odds is not None and _valid_odds(odds):
             p["edge"] = round((cal - _implied(int(odds))) * 100, 1)
 
+    # Also push the ML calibration back onto pred["win_prob"] so the
+    # "Projected Outcome" WP on the frontend matches the ML pick's
+    # calibrated probability. Previously Projected Outcome showed the
+    # raw soft-compressed WP (43.1%) while the pick card showed the
+    # empirical-calibrated WP (45.0%) for the same game -- same concept,
+    # two layers of calibration, displayed inconsistently.
+    wp = pred.get("win_prob") or {}
+    home_wp = wp.get("home")
+    if home_wp is not None:
+        cal_home = float(_calibrate("ML", float(home_wp)))
+        pred["win_prob"] = {
+            "home": round(cal_home, 4),
+            "away": round(1.0 - cal_home, 4),
+        }
+
     # Annotate each pick with a probability band so the UI can render a
     # confidence histogram around the calibrated point estimate. Clamp
     # to [0, 1] (a -0.04 lower bound on a 0.51 prediction is just 0).

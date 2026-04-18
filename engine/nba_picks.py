@@ -197,6 +197,16 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
         p["prob"] = round(float(cal), 4)
         if odds is not None and _valid_odds(odds):
             p["edge"] = round((cal - _implied_prob(int(odds))) * 100, 1)
+
+    # Keep pred's Q1 win prob consistent with the calibrated Q1 ML
+    # pick so Projected Outcome and the pick card agree. predict_q1
+    # exposes q1_ml_home / q1_ml_away as top-level fields.
+    q1_home = pred.get("q1_ml_home")
+    if q1_home is not None:
+        cal_q1 = float(_calibrate("Q1 ML", float(q1_home), sport="nba"))
+        pred["q1_ml_home"] = round(cal_q1, 4)
+        pred["q1_ml_away"] = round(1.0 - cal_q1, 4)
+
     picks = [p for p in picks if (p.get("edge") or 0) > 0]
 
     # Adjusted EV: edge * reliability weight
