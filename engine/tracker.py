@@ -430,14 +430,25 @@ def settle_picks() -> dict:
     for pick in pending:
         pick = dict(pick)
         game_id = pick["game_id"]
+        bt_probe = (pick["bet_type"] or "").upper()
 
-        game = conn.execute(
-            "SELECT * FROM games WHERE mlb_game_id = ? AND status = 'final'",
-            (game_id,)
-        ).fetchone()
+        # F5 + NRFI markets can settle before the full game ends -- once
+        # the linescore has enough innings, the outcome is locked. Only
+        # full-game markets (ML, OU, RL) must wait for status='final'.
+        f5_or_inning = bt_probe.startswith("F5") or bt_probe in ("1ST INN", "NRFI")
+        if f5_or_inning:
+            game = conn.execute(
+                "SELECT * FROM games WHERE mlb_game_id = ?",
+                (game_id,),
+            ).fetchone()
+        else:
+            game = conn.execute(
+                "SELECT * FROM games WHERE mlb_game_id = ? AND status = 'final'",
+                (game_id,),
+            ).fetchone()
 
         if not game:
-            continue  # Game not finished yet
+            continue  # Game not loaded yet
 
         game = dict(game)
         hs = game.get("home_score", 0) or 0
@@ -505,22 +516,35 @@ def settle_picks() -> dict:
                     result = "P"
 
         elif bt in ("nrfi", "1st INN"):
-            # Use real linescore data when available
+            # Use real linescore data when available. Only trust the 1st
+            # inning when it's locked: either the game is final, or the
+            # linescore already has a 2nd inning entry (which the MLB
+            # API adds after the 1st wraps). Otherwise skip and retry
+            # on the next settle pass.
             import json as _json
             home_ls = game.get("home_linescore")
             away_ls = game.get("away_linescore")
+            status = (game.get("status") or "").lower()
+            scoreless_1st = None
             if home_ls and away_ls:
                 try:
                     h_inn = _json.loads(home_ls)
                     a_inn = _json.loads(away_ls)
-                    if len(h_inn) > 0 and len(a_inn) > 0:
+                    full_innings = min(len(h_inn), len(a_inn))
+                    first_inning_locked = (
+                        status == "final" or full_innings >= 2
+                    )
+                    if first_inning_locked and full_innings >= 1:
                         scoreless_1st = (h_inn[0] == 0 and a_inn[0] == 0)
-                    else:
-                        scoreless_1st = total_runs <= 6
                 except Exception:
+                    pass
+            if scoreless_1st is None:
+                # Fall back to total-runs heuristic only when the game is
+                # final and linescore was unavailable (legacy rows).
+                if status == "final":
                     scoreless_1st = total_runs <= 6
-            else:
-                scoreless_1st = total_runs <= 6
+                else:
+                    continue  # 1st inning still in progress
 
             if pk == "NRFI":
                 result = "W" if scoreless_1st else "L"
@@ -546,6 +570,78 @@ def settle_picks() -> dict:
                 result = "P"
             else:
                 result = "L"
+
+        elif bt.upper().startswith("F5"):
+            # First-5-innings markets. Need 5 complete innings before we
+            # settle -- a mid-5th linescore entry would be partial data.
+            # Two ways to be sure:
+            #   - game is final (entire linescore is settled) OR
+            #   - linescore has a 6th inning entry, which the MLB Stats
+            #     API only adds once the 5th wraps.
+            import json as _json
+            h_inn: list = []
+            a_inn: list = []
+            try:
+                h_inn = _json.loads(game.get("home_linescore") or "[]")
+                a_inn = _json.loads(game.get("away_linescore") or "[]")
+            except Exception:
+                pass
+            status = (game.get("status") or "").lower()
+            full_innings = min(len(h_inn), len(a_inn))
+            if status == "final":
+                if full_innings < 5:
+                    continue  # game ended before F5 resolved (rain etc.)
+            else:
+                if full_innings < 6:
+                    continue  # mid-F5 or earlier
+
+            f5_home = sum(h_inn[:5])
+            f5_away = sum(a_inn[:5])
+            f5_total = f5_home + f5_away
+            f5_margin = f5_home - f5_away
+            sub = bt.upper()[2:].strip()  # "ML" / "O/U" / "RL"
+
+            if sub == "ML":
+                # Tied after 5 -> push (F5 ML books settle this way).
+                if f5_margin == 0:
+                    result = "P"
+                elif pk == h:
+                    result = "W" if f5_margin > 0 else "L"
+                else:
+                    result = "W" if f5_margin < 0 else "L"
+
+            elif sub in ("O/U", "OU"):
+                # Pick text is e.g. "F5 Over 4.5" or "F5 Under 4.5".
+                parts = pk.split()
+                try:
+                    line = float(parts[-1])
+                except (ValueError, IndexError):
+                    continue
+                is_over = any(p.lower() == "over" for p in parts)
+                if f5_total > line:
+                    result = "W" if is_over else "L"
+                elif f5_total < line:
+                    result = "L" if is_over else "W"
+                else:
+                    result = "P"
+
+            elif sub == "RL":
+                parts = pk.split()
+                pick_team = parts[0] if parts else ""
+                try:
+                    spread = float(parts[1]) if len(parts) > 1 else 0.5
+                except ValueError:
+                    spread = 0.5
+                if pick_team == h:
+                    team_margin = f5_margin
+                else:
+                    team_margin = -f5_margin
+                if team_margin + spread > 0:
+                    result = "W"
+                elif team_margin + spread == 0:
+                    result = "P"
+                else:
+                    result = "L"
 
         if result is None:
             continue  # Could not determine result - skip
