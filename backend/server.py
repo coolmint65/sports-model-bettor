@@ -1069,10 +1069,23 @@ def _predict_nhl_full(home_key: str, away_key: str,
         try:
             from engine.gbm.predict import predict_nhl as _gbm_predict_nhl
             from engine.nhl_db import get_conn as _nhl_conn
-            home_tid = (result.get("home") or {}).get("id")
-            away_tid = (result.get("away") or {}).get("id")
+            # nhl_predict.predict_matchup returns {home: {name, abbreviation,
+            # record, key}} -- no `id`. Resolve team_id via nhl_teams.abbreviation
+            # so the GBM payload has what engine.gbm.features_nhl expects.
+            nhl_conn = _nhl_conn()
+            home_abbr = (result.get("home") or {}).get("abbreviation") or ""
+            away_abbr = (result.get("away") or {}).get("abbreviation") or ""
+            home_tid = away_tid = None
+            if home_abbr and away_abbr:
+                rows = nhl_conn.execute(
+                    "SELECT id, abbreviation FROM nhl_teams "
+                    "WHERE abbreviation IN (?, ?)",
+                    (home_abbr.upper(), away_abbr.upper()),
+                ).fetchall()
+                by_abbr = {r["abbreviation"]: r["id"] for r in rows}
+                home_tid = by_abbr.get(home_abbr.upper())
+                away_tid = by_abbr.get(away_abbr.upper())
             if home_tid and away_tid:
-                nhl_conn = _nhl_conn()
                 today_s = datetime.now().strftime("%Y-%m-%d")
                 result["gbm"] = _gbm_predict_nhl(nhl_conn, {
                     "home_team_id": int(home_tid),
@@ -1082,6 +1095,12 @@ def _predict_nhl_full(home_key: str, away_key: str,
                         nhl_conn, int(home_tid), int(away_tid), today_s,
                     ),
                 })
+            else:
+                # Expose the lookup failure so we don't silently fall back
+                # to factor-only again. UI can distinguish "GBM off" from
+                # "GBM tried and couldn't resolve team".
+                result["gbm"] = {"error": f"team_id lookup failed: "
+                                          f"{home_abbr!r}/{away_abbr!r}"}
         except Exception as e:
             logger.warning("NHL GBM failed for %s/%s: %s", home_key, away_key, e)
             result["gbm"] = {"error": str(e)}
@@ -1138,14 +1157,30 @@ def _predict_nba_full(home_abbr: str, away_abbr: str,
         try:
             from engine.gbm.predict import predict_nba as _gbm_predict_nba
             from engine.nba_db import get_conn as _nba_conn
-            home_tid = (result.get("home") or {}).get("id")
-            away_tid = (result.get("away") or {}).get("id")
+            # predict_q1 returns flat home_abbr/away_abbr, not a nested
+            # home.id -- resolve via nba_teams.abbreviation.
+            nba_conn = _nba_conn()
+            h_abbr_u = (home_abbr or "").upper()
+            a_abbr_u = (away_abbr or "").upper()
+            home_tid = away_tid = None
+            if h_abbr_u and a_abbr_u:
+                rows = nba_conn.execute(
+                    "SELECT id, abbreviation FROM nba_teams "
+                    "WHERE abbreviation IN (?, ?)",
+                    (h_abbr_u, a_abbr_u),
+                ).fetchall()
+                by_abbr = {r["abbreviation"]: r["id"] for r in rows}
+                home_tid = by_abbr.get(h_abbr_u)
+                away_tid = by_abbr.get(a_abbr_u)
             if home_tid and away_tid:
-                result["gbm"] = _gbm_predict_nba(_nba_conn(), {
+                result["gbm"] = _gbm_predict_nba(nba_conn, {
                     "home_team_id": int(home_tid),
                     "away_team_id": int(away_tid),
                     "date": datetime.now().strftime("%Y-%m-%d"),
                 })
+            else:
+                result["gbm"] = {"error": f"team_id lookup failed: "
+                                          f"{h_abbr_u!r}/{a_abbr_u!r}"}
         except Exception as e:
             logger.warning("NBA GBM failed for %s/%s: %s", home_abbr, away_abbr, e)
             result["gbm"] = {"error": str(e)}
@@ -2698,10 +2733,23 @@ def api_nhl_predict(home: str = Query(...), away: str = Query(...)):
         try:
             from engine.gbm.predict import predict_nhl as _gbm_predict_nhl
             from engine.nhl_db import get_conn as _nhl_conn
-            home_tid = (result.get("home") or {}).get("id")
-            away_tid = (result.get("away") or {}).get("id")
+            # Same team-id resolution as _predict_nhl_full -- nhl_predict
+            # doesn't emit result["home"]["id"], so we look up by
+            # abbreviation against nhl_teams.
+            nhl_conn = _nhl_conn()
+            home_abbr = (result.get("home") or {}).get("abbreviation") or ""
+            away_abbr = (result.get("away") or {}).get("abbreviation") or ""
+            home_tid = away_tid = None
+            if home_abbr and away_abbr:
+                rows = nhl_conn.execute(
+                    "SELECT id, abbreviation FROM nhl_teams "
+                    "WHERE abbreviation IN (?, ?)",
+                    (home_abbr.upper(), away_abbr.upper()),
+                ).fetchall()
+                by_abbr = {r["abbreviation"]: r["id"] for r in rows}
+                home_tid = by_abbr.get(home_abbr.upper())
+                away_tid = by_abbr.get(away_abbr.upper())
             if home_tid and away_tid:
-                nhl_conn = _nhl_conn()
                 today_s = datetime.now().strftime("%Y-%m-%d")
                 result["gbm"] = _gbm_predict_nhl(nhl_conn, {
                     "home_team_id": int(home_tid),
@@ -2711,6 +2759,9 @@ def api_nhl_predict(home: str = Query(...), away: str = Query(...)):
                         nhl_conn, int(home_tid), int(away_tid), today_s,
                     ),
                 })
+            else:
+                result["gbm"] = {"error": f"team_id lookup failed: "
+                                          f"{home_abbr!r}/{away_abbr!r}"}
         except Exception as e:
             logger.warning("NHL GBM shadow failed for %s/%s: %s", home, away, e)
             result["gbm"] = {"error": str(e)}
@@ -3490,19 +3541,34 @@ def api_nba_predict(home: str = Query(...), away: str = Query(...)):
                 logger.warning("NBA MC shadow failed for %s/%s: %s", home, away, e)
                 result["mc"] = {"error": str(e)}
 
-        # NBA GBM shadow (gated on ENABLE_NBA_GBM).
+        # NBA GBM shadow (gated on ENABLE_NBA_GBM). See _predict_nba_full
+        # for rationale on the abbreviation-based team-id lookup.
         if _get_flag("ENABLE_NBA_GBM", False, sport="nba"):
             try:
                 from engine.gbm.predict import predict_nba as _gbm_predict_nba
                 from engine.nba_db import get_conn as _nba_conn
-                home_tid = (result.get("home") or {}).get("id")
-                away_tid = (result.get("away") or {}).get("id")
+                nba_conn = _nba_conn()
+                h_abbr_u = (home or "").upper()
+                a_abbr_u = (away or "").upper()
+                home_tid = away_tid = None
+                if h_abbr_u and a_abbr_u:
+                    rows = nba_conn.execute(
+                        "SELECT id, abbreviation FROM nba_teams "
+                        "WHERE abbreviation IN (?, ?)",
+                        (h_abbr_u, a_abbr_u),
+                    ).fetchall()
+                    by_abbr = {r["abbreviation"]: r["id"] for r in rows}
+                    home_tid = by_abbr.get(h_abbr_u)
+                    away_tid = by_abbr.get(a_abbr_u)
                 if home_tid and away_tid:
-                    result["gbm"] = _gbm_predict_nba(_nba_conn(), {
+                    result["gbm"] = _gbm_predict_nba(nba_conn, {
                         "home_team_id": int(home_tid),
                         "away_team_id": int(away_tid),
                         "date": datetime.now().strftime("%Y-%m-%d"),
                     })
+                else:
+                    result["gbm"] = {"error": f"team_id lookup failed: "
+                                              f"{h_abbr_u!r}/{a_abbr_u!r}"}
             except Exception as e:
                 logger.warning("NBA GBM shadow failed for %s/%s: %s", home, away, e)
                 result["gbm"] = {"error": str(e)}
