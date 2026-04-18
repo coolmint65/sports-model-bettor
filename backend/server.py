@@ -823,6 +823,34 @@ def _bb_progress_increment(sport: str = "mlb") -> None:
         bucket["done"] = bucket.get("done", 0) + 1
 
 
+def _nhl_resolve_game_type(conn, home_tid: int, away_tid: int, date_s: str) -> int:
+    """Resolve NHL game_type (2=regular, 3=playoff) for a live matchup.
+
+    Checks the scheduled nhl_games row first; falls back to the calendar
+    window (Apr-Jun = playoff) when the row isn't there yet. The GBM
+    feature extractor reads game_type and derives `is_playoff`; hardcoding
+    2 at inference masked the playoff signal the model learned in
+    training, which is exactly the opposite of what we want during the
+    postseason.
+    """
+    try:
+        row = conn.execute(
+            "SELECT game_type FROM nhl_games "
+            "WHERE date = ? AND home_team_id = ? AND away_team_id = ? "
+            "LIMIT 1",
+            (date_s, home_tid, away_tid),
+        ).fetchone()
+        if row and row["game_type"] is not None:
+            return int(row["game_type"])
+    except Exception:
+        pass
+    try:
+        month = int((date_s or "")[5:7])
+    except (ValueError, TypeError):
+        month = 0
+    return 3 if month in (4, 5, 6) else 2
+
+
 def _bb_progress_snapshot(sport: str = "mlb") -> dict:
     with _BB_PROGRESS_LOCK:
         return dict(_BB_PROGRESS.get(sport, {}))
@@ -990,11 +1018,15 @@ def _predict_nhl_full(home_key: str, away_key: str,
             home_tid = (result.get("home") or {}).get("id")
             away_tid = (result.get("away") or {}).get("id")
             if home_tid and away_tid:
-                result["gbm"] = _gbm_predict_nhl(_nhl_conn(), {
+                nhl_conn = _nhl_conn()
+                today_s = datetime.now().strftime("%Y-%m-%d")
+                result["gbm"] = _gbm_predict_nhl(nhl_conn, {
                     "home_team_id": int(home_tid),
                     "away_team_id": int(away_tid),
-                    "date": datetime.now().strftime("%Y-%m-%d"),
-                    "game_type": 2,
+                    "date": today_s,
+                    "game_type": _nhl_resolve_game_type(
+                        nhl_conn, int(home_tid), int(away_tid), today_s,
+                    ),
                 })
         except Exception as e:
             logger.warning("NHL GBM failed for %s/%s: %s", home_key, away_key, e)
@@ -2615,11 +2647,15 @@ def api_nhl_predict(home: str = Query(...), away: str = Query(...)):
             home_tid = (result.get("home") or {}).get("id")
             away_tid = (result.get("away") or {}).get("id")
             if home_tid and away_tid:
-                result["gbm"] = _gbm_predict_nhl(_nhl_conn(), {
+                nhl_conn = _nhl_conn()
+                today_s = datetime.now().strftime("%Y-%m-%d")
+                result["gbm"] = _gbm_predict_nhl(nhl_conn, {
                     "home_team_id": int(home_tid),
                     "away_team_id": int(away_tid),
-                    "date": datetime.now().strftime("%Y-%m-%d"),
-                    "game_type": 2,
+                    "date": today_s,
+                    "game_type": _nhl_resolve_game_type(
+                        nhl_conn, int(home_tid), int(away_tid), today_s,
+                    ),
                 })
         except Exception as e:
             logger.warning("NHL GBM shadow failed for %s/%s: %s", home, away, e)
