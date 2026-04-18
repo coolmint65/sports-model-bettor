@@ -1,4 +1,5 @@
 import EdgeBadge from './primitives/EdgeBadge'
+import WinProbBar from './primitives/WinProbBar'
 
 export default function NBAScoreboard({ games, loading, progress, onSelectGame, bestBets }) {
   if (loading) {
@@ -206,7 +207,7 @@ function NBAGameCard({ game, bet, onClick }) {
 
       {/* Win probability bar */}
       {isPre && bet?.win_prob?.home != null && (
-        <Q1ProbBar wp={bet.win_prob} home={home} away={away} />
+        <WinProbBar wp={bet.win_prob} home={home} away={away} />
       )}
 
       {/* Odds - Q1 focused */}
@@ -274,21 +275,3 @@ function NBATeamRow({ team, isLive, isFinal }) {
 }
 
 
-function Q1ProbBar({ wp, home, away }) {
-  const hPct = Math.round(wp.home * 100)
-  const aPct = Math.round(wp.away * 100)
-  const homeFavored = wp.home > wp.away
-
-  return (
-    <>
-      <div className="wp-labels">
-        <span className={!homeFavored ? 'wp-favored' : ''}>{away.abbreviation} {aPct}%</span>
-        <span className={homeFavored ? 'wp-favored' : ''}>{home.abbreviation} {hPct}%</span>
-      </div>
-      <div className="wp-bar-card">
-        <div className="wp-away" style={{ width: `${aPct}%` }} />
-        <div className="wp-home" style={{ width: `${hPct}%` }} />
-      </div>
-    </>
-  )
-}

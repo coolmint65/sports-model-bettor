@@ -1,4 +1,6 @@
 import SharedGameHeader from './gameDetail/SharedGameHeader'
+import WinProbBar from './primitives/WinProbBar'
+import StatRow from './primitives/StatRow'
 import RestBadges from './gameDetail/RestBadges'
 import EdgeCallout from './gameDetail/EdgeCallout'
 import { kellyFraction, mlToProb, impliedFromOdds } from './gameDetail/kelly'
@@ -234,28 +236,14 @@ function NHLPredictionResults({ data, odds, home, away }) {
           )
         })()}
 
-        <div className="prob-bar-container">
-          <div className="prob-bar-labels">
-            <span className={homeWins ? 'favored' : ''}>{home.abbreviation} {pct(wp.home)}</span>
-            <span className={!homeWins ? 'favored' : ''}>{away.abbreviation} {pct(wp.away)}</span>
-          </div>
-          <div className="prob-bar">
-            <div className="home" style={{ width: pct(wp.home) }} />
-            <div className="away" style={{ width: pct(wp.away) }} />
-          </div>
-        </div>
+        <WinProbBar wp={wp} home={home} away={away} variant="detail" />
 
         <div className="key-stats">
-          <div className="key-stat">
-            <span className="key-label">Total</span>
-            <span className="key-value">{d.total.toFixed(1)}</span>
-          </div>
-          <div className="key-stat">
-            <span className="key-label">Spread</span>
-            <span className="key-value">
-              {homeWins ? home.abbreviation : away.abbreviation} {Math.abs(d.spread).toFixed(1)}
-            </span>
-          </div>
+          <StatRow label="Total" value={d.total.toFixed(1)} />
+          <StatRow
+            label="Spread"
+            value={`${homeWins ? home.abbreviation : away.abbreviation} ${Math.abs(d.spread).toFixed(1)}`}
+          />
         </div>
 
         <EdgeCallout edge={bestEdge} badgeClassName={bestEdge ? `conf-badge conf-${bestEdge.rating}` : undefined} />

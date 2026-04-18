@@ -1,4 +1,5 @@
 import EdgeBadge from './primitives/EdgeBadge'
+import WinProbBar from './primitives/WinProbBar'
 
 export default function Scoreboard({ games, loading, progress, onSelectGame, bestBets }) {
   if (loading) {
@@ -303,26 +304,6 @@ function TeamRow({ team, isLive, isFinal }) {
         <span className={`game-score ${team.winner ? 'winner' : ''}`}>{team.score}</span>
       )}
     </div>
-  )
-}
-
-
-function WinProbBar({ wp, home, away }) {
-  const hPct = Math.round((wp.home || 0) * 100)
-  const aPct = Math.round((wp.away || 0) * 100)
-  const homeFavored = (wp.home || 0) > (wp.away || 0)
-
-  return (
-    <>
-      <div className="wp-labels">
-        <span className={!homeFavored ? 'wp-favored' : ''}>{away.abbreviation} {aPct}%</span>
-        <span className={homeFavored ? 'wp-favored' : ''}>{home.abbreviation} {hPct}%</span>
-      </div>
-      <div className="wp-bar-card">
-        <div className="wp-away" style={{ width: `${aPct}%` }} />
-        <div className="wp-home" style={{ width: `${hPct}%` }} />
-      </div>
-    </>
   )
 }
 

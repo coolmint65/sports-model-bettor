@@ -1,5 +1,7 @@
 import EdgeCallout from './gameDetail/EdgeCallout'
 import ModelSignals from './gameDetail/ModelSignals'
+import WinProbBar from './primitives/WinProbBar'
+import StatRow from './primitives/StatRow'
 
 export default function PredictionResults({ data, odds }) {
   const d = data
@@ -59,36 +61,21 @@ export default function PredictionResults({ data, odds }) {
         </div>
 
         {/* Win Prob Bar inline */}
-        <div className="prob-bar-container">
-          <div className="prob-bar-labels">
-            <span className={homeWins ? 'favored' : ''}>{home.abbreviation} {pct(wp.home)}</span>
-            <span className={!homeWins ? 'favored' : ''}>{away.abbreviation} {pct(wp.away)}</span>
-          </div>
-          <div className="prob-bar">
-            <div className="home" style={{ width: pct(wp.home) }} />
-            <div className="away" style={{ width: pct(wp.away) }} />
-          </div>
-        </div>
+        <WinProbBar wp={wp} home={home} away={away} variant="detail" />
 
         {/* Key numbers */}
         <div className="key-stats">
-          <div className="key-stat">
-            <span className="key-label">Total</span>
-            <span className="key-value">{d.total.toFixed(1)}</span>
-          </div>
-          <div className="key-stat">
-            <span className="key-label">Spread</span>
-            <span className="key-value">
-              {homeWins ? home.abbreviation : away.abbreviation} {Math.abs(d.spread).toFixed(1)}
-            </span>
-          </div>
+          <StatRow label="Total" value={d.total.toFixed(1)} />
+          <StatRow
+            label="Spread"
+            value={`${homeWins ? home.abbreviation : away.abbreviation} ${Math.abs(d.spread).toFixed(1)}`}
+          />
           {d.park_factor && d.park_factor !== 1.0 && (
-            <div className="key-stat">
-              <span className="key-label">Park</span>
-              <span className={`key-value ${d.park_factor > 1.03 ? 'positive' : d.park_factor < 0.97 ? 'negative' : ''}`}>
-                {d.park_factor > 1.03 ? 'Hitter' : d.park_factor < 0.97 ? 'Pitcher' : 'Neutral'}
-              </span>
-            </div>
+            <StatRow
+              label="Park"
+              value={d.park_factor > 1.03 ? 'Hitter' : d.park_factor < 0.97 ? 'Pitcher' : 'Neutral'}
+              valueClassName={d.park_factor > 1.03 ? 'positive' : d.park_factor < 0.97 ? 'negative' : ''}
+            />
           )}
         </div>
 

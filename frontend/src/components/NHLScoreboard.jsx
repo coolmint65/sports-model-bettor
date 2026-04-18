@@ -1,4 +1,5 @@
 import EdgeBadge from './primitives/EdgeBadge'
+import WinProbBar from './primitives/WinProbBar'
 
 // League-average NHL SV% is ~0.905. Color + tooltip labels anchor the
 // user's eye so a ".915" starter is recognized as above average without
@@ -377,26 +378,6 @@ function TeamRow({ team, isLive, isFinal }) {
         <span className={`game-score ${team.winner ? 'winner' : ''}`}>{team.score}</span>
       )}
     </div>
-  )
-}
-
-
-function WinProbBar({ wp, home, away }) {
-  const hPct = Math.round(wp.home * 100)
-  const aPct = Math.round(wp.away * 100)
-  const homeFavored = wp.home > wp.away
-
-  return (
-    <>
-      <div className="wp-labels">
-        <span className={!homeFavored ? 'wp-favored' : ''}>{away.abbreviation} {aPct}%</span>
-        <span className={homeFavored ? 'wp-favored' : ''}>{home.abbreviation} {hPct}%</span>
-      </div>
-      <div className="wp-bar-card">
-        <div className="wp-away" style={{ width: `${aPct}%` }} />
-        <div className="wp-home" style={{ width: `${hPct}%` }} />
-      </div>
-    </>
   )
 }
 

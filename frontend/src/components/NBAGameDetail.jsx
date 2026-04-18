@@ -1,4 +1,6 @@
 import SharedGameHeader from './gameDetail/SharedGameHeader'
+import WinProbBar from './primitives/WinProbBar'
+import StatRow from './primitives/StatRow'
 import EdgeCallout from './gameDetail/EdgeCallout'
 import { kellyFraction, impliedFromOdds } from './gameDetail/kelly'
 import ProbHistogram from './gameDetail/ProbHistogram'
@@ -90,32 +92,22 @@ function Q1PredictionResults({ data, odds, home, away }) {
         </div>
 
         {d.spread_cover_prob != null && (
-          <div className="prob-bar-container">
-            <div className="prob-bar-labels">
-              <span className={homeFav ? 'favored' : ''}>{home.abbreviation} {pct(d.q1_ml_home)}</span>
-              <span className={!homeFav ? 'favored' : ''}>{away.abbreviation} {pct(1 - (d.q1_ml_home || 0.5))}</span>
-            </div>
-            <div className="prob-bar">
-              <div className="home" style={{width: pct(d.q1_ml_home || 0.5)}} />
-              <div className="away" style={{width: pct(1 - (d.q1_ml_home || 0.5))}} />
-            </div>
-          </div>
+          <WinProbBar
+            wp={{ home: d.q1_ml_home || 0.5, away: 1 - (d.q1_ml_home || 0.5) }}
+            home={home}
+            away={away}
+            variant="detail"
+          />
         )}
 
         <div className="key-stats">
-          <div className="key-stat">
-            <span className="key-label">Q1 Total</span>
-            <span className="key-value">{total.toFixed(1)}</span>
-          </div>
-          <div className="key-stat">
-            <span className="key-label">Q1 Spread</span>
-            <span className="key-value">{homeFav ? home.abbreviation : away.abbreviation} {Math.abs(margin).toFixed(1)}</span>
-          </div>
+          <StatRow label="Q1 Total" value={total.toFixed(1)} />
+          <StatRow
+            label="Q1 Spread"
+            value={`${homeFav ? home.abbreviation : away.abbreviation} ${Math.abs(margin).toFixed(1)}`}
+          />
           {d.spread_cover_prob != null && (
-            <div className="key-stat">
-              <span className="key-label">Cover %</span>
-              <span className="key-value">{pct(d.spread_cover_prob)}</span>
-            </div>
+            <StatRow label="Cover %" value={pct(d.spread_cover_prob)} />
           )}
         </div>
 
