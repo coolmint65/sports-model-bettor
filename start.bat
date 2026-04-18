@@ -25,8 +25,12 @@ echo Starting everything...
 echo.
 
 REM ── Sync: MLB, NHL, NBA (sequential to avoid DB race conditions) ──
+REM Chain with `&` (not `&&`) so a failure in an earlier sport doesn't
+REM skip the later ones -- the tracker record/settle steps for each
+REM sport live inside that sport's sync, so an MLB hiccup must not
+REM block NBA from automating its record/settle pass.
 echo [1/4] Syncing data (auto-closes when done)...
-start "Data-Sync" cmd /c "cd /d %~dp0 && call sync_mlb.bat && call sync_nhl.bat && call sync_nba.bat && exit"
+start "Data-Sync" cmd /c "cd /d %~dp0 & call sync_mlb.bat & call sync_nhl.bat & call sync_nba.bat & exit"
 
 REM ── Backend server ──
 echo [3/4] Backend API server...

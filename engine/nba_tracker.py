@@ -568,6 +568,29 @@ def get_pick_summary() -> dict:
     }
 
 
+# ── Public API (nba_-prefixed aliases used by backend/server.py) ──
+# The backend routes import sport-prefixed names by convention so the
+# endpoints read clearly at the call site. Module-internal names stayed
+# short; expose the prefixed aliases here so /api/nba/tracker/* actually
+# resolves the functions instead of hitting ImportError and silently
+# returning "module not loaded yet".
+
+record_nba_picks = record_picks
+settle_nba_picks = settle_picks
+get_nba_pick_summary = get_pick_summary
+
+
+def get_nba_pick_history(limit: int = 30) -> list[dict]:
+    """Return the most recent NBA picks for the tracker history tab.
+
+    Mirrors get_nba_pick_summary() but peels off just the `recent` list
+    so the /api/nba/tracker/history endpoint can stream a flat array.
+    """
+    summary = get_pick_summary() or {}
+    recent = summary.get("recent") or []
+    return recent[:limit]
+
+
 # ── CLI ──────────────────────────────────────────────────────
 
 if __name__ == "__main__":
