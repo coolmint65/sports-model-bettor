@@ -837,22 +837,24 @@ function getReasoning(pred, home, away) {
     reasons.push(`${home.abbreviation} playing at home where they have a clear advantage this season`)
   }
 
-  // Power play vs penalty kill mismatch
-  if (f.home_pp != null && f.away_pk != null) {
+  // Power play vs penalty kill mismatch. Previously labeled any PK
+  // under 78% as "weak" which caught nearly half the league (NHL
+  // average PK is ~79%). Switched to rank-based thresholds so the
+  // language matches reality: "weak" means bottom-10 PK, "strong PP"
+  // means top-10 PP. We only editorialize when we have rank data.
+  const strongPP = (rank) => rank != null && rank <= 10
+  const weakPK   = (rank) => rank != null && rank >= 23
+  if (f.home_pp != null && f.away_pk != null
+      && strongPP(f.home_pp_rank) && weakPK(f.away_pk_rank)) {
     const h_pp = f.home_pp * 100
     const a_pk = f.away_pk * 100
-    if (h_pp > 22 && a_pk < 78) {
-      reasons.push(`${home.abbreviation}'s power play (${h_pp.toFixed(1)}%) could feast against ${away.abbreviation}'s weak penalty kill (${a_pk.toFixed(1)}%)`)
-    } else if (h_pp > 20 && a_pk < 80) {
-      reasons.push(`${home.abbreviation} has a decent power play that could take advantage of ${away.abbreviation}'s penalty kill`)
-    }
+    reasons.push(`${home.abbreviation}'s top-${Math.min(10, f.home_pp_rank)} power play (${h_pp.toFixed(1)}%) lines up against ${away.abbreviation}'s ${ordinal(f.away_pk_rank)}-ranked penalty kill (${a_pk.toFixed(1)}%)`)
   }
-  if (f.away_pp != null && f.home_pk != null) {
+  if (f.away_pp != null && f.home_pk != null
+      && strongPP(f.away_pp_rank) && weakPK(f.home_pk_rank)) {
     const a_pp = f.away_pp * 100
     const h_pk = f.home_pk * 100
-    if (a_pp > 22 && h_pk < 78) {
-      reasons.push(`${away.abbreviation}'s power play (${a_pp.toFixed(1)}%) could feast against ${home.abbreviation}'s weak penalty kill (${h_pk.toFixed(1)}%)`)
-    }
+    reasons.push(`${away.abbreviation}'s top-${Math.min(10, f.away_pp_rank)} power play (${a_pp.toFixed(1)}%) lines up against ${home.abbreviation}'s ${ordinal(f.home_pk_rank)}-ranked penalty kill (${h_pk.toFixed(1)}%)`)
   }
 
   // Save % rankings
@@ -895,18 +897,17 @@ function getReasoning(pred, home, away) {
     reasons.push(`${away.abbreviation} has had extra rest, giving them a fresh-legs advantage`)
   }
 
-  // Injuries
+  // Injuries. Only surface when meaningful (>=8% strength loss). The
+  // old "depth should cover it" fallback implied we knew something
+  // about roster depth, which we don't -- just listing players without
+  // context reads as filler. If the impact is small, stay silent.
   if (pred.injuries?.home_impact != null && pred.injuries.home_impact < 0.92) {
     const pct = Math.round((1 - pred.injuries.home_impact) * 100)
-    reasons.push(`${home.abbreviation} is severely shorthanded, about ${pct}% weaker than full strength`)
-  } else if (pred.injuries?.home_impact != null && pred.injuries.home_impact < 0.97) {
-    reasons.push(`${home.abbreviation} has some players out but their depth should cover it`)
+    reasons.push(`${home.abbreviation} is notably shorthanded (~${pct}% weaker from injuries)`)
   }
   if (pred.injuries?.away_impact != null && pred.injuries.away_impact < 0.92) {
     const pct = Math.round((1 - pred.injuries.away_impact) * 100)
-    reasons.push(`${away.abbreviation} is severely shorthanded, about ${pct}% of their scoring power is out`)
-  } else if (pred.injuries?.away_impact != null && pred.injuries.away_impact < 0.97) {
-    reasons.push(`${away.abbreviation} missing a few players but their depth should cover it`)
+    reasons.push(`${away.abbreviation} is notably shorthanded (~${pct}% weaker from injuries)`)
   }
 
   // Motivation / playoff context
