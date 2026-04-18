@@ -233,27 +233,58 @@ def _advance_runners(outcome: str, bases: list[bool]) -> tuple[int, list[bool]]:
     return 0, bases
 
 
-def _sim_half_inning(lineup: Sequence[HitterProfile],
+def _sim_half_inning(lineup_len: int,
                      lineup_idx: int,
-                     pitcher: PitcherProfile,
-                     park_hr_factor: float,
+                     pitcher_role: int,
+                     prob_table: np.ndarray,
+                     cum_table: np.ndarray,
+                     outs_per_outcome: np.ndarray,
                      rng: np.random.Generator) -> tuple[int, int]:
-    """Simulate one half-inning. Returns (runs, new_lineup_idx)."""
+    """Simulate one half-inning against a precomputed prob table.
+
+    prob_table[batter_idx, pitcher_role] is the 8-vector of outcome
+    probabilities for that matchup; cum_table is its cumulative sum
+    along the outcome axis so a single rng.random() + np.searchsorted
+    replaces rng.choice (which has per-call p-array overhead).
+
+    Returns (runs, new_lineup_idx).
+    """
     outs = 0
     bases = [False, False, False]
     runs = 0
     while outs < 3:
-        batter = lineup[lineup_idx % len(lineup)]
-        probs = outcome_probs(batter, pitcher, park_hr_factor)
-        idx = rng.choice(len(OUTCOMES), p=probs)
-        outcome = OUTCOMES[idx]
-        if outcome in ("K", "OUT"):
+        idx_in_lineup = lineup_idx % lineup_len
+        cum = cum_table[idx_in_lineup, pitcher_role]
+        u = rng.random()
+        idx = int(np.searchsorted(cum, u))
+        if idx >= 8:
+            idx = 7
+        if outs_per_outcome[idx]:  # K or OUT
             outs += 1
         else:
+            outcome = OUTCOMES[idx]
             got_runs, bases = _advance_runners(outcome, bases)
             runs += got_runs
         lineup_idx += 1
     return runs, lineup_idx
+
+
+def _precompute_prob_table(lineup: Sequence[HitterProfile],
+                            starter: PitcherProfile,
+                            bullpen: PitcherProfile,
+                            park_hr_factor: float) -> tuple[np.ndarray, np.ndarray]:
+    """Build (n_batters, 2, 8) probability + cumulative tables, indexed by
+    pitcher role (0=starter, 1=bullpen). Called twice per game (one per
+    side) -- eliminates the 4.25M per-PA recompute that was the bottleneck
+    at 50k sims (~97s/game before this change)."""
+    n = len(lineup)
+    probs = np.zeros((n, 2, 8), dtype=np.float64)
+    pitchers = (starter, bullpen)
+    for i, batter in enumerate(lineup):
+        for r, pitcher in enumerate(pitchers):
+            probs[i, r] = outcome_probs(batter, pitcher, park_hr_factor)
+    cum = np.cumsum(probs, axis=-1)
+    return probs, cum
 
 
 def _draw_sp_innings_ceiling(pitcher: PitcherProfile, rng: np.random.Generator) -> int:
@@ -290,6 +321,22 @@ def simulate_games(home: TeamProfile, away: TeamProfile,
     home_inn = np.zeros((n_sims, 9), dtype=np.int16)
     away_inn = np.zeros((n_sims, 9), dtype=np.int16)
 
+    # Precompute the batter × pitcher-role outcome tables once per game.
+    # Inside the hot loop we only do an array lookup + searchsorted sample
+    # instead of rebuilding log5 / platoon math for every plate appearance.
+    away_probs, away_cum = _precompute_prob_table(
+        away.lineup, home.starter, home.bullpen, home.park_hr_factor,
+    )
+    home_probs, home_cum = _precompute_prob_table(
+        home.lineup, away.starter, away.bullpen, home.park_hr_factor,
+    )
+    # 1 where the outcome increments `outs` (K or OUT), 0 otherwise.
+    outs_per_outcome = np.array(
+        [1 if o in ("K", "OUT") else 0 for o in OUTCOMES], dtype=np.int8,
+    )
+    home_lineup_len = len(home.lineup)
+    away_lineup_len = len(away.lineup)
+
     for s in range(n_sims):
         home_idx = 0
         away_idx = 0
@@ -300,9 +347,10 @@ def simulate_games(home: TeamProfile, away: TeamProfile,
 
         for inning in range(9):
             # Top of inning: away bats, home pitches
-            home_pitcher = home.starter if inning <= home_sp_ceiling else home.bullpen
+            home_role = 0 if inning <= home_sp_ceiling else 1
             runs_top, away_idx = _sim_half_inning(
-                away.lineup, away_idx, home_pitcher, home.park_hr_factor, rng,
+                away_lineup_len, away_idx, home_role,
+                away_probs, away_cum, outs_per_outcome, rng,
             )
             away_inn[s, inning] = runs_top
             game_away += runs_top
@@ -312,9 +360,10 @@ def simulate_games(home: TeamProfile, away: TeamProfile,
                 break
 
             # Bottom: home bats, away pitches
-            away_pitcher = away.starter if inning <= away_sp_ceiling else away.bullpen
+            away_role = 0 if inning <= away_sp_ceiling else 1
             runs_bot, home_idx = _sim_half_inning(
-                home.lineup, home_idx, away_pitcher, away.park_hr_factor, rng,
+                home_lineup_len, home_idx, away_role,
+                home_probs, home_cum, outs_per_outcome, rng,
             )
             home_inn[s, inning] = runs_bot
             game_home += runs_bot
