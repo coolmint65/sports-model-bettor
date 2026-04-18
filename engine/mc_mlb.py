@@ -236,55 +236,87 @@ def _advance_runners(outcome: str, bases: list[bool]) -> tuple[int, list[bool]]:
 def _sim_half_inning(lineup_len: int,
                      lineup_idx: int,
                      pitcher_role: int,
-                     prob_table: np.ndarray,
-                     cum_table: np.ndarray,
-                     outs_per_outcome: np.ndarray,
-                     rng: np.random.Generator) -> tuple[int, int]:
-    """Simulate one half-inning against a precomputed prob table.
+                     cum_lists: list,
+                     outs_per_outcome: tuple,
+                     randoms: "np.ndarray",
+                     rand_offset: int) -> tuple[int, int, int]:
+    """Simulate one half-inning using only Python in the inner loop.
 
-    prob_table[batter_idx, pitcher_role] is the 8-vector of outcome
-    probabilities for that matchup; cum_table is its cumulative sum
-    along the outcome axis so a single rng.random() + np.searchsorted
-    replaces rng.choice (which has per-call p-array overhead).
+    Earlier revision called rng.random() + np.searchsorted per plate
+    appearance. Under Python 3.14's free-threaded mode that pattern
+    deadlocked across worker threads (multiple concurrent numpy C
+    callbacks racing for an internal allocator). All randomness is now
+    pre-generated upstream as one numpy array (`randoms`) -- a single
+    contended C call per sim instead of ~85 per sim -- and we walk the
+    8-element cumulative distribution with a tight Python loop. For 8
+    outcomes a manual scan is faster than bisect's call overhead.
 
-    Returns (runs, new_lineup_idx).
+    `cum_lists[batter_idx][pitcher_role]` is a Python list (not numpy)
+    so the inner loop touches no C extension state.
+
+    Returns (runs, new_lineup_idx, new_rand_offset).
     """
     outs = 0
     bases = [False, False, False]
     runs = 0
+    rand_idx = rand_offset
+    n_rand = len(randoms)
     while outs < 3:
-        idx_in_lineup = lineup_idx % lineup_len
-        cum = cum_table[idx_in_lineup, pitcher_role]
-        u = rng.random()
-        idx = int(np.searchsorted(cum, u))
-        if idx >= 8:
-            idx = 7
+        if rand_idx >= n_rand:
+            # extremely unlikely (caller sized the buffer for the worst
+            # case) but bail out cleanly rather than IndexError
+            break
+        cum = cum_lists[lineup_idx % lineup_len][pitcher_role]
+        u = randoms[rand_idx]
+        rand_idx += 1
+        # Linear scan over 8 outcomes: faster than bisect/searchsorted
+        # at this size and uses no C extension calls.
+        idx = 0
+        if u >= cum[0]:
+            if u >= cum[3]:
+                if u >= cum[5]:
+                    idx = 6 if u < cum[6] else 7
+                else:
+                    idx = 4 if u < cum[4] else 5
+            else:
+                if u >= cum[1]:
+                    idx = 2 if u < cum[2] else 3
+                else:
+                    idx = 1
         if outs_per_outcome[idx]:  # K or OUT
             outs += 1
         else:
-            outcome = OUTCOMES[idx]
-            got_runs, bases = _advance_runners(outcome, bases)
+            got_runs, bases = _advance_runners(OUTCOMES[idx], bases)
             runs += got_runs
         lineup_idx += 1
-    return runs, lineup_idx
+    return runs, lineup_idx, rand_idx
 
 
 def _precompute_prob_table(lineup: Sequence[HitterProfile],
                             starter: PitcherProfile,
                             bullpen: PitcherProfile,
-                            park_hr_factor: float) -> tuple[np.ndarray, np.ndarray]:
-    """Build (n_batters, 2, 8) probability + cumulative tables, indexed by
-    pitcher role (0=starter, 1=bullpen). Called twice per game (one per
-    side) -- eliminates the 4.25M per-PA recompute that was the bottleneck
-    at 50k sims (~97s/game before this change)."""
+                            park_hr_factor: float) -> list:
+    """Build a [batter_idx][pitcher_role] -> Python-list[8] cumulative
+    probability table. Called once per side per game.
+
+    Originally returned numpy arrays so the inner sim loop could
+    np.searchsorted them. That deadlocked under Python 3.14's
+    free-threaded mode (concurrent numpy calls across MC worker
+    threads). The inner loop now uses pure Python on a plain list, so
+    the precompute returns lists -- one C-level call (cumsum) here,
+    zero C-level calls per plate appearance later.
+    """
     n = len(lineup)
-    probs = np.zeros((n, 2, 8), dtype=np.float64)
     pitchers = (starter, bullpen)
+    table: list = []
     for i, batter in enumerate(lineup):
-        for r, pitcher in enumerate(pitchers):
-            probs[i, r] = outcome_probs(batter, pitcher, park_hr_factor)
-    cum = np.cumsum(probs, axis=-1)
-    return probs, cum
+        per_role: list = []
+        for pitcher in pitchers:
+            probs = outcome_probs(batter, pitcher, park_hr_factor)
+            cum = np.cumsum(probs)
+            per_role.append([float(x) for x in cum])
+        table.append(per_role)
+    return table
 
 
 def _draw_sp_innings_ceiling(pitcher: PitcherProfile, rng: np.random.Generator) -> int:
@@ -322,35 +354,52 @@ def simulate_games(home: TeamProfile, away: TeamProfile,
     away_inn = np.zeros((n_sims, 9), dtype=np.int16)
 
     # Precompute the batter × pitcher-role outcome tables once per game.
-    # Inside the hot loop we only do an array lookup + searchsorted sample
-    # instead of rebuilding log5 / platoon math for every plate appearance.
-    away_probs, away_cum = _precompute_prob_table(
+    # Stored as Python lists so the inner loop touches no numpy state.
+    away_cum_lists = _precompute_prob_table(
         away.lineup, home.starter, home.bullpen, home.park_hr_factor,
     )
-    home_probs, home_cum = _precompute_prob_table(
+    home_cum_lists = _precompute_prob_table(
         home.lineup, away.starter, away.bullpen, home.park_hr_factor,
     )
-    # 1 where the outcome increments `outs` (K or OUT), 0 otherwise.
-    outs_per_outcome = np.array(
-        [1 if o in ("K", "OUT") else 0 for o in OUTCOMES], dtype=np.int8,
+    # Tuple: 1 where outcome increments `outs` (K or OUT), 0 otherwise.
+    outs_per_outcome = tuple(
+        1 if o in ("K", "OUT") else 0 for o in OUTCOMES
     )
     home_lineup_len = len(home.lineup)
     away_lineup_len = len(away.lineup)
 
+    # Pre-generate ALL random draws upfront in one big numpy call. A
+    # single C-level call per sim batch (releases GIL once for the whole
+    # array) is dramatically safer under Python 3.14 free-threaded mode
+    # than thousands of tiny rng.random() calls in the hot loop, which
+    # deadlocked across worker threads. Buffer is sized for the
+    # theoretical worst case (~22 PA per half-inning, 18 half-innings).
+    MAX_PA_PER_SIM = 9 * 2 * 22
+    all_randoms = rng.random(n_sims * MAX_PA_PER_SIM)
+    sp_draws = rng.normal(0.0, 1.0, size=n_sims * 2)  # one per starter
+
+    home_sp_mean = max(2.0, min(8.0, home.starter.expected_innings))
+    away_sp_mean = max(2.0, min(8.0, away.starter.expected_innings))
+
     for s in range(n_sims):
         home_idx = 0
         away_idx = 0
-        home_sp_ceiling = _draw_sp_innings_ceiling(home.starter, rng)
-        away_sp_ceiling = _draw_sp_innings_ceiling(away.starter, rng)
+        # Inline _draw_sp_innings_ceiling to avoid per-sim rng.normal calls
+        home_sp_ceiling = int(max(3, min(9, round(home_sp_mean + sp_draws[s * 2])))) - 1
+        away_sp_ceiling = int(max(3, min(9, round(away_sp_mean + sp_draws[s * 2 + 1])))) - 1
         game_home = 0
         game_away = 0
+
+        rand_offset = s * MAX_PA_PER_SIM
+        rand_window = all_randoms[rand_offset:rand_offset + MAX_PA_PER_SIM]
+        rand_pos = 0
 
         for inning in range(9):
             # Top of inning: away bats, home pitches
             home_role = 0 if inning <= home_sp_ceiling else 1
-            runs_top, away_idx = _sim_half_inning(
+            runs_top, away_idx, rand_pos = _sim_half_inning(
                 away_lineup_len, away_idx, home_role,
-                away_probs, away_cum, outs_per_outcome, rng,
+                away_cum_lists, outs_per_outcome, rand_window, rand_pos,
             )
             away_inn[s, inning] = runs_top
             game_away += runs_top
@@ -361,9 +410,9 @@ def simulate_games(home: TeamProfile, away: TeamProfile,
 
             # Bottom: home bats, away pitches
             away_role = 0 if inning <= away_sp_ceiling else 1
-            runs_bot, home_idx = _sim_half_inning(
+            runs_bot, home_idx, rand_pos = _sim_half_inning(
                 home_lineup_len, home_idx, away_role,
-                home_probs, home_cum, outs_per_outcome, rng,
+                home_cum_lists, outs_per_outcome, rand_window, rand_pos,
             )
             home_inn[s, inning] = runs_bot
             game_home += runs_bot
