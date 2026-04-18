@@ -156,6 +156,11 @@ function NHLGameCard({ game, bet, onClick }) {
           <span className="pick-badge-edge">+{bet.best_pick.edge}%</span>
         </div>
       )}
+      {isPre && !(bet && bet.best_pick && conf !== 'skip') && (
+        <div className="pick-badge pick-badge-none" title="Model found no +EV play in the calibrated edges">
+          <span className="pick-badge-type">NO PICK</span>
+        </div>
+      )}
 
       {/* Rest / back-to-back indicators */}
       {isPre && (homeB2B || awayB2B || homeRest || awayRest) && (

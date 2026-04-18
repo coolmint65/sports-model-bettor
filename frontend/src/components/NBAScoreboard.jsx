@@ -152,6 +152,11 @@ function NBAGameCard({ game, bet, onClick }) {
       {isFinal && <div className="final-badge">FINAL</div>}
 
       {/* Q1 pick badge - only for pregame games */}
+      {isPre && !(bet && bet.best_pick && conf !== 'skip') && (
+        <div className="pick-badge pick-badge-none" title="Model found no +EV play in the calibrated edges">
+          <span className="pick-badge-type">NO PICK</span>
+        </div>
+      )}
       {isPre && bet && bet.best_pick && conf !== 'skip' && (
         <div className={`pick-badge q1-badge badge-${conf}`}>
           <span className="pick-badge-type">
@@ -165,26 +170,11 @@ function NBAGameCard({ game, bet, onClick }) {
         </div>
       )}
 
-      {/* Show secondary Q1 pick (e.g. spread when winner is best) */}
-      {isPre && bet?.all_picks && bet.all_picks.length > 1 && conf !== 'skip' && (() => {
-        const best = bet.best_pick
-        const second = bet.all_picks.find(p => p && p.type !== best.type && (p.confidence || 'skip') !== 'skip')
-        if (!second) return null
-        return (
-          <div className={`pick-badge q1-badge-secondary badge-${second.confidence || 'lean'}`} style={{opacity:0.9}}>
-            <span className="pick-badge-type">
-              {second.type === 'Q1_SPREAD' ? 'Q1 SPREAD'
-                : second.type === 'Q1_TOTAL' ? 'Q1 TOTAL'
-                : second.type === 'Q1_ML' ? 'Q1 WINNER'
-                : 'Q1'}
-            </span>
-            <span className="pick-badge-pick">{second.pick}</span>
-            <span className="pick-badge-edge">+{second.edge}%</span>
-          </div>
-        )
-      })()}
-
-      {/* Rest indicators */}
+      {/* One-pick-per-card rule: the scoreboard shows only the highest-
+          conviction play for the game. Secondary picks are still in the
+          response (bet.all_picks) so the GameDetail drilldown can list
+          them; the card is reserved for "this is THE play" signal. */}
+{/* Rest indicators */}
       {isPre && bet?.rest && (bet.rest.home_b2b || bet.rest.away_b2b) && (
         <div style={{display:'flex',gap:4,flexWrap:'wrap',marginBottom:6}}>
           {bet.rest.away_b2b && (

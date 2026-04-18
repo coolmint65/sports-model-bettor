@@ -350,6 +350,20 @@ body {
   color: #94a3b8;
 }
 
+/* Rendered when the model found no +EV play for this game after
+   calibration. Intentionally muted -- visible enough to show "we
+   looked, nothing came back" but not so loud it steals attention
+   from the games that DO have picks. */
+.pick-badge.pick-badge-none {
+  background: rgba(71, 85, 105, 0.08);
+  color: #64748b;
+  border: 1px dashed rgba(71, 85, 105, 0.25);
+  justify-content: center;
+}
+.pick-badge.pick-badge-none .pick-badge-type {
+  letter-spacing: 0.08em;
+}
+
 .pick-badge-type {
   font-size: 0.65rem;
   text-transform: uppercase;
