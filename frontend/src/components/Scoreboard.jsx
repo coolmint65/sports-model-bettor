@@ -3,7 +3,10 @@ export default function Scoreboard({ games, loading, progress, onSelectGame, bes
     // Progress is the live snapshot from /api/best-bets/progress -- shows
     // X / N games and a percent so the cold-load wait isn't a black box.
     const total = progress?.total || 0
-    const done = progress?.done || 0
+    const rawDone = progress?.done || 0
+    // Backend single-flight should keep done <= total now, but defense
+    // in depth: clamp the display in case two predates collide.
+    const done = total > 0 ? Math.min(rawDone, total) : rawDone
     const pct = total ? Math.min(100, Math.round((done / total) * 100)) : null
     const phase = progress?.phase
     let label = "Loading today's slate..."

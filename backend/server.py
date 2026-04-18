@@ -823,6 +823,48 @@ def _bb_progress_increment(sport: str = "mlb") -> None:
         bucket["done"] = bucket.get("done", 0) + 1
 
 
+# Single-flight registry. Concurrent /api/<sport>/best-bets calls (mount
+# load + 5-min refresh interval racing each other, or two tabs open)
+# would otherwise both run the full per-game prediction chain AND both
+# bump the same shared progress counter -- producing "32/15 (100%)" in
+# the spinner and doubling the workload. _BB_INFLIGHT holds the running
+# request's Future so latecomers wait for its result instead of racing.
+import concurrent.futures as _futures
+_BB_INFLIGHT: dict[str, _futures.Future] = {}
+_BB_INFLIGHT_LOCK = _threading.Lock()
+
+
+def _bb_single_flight(sport: str, runner):
+    """Run `runner()` once per sport at a time. If another request is
+    already executing the same sport's work, wait for and return its
+    result. Used by all three /best-bets endpoints."""
+    with _BB_INFLIGHT_LOCK:
+        existing = _BB_INFLIGHT.get(sport)
+        if existing is not None and not existing.done():
+            fut = existing
+            owner = False
+        else:
+            fut = _futures.Future()
+            _BB_INFLIGHT[sport] = fut
+            owner = True
+
+    if not owner:
+        # Another caller is already running. Wait for their result.
+        return fut.result()
+
+    try:
+        result = runner()
+        fut.set_result(result)
+        return result
+    except BaseException as e:
+        fut.set_exception(e)
+        raise
+    finally:
+        with _BB_INFLIGHT_LOCK:
+            if _BB_INFLIGHT.get(sport) is fut:
+                _BB_INFLIGHT.pop(sport, None)
+
+
 def _nhl_resolve_game_type(conn, home_tid: int, away_tid: int, date_s: str) -> int:
     """Resolve NHL game_type (2=regular, 3=playoff) for a live matchup.
 
@@ -857,20 +899,32 @@ def _bb_progress_snapshot(sport: str = "mlb") -> dict:
 
 
 def _bb_reset_on_exit(sport: str):
-    """Decorator: guarantee progress for `sport` returns to idle even when
-    the wrapped endpoint raises. Without this a mid-loop crash leaves the
-    spinner stuck at "Computing 4/15 games" forever on the frontend."""
+    """Decorator wrapping a /best-bets endpoint with two guarantees:
+
+    1. Single-flight: only one underlying compute runs per sport at a
+       time. Concurrent callers (mount + 5-min refresh racing, two open
+       tabs) share the in-flight result instead of duplicating the
+       full per-game prediction chain. Without this the shared progress
+       counter overshoots ("32/15 (100%)" in the spinner) because two
+       runners both increment the same `done`.
+    2. Progress reset: the sport's progress bucket is forced back to
+       phase=idle on exit -- even when the inner function raises -- so
+       a mid-loop crash can never leave the spinner stuck at
+       "Computing 4/15 games" forever.
+    """
     import functools as _functools
 
     def decorator(fn):
         @_functools.wraps(fn)
         def wrapper(*args, **kwargs):
-            try:
-                return fn(*args, **kwargs)
-            finally:
-                import time as _time
-                _bb_progress_set(sport, phase="idle",
-                                 finished_at=_time.time())
+            def _runner():
+                try:
+                    return fn(*args, **kwargs)
+                finally:
+                    import time as _time
+                    _bb_progress_set(sport, phase="idle",
+                                     finished_at=_time.time())
+            return _bb_single_flight(sport, _runner)
         return wrapper
     return decorator
 
