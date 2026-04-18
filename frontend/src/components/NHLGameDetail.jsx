@@ -209,7 +209,7 @@ function NHLPredictionResults({ data, odds, home, away }) {
                 </div>
               </div>
 
-              {goesToOT && (
+              {goesToOT && regDrawPct >= 0.30 && (
                 <div style={{textAlign:'center',marginTop:-6,marginBottom:6}}>
                   <span style={{
                     display:'inline-block',
