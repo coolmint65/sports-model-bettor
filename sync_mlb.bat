@@ -62,6 +62,13 @@ echo Settling completed picks...
 python scripts\run.py engine.tracker --settle
 
 echo.
+echo Refreshing empirical pick-prob calibration from settled picks...
+REM Per-bet-type lookup tables built from picks.result. Pickled in
+REM memory; refreshed nightly so the over-confidence at the upper tail
+REM converges toward observed reality as more picks settle.
+python -c "from engine.empirical_calibration import refresh_calibration; print(refresh_calibration())" 2>nul
+
+echo.
 echo Auto-applying train recommendations (n>=30, p<0.01, disable-only)...
 python scripts\run.py engine.train mlb --apply 2>nul
 

@@ -337,9 +337,28 @@ def generate_picks(home_team_id: int, away_team_id: int,
         f5 = pred.get("f5") or {}
         _append_f5_picks(picks, f5, odds, h_abbr, a_abbr)
 
+    # Empirical recalibration. The factor + MC + GBM blend is
+    # systemically over-confident at the upper tail (tracker showed the
+    # 80%+ predicted bucket only hit ~50% real WR). We replace each
+    # pick's `prob` with the bucket's empirical WR from the tracker
+    # data, then recompute `edge` against that calibrated probability.
+    # Buckets without enough samples pass the raw value through, so
+    # cold-start picks aren't penalised.
+    from .empirical_calibration import calibrate as _calibrate
+    for p in picks:
+        prob = p.get("prob")
+        odds = p.get("odds")
+        if prob is None:
+            continue
+        cal = _calibrate(p["type"], float(prob))
+        p["prob_raw"] = round(float(prob), 4)
+        p["prob"] = round(float(cal), 4)
+        if odds is not None and _valid_odds(odds):
+            p["edge"] = round((cal - _implied(int(odds))) * 100, 1)
+
     # Annotate each pick with a probability band so the UI can render a
-    # confidence histogram around the point estimate. Clamp to [0, 1]
-    # (a -0.04 lower bound on a 0.51 prediction is just 0).
+    # confidence histogram around the calibrated point estimate. Clamp
+    # to [0, 1] (a -0.04 lower bound on a 0.51 prediction is just 0).
     for p in picks:
         prob = p.get("prob")
         if prob is None:
@@ -347,6 +366,11 @@ def generate_picks(home_team_id: int, away_team_id: int,
         p["prob_low"]  = round(max(0.0, prob - ci_hw), 4)
         p["prob_high"] = round(min(1.0, prob + ci_hw), 4)
         p["ci_half_width"] = ci_hw
+
+    # Re-filter: edge may have flipped negative after calibration.
+    # Drop those rows so the UI never shows a "pick" that's actually
+    # negative-EV under our calibrated probability.
+    picks = [p for p in picks if (p.get("edge") or 0) > 0]
 
     # Adjusted EV: edge * reliability weight
     for p in picks:
