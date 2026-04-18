@@ -437,6 +437,75 @@ def _nhl_position_tier(position: str) -> str:
     return "depth"
 
 
+def _nhl_name_key(name: str) -> str:
+    """Normalize a player name for lookup: strip whitespace, lowercase,
+    collapse diacritics-style unicode. Good enough to match ESPN's
+    injury-list spelling against nhl_players.name."""
+    if not name:
+        return ""
+    import unicodedata
+    n = unicodedata.normalize("NFKD", name)
+    n = "".join(c for c in n if not unicodedata.combining(c))
+    return n.strip().lower()
+
+
+def _nhl_injured_player_ppg(injuries: list[dict]) -> dict[str, float]:
+    """Resolve points-per-game for each injured player via a single DB
+    round-trip. Returns {name_key: ppg}. Players not found (rookies, no
+    samples, name-match miss) are absent from the returned map.
+
+    Caller treats "not in map" as "depth player" so an unknown rookie
+    doesn't get tagged as top-6 just because they were listed first.
+    """
+    if not injuries:
+        return {}
+    names = list({_nhl_name_key(inj.get("name", ""))
+                  for inj in injuries if inj.get("name")})
+    if not names:
+        return {}
+    try:
+        from .nhl_db import get_conn
+        conn = get_conn()
+    except Exception:
+        return {}
+
+    # Match ESPN name to nhl_players.name (lowercased, diacritics
+    # stripped) and join to skater_stats for current season.
+    import unicodedata
+    current_season = _nhl_current_season_year()
+    placeholders = ",".join(["?"] * len(names))
+    try:
+        rows = conn.execute(
+            f"SELECT p.name AS name, s.points AS points, s.games AS games "
+            f"FROM nhl_players p "
+            f"JOIN skater_stats s ON s.player_id = p.id "
+            f"WHERE s.season = ? AND s.games >= 5 "
+            f"  AND LOWER(p.name) IN ({placeholders})",
+            (current_season, *names),
+        ).fetchall()
+    except Exception as e:
+        logger.debug("_nhl_injured_player_ppg query failed: %s", e)
+        return {}
+
+    out: dict[str, float] = {}
+    for r in rows:
+        key = _nhl_name_key(r["name"])
+        games = r["games"] or 0
+        if games <= 0:
+            continue
+        out[key] = (r["points"] or 0) / games
+    return out
+
+
+def _nhl_current_season_year() -> int:
+    """NHL seasons are labeled by the ending calendar year in our schema
+    (e.g. the 2024-25 season is stored as season=2025). Oct-Dec belongs
+    to the season that ends the following calendar year."""
+    from datetime import datetime
+    now = datetime.now()
+    return now.year + 1 if now.month >= 8 else now.year
+
+
 def compute_nhl_injury_impact(team_abbr: str, injuries: list[dict]) -> float:
     """Compute expected goals multiplier based on injured players.
 
@@ -472,19 +541,25 @@ def compute_nhl_injury_impact(team_abbr: str, injuries: list[dict]) -> float:
     forward_count = 0
     defense_count = 0
 
+    # Look up per-player season stats so we can classify injured players
+    # by actual ice-time / production, not by their order in the injury
+    # list. Previously "first 6 forwards listed are top-6" inflated the
+    # penalty for teams losing depth players (e.g. a rookie 4th-liner
+    # counted as -0.08 xG like a top-line winger).
+    ppg_lookup = _nhl_injured_player_ppg(injuries)
+
     for inj in injuries:
         if not _is_player_out(inj.get("status", "")):
             continue
 
         tier = _nhl_position_tier(inj.get("position", ""))
+        ppg = ppg_lookup.get(_nhl_name_key(inj.get("name", "")))
 
         if tier == "goalie":
             goalie_count += 1
             if goalie_count == 1:
-                # Assume the first goalie listed is the starter.
-                # Losing the starter means the team allows ~0.4 more goals,
-                # which we model as a penalty on the team's own output
-                # (opponent is effectively stronger).
+                # First goalie out; without a better signal assume starter.
+                # Losing the starter means the team allows ~0.4 more goals.
                 total_adjustment -= 0.4
                 logger.debug(
                     "%s: starter goalie %s out -> -0.40 xG adjustment",
@@ -495,22 +570,31 @@ def compute_nhl_injury_impact(team_abbr: str, injuries: list[dict]) -> float:
                 total_adjustment -= 0.05
         elif tier == "forward":
             forward_count += 1
-            if forward_count <= 6:
-                # Top-6 forward
+            # PPG-based classification. League top-6 forwards average
+            # 0.55+ ppg, middle-six ~0.35-0.55, depth < 0.35. Unknown
+            # (rookie / no samples) defaults to depth so we don't
+            # assume importance we don't have evidence for.
+            if ppg is not None and ppg >= 0.55:
                 total_adjustment -= 0.08
-                logger.debug(
-                    "%s: top-6 F %s out -> -0.08 xG", team_abbr, inj.get("name"),
-                )
+                logger.debug("%s: top-6 F %s out (%.2f ppg) -> -0.08 xG",
+                             team_abbr, inj.get("name"), ppg)
+            elif ppg is not None and ppg >= 0.35:
+                total_adjustment -= 0.04
+                logger.debug("%s: middle-6 F %s out (%.2f ppg) -> -0.04 xG",
+                             team_abbr, inj.get("name"), ppg)
             else:
                 total_adjustment -= 0.02
+                logger.debug("%s: depth F %s out (ppg=%s) -> -0.02 xG",
+                             team_abbr, inj.get("name"),
+                             f"{ppg:.2f}" if ppg is not None else "unknown")
         elif tier == "defense":
             defense_count += 1
-            if defense_count <= 4:
-                # Top-4 defenseman
+            # Defense-ppg signal is weaker (they score less) so the
+            # threshold shifts down. Top-4 D average ~0.30+ ppg.
+            if ppg is not None and ppg >= 0.30:
                 total_adjustment -= 0.06
-                logger.debug(
-                    "%s: top-4 D %s out -> -0.06 xG", team_abbr, inj.get("name"),
-                )
+                logger.debug("%s: top-4 D %s out (%.2f ppg) -> -0.06 xG",
+                             team_abbr, inj.get("name"), ppg)
             else:
                 total_adjustment -= 0.02
         else:
