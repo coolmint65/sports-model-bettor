@@ -828,6 +828,25 @@ def _bb_progress_snapshot(sport: str = "mlb") -> dict:
         return dict(_BB_PROGRESS.get(sport, {}))
 
 
+def _bb_reset_on_exit(sport: str):
+    """Decorator: guarantee progress for `sport` returns to idle even when
+    the wrapped endpoint raises. Without this a mid-loop crash leaves the
+    spinner stuck at "Computing 4/15 games" forever on the frontend."""
+    import functools as _functools
+
+    def decorator(fn):
+        @_functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                import time as _time
+                _bb_progress_set(sport, phase="idle",
+                                 finished_at=_time.time())
+        return wrapper
+    return decorator
+
+
 def _pred_cache_get(key: tuple):
     import time as _time
     with _PRED_CACHE_LOCK:
@@ -854,8 +873,7 @@ def _predict_mlb_full(home_team_id: int, away_team_id: int,
                       home_pitcher_id: int | None,
                       away_pitcher_id: int | None,
                       venue: str | None,
-                      use_cache: bool = True,
-                      mc_n_sims: int | None = None) -> dict:
+                      use_cache: bool = True) -> dict:
     """Run the full MLB prediction chain: factor + MC + GBM + ensemble.
 
     Single source of truth shared by /api/predict and /api/best-bets so
@@ -867,14 +885,9 @@ def _predict_mlb_full(home_team_id: int, away_team_id: int,
     (home, away, pitcher pair, venue) tuple within _PRED_CACHE_TTL_S.
     Pass False from on-demand handlers that need a guaranteed fresh
     prediction.
-
-    `mc_n_sims=None` defers to MLB_MC_N_SIMS in config (default 50k).
-    /api/best-bets passes 5_000 because the ensemble blend just needs a
-    stable mean, not the tail-quality MC sim count appropriate for the
-    GameDetail drill-down's correct-score / inning grids.
     """
-    cache_key = (home_team_id, away_team_id, home_pitcher_id,
-                 away_pitcher_id, venue, mc_n_sims)
+    cache_key = ("mlb", home_team_id, away_team_id, home_pitcher_id,
+                 away_pitcher_id, venue)
     if use_cache:
         cached = _pred_cache_get(cache_key)
         if cached is not None:
@@ -1327,6 +1340,7 @@ def _bb_predict_one(game: dict, all_odds) -> dict | None:
 
 
 @app.get("/api/best-bets")
+@_bb_reset_on_exit("mlb")
 def api_best_bets():
     """
     Run predictions on all today's games using the unified picks engine.
@@ -2621,6 +2635,7 @@ def api_nhl_predict(home: str = Query(...), away: str = Query(...)):
 
 
 @app.get("/api/nhl/best-bets")
+@_bb_reset_on_exit("nhl")
 def api_nhl_best_bets():
     """Run predictions on all today's NHL games and find edges.
 
@@ -3417,6 +3432,7 @@ def api_nba_predict(home: str = Query(...), away: str = Query(...)):
 
 
 @app.get("/api/nba/best-bets")
+@_bb_reset_on_exit("nba")
 def api_nba_best_bets():
     """Generate Q1 spread picks for all today's NBA games.
 

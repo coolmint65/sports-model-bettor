@@ -273,7 +273,7 @@ export default function PredictionResults({ data, odds }) {
               </div>
             )}
             <div style={{flex:1,textAlign:'right',fontSize:'0.72rem',color:'#64748b'}}>
-              {d.umpire.factor != null && d.umpire.factor !== 1
+              {d.umpire.factor != null && Math.abs(d.umpire.factor - 1) > 1e-4
                 ? 'Lean: ' + (d.umpire.factor > 1 ? 'hitter-friendly' : 'pitcher-friendly')
                 : 'No historical lean (or new umpire)'}
             </div>

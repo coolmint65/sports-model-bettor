@@ -206,19 +206,28 @@ def ensemble_nhl(pred: dict) -> dict:
         out["total_expected"] = round(tot, 3)
         out["weights_used"]["total"] = w
 
-    # Period-1 markets
-    factor_p1_wp = (pred.get("p1") or {}).get("home_win") or \
-                   ((pred.get("p1") or {}).get("win_prob") or {}).get("home")
-    mc_p1_wp = ((mc.get("p1") or {}).get("win_prob") or {}).get("home")
+    # Period-1 markets. Both the factor model (engine.nhl_predict) and
+    # the MC simulator emit a `first_period` block, not `p1` -- prior
+    # revision hit the wrong key and silently blended nothing from
+    # factor + MC, so only GBM was contributing to p1 ensemble rows.
+    factor_fp = pred.get("first_period") or {}
+    mc_fp = mc.get("first_period") or {}
+
+    # p1 home-win probability: factor doesn't emit a scalar, only the
+    # expected_home/away split. MC + GBM carry the blend; factor weight
+    # redistributes through blend() when None.
+    mc_p1_wp = mc_fp.get("home_win")
     gbm_p1_wp = gbm.get("p1_home_win")
     w = weights_for("nhl", "p1_home_win")
-    p1_wp = blend({"factor": factor_p1_wp, "mc": mc_p1_wp, "gbm": gbm_p1_wp}, w)
+    p1_wp = blend({"factor": None, "mc": mc_p1_wp, "gbm": gbm_p1_wp}, w)
     if p1_wp is not None:
         out["p1_home_win"] = round(p1_wp, 4)
         out["weights_used"]["p1_home_win"] = w
 
-    factor_p1_tot = (pred.get("p1") or {}).get("total")
-    mc_p1_tot = ((mc.get("p1") or {}).get("expected_goals") or {}).get("total")
+    # p1 total: all three signals present (factor = expected_home +
+    # expected_away, MC = expected_total, GBM = p1_total_goals).
+    factor_p1_tot = factor_fp.get("expected_total")
+    mc_p1_tot = mc_fp.get("expected_total")
     gbm_p1_tot = gbm.get("p1_total_goals")
     w = weights_for("nhl", "p1_total")
     p1_tot = blend({"factor": factor_p1_tot, "mc": mc_p1_tot, "gbm": gbm_p1_tot}, w)

@@ -69,91 +69,101 @@ export default function App() {
   const [nhlBbProgress, setNhlBbProgress] = useState(null)
   const [nbaBbProgress, setNbaBbProgress] = useState(null)
 
-  // Load MLB games on mount + auto-refresh every 5 min
+  // Load MLB games on mount + auto-refresh every 5 min. Both the mount
+  // load and each refresh pipe through /best-bets which can take minutes
+  // cold, so we poll /best-bets/progress on both paths to keep the
+  // spinner label live.
   useEffect(() => {
     const fetchGames = () => {
       api.get('/scoreboard').then(r => setGames(r.data)).catch(() => {})
     }
-    setGamesLoading(true)
 
-    // Poll /best-bets/progress until /best-bets returns. 750ms cadence
-    // is fast enough to feel responsive without hammering the backend.
-    const pollHandle = setInterval(() => {
-      api.get('/best-bets/progress')
-        .then(r => setBbProgress(r.data))
+    const runBestBets = (onStart, onFinally) => {
+      if (onStart) onStart()
+      const pollHandle = setInterval(() => {
+        api.get('/best-bets/progress')
+          .then(r => setBbProgress(r.data))
+          .catch(() => {})
+      }, 750)
+      return api.get('/best-bets')
+        .then(r => setBestBets(r.data))
         .catch(() => {})
-    }, 750)
+        .finally(() => {
+          clearInterval(pollHandle)
+          setBbProgress(null)
+          if (onFinally) onFinally()
+        })
+    }
 
+    setGamesLoading(true)
     Promise.all([
-      api.get('/scoreboard'),
-      api.get('/best-bets'),
-    ]).then(([g, b]) => {
-      setGames(g.data)
-      setBestBets(b.data)
-    }).catch(() => setGames([]))
-      .finally(() => {
-        clearInterval(pollHandle)
-        setBbProgress(null)
-        setGamesLoading(false)
-      })
+      api.get('/scoreboard').then(r => setGames(r.data)).catch(() => setGames([])),
+      runBestBets(),
+    ]).finally(() => setGamesLoading(false))
 
     const interval = setInterval(() => {
       fetchGames()
-      api.get('/best-bets').then(r => setBestBets(r.data)).catch(() => {})
+      runBestBets()
     }, 5 * 60 * 1000)
     return () => clearInterval(interval)
   }, [])
 
   // Load NHL games on mount + auto-refresh
   useEffect(() => {
-    setNhlLoading(true)
-    const pollHandle = setInterval(() => {
-      api.get('/nhl/best-bets/progress')
-        .then(r => setNhlBbProgress(r.data))
+    const runBestBets = () => {
+      const pollHandle = setInterval(() => {
+        api.get('/nhl/best-bets/progress')
+          .then(r => setNhlBbProgress(r.data))
+          .catch(() => {})
+      }, 750)
+      return api.get('/nhl/best-bets')
+        .then(r => setNhlBestBets(r.data))
         .catch(() => {})
-    }, 750)
+        .finally(() => {
+          clearInterval(pollHandle)
+          setNhlBbProgress(null)
+        })
+    }
+
+    setNhlLoading(true)
     Promise.all([
-      api.get('/nhl/scoreboard'),
-      api.get('/nhl/best-bets'),
-    ]).then(([g, b]) => {
-      setNhlGames(g.data)
-      setNhlBestBets(b.data)
-    }).catch(() => setNhlGames([]))
-      .finally(() => {
-        clearInterval(pollHandle)
-        setNhlBbProgress(null)
-        setNhlLoading(false)
-      })
+      api.get('/nhl/scoreboard').then(r => setNhlGames(r.data)).catch(() => setNhlGames([])),
+      runBestBets(),
+    ]).finally(() => setNhlLoading(false))
+
     const interval = setInterval(() => {
       api.get('/nhl/scoreboard').then(r => setNhlGames(r.data)).catch(() => {})
-      api.get('/nhl/best-bets').then(r => setNhlBestBets(r.data)).catch(() => {})
+      runBestBets()
     }, 5 * 60 * 1000)
     return () => clearInterval(interval)
   }, [])
 
   // Load NBA games on mount + auto-refresh
   useEffect(() => {
-    setNbaLoading(true)
-    const pollHandle = setInterval(() => {
-      api.get('/nba/best-bets/progress')
-        .then(r => setNbaBbProgress(r.data))
+    const runBestBets = () => {
+      const pollHandle = setInterval(() => {
+        api.get('/nba/best-bets/progress')
+          .then(r => setNbaBbProgress(r.data))
+          .catch(() => {})
+      }, 750)
+      return api.get('/nba/best-bets')
+        .then(r => setNbaBestBets(Array.isArray(r.data) ? r.data : null))
         .catch(() => {})
-    }, 750)
+        .finally(() => {
+          clearInterval(pollHandle)
+          setNbaBbProgress(null)
+        })
+    }
+
+    setNbaLoading(true)
     Promise.all([
-      api.get('/nba/scoreboard'),
-      api.get('/nba/best-bets'),
-    ]).then(([g, b]) => {
-      setNbaGames(Array.isArray(g.data) ? g.data : [])
-      setNbaBestBets(Array.isArray(b.data) ? b.data : null)
-    }).catch(() => setNbaGames([]))
-      .finally(() => {
-        clearInterval(pollHandle)
-        setNbaBbProgress(null)
-        setNbaLoading(false)
-      })
+      api.get('/nba/scoreboard').then(r => setNbaGames(Array.isArray(r.data) ? r.data : [])).catch(() => setNbaGames([])),
+      runBestBets(),
+    ]).finally(() => setNbaLoading(false))
+
     const interval = setInterval(() => {
       api.get('/nba/scoreboard').then(r => setNbaGames(Array.isArray(r.data) ? r.data : [])).catch(() => {})
-      api.get('/nba/best-bets').then(r => setNbaBestBets(Array.isArray(r.data) ? r.data : null)).catch(() => {})
+      runBestBets()
     }, 5 * 60 * 1000)
     return () => clearInterval(interval)
   }, [])

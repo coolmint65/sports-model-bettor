@@ -916,61 +916,61 @@ if __name__ == "__main__":
 
     if periods_arg is not None:
         # Walk final games missing period scores and fill via ESPN.
-        # `periods_arg` is a year (e.g. "2024") for a single season
-        # (covers 2024-25 Oct->Jun), or True to walk every season
-        # represented in nhl_games.
+        # `periods_arg` is a year (e.g. "2024") for the 2024-25 season,
+        # or True to walk every season represented in nhl_games.
+        #
+        # We iterate SEASONS (Oct YYYY -> Jun YYYY+1) not calendar years
+        # so each date range is walked exactly once. Earlier revisions
+        # double-covered Jan-Jun when consecutive calendar years were
+        # present, wasting ESPN API calls.
         from engine.nhl_db import get_conn, compute_all_p1_stats
 
         conn = get_conn()
         if periods_arg is True:
-            yrs = [r["yr"] for r in conn.execute(
-                "SELECT DISTINCT SUBSTR(date, 1, 4) AS yr FROM nhl_games "
+            # Derive season-start years from games missing period scores.
+            # Game dated Oct-Dec of Y belongs to season starting Y;
+            # Jan-Sep of Y belongs to season starting Y-1.
+            year_rows = conn.execute(
+                "SELECT DISTINCT "
+                "  CASE WHEN CAST(SUBSTR(date, 6, 2) AS INTEGER) >= 10 "
+                "       THEN CAST(SUBSTR(date, 1, 4) AS INTEGER) "
+                "       ELSE CAST(SUBSTR(date, 1, 4) AS INTEGER) - 1 "
+                "  END AS start_yr "
+                "FROM nhl_games "
                 "WHERE status = 'final' AND home_p1 IS NULL "
-                "ORDER BY yr"
-            ).fetchall()]
-            _progress(f"=== NHL period-score backfill (all {len(yrs)} years) ===")
+                "ORDER BY start_yr"
+            ).fetchall()
+            season_start_years = [r["start_yr"] for r in year_rows]
+            _progress(f"=== NHL period-score backfill ({len(season_start_years)} season(s)) ===")
         else:
-            yrs = [str(periods_arg)]
-            _progress(f"=== NHL period-score backfill for {periods_arg} ===")
+            try:
+                season_start_years = [int(periods_arg)]
+            except (TypeError, ValueError):
+                season_start_years = []
+            _progress(f"=== NHL period-score backfill for {periods_arg}-{int(periods_arg)+1} ===")
 
         total_filled = 0
-        for yr_str in yrs:
-            try:
-                yr = int(yr_str)
-            except ValueError:
-                continue
+        today = datetime.now().strftime("%Y-%m-%d")
+        for yr in season_start_years:
             start_date = f"{yr}-10-01"
-            # NHL season runs Oct YYYY -> Jun YYYY+1; cap at today.
             end_date = f"{yr + 1}-06-30"
-            today = datetime.now().strftime("%Y-%m-%d")
             if end_date > today:
                 end_date = today
-            # Also walk the early-year half (Jan-Jun YYYY), which is the
-            # back half of season YYYY-1. Queries are idempotent due to
-            # the UPDATE ... WHERE home_p1 IS NULL guard downstream.
+            if start_date > today:
+                continue
             n = fetch_period_scores_range(start_date, end_date)
             _progress(f"  {yr}-{yr+1} season: {n} games updated")
             total_filled += n
 
-            # Also walk Jan-Sep YYYY to cover the back half of the prior
-            # season (which uses YYYY in its date prefix).
-            prior_end = f"{yr}-09-30"
-            prior_start = f"{yr}-01-01"
-            if prior_start <= prior_end:
-                n2 = fetch_period_scores_range(prior_start, prior_end)
-                if n2:
-                    _progress(f"  {yr-1}-{yr} tail: {n2} games updated")
-                    total_filled += n2
-
             # Recompute P1 stats for this season (the nhl_p1_stats
             # tendency table is derived from home_p1/away_p1, so it
             # needs to refresh after the backfill).
+            season_ending = yr + 1
             try:
-                season_ending = yr + 1
                 p1_count = compute_all_p1_stats(season_ending)
                 _progress(f"  Recomputed P1 stats for {p1_count} teams in season {season_ending}")
             except Exception as e:
-                _progress(f"  WARN: compute_all_p1_stats failed for {yr+1}: {e}")
+                _progress(f"  WARN: compute_all_p1_stats failed for {season_ending}: {e}")
 
         _progress(f"=== Done: {total_filled} games updated with period scores ===")
     elif history_season:
