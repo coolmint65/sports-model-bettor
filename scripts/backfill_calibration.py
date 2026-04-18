@@ -168,19 +168,35 @@ def _nhl_conn():
 
 
 def _nhl_team_key_map() -> dict[int, str]:
-    """Map nhl_teams.id -> team JSON key (lowercase abbreviation).
-    nhl_predict.predict_matchup takes team keys, not IDs."""
+    """Map nhl_teams.id -> team JSON file stem (e.g. 'bruins').
+
+    predict_matchup takes the JSON stem, NOT the abbreviation, so we
+    build the map by walking data/teams/NHL/*.json and matching each
+    file's `abbreviation` field back to nhl_teams.id. Mirrors
+    backend/server.py:_nhl_espn_to_key.
+    """
+    from engine.data import list_teams, load_team
     conn = _nhl_conn()
-    rows = conn.execute(
-        "SELECT id, abbreviation FROM nhl_teams"
-    ).fetchall()
-    # Map to file-stem form used by engine/data.py:load_team.
-    out: dict[int, str] = {}
-    for r in rows:
+    # nhl_teams.id -> abbreviation (uppercase, canonical)
+    id_to_abbr: dict[int, str] = {}
+    for r in conn.execute("SELECT id, abbreviation FROM nhl_teams").fetchall():
         abbr = (r["abbreviation"] or "").strip().upper()
         if abbr:
-            out[r["id"]] = abbr.lower()
-    return out
+            id_to_abbr[r["id"]] = abbr
+
+    # abbreviation -> JSON file stem (loaded from data/teams/NHL/*.json)
+    abbr_to_stem: dict[str, str] = {}
+    for t in list_teams("NHL"):
+        stem = t.get("key")
+        if not stem:
+            continue
+        team = load_team("NHL", stem)
+        if team and team.get("abbreviation"):
+            abbr_to_stem[team["abbreviation"].strip().upper()] = stem
+
+    # Join: team_id -> stem
+    return {tid: abbr_to_stem[abbr]
+            for tid, abbr in id_to_abbr.items() if abbr in abbr_to_stem}
 
 
 def _nhl_load_games(conn, season: int | None, limit: int | None) -> list[dict]:
