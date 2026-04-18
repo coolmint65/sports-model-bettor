@@ -296,10 +296,15 @@ NHL_MC_N_SIMS = 50_000
 ENABLE_NBA_MC = False
 NBA_MC_N_SIMS = 50_000
 
-# Gradient-boosted-tree (GBM) model (engine.gbm). MLB GBM trained on
-# ~7500 historical games (Brier 0.2413 home_win, 0.2361 F5 home_win).
-# Turn on the per-sport flag once engine.gbm.train has produced
-# artifacts for that sport.
+# Gradient-boosted-tree (GBM) model (engine.gbm). Each sport trains
+# ~4000-7500 historical games into 2-5 targets (home_win, total, and
+# sport-specific period/inning markets).
+# - MLB:  home_win Brier 0.2422, f5 Brier 0.2364 (accuracy 58.1%/59.2%)
+# - NHL:  home_win Brier 0.2462 / 56.2% accuracy, total_goals RMSE 2.30
+#         (p1 markets skipped -- nhl_games period scores only populated
+#         for 37 of 4209 games; backfill period scores to unlock P1)
+# - NBA:  home_win 70.6% / 0.1942 (late-season/playoff-weighted split),
+#         q1_home_win 58.5% / 0.2343, q1_total RMSE 8.59
 ENABLE_MLB_GBM = True
-ENABLE_NHL_GBM = False   # training pipeline not built yet
-ENABLE_NBA_GBM = False
+ENABLE_NHL_GBM = True
+ENABLE_NBA_GBM = True
