@@ -83,28 +83,43 @@ CACHE_TTL = 120
 MAX_CACHE_ENTRIES = 50  # Prevent unbounded memory growth
 
 
-def _odds_from_scoreboard_cache(home_abbr: str, away_abbr: str) -> dict:
+def _odds_from_scoreboard_cache(home_abbr: str, away_abbr: str,
+                                sport: str = "mlb") -> dict:
     """Look up odds for a matchup in any cached scoreboard payload.
 
     /api/predict was triggering a full Odds API fetch on every request
     even though /api/scoreboard had already attached the same odds to
     each game in its cache. Try the cache first; the caller falls back
-    to fetch_real_odds_for_games() on miss. Tries alternate abbrevia-
-    tion forms (ARI/AZ etc.) so an ESPN-keyed scoreboard cache can
-    still answer an Odds-API-keyed query.
+    to a fresh fetch on miss. Tries alternate abbreviation forms
+    (ARI/AZ, UTA/UTH, BKN/BRK, etc.) so an ESPN-keyed scoreboard cache
+    can still answer an Odds-API-keyed query.
+
+    Walks both _scoreboard_cache (MLB + NHL both use it) and
+    _nba_scoreboard_cache so all three sports benefit from the skip.
+    Matters especially at month-end when the Odds API key is near its
+    credit limit -- duplicate fetches from predict endpoints were the
+    difference between a 20K/mo plan lasting 30 days vs burning out.
     """
     from engine.abbr import alt_abbr
     candidates = {(home_abbr, away_abbr)}
-    h_alt = alt_abbr(home_abbr, "mlb")
-    a_alt = alt_abbr(away_abbr, "mlb")
+    h_alt = alt_abbr(home_abbr, sport)
+    a_alt = alt_abbr(away_abbr, sport)
     candidates.update({(h_alt, away_abbr), (home_abbr, a_alt), (h_alt, a_alt)})
 
-    for _ts, games in _scoreboard_cache.values():
-        for g in games:
-            gh = g.get("home", {}).get("abbreviation", "")
-            ga = g.get("away", {}).get("abbreviation", "")
-            if (gh, ga) in candidates and g.get("odds"):
-                return g["odds"]
+    caches = [_scoreboard_cache]
+    # _nba_scoreboard_cache is defined further down the module; guard
+    # with globals() so the order doesn't matter.
+    nba_cache = globals().get("_nba_scoreboard_cache")
+    if nba_cache:
+        caches.append(nba_cache)
+
+    for cache in caches:
+        for _ts, games in cache.values():
+            for g in games:
+                gh = g.get("home", {}).get("abbreviation", "")
+                ga = g.get("away", {}).get("abbreviation", "")
+                if (gh, ga) in candidates and g.get("odds"):
+                    return g["odds"]
     return {}
 
 
@@ -2782,14 +2797,13 @@ def api_nhl_predict(home: str = Query(...), away: str = Query(...)):
         from engine.nhl_picks import generate_nhl_picks_with_context
         home_abbr = (result.get("home") or {}).get("abbreviation") or ""
         away_abbr = (result.get("away") or {}).get("abbreviation") or ""
-        # Mirror the alt-key lookup in _get_nhl_scoreboard so predict and
-        # best-bets see the same odds row for teams whose ESPN abbrev
-        # differs from The Odds API's (UTA/UTH, WSH/WAS, LAK/LA, etc.).
-        # Without this, best-bets picked PL MTL +1.5 (real odds) while
-        # predict saw empty odds and picked Under 6.5 (synthetic fallback).
-        odds_map = _fetch_nhl_odds() if (home_abbr and away_abbr) else {}
-        game_odds = {}
-        if odds_map:
+        # Try the scoreboard cache first (same odds /api/nhl/best-bets
+        # and /api/nhl/scoreboard already attached). Only hit the Odds
+        # API if the cache misses -- duplicate fetches from predict
+        # endpoints were burning through the monthly credit limit.
+        game_odds = _odds_from_scoreboard_cache(home_abbr, away_abbr, sport="nhl")
+        if not game_odds and home_abbr and away_abbr:
+            odds_map = _fetch_nhl_odds()
             for k in (
                 f"{away_abbr}@{home_abbr}",
                 f"{_nhl_alt_abbr(away_abbr)}@{_nhl_alt_abbr(home_abbr)}",
@@ -3586,26 +3600,25 @@ def api_nba_predict(home: str = Query(...), away: str = Query(...)):
     # real posted lines instead of being silently skipped. Uses the full
     # Odds-API → DK → ESPN fallback chain so picks work even when the
     # user's plan tier doesn't include Q1 markets.
-    odds = {}
-    try:
-        from scrapers.nba_odds import fetch_all_nba_odds
-        # Mirror the alt-key lookup in _get_nba_scoreboard so predict and
-        # best-bets see the same odds row for teams whose ESPN abbrev
-        # differs from The Odds API's (BKN/BRK, CHA/CHO, NOP/NO, etc.).
-        # Without this, best-bets picked with real Q1 odds while predict
-        # got empty odds and fell back to synthetic -110 defaults.
-        odds_map = fetch_all_nba_odds() or {}
-        for k in (
-            f"{away}@{home}",
-            f"{_nba_alt_abbr(away)}@{_nba_alt_abbr(home)}",
-            f"{_nba_alt_abbr(away)}@{home}",
-            f"{away}@{_nba_alt_abbr(home)}",
-        ):
-            if k in odds_map:
-                odds = odds_map[k] or {}
-                break
-    except Exception as e:
-        logger.debug("NBA Q1 odds fetch failed in predict endpoint: %s", e)
+    # Try the scoreboard cache first -- _get_nba_scoreboard already
+    # attached Q1 odds to each game. Only hit fetch_all_nba_odds on
+    # cache miss so we don't burn extra Odds API credits per game view.
+    odds = _odds_from_scoreboard_cache(home, away, sport="nba")
+    if not odds:
+        try:
+            from scrapers.nba_odds import fetch_all_nba_odds
+            odds_map = fetch_all_nba_odds() or {}
+            for k in (
+                f"{away}@{home}",
+                f"{_nba_alt_abbr(away)}@{_nba_alt_abbr(home)}",
+                f"{_nba_alt_abbr(away)}@{home}",
+                f"{away}@{_nba_alt_abbr(home)}",
+            ):
+                if k in odds_map:
+                    odds = odds_map[k] or {}
+                    break
+        except Exception as e:
+            logger.debug("NBA Q1 odds fetch failed in predict endpoint: %s", e)
 
     try:
         result = predict_q1_matchup(home, away, odds=odds)
