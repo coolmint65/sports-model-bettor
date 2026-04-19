@@ -35,7 +35,13 @@ function Q1PredictionResults({ data, odds, home, away }) {
   const total = d.predicted_total || 0
   const homeFav = margin > 0
 
-  const bestEdge = odds ? findBestQ1Edge(d, odds, home, away) : null
+  // Prefer the engine-generated pick attached by /api/nba/predict --
+  // same selector + empirical calibration that powers the Scoreboard
+  // card. Fall back to the client-side findBestQ1Edge if the backend
+  // didn't attach a pick (older cached prediction, odds fetch failed).
+  const bestEdge = d.best_pick
+    ? edgeFromBackendPick(d.best_pick)
+    : (odds ? findBestQ1Edge(d, odds, home, away) : null)
 
   return (
     <div className="results">
@@ -286,6 +292,22 @@ function PickRow({ label, pick, prob, odds, pct, ciHw }) {
     </div>
   )
 }
+
+// Engine best_pick → EdgeCallout shape. NBA Q1 picks emit type like
+// "Q1_SPREAD" / "Q1_TOTAL" / "Q1_ML"; for ML we render "{abbr} Q1 ML",
+// otherwise the engine's pick.pick already contains the full label
+// ("Over 54.5 Q1", "LAL -3.5 Q1", etc).
+function edgeFromBackendPick(pick) {
+  if (!pick) return null
+  const label = pick.type === 'Q1_ML' ? `${pick.pick} Q1 ML` : pick.pick
+  return {
+    label,
+    odds: pick.odds,
+    edge: pick.edge,
+    rating: pick.confidence || 'lean',
+  }
+}
+
 
 function findBestQ1Edge(data, odds, home, away) {
   const candidates = []

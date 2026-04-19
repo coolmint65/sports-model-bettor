@@ -365,6 +365,10 @@ def generate_picks(home_team_id: int, away_team_id: int,
     wp = pred.get("win_prob") or {}
     home_wp = wp.get("home")
     if home_wp is not None:
+        # Preserve the pre-calibration factor value so the Model
+        # Signals table can show Factor | MC | GBM | Blended without
+        # the Factor column being polluted by empirical calibration.
+        pred.setdefault("factor_win_prob", dict(wp))
         cal_home = float(_calibrate("ML", float(home_wp)))
         pred["win_prob"] = {
             "home": round(cal_home, 4),

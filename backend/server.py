@@ -2772,6 +2772,31 @@ def api_nhl_predict(home: str = Query(...), away: str = Query(...)):
     except Exception as e:
         logger.debug("NHL ensemble blend failed: %s", e)
 
+    # Run the same pick generator the Scoreboard uses so GameDetail and
+    # the card agree on best_pick / edges. Previously GameDetail
+    # reimplemented edge selection client-side (findBestEdge) which used
+    # different thresholds + no empirical calibration, so the card
+    # could say "PL MTL +1.5 / +14.1%" while the detail computed
+    # "Under 6.5 / +12.9%" on the same game.
+    try:
+        from engine.nhl_picks import generate_nhl_picks_with_context
+        home_abbr = (result.get("home") or {}).get("abbreviation") or ""
+        away_abbr = (result.get("away") or {}).get("abbreviation") or ""
+        odds_map = _fetch_nhl_odds() if (home_abbr and away_abbr) else {}
+        game_odds = odds_map.get(f"{away_abbr}@{home_abbr}", {}) if odds_map else {}
+        picks, _ctx = generate_nhl_picks_with_context(
+            home_key, away_key, game_odds, pred=result,
+        )
+        result["picks"] = picks
+        result["best_pick"] = picks[0] if picks else None
+        result["odds"] = game_odds
+    except Exception as e:
+        logger.warning("NHL picks generation in predict failed for %s/%s: %s",
+                       home, away, e)
+        result["picks"] = []
+        result["best_pick"] = None
+        result["odds"] = {}
+
     return result
 
 
@@ -3578,6 +3603,24 @@ def api_nba_predict(home: str = Query(...), away: str = Query(...)):
             result["ensemble"] = ensemble_nba(result)
         except Exception as e:
             logger.debug("NBA ensemble blend failed: %s", e)
+
+        # Same picks-attach pattern as NHL -- keep GameDetail consistent
+        # with the scoreboard card's best_pick / edges instead of
+        # reimplementing edge selection client-side. generate_q1_picks
+        # accepts pred= so we reuse the factor + MC + GBM work we
+        # already did above instead of re-running predict_q1.
+        try:
+            from engine.nba_picks import generate_q1_picks
+            picks = generate_q1_picks(home, away, odds=odds, pred=result)
+            result["picks"] = picks
+            result["best_pick"] = picks[0] if picks else None
+            result["odds"] = odds
+        except Exception as e:
+            logger.warning("NBA Q1 picks generation in predict failed for %s/%s: %s",
+                           home, away, e)
+            result["picks"] = []
+            result["best_pick"] = None
+            result["odds"] = odds
 
         return result
     except HTTPException:

@@ -137,7 +137,13 @@ function NHLPredictionResults({ data, odds, home, away }) {
   const homeWins = es.home > es.away
   const pct = n => `${(n * 100).toFixed(1)}%`
 
-  const bestEdge = odds ? findBestEdge(d, odds, home, away) : null
+  // Prefer the engine-generated pick attached by /api/nhl/predict --
+  // same selector + empirical calibration that powers the Scoreboard
+  // card. Fall back to the client-side findBestEdge when the backend
+  // hasn't attached picks (older cached prediction, odds fetch failed).
+  const bestEdge = d.best_pick
+    ? edgeFromBackendPick(d.best_pick)
+    : (odds ? findBestEdge(d, odds, home, away) : null)
   const reasons = getReasoning(d, home, away)
 
   return (
@@ -991,6 +997,25 @@ function findBestEdge(data, odds, home, away) {
 // NHL's findBestEdge emits {label, odds, edge, rating} without the
 // engine's raw pick shape. Reconstruct a minimal {type, pick, odds}
 // object so the shared UnderdogNote can do its model_prob < 0.5 check.
+// Adapt the engine's best_pick shape (type/pick/prob/edge/odds/confidence)
+// into the {label, odds, edge, rating} shape EdgeCallout expects. Keeps
+// the existing downstream components unchanged while letting us swap
+// the pick source from the client-side findBestEdge to the engine's.
+function edgeFromBackendPick(pick) {
+  if (!pick) return null
+  const type = pick.type || ''
+  // ML shows "{abbr} ML"; O/U and PL already render their full label in
+  // pick.pick (e.g. "Over 6.5", "MTL +1.5").
+  const label = type === 'ML' ? `${pick.pick} ML` : pick.pick
+  return {
+    label,
+    odds: pick.odds,
+    edge: pick.edge,
+    rating: pick.confidence || 'lean',
+  }
+}
+
+
 function pickFromEdge(edge, home, away) {
   if (!edge) return null
   const m = edge.label.match(/^([A-Z]{2,4})\s+ML$/)

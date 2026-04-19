@@ -108,7 +108,12 @@ function marketsFor(sport, pred, home, away) {
     return [
       {
         label: `${hAbbr} ML (home win)`,
-        factor: pred?.win_prob?.home,
+        // factor_win_prob is the preserved pre-calibration value;
+        // engine.picks.generate_picks overwrites win_prob with the
+        // calibrated number so the Projected Outcome panel agrees
+        // with the pick card. Without this fallback the Factor column
+        // would display the calibrated value, not the raw factor.
+        factor: pred?.factor_win_prob?.home ?? pred?.win_prob?.home,
         mc:     mc?.win_prob?.home,
         gbm:    gbm?.home_win,
         blended: ens.home_win,
@@ -158,7 +163,8 @@ function marketsFor(sport, pred, home, away) {
     return [
       {
         label: `${hAbbr} ML (home win)`,
-        factor: pred?.win_prob?.home,
+        // See MLB comment above re: factor_win_prob vs win_prob.
+        factor: pred?.factor_win_prob?.home ?? pred?.win_prob?.home,
         mc:     mc?.win_prob?.home,
         gbm:    null,  // NHL GBM not trained yet
         blended: ens.home_win,
@@ -181,7 +187,10 @@ function marketsFor(sport, pred, home, away) {
     return [
       {
         label: `${hAbbr} Q1 ML (home Q1 win)`,
-        factor: pred?.q1_ml_home,
+        // factor_q1_ml_home is the pre-calibration factor value;
+        // nba_picks.generate_q1_picks overwrites q1_ml_home with the
+        // calibrated value so Projected Outcome agrees with the pick.
+        factor: pred?.factor_q1_ml_home ?? pred?.q1_ml_home,
         mc:     mc?.win_prob?.home,
         gbm:    null,  // NBA GBM not trained yet
         blended: ens.q1_home_win,

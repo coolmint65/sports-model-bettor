@@ -203,6 +203,9 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
     # exposes q1_ml_home / q1_ml_away as top-level fields.
     q1_home = pred.get("q1_ml_home")
     if q1_home is not None:
+        # Preserve the pre-calibration factor value so Model Signals'
+        # Factor column reads the true factor output.
+        pred.setdefault("factor_q1_ml_home", q1_home)
         cal_q1 = float(_calibrate("Q1 ML", float(q1_home), sport="nba"))
         pred["q1_ml_home"] = round(cal_q1, 4)
         pred["q1_ml_away"] = round(1.0 - cal_q1, 4)

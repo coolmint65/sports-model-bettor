@@ -258,6 +258,9 @@ def generate_nhl_picks_with_context(home_key: str, away_key: str,
     wp = pred.get("win_prob") or {}
     home_wp = wp.get("home")
     if home_wp is not None:
+        # Preserve the pre-calibration factor value so Model Signals
+        # renders the true Factor column, not the calibrated one.
+        pred.setdefault("factor_win_prob", dict(wp))
         cal_home = float(_calibrate("ML", float(home_wp), sport="nhl"))
         pred["win_prob"] = {
             "home": round(cal_home, 4),
