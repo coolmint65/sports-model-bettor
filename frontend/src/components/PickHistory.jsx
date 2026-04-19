@@ -20,11 +20,15 @@ export default function PickHistory({ summary, history, loading, onRecord, onSet
   const todaysPicks = (history || []).filter(p => p.date === today)
   const pastPicks = (history || []).filter(p => p.date !== today)
 
-  // Bet types that have data
+  // Bet types that have data. F5 is the aggregate of F5 ML + F5 O/U +
+  // F5 RL (summed server-side in engine.tracker.get_pick_summary); the
+  // per-market splits are still in byType under their individual keys
+  // for anyone who wants the breakdown.
   const typesWithData = [
     { key: 'ML', label: 'Moneyline' },
     { key: 'O/U', label: 'Over/Under' },
     { key: '1st INN', label: '1st Inning' },
+    { key: 'F5', label: 'First 5 Innings' },
     { key: 'RL', label: 'Run Line' },
     { key: 'PL', label: 'Puck Line' },
   ].filter(({ key }) => byType[key] && byType[key].total > 0)

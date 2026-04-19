@@ -684,6 +684,12 @@ def get_pick_summary() -> dict:
         "O/U": ("O/U", "ou"),
         "1st INN": ("1st INN", "nrfi"),
         "RL": ("RL", "rl"),
+        # F5 / first-5-innings markets are stored with the exact display
+        # label by engine/picks.generate_picks, so the aliases tuple just
+        # has the one canonical string each.
+        "F5 ML": ("F5 ML",),
+        "F5 O/U": ("F5 O/U",),
+        "F5 RL": ("F5 RL",),
     }
     for bt, aliases in bt_aliases.items():
         placeholders = ",".join("?" for _ in aliases)
@@ -711,6 +717,30 @@ def get_pick_summary() -> dict:
             "profit": round(row["profit"], 2),
             "win_pct": round(w / settled * 100, 1) if settled > 0 else 0,
             "roi": round(row["profit"] / settled, 1) if settled > 0 else 0,
+        }
+
+    # Aggregate F5 tile -- the UI tile is a single "First 5 Innings" card
+    # summing ML + O/U + RL variants. Per-market splits remain under the
+    # individual keys for anyone wanting the breakdown.
+    f5_rows = [summary.get(k) for k in ("F5 ML", "F5 O/U", "F5 RL")]
+    f5_rows = [r for r in f5_rows if r]
+    if f5_rows:
+        agg_total = sum(r["total"] for r in f5_rows)
+        agg_w = sum(r["wins"] for r in f5_rows)
+        agg_l = sum(r["losses"] for r in f5_rows)
+        agg_p = sum((r["pushes"] or 0) for r in f5_rows)
+        agg_pend = sum((r["pending"] or 0) for r in f5_rows)
+        agg_profit = round(sum(r["profit"] for r in f5_rows), 2)
+        settled = agg_w + agg_l
+        summary["F5"] = {
+            "total": agg_total,
+            "wins": agg_w,
+            "losses": agg_l,
+            "pushes": agg_p,
+            "pending": agg_pend,
+            "profit": agg_profit,
+            "win_pct": round(agg_w / settled * 100, 1) if settled > 0 else 0,
+            "roi": round(agg_profit / settled, 1) if settled > 0 else 0,
         }
 
     # Recent picks
