@@ -109,13 +109,23 @@ function Q1PredictionResults({ data, odds, home, away }) {
           <h2>Q1 Key Factors</h2>
           {d.factors.pace_factor && (
             <div className="stat-row">
-              <span className="stat-label">Pace Factor</span>
+              <span
+                className="stat-label"
+                title="Combined possessions per game vs the league baseline (1.00x = average). Above 1 means more shot attempts in Q1 = higher scoring; below 1 = slower."
+              >
+                Pace Factor
+              </span>
               <span className="stat-value">{d.factors.pace_factor.toFixed(2)}x</span>
             </div>
           )}
           {d.factors.home_court_boost && (
             <div className="stat-row">
-              <span className="stat-label">Home Court Q1 Boost</span>
+              <span
+                className="stat-label"
+                title="Empirically-calibrated home-team Q1 advantage (~+0.7 pts vs road)."
+              >
+                Home Court Q1 Boost
+              </span>
               <span className="stat-value positive">+{d.factors.home_court_boost} pts</span>
             </div>
           )}
@@ -123,7 +133,12 @@ function Q1PredictionResults({ data, odds, home, away }) {
             <>
               {d.factors.rest_adj.home !== 0 && (
                 <div className="stat-row">
-                  <span className="stat-label">{home.abbreviation} Rest</span>
+                  <span
+                    className="stat-label"
+                    title="Penalty for playing on the second night of a back-to-back. Tired legs typically cost ~1 pt in Q1."
+                  >
+                    {home.abbreviation} on back-to-back
+                  </span>
                   <span className={`stat-value ${d.factors.rest_adj.home < 0 ? 'negative' : 'positive'}`}>
                     {d.factors.rest_adj.home > 0 ? '+' : ''}{d.factors.rest_adj.home} pts
                   </span>
@@ -131,7 +146,12 @@ function Q1PredictionResults({ data, odds, home, away }) {
               )}
               {d.factors.rest_adj.away !== 0 && (
                 <div className="stat-row">
-                  <span className="stat-label">{away.abbreviation} Rest</span>
+                  <span
+                    className="stat-label"
+                    title="Penalty for playing on the second night of a back-to-back. Tired legs typically cost ~1 pt in Q1."
+                  >
+                    {away.abbreviation} on back-to-back
+                  </span>
                   <span className={`stat-value ${d.factors.rest_adj.away < 0 ? 'negative' : 'positive'}`}>
                     {d.factors.rest_adj.away > 0 ? '+' : ''}{d.factors.rest_adj.away} pts
                   </span>
@@ -141,13 +161,23 @@ function Q1PredictionResults({ data, odds, home, away }) {
           )}
           {d.factors.home_q1_off && (
             <div className="stat-row">
-              <span className="stat-label">Q1 Offense</span>
+              <span
+                className="stat-label"
+                title="Average points each team scores in Q1 over the season (higher = better offense)."
+              >
+                Q1 PPG scored
+              </span>
               <span className="stat-value">{away.abbreviation} {d.factors.away_q1_off?.toFixed(1)} / {home.abbreviation} {d.factors.home_q1_off?.toFixed(1)}</span>
             </div>
           )}
           {d.factors.home_q1_def && (
             <div className="stat-row">
-              <span className="stat-label">Q1 Defense</span>
+              <span
+                className="stat-label"
+                title="Average points each team allows in Q1 over the season (lower = better defense)."
+              >
+                Q1 PPG allowed
+              </span>
               <span className="stat-value">{away.abbreviation} {d.factors.away_q1_def?.toFixed(1)} / {home.abbreviation} {d.factors.home_q1_def?.toFixed(1)}</span>
             </div>
           )}
