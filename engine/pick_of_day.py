@@ -885,14 +885,52 @@ def _determine_outcome(sport: str, conn, potd: dict) -> tuple[str | None, float]
         )
         return None, 0
 
-    if result == "W":
-        profit = odds if odds > 0 else 10000 / abs(odds)
-    elif result == "L":
-        profit = -100.0
-    else:
-        profit = 0.0
+    return result, _profit_on_settled(result, odds)
 
-    return result, round(profit, 2)
+
+def _profit_on_settled(result: str | None, odds: int | float | None) -> float:
+    """$100-unit profit formula used by settle_potd. Exposed so
+    recalc_potd_profit can rewrite stored profits to match current code
+    when an older run left them on a different unit sizing."""
+    if result == "W":
+        o = odds if odds is not None else -110
+        return round(o if o > 0 else 10000 / abs(o), 2)
+    if result == "L":
+        return -100.0
+    return 0.0
+
+
+def recalc_potd_profit(sport: str) -> dict:
+    """Rewrite the ``profit`` column on every settled POTD row using
+    the current $100-unit formula. No-op on pending rows (result NULL).
+
+    Purpose: historical rows may have been saved under an older unit
+    sizing (e.g. a Kelly-fraction dollarization that used a $1000 or
+    $5000 bankroll instead of $100), so the POTD hero's running
+    profit diverged from what the current code would compute. Running
+    this once after a unit-sizing change realigns the ledger.
+
+    Idempotent — running it twice produces the same values.
+    """
+    _ensure_potd_table(sport)
+    conn = _get_conn(sport)
+    rows = conn.execute(
+        "SELECT id, result, odds, profit FROM pick_of_day "
+        "WHERE result IN ('W', 'L', 'P')"
+    ).fetchall()
+
+    updated = 0
+    for r in rows:
+        new_profit = _profit_on_settled(r["result"], r["odds"])
+        if r["profit"] is None or abs((r["profit"] or 0) - new_profit) > 0.01:
+            conn.execute(
+                "UPDATE pick_of_day SET profit = ? WHERE id = ?",
+                (new_profit, r["id"]),
+            )
+            updated += 1
+
+    conn.commit()
+    return {"sport": sport, "settled_rows": len(rows), "updated": updated}
 
 
 def get_potd_summary(sport: str, limit: int = 30) -> dict:

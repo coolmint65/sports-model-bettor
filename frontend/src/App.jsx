@@ -4,7 +4,6 @@ import Scoreboard from './components/Scoreboard'
 import GameDetail from './components/GameDetail'
 import Standings from './components/Standings'
 import Backtest from './components/Backtest'
-import BestBets from './components/BestBets'
 import PickHistory from './components/PickHistory'
 import NHLScoreboard from './components/NHLScoreboard'
 import NHLStandings from './components/NHLStandings'
@@ -264,28 +263,6 @@ export default function App() {
       .finally(() => setBtLoading(false))
   }, [league])
 
-  const showBestBets = useCallback(() => {
-    setView('best-bets'); setSelectedGame(null); setNhlSelectedGame(null); setNbaSelectedGame(null)
-    if (league === 'MLB') {
-      setBbLoading(true)
-      api.get('/best-bets')
-        .then(r => setBestBets(r.data))
-        .catch(() => setBestBets([]))
-        .finally(() => setBbLoading(false))
-    } else if (league === 'NHL') {
-      setNhlBbLoading(true)
-      api.get('/nhl/best-bets')
-        .then(r => setNhlBestBets(r.data))
-        .catch(() => setNhlBestBets([]))
-        .finally(() => setNhlBbLoading(false))
-    } else if (league === 'NBA') {
-      setNbaBbLoading(true)
-      api.get('/nba/best-bets')
-        .then(r => setNbaBestBets(Array.isArray(r.data) ? r.data : []))
-        .catch(() => setNbaBestBets([]))
-        .finally(() => setNbaBbLoading(false))
-    }
-  }, [league])
 
   const showHistory = useCallback(() => {
     setView('history'); setSelectedGame(null); setNhlSelectedGame(null); setNbaSelectedGame(null)
@@ -414,9 +391,6 @@ export default function App() {
         <button className={`nav-tab ${view === 'games' && !selectedGame && !nhlSelectedGame && !nbaSelectedGame ? 'active' : ''}`} onClick={goBack}>
           Games
         </button>
-        <button className={`nav-tab ${view === 'best-bets' ? 'active' : ''}`} onClick={showBestBets}>
-          Best Bets
-        </button>
         <button className={`nav-tab ${view === 'standings' ? 'active' : ''}`} onClick={showStandings}>
           Standings
         </button>
@@ -438,10 +412,6 @@ export default function App() {
 
       {isMLB && selectedGame && (
         <GameDetail game={selectedGame} prediction={prediction} loading={predLoading} onBack={goBack} />
-      )}
-
-      {isMLB && view === 'best-bets' && (
-        <BestBets bets={bestBets} loading={bbLoading} />
       )}
 
       {isMLB && view === 'standings' && (
@@ -474,10 +444,6 @@ export default function App() {
         <NHLGameDetail game={nhlSelectedGame} prediction={nhlPrediction} loading={nhlPredLoading} onBack={goBack} />
       )}
 
-      {isNHL && view === 'best-bets' && (
-        <BestBets bets={nhlBestBets} loading={nhlBbLoading} />
-      )}
-
       {isNHL && view === 'standings' && (
         <NHLStandings divisions={nhlStandings} loading={nhlStandingsLoading} />
       )}
@@ -506,10 +472,6 @@ export default function App() {
 
       {isNBA && nbaSelectedGame && (
         <NBAGameDetail game={nbaSelectedGame} prediction={nbaPrediction} loading={nbaPredLoading} onBack={goBack} />
-      )}
-
-      {isNBA && view === 'best-bets' && (
-        <BestBets bets={nbaBestBets} loading={nbaBbLoading} />
       )}
 
       {isNBA && view === 'standings' && (

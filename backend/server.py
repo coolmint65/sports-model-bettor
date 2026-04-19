@@ -3179,8 +3179,19 @@ def api_pick_of_day(sport: str):
 
 @app.get("/api/pick-of-day/{sport}/summary")
 def api_potd_summary(sport: str):
-    """Get POTD running totals."""
-    from engine.pick_of_day import get_potd_summary
+    """Get POTD running totals.
+
+    Auto-settles pending POTDs before returning the summary so the
+    hero shown on the dashboard reflects finals without requiring the
+    user to click "Settle Completed" on the Pick Tracker tab. settle_potd
+    is a no-op when nothing is pending, so the cost is a single SQLite
+    round-trip on typical calls.
+    """
+    from engine.pick_of_day import get_potd_summary, settle_potd
+    try:
+        settle_potd(sport)
+    except Exception as e:
+        logger.warning("POTD auto-settle failed for %s: %s", sport, e)
     return get_potd_summary(sport)
 
 
@@ -3189,6 +3200,16 @@ def api_potd_settle(sport: str):
     """Settle completed POTDs."""
     from engine.pick_of_day import settle_potd
     return settle_potd(sport)
+
+
+@app.post("/api/pick-of-day/{sport}/recalc-profit")
+def api_potd_recalc_profit(sport: str):
+    """Rewrite profit on every settled POTD row using the current
+    $100-unit formula. Run this once after a unit-sizing change to
+    realign rows that were persisted under an older formula (e.g.
+    Kelly dollarization against a $5000 bankroll)."""
+    from engine.pick_of_day import recalc_potd_profit
+    return recalc_potd_profit(sport)
 
 
 @app.delete("/api/pick-of-day/{sport}")
@@ -3838,10 +3859,18 @@ def api_nba_record_picks():
 
 @app.post("/api/nba/tracker/settle")
 def api_nba_settle_picks():
-    """Settle completed NBA picks."""
+    """Settle completed NBA picks + POTD."""
     try:
         from engine.nba_tracker import settle_nba_picks
-        return settle_nba_picks()
+        result = settle_nba_picks()
+        # Parity with MLB + NHL -- also settle NBA POTDs so the POTD
+        # hero record doesn't drift behind the Pick Tracker record.
+        try:
+            from engine.pick_of_day import settle_potd
+            settle_potd("nba")
+        except Exception as e:
+            logger.warning("NBA POTD settle failed: %s", e)
+        return result
     except ImportError:
         return {"error": "NBA tracker module not loaded yet", "settled": 0}
     except Exception as e:
