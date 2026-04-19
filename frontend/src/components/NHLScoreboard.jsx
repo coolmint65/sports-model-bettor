@@ -1,4 +1,5 @@
 import GameCard from './primitives/GameCard'
+import ScoreboardShell from './primitives/ScoreboardShell'
 
 // League-average NHL SV% is ~0.905. Color + tooltip labels anchor the
 // user's eye so a ".915" starter is recognized as above average without
@@ -18,135 +19,18 @@ function svPctLabel(sv) {
 }
 
 
-export default function NHLScoreboard({ games, loading, progress, onSelectGame, bestBets }) {
-  if (loading) {
-    const total = progress?.total || 0
-    const rawDone = progress?.done || 0
-    const done = total > 0 ? Math.min(rawDone, total) : rawDone
-    const pct = total ? Math.min(100, Math.round((done / total) * 100)) : null
-    const phase = progress?.phase
-    let label = 'Loading NHL games...'
-    if (phase === 'predicting' && total > 0) {
-      label = `Computing predictions: ${done}/${total} games (${pct}%)`
-    } else if (phase === 'building') {
-      label = 'Assembling picks...'
-    }
-    return (
-      <div className="loading">
-        <div className="spinner" />
-        <p>{label}</p>
-      </div>
-    )
-  }
-
-  if (!games || games.length === 0) {
-    return (
-      <div className="no-games">
-        <p>No NHL games scheduled today.</p>
-        <p className="sub">Check back for the next slate.</p>
-      </div>
-    )
-  }
-
-  const betMap = {}
-  if (bestBets) {
-    for (const b of bestBets) {
-      betMap[b.game_id] = b
-    }
-  }
-
-  // Split games into active (pregame/live) and finals
-  const activeGames = []
-  const finalGames = []
-  for (const g of games) {
-    if (g.status?.state === 'post' || g.status?.completed) {
-      finalGames.push(g)
-    } else {
-      activeGames.push(g)
-    }
-  }
-
-  // Sort active games by edge (highest first)
-  activeGames.sort((a, b) => {
-    const aEdge = betMap[a.id]?.best_pick?.edge || -99
-    const bEdge = betMap[b.id]?.best_pick?.edge || -99
-    return bEdge - aEdge
-  })
-
-  // Sort finals by most recent first (natural order usually works)
-  const edgeCount = activeGames.filter(g =>
-    betMap[g.id]?.confidence === 'strong' || betMap[g.id]?.confidence === 'moderate'
-  ).length
-
+export default function NHLScoreboard(props) {
   return (
-    <div className="scoreboard">
-      <h2 className="section-title">
-        NHL Games ({games.length})
-        {edgeCount > 0 && <span className="edge-count">{edgeCount} plays with edge</span>}
-      </h2>
-
-      {activeGames.length > 0 && (
-        <>
-          {finalGames.length > 0 && (
-            <div className="games-section-header">
-              {activeGames.some(g => g.status?.state === 'in') ? 'Live & Upcoming' : 'Upcoming'} ({activeGames.length})
-            </div>
-          )}
-          <div className="games-feature-grid">
-            {activeGames.map(game => (
-              <NHLGameCard
-                key={game.id}
-                game={game}
-                bet={betMap[game.id]}
-                onClick={() => onSelectGame && onSelectGame(game)}
-              />
-            ))}
-          </div>
-        </>
+    <ScoreboardShell
+      {...props}
+      title="NHL Games"
+      loadingLabel="Loading NHL games..."
+      emptyPrimary="No NHL games scheduled today."
+      emptySub="Check back for the next slate."
+      renderCard={({ game, bet, onClick, key }) => (
+        <NHLGameCard key={key} game={game} bet={bet} onClick={onClick} />
       )}
-
-      {finalGames.length > 0 && (
-        <>
-          <div className="games-section-header">Final ({finalGames.length})</div>
-          <div className="games-finals-grid">
-            {finalGames.map(game => (
-              <NHLFinalRow
-                key={game.id}
-                game={game}
-                bet={betMap[game.id]}
-                onClick={() => onSelectGame && onSelectGame(game)}
-              />
-            ))}
-          </div>
-        </>
-      )}
-    </div>
-  )
-}
-
-
-function NHLFinalRow({ game, bet, onClick }) {
-  const { home, away } = game
-  const hs = parseInt(home.score) || 0
-  const as = parseInt(away.score) || 0
-  const homeWon = hs > as
-  return (
-    <div className="game-final-row" onClick={onClick}>
-      <span className="final-label">FINAL</span>
-      <div className="final-teams">
-        <div className="final-team">
-          {away.logo && <img src={away.logo} alt="" />}
-          <span className={`final-abbr ${!homeWon ? 'winner' : ''}`}>{away.abbreviation}</span>
-        </div>
-        <span className={`final-score ${!homeWon ? 'winner' : ''}`}>{as}</span>
-        <span className="final-dash">-</span>
-        <span className={`final-score ${homeWon ? 'winner' : ''}`}>{hs}</span>
-        <div className="final-team">
-          {home.logo && <img src={home.logo} alt="" />}
-          <span className={`final-abbr ${homeWon ? 'winner' : ''}`}>{home.abbreviation}</span>
-        </div>
-      </div>
-    </div>
+    />
   )
 }
 
