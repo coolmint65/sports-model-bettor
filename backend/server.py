@@ -3212,6 +3212,22 @@ def api_potd_recalc_profit(sport: str):
     return recalc_potd_profit(sport)
 
 
+@app.post("/api/calibration/refresh")
+def api_calibration_refresh(sport: str | None = None):
+    """Rebuild the empirical-calibration table(s) from the current
+    tracker data without restarting the server. Useful after a code
+    change to the calibration math so the in-memory table gets rebuilt
+    in the new shape (e.g. after adding sample-count shrinkage, the
+    old 3-tuple rows need refresh to become 4-tuples with real counts).
+
+    No sport -> refresh all three (mlb, nhl, nba).
+    """
+    from engine.empirical_calibration import refresh_calibration, refresh_all_sports
+    if sport:
+        return refresh_calibration(sport)
+    return refresh_all_sports()
+
+
 @app.delete("/api/pick-of-day/{sport}")
 def api_potd_reset(sport: str):
     """Delete today's POTD so it regenerates on next request."""
