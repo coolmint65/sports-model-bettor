@@ -43,6 +43,13 @@ logger = logging.getLogger(__name__)
 # for fewer false-positive recalibrations.
 MIN_BUCKET_N = 10
 
+# Sample count at which the empirical WR fully replaces the raw model
+# prob. Below it, we linearly blend empirical with raw: at n=10 (the
+# MIN_BUCKET_N floor) we keep 80% raw + 20% empirical; at n=50 it's
+# fully empirical. Prevents small-sample noise from rewriting
+# probabilities by ±15pp and creating phantom +EV picks at the tails.
+SHRINKAGE_TARGET_N = 50
+
 # Buckets are open-on-the-right intervals: [lo, hi). The "raw" bucket
 # label is also used as the lookup key.
 _BUCKETS = [
@@ -107,14 +114,33 @@ def calibrate(bet_type: str, raw_prob: float, sport: str = "mlb") -> float:
     if not rows:
         return raw_prob
 
-    for lo, hi, real_wr in rows:
+    for row in rows:
+        # Support both the legacy (lo, hi, real_wr) tuple and the new
+        # (lo, hi, real_wr, n) tuple so in-flight processes surviving a
+        # partial redeploy don't crash.
+        lo, hi, real_wr = row[0], row[1], row[2]
+        n = row[3] if len(row) > 3 else 0
         if lo <= raw_prob < hi:
-            return real_wr
+            # Shrink the empirical toward the raw model prob based on
+            # sample count. With n=10 the bucket has too little data to
+            # trust wholesale (a single hot streak moves the bar by 10pp);
+            # with n>=SHRINKAGE_TARGET_N it's reliable enough to apply
+            # fully. Without this, the NBA Q1 ML bucket [0.30, 0.40]
+            # with ~12 synthetic samples that hit 45% was lifting every
+            # heavy underdog from raw 32% to "calibrated" 45%, producing
+            # phantom +EV edges against heavy market prices.
+            w = min(1.0, n / SHRINKAGE_TARGET_N) if n > 0 else 0.0
+            return w * real_wr + (1.0 - w) * raw_prob
 
-    # raw is outside our buckets -- match the closest end.
-    if raw_prob < rows[0][0]:
-        return rows[0][2]
-    return rows[-1][2]
+    # raw is outside our bucket range (below the lowest or above the
+    # highest). Pass it through unchanged rather than clamping to the
+    # boundary bucket's real_wr: those tails have no data supporting a
+    # recalibration, and clamping WAS producing phantom +EV picks on
+    # heavy underdogs. A +700 NBA Q1 dog with raw prob 0.286 was being
+    # lifted to the [0.30, 0.40] bucket's empirical WR (~0.35),
+    # creating a fake 22% edge over the market's implied 12.5%.
+    # Favorites above 0.80 have the mirror problem.
+    return raw_prob
 
 
 def calibrated_edge(bet_type: str, raw_prob: float, odds: int,
@@ -203,15 +229,20 @@ def refresh_calibration(sport: str = "mlb") -> dict:
         if r["result"] == "W":
             c["w"] += 1
 
-    new_table: dict[str, list[tuple[float, float, float]]] = defaultdict(list)
+    # Table rows are (lo, hi, real_wr, n). The sample count is carried
+    # so calibrate() can shrink the empirical back toward the raw model
+    # prob at low sample sizes -- a single bad streak at n=12 shouldn't
+    # rewrite a whole bucket to 25% WR when the underlying truth is
+    # likely 45-55%.
+    new_table: dict[str, list[tuple[float, float, float, int]]] = defaultdict(list)
     for (bt, (lo, hi)), c in counts.items():
         if c["n"] >= MIN_BUCKET_N:
             real_wr = c["w"] / c["n"]
-            new_table[bt].append((lo, hi, real_wr))
+            new_table[bt].append((lo, hi, real_wr, c["n"]))
             summary["buckets_filled"] += 1
         else:
             # Passthrough: midpoint of bucket. Sample too thin to trust.
-            new_table[bt].append((lo, hi, (lo + hi) / 2))
+            new_table[bt].append((lo, hi, (lo + hi) / 2, 0))
             summary["buckets_passthrough"] += 1
 
     # Sort each bet-type's rows by lo so the lookup loop is deterministic.
