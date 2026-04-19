@@ -63,7 +63,7 @@ HEADERS_FILE = _REPO_DATA / "hardrock_headers.json"
 
 # Caching
 _cache: dict[str, tuple[float, dict]] = {}
-CACHE_TTL = 600
+CACHE_TTL = 60
 EMPTY_CACHE_TTL = 120  # short TTL when we got nothing -- Hard Rock may
                        # just be momentarily 403'ing and we don't want to
                        # hammer the endpoint from every best-bets tick.
@@ -76,26 +76,39 @@ EMPTY_CACHE_TTL = 120  # short TTL when we got nothing -- Hard Rock may
 # sportsbook GraphQL schemas expose. Overriden by hardrock_query.json
 # once the user pastes a real request body.
 
-_DEFAULT_BRAND = "hrd_online"
-_DEFAULT_SEGMENT = "fl"
-_DEFAULT_LANGUAGE = "en-us"
+_DEFAULT_LOCALE = "en-us"
+_DEFAULT_CHANNEL = "web"
+_DEFAULT_REGION = "fl"
+_DEFAULT_CMS_SEGMENT = "fl"
 
 _DEFAULT_QUERY_TEMPLATE = {
-    "operationName": "EventTree",
+    "operationName": "BetSync",
     "query": (
-        "query EventTree($brand: String!, $segment: String!, "
-        "$language: String!) { "
-        "  eventTree(brand: $brand, segment: $segment, language: $language) { "
-        "    sports { id name "
-        "      events { id name startTime "
-        "        participants { id name role } "
-        "        markets { id name type "
-        "          outcomes { id label line oddsAmerican oddsDecimal } } } } } }"
+        "query BetSync($locale: String!, $channel: String!, "
+        "$language: String!, $region: String!, $cmsSegment: String!) { "
+        "  betSync(locale: $locale, channel: $channel, language: $language, "
+        "          region: $region, cmsSegment: $cmsSegment) { "
+        "    numEvents "
+        "    sports { id name code "
+        "      competitions { id name "
+        "        events { data { "
+        "          id name sport startTime "
+        "          participants { id name shortName position } "
+        "          markets { id name type line spread period "
+        "            selection { id name type odds rootIdx } "
+        "          } "
+        "        } } "
+        "      } "
+        "    } "
+        "  } "
+        "}"
     ),
     "variables": {
-        "brand": _DEFAULT_BRAND,
-        "segment": _DEFAULT_SEGMENT,
-        "language": _DEFAULT_LANGUAGE,
+        "locale": _DEFAULT_LOCALE,
+        "channel": _DEFAULT_CHANNEL,
+        "language": _DEFAULT_LOCALE,
+        "region": _DEFAULT_REGION,
+        "cmsSegment": _DEFAULT_CMS_SEGMENT,
     },
 }
 
@@ -149,11 +162,28 @@ except Exception:
     _mlb_to_abbr = lambda n: (n or "").strip()  # noqa: E731
 
 try:
-    from .nba_dk_odds import _NBA_NAME_TO_ABBR as _NBA_MAP  # type: ignore
+    from .nba_dk_odds import _NBA_NAME_TO_ABBR as _NBA_MAP_FULL  # type: ignore
 except Exception:
-    _NBA_MAP = {}
+    _NBA_MAP_FULL = {}
+
+# NBA short-name map (Hard Rock uses nicknames only, no city)
+_NBA_SHORT_TO_ABBR: dict[str, str] = {
+    "Hawks": "ATL", "Celtics": "BOS", "Nets": "BKN",
+    "Hornets": "CHA", "Bulls": "CHI", "Cavaliers": "CLE",
+    "Mavericks": "DAL", "Nuggets": "DEN", "Pistons": "DET",
+    "Warriors": "GS", "Rockets": "HOU", "Pacers": "IND",
+    "Clippers": "LAC", "Lakers": "LAL", "Grizzlies": "MEM",
+    "Heat": "MIA", "Bucks": "MIL", "Timberwolves": "MIN",
+    "Pelicans": "NO", "Knicks": "NYK", "Thunder": "OKC",
+    "Magic": "ORL", "76ers": "PHI", "Suns": "PHX",
+    "Trail Blazers": "POR", "Kings": "SAC", "Spurs": "SA",
+    "Raptors": "TOR", "Jazz": "UTA", "Wizards": "WAS",
+}
+# Merge full names from DK map
+_NBA_MAP: dict[str, str] = {**_NBA_MAP_FULL, **_NBA_SHORT_TO_ABBR}
 
 _NHL_NAME_TO_ABBR: dict[str, str] = {
+    # Full names
     "Anaheim Ducks": "ANA", "Boston Bruins": "BOS", "Buffalo Sabres": "BUF",
     "Calgary Flames": "CGY", "Carolina Hurricanes": "CAR", "Chicago Blackhawks": "CHI",
     "Colorado Avalanche": "COL", "Columbus Blue Jackets": "CBJ", "Dallas Stars": "DAL",
@@ -166,6 +196,34 @@ _NHL_NAME_TO_ABBR: dict[str, str] = {
     "Utah Mammoth": "UTA", "Utah Hockey Club": "UTA",
     "Vancouver Canucks": "VAN", "Vegas Golden Knights": "VGK",
     "Washington Capitals": "WSH", "Winnipeg Jets": "WPG",
+    # Short names (Hard Rock format)
+    "Ducks": "ANA", "Bruins": "BOS", "Sabres": "BUF",
+    "Flames": "CGY", "Hurricanes": "CAR", "Blackhawks": "CHI",
+    "Avalanche": "COL", "Blue Jackets": "CBJ", "Stars": "DAL",
+    "Red Wings": "DET", "Oilers": "EDM", "Panthers": "FLA",
+    "Kings": "LA", "Wild": "MIN", "Canadiens": "MTL",
+    "Predators": "NSH", "Devils": "NJ", "Islanders": "NYI",
+    "Rangers": "NYR", "Senators": "OTT", "Flyers": "PHI",
+    "Penguins": "PIT", "Sharks": "SJ", "Kraken": "SEA",
+    "Blues": "STL", "Lightning": "TB", "Maple Leafs": "TOR",
+    "Mammoth": "UTA",
+    "Canucks": "VAN", "Golden Knights": "VGK",
+    "Capitals": "WSH", "Jets": "WPG",
+}
+
+# MLB short-name map (Hard Rock uses nicknames only, no city)
+_MLB_SHORT_TO_ABBR: dict[str, str] = {
+    "Diamondbacks": "ARI", "D-backs": "ARI", "Braves": "ATL",
+    "Orioles": "BAL", "Red Sox": "BOS", "Cubs": "CHC",
+    "White Sox": "CWS", "Reds": "CIN", "Guardians": "CLE",
+    "Rockies": "COL", "Tigers": "DET", "Astros": "HOU",
+    "Royals": "KC", "Angels": "LAA", "Dodgers": "LAD",
+    "Brewers": "MIL", "Twins": "MIN", "Mets": "NYM",
+    "Yankees": "NYY", "Athletics": "OAK", "Phillies": "PHI",
+    "Pirates": "PIT", "Padres": "SD", "Giants": "SF",
+    "Mariners": "SEA", "Cardinals": "STL", "Rays": "TB",
+    "Rangers": "TEX", "Blue Jays": "TOR", "Nationals": "WSH",
+    "Marlins": "MIA",
 }
 
 # Sport identifiers seen in Hard Rock's sports tree. We don't know the
@@ -174,7 +232,7 @@ _NHL_NAME_TO_ABBR: dict[str, str] = {
 # ("MLB", "Baseball - MLB", "baseball_mlb", etc.) will match.
 _SPORT_HINTS = {
     "mlb": ("mlb", "baseball"),
-    "nhl": ("nhl", "hockey"),
+    "nhl": ("nhl", "hockey", "ice_hockey", "icehockey"),
     "nba": ("nba", "basketball"),
 }
 
@@ -189,6 +247,9 @@ def _team_abbr(sport: str, name: str) -> str:
         return ""
     name = name.strip()
     if sport == "mlb":
+        # Try short-name map first (Hard Rock), then full-name normalizer (DK)
+        if name in _MLB_SHORT_TO_ABBR:
+            return _MLB_SHORT_TO_ABBR[name]
         return _mlb_to_abbr(name)
     if sport == "nhl":
         return _NHL_NAME_TO_ABBR.get(name, name)
@@ -345,7 +406,13 @@ def _walk_events_flat(root: Any) -> list[dict]:
 
 
 def _extract_teams(event: dict) -> tuple[str, str]:
-    """Return (away_name, home_name) best-effort."""
+    """Return (away_name, home_name) best-effort.
+
+    Hard Rock's betSync schema puts teams in ``participants`` with a
+    ``position`` field (typically 1 = away, 2 = home in US sports) and
+    the event ``name`` as "Away @ Home" or "Away at Home".
+    """
+    # ── Direct home/away fields (legacy / user-pasted query shapes) ──
     home = _pick(event, "homeTeam", "home", "homeTeamName", "homeName")
     away = _pick(event, "awayTeam", "away", "awayTeamName", "awayName")
     if isinstance(home, dict):
@@ -355,43 +422,97 @@ def _extract_teams(event: dict) -> tuple[str, str]:
     if home and away:
         return str(away), str(home)
 
+    # ── Parse event name first — it's the most reliable signal ──
+    # Hard Rock formats: "Away vs Home", "Away vs. Home", "Away @ Home"
+    title = str(_pick(event, "name", "title", "displayName") or "")
+    if " @ " in title:
+        a, h = title.split(" @ ", 1)
+        return a.strip(), h.strip()
+    if " at " in title.lower():
+        low = title.lower()
+        idx = low.find(" at ")
+        return title[:idx].strip(), title[idx + 4:].strip()
+    # "vs." before "vs" to avoid partial match
+    for sep in (" vs. ", " vs ", " v "):
+        if sep in title.lower():
+            idx = title.lower().find(sep)
+            return title[:idx].strip(), title[idx + len(sep):].strip()
+
+    # ── Participants list ──
     parts = _pick(event, "participants", "competitors", "teams")
     if isinstance(parts, list) and len(parts) >= 2:
-        role_map = {}
+        # Hard Rock uses position: 1 and 2. Try role/homeAway first.
+        role_map: dict[str, str] = {}
+        pos_map: dict[int, str] = {}
         for p in parts:
             if not isinstance(p, dict):
                 continue
-            role = (_pick(p, "role", "homeAway", "side") or "").lower()
-            name = _pick(p, "name", "displayName", "fullName", "label", "teamName")
-            if role and name:
-                role_map[role] = str(name)
+            name = str(_pick(p, "name", "displayName", "fullName",
+                             "label", "teamName") or "")
+            role = (_pick(p, "role", "homeAway", "side", "type") or "").lower()
+            pos = _pick(p, "position")
+            if role in ("home", "away") and name:
+                role_map[role] = name
+            if isinstance(pos, int) and name:
+                pos_map[pos] = name
         if "home" in role_map and "away" in role_map:
             return role_map["away"], role_map["home"]
-        names = [str(_pick(p, "name", "displayName", "fullName", "label", "teamName") or "")
+        # position convention: 1 = away, 2 = home (US sportsbook standard)
+        if 1 in pos_map and 2 in pos_map:
+            return pos_map[1], pos_map[2]
+        names = [str(_pick(p, "name", "displayName", "fullName",
+                           "label", "teamName") or "")
                  for p in parts if isinstance(p, dict)]
         if len(names) >= 2:
-            # Sportsbook convention: participants[0] often home, [1] away.
-            # Also try parsing "Away @ Home" from the event name as a backup.
-            title = str(_pick(event, "name", "title", "displayName") or "")
-            if " @ " in title:
-                a, h = title.split(" @ ", 1)
-                return a.strip(), h.strip()
-            if " at " in title.lower():
-                low = title.lower()
-                idx = low.find(" at ")
-                return title[:idx].strip(), title[idx + 4:].strip()
-            return names[1], names[0]
+            return names[0], names[1]
     return "", ""
 
 
+# Whitelist of exact market type suffixes that represent game-level
+# moneyline, spread, and total markets. Discovered via introspection
+# of the Hard Rock GraphQL schema + live data inspection.
+#
+# NHL:  ICE_HOCKEY:FTOT:ML / :SPRD / :OU
+# MLB:  BASEBALL:FTEI:ML / :SPRD / :OU   (FTEI = includes extra innings)
+# NBA:  BASKETBALL:FTOT:ML / :SPRD / :OU
+#
+# Everything else (team totals, period totals, stat totals, props,
+# futures/outrights) is excluded by not being in this map.
+_GAME_MARKET_TYPES: dict[str, str] = {
+    # Moneyline
+    "FTOT:ML": "ml", "FTEI:ML": "ml",
+    # Spread
+    "FTOT:SPRD": "ml_spread", "FTEI:SPRD": "ml_spread",
+    # Total
+    "FTOT:OU": "total", "FTEI:OU": "total",
+}
+
+
 def _market_kind(label: str, market_type: str = "") -> str | None:
-    s = f"{label} {market_type}".lower()
-    if "moneyline" in s or "money line" in s or s.strip() == "ml" or "match winner" in s:
-        return "ml"
-    if "puck line" in s or "run line" in s or "spread" in s or "handicap" in s:
-        return "spread"
-    if "total" in s or "over/under" in s or "over under" in s:
-        return "total"
+    """Classify a market as ml, spread, or total using the type code.
+
+    Uses a strict whitelist of game-level market type suffixes.
+    Falls back to label-based heuristics only when type is missing
+    (e.g. user-pasted query with a different schema).
+    """
+    mtu = market_type.upper()
+
+    # ── Whitelist match on type code suffix ──
+    for suffix, kind in _GAME_MARKET_TYPES.items():
+        if mtu.endswith(suffix):
+            # "ml_spread" → "spread" (disambiguate from the dict key)
+            return "spread" if kind == "ml_spread" else kind
+
+    # ── Fallback: label-based heuristics (for non-betSync schemas) ──
+    if not market_type:
+        s = label.lower()
+        if "moneyline" in s or "money line" in s or "match winner" in s:
+            return "ml"
+        if "puck line" in s or "run line" in s or "spread" in s:
+            return "spread"
+        if s.startswith("total") and "total" in s:
+            return "total"
+
     return None
 
 
@@ -400,34 +521,149 @@ def _is_q1(label: str) -> bool:
     return any(h in s for h in ("1st quarter", "first quarter", "1q", " q1", "q1 "))
 
 
-def _classify_outcome(outcome: dict, away_abbr: str, home_abbr: str,
-                      sport: str) -> tuple[str | None, int | None, float | None]:
-    """Return (side, american_price, line) for an outcome dict."""
-    label = (_pick(outcome, "label", "name", "participantName", "selection") or "").strip()
-    side_hint = (_pick(outcome, "side", "type", "outcomeType") or "").strip().lower()
+def _parse_odds_string(raw: Any) -> int | None:
+    """Parse the ``odds`` field from a Hard Rock Selection.
 
-    american = _int_odds(_pick(outcome, "oddsAmerican", "americanOdds", "priceUsOdds"))
+    Hard Rock always sends **decimal** odds as a string (e.g. "2.50",
+    "1.90909091", "2", "41").  There is no American format in their
+    GraphQL schema, so we always interpret the value as decimal and
+    convert to American.
+
+    Also handles edge cases from other providers / user-pasted queries:
+      - Explicit American: "+150", "-110" (has +/- prefix)
+      - Fractional: "3/2"
+    """
+    if raw is None:
+        return None
+    s = str(raw).strip().replace("\u2212", "-")  # unicode minus
+    if not s:
+        return None
+    # Fractional: "3/2"
+    if "/" in s:
+        try:
+            num, den = s.split("/", 1)
+            dec = float(num) / float(den) + 1.0
+            return _decimal_to_american(dec)
+        except (ValueError, ZeroDivisionError):
+            return None
+    # Explicit American sign: "+150", "-110"
+    if s.startswith("+") or s.startswith("-"):
+        try:
+            return int(s.replace("+", ""))
+        except ValueError:
+            pass
+    # Everything else: treat as decimal odds (Hard Rock's format)
+    try:
+        dec = float(s)
+        if dec > 1.0:
+            return _decimal_to_american(dec)
+    except ValueError:
+        pass
+    return None
+
+
+def _extract_line_from_name(name: str) -> float | None:
+    """Extract a numeric spread/handicap from a selection name.
+
+    Hard Rock embeds the line in the name, e.g.:
+      "Rangers +1.5", "Mariners -1.5", "Over 5.5"
+    """
+    import re
+    m = re.search(r'[+-]?\d+\.?\d*\s*$', name.strip())
+    if m:
+        return _float_line(m.group(0).strip())
+    return None
+
+
+def _classify_outcome(outcome: dict, away_abbr: str, home_abbr: str,
+                      sport: str,
+                      participants: list[dict] | None = None,
+                      ) -> tuple[str | None, int | None, float | None]:
+    """Return (side, american_price, line) for a selection/outcome dict.
+
+    Hard Rock betSync selections use:
+      - ``type``: "A" (position 0 / away), "B" (position 1 / home),
+        "AH"/"BH" (spread A/B), "Over", "Under"
+      - ``odds``: decimal string like "2.50"
+      - ``name``: team name + optional line, e.g. "Rangers +1.5"
+    """
+    label = (_pick(outcome, "name", "label", "participantName", "selection") or "").strip()
+    sel_type = (_pick(outcome, "type", "side", "outcomeType") or "").strip()
+
+    # Hard Rock selections use an ``odds`` string field
+    american = _parse_odds_string(_pick(outcome, "odds"))
+    if american is None:
+        american = _int_odds(_pick(outcome, "oddsAmerican", "americanOdds", "priceUsOdds"))
     if american is None:
         dec = _float_line(_pick(outcome, "oddsDecimal", "decimalOdds", "price"))
         if dec is not None:
             american = _decimal_to_american(dec)
 
     line = _float_line(_pick(outcome, "line", "handicap", "points", "spread", "total"))
+    if line is None:
+        line = _extract_line_from_name(label)
 
-    abbr = _team_abbr(sport, label) if label else ""
+    sel_lower = sel_type.lower()
+
+    # ── 1. Selection type field (most reliable for Hard Rock) ──
+    # "Over"/"Under" types are unambiguous
+    if sel_lower == "over":
+        return "over", american, line
+    if sel_lower == "under":
+        return "under", american, line
+    # "A" = position 0 (away), "B" = position 1 (home)
+    # "AH"/"BH" = spread for A/B
+    if sel_type in ("A", "AH"):
+        return "away", american, line
+    if sel_type in ("B", "BH"):
+        return "home", american, line
+
+    # ── 2. Team abbreviation matching ──
+    # Strip any trailing line numbers from label for matching
+    # e.g. "Rangers +1.5" → try matching "Rangers"
+    import re
+    team_part = re.sub(r'\s*[+-]?\d+\.?\d*\s*$', '', label).strip()
+    abbr = _team_abbr(sport, team_part) if team_part else ""
     if abbr == home_abbr:
         return "home", american, line
     if abbr == away_abbr:
         return "away", american, line
+
+    # ── 3. Label-based over/under (standalone word only) ──
+    # Must be a standalone "Over" or "Under" at the start of the label,
+    # not a substring of a team name like "Thunder" or "Rovers".
     lower = label.lower()
-    if "over" in lower or side_hint == "over":
+    if lower.startswith("over ") or lower == "over":
         return "over", american, line
-    if "under" in lower or side_hint == "under":
+    if lower.startswith("under ") or lower == "under":
         return "under", american, line
+
+    # ── 4. Participant name matching (fallback) ──
+    if participants:
+        for p in participants:
+            pname = (p.get("name") or "").strip()
+            pos = p.get("position")
+            if pname and team_part and pname.lower() == team_part.lower():
+                if pos == 0:
+                    return "away", american, line
+                if pos == 1:
+                    return "home", american, line
+
     return None, american, line
 
 
 def _apply_market(bucket: dict, kind: str, sides: dict, q1: bool) -> None:
+    """Apply parsed market sides to the event bucket.
+
+    For spread and total markets, the first market seen becomes the
+    "primary" line (backwards-compatible top-level fields). Subsequent
+    markets with different lines are appended to ``alt_spreads`` or
+    ``alt_totals`` lists so the pick engine can shop for the best edge.
+
+    Each alt entry is a dict:
+        alt_spreads: [{"point": -2.5, "home_odds": 150, "away_odds": -180}, ...]
+        alt_totals:  [{"line": 5.5, "over_odds": -110, "under_odds": -110}, ...]
+    """
     if kind == "ml":
         if q1:
             if sides.get("home", {}).get("price") is not None:
@@ -440,29 +676,169 @@ def _apply_market(bucket: dict, kind: str, sides: dict, q1: bool) -> None:
             if sides.get("away", {}).get("price") is not None:
                 bucket["away_ml"] = sides["away"]["price"]
     elif kind == "spread":
+        home_line = sides.get("home", {}).get("line")
+        home_price = sides.get("home", {}).get("price")
+        away_line = sides.get("away", {}).get("line")
+        away_price = sides.get("away", {}).get("price")
+        if home_line is None and away_line is None:
+            return
         if q1:
-            if sides.get("home", {}).get("line") is not None:
-                bucket["q1_spread"] = sides["home"]["line"]
-            if sides.get("home", {}).get("price") is not None:
-                bucket["q1_spread_home_odds"] = sides["home"]["price"]
-            if sides.get("away", {}).get("price") is not None:
-                bucket["q1_spread_away_odds"] = sides["away"]["price"]
+            if home_line is not None:
+                bucket["q1_spread"] = home_line
+            if home_price is not None:
+                bucket["q1_spread_home_odds"] = home_price
+            if away_price is not None:
+                bucket["q1_spread_away_odds"] = away_price
         else:
-            if sides.get("home", {}).get("line") is not None:
-                bucket["home_spread_point"] = sides["home"]["line"]
-                bucket["home_spread_odds"] = sides["home"]["price"]
-            if sides.get("away", {}).get("line") is not None:
-                bucket["away_spread_point"] = sides["away"]["line"]
-                bucket["away_spread_odds"] = sides["away"]["price"]
+            cur = bucket.get("home_spread_point")
+            if cur is None:
+                # First spread — set as primary
+                if home_line is not None:
+                    bucket["home_spread_point"] = home_line
+                    bucket["home_spread_odds"] = home_price
+                if away_line is not None:
+                    bucket["away_spread_point"] = away_line
+                    bucket["away_spread_odds"] = away_price
+            elif home_line == cur or (away_line is not None and -away_line == cur):
+                # Same line seen again (from a second comp) — overwrite
+                # odds to pick up fresher pricing.
+                if home_line is not None:
+                    bucket["home_spread_point"] = home_line
+                    bucket["home_spread_odds"] = home_price
+                if away_line is not None:
+                    bucket["away_spread_point"] = away_line
+                    bucket["away_spread_odds"] = away_price
+            else:
+                # Different line — add as alt
+                point = home_line if home_line is not None else (
+                    -away_line if away_line is not None else None)
+                if point is not None:
+                    alt = {"point": point,
+                           "home_odds": home_price, "away_odds": away_price}
+                    bucket.setdefault("alt_spreads", []).append(alt)
     elif kind == "total":
         line = (sides.get("over", {}).get("line")
                 or sides.get("under", {}).get("line"))
-        if line is not None:
-            bucket["q1_total" if q1 else "over_under"] = line
-        if sides.get("over", {}).get("price") is not None:
-            bucket["q1_over_odds" if q1 else "over_odds"] = sides["over"]["price"]
-        if sides.get("under", {}).get("price") is not None:
-            bucket["q1_under_odds" if q1 else "under_odds"] = sides["under"]["price"]
+        over_price = sides.get("over", {}).get("price")
+        under_price = sides.get("under", {}).get("price")
+        if q1:
+            if line is not None:
+                bucket["q1_total"] = line
+            if over_price is not None:
+                bucket["q1_over_odds"] = over_price
+            if under_price is not None:
+                bucket["q1_under_odds"] = under_price
+        else:
+            cur = bucket.get("over_under")
+            if cur is None:
+                # First total — set as primary
+                if line is not None:
+                    bucket["over_under"] = line
+                if over_price is not None:
+                    bucket["over_odds"] = over_price
+                if under_price is not None:
+                    bucket["under_odds"] = under_price
+            elif line == cur:
+                # Same line seen again — overwrite with fresher odds
+                if over_price is not None:
+                    bucket["over_odds"] = over_price
+                if under_price is not None:
+                    bucket["under_odds"] = under_price
+            else:
+                # Different line — add as alt
+                if line is not None:
+                    alt = {"line": line,
+                           "over_odds": over_price, "under_odds": under_price}
+                    bucket.setdefault("alt_totals", []).append(alt)
+
+
+# Competition name filters — only pull events from the target league,
+# not eSports, college, or international leagues.
+_COMP_FILTERS: dict[str, tuple[str, ...]] = {
+    "mlb": ("mlb",),
+    "nhl": ("nhl",),
+    "nba": ("nba", "wnba"),
+}
+
+
+def _comp_matches_sport(comp_name: str, sport: str) -> bool:
+    """Return True if a competition belongs to the target league."""
+    filters = _COMP_FILTERS.get(sport)
+    if not filters:
+        return True
+    name_lower = comp_name.lower()
+    return any(f in name_lower for f in filters)
+
+
+def _collect_events_from_sport(sport_node: dict,
+                               sport: str = "") -> list[dict]:
+    """Gather event dicts from a sport node.
+
+    Hard Rock's betSync nests events under competitions:
+        sport -> competitions[] -> events.data[]
+    But also supports a flat sport -> events.data[] path.
+
+    When ``sport`` is provided, filters competitions by league name
+    (e.g. only "MLB" competitions, not college baseball or eSports).
+
+    Hard Rock sometimes has duplicate competitions for the same league
+    (e.g. two "NBA" comps — one for playoff series, one for individual
+    games). When duplicates exist, we pick the one with more markets
+    per event (the game-level comp) and skip the series/overview comp.
+    """
+    events: list[dict] = []
+
+    # competitions[].events.data[]
+    comps = sport_node.get("competitions")
+    if isinstance(comps, list):
+        # Hard Rock often has two competitions with the same name for a
+        # league (e.g. two "NBA" comps). One is the site-facing comp
+        # with correct primary lines and alts; the other is an extended
+        # comp with extra/internal markets. The site-facing comp always
+        # has fewer markets per event. When duplicates exist, use only
+        # the smaller one.
+        by_name: dict[str, list[dict]] = {}
+        for comp in comps:
+            if not isinstance(comp, dict):
+                continue
+            comp_name = comp.get("name", "")
+            if sport and not _comp_matches_sport(comp_name, sport):
+                continue
+            by_name.setdefault(comp_name.lower(), []).append(comp)
+
+        selected_comps: list[dict] = []
+        for group in by_name.values():
+            if len(group) > 1:
+                # Pick the comp with fewer avg markets (site-facing)
+                def _avg_mkts(c: dict) -> float:
+                    ev = c.get("events")
+                    ev_list = (ev.get("data", []) if isinstance(ev, dict)
+                               else ev if isinstance(ev, list) else [])
+                    if not ev_list:
+                        return 0.0
+                    return sum(len(e.get("markets", []))
+                               for e in ev_list if isinstance(e, dict)) / len(ev_list)
+                selected_comps.append(min(group, key=_avg_mkts))
+            else:
+                selected_comps.append(group[0])
+
+        for comp in selected_comps:
+            ev_container = comp.get("events")
+            if isinstance(ev_container, dict):
+                raw = ev_container.get("data")
+                if isinstance(raw, list):
+                    events.extend(e for e in raw if isinstance(e, dict))
+            elif isinstance(ev_container, list):
+                events.extend(e for e in ev_container if isinstance(e, dict))
+    # sport.events.data[] (flat)
+    ev_container = sport_node.get("events")
+    if isinstance(ev_container, dict):
+        ev_list = ev_container.get("data")
+        if isinstance(ev_list, list):
+            events.extend(e for e in ev_list if isinstance(e, dict))
+    elif isinstance(ev_container, list):
+        events.extend(e for e in ev_container if isinstance(e, dict))
+    return events
 
 
 def _parse_response(sport: str, data: Any) -> dict[str, dict]:
@@ -473,14 +849,15 @@ def _parse_response(sport: str, data: Any) -> dict[str, dict]:
     if isinstance(data, dict) and "data" in data and isinstance(data["data"], dict):
         data = data["data"]
 
-    # Two layouts: sports[].events[] (tree) or just events[] (flat)
+    # Two layouts: sports[].competitions[].events.data[] (betSync tree)
+    # or just events[] somewhere flat.
     events_to_process: list[tuple[str, list[dict]]] = []
     sports = _walk_sports(data)
     if sports:
         for s in sports:
-            sport_name = str(_pick(s, "name", "displayName", "id") or "")
-            events = _pick(s, "events", "eventList") or []
-            if isinstance(events, list):
+            sport_name = str(_pick(s, "name", "displayName", "code", "id") or "")
+            events = _collect_events_from_sport(s, sport)
+            if events:
                 events_to_process.append((sport_name, events))
     else:
         flat = _walk_events_flat(data)
@@ -491,6 +868,14 @@ def _parse_response(sport: str, data: Any) -> dict[str, dict]:
         # Filter by sport if the node is labeled
         if sport_name and not _matches_sport(sport_name, sport):
             continue
+
+        # Sort events so those with MORE markets come first. When
+        # duplicate events exist (same matchup from different comps),
+        # the comp with fewer markets (typically the overview/series
+        # comp with fresher MLs) processes last and overwrites.
+        events = sorted(events,
+                        key=lambda e: len(e.get("markets", [])),
+                        reverse=True)
 
         for event in events:
             if not isinstance(event, dict):
@@ -503,6 +888,8 @@ def _parse_response(sport: str, data: Any) -> dict[str, dict]:
             key = f"{away_abbr}@{home_abbr}"
             bucket = result.setdefault(key, {"provider": "HardRock"})
 
+            event_participants = event.get("participants") or []
+
             markets = (_pick(event, "markets", "offers", "bets", "marketGroups") or [])
             if not isinstance(markets, list):
                 continue
@@ -510,7 +897,7 @@ def _parse_response(sport: str, data: Any) -> dict[str, dict]:
             for m in markets:
                 if not isinstance(m, dict):
                     continue
-                # Some GraphQL schemas nest the real markets under a group
+                # Some schemas nest the real markets under a group
                 inner = _pick(m, "markets")
                 iterable = inner if isinstance(inner, list) else [m]
                 for mkt in iterable:
@@ -521,20 +908,52 @@ def _parse_response(sport: str, data: Any) -> dict[str, dict]:
                     kind = _market_kind(label, mtype)
                     if kind is None:
                         continue
-                    outcomes = _pick(mkt, "outcomes", "selections", "runners") or []
+
+                    # Hard Rock bundles Asian lines (whole numbers) under
+                    # the same type as standard half-point lines. The site
+                    # only shows .5 lines, so skip whole-number markets.
+                    if kind in ("spread", "total"):
+                        outcomes_peek = (_pick(mkt, "selection", "outcomes",
+                                              "selections") or [])
+                        if outcomes_peek:
+                            sample_line = _extract_line_from_name(
+                                str(_pick(outcomes_peek[0], "name") or ""))
+                            if sample_line is not None and sample_line == int(sample_line):
+                                continue
+                    # Hard Rock betSync uses "selection"; other shapes
+                    # use "outcomes" / "selections" / "runners".
+                    outcomes = (_pick(mkt, "selection", "outcomes",
+                                     "selections", "runners") or [])
                     if not isinstance(outcomes, list) or len(outcomes) < 2:
                         continue
+
+                    # For spread/total markets, the line may live on the
+                    # market itself rather than on each selection.
+                    market_line = _float_line(_pick(mkt, "line", "spread"))
+
                     q1 = _is_q1(label) if sport == "nba" else False
 
                     sides: dict[str, dict] = {}
                     for o in outcomes:
                         if not isinstance(o, dict):
                             continue
-                        side, price, line = _classify_outcome(o, away_abbr, home_abbr, sport)
+                        side, price, line = _classify_outcome(
+                            o, away_abbr, home_abbr, sport,
+                            participants=event_participants)
                         if side is None:
                             continue
+                        # Fall back to market-level line when the
+                        # selection doesn't carry its own.
+                        if line is None and market_line is not None:
+                            line = market_line
                         sides[side] = {"price": price, "line": line}
                     _apply_market(bucket, kind, sides, q1)
+
+    # Post-process: pick the best primary spread/total from all
+    # collected lines. The "primary" should be the one closest to
+    # even juice (-110/-110), which is the standard/consensus line.
+    for v in result.values():
+        _promote_best_primary(v)
 
     # Drop entries without real pricing -- an empty stub isn't useful.
     return {k: v for k, v in result.items()
@@ -542,6 +961,87 @@ def _parse_response(sport: str, data: Any) -> dict[str, dict]:
                 "home_ml", "away_ml", "over_under",
                 "q1_spread", "q1_total", "q1_home_ml",
             ))}
+
+
+def _juice_score(home_odds: int | None, away_odds: int | None,
+                 line: float | None = None) -> tuple[float, float]:
+    """Score how "standard" a spread/total line is.
+
+    Returns a (primary_score, tiebreak) tuple for sorting. Lower is better.
+
+    Primary score: distance of both sides' odds from even money (±100).
+    The consensus line has both sides near -110, while alts have one
+    side at long odds (+300/-400).
+
+    Tiebreak: absolute value of the line. When two lines have identical
+    juice (e.g. both -105/-115), the one closer to zero is more likely
+    the consensus line the site displays.
+    """
+    if home_odds is None or away_odds is None:
+        return (9999.0, abs(line) if line is not None else 9999.0)
+    def _dist(odds: int) -> float:
+        return abs(abs(odds) - 100)
+    return (_dist(home_odds) + _dist(away_odds),
+            abs(line) if line is not None else 0.0)
+
+
+def _promote_best_primary(bucket: dict) -> None:
+    """If alt_spreads or alt_totals exist, find the line with the most
+    balanced juice and swap it into the primary slot."""
+    # ── Spreads ──
+    alts = bucket.get("alt_spreads")
+    if alts and "home_spread_point" in bucket:
+        # Collect all lines (primary + alts)
+        all_spreads = [{
+            "point": bucket["home_spread_point"],
+            "home_odds": bucket.get("home_spread_odds"),
+            "away_odds": bucket.get("away_spread_odds"),
+        }] + list(alts)
+        # Pick the one with most balanced juice, tiebreak by smaller line
+        best = min(all_spreads, key=lambda s: _juice_score(s["home_odds"], s["away_odds"], s["point"]))
+        if best["point"] != bucket["home_spread_point"]:
+            # Swap: current primary becomes an alt
+            old_primary = {
+                "point": bucket["home_spread_point"],
+                "home_odds": bucket.get("home_spread_odds"),
+                "away_odds": bucket.get("away_spread_odds"),
+            }
+            bucket["home_spread_point"] = best["point"]
+            bucket["home_spread_odds"] = best["home_odds"]
+            bucket["away_spread_point"] = -best["point"] if best["point"] is not None else None
+            bucket["away_spread_odds"] = best["away_odds"]
+            # Rebuild alt list without the new primary
+            new_alts = [s for s in all_spreads
+                        if s["point"] != best["point"]]
+            bucket["alt_spreads"] = new_alts if new_alts else []
+        if not bucket.get("alt_spreads"):
+            bucket.pop("alt_spreads", None)
+
+    # ── Totals ──
+    alts = bucket.get("alt_totals")
+    if alts and "over_under" in bucket:
+        all_totals = [{
+            "line": bucket["over_under"],
+            "over_odds": bucket.get("over_odds"),
+            "under_odds": bucket.get("under_odds"),
+        }] + list(alts)
+        # Filter to reasonable game totals. Props and aggregates can
+        # have lines like 275.5 (strikeouts). Game totals are:
+        #   MLB: 3-20, NHL: 2-12, NBA: 150-300
+        # We use a generous range to not clip unusual games.
+        reasonable = [t for t in all_totals
+                      if t["line"] is not None and t["line"] <= 300]
+        if reasonable:
+            best = min(reasonable, key=lambda t: _juice_score(
+                t["over_odds"], t["under_odds"], t["line"]))
+            bucket["over_under"] = best["line"]
+            bucket["over_odds"] = best["over_odds"]
+            bucket["under_odds"] = best["under_odds"]
+            new_alts = [t for t in reasonable
+                        if t["line"] != best["line"]]
+            bucket["alt_totals"] = new_alts if new_alts else []
+        if not bucket.get("alt_totals"):
+            bucket.pop("alt_totals", None)
 
 
 # ── Fetch / probe ─────────────────────────────────────────
@@ -604,9 +1104,10 @@ def load_from_curl(curl_text: str) -> tuple[Path, Path]:
       * Bash  - double quotes:  curl "url" -H "a: b" --data-raw "{...}"
       * CMD   - Windows escape: curl.exe ^"url^" ^ -H ^"a: b^"
 
-    Tolerates line continuations in all three (``\`` for bash,
-    ``^`` for cmd, ``` ` ``` for PowerShell).
+    Tolerates line continuations in all three (backslash for bash,
+    caret for cmd, backtick for PowerShell).
     """
+    import re
     import shlex
     # Normalize line continuations. Windows cmd wraps with trailing ``^``
     # followed by a newline; DevTools 'Copy as cURL (cmd)' also
@@ -614,8 +1115,13 @@ def load_from_curl(curl_text: str) -> tuple[Path, Path]:
     text = curl_text.replace("\r\n", "\n")
     # Strip line-continuation markers first
     text = text.replace("\\\n", " ").replace("^\n", " ").replace("`\n", " ")
-    # Windows cURL: ``^"..."^`` wraps quoted strings; unescape to plain "
-    text = text.replace('^"', '"')
+
+    # Windows CMD cURL: the ``^`` character escapes the next character.
+    # Firefox "Copy as cURL (Windows)" produces e.g.:
+    #   ^"...^"  for quoted strings
+    #   ^{, ^}, ^[, ^], ^\, ^$  inside --data-raw
+    # Strip all ``^X`` → ``X`` (caret is the CMD escape char).
+    text = re.sub(r'\^(.)', r'\1', text)
 
     try:
         tokens = shlex.split(text, posix=True)
@@ -670,6 +1176,24 @@ def load_from_curl(curl_text: str) -> tuple[Path, Path]:
             body_json = json.loads(body_text)
         except Exception as e:
             raise ValueError(f"Body was not JSON: {e}")
+        # Extract variables (channel, segment, region, language) from the
+        # user's cURL, but replace the query with our own that fetches
+        # full event data including markets + selections + odds.
+        # The user's browser query often only fetches the sports tree
+        # (counts/categories) without actual odds data.
+        user_vars = body_json.get("variables", {})
+        if user_vars:
+            merged_vars = dict(_DEFAULT_QUERY_TEMPLATE["variables"])
+            # Map the user's variable names to ours
+            for src, dst in [("channel", "channel"), ("segment", "cmsSegment"),
+                             ("region", "region"), ("language", "language"),
+                             ("locale", "locale")]:
+                if src in user_vars:
+                    merged_vars[dst] = user_vars[src]
+            body_json = dict(_DEFAULT_QUERY_TEMPLATE)
+            body_json["variables"] = merged_vars
+            logger.info("Hard Rock: extracted variables from user cURL: %s",
+                        merged_vars)
     else:
         body_json = _DEFAULT_QUERY_TEMPLATE
 
