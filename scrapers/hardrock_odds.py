@@ -50,7 +50,9 @@ logger = logging.getLogger(__name__)
 
 # ── Config ─────────────────────────────────────────────────
 HARDROCK_HOST = "https://api.hardrocksportsbook.com"
-EVENT_TREE_URL = f"{HARDROCK_HOST}/graphql?type=event_tree"
+# Real path (confirmed from user's DevTools cURL) -- note the
+# /java-graphql/ prefix. Without it the server returns 404.
+EVENT_TREE_URL = f"{HARDROCK_HOST}/java-graphql/graphql?type=event_tree"
 
 # Files the user can drop to override the default request body + headers.
 # data/hardrock_query.json   - the GraphQL JSON body (from DevTools cURL)
@@ -197,19 +199,57 @@ def _team_abbr(sport: str, name: str) -> str:
 
 # ── HTTP ───────────────────────────────────────────────────
 
+def _decompress_body(body: bytes, encoding: str) -> bytes:
+    """Hard Rock serves responses with Accept-Encoding: gzip, br, zstd.
+    urllib doesn't auto-decompress; handle the common cases here so
+    the parser gets plain JSON regardless of what the server sent."""
+    if not body or not encoding:
+        return body
+    enc = encoding.lower().strip()
+    try:
+        if enc == "gzip":
+            import gzip
+            return gzip.decompress(body)
+        if enc == "deflate":
+            import zlib
+            return zlib.decompress(body)
+        if enc == "br":
+            try:
+                import brotli  # type: ignore
+                return brotli.decompress(body)
+            except ImportError:
+                logger.warning("Hard Rock returned brotli but 'brotli' is not installed; "
+                               "install it or strip Accept-Encoding: br from the headers file.")
+                return body
+        if enc == "zstd":
+            try:
+                import zstandard  # type: ignore
+                return zstandard.ZstdDecompressor().decompress(body)
+            except ImportError:
+                logger.warning("Hard Rock returned zstd but 'zstandard' is not installed; "
+                               "install it or strip Accept-Encoding: zstd from the headers file.")
+                return body
+    except Exception as e:
+        logger.warning("Hard Rock: decompress %s failed: %s", enc, e)
+    return body
+
+
 def _graphql_post(url: str, body: dict, headers: dict,
                   timeout: float = 15.0) -> tuple[int, bytes | None, str | None]:
     try:
         data = json.dumps(body).encode()
         req = urllib.request.Request(url, data=data, headers=headers, method="POST")
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status, resp.read(), None
+            raw = resp.read()
+            raw = _decompress_body(raw, resp.headers.get("Content-Encoding", ""))
+            return resp.status, raw, None
     except urllib.error.HTTPError as e:
         try:
-            body = e.read()
+            raw = e.read()
+            raw = _decompress_body(raw, e.headers.get("Content-Encoding", "") if e.headers else "")
         except Exception:
-            body = None
-        return e.code, body, f"HTTPError {e.code}"
+            raw = None
+        return e.code, raw, f"HTTPError {e.code}"
     except Exception as e:
         return 0, None, str(e)
 
@@ -559,16 +599,32 @@ def load_from_curl(curl_text: str) -> tuple[Path, Path]:
     JSON body, and write them to the override files so the next fetch
     uses them. Returns (query_path, headers_path) of what was written.
 
-    Accepts both ``curl 'url' -H 'a: b' --data-raw '{}'`` (bash) and the
-    escaped Windows form. Tolerates line continuations.
+    Accepts three cURL flavors DevTools produces:
+      * Bash  - single quotes:  curl 'url' -H 'a: b' --data-raw '{...}'
+      * Bash  - double quotes:  curl "url" -H "a: b" --data-raw "{...}"
+      * CMD   - Windows escape: curl.exe ^"url^" ^ -H ^"a: b^"
+
+    Tolerates line continuations in all three (``\`` for bash,
+    ``^`` for cmd, ``` ` ``` for PowerShell).
     """
     import shlex
-    # Normalize line continuations + Windows ^ breaks
-    text = (curl_text
-            .replace("\\\n", " ")
-            .replace("^\n", " ")
-            .replace("`\n", " "))
-    tokens = shlex.split(text, posix=True)
+    # Normalize line continuations. Windows cmd wraps with trailing ``^``
+    # followed by a newline; DevTools 'Copy as cURL (cmd)' also
+    # escape-quotes double quotes with ``^"`` inline.
+    text = curl_text.replace("\r\n", "\n")
+    # Strip line-continuation markers first
+    text = text.replace("\\\n", " ").replace("^\n", " ").replace("`\n", " ")
+    # Windows cURL: ``^"..."^`` wraps quoted strings; unescape to plain "
+    text = text.replace('^"', '"')
+
+    try:
+        tokens = shlex.split(text, posix=True)
+    except ValueError:
+        # Fallback for unbalanced quotes -- try posix=False which is
+        # more permissive with Windows-style cmd.exe quoting.
+        tokens = shlex.split(text, posix=False)
+        # Strip surrounding quotes left by posix=False
+        tokens = [t.strip('"').strip("'") for t in tokens]
 
     url = None
     headers: dict[str, str] = {}
@@ -577,7 +633,9 @@ def load_from_curl(curl_text: str) -> tuple[Path, Path]:
     i = 0
     while i < len(tokens):
         t = tokens[i]
-        if t == "curl" and url is None and i + 1 < len(tokens):
+        # Skip the cURL executable token. DevTools produces "curl" on
+        # Unix and "curl.exe" on Windows.
+        if t.lower() in ("curl", "curl.exe") and url is None and i + 1 < len(tokens):
             nxt = tokens[i + 1]
             if not nxt.startswith("-"):
                 url = nxt
@@ -643,8 +701,24 @@ if __name__ == "__main__":
                     help="Read a DevTools cURL command from stdin and "
                          "write it to data/hardrock_query.json + "
                          "data/hardrock_headers.json so the scraper can "
-                         "use it on the next fetch.")
+                         "use it on the next fetch. On Windows the stdin "
+                         "terminator is Ctrl+Z then Enter. Prefer "
+                         "--curl-file on Windows because cmd.exe mangles "
+                         "multi-line pastes.")
+    ap.add_argument("--curl-file",
+                    help="Path to a text file containing a cURL command. "
+                         "On Windows: save the cURL to a .txt file first "
+                         "(open the file in Notepad, paste cURL, save) "
+                         "then point this at it. Avoids the Ctrl+Z stdin "
+                         "pain entirely.")
     args = ap.parse_args()
+
+    if args.curl_file:
+        curl_text = Path(args.curl_file).read_text(encoding="utf-8")
+        q, h = load_from_curl(curl_text)
+        print(f"Wrote:\n  query   -> {q}\n  headers -> {h}")
+        print("\nNext: python -m scrapers.hardrock_odds --sport nhl")
+        sys.exit(0)
 
     if args.load_curl:
         print("Paste the cURL command and press Ctrl+D (Unix) or Ctrl+Z "
