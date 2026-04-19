@@ -35,12 +35,13 @@ function Q1PredictionResults({ data, odds, home, away }) {
   const total = d.predicted_total || 0
   const homeFav = margin > 0
 
-  // Prefer the engine-generated pick attached by /api/nba/predict --
-  // same selector + empirical calibration that powers the Scoreboard
-  // card. Fall back to the client-side findBestQ1Edge if the backend
-  // didn't attach a pick (older cached prediction, odds fetch failed).
-  const bestEdge = d.best_pick
-    ? edgeFromBackendPick(d.best_pick)
+  // Prefer the engine-generated pick attached by /api/nba/predict.
+  // When backend ran picks at all (d.picks present), trust its verdict
+  // including an explicit null (no +EV play). Only fall back to the
+  // local findBestQ1Edge when d.picks isn't there (older cached shape).
+  const backendRanPicks = Array.isArray(d.picks)
+  const bestEdge = backendRanPicks
+    ? (d.best_pick ? edgeFromBackendPick(d.best_pick) : null)
     : (odds ? findBestQ1Edge(d, odds, home, away) : null)
 
   return (
@@ -293,15 +294,13 @@ function PickRow({ label, pick, prob, odds, pct, ciHw }) {
   )
 }
 
-// Engine best_pick → EdgeCallout shape. NBA Q1 picks emit type like
-// "Q1_SPREAD" / "Q1_TOTAL" / "Q1_ML"; for ML we render "{abbr} Q1 ML",
-// otherwise the engine's pick.pick already contains the full label
-// ("Over 54.5 Q1", "LAL -3.5 Q1", etc).
+// Engine best_pick → EdgeCallout shape. engine.nba_picks already emits
+// the full display label in pick.pick for every Q1 market type
+// ("MIA Q1 ML", "LAL -3.5 Q1", "Over 54.5 Q1"), so we pass it through.
 function edgeFromBackendPick(pick) {
   if (!pick) return null
-  const label = pick.type === 'Q1_ML' ? `${pick.pick} Q1 ML` : pick.pick
   return {
-    label,
+    label: pick.pick,
     odds: pick.odds,
     edge: pick.edge,
     rating: pick.confidence || 'lean',

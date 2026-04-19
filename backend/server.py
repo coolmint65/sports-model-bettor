@@ -2782,8 +2782,23 @@ def api_nhl_predict(home: str = Query(...), away: str = Query(...)):
         from engine.nhl_picks import generate_nhl_picks_with_context
         home_abbr = (result.get("home") or {}).get("abbreviation") or ""
         away_abbr = (result.get("away") or {}).get("abbreviation") or ""
+        # Mirror the alt-key lookup in _get_nhl_scoreboard so predict and
+        # best-bets see the same odds row for teams whose ESPN abbrev
+        # differs from The Odds API's (UTA/UTH, WSH/WAS, LAK/LA, etc.).
+        # Without this, best-bets picked PL MTL +1.5 (real odds) while
+        # predict saw empty odds and picked Under 6.5 (synthetic fallback).
         odds_map = _fetch_nhl_odds() if (home_abbr and away_abbr) else {}
-        game_odds = odds_map.get(f"{away_abbr}@{home_abbr}", {}) if odds_map else {}
+        game_odds = {}
+        if odds_map:
+            for k in (
+                f"{away_abbr}@{home_abbr}",
+                f"{_nhl_alt_abbr(away_abbr)}@{_nhl_alt_abbr(home_abbr)}",
+                f"{_nhl_alt_abbr(away_abbr)}@{home_abbr}",
+                f"{away_abbr}@{_nhl_alt_abbr(home_abbr)}",
+            ):
+                if k in odds_map:
+                    game_odds = odds_map[k]
+                    break
         picks, _ctx = generate_nhl_picks_with_context(
             home_key, away_key, game_odds, pred=result,
         )
@@ -3537,7 +3552,21 @@ def api_nba_predict(home: str = Query(...), away: str = Query(...)):
     odds = {}
     try:
         from scrapers.nba_odds import fetch_all_nba_odds
-        odds = (fetch_all_nba_odds() or {}).get(f"{away}@{home}", {}) or {}
+        # Mirror the alt-key lookup in _get_nba_scoreboard so predict and
+        # best-bets see the same odds row for teams whose ESPN abbrev
+        # differs from The Odds API's (BKN/BRK, CHA/CHO, NOP/NO, etc.).
+        # Without this, best-bets picked with real Q1 odds while predict
+        # got empty odds and fell back to synthetic -110 defaults.
+        odds_map = fetch_all_nba_odds() or {}
+        for k in (
+            f"{away}@{home}",
+            f"{_nba_alt_abbr(away)}@{_nba_alt_abbr(home)}",
+            f"{_nba_alt_abbr(away)}@{home}",
+            f"{away}@{_nba_alt_abbr(home)}",
+        ):
+            if k in odds_map:
+                odds = odds_map[k] or {}
+                break
     except Exception as e:
         logger.debug("NBA Q1 odds fetch failed in predict endpoint: %s", e)
 

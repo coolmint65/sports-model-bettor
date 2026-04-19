@@ -139,10 +139,13 @@ function NHLPredictionResults({ data, odds, home, away }) {
 
   // Prefer the engine-generated pick attached by /api/nhl/predict --
   // same selector + empirical calibration that powers the Scoreboard
-  // card. Fall back to the client-side findBestEdge when the backend
-  // hasn't attached picks (older cached prediction, odds fetch failed).
-  const bestEdge = d.best_pick
-    ? edgeFromBackendPick(d.best_pick)
+  // card. When backend ran picks at all (d.picks present), trust its
+  // verdict including an explicit null (no +EV play). Only fall back
+  // to the client-side findBestEdge when d.picks isn't there at all
+  // (older cached prediction shape, pre-server upgrade).
+  const backendRanPicks = Array.isArray(d.picks)
+  const bestEdge = backendRanPicks
+    ? (d.best_pick ? edgeFromBackendPick(d.best_pick) : null)
     : (odds ? findBestEdge(d, odds, home, away) : null)
   const reasons = getReasoning(d, home, away)
 
