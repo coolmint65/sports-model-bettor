@@ -267,7 +267,13 @@ NBA_BET_RELIABILITY = {
 }
 
 # ── Weak markets - disabled by default ──
-ENABLE_MLB_NRFI = True
+# 1st INN / NRFI: empirical tracker shows 44.4% WR, -$500. The pitcher
+# scoreless-rate blend produces overconfident probs (80%+) that don't
+# calibrate, and it was also dragging best_pick + Best Bets surfaces
+# below break-even. POTD already excluded it; flipping this flag off
+# stops it from being emitted by engine.picks.generate_picks so the
+# Scoreboard badge and Best Bets page stop featuring it too.
+ENABLE_MLB_NRFI = False
 ENABLE_NHL_ML = True
 ENABLE_NHL_OU = True
 ENABLE_NHL_PL = True
