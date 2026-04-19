@@ -2440,20 +2440,75 @@ def _parse_nhl_scoreboard(data: dict) -> list[dict]:
 _nhl_odds_cache: dict | None = None
 _nhl_odds_cache_time: float = 0
 
+# Negative-result TTL: when The Odds API is 401 / quota-exhausted,
+# DON'T retry it on every best-bets tick. Cache the empty dict for
+# NHL_EMPTY_CACHE_TTL seconds so we fall through to the Hard Rock / DK
+# chain instead of hammering the API + burning wall-clock per request.
+NHL_EMPTY_CACHE_TTL = 120
+
+
 def _fetch_nhl_odds() -> dict:
-    """Fetch NHL odds from The Odds API."""
+    """Fetch NHL odds with multi-source fallback:
+
+        1. Hard Rock Bet (preferred primary, free, no quota)
+        2. The Odds API (original source, monthly credit-gated)
+        3. DraftKings public sportsbook API (free fallback)
+
+    Merges the first non-empty source. Cached for 10 min; 2 min for
+    empty results so a 401/exhaustion on Odds API doesn't hammer it.
+    """
     global _nhl_odds_cache, _nhl_odds_cache_time
 
-    if _nhl_odds_cache and (time.time() - _nhl_odds_cache_time) < 600:
-        return _nhl_odds_cache
+    if _nhl_odds_cache is not None:
+        age = time.time() - _nhl_odds_cache_time
+        ttl = 600 if _nhl_odds_cache else NHL_EMPTY_CACHE_TTL
+        if age < ttl:
+            return _nhl_odds_cache
 
-    import os
-    from pathlib import Path
-    key_file = Path(__file__).resolve().parent.parent / "data" / "odds_api_key.txt"
-    api_key = os.environ.get("ODDS_API_KEY") or (key_file.read_text().strip() if key_file.exists() else None)
-    if not api_key:
-        return {}
+    merged: dict = {}
 
+    # 1. Hard Rock primary
+    try:
+        from scrapers.hardrock_odds import fetch_nhl as _hr_nhl
+        hr = _hr_nhl()
+        if hr:
+            merged.update(hr)
+            logger.info("NHL odds: %d games from Hard Rock", len(hr))
+    except Exception as e:
+        logger.debug("Hard Rock NHL odds failed: %s", e)
+
+    # 2. The Odds API (only if Hard Rock didn't cover the slate)
+    if not merged:
+        import os
+        from pathlib import Path
+        key_file = Path(__file__).resolve().parent.parent / "data" / "odds_api_key.txt"
+        api_key = os.environ.get("ODDS_API_KEY") or (key_file.read_text().strip() if key_file.exists() else None)
+        if api_key:
+            oddsapi_result = _fetch_nhl_odds_oddsapi(api_key)
+            if oddsapi_result:
+                merged.update(oddsapi_result)
+        else:
+            logger.debug("NHL: no Odds API key configured, skipping that source")
+
+    # 3. DraftKings public API (ultimate fallback)
+    if not merged:
+        try:
+            from scrapers.nhl_dk_odds import fetch_nhl_dk_odds
+            dk = fetch_nhl_dk_odds()
+            if dk:
+                merged.update(dk)
+                logger.info("NHL odds fallback: merged %d DK games", len(dk))
+        except Exception as e:
+            logger.debug("DK NHL odds fallback failed: %s", e)
+
+    _nhl_odds_cache = merged
+    _nhl_odds_cache_time = time.time()
+    return merged
+
+
+def _fetch_nhl_odds_oddsapi(api_key: str) -> dict:
+    """Original Odds API path for NHL. Extracted so the multi-source
+    `_fetch_nhl_odds` stays readable."""
     url = (f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds/"
            f"?apiKey={api_key}"
            f"&regions=us"
@@ -2518,8 +2573,6 @@ def _fetch_nhl_odds() -> dict:
         if result.get("home_ml"):
             odds_map[key] = result
 
-    _nhl_odds_cache = odds_map
-    _nhl_odds_cache_time = time.time()
     return odds_map
 
 

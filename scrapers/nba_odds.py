@@ -335,19 +335,43 @@ def _merge_odds(base: dict, extra: dict) -> dict:
 
 
 def fetch_all_nba_odds() -> dict:
-    """Fetch NBA odds from The Odds API with ESPN + DK fallback chain.
+    """Fetch NBA odds with a multi-source fallback chain.
 
     Order:
-      1. The Odds API (fast, authoritative when plan includes Q1)
-      2. DraftKings public sportsbook API (Q1 markets, may 403 by region)
-      3. ESPN summary/core endpoints (Q1 markets via pickcenter)
+      1. Hard Rock Bet (user-preferred primary when it resolves -- free,
+         no quota). See scrapers/hardrock_odds.py for the endpoint
+         discovery state.
+      2. The Odds API (fast, authoritative when plan includes Q1).
+      3. DraftKings public sportsbook API (Q1 markets, may 403 by region).
+      4. ESPN summary/core endpoints (Q1 markets via pickcenter).
 
     Each source is merged without overwriting data from a prior source.
     Returns a dict keyed by "AWAY@HOME" with the same schema
     fetch_nba_odds() returns.
     """
-    odds = fetch_nba_odds() or {}
+    odds = {}
 
+    # 1. Hard Rock (preferred). If its endpoints haven't been verified
+    # yet the fetch returns {} silently and we fall through.
+    try:
+        from .hardrock_odds import fetch_nba as fetch_hr_nba
+        hr = fetch_hr_nba()
+        if hr:
+            odds = _merge_odds(odds, hr)
+            logger.info("NBA odds: %d games from Hard Rock", len(hr))
+    except Exception as e:
+        logger.debug("Hard Rock NBA odds failed: %s", e)
+
+    # 2. The Odds API
+    if not odds or not _has_q1_data(odds):
+        try:
+            api = fetch_nba_odds() or {}
+            if api:
+                odds = _merge_odds(odds, api)
+        except Exception as e:
+            logger.debug("Odds API NBA fetch failed: %s", e)
+
+    # 3. DraftKings public API
     if not _has_q1_data(odds):
         try:
             from .nba_dk_odds import fetch_nba_dk_odds
@@ -358,6 +382,7 @@ def fetch_all_nba_odds() -> dict:
         except Exception as e:
             logger.debug("DK NBA odds fallback failed: %s", e)
 
+    # 4. ESPN pickcenter
     if not _has_q1_data(odds):
         try:
             from .nba_espn_odds import fetch_nba_espn_odds

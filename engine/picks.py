@@ -596,16 +596,47 @@ def _find_ou(ou_lines: dict, vegas_total: float) -> dict | None:
 
 
 def fetch_real_odds_for_games() -> dict:
+    """Fetch real MLB odds with multi-source fallback:
+
+        1. Hard Rock Bet (preferred primary; free, no quota)
+        2. The Odds API (monthly credit-gated)
+        3. DraftKings public sportsbook API (free fallback)
+
+    Merges non-empty sources, first-source-wins per matchup key.
+    Cached inside each scraper so repeated calls are cheap.
     """
-    Fetch real DraftKings odds for all today's games.
-    Returns {matchup_key: odds_dict}.
-    Cached by the Odds API module.
-    """
+    merged: dict = {}
+
+    # 1. Hard Rock
     try:
-        from scrapers.odds_api import fetch_odds
-        return fetch_odds()
+        from scrapers.hardrock_odds import fetch_mlb as _hr_mlb
+        hr = _hr_mlb()
+        if hr:
+            merged.update(hr)
     except Exception:
-        return {}
+        pass
+
+    # 2. The Odds API
+    if not merged:
+        try:
+            from scrapers.odds_api import fetch_odds
+            api = fetch_odds()
+            if api:
+                merged.update(api)
+        except Exception:
+            pass
+
+    # 3. DraftKings public API
+    if not merged:
+        try:
+            from scrapers.dk_odds import fetch_dk_odds
+            dk = fetch_dk_odds()
+            if dk:
+                merged.update(dk)
+        except Exception:
+            pass
+
+    return merged
 
 
 def match_odds(home_abbr: str, away_abbr: str, all_odds: dict) -> dict:
