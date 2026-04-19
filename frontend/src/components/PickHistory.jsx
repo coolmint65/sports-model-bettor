@@ -1,3 +1,5 @@
+import { humanizeBetType } from '../lib/betType'
+
 export default function PickHistory({ summary, history, loading, onRecord, onSettle }) {
   const pct = n => `${(n * 100).toFixed(1)}%`
 
@@ -148,7 +150,7 @@ function PicksTable({ picks, pct }) {
             <tr key={p.id || i} className={resultClass}>
               <td className="col-date">{p.date?.slice(5)}</td>
               <td className="col-matchup">{p.matchup}</td>
-              <td><span className="type-badge">{p.bet_type?.toUpperCase()}</span></td>
+              <td><span className="type-badge">{humanizeBetType(p.bet_type)}</span></td>
               <td style={{ fontWeight: 600 }}>{p.pick}</td>
               <td style={{ color: '#94a3b8' }}>{p.odds ? `${p.odds > 0 ? '+' : ''}${p.odds}` : '-'}</td>
               <td>{p.model_prob ? pct(p.model_prob) : '-'}</td>

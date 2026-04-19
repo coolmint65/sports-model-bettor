@@ -1,3 +1,5 @@
+import { humanizeBetType } from '../lib/betType'
+
 export default function BestBets({ bets, loading }) {
   if (loading) {
     return (
@@ -70,7 +72,7 @@ function BetCard({ bet }) {
       <div className="bb-card-body">
         {/* Best pick callout */}
         <div className={`bb-best-pick conf-${bet.confidence}`}>
-          <div className="bb-pick-type">{best_pick.type}</div>
+          <div className="bb-pick-type">{humanizeBetType(best_pick.type)}</div>
           <div className="bb-pick-name">{best_pick.pick}</div>
           <div className="bb-pick-edge">+{best_pick.edge}% edge</div>
           <div className="bb-pick-prob">{pct(best_pick.prob)}</div>
@@ -80,7 +82,7 @@ function BetCard({ bet }) {
         <div className="bb-all-picks">
           {all_picks.map((p, i) => (
             <div key={i} className={`bb-pick-row ${i === 0 ? 'best' : ''}`}>
-              <span className="bb-pr-type">{p.type}</span>
+              <span className="bb-pr-type">{humanizeBetType(p.type)}</span>
               <span className="bb-pr-pick">{p.pick}</span>
               <span className={`bb-pr-prob ${p.edge > 4 ? 'positive' : ''}`}>{pct(p.prob)}</span>
               <span className={`bb-pr-edge ${p.edge > 4 ? 'positive' : p.edge < 0 ? 'negative' : ''}`}>
@@ -93,7 +95,7 @@ function BetCard({ bet }) {
         {/* Pick odds */}
         <div className="bb-summary">
           {all_picks.slice(0, 4).map((p, i) => (
-            p.odds && <span key={i}>{p.type}: {p.odds > 0 ? '+' : ''}{p.odds}</span>
+            p.odds && <span key={i}>{humanizeBetType(p.type)}: {p.odds > 0 ? '+' : ''}{p.odds}</span>
           ))}
         </div>
       </div>
