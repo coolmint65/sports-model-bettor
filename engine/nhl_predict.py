@@ -1666,16 +1666,20 @@ def predict_matchup(home_key: str, away_key: str,
     granular_data["ot_split_used"] = {"home": round(home_ot_share, 3),
                                       "away": round(away_ot_share, 3)}
 
-    # ── Calibration cap (added 2026-04 after engine.train on 47 picks
-    # showed ALL probability buckets hit 15-40pp below their stated
-    # prob). The model is systematically overconfident - every bet
-    # market losing (ML 33%, O/U 35%, PL 33%), flipped-scenario WR
-    # 66% flags a sign-error-equivalent miscalibration.
-    # Capping raw win-prob pulls heavy favorites back toward 50/50.
-    # If this proves too blunt, next step is per-factor ablation via
-    # engine.factor_backtest nhl.
+    # ── Overconfidence shaping ──
+    # Added 2026-04 after engine.train on 47 picks showed ALL prob
+    # buckets hit 15-40pp below stated (model systemically overconfident,
+    # every market losing). The original patch was a hard clamp but it
+    # flattened every strong favorite to NHL_WIN_PROB_CAP (0.55), which
+    # ALSO lifted underdogs' win prob to 0.45 and produced false +EV
+    # picks on mispriced dogs (e.g. a +225 dog capped to 45% against
+    # implied 31% = fake 14% edge). Switched to the soft-compression
+    # shape MLB uses: preserves ordering (a 0.85 favorite still reads
+    # stronger than 0.65) while pulling the tail toward the empirical
+    # sweet spot instead of clipping it flat.
     from .config import NHL_WIN_PROB_FLOOR, NHL_WIN_PROB_CAP
-    p_home_ml = max(NHL_WIN_PROB_FLOOR, min(NHL_WIN_PROB_CAP, p_home_ml))
+    from .win_prob import compress_win_prob
+    p_home_ml = compress_win_prob(p_home_ml, NHL_WIN_PROB_FLOOR, NHL_WIN_PROB_CAP)
     p_away_ml = 1.0 - p_home_ml
 
     # ── Puck line (±1.5) ──

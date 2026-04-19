@@ -118,31 +118,9 @@ def reload_weights():
     _cached_weights = None
 
 
-def _calibrate_win_prob(raw: float, floor: float, cap: float,
-                        compress: float = 0.35) -> float:
-    """Soft-compress an over-confident win probability.
-
-    Below `floor`, raw is squashed toward floor by `compress`. Above
-    `cap`, raw is squashed toward cap by the same factor. Inside
-    [floor, cap] raw passes through unchanged. The compression is
-    monotonic, so a 0.85 raw still reads as a stronger favorite than
-    0.70, but both end up clustered just above `cap` where empirical
-    win rates actually live.
-
-    With the default compress=0.35 and cap=0.58:
-        raw 0.50 -> 0.500 (unchanged)
-        raw 0.58 -> 0.580 (unchanged, at boundary)
-        raw 0.65 -> 0.605 (0.58 + 0.07*0.35)
-        raw 0.75 -> 0.640 (0.58 + 0.17*0.35)
-        raw 0.90 -> 0.692 (0.58 + 0.32*0.35)
-    """
-    if raw < floor:
-        deficit = floor - raw
-        return max(0.0, floor - deficit * compress)
-    if raw > cap:
-        excess = raw - cap
-        return min(1.0, cap + excess * compress)
-    return raw
+# Shape-compression for over-confident win probabilities moved to
+# engine.win_prob.compress_win_prob so MLB, NHL (and NBA if we ever
+# add a Poisson ML market there) share one canonical implementation.
 
 
 # ── Core prediction ──────────────────────────────────────────
@@ -557,7 +535,8 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     # tail toward the boundary by a fixed factor, preserving ordering so
     # a "stronger" favorite still reads stronger than a "weaker" one.
     from .config import MLB_WIN_PROB_FLOOR, MLB_WIN_PROB_CAP
-    p_home = _calibrate_win_prob(p_home, MLB_WIN_PROB_FLOOR, MLB_WIN_PROB_CAP)
+    from .win_prob import compress_win_prob
+    p_home = compress_win_prob(p_home, MLB_WIN_PROB_FLOOR, MLB_WIN_PROB_CAP)
     p_away = 1 - p_home
 
     # ── Over/Under lines ──
