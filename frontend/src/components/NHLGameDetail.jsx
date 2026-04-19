@@ -1,4 +1,4 @@
-import SharedGameHeader from './gameDetail/SharedGameHeader'
+import GameDetailShell from './primitives/GameDetailShell'
 import WinProbBar from './primitives/WinProbBar'
 import StatRow from './primitives/StatRow'
 import RestBadges from './gameDetail/RestBadges'
@@ -59,37 +59,17 @@ export default function NHLGameDetail({ game, prediction, loading, onBack }) {
   )
 
   return (
-    <div className="game-detail">
-      <SharedGameHeader game={game} onBack={onBack} matchupExtras={matchupExtras} />
-
-      {/* Model Prediction - two-column layout */}
-      <div className="detail-prediction">
-        {loading && (
-          <div className="loading">
-            <div className="spinner" />
-            <p>Running model...</p>
-          </div>
-        )}
-
-        {pred && (
-          <div className="prediction-layout">
-            <div className="prediction-main">
-              <NHLPredictionResults data={pred} odds={game.odds} home={home} away={away} />
-            </div>
-            <div className="prediction-sidebar">
-              <NHLBettingPicks data={pred} odds={game.odds} home={home} away={away} />
-            </div>
-          </div>
-        )}
-
-        {!loading && !pred && (
-          <div className="no-prediction">
-            <p>Prediction unavailable. Run the NHL sync first:</p>
-            <code>sync_nhl.bat --full</code>
-          </div>
-        )}
-      </div>
-    </div>
+    <GameDetailShell
+      game={game}
+      onBack={onBack}
+      matchupExtras={matchupExtras}
+      loading={loading}
+      prediction={pred}
+      noPredictionMessage="Prediction unavailable. Run the NHL sync first:"
+      noPredictionCommand="sync_nhl.bat --full"
+      renderMain={p => <NHLPredictionResults data={p} odds={game.odds} home={home} away={away} />}
+      renderSidebar={p => <NHLBettingPicks data={p} odds={game.odds} home={home} away={away} />}
+    />
   )
 }
 

@@ -1,5 +1,5 @@
 import PredictionResults from './PredictionResults'
-import SharedGameHeader from './gameDetail/SharedGameHeader'
+import GameDetailShell from './primitives/GameDetailShell'
 import { kellyFraction } from './gameDetail/kelly'
 import ProbHistogram from './gameDetail/ProbHistogram'
 
@@ -8,68 +8,39 @@ export default function GameDetail({ game, prediction, loading, onBack }) {
 
   const matchupExtras = (game.home_pitcher || game.away_pitcher) ? (
     <div className="pitching-matchup">
-      <div className="pitcher-card">
-        <div className="pitcher-label">Away SP</div>
-        <div className="pitcher-name">{game.away_pitcher?.name || 'TBD'}</div>
-        {game.away_pitcher?.stats?.length > 0 && (
-          <div className="pitcher-stats-row">
-            {game.away_pitcher.stats.map((s, i) => (
-              <span key={i} className="pitcher-stat">{s.name}: {s.value}</span>
-            ))}
-          </div>
-        )}
-      </div>
+      <PitcherCard label="Away SP" pitcher={game.away_pitcher} />
       <div className="vs-label">VS</div>
-      <div className="pitcher-card">
-        <div className="pitcher-label">Home SP</div>
-        <div className="pitcher-name">{game.home_pitcher?.name || 'TBD'}</div>
-        {game.home_pitcher?.stats?.length > 0 && (
-          <div className="pitcher-stats-row">
-            {game.home_pitcher.stats.map((s, i) => (
-              <span key={i} className="pitcher-stat">{s.name}: {s.value}</span>
-            ))}
-          </div>
-        )}
-      </div>
+      <PitcherCard label="Home SP" pitcher={game.home_pitcher} />
     </div>
   ) : null
 
   return (
-    <div className="game-detail">
-      <SharedGameHeader game={game} onBack={onBack} matchupExtras={matchupExtras} />
+    <GameDetailShell
+      game={game}
+      onBack={onBack}
+      matchupExtras={matchupExtras}
+      loading={loading}
+      prediction={mergedPrediction}
+      noPredictionMessage="Prediction unavailable. Run the data sync first:"
+      noPredictionCommand="sync.bat"
+      renderMain={pred => <PredictionResults data={pred} odds={game.odds} />}
+      renderSidebar={pred => <BettingPicks data={pred} />}
+    />
+  )
+}
 
-      {/* Model Prediction - two-column layout */}
-      <div className="detail-prediction">
-        {loading && (
-          <div className="loading">
-            <div className="spinner" />
-            <p>Running model...</p>
-          </div>
-        )}
-
-        {mergedPrediction && (
-          <div className="prediction-layout">
-            {/* Left: detailed breakdown */}
-            <div className="prediction-main">
-              <PredictionResults data={mergedPrediction} odds={game.odds} />
-            </div>
-
-            {/* Right: quick picks summary. mergedPrediction.picks comes
-                from engine.picks.generate_picks() -- same engine the
-                Scoreboard best-bet badge and POTD use. */}
-            <div className="prediction-sidebar">
-              <BettingPicks data={mergedPrediction} />
-            </div>
-          </div>
-        )}
-
-        {!loading && !prediction && (
-          <div className="no-prediction">
-            <p>Prediction unavailable. Run the data sync first:</p>
-            <code>sync.bat</code>
-          </div>
-        )}
-      </div>
+function PitcherCard({ label, pitcher }) {
+  return (
+    <div className="pitcher-card">
+      <div className="pitcher-label">{label}</div>
+      <div className="pitcher-name">{pitcher?.name || 'TBD'}</div>
+      {pitcher?.stats?.length > 0 && (
+        <div className="pitcher-stats-row">
+          {pitcher.stats.map((s, i) => (
+            <span key={i} className="pitcher-stat">{s.name}: {s.value}</span>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

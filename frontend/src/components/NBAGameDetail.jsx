@@ -1,4 +1,4 @@
-import SharedGameHeader from './gameDetail/SharedGameHeader'
+import GameDetailShell from './primitives/GameDetailShell'
 import WinProbBar from './primitives/WinProbBar'
 import StatRow from './primitives/StatRow'
 import EdgeCallout from './gameDetail/EdgeCallout'
@@ -7,37 +7,20 @@ import ProbHistogram from './gameDetail/ProbHistogram'
 import ModelSignals from './gameDetail/ModelSignals'
 
 export default function NBAGameDetail({ game, prediction, loading, onBack }) {
-  const { home, away, status } = game
-  const pred = prediction
+  const { home, away } = game
 
   return (
-    <div className="game-detail">
-      <SharedGameHeader game={game} onBack={onBack} />
-
-      <div className="detail-prediction">
-        {loading && (
-          <div className="loading"><div className="spinner" /><p>Running Q1 model...</p></div>
-        )}
-
-        {pred && (
-          <div className="prediction-layout">
-            <div className="prediction-main">
-              <Q1PredictionResults data={pred} odds={game.odds} home={home} away={away} />
-            </div>
-            <div className="prediction-sidebar">
-              <Q1BettingPicks data={pred} odds={game.odds} home={home} away={away} />
-            </div>
-          </div>
-        )}
-
-        {!loading && !pred && (
-          <div className="no-prediction">
-            <p>Q1 prediction unavailable. Run NBA sync first:</p>
-            <code>sync_nba.bat --full</code>
-          </div>
-        )}
-      </div>
-    </div>
+    <GameDetailShell
+      game={game}
+      onBack={onBack}
+      loading={loading}
+      loadingLabel="Running Q1 model..."
+      prediction={prediction}
+      noPredictionMessage="Q1 prediction unavailable. Run NBA sync first:"
+      noPredictionCommand="sync_nba.bat --full"
+      renderMain={p => <Q1PredictionResults data={p} odds={game.odds} home={home} away={away} />}
+      renderSidebar={p => <Q1BettingPicks data={p} odds={game.odds} home={home} away={away} />}
+    />
   )
 }
 
