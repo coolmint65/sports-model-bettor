@@ -1301,6 +1301,29 @@ button:focus-visible {
   font-weight: var(--font-weight-semibold);
 }
 
+/* ── Why this pick? list ── */
+.why-pick-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.why-pick-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: 0.85rem;
+  color: var(--color-text-body);
+}
+.why-pick-item:last-child { border-bottom: none; }
+.why-pick-num {
+  color: var(--color-brand-hover);
+  font-weight: var(--font-weight-bold);
+  min-width: 14px;
+}
+.why-pick-text { flex: 1; }
+
 /* Pitcher comparison */
 .pitcher-comparison {
   display: grid;

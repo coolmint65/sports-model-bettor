@@ -4,6 +4,7 @@ import StatRow from './primitives/StatRow'
 import RestBadges from './gameDetail/RestBadges'
 import EdgeCallout from './gameDetail/EdgeCallout'
 import UnderdogNote from './gameDetail/UnderdogNote'
+import WhyThisPick from './gameDetail/WhyThisPick'
 import { kellyFraction, mlToProb, impliedFromOdds } from './gameDetail/kelly'
 import ProbHistogram from './gameDetail/ProbHistogram'
 import ModelSignals from './gameDetail/ModelSignals'
@@ -297,28 +298,12 @@ function NHLPredictionResults({ data, odds, home, away }) {
         <GoalieImpactCard gm={d.goalie_matchup} home={home} away={away} />
       )}
 
-      {/* Why this pick? */}
-      {reasons.length > 0 && (
-        <div className="result-card">
-          <h2>Why this pick?</h2>
-          <ul style={{listStyle:'none',padding:0,margin:0}}>
-            {reasons.map((r, i) => (
-              <li key={i} style={{
-                padding:'8px 0',
-                borderBottom: i < reasons.length - 1 ? '1px solid #1e293b' : 'none',
-                fontSize:'0.85rem',
-                color:'#cbd5e1',
-                display:'flex',
-                alignItems:'flex-start',
-                gap:10,
-              }}>
-                <span style={{color:'#60a5fa',fontWeight:700,minWidth:14}}>{i + 1}.</span>
-                <span>{r}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      <WhyThisPick
+        pred={{ ...d, reasoning: reasons }}
+        pick={pickFromEdge(bestEdge, home, away)}
+        home={home}
+        away={away}
+      />
 
       {/* Betting Lines */}
       <div className="result-card">

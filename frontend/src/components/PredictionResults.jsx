@@ -1,6 +1,7 @@
 import EdgeCallout from './gameDetail/EdgeCallout'
 import ModelSignals from './gameDetail/ModelSignals'
 import UnderdogNote from './gameDetail/UnderdogNote'
+import WhyThisPick from './gameDetail/WhyThisPick'
 import WinProbBar from './primitives/WinProbBar'
 import StatRow from './primitives/StatRow'
 
@@ -85,43 +86,7 @@ export default function PredictionResults({ data, odds }) {
         <UnderdogNote pick={d.best_pick} wp={wp} home={home} away={away} />
       </div>
 
-      {/* ── Why this pick? ──
-          Merges matchup_insights (pick-specific reasoning from
-          compute_matchup_interaction, often empty) and reasoning
-          (stat context always present) into a single top-of-page
-          card. Matchup insights render first when present.
-      */}
-      {(() => {
-        const lines = []
-        if (d.matchup_insights && d.matchup_insights.length > 0) {
-          lines.push(...d.matchup_insights)
-        }
-        if (d.reasoning && d.reasoning.length > 0) {
-          lines.push(...d.reasoning)
-        }
-        if (lines.length === 0) return null
-        return (
-          <div className="result-card">
-            <h2>Why this pick?</h2>
-            <ul style={{listStyle:'none',padding:0,margin:0}}>
-              {lines.map((line, i) => (
-                <li key={i} style={{
-                  padding:'8px 0',
-                  borderBottom: i < lines.length - 1 ? '1px solid #1e293b' : 'none',
-                  fontSize:'0.85rem',
-                  color:'#cbd5e1',
-                  display:'flex',
-                  alignItems:'flex-start',
-                  gap:10,
-                }}>
-                  <span style={{color:'#60a5fa',fontWeight:700,minWidth:14}}>{i + 1}.</span>
-                  <span>{line}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )
-      })()}
+      <WhyThisPick pred={d} pick={d.best_pick} home={home} away={away} />
 
       {/* ── Pitching Matchup ── */}
       {(home.pitcher || away.pitcher) && (

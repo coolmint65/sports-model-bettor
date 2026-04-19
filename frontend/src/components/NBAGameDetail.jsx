@@ -2,6 +2,7 @@ import GameDetailShell from './primitives/GameDetailShell'
 import WinProbBar from './primitives/WinProbBar'
 import StatRow from './primitives/StatRow'
 import EdgeCallout from './gameDetail/EdgeCallout'
+import WhyThisPick from './gameDetail/WhyThisPick'
 import { kellyFraction, impliedFromOdds } from './gameDetail/kelly'
 import ProbHistogram from './gameDetail/ProbHistogram'
 import ModelSignals from './gameDetail/ModelSignals'
@@ -153,20 +154,13 @@ function Q1PredictionResults({ data, odds, home, away }) {
         </div>
       )}
 
-      {/* Reasoning */}
-      {d.reasoning && d.reasoning.length > 0 && (
-        <div className="result-card">
-          <h2>Why this Q1 pick?</h2>
-          <ul style={{listStyle:'none',padding:0,margin:0}}>
-            {d.reasoning.map((r, i) => (
-              <li key={i} style={{padding:'8px 0',borderBottom:i<d.reasoning.length-1?'1px solid #1e293b':'none',fontSize:'0.85rem',color:'#cbd5e1',display:'flex',gap:10}}>
-                <span style={{color:'#f59e0b',fontWeight:700,minWidth:14}}>{i+1}.</span>
-                <span>{r}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      <WhyThisPick
+        pred={d}
+        pick={bestEdge ? { type: 'Q1', pick: bestEdge.label, odds: bestEdge.odds } : null}
+        home={home}
+        away={away}
+        title="Why this Q1 pick?"
+      />
     </div>
   )
 }
