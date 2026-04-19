@@ -1270,6 +1270,37 @@ button:focus-visible {
 .prob-bar .home { background: #3b82f6; transition: width 0.3s; }
 .prob-bar .away { background: #ef4444; transition: width 0.3s; }
 
+/* Inline CI-band bell curve rendered next to each pick's probability
+   in the sidebar. The SVG uses a fixed 70px width; add a small
+   horizontal buffer so its fill/stroke doesn't visually touch the
+   picks-card border when the row is highlighted or near the edge. */
+.prob-histogram {
+  display: block;
+  margin-top: 2px;
+  margin-right: 4px;
+  max-width: 100%;
+  overflow: visible;
+}
+.pick-numbers { padding-right: 2px; }
+
+/* Disambiguator under the edge callout when the recommended ML pick
+   is on the projected loser (+EV dog). The projected score + edge
+   chip are both correct but visually conflict; this line explains. */
+.underdog-note {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--amber-400);
+  background: rgba(245, 158, 11, 0.06);
+  border-radius: 4px;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  line-height: 1.45;
+}
+.underdog-note strong {
+  color: var(--color-text-body);
+  font-weight: var(--font-weight-semibold);
+}
+
 /* Pitcher comparison */
 .pitcher-comparison {
   display: grid;

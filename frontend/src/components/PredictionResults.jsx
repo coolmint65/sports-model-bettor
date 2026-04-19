@@ -1,5 +1,6 @@
 import EdgeCallout from './gameDetail/EdgeCallout'
 import ModelSignals from './gameDetail/ModelSignals'
+import UnderdogNote from './gameDetail/UnderdogNote'
 import WinProbBar from './primitives/WinProbBar'
 import StatRow from './primitives/StatRow'
 
@@ -81,6 +82,7 @@ export default function PredictionResults({ data, odds }) {
 
         {/* Edge vs Vegas callout */}
         <EdgeCallout edge={bestEdge} />
+        <UnderdogNote pick={d.best_pick} wp={wp} home={home} away={away} />
       </div>
 
       {/* ── Why this pick? ──

@@ -37,7 +37,7 @@ export default function ProbHistogram({ prob, low, high, halfWidth }) {
       width={W}
       height={H}
       viewBox={`0 0 ${W} ${H}`}
-      style={{ marginTop: 2 }}
+      className="prob-histogram"
       role="img"
       aria-label={tooltip}
     >

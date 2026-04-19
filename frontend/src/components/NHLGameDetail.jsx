@@ -3,6 +3,7 @@ import WinProbBar from './primitives/WinProbBar'
 import StatRow from './primitives/StatRow'
 import RestBadges from './gameDetail/RestBadges'
 import EdgeCallout from './gameDetail/EdgeCallout'
+import UnderdogNote from './gameDetail/UnderdogNote'
 import { kellyFraction, mlToProb, impliedFromOdds } from './gameDetail/kelly'
 import ProbHistogram from './gameDetail/ProbHistogram'
 import ModelSignals from './gameDetail/ModelSignals'
@@ -227,6 +228,7 @@ function NHLPredictionResults({ data, odds, home, away }) {
         </div>
 
         <EdgeCallout edge={bestEdge} badgeClassName={bestEdge ? `conf-badge conf-${bestEdge.rating}` : undefined} />
+        <UnderdogNote pick={pickFromEdge(bestEdge, home, away)} wp={wp} home={home} away={away} />
       </div>
 
       {/* Model Signals: factor / MC breakdown for home_win + total.
@@ -998,4 +1000,17 @@ function findBestEdge(data, odds, home, away) {
   const best = candidates.sort((a, b) => b.edge - a.edge)[0]
   best.rating = best.edge > 8 ? 'strong' : best.edge > 4 ? 'moderate' : 'lean'
   return best
+}
+
+
+// NHL's findBestEdge emits {label, odds, edge, rating} without the
+// engine's raw pick shape. Reconstruct a minimal {type, pick, odds}
+// object so the shared UnderdogNote can do its model_prob < 0.5 check.
+function pickFromEdge(edge, home, away) {
+  if (!edge) return null
+  const m = edge.label.match(/^([A-Z]{2,4})\s+ML$/)
+  if (!m) return null
+  const abbr = m[1]
+  if (abbr !== home.abbreviation && abbr !== away.abbreviation) return null
+  return { type: 'ML', pick: abbr, odds: edge.odds }
 }
