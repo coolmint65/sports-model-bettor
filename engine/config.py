@@ -267,13 +267,16 @@ NBA_BET_RELIABILITY = {
 }
 
 # ── Weak markets - disabled by default ──
-# 1st INN / NRFI: empirical tracker shows 44.4% WR, -$500. The pitcher
-# scoreless-rate blend produces overconfident probs (80%+) that don't
-# calibrate, and it was also dragging best_pick + Best Bets surfaces
-# below break-even. POTD already excluded it; flipping this flag off
-# stops it from being emitted by engine.picks.generate_picks so the
-# Scoreboard badge and Best Bets page stop featuring it too.
-ENABLE_MLB_NRFI = False
+# 1st INN / NRFI: raw model is overconfident at the upper tail (predicted
+# 80%+ buckets landed ~50% real WR in early tracker data). Kept ON
+# because engine.picks.generate_picks calibrates prob against the
+# tracker's empirical bucket hit rates and then re-filters picks whose
+# calibrated edge went negative (see the re-filter step after the
+# calibration loop). So 1st INN only surfaces when its empirical
+# bucket actually beats the market price -- if calibration says the
+# model is wrong about a bucket, that pick gets dropped before it
+# reaches the Scoreboard / Best Bets / POTD surfaces.
+ENABLE_MLB_NRFI = True
 ENABLE_NHL_ML = True
 ENABLE_NHL_OU = True
 ENABLE_NHL_PL = True
