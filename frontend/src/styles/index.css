@@ -448,6 +448,132 @@ button:focus-visible {
   margin-top: 2px;
 }
 
+/* ═══════════════════════════════════════════
+   Pick of the Day hero
+   The headline element at the top of each
+   dashboard view; highest-conviction play +
+   running POTD record.
+   ═══════════════════════════════════════════ */
+.potd-hero {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(135deg, rgba(52, 211, 153, 0.06) 0%, var(--color-surface) 60%);
+  border: 1px solid rgba(52, 211, 153, 0.25);
+  border-radius: var(--radius-xl);
+  padding: var(--space-5) var(--space-6);
+  margin-bottom: var(--space-4);
+}
+
+.potd-accent-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--green-300), var(--blue-300));
+}
+
+.potd-body {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--space-5);
+  flex-wrap: wrap;
+}
+
+.potd-primary { min-width: 0; }
+
+.potd-eyebrow {
+  font-size: 0.68rem;
+  font-weight: var(--font-weight-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--green-300);
+  margin-bottom: var(--space-2);
+}
+
+.potd-pick {
+  font-size: 1.4rem;
+  font-weight: 800;
+  color: var(--color-text-primary);
+  line-height: 1.2;
+}
+
+.potd-odds {
+  color: var(--color-text-muted);
+  font-weight: var(--font-weight-medium);
+  font-size: var(--font-size-md);
+  margin-left: var(--space-2);
+}
+
+.potd-matchup {
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  margin-top: var(--space-1);
+}
+
+.potd-bet-type { color: var(--blue-300); }
+
+.potd-metrics {
+  display: flex;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  font-size: 0.78rem;
+  color: var(--color-text-dim);
+  margin-top: var(--space-2);
+}
+
+.potd-metrics strong {
+  color: var(--color-text-body);
+  font-weight: var(--font-weight-semibold);
+}
+
+.text-positive { color: var(--color-positive) !important; }
+
+.potd-reasoning {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  margin-top: var(--space-2);
+  font-style: italic;
+  max-width: 500px;
+}
+
+.potd-record {
+  text-align: right;
+  min-width: 120px;
+}
+
+.potd-record-label {
+  font-size: 0.62rem;
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-dim);
+  margin-bottom: var(--space-1);
+}
+
+.potd-record-wl {
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: var(--color-text-body);
+}
+
+.potd-record-profit {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-bold);
+  margin-top: 2px;
+}
+
+.potd-record-positive { color: var(--color-positive); }
+.potd-record-negative { color: var(--color-negative-strong); }
+.potd-record-neutral  { color: var(--color-text-muted); }
+
+.potd-record-meta {
+  font-size: 0.7rem;
+  color: var(--color-text-dim);
+  margin-top: 2px;
+}
+
 .edge-count {
   font-size: 0.75rem;
   font-weight: 500;
