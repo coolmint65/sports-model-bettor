@@ -155,8 +155,11 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
                 })
 
     # ── Q1 Moneyline ──
-    home_ml_odds = odds.get("home_ml")
-    away_ml_odds = odds.get("away_ml")
+    # Use Q1-specific ML odds, not full-game ML. Full-game ML has
+    # much wider spreads that create phantom edge when compared
+    # against the Q1 model's tighter probabilities.
+    home_ml_odds = odds.get("q1_home_ml") or odds.get("home_ml")
+    away_ml_odds = odds.get("q1_away_ml") or odds.get("away_ml")
 
     if home_ml_odds is not None:
         home_ml_prob = pred["q1_ml_home"]
