@@ -924,7 +924,11 @@ def _parse_response(sport: str, data: Any) -> dict[str, dict]:
             if not (away_abbr and home_abbr):
                 continue
             key = f"{away_abbr}@{home_abbr}"
-            bucket = result.setdefault(key, {"provider": "HardRock"})
+            bucket = result.setdefault(key, {
+                "provider": "HardRock",
+                "odds_home": home_abbr,
+                "odds_away": away_abbr,
+            })
 
             event_participants = event.get("participants") or []
 

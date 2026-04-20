@@ -680,7 +680,6 @@ def _swap_odds(odds: dict) -> dict:
     schedule's home/away designation.
     """
     swapped = dict(odds)
-    # Swap pairs: home_X <-> away_X
     swap_pairs = [
         ("home_ml", "away_ml"),
         ("home_spread_point", "away_spread_point"),
@@ -694,54 +693,76 @@ def _swap_odds(odds: dict) -> dict:
             swapped[a] = vb
             swapped[b] = va
 
-    # Negate spread points (home -3.5 becomes home +3.5)
-    for field in ("home_spread_point", "away_spread_point", "q1_spread"):
-        if swapped.get(field) is not None:
-            swapped[field] = -swapped[field]
+    # Q1 spread: negate because it's expressed as "home team spread"
+    # and the home team identity changed
+    if swapped.get("q1_spread") is not None:
+        swapped["q1_spread"] = -swapped["q1_spread"]
 
-    # Swap alt spreads home/away odds
+    # Alt spreads: swap odds and negate points (point is relative to
+    # the home team)
     for alt in swapped.get("alt_spreads", []):
         alt["home_odds"], alt["away_odds"] = alt.get("away_odds"), alt.get("home_odds")
         if alt.get("point") is not None:
             alt["point"] = -alt["point"]
 
+    # Flip the identity tags
+    swapped["odds_home"], swapped["odds_away"] = (
+        swapped.get("odds_away"), swapped.get("odds_home"))
+
     return swapped
 
 
-def match_odds(home_abbr: str, away_abbr: str, all_odds: dict) -> dict:
-    """Find odds for a specific matchup from the odds map.
+def _find_odds_by_team_pair(team_a: str, team_b: str,
+                            all_odds: dict) -> dict | None:
+    """Find an odds dict containing these two teams, regardless of key order.
 
-    ESPN, Odds API, and MLB Stats API disagree on a few abbreviations
-    (ARI/AZ, CHW/CWS, etc.). Try every combination of canonical and
-    aliased forms; the alias table lives in engine.abbr.
-
-    When matched via a reversed key (sportsbook's home != our home),
-    swaps all home/away fields so the odds align with our schedule.
+    Uses the ``odds_home`` / ``odds_away`` fields embedded in the odds
+    dict by the scraper, plus abbreviation aliases. Returns the raw
+    odds dict (not yet aligned to any schedule).
     """
     from .abbr import alt_abbr
-    home_alt = alt_abbr(home_abbr, "mlb")
-    away_alt = alt_abbr(away_abbr, "mlb")
+    a_alts = {team_a, alt_abbr(team_a, "mlb")}
+    b_alts = {team_b, alt_abbr(team_b, "mlb")}
 
-    # Normal keys (away@home)
-    normal_keys = [
-        f"{away_abbr}@{home_abbr}",
-        f"{away_alt}@{home_alt}",
-        f"{away_alt}@{home_abbr}",
-        f"{away_abbr}@{home_alt}",
-    ]
-    for key in normal_keys:
-        if key in all_odds:
-            return all_odds[key]
+    # Fast path: try direct key lookups
+    for a in a_alts:
+        for b in b_alts:
+            for key in (f"{a}@{b}", f"{b}@{a}"):
+                if key in all_odds:
+                    return all_odds[key]
 
-    # Reversed keys — need to swap home/away in the odds
-    reversed_keys = [
-        f"{home_abbr}@{away_abbr}",
-        f"{home_alt}@{away_alt}",
-        f"{home_alt}@{away_abbr}",
-        f"{home_abbr}@{away_alt}",
-    ]
-    for key in reversed_keys:
-        if key in all_odds:
-            return _swap_odds(all_odds[key])
+    # Slow path: scan odds dicts for matching team identity tags
+    for odds in all_odds.values():
+        oh = odds.get("odds_home", "")
+        oa = odds.get("odds_away", "")
+        if (oh in a_alts and oa in b_alts) or (oh in b_alts and oa in a_alts):
+            return odds
 
-    return {}
+    return None
+
+
+def match_odds(home_abbr: str, away_abbr: str, all_odds: dict) -> dict:
+    """Find odds for a matchup and align home/away to our schedule.
+
+    Matches by team pair (ignoring key order), then checks whether
+    the sportsbook's home team matches our home team. If not, swaps
+    all home_*/away_* fields so the odds align with our designation.
+
+    The schedule source (ESPN / DB) is always the authority on
+    which team is home.
+    """
+    from .abbr import alt_abbr
+    raw = _find_odds_by_team_pair(home_abbr, away_abbr, all_odds)
+    if not raw:
+        return {}
+
+    # Check if the sportsbook's home matches our home
+    odds_home = raw.get("odds_home", "")
+    home_alts = {home_abbr, alt_abbr(home_abbr, "mlb")}
+
+    if odds_home in home_alts:
+        # Same home — use as-is
+        return raw
+
+    # Different home — swap so fields align with our schedule
+    return _swap_odds(raw)

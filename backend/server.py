@@ -370,31 +370,16 @@ def _get_scoreboard(date: str = "") -> list[dict]:
         if api_odds:
             # Log what keys we're trying to match
             api_keys = set(api_odds.keys())
+            from engine.picks import match_odds as _match
             for game in games:
                 h_abbr = game["home"].get("abbreviation", "")
                 a_abbr = game["away"].get("abbreviation", "")
-                key = f"{a_abbr}@{h_abbr}"
-                if key in api_odds:
-                    game["odds"] = api_odds[key]
+                matched_odds = _match(h_abbr, a_abbr, api_odds)
+                if matched_odds:
+                    game["odds"] = matched_odds
                     odds_matched += 1
                 else:
-                    # Try reverse key or alternate abbreviations
-                    alt_keys = [
-                        f"{a_abbr}@{h_abbr}",
-                        f"{_alt_abbr(a_abbr)}@{_alt_abbr(h_abbr)}",
-                        f"{_alt_abbr(a_abbr)}@{h_abbr}",
-                        f"{a_abbr}@{_alt_abbr(h_abbr)}",
-                    ]
-                    matched = False
-                    for ak in alt_keys:
-                        if ak in api_odds:
-                            game["odds"] = api_odds[ak]
-                            odds_matched += 1
-                            matched = True
-                            break
-                    if not matched:
-                        logger.debug("No odds match for %s (tried %s, available: %s)",
-                                    key, alt_keys[:2], list(api_keys)[:3])
+                    logger.debug("No odds match for %s@%s", a_abbr, h_abbr)
             logger.info("Odds API: matched %d/%d games", odds_matched, len(games))
     except Exception as e:
         logger.warning("Odds API failed: %s", e, exc_info=True)
@@ -2241,29 +2226,10 @@ def _get_nhl_scoreboard(date: str = "") -> list[dict]:
                 h = game["home"]["abbreviation"]
                 a = game["away"]["abbreviation"]
                 key = f"{a}@{h}"
-                normal_keys = [
-                    key,
-                    f"{_nhl_alt_abbr(a)}@{_nhl_alt_abbr(h)}",
-                    f"{_nhl_alt_abbr(a)}@{h}",
-                    f"{a}@{_nhl_alt_abbr(h)}",
-                ]
-                reversed_keys = [
-                    f"{h}@{a}",
-                    f"{_nhl_alt_abbr(h)}@{_nhl_alt_abbr(a)}",
-                    f"{_nhl_alt_abbr(h)}@{a}",
-                    f"{h}@{_nhl_alt_abbr(a)}",
-                ]
-                found = False
-                for k in normal_keys:
-                    if k in nhl_odds:
-                        game["odds"] = nhl_odds[k]
-                        found = True
-                        break
-                if not found:
-                    from engine.picks import _swap_odds
-                    for k in reversed_keys:
-                        if k in nhl_odds:
-                            game["odds"] = _swap_odds(nhl_odds[k])
+                from engine.picks import match_odds as _match
+                matched_odds = _match(h, a, nhl_odds)
+                if matched_odds:
+                    game["odds"] = matched_odds
                         matched += 1
                         break
             logger.info("NHL odds: matched %d/%d games", matched, len(games))
@@ -2930,16 +2896,9 @@ def api_nhl_predict(home: str = Query(...), away: str = Query(...)):
         # endpoints were burning through the monthly credit limit.
         game_odds = _odds_from_scoreboard_cache(home_abbr, away_abbr, sport="nhl")
         if not game_odds and home_abbr and away_abbr:
+            from engine.picks import match_odds as _match
             odds_map = _fetch_nhl_odds()
-            for k in (
-                f"{away_abbr}@{home_abbr}",
-                f"{_nhl_alt_abbr(away_abbr)}@{_nhl_alt_abbr(home_abbr)}",
-                f"{_nhl_alt_abbr(away_abbr)}@{home_abbr}",
-                f"{away_abbr}@{_nhl_alt_abbr(home_abbr)}",
-            ):
-                if k in odds_map:
-                    game_odds = odds_map[k]
-                    break
+            game_odds = _match(home_abbr, away_abbr, odds_map)
         picks, _ctx = generate_nhl_picks_with_context(
             home_key, away_key, game_odds, pred=result,
         )
@@ -3473,29 +3432,10 @@ def _get_nba_scoreboard(date: str = "") -> list[dict]:
                 h = game["home"]["abbreviation"]
                 a = game["away"]["abbreviation"]
                 key = f"{a}@{h}"
-                normal_keys = [
-                    key,
-                    f"{_nba_alt_abbr(a)}@{_nba_alt_abbr(h)}",
-                    f"{_nba_alt_abbr(a)}@{h}",
-                    f"{a}@{_nba_alt_abbr(h)}",
-                ]
-                reversed_keys = [
-                    f"{h}@{a}",
-                    f"{_nba_alt_abbr(h)}@{_nba_alt_abbr(a)}",
-                    f"{_nba_alt_abbr(h)}@{a}",
-                    f"{h}@{_nba_alt_abbr(a)}",
-                ]
-                found = False
-                for k in normal_keys:
-                    if k in nba_odds:
-                        game["odds"] = nba_odds[k]
-                        found = True
-                        break
-                if not found:
-                    from engine.picks import _swap_odds
-                    for k in reversed_keys:
-                        if k in nba_odds:
-                            game["odds"] = _swap_odds(nba_odds[k])
+                from engine.picks import match_odds as _match
+                matched_odds = _match(h, a, nba_odds)
+                if matched_odds:
+                    game["odds"] = matched_odds
                         matched += 1
                         break
             logger.info("NBA odds: matched %d/%d games", matched, len(games))
@@ -3808,16 +3748,9 @@ def api_nba_predict(home: str = Query(...), away: str = Query(...)):
     if not odds:
         try:
             from scrapers.nba_odds import fetch_all_nba_odds
+            from engine.picks import match_odds as _match
             odds_map = fetch_all_nba_odds() or {}
-            for k in (
-                f"{away}@{home}",
-                f"{_nba_alt_abbr(away)}@{_nba_alt_abbr(home)}",
-                f"{_nba_alt_abbr(away)}@{home}",
-                f"{away}@{_nba_alt_abbr(home)}",
-            ):
-                if k in odds_map:
-                    odds = odds_map[k] or {}
-                    break
+            odds = _match(home, away, odds_map) or {}
         except Exception as e:
             logger.debug("NBA Q1 odds fetch failed in predict endpoint: %s", e)
 
