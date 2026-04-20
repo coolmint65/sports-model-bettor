@@ -144,75 +144,67 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
         logger.info("No NHL games found for %s", target_date)
         return []
 
-    # Fetch odds
+    # Fetch odds — use the same scraper chain as the backend
+    # (Hard Rock primary, DK/Odds API fallback).
     odds_map = {}
     try:
-        import os
-        from pathlib import Path
-        key_file = Path(__file__).resolve().parent.parent / "data" / "odds_api_key.txt"
-        api_key = os.environ.get("ODDS_API_KEY") or (key_file.read_text().strip() if key_file.exists() else None)
-        if api_key:
-            import urllib.request
-            url = (f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds/"
-                   f"?apiKey={api_key}&regions=us&markets=h2h,spreads,totals"
-                   f"&oddsFormat=american&bookmakers=draftkings")
-            req = urllib.request.Request(url, headers={"User-Agent": "NHLTracker/1.0"})
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                odds_data = json.loads(resp.read().decode())
-
-            _NHL_TEAM_ABBR = {
-                "Anaheim Ducks": "ANA", "Utah Hockey Club": "UTA",
-                "Boston Bruins": "BOS", "Buffalo Sabres": "BUF",
-                "Calgary Flames": "CGY", "Carolina Hurricanes": "CAR",
-                "Chicago Blackhawks": "CHI", "Colorado Avalanche": "COL",
-                "Columbus Blue Jackets": "CBJ", "Dallas Stars": "DAL",
-                "Detroit Red Wings": "DET", "Edmonton Oilers": "EDM",
-                "Florida Panthers": "FLA", "Los Angeles Kings": "LAK",
-                "Minnesota Wild": "MIN", "Montreal Canadiens": "MTL",
-                "Nashville Predators": "NSH", "New Jersey Devils": "NJD",
-                "New York Islanders": "NYI", "New York Rangers": "NYR",
-                "Ottawa Senators": "OTT", "Philadelphia Flyers": "PHI",
-                "Pittsburgh Penguins": "PIT", "San Jose Sharks": "SJS",
-                "Seattle Kraken": "SEA", "St. Louis Blues": "STL",
-                "Tampa Bay Lightning": "TBL", "Toronto Maple Leafs": "TOR",
-                "Vancouver Canucks": "VAN", "Vegas Golden Knights": "VGK",
-                "Washington Capitals": "WSH", "Winnipeg Jets": "WPG",
-            }
-
-            for game in (odds_data or []):
-                home = game.get("home_team", "")
-                away = game.get("away_team", "")
-                h_abbr = _NHL_TEAM_ABBR.get(home, home[:3].upper())
-                a_abbr = _NHL_TEAM_ABBR.get(away, away[:3].upper())
-                key = f"{a_abbr}@{h_abbr}"
-                result = {"provider": "DraftKings"}
-                for book in game.get("bookmakers", [])[:1]:
-                    for market in book.get("markets", []):
-                        mkey = market.get("key", "")
-                        for o in market.get("outcomes", []):
-                            if mkey == "h2h":
-                                if o.get("name") == home:
-                                    result["home_ml"] = o.get("price")
-                                elif o.get("name") == away:
-                                    result["away_ml"] = o.get("price")
-                            elif mkey == "spreads":
-                                if o.get("name") == home:
-                                    result["home_spread_odds"] = o.get("price")
-                                    result["home_spread_point"] = o.get("point")
-                                elif o.get("name") == away:
-                                    result["away_spread_odds"] = o.get("price")
-                                    result["away_spread_point"] = o.get("point")
-                            elif mkey == "totals":
-                                name = o.get("name", "").lower()
-                                if "over" in name:
-                                    result["over_odds"] = o.get("price")
-                                    result["over_under"] = o.get("point")
-                                elif "under" in name:
-                                    result["under_odds"] = o.get("price")
-                if result.get("home_ml"):
-                    odds_map[key] = result
+        from scrapers.hardrock_odds import fetch_nhl as _hr_nhl
+        hr_odds = _hr_nhl()
+        if hr_odds:
+            odds_map = hr_odds
+            logger.info("NHL tracker: %d games from Hard Rock", len(odds_map))
     except Exception as e:
-        logger.warning("Could not fetch NHL odds: %s", e)
+        logger.warning("NHL tracker Hard Rock failed: %s", e)
+
+    if not odds_map:
+        try:
+            import os
+            from pathlib import Path
+            key_file = Path(__file__).resolve().parent.parent / "data" / "odds_api_key.txt"
+            api_key = os.environ.get("ODDS_API_KEY") or (
+                key_file.read_text().strip() if key_file.exists() else None)
+            if api_key:
+                import urllib.request
+                url = (f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds/"
+                       f"?apiKey={api_key}&regions=us&markets=h2h,spreads,totals"
+                       f"&oddsFormat=american&bookmakers=draftkings")
+                req = urllib.request.Request(url, headers={"User-Agent": "NHLTracker/1.0"})
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    odds_data = json.loads(resp.read().decode())
+                for game in (odds_data or []):
+                    home = game.get("home_team", "")
+                    away = game.get("away_team", "")
+                    h = home[:3].upper()
+                    a = away[:3].upper()
+                    key = f"{a}@{h}"
+                    result = {"provider": "DraftKings"}
+                    for book in game.get("bookmakers", [])[:1]:
+                        for market in book.get("markets", []):
+                            mkey = market.get("key", "")
+                            for o in market.get("outcomes", []):
+                                if mkey == "h2h":
+                                    if o.get("name") == home:
+                                        result["home_ml"] = o.get("price")
+                                    elif o.get("name") == away:
+                                        result["away_ml"] = o.get("price")
+                                elif mkey == "spreads":
+                                    if o.get("name") == home:
+                                        result["home_spread_odds"] = o.get("price")
+                                        result["home_spread_point"] = o.get("point")
+                                    elif o.get("name") == away:
+                                        result["away_spread_odds"] = o.get("price")
+                                        result["away_spread_point"] = o.get("point")
+                                elif mkey == "totals":
+                                    name = o.get("name", "").lower()
+                                    if "over" in name:
+                                        result["over_odds"] = o.get("price")
+                                        result["over_under"] = o.get("point")
+                                    elif "under" in name:
+                                        result["under_odds"] = o.get("price")
+                    if result.get("home_ml"):
+                        odds_map[key] = result
+        except Exception as e:
+            logger.warning("Could not fetch NHL odds (fallback): %s", e)
 
     recorded = []
     for event in events:
@@ -263,16 +255,9 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
             logger.warning("Could not find team keys for %s vs %s", a_abbr, h_abbr)
             continue
 
-        # Match odds (try alternate abbreviations too)
-        game_odds = None
-        for a_try in [a_abbr, _ALT.get(a_abbr, "")]:
-            for h_try in [h_abbr, _ALT.get(h_abbr, "")]:
-                if a_try and h_try:
-                    game_odds = odds_map.get(f"{a_try}@{h_try}")
-                    if game_odds:
-                        break
-            if game_odds:
-                break
+        # Match odds using unified team-pair matching
+        from engine.picks import match_odds as _match_odds
+        game_odds = _match_odds(h_abbr, a_abbr, odds_map)
 
         picks = generate_nhl_picks(h_key, a_key, game_odds)
         if not picks:
