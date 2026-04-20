@@ -1099,6 +1099,23 @@ def predict_matchup(home_key: str, away_key: str,
         home_xg *= NHL_PLAYOFF_SCORING_FACTOR
         away_xg *= NHL_PLAYOFF_SCORING_FACTOR
 
+    # ── Playoff series context ──
+    # Infer game number, series score, elimination/closeout status
+    # from recent games between these two teams. Adjusts xG and
+    # home edge based on historical playoff tendencies.
+    series: dict = {}
+    series_reasons: list[str] = []
+    if in_playoffs:
+        try:
+            from .series_context import infer_series, apply_series_adjustments
+            series = infer_series("nhl", home_key, away_key)
+            if series.get("in_series"):
+                home_xg, away_xg, home_edge, series_reasons = (
+                    apply_series_adjustments(
+                        "nhl", home_xg, away_xg, home_edge, series))
+        except Exception as e:
+            logger.warning("Series context error: %s", e)
+
     # ── Special teams adjustment ──
     league_pp = la.get("pp_pct", 0.20)
     league_pk = la.get("pk_pct", 0.80)
@@ -1967,6 +1984,8 @@ def predict_matchup(home_key: str, away_key: str,
         "goalie_matchup": goalie_factor,
         "h2h": h2h_data,
         "season_context": season_context,
+        "series_context": series if series.get("in_series") else None,
+        "series_reasoning": series_reasons if series_reasons else None,
         "injuries": injury_data,
         "rest": rest_data,
         "granular": granular_data,

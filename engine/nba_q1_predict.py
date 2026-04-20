@@ -361,6 +361,30 @@ def predict_q1(home_abbr: str, away_abbr: str,
         home_q1_expected *= NBA_PLAYOFF_SCORING_FACTOR
         away_q1_expected *= NBA_PLAYOFF_SCORING_FACTOR
 
+    # ── Playoff series context ──
+    series: dict = {}
+    series_reasons: list[str] = []
+    if in_playoffs:
+        try:
+            from .series_context import infer_series, apply_series_adjustments
+            series = infer_series("nba", home_abbr, away_abbr)
+            if series.get("in_series"):
+                # NBA Q1 adjustments are on expected points, not goals,
+                # but the same multiplicative pattern works.
+                home_edge_adj = HOME_Q1_BOOST
+                home_q1_expected, away_q1_expected, home_edge_adj, series_reasons = (
+                    apply_series_adjustments(
+                        "nba", home_q1_expected, away_q1_expected,
+                        home_edge_adj, series))
+                # Apply any home edge change from series context
+                edge_delta = home_edge_adj - HOME_Q1_BOOST
+                if abs(edge_delta) > 0.001:
+                    home_q1_expected += edge_delta / 2
+                    away_q1_expected -= edge_delta / 2
+                reasoning.extend(series_reasons)
+        except Exception as e:
+            logger.warning("NBA series context error: %s", e)
+
     if pace_factor > 1.03:
         reasoning.append(f"Fast-paced matchup (pace factor {pace_factor:.2f}) boosts Q1 scoring")
     elif pace_factor < 0.97:
@@ -592,6 +616,7 @@ def predict_q1(home_abbr: str, away_abbr: str,
             "home_roster": home_roster_adj,
             "away_roster": away_roster_adj,
         },
+        "series_context": series if series.get("in_series") else None,
         "reasoning": reasoning,
     }
 
