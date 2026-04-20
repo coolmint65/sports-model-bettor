@@ -1332,40 +1332,43 @@ def api_predict(req: PredictRequest):
     # drift from engine.picks (hardcoded -120 NRFI, ignored direction
     # filters, no real F5/NRFI DK odds). Single source of truth lives
     # in engine.picks.generate_picks().
+    #
+    # If best-bets already computed picks for this game (attached to
+    # the cached prediction), reuse them so all three surfaces
+    # (scoreboard card, game detail, tracker) show the same pick.
     try:
         from engine.picks import (
             generate_picks, get_best_pick, match_odds, fetch_real_odds_for_games,
         )
         from engine.db import get_team_by_id
 
-        home_team = get_team_by_id(req.home_team_id) or {}
-        away_team = get_team_by_id(req.away_team_id) or {}
-        h_abbr = home_team.get("abbreviation", "")
-        a_abbr = away_team.get("abbreviation", "")
+        # Prefer cached picks from best-bets (single source of truth)
+        if result.get("_cached_picks"):
+            picks = result["_cached_picks"]
+            odds = result.get("_cached_odds", {})
+        else:
+            home_team = get_team_by_id(req.home_team_id) or {}
+            away_team = get_team_by_id(req.away_team_id) or {}
+            h_abbr = home_team.get("abbreviation", "")
+            a_abbr = away_team.get("abbreviation", "")
 
-        # Reuse the odds the scoreboard already attached to today's games
-        # (warmed by /api/scoreboard or its background refresh) instead of
-        # triggering an Odds API fetch from inside the request handler.
-        # Falls back to fetch_real_odds_for_games() only if no scoreboard
-        # cache hit is available -- this is the cold-start path.
-        odds = _odds_from_scoreboard_cache(h_abbr, a_abbr) if (h_abbr and a_abbr) else {}
-        if not odds and h_abbr and a_abbr:
-            all_odds = fetch_real_odds_for_games()
-            odds = match_odds(h_abbr, a_abbr, all_odds)
+            odds = _odds_from_scoreboard_cache(h_abbr, a_abbr) if (h_abbr and a_abbr) else {}
+            if not odds and h_abbr and a_abbr:
+                all_odds = fetch_real_odds_for_games()
+                odds = match_odds(h_abbr, a_abbr, all_odds)
 
-        picks = generate_picks(
-            home_team_id=req.home_team_id,
-            away_team_id=req.away_team_id,
-            home_pitcher_id=req.home_pitcher_id,
-            away_pitcher_id=req.away_pitcher_id,
-            venue=req.venue,
-            odds=odds or None,
-            pred=result,  # Reuse the prediction we already computed above
-        )
+            picks = generate_picks(
+                home_team_id=req.home_team_id,
+                away_team_id=req.away_team_id,
+                home_pitcher_id=req.home_pitcher_id,
+                away_pitcher_id=req.away_pitcher_id,
+                venue=req.venue,
+                odds=odds or None,
+                pred=result,
+            )
+
         result["picks"] = picks
         result["best_pick"] = get_best_pick(picks)
-        # Surface the odds snapshot the engine used so PickRow shows the
-        # same price GameDetail recomputes from.
         result["odds"] = odds
     except Exception as e:
         logger.warning("Unified picks generation failed for %s/%s: %s",
@@ -1538,6 +1541,13 @@ def api_best_bets():
 
         if not picks:
             continue
+
+        # Attach picks + odds to the prediction so every surface
+        # (predict endpoint, scoreboard card, tracker) reads the
+        # same picks instead of regenerating with different odds.
+        pred["_cached_picks"] = picks
+        pred["_cached_odds"] = game_odds
+        pred["_cached_best_pick"] = get_best_pick(picks)
 
         best = get_best_pick(picks)
         if not best:
@@ -2887,20 +2897,21 @@ def api_nhl_predict(home: str = Query(...), away: str = Query(...)):
     # "Under 6.5 / +12.9%" on the same game.
     try:
         from engine.nhl_picks import generate_nhl_picks_with_context
-        home_abbr = (result.get("home") or {}).get("abbreviation") or ""
-        away_abbr = (result.get("away") or {}).get("abbreviation") or ""
-        # Try the scoreboard cache first (same odds /api/nhl/best-bets
-        # and /api/nhl/scoreboard already attached). Only hit the Odds
-        # API if the cache misses -- duplicate fetches from predict
-        # endpoints were burning through the monthly credit limit.
-        game_odds = _odds_from_scoreboard_cache(home_abbr, away_abbr, sport="nhl")
-        if not game_odds and home_abbr and away_abbr:
-            from engine.picks import match_odds as _match
-            odds_map = _fetch_nhl_odds()
-            game_odds = _match(home_abbr, away_abbr, odds_map)
-        picks, _ctx = generate_nhl_picks_with_context(
-            home_key, away_key, game_odds, pred=result,
-        )
+        # Prefer cached picks from best-bets
+        if result.get("_cached_picks"):
+            picks = result["_cached_picks"]
+            game_odds = result.get("_cached_odds", {})
+        else:
+            home_abbr = (result.get("home") or {}).get("abbreviation") or ""
+            away_abbr = (result.get("away") or {}).get("abbreviation") or ""
+            game_odds = _odds_from_scoreboard_cache(home_abbr, away_abbr, sport="nhl")
+            if not game_odds and home_abbr and away_abbr:
+                from engine.picks import match_odds as _match
+                odds_map = _fetch_nhl_odds()
+                game_odds = _match(home_abbr, away_abbr, odds_map)
+            picks, _ctx = generate_nhl_picks_with_context(
+                home_key, away_key, game_odds, pred=result,
+            )
         result["picks"] = picks
         result["best_pick"] = picks[0] if picks else None
         result["odds"] = game_odds
@@ -3013,6 +3024,11 @@ def api_nhl_best_bets():
             continue
         if not picks:
             continue
+
+        # Cache picks on prediction for predict endpoint consistency
+        pred["_cached_picks"] = picks
+        pred["_cached_odds"] = odds
+
         best = picks[0]
 
         goalie_info = {}
@@ -3821,8 +3837,13 @@ def api_nba_predict(home: str = Query(...), away: str = Query(...)):
         # accepts pred= so we reuse the factor + MC + GBM work we
         # already did above instead of re-running predict_q1.
         try:
-            from engine.nba_picks import generate_q1_picks
-            picks = generate_q1_picks(home, away, odds=odds, pred=result)
+            # Prefer cached picks from best-bets
+            if result.get("_cached_picks"):
+                picks = result["_cached_picks"]
+                odds = result.get("_cached_odds", odds)
+            else:
+                from engine.nba_picks import generate_q1_picks
+                picks = generate_q1_picks(home, away, odds=odds, pred=result)
             result["picks"] = picks
             result["best_pick"] = picks[0] if picks else None
             result["odds"] = odds
@@ -3930,6 +3951,10 @@ def api_nba_best_bets():
         picks = pred.get("picks", [])
         if not picks:
             continue
+
+        # Cache picks on prediction for predict endpoint consistency
+        pred_full["_cached_picks"] = picks
+        pred_full["_cached_odds"] = odds
 
         best = picks[0]
 
