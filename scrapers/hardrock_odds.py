@@ -861,7 +861,6 @@ def _collect_events_from_sport(sport_node: dict,
             by_name.setdefault(comp_name.lower(), []).append(comp)
 
         selected_comps: list[dict] = []
-        q1_alt_comps: list[dict] = []  # larger comps for Q1 alt mining
         for group in by_name.values():
             if len(group) > 1:
                 def _avg_mkts(c: dict) -> float:
@@ -872,11 +871,9 @@ def _collect_events_from_sport(sport_node: dict,
                         return 0.0
                     return sum(len(e.get("markets", []))
                                for e in ev_list if isinstance(e, dict)) / len(ev_list)
-                sorted_group = sorted(group, key=_avg_mkts)
-                # Site-facing comp (fewest markets) for primary lines
-                selected_comps.append(sorted_group[0])
-                # Larger comps for Q1 alt mining only
-                q1_alt_comps.extend(sorted_group[1:])
+                # Site-facing comp (fewest markets) has correct primary
+                # lines AND the Q1 alts the site actually displays.
+                selected_comps.append(min(group, key=_avg_mkts))
             else:
                 selected_comps.append(group[0])
 
@@ -893,10 +890,6 @@ def _collect_events_from_sport(sport_node: dict,
             return evts
 
         events = _extract_events(selected_comps)
-        # Q1 alt events from larger comps (for second pass)
-        q1_extra = _extract_events(q1_alt_comps) if q1_alt_comps else []
-    else:
-        q1_extra = []
 
     # sport.events.data[] (flat)
     ev_container = sport_node.get("events")
@@ -906,7 +899,7 @@ def _collect_events_from_sport(sport_node: dict,
             events.extend(e for e in ev_list if isinstance(e, dict))
     elif isinstance(ev_container, list):
         events.extend(e for e in ev_container if isinstance(e, dict))
-    return events, q1_extra
+    return events
 
 
 def _parse_response(sport: str, data: Any) -> dict[str, dict]:
@@ -921,15 +914,12 @@ def _parse_response(sport: str, data: Any) -> dict[str, dict]:
     # or just events[] somewhere flat.
     events_to_process: list[tuple[str, list[dict]]] = []
     sports = _walk_sports(data)
-    q1_alt_events: list[tuple[str, list[dict]]] = []
     if sports:
         for s in sports:
             sport_name = str(_pick(s, "name", "displayName", "code", "id") or "")
-            events, q1_extra = _collect_events_from_sport(s, sport)
+            events = _collect_events_from_sport(s, sport)
             if events:
                 events_to_process.append((sport_name, events))
-            if q1_extra:
-                q1_alt_events.append((sport_name, q1_extra))
     else:
         flat = _walk_events_flat(data)
         if flat:
@@ -1029,65 +1019,6 @@ def _parse_response(sport: str, data: Any) -> dict[str, dict]:
                     # Normalize q1_* kinds to base kind for _apply_market
                     base_kind = kind.replace("q1_", "") if q1 else kind
                     _apply_market(bucket, base_kind, sides, q1)
-
-    # ── Second pass: Q1 alt lines from larger comps ──
-    # The larger comp has Q1 alt spreads/totals that the site-facing
-    # comp doesn't. Process these events but ONLY collect Q1 markets
-    # as alts (primaries are already set from the first pass).
-    for sport_name, events in q1_alt_events:
-        if sport_name and not _matches_sport(sport_name, sport):
-            continue
-        for event in events:
-            if not isinstance(event, dict):
-                continue
-            away_name, home_name = _extract_teams(event)
-            away_abbr = _team_abbr(sport, away_name)
-            home_abbr = _team_abbr(sport, home_name)
-            if not (away_abbr and home_abbr):
-                continue
-            key = f"{away_abbr}@{home_abbr}"
-            bucket = result.get(key)
-            if not bucket:
-                continue  # only add Q1 alts to games we already have
-            event_participants = event.get("participants") or []
-            markets = event.get("markets") or []
-            for mkt in markets:
-                if not isinstance(mkt, dict):
-                    continue
-                label = str(_pick(mkt, "name", "label", "marketName") or "")
-                mtype = str(_pick(mkt, "type", "marketType") or "")
-                mkt_period = str(mkt.get("period") or "")
-                kind = _market_kind(label, mtype, mkt_period)
-                if kind is None or not kind.startswith("q1_"):
-                    continue  # only Q1 markets from larger comp
-                # Skip whole-number lines
-                if kind in ("q1_spread", "q1_total"):
-                    outcomes_peek = (_pick(mkt, "selection", "outcomes",
-                                          "selections") or [])
-                    if outcomes_peek:
-                        sample_line = _extract_line_from_name(
-                            str(_pick(outcomes_peek[0], "name") or ""))
-                        if sample_line is not None and sample_line == int(sample_line):
-                            continue
-                outcomes = (_pick(mkt, "selection", "outcomes",
-                                 "selections", "runners") or [])
-                if not isinstance(outcomes, list) or len(outcomes) < 2:
-                    continue
-                market_line = _float_line(_pick(mkt, "line", "spread"))
-                sides: dict[str, dict] = {}
-                for o in outcomes:
-                    if not isinstance(o, dict):
-                        continue
-                    side, price, line = _classify_outcome(
-                        o, away_abbr, home_abbr, sport,
-                        participants=event_participants)
-                    if side is None:
-                        continue
-                    if line is None and market_line is not None:
-                        line = market_line
-                    sides[side] = {"price": price, "line": line}
-                base_kind = kind.replace("q1_", "")
-                _apply_market(bucket, base_kind, sides, q1=True)
 
     # Post-process: pick the best primary spread/total from all
     # collected lines. The "primary" should be the one closest to
