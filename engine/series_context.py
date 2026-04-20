@@ -152,6 +152,8 @@ def infer_series(sport: str, home_abbr: str, away_abbr: str,
         "GSW": "GS", "GS": "GS",
         "NOP": "NO", "NO": "NO",
         "SAS": "SA", "SA": "SA",
+        "UTA": "UTAH", "UTAH": "UTAH",
+        "WAS": "WSH", "WSH": "WSH",
     }
     home_db_abbr = _ABBR_ALIASES.get(home_abbr, home_abbr)
     away_db_abbr = _ABBR_ALIASES.get(away_abbr, away_abbr)

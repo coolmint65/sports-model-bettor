@@ -51,6 +51,8 @@ NBA_ALIASES = {
     "GS":  "GSW",
     "NO":  "NOP",
     "SA":  "SAS",
+    "UTAH": "UTA",
+    "WSH": "WAS",
 }
 
 
