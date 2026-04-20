@@ -28,6 +28,10 @@ const BET_TYPE_LABELS = {
   '1ST_INNING': '1st Inning',
   '1ST_INN': '1st Inning',
   '1st INN': '1st Inning',
+
+  'ALT RL': 'Alt Run Line',
+  'ALT O/U': 'Alt Over/Under',
+  'ALT PL': 'Alt Puck Line',
 }
 
 export function humanizeBetType(t) {
