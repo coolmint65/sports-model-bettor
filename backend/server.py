@@ -806,8 +806,13 @@ _PICKS_STORE_LOCK = _threading.Lock()
 
 
 def _picks_store_put(sport: str, home: str, away: str, picks: list, odds: dict):
+    """Write picks to the store. Write-once per game — subsequent calls
+    for the same game are ignored so the pick doesn't change mid-day
+    when best-bets reruns with shifted odds."""
     key = f"{sport}:{away}@{home}"
     with _PICKS_STORE_LOCK:
+        if key in _PICKS_STORE:
+            return  # already locked in for today
         from engine.picks import get_best_pick
         _PICKS_STORE[key] = {
             "picks": picks,
