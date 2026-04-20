@@ -49,7 +49,7 @@ app.add_middleware(
 # refetch loop, accidental polling) before it melts the backend or burns
 # Odds API credits, not to enforce a multi-tenant quota.
 RATE_LIMIT_WINDOW_SEC = 60
-RATE_LIMIT_MAX_REQUESTS = 240   # 4 req/sec sustained per IP
+RATE_LIMIT_MAX_REQUESTS = 600   # 10 req/sec sustained per IP
 _rate_buckets: dict[str, deque] = defaultdict(deque)
 # Endpoints exempt from the limit (cheap reads, monitoring).
 _RATE_LIMIT_EXEMPT_PREFIXES = ("/health", "/docs", "/openapi.json", "/redoc")
