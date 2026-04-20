@@ -1542,12 +1542,7 @@ def api_best_bets():
         if not picks:
             continue
 
-        # Attach picks + odds to the prediction so every surface
-        # (predict endpoint, scoreboard card, tracker) reads the
-        # same picks instead of regenerating with different odds.
-        pred["_cached_picks"] = picks
-        pred["_cached_odds"] = game_odds
-        pred["_cached_best_pick"] = get_best_pick(picks)
+        # generate_picks() now auto-caches on the pred dict.
 
         best = get_best_pick(picks)
         if not best:
@@ -3025,7 +3020,9 @@ def api_nhl_best_bets():
         if not picks:
             continue
 
-        # Cache picks on prediction for predict endpoint consistency
+        # generate_nhl_picks_with_context auto-caches via its internal
+        # generate_picks call (if applicable). Also cache here for
+        # NHL-specific pick format compatibility.
         pred["_cached_picks"] = picks
         pred["_cached_odds"] = odds
 

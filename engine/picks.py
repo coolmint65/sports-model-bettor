@@ -444,6 +444,14 @@ def generate_picks(home_team_id: int, away_team_id: int,
         if e < EDGE_SKIP:
             p["confidence"] = "skip"
 
+    # Cache picks on the prediction dict so any surface that shares
+    # the same cached prediction gets identical picks. This is the
+    # single source of truth — whoever generates first (best-bets or
+    # predict endpoint) writes the cache; the other reads it.
+    if pred is not None and isinstance(pred, dict):
+        pred["_cached_picks"] = picks
+        pred["_cached_odds"] = odds
+
     return picks
 
 
