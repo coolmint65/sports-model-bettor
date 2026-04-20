@@ -267,17 +267,33 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
             print(f"[RECORD]   {matchup}: already recorded, skipping", flush=True)
             continue
 
-        # Get odds — prefer the scoreboard cache (same odds the card
-        # shows) to guarantee pick consistency. Fall back to fresh
-        # fetch only if the cache has nothing for this game.
-        game_odds = {}
+        # Read from the picks store (single source of truth from best-bets).
+        # If best-bets already ran, this returns the exact same picks the
+        # card shows. If not, fall back to generating with matched odds.
         try:
-            from backend.server import _odds_from_scoreboard_cache
-            game_odds = _odds_from_scoreboard_cache(h, a) or {}
+            from backend.server import _picks_store_get
+            stored = _picks_store_get("mlb", h, a)
+            if stored and stored.get("picks"):
+                picks = stored["picks"]
+                game_odds = stored.get("odds", {})
+                best = get_best_pick(picks)
+                if best and best["edge"] >= min_edge and _valid_odds(best.get("odds")):
+                    conn.execute("""
+                        INSERT INTO picks (game_id, date, matchup, bet_type, pick,
+                                         model_prob, edge, odds)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (game_id, target_date, matchup, best["type"], best["pick"],
+                          best["prob"], best["edge"], best["odds"]))
+                    recorded.append({
+                        "matchup": matchup, "type": best["type"],
+                        "pick": best["pick"], "prob": round(best["prob"], 3),
+                        "edge": round(best["edge"], 1), "odds": best["odds"],
+                    })
+                continue
         except Exception:
             pass
-        if not game_odds:
-            game_odds = match_odds(h, a, all_odds)
+
+        game_odds = match_odds(h, a, all_odds)
 
         picks = generate_picks(
             home_team_id=home_id,

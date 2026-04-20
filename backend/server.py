@@ -796,6 +796,39 @@ _PRED_CACHE: dict = {}
 _PRED_CACHE_LOCK = _threading.Lock()
 _PRED_CACHE_TTL_S = 300
 
+# ── Picks store ──────────────────────────────────────────────
+# Single source of truth for today's picks. Best-bets writes here;
+# predict endpoint + tracker read from here. Keyed by
+# "{sport}:{away}@{home}" → {"picks": [...], "odds": {...}, "best_pick": {...}}.
+# Cleared daily (or when best-bets reruns).
+_PICKS_STORE: dict[str, dict] = {}
+_PICKS_STORE_LOCK = _threading.Lock()
+
+
+def _picks_store_put(sport: str, home: str, away: str, picks: list, odds: dict):
+    key = f"{sport}:{away}@{home}"
+    with _PICKS_STORE_LOCK:
+        from engine.picks import get_best_pick
+        _PICKS_STORE[key] = {
+            "picks": picks,
+            "odds": odds,
+            "best_pick": get_best_pick(picks) if picks else None,
+        }
+
+
+def _picks_store_get(sport: str, home: str, away: str) -> dict | None:
+    """Read picks for a game. Returns {"picks", "odds", "best_pick"} or None."""
+    from engine.abbr import aliases_for
+    with _PICKS_STORE_LOCK:
+        # Try all alias combinations
+        for h in aliases_for(home, sport):
+            for a in aliases_for(away, sport):
+                for key in (f"{sport}:{a}@{h}", f"{sport}:{h}@{a}"):
+                    if key in _PICKS_STORE:
+                        return _PICKS_STORE[key]
+    return None
+
+
 # Per-sport /best-bets progress state for the spinner. Frontend polls
 # /api/<sport>/best-bets/progress to render a percentage instead of an
 # indeterminate spinner during the multi-minute cold load. Each sport
@@ -1342,15 +1375,20 @@ def api_predict(req: PredictRequest):
         )
         from engine.db import get_team_by_id
 
-        # Prefer cached picks from best-bets (single source of truth)
-        if result.get("_cached_picks"):
+        # Prefer picks store (single source of truth from best-bets)
+        home_team = get_team_by_id(req.home_team_id) or {}
+        away_team = get_team_by_id(req.away_team_id) or {}
+        h_abbr = home_team.get("abbreviation", "")
+        a_abbr = away_team.get("abbreviation", "")
+
+        stored = _picks_store_get("mlb", h_abbr, a_abbr)
+        if stored:
+            picks = stored["picks"]
+            odds = stored["odds"]
+        elif result.get("_cached_picks"):
             picks = result["_cached_picks"]
             odds = result.get("_cached_odds", {})
         else:
-            home_team = get_team_by_id(req.home_team_id) or {}
-            away_team = get_team_by_id(req.away_team_id) or {}
-            h_abbr = home_team.get("abbreviation", "")
-            a_abbr = away_team.get("abbreviation", "")
 
             odds = _odds_from_scoreboard_cache(h_abbr, a_abbr) if (h_abbr and a_abbr) else {}
             if not odds and h_abbr and a_abbr:
@@ -1542,7 +1580,8 @@ def api_best_bets():
         if not picks:
             continue
 
-        # generate_picks() now auto-caches on the pred dict.
+        # Store picks so tracker + predict endpoint read the same result.
+        _picks_store_put("mlb", h_abbr, a_abbr, picks, game_odds)
 
         best = get_best_pick(picks)
         if not best:
@@ -2892,13 +2931,17 @@ def api_nhl_predict(home: str = Query(...), away: str = Query(...)):
     # "Under 6.5 / +12.9%" on the same game.
     try:
         from engine.nhl_picks import generate_nhl_picks_with_context
-        # Prefer cached picks from best-bets
-        if result.get("_cached_picks"):
+        # Prefer picks store from best-bets
+        home_abbr = (result.get("home") or {}).get("abbreviation") or ""
+        away_abbr = (result.get("away") or {}).get("abbreviation") or ""
+        stored = _picks_store_get("nhl", home_abbr, away_abbr)
+        if stored:
+            picks = stored["picks"]
+            game_odds = stored["odds"]
+        elif result.get("_cached_picks"):
             picks = result["_cached_picks"]
             game_odds = result.get("_cached_odds", {})
         else:
-            home_abbr = (result.get("home") or {}).get("abbreviation") or ""
-            away_abbr = (result.get("away") or {}).get("abbreviation") or ""
             game_odds = _odds_from_scoreboard_cache(home_abbr, away_abbr, sport="nhl")
             if not game_odds and home_abbr and away_abbr:
                 from engine.picks import match_odds as _match
@@ -3025,6 +3068,7 @@ def api_nhl_best_bets():
         # NHL-specific pick format compatibility.
         pred["_cached_picks"] = picks
         pred["_cached_odds"] = odds
+        _picks_store_put("nhl", h_abbr, a_abbr, picks, odds)
 
         best = picks[0]
 
@@ -3834,8 +3878,12 @@ def api_nba_predict(home: str = Query(...), away: str = Query(...)):
         # accepts pred= so we reuse the factor + MC + GBM work we
         # already did above instead of re-running predict_q1.
         try:
-            # Prefer cached picks from best-bets
-            if result.get("_cached_picks"):
+            # Prefer picks store from best-bets
+            stored = _picks_store_get("nba", home, away)
+            if stored:
+                picks = stored["picks"]
+                odds = stored["odds"]
+            elif result.get("_cached_picks"):
                 picks = result["_cached_picks"]
                 odds = result.get("_cached_odds", odds)
             else:
@@ -3952,6 +4000,7 @@ def api_nba_best_bets():
         # Cache picks on prediction for predict endpoint consistency
         pred_full["_cached_picks"] = picks
         pred_full["_cached_odds"] = odds
+        _picks_store_put("nba", h_abbr, a_abbr, picks, odds)
 
         best = picks[0]
 
