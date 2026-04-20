@@ -720,6 +720,22 @@ def _swap_odds(odds: dict) -> dict:
     return swapped
 
 
+def _detect_sport(all_odds: dict) -> str:
+    """Guess the sport from odds keys or content."""
+    for v in all_odds.values():
+        if isinstance(v, dict):
+            if v.get("q1_home_ml") is not None or v.get("q1_spread") is not None:
+                return "nba"
+            ou = v.get("over_under")
+            if isinstance(ou, (int, float)):
+                if ou > 100:
+                    return "nba"
+                elif ou < 12:
+                    return "nhl"
+        break
+    return "mlb"
+
+
 def _find_odds_by_team_pair(team_a: str, team_b: str,
                             all_odds: dict) -> dict | None:
     """Find an odds dict containing these two teams, regardless of key order.
@@ -728,9 +744,10 @@ def _find_odds_by_team_pair(team_a: str, team_b: str,
     dict by the scraper, plus abbreviation aliases. Returns the raw
     odds dict (not yet aligned to any schedule).
     """
-    from .abbr import alt_abbr
-    a_alts = {team_a, alt_abbr(team_a, "mlb")}
-    b_alts = {team_b, alt_abbr(team_b, "mlb")}
+    from .abbr import alt_abbr, aliases_for
+    sport = _detect_sport(all_odds)
+    a_alts = set(aliases_for(team_a, sport))
+    b_alts = set(aliases_for(team_b, sport))
 
     # Fast path: try direct key lookups
     for a in a_alts:
@@ -759,14 +776,15 @@ def match_odds(home_abbr: str, away_abbr: str, all_odds: dict) -> dict:
     The schedule source (ESPN / DB) is always the authority on
     which team is home.
     """
-    from .abbr import alt_abbr
+    from .abbr import aliases_for
     raw = _find_odds_by_team_pair(home_abbr, away_abbr, all_odds)
     if not raw:
         return {}
 
     # Check if the sportsbook's home matches our home
     odds_home = raw.get("odds_home", "")
-    home_alts = {home_abbr, alt_abbr(home_abbr, "mlb")}
+    sport = _detect_sport(all_odds)
+    home_alts = set(aliases_for(home_abbr, sport))
 
     if odds_home in home_alts:
         # Same home — use as-is

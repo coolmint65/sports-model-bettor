@@ -47,6 +47,10 @@ NBA_ALIASES = {
     "BKN": "BRK",
     "PHX": "PHO",
     "CHA": "CHO",
+    "NY":  "NYK",
+    "GS":  "GSW",
+    "NO":  "NOP",
+    "SA":  "SAS",
 }
 
 
