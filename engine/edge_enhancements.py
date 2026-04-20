@@ -37,7 +37,7 @@ ENABLE_LINE_MOVEMENT_SIGNAL = True
 
 # ── Alt Line Shopping ─────────────────────────────────────────
 # Minimum edge improvement over primary to recommend an alt line.
-ALT_LINE_MIN_EDGE_IMPROVEMENT = 1.5  # percentage points
+ALT_LINE_MIN_EDGE_IMPROVEMENT = 3.0  # percentage points above primary RL edge
 ALT_LINE_JUICE_WALL = -180  # max vig on alt picks (same as MLB default)
 
 
@@ -94,18 +94,23 @@ def shop_alt_spreads(pred: dict, odds: dict, h_abbr: str, a_abbr: str,
         if point is None:
             continue
 
-        # Estimate cover probability for this spread point using
-        # interpolation from the known -1.5/+1.5 probabilities and
-        # the model's projected spread.
-        # For a home spread of X:
-        #   - If X < 0 (favorite): prob decreases as |X| increases
-        #   - If X > 0 (underdog): prob increases as X increases
-        # Use a simple linear interpolation anchored on the known points.
+        # Estimate cover probability using normal CDF centered on
+        # the model's projected spread. Standard deviations calibrated
+        # from historical margin distributions:
+        #   MLB: ~3.8 runs (regular season avg margin std dev)
+        #   NHL: ~2.2 goals
+        #   NBA: ~11.5 points
         import math
-        std = max(abs(model_spread) + 1.5, 2.0)  # rough std dev
-        # P(home margin > -point) using normal CDF approximation
-        # centered on model_spread
-        z = (model_spread - (-point)) / std  # negative point = home needs margin > |point|
+        _MARGIN_STD = {"mlb": 3.8, "nhl": 2.2, "nba": 11.5}
+        # Detect sport from prediction context
+        sport_key = "mlb"  # default; could be enhanced to detect
+        if pred.get("puck_line") or pred.get("regulation_draw_prob"):
+            sport_key = "nhl"
+        elif pred.get("q1_ml_home") or pred.get("predicted_margin"):
+            sport_key = "nba"
+        std = _MARGIN_STD.get(sport_key, 3.8)
+
+        z = (model_spread - (-point)) / std
         home_cover_prob = 0.5 * (1 + math.erf(z / math.sqrt(2)))
 
         # Sanity clamp
@@ -192,15 +197,18 @@ def shop_alt_totals(pred: dict, odds: dict,
         if line is None:
             continue
 
-        # Simple probability estimate: model total vs line
-        # If model total > line → lean over; if < → lean under
-        # Use the distance to estimate probability
+        # Probability estimate using logistic function with
+        # sport-appropriate total standard deviations:
+        #   MLB: ~3.2 runs, NHL: ~1.8 goals, NBA: ~10.5 pts
         diff = model_total - line
-        # Rough sigmoid based on typical MLB/NHL/NBA std devs
-        # MLB: std ~2.5 runs, NHL: ~1.5 goals, NBA: ~12 pts
         import math
-        # Use a generic std dev of 2.0 (conservative)
-        std = 2.0
+        _TOTAL_STD = {"mlb": 3.2, "nhl": 1.8, "nba": 10.5}
+        sport_key = "mlb"
+        if model_total > 100:
+            sport_key = "nba"
+        elif model_total < 12:
+            sport_key = "nhl"
+        std = _TOTAL_STD.get(sport_key, 3.2)
         over_prob = 1.0 / (1.0 + math.exp(-diff / std))
         under_prob = 1.0 - over_prob
 

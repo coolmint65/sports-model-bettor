@@ -711,12 +711,21 @@ def _apply_market(bucket: dict, kind: str, sides: dict, q1: bool) -> None:
         if home_line is None and away_line is None:
             return
         if q1:
-            if home_line is not None:
-                bucket["q1_spread"] = home_line
-            if home_price is not None:
-                bucket["q1_spread_home_odds"] = home_price
-            if away_price is not None:
-                bucket["q1_spread_away_odds"] = away_price
+            cur_q1 = bucket.get("q1_spread")
+            if cur_q1 is None:
+                if home_line is not None:
+                    bucket["q1_spread"] = home_line
+                if home_price is not None:
+                    bucket["q1_spread_home_odds"] = home_price
+                if away_price is not None:
+                    bucket["q1_spread_away_odds"] = away_price
+            elif home_line != cur_q1:
+                point = home_line if home_line is not None else (
+                    -away_line if away_line is not None else None)
+                if point is not None:
+                    alt = {"point": point,
+                           "home_odds": home_price, "away_odds": away_price}
+                    bucket.setdefault("q1_alt_spreads", []).append(alt)
         else:
             cur = bucket.get("home_spread_point")
             if cur is None:
@@ -750,12 +759,19 @@ def _apply_market(bucket: dict, kind: str, sides: dict, q1: bool) -> None:
         over_price = sides.get("over", {}).get("price")
         under_price = sides.get("under", {}).get("price")
         if q1:
-            if line is not None:
-                bucket["q1_total"] = line
-            if over_price is not None:
-                bucket["q1_over_odds"] = over_price
-            if under_price is not None:
-                bucket["q1_under_odds"] = under_price
+            cur_q1t = bucket.get("q1_total")
+            if cur_q1t is None:
+                if line is not None:
+                    bucket["q1_total"] = line
+                if over_price is not None:
+                    bucket["q1_over_odds"] = over_price
+                if under_price is not None:
+                    bucket["q1_under_odds"] = under_price
+            elif line != cur_q1t:
+                if line is not None:
+                    alt = {"line": line,
+                           "over_odds": over_price, "under_odds": under_price}
+                    bucket.setdefault("q1_alt_totals", []).append(alt)
         else:
             cur = bucket.get("over_under")
             if cur is None:
@@ -847,7 +863,10 @@ def _collect_events_from_sport(sport_node: dict,
         selected_comps: list[dict] = []
         for group in by_name.values():
             if len(group) > 1:
-                # Pick the comp with fewer avg markets (site-facing)
+                # Pick the site-facing comp (fewer markets) for primary
+                # lines. Also include the larger comp so Q1 alt markets
+                # get collected, but mark it so _apply_market only adds
+                # alts from it, not overwrites.
                 def _avg_mkts(c: dict) -> float:
                     ev = c.get("events")
                     ev_list = (ev.get("data", []) if isinstance(ev, dict)
