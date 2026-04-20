@@ -785,17 +785,27 @@ def _apply_market(bucket: dict, kind: str, sides: dict, q1: bool) -> None:
 _COMP_FILTERS: dict[str, tuple[str, ...]] = {
     "mlb": ("mlb",),
     "nhl": ("nhl",),
-    "nba": ("nba", "wnba"),
+    "nba": ("nba",),
 }
 
 
 def _comp_matches_sport(comp_name: str, sport: str) -> bool:
-    """Return True if a competition belongs to the target league."""
+    """Return True if a competition belongs to the target league.
+
+    Uses word-boundary matching to avoid "nba" matching "wnba".
+    """
     filters = _COMP_FILTERS.get(sport)
     if not filters:
         return True
-    name_lower = comp_name.lower()
-    return any(f in name_lower for f in filters)
+    import re
+    name_lower = comp_name.lower().strip()
+    for f in filters:
+        if name_lower == f:
+            return True
+        # Word-boundary match: \b ensures "nba" doesn't match "wnba"
+        if re.search(r'\b' + re.escape(f) + r'\b', name_lower):
+            return True
+    return False
 
 
 def _collect_events_from_sport(sport_node: dict,
