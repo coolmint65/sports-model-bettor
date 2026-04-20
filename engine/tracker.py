@@ -267,46 +267,26 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
             print(f"[RECORD]   {matchup}: already recorded, skipping", flush=True)
             continue
 
-        # Get real odds for this game
-        game_odds = match_odds(h, a, all_odds)
-
-        # Use the same prediction the best-bets endpoint would use
-        # (via _predict_mlb_full cache) so picks are identical across
-        # all surfaces. Without this, the tracker recomputes from
-        # scratch and can pick a different best bet than the card.
+        # Get odds — prefer the scoreboard cache (same odds the card
+        # shows) to guarantee pick consistency. Fall back to fresh
+        # fetch only if the cache has nothing for this game.
+        game_odds = {}
         try:
-            from backend.server import _predict_mlb_full
-            pred = _predict_mlb_full(
-                home_team_id=home_id,
-                away_team_id=away_id,
-                home_pitcher_id=game.get("home_pitcher_id"),
-                away_pitcher_id=game.get("away_pitcher_id"),
-                venue=game.get("venue"),
-            )
-            # If best-bets already attached picks, use those
-            if pred.get("_cached_picks"):
-                picks = pred["_cached_picks"]
-                game_odds = pred.get("_cached_odds", game_odds)
-            else:
-                picks = generate_picks(
-                    home_team_id=home_id,
-                    away_team_id=away_id,
-                    home_pitcher_id=game.get("home_pitcher_id"),
-                    away_pitcher_id=game.get("away_pitcher_id"),
-                    venue=game.get("venue"),
-                    odds=game_odds,
-                    pred=pred,
-                )
+            from backend.server import _odds_from_scoreboard_cache
+            game_odds = _odds_from_scoreboard_cache(h, a) or {}
         except Exception:
-            # Fallback: generate from scratch if server import fails
-            picks = generate_picks(
-                home_team_id=home_id,
-                away_team_id=away_id,
-                home_pitcher_id=game.get("home_pitcher_id"),
-                away_pitcher_id=game.get("away_pitcher_id"),
-                venue=game.get("venue"),
-                odds=game_odds,
-            )
+            pass
+        if not game_odds:
+            game_odds = match_odds(h, a, all_odds)
+
+        picks = generate_picks(
+            home_team_id=home_id,
+            away_team_id=away_id,
+            home_pitcher_id=game.get("home_pitcher_id"),
+            away_pitcher_id=game.get("away_pitcher_id"),
+            venue=game.get("venue"),
+            odds=game_odds,
+        )
 
         # Take the best pick. Defense-in-depth odds sanity check -- if a
         # pick somehow slipped through generate_picks with |odds| < 100
