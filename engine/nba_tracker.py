@@ -220,23 +220,12 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
 
         # Match odds using unified team-pair matching (handles
         # abbreviation aliases + home/away swap automatically).
+        # Pass the full matched odds dict (includes Q1 alts) instead
+        # of cherry-picking fields — generate_q1_picks reads what it needs.
         from engine.picks import match_odds as _match_odds
-        market_odds = _match_odds(h_abbr, a_abbr, q1_odds_map)
-        odds_dict = {
-            "q1_spread": market_odds.get("q1_spread"),
-            "q1_total": market_odds.get("q1_total"),
-            "q1_spread_home_odds": market_odds.get("q1_spread_home_odds", -110),
-            "q1_spread_away_odds": market_odds.get("q1_spread_away_odds", -110),
-            "q1_over_odds": market_odds.get("q1_over_odds", -110),
-            "q1_under_odds": market_odds.get("q1_under_odds", -110),
-            # Use Q1-specific ML odds, NOT full-game ML
-            "q1_home_ml": market_odds.get("q1_home_ml"),
-            "q1_away_ml": market_odds.get("q1_away_ml"),
-            "home_ml": market_odds.get("home_ml"),
-            "away_ml": market_odds.get("away_ml"),
-        }
+        odds_dict = _match_odds(h_abbr, a_abbr, q1_odds_map)
 
-        # Generate Q1 ML picks (always available without specific Q1 odds)
+        # Generate Q1 picks
         picks = generate_q1_picks(h_abbr, a_abbr, odds_dict)
         if not picks:
             continue

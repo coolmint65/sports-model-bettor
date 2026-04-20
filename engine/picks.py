@@ -707,11 +707,17 @@ def _swap_odds(odds: dict) -> dict:
         swapped["q1_spread"] = -swapped["q1_spread"]
 
     # Alt spreads: swap odds and negate points (point is relative to
-    # the home team)
-    for alt in swapped.get("alt_spreads", []):
-        alt["home_odds"], alt["away_odds"] = alt.get("away_odds"), alt.get("home_odds")
-        if alt.get("point") is not None:
-            alt["point"] = -alt["point"]
+    # the home team). Apply to both full-game and Q1 alts.
+    for key in ("alt_spreads", "q1_alt_spreads"):
+        for alt in swapped.get(key, []):
+            alt["home_odds"], alt["away_odds"] = alt.get("away_odds"), alt.get("home_odds")
+            if alt.get("point") is not None:
+                alt["point"] = -alt["point"]
+
+    # Q1 alt totals: swap over/under odds (totals are symmetric but
+    # odds may differ if the swap changes the perspective)
+    # Actually totals don't need swapping — over is over regardless
+    # of who's home. But include for completeness.
 
     # Flip the identity tags
     swapped["odds_home"], swapped["odds_away"] = (
