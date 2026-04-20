@@ -840,6 +840,63 @@ def _picks_store_clear():
         _PICKS_STORE.clear()
 
 
+def _get_recorded_pick(sport: str, matchup: str, date: str) -> dict | None:
+    """Read a previously recorded pick from the tracker DB.
+
+    Returns {"type", "pick", "prob", "edge", "odds", "confidence"} or None.
+    This is the source of truth — once recorded, this pick shouldn't change.
+    """
+    try:
+        if sport == "mlb":
+            from engine.db import get_conn
+            conn = get_conn()
+            table = "picks"
+        elif sport == "nhl":
+            from engine.nhl_db import get_conn as _nhl_conn
+            conn = _nhl_conn()
+            table = "nhl_picks"
+        elif sport == "nba":
+            from engine.nba_db import get_conn as _nba_conn
+            conn = _nba_conn()
+            table = "nba_picks"
+        else:
+            return None
+
+        row = conn.execute(
+            f"SELECT bet_type, pick, model_prob, edge, odds FROM {table} "
+            f"WHERE date = ? AND matchup = ? AND result IS NULL "
+            f"ORDER BY edge DESC LIMIT 1",
+            (date, matchup),
+        ).fetchone()
+
+        if not row:
+            return None
+
+        edge = row["edge"] or 0
+        from engine.config import EDGE_STRONG, EDGE_MODERATE, EDGE_LEAN
+        if edge >= EDGE_STRONG:
+            conf = "strong"
+        elif edge >= EDGE_MODERATE:
+            conf = "moderate"
+        elif edge >= EDGE_LEAN:
+            conf = "lean"
+        else:
+            conf = "skip"
+
+        return {
+            "type": row["bet_type"],
+            "pick": row["pick"],
+            "prob": row["model_prob"],
+            "edge": edge,
+            "odds": row["odds"],
+            "confidence": conf,
+            "from_tracker": True,
+        }
+    except Exception as e:
+        logger.debug("Could not read recorded pick for %s %s: %s", sport, matchup, e)
+        return None
+
+
 # Per-sport /best-bets progress state for the spinner. Frontend polls
 # /api/<sport>/best-bets/progress to render a percentage instead of an
 # indeterminate spinner during the multi-minute cold load. Each sport
@@ -1417,7 +1474,11 @@ def api_predict(req: PredictRequest):
             )
 
         result["picks"] = picks
-        result["best_pick"] = get_best_pick(picks)
+        # Use recorded tracker pick as canonical best_pick
+        predict_matchup_str = f"{a_abbr} @ {h_abbr}"
+        predict_date = datetime.now().strftime("%Y-%m-%d")
+        recorded = _get_recorded_pick("mlb", predict_matchup_str, predict_date)
+        result["best_pick"] = recorded if recorded else get_best_pick(picks)
         result["odds"] = odds
     except Exception as e:
         logger.warning("Unified picks generation failed for %s/%s: %s",
@@ -1525,6 +1586,7 @@ def api_best_bets():
     import time as _time
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
+    target_date = datetime.now().strftime("%Y-%m-%d")
     games = _get_scoreboard()
 
     from engine.picks import generate_picks, get_best_pick, fetch_real_odds_for_games
@@ -1591,10 +1653,16 @@ def api_best_bets():
         if not picks:
             continue
 
-        # Store picks so tracker + predict endpoint read the same result.
         _picks_store_put("mlb", h_abbr, a_abbr, picks, game_odds)
 
-        best = get_best_pick(picks)
+        # If a pick was already recorded in the tracker, use that as
+        # the canonical best_pick so the card matches the tracker.
+        matchup = f"{a_abbr} @ {h_abbr}"
+        recorded = _get_recorded_pick("mlb", matchup, target_date)
+        if recorded:
+            best = recorded
+        else:
+            best = get_best_pick(picks)
         if not best:
             continue
 
@@ -3081,7 +3149,11 @@ def api_nhl_best_bets():
         pred["_cached_odds"] = odds
         _picks_store_put("nhl", h_abbr, a_abbr, picks, odds)
 
-        best = picks[0]
+        # Use recorded pick from tracker if available
+        nhl_matchup = f"{a_abbr} @ {h_abbr}"
+        nhl_target = datetime.now().strftime("%Y-%m-%d")
+        recorded = _get_recorded_pick("nhl", nhl_matchup, nhl_target)
+        best = recorded if recorded else picks[0]
 
         goalie_info = {}
         if home_goalie_name:
@@ -4013,7 +4085,11 @@ def api_nba_best_bets():
         pred_full["_cached_odds"] = odds
         _picks_store_put("nba", h_abbr, a_abbr, picks, odds)
 
-        best = picks[0]
+        # Use recorded pick from tracker if available
+        nba_matchup = f"{a_abbr} @ {h_abbr}"
+        nba_target = datetime.now().strftime("%Y-%m-%d")
+        recorded = _get_recorded_pick("nba", nba_matchup, nba_target)
+        best = recorded if recorded else picks[0]
 
         # Surface Q1 roster/injury info as a unified "injuries" field so
         # the scoreboard CardInsight can render shorthanded warnings the
