@@ -391,10 +391,42 @@ def generate_picks(home_team_id: int, away_team_id: int,
     # negative-EV under our calibrated probability.
     picks = [p for p in picks if (p.get("edge") or 0) > 0]
 
-    # Adjusted EV: edge * reliability weight
+    # ── Edge Enhancements ──
+    # Four signals that sharpen pick quality beyond the base model.
+    try:
+        from .edge_enhancements import (
+            shop_alt_spreads, shop_alt_totals,
+            get_clv_reliability, annotate_line_movement,
+        )
+
+        # 1. Alt Line Shopping: find better edges on alt spreads/totals
+        alt_rl = shop_alt_spreads(pred, odds, h_abbr, a_abbr, picks)
+        alt_ou = shop_alt_totals(pred, odds, picks)
+        picks.extend(alt_rl)
+        picks.extend(alt_ou)
+
+        # 4. CLV Confidence: adjust reliability based on historical CLV
+        clv_cache: dict[str, float] = {}
+        for p in picks:
+            bt = p.get("type", "")
+            if bt not in clv_cache:
+                clv_cache[bt] = get_clv_reliability("mlb", bt) or 1.0
+            p["clv_reliability"] = clv_cache[bt]
+
+        # 5. Line Movement: annotate picks with sharp money signals
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        matchup_key = f"{date_str}_{a_abbr}@{h_abbr}"
+        annotate_line_movement(picks, "mlb", matchup_key, odds)
+
+    except Exception as e:
+        logger.warning("Edge enhancements error: %s", e)
+
+    # Adjusted EV: edge * reliability weight * CLV modifier * line move modifier
     for p in picks:
         reliability = MLB_BET_RELIABILITY.get(p["type"], 0.5)
-        p["adjusted_ev"] = round(p["edge"] * reliability, 2)
+        clv_mult = p.get("clv_reliability", 1.0)
+        lm_mult = p.get("line_move_modifier", 1.0)
+        p["adjusted_ev"] = round(p["edge"] * reliability * clv_mult * lm_mult, 2)
     picks.sort(key=lambda p: -p["adjusted_ev"])
 
     # Add confidence rating (thresholds centralised in engine.config)

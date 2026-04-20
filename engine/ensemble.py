@@ -52,7 +52,14 @@ _DEFAULT_WEIGHTS = {
 
 
 def weights_for(sport: str, market: str) -> dict[str, float]:
-    """Return the blend weights for a (sport, market), consulting overrides."""
+    """Return the blend weights for a (sport, market).
+
+    Priority:
+      1. Runtime override (model_overrides table) — ops can retune live
+      2. Dynamic weights from rolling accuracy (edge_enhancements) — data-driven
+      3. Static defaults — conservative baseline
+    """
+    # 1. Runtime override (highest priority)
     try:
         from .model_overrides import get_override
         ov = get_override(sport, f"ENSEMBLE_{market}")
@@ -65,6 +72,17 @@ def weights_for(sport: str, market: str) -> dict[str, float]:
                 pass
     except Exception:
         pass
+
+    # 2. Dynamic weights from recent component accuracy
+    try:
+        from .edge_enhancements import get_dynamic_weights
+        dynamic = get_dynamic_weights(sport, market)
+        if dynamic:
+            return _normalize(dynamic)
+    except Exception:
+        pass
+
+    # 3. Static defaults
     return _DEFAULT_WEIGHTS.get((sport, market), {"factor": 1.0})
 
 
