@@ -2186,6 +2186,52 @@ def _get_nhl_scoreboard(date: str = "") -> list[dict]:
         if espn_data:
             games = _parse_nhl_scoreboard(espn_data)
 
+    # ── Hard Rock fallback ──────────────────────────────────────
+    # When ESPN hasn't posted today's schedule (common early in the
+    # day or during playoff transitions), build minimal scoreboard
+    # entries from Hard Rock's game list so best-bets can still run.
+    pre_games = [g for g in games
+                 if g.get("status", {}).get("state") == "pre"]
+    if not pre_games and date == "":
+        try:
+            from scrapers.hardrock_odds import fetch_nhl as _hr_nhl
+            hr_odds = _hr_nhl()
+            if hr_odds:
+                logger.info("NHL: ESPN empty, building %d games from Hard Rock",
+                            len(hr_odds))
+                for matchup_key, odds_data in hr_odds.items():
+                    parts = matchup_key.split("@")
+                    if len(parts) != 2:
+                        continue
+                    a_abbr, h_abbr = parts
+                    # Check if this game already exists (e.g. in-progress)
+                    existing = any(
+                        g["home"]["abbreviation"] == h_abbr and
+                        g["away"]["abbreviation"] == a_abbr
+                        for g in games
+                    )
+                    if existing:
+                        continue
+                    games.append({
+                        "id": f"hr_{a_abbr}_{h_abbr}",
+                        "date": target_date,
+                        "home": {
+                            "abbreviation": h_abbr,
+                            "name": h_abbr,
+                            "score": None,
+                        },
+                        "away": {
+                            "abbreviation": a_abbr,
+                            "name": a_abbr,
+                            "score": None,
+                        },
+                        "status": {"state": "pre", "detail": "Scheduled"},
+                        "odds": odds_data,
+                        "source": "hardrock",
+                    })
+        except Exception as e:
+            logger.debug("NHL Hard Rock fallback failed: %s", e)
+
     # Fetch NHL odds from The Odds API
     try:
         nhl_odds = _fetch_nhl_odds()
@@ -2312,6 +2358,20 @@ def _get_nhl_scoreboard(date: str = "") -> list[dict]:
                             break
         except Exception as e:
             logger.debug("NHL API goalie fallback failed: %s", e)
+
+    # ── Enrich with playoff series context ──
+    try:
+        from engine.series_context import infer_series
+        from engine.nhl_predict import _is_playoff_window
+        if _is_playoff_window():
+            for game in games:
+                h = game["home"]["abbreviation"]
+                a = game["away"]["abbreviation"]
+                series = infer_series("nhl", h, a)
+                if series.get("in_series"):
+                    game["series"] = series
+    except Exception as e:
+        logger.debug("NHL series enrichment failed: %s", e)
 
     _scoreboard_cache[cache_key] = (now, games)
     # Evict oldest entries if cache grows too large
@@ -3348,6 +3408,48 @@ def _get_nba_scoreboard(date: str = "") -> list[dict]:
             if games:
                 logger.info("Found %d NBA games for tomorrow", len(games))
 
+    # ── Hard Rock fallback ──────────────────────────────────────
+    pre_games = [g for g in games
+                 if g.get("status", {}).get("state") == "pre"]
+    if not pre_games and date == "":
+        try:
+            from scrapers.hardrock_odds import fetch_nba as _hr_nba
+            hr_odds = _hr_nba()
+            if hr_odds:
+                logger.info("NBA: ESPN empty, building %d games from Hard Rock",
+                            len(hr_odds))
+                for matchup_key, odds_data in hr_odds.items():
+                    parts = matchup_key.split("@")
+                    if len(parts) != 2:
+                        continue
+                    a_abbr, h_abbr = parts
+                    existing = any(
+                        g["home"]["abbreviation"] == h_abbr and
+                        g["away"]["abbreviation"] == a_abbr
+                        for g in games
+                    )
+                    if existing:
+                        continue
+                    games.append({
+                        "id": f"hr_{a_abbr}_{h_abbr}",
+                        "date": target_date,
+                        "home": {
+                            "abbreviation": h_abbr,
+                            "name": h_abbr,
+                            "score": None,
+                        },
+                        "away": {
+                            "abbreviation": a_abbr,
+                            "name": a_abbr,
+                            "score": None,
+                        },
+                        "status": {"state": "pre", "detail": "Scheduled"},
+                        "odds": odds_data,
+                        "source": "hardrock",
+                    })
+        except Exception as e:
+            logger.debug("NBA Hard Rock fallback failed: %s", e)
+
     # Fetch NBA odds from The Odds API
     try:
         nba_odds = _fetch_nba_odds()
@@ -3372,6 +3474,20 @@ def _get_nba_scoreboard(date: str = "") -> list[dict]:
     if len(_nba_scoreboard_cache) >= MAX_CACHE_ENTRIES:
         oldest = min(_nba_scoreboard_cache, key=lambda k: _nba_scoreboard_cache[k][0])
         del _nba_scoreboard_cache[oldest]
+    # ── Enrich with playoff series context ──
+    try:
+        from engine.series_context import infer_series
+        from engine.nba_q1_predict import _is_nba_playoffs
+        if _is_nba_playoffs():
+            for game in games:
+                h = game["home"]["abbreviation"]
+                a = game["away"]["abbreviation"]
+                series = infer_series("nba", h, a)
+                if series.get("in_series"):
+                    game["series"] = series
+    except Exception as e:
+        logger.debug("NBA series enrichment failed: %s", e)
+
     _nba_scoreboard_cache[cache_key] = (now, games)
     return games
 

@@ -61,6 +61,25 @@ export default function GameCard({
       {isPre && <RestChips rest={bet?.rest} home={home} away={away} tiredLabel={restTiredLabel} />}
       {isPre && <LineMovedChip lm={game.line_movement} />}
 
+      {game.series?.in_series && (
+        <div className="series-badge" style={{
+          fontSize: '0.7rem', color: '#94a3b8', textAlign: 'center',
+          padding: '2px 0', letterSpacing: '0.02em',
+        }}>
+          Game {game.series.game_number}
+          {game.series.game_number > 1 && (
+            <> &middot; {
+              game.series.is_tied
+                ? `Tied ${game.series.home_wins}-${game.series.away_wins}`
+                : game.series.series_leader === 'home'
+                  ? `${home.abbreviation} leads ${game.series.home_wins}-${game.series.away_wins}`
+                  : `${away.abbreviation} leads ${game.series.away_wins}-${game.series.home_wins}`
+            }</>
+          )}
+          {game.series.is_elimination && <> &middot; <span style={{ color: '#ef4444' }}>ELIMINATION</span></>}
+        </div>
+      )}
+
       <div className="game-teams">
         <TeamRow team={away} isLive={isLive} isFinal={isFinal} />
         <div className="game-at">@</div>
