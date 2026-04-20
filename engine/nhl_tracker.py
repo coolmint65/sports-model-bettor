@@ -255,11 +255,20 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
             logger.warning("Could not find team keys for %s vs %s", a_abbr, h_abbr)
             continue
 
-        # Match odds using unified team-pair matching
-        from engine.picks import match_odds as _match_odds
-        game_odds = _match_odds(h_abbr, a_abbr, odds_map)
+        # Read from shared picks store first (same picks the card shows)
+        picks = None
+        try:
+            from backend.server import _picks_store_get
+            stored = _picks_store_get("nhl", h_abbr, a_abbr)
+            if stored and stored.get("picks"):
+                picks = stored["picks"]
+        except Exception:
+            pass
 
-        picks = generate_nhl_picks(h_key, a_key, game_odds)
+        if not picks:
+            from engine.picks import match_odds as _match_odds
+            game_odds = _match_odds(h_abbr, a_abbr, odds_map)
+            picks = generate_nhl_picks(h_key, a_key, game_odds)
         if not picks:
             continue
 

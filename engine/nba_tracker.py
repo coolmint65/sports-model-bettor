@@ -218,15 +218,21 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
             if existing > 0:
                 continue
 
-        # Match odds using unified team-pair matching (handles
-        # abbreviation aliases + home/away swap automatically).
-        # Pass the full matched odds dict (includes Q1 alts) instead
-        # of cherry-picking fields — generate_q1_picks reads what it needs.
-        from engine.picks import match_odds as _match_odds
-        odds_dict = _match_odds(h_abbr, a_abbr, q1_odds_map)
+        # Read from shared picks store (same picks the card shows).
+        # Only fall back to generating if store is empty.
+        picks = None
+        try:
+            from backend.server import _picks_store_get
+            stored = _picks_store_get("nba", h_abbr, a_abbr)
+            if stored and stored.get("picks"):
+                picks = stored["picks"]
+        except Exception:
+            pass
 
-        # Generate Q1 picks
-        picks = generate_q1_picks(h_abbr, a_abbr, odds_dict)
+        if not picks:
+            from engine.picks import match_odds as _match_odds
+            odds_dict = _match_odds(h_abbr, a_abbr, q1_odds_map)
+            picks = generate_q1_picks(h_abbr, a_abbr, odds_dict)
         if not picks:
             continue
 
