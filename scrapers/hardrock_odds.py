@@ -487,21 +487,49 @@ _GAME_MARKET_TYPES: dict[str, str] = {
     "FTOT:OU": "total", "FTEI:OU": "total",
 }
 
+# Q1 markets use period-level type codes. We match these only when
+# the market name or period confirms it's Q1 (not 2nd/3rd/4th quarter).
+_Q1_MARKET_TYPES: dict[str, str] = {
+    "P:DNB": "q1_ml",       # "1st Quarter Winner"
+    "P:SPRD": "q1_spread",  # "1st Quarter Spread"
+    "P:OU": "q1_total",     # "1st Quarter Total Points"
+}
 
-def _market_kind(label: str, market_type: str = "") -> str | None:
-    """Classify a market as ml, spread, or total using the type code.
+
+def _is_q1_market(label: str, period: str = "") -> bool:
+    """Check if a period market is specifically Q1."""
+    lower = label.lower()
+    p = period.upper()
+    # Period field: Q1, P1, 1Q, etc.
+    if p in ("Q1", "1Q", "P1", "1"):
+        return True
+    # Label: "1st Quarter ..."
+    if "1st quarter" in lower or "first quarter" in lower:
+        return True
+    return False
+
+
+def _market_kind(label: str, market_type: str = "",
+                 period: str = "") -> str | None:
+    """Classify a market as ml, spread, total, or q1_* using the type code.
 
     Uses a strict whitelist of game-level market type suffixes.
-    Falls back to label-based heuristics only when type is missing
-    (e.g. user-pasted query with a different schema).
+    Q1 markets are identified by period-level type codes + label/period
+    confirmation that it's specifically Q1 (not other quarters).
+    Falls back to label-based heuristics only when type is missing.
     """
     mtu = market_type.upper()
 
-    # ── Whitelist match on type code suffix ──
+    # ── Whitelist match on full-game type code suffix ──
     for suffix, kind in _GAME_MARKET_TYPES.items():
         if mtu.endswith(suffix):
-            # "ml_spread" → "spread" (disambiguate from the dict key)
             return "spread" if kind == "ml_spread" else kind
+
+    # ── Q1 period markets (NBA only) ──
+    if _is_q1_market(label, period):
+        for suffix, kind in _Q1_MARKET_TYPES.items():
+            if mtu.endswith(suffix):
+                return kind
 
     # ── Fallback: label-based heuristics (for non-betSync schemas) ──
     if not market_type:
@@ -905,14 +933,15 @@ def _parse_response(sport: str, data: Any) -> dict[str, dict]:
                         continue
                     label = str(_pick(mkt, "name", "label", "marketName") or "")
                     mtype = str(_pick(mkt, "type", "marketType") or "")
-                    kind = _market_kind(label, mtype)
+                    mkt_period = str(mkt.get("period") or "")
+                    kind = _market_kind(label, mtype, mkt_period)
                     if kind is None:
                         continue
 
                     # Hard Rock bundles Asian lines (whole numbers) under
                     # the same type as standard half-point lines. The site
                     # only shows .5 lines, so skip whole-number markets.
-                    if kind in ("spread", "total"):
+                    if kind in ("spread", "total", "q1_spread", "q1_total"):
                         outcomes_peek = (_pick(mkt, "selection", "outcomes",
                                               "selections") or [])
                         if outcomes_peek:
@@ -931,7 +960,10 @@ def _parse_response(sport: str, data: Any) -> dict[str, dict]:
                     # market itself rather than on each selection.
                     market_line = _float_line(_pick(mkt, "line", "spread"))
 
-                    q1 = _is_q1(label) if sport == "nba" else False
+                    # Q1 flag for _apply_market: True if the kind
+                    # starts with "q1_" (from whitelist) or the legacy
+                    # label check matches.
+                    q1 = kind.startswith("q1_")
 
                     sides: dict[str, dict] = {}
                     for o in outcomes:
@@ -947,7 +979,9 @@ def _parse_response(sport: str, data: Any) -> dict[str, dict]:
                         if line is None and market_line is not None:
                             line = market_line
                         sides[side] = {"price": price, "line": line}
-                    _apply_market(bucket, kind, sides, q1)
+                    # Normalize q1_* kinds to base kind for _apply_market
+                    base_kind = kind.replace("q1_", "") if q1 else kind
+                    _apply_market(bucket, base_kind, sides, q1)
 
     # Post-process: pick the best primary spread/total from all
     # collected lines. The "primary" should be the one closest to
