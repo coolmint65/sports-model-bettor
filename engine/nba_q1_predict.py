@@ -537,6 +537,31 @@ def predict_q1(home_abbr: str, away_abbr: str,
     home_q1_expected += net_adj / 2
     away_q1_expected -= net_adj / 2
 
+    # ── Step 8: Market spread anchor ──
+    # The Q1 model's margin can be tighter than what the market expects.
+    # The posted Q1 spread incorporates information (injuries, rotations,
+    # matchup history) that the model may not capture. Blend the model's
+    # predicted margin toward the posted spread to reduce the chance of
+    # systematically over-valuing underdogs.
+    #
+    # Convention: spread < 0 means home favored (e.g. -3.5 = home -3.5).
+    # Our predicted_margin > 0 means home leads. So the market-implied
+    # margin is -spread (e.g. spread=-3.5 → implied margin = +3.5 for home).
+    if spread is not None:
+        model_margin = home_q1_expected - away_q1_expected
+        market_margin = -spread  # posted spread is home's perspective
+        SPREAD_ANCHOR_WEIGHT = 0.30
+        anchored_margin = (model_margin * (1 - SPREAD_ANCHOR_WEIGHT) +
+                          market_margin * SPREAD_ANCHOR_WEIGHT)
+        delta = anchored_margin - model_margin
+        if abs(delta) > 0.2:
+            home_q1_expected += delta / 2
+            away_q1_expected -= delta / 2
+            reasoning.append(
+                f"Market anchor: model margin {model_margin:+.1f} -> {anchored_margin:+.1f} "
+                f"(blended {SPREAD_ANCHOR_WEIGHT:.0%} toward posted Q1 spread {spread:+.1f})"
+            )
+
     # ── Clamp expected scores to realistic range ──
     home_q1_expected = max(18.0, min(40.0, home_q1_expected))
     away_q1_expected = max(18.0, min(40.0, away_q1_expected))

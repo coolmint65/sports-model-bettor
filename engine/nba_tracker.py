@@ -157,14 +157,21 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
         logger.info("No NBA games found for %s", target_date)
         return []
 
-    # Pull Q1 odds using the full fallback chain (Odds API → DK → ESPN).
-    # When all three fail, picks fall back to -110 defaults and Q1 ML only.
+    # Pull odds — Hard Rock first (has Q1 markets), then fallback chain.
     q1_odds_map = {}
     try:
-        from scrapers.nba_odds import fetch_all_nba_odds
-        q1_odds_map = fetch_all_nba_odds()
+        from scrapers.hardrock_odds import fetch_nba as _hr_nba
+        q1_odds_map = _hr_nba()
+        if q1_odds_map:
+            logger.info("NBA tracker: %d games from Hard Rock", len(q1_odds_map))
     except Exception as e:
-        logger.debug("NBA Q1 odds fetch failed: %s", e)
+        logger.debug("NBA tracker Hard Rock failed: %s", e)
+    if not q1_odds_map:
+        try:
+            from scrapers.nba_odds import fetch_all_nba_odds
+            q1_odds_map = fetch_all_nba_odds()
+        except Exception as e:
+            logger.debug("NBA Q1 odds fallback failed: %s", e)
 
     recorded = []
 
@@ -211,8 +218,10 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
             if existing > 0:
                 continue
 
-        # Merge real Odds API Q1 markets (when available) with -110 defaults
-        market_odds = q1_odds_map.get(f"{a_abbr}@{h_abbr}") or {}
+        # Match odds using unified team-pair matching (handles
+        # abbreviation aliases + home/away swap automatically).
+        from engine.picks import match_odds as _match_odds
+        market_odds = _match_odds(h_abbr, a_abbr, q1_odds_map)
         odds_dict = {
             "q1_spread": market_odds.get("q1_spread"),
             "q1_total": market_odds.get("q1_total"),
@@ -220,8 +229,11 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
             "q1_spread_away_odds": market_odds.get("q1_spread_away_odds", -110),
             "q1_over_odds": market_odds.get("q1_over_odds", -110),
             "q1_under_odds": market_odds.get("q1_under_odds", -110),
-            "home_ml": market_odds.get("q1_home_ml") or market_odds.get("home_ml"),
-            "away_ml": market_odds.get("q1_away_ml") or market_odds.get("away_ml"),
+            # Use Q1-specific ML odds, NOT full-game ML
+            "q1_home_ml": market_odds.get("q1_home_ml"),
+            "q1_away_ml": market_odds.get("q1_away_ml"),
+            "home_ml": market_odds.get("home_ml"),
+            "away_ml": market_odds.get("away_ml"),
         }
 
         # Generate Q1 ML picks (always available without specific Q1 odds)
