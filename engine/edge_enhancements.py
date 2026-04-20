@@ -38,6 +38,7 @@ ENABLE_LINE_MOVEMENT_SIGNAL = True
 # ── Alt Line Shopping ─────────────────────────────────────────
 # Minimum edge improvement over primary to recommend an alt line.
 ALT_LINE_MIN_EDGE_IMPROVEMENT = 1.5  # percentage points
+ALT_LINE_JUICE_WALL = -180  # max vig on alt picks (same as MLB default)
 
 
 def _implied(ml: int) -> float:
@@ -112,7 +113,7 @@ def shop_alt_spreads(pred: dict, odds: dict, h_abbr: str, a_abbr: str,
         away_cover_prob = 1.0 - home_cover_prob
 
         # Home side: home team at this spread
-        if home_odds is not None and abs(home_odds) >= 100:
+        if home_odds is not None and abs(home_odds) >= 100 and home_odds >= ALT_LINE_JUICE_WALL:
             # point < 0 = home favorite (needs to win by more)
             # point > 0 = home underdog (can lose by less)
             prob = home_cover_prob
@@ -130,7 +131,7 @@ def shop_alt_spreads(pred: dict, odds: dict, h_abbr: str, a_abbr: str,
                 })
 
         # Away side: away team at opposite spread
-        if away_odds is not None and abs(away_odds) >= 100:
+        if away_odds is not None and abs(away_odds) >= 100 and away_odds >= ALT_LINE_JUICE_WALL:
             prob = away_cover_prob
             edge = (prob - _implied(away_odds)) * 100
             if edge > 0 and edge > existing_rl_edge + ALT_LINE_MIN_EDGE_IMPROVEMENT:
@@ -204,7 +205,7 @@ def shop_alt_totals(pred: dict, odds: dict,
         under_prob = 1.0 - over_prob
 
         # Over side
-        if over_odds is not None and abs(over_odds) >= 100 and over_prob > 0.5:
+        if over_odds is not None and abs(over_odds) >= 100 and over_odds >= ALT_LINE_JUICE_WALL and over_prob > 0.5:
             edge = (over_prob - _implied(over_odds)) * 100
             if edge > 0 and edge > existing_ou_edge + ALT_LINE_MIN_EDGE_IMPROVEMENT:
                 new_picks.append({
@@ -218,7 +219,7 @@ def shop_alt_totals(pred: dict, odds: dict,
                 })
 
         # Under side
-        if under_odds is not None and abs(under_odds) >= 100 and under_prob > 0.5:
+        if under_odds is not None and abs(under_odds) >= 100 and under_odds >= ALT_LINE_JUICE_WALL and under_prob > 0.5:
             edge = (under_prob - _implied(under_odds)) * 100
             if edge > 0 and edge > existing_ou_edge + ALT_LINE_MIN_EDGE_IMPROVEMENT:
                 new_picks.append({
