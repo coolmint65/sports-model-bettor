@@ -76,6 +76,16 @@ def shop_alt_spreads(pred: dict, odds: dict, h_abbr: str, a_abbr: str,
 
     new_picks = []
 
+    # Use the standard run line probabilities as reference.
+    # home_minus_1_5 = P(home wins by 2+) = home -1.5 cover
+    # home_plus_1_5  = P(home loses by 0 or 1, or wins) = home +1.5 cover
+    rl_home_minus = pred.get("run_line", {}).get("home_minus_1_5")
+    rl_home_plus = pred.get("run_line", {}).get("home_plus_1_5")
+    model_spread = pred.get("run_line", {}).get("model_spread", 0)
+
+    if rl_home_minus is None or rl_home_plus is None:
+        return []
+
     for alt in alt_spreads:
         point = alt.get("point")
         home_odds = alt.get("home_odds")
@@ -83,43 +93,52 @@ def shop_alt_spreads(pred: dict, odds: dict, h_abbr: str, a_abbr: str,
         if point is None:
             continue
 
-        # Look up model probability for this spread point
-        spread_key = str(point)
-        spread_probs = spreads_dist.get(spread_key)
-        if not spread_probs:
-            # Try negative (away side)
-            spread_key = str(-point)
-            spread_probs = spreads_dist.get(spread_key)
-            if not spread_probs:
-                continue
+        # Estimate cover probability for this spread point using
+        # interpolation from the known -1.5/+1.5 probabilities and
+        # the model's projected spread.
+        # For a home spread of X:
+        #   - If X < 0 (favorite): prob decreases as |X| increases
+        #   - If X > 0 (underdog): prob increases as X increases
+        # Use a simple linear interpolation anchored on the known points.
+        import math
+        std = max(abs(model_spread) + 1.5, 2.0)  # rough std dev
+        # P(home margin > -point) using normal CDF approximation
+        # centered on model_spread
+        z = (model_spread - (-point)) / std  # negative point = home needs margin > |point|
+        home_cover_prob = 0.5 * (1 + math.erf(z / math.sqrt(2)))
 
-        home_cover = spread_probs.get("home_cover", 0.5)
-        away_cover = spread_probs.get("away_cover", 0.5)
+        # Sanity clamp
+        home_cover_prob = max(0.05, min(0.95, home_cover_prob))
+        away_cover_prob = 1.0 - home_cover_prob
 
-        # Home side
+        # Home side: home team at this spread
         if home_odds is not None and abs(home_odds) >= 100:
-            edge = (home_cover - _implied(home_odds)) * 100
+            # point < 0 = home favorite (needs to win by more)
+            # point > 0 = home underdog (can lose by less)
+            prob = home_cover_prob
+            edge = (prob - _implied(home_odds)) * 100
             if edge > 0 and edge > existing_rl_edge + ALT_LINE_MIN_EDGE_IMPROVEMENT:
                 sign = "+" if point > 0 else ""
                 new_picks.append({
                     "type": "ALT RL",
                     "pick": f"{h_abbr} {sign}{point}",
-                    "prob": round(home_cover, 4),
+                    "prob": round(prob, 4),
                     "edge": round(edge, 1),
                     "odds": home_odds,
                     "is_alt": True,
                     "alt_vs_primary_improvement": round(edge - existing_rl_edge, 1),
                 })
 
-        # Away side
+        # Away side: away team at opposite spread
         if away_odds is not None and abs(away_odds) >= 100:
-            edge = (away_cover - _implied(away_odds)) * 100
+            prob = away_cover_prob
+            edge = (prob - _implied(away_odds)) * 100
             if edge > 0 and edge > existing_rl_edge + ALT_LINE_MIN_EDGE_IMPROVEMENT:
                 sign = "+" if -point > 0 else ""
                 new_picks.append({
                     "type": "ALT RL",
                     "pick": f"{a_abbr} {sign}{-point}",
-                    "prob": round(away_cover, 4),
+                    "prob": round(prob, 4),
                     "edge": round(edge, 1),
                     "odds": away_odds,
                     "is_alt": True,
