@@ -671,33 +671,77 @@ def fetch_real_odds_for_games() -> dict:
     return merged
 
 
+def _swap_odds(odds: dict) -> dict:
+    """Swap home/away fields in an odds dict.
+
+    When the sportsbook and schedule disagree on who's home, the odds
+    dict has home_ml = sportsbook's home (our away) and vice versa.
+    This swaps all home_*/away_* pairs so the odds align with our
+    schedule's home/away designation.
+    """
+    swapped = dict(odds)
+    # Swap pairs: home_X <-> away_X
+    swap_pairs = [
+        ("home_ml", "away_ml"),
+        ("home_spread_point", "away_spread_point"),
+        ("home_spread_odds", "away_spread_odds"),
+        ("q1_home_ml", "q1_away_ml"),
+        ("q1_spread_home_odds", "q1_spread_away_odds"),
+    ]
+    for a, b in swap_pairs:
+        va, vb = swapped.get(a), swapped.get(b)
+        if va is not None or vb is not None:
+            swapped[a] = vb
+            swapped[b] = va
+
+    # Negate spread points (home -3.5 becomes home +3.5)
+    for field in ("home_spread_point", "away_spread_point", "q1_spread"):
+        if swapped.get(field) is not None:
+            swapped[field] = -swapped[field]
+
+    # Swap alt spreads home/away odds
+    for alt in swapped.get("alt_spreads", []):
+        alt["home_odds"], alt["away_odds"] = alt.get("away_odds"), alt.get("home_odds")
+        if alt.get("point") is not None:
+            alt["point"] = -alt["point"]
+
+    return swapped
+
+
 def match_odds(home_abbr: str, away_abbr: str, all_odds: dict) -> dict:
     """Find odds for a specific matchup from the odds map.
 
     ESPN, Odds API, and MLB Stats API disagree on a few abbreviations
     (ARI/AZ, CHW/CWS, etc.). Try every combination of canonical and
     aliased forms; the alias table lives in engine.abbr.
+
+    When matched via a reversed key (sportsbook's home != our home),
+    swaps all home/away fields so the odds align with our schedule.
     """
     from .abbr import alt_abbr
     home_alt = alt_abbr(home_abbr, "mlb")
     away_alt = alt_abbr(away_abbr, "mlb")
 
-    keys_to_try = [
+    # Normal keys (away@home)
+    normal_keys = [
         f"{away_abbr}@{home_abbr}",
         f"{away_alt}@{home_alt}",
         f"{away_alt}@{home_abbr}",
         f"{away_abbr}@{home_alt}",
-        # Also try swapped (DB and sportsbook sometimes disagree
-        # on home/away, especially early in the day or for
-        # doubleheaders).
+    ]
+    for key in normal_keys:
+        if key in all_odds:
+            return all_odds[key]
+
+    # Reversed keys — need to swap home/away in the odds
+    reversed_keys = [
         f"{home_abbr}@{away_abbr}",
         f"{home_alt}@{away_alt}",
         f"{home_alt}@{away_abbr}",
         f"{home_abbr}@{away_alt}",
     ]
-
-    for key in keys_to_try:
+    for key in reversed_keys:
         if key in all_odds:
-            return all_odds[key]
+            return _swap_odds(all_odds[key])
 
     return {}

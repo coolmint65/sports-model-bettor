@@ -2241,20 +2241,29 @@ def _get_nhl_scoreboard(date: str = "") -> list[dict]:
                 h = game["home"]["abbreviation"]
                 a = game["away"]["abbreviation"]
                 key = f"{a}@{h}"
-                alt_keys = [
+                normal_keys = [
                     key,
                     f"{_nhl_alt_abbr(a)}@{_nhl_alt_abbr(h)}",
                     f"{_nhl_alt_abbr(a)}@{h}",
                     f"{a}@{_nhl_alt_abbr(h)}",
-                    # Reversed (sportsbook may swap home/away)
+                ]
+                reversed_keys = [
                     f"{h}@{a}",
                     f"{_nhl_alt_abbr(h)}@{_nhl_alt_abbr(a)}",
                     f"{_nhl_alt_abbr(h)}@{a}",
                     f"{h}@{_nhl_alt_abbr(a)}",
                 ]
-                for k in alt_keys:
+                found = False
+                for k in normal_keys:
                     if k in nhl_odds:
                         game["odds"] = nhl_odds[k]
+                        found = True
+                        break
+                if not found:
+                    from engine.picks import _swap_odds
+                    for k in reversed_keys:
+                        if k in nhl_odds:
+                            game["odds"] = _swap_odds(nhl_odds[k])
                         matched += 1
                         break
             logger.info("NHL odds: matched %d/%d games", matched, len(games))
@@ -3464,20 +3473,29 @@ def _get_nba_scoreboard(date: str = "") -> list[dict]:
                 h = game["home"]["abbreviation"]
                 a = game["away"]["abbreviation"]
                 key = f"{a}@{h}"
-                alt_keys = [
+                normal_keys = [
                     key,
                     f"{_nba_alt_abbr(a)}@{_nba_alt_abbr(h)}",
                     f"{_nba_alt_abbr(a)}@{h}",
                     f"{a}@{_nba_alt_abbr(h)}",
-                    # Reversed (sportsbook may swap home/away)
+                ]
+                reversed_keys = [
                     f"{h}@{a}",
                     f"{_nba_alt_abbr(h)}@{_nba_alt_abbr(a)}",
                     f"{_nba_alt_abbr(h)}@{a}",
                     f"{h}@{_nba_alt_abbr(a)}",
                 ]
-                for k in alt_keys:
+                found = False
+                for k in normal_keys:
                     if k in nba_odds:
                         game["odds"] = nba_odds[k]
+                        found = True
+                        break
+                if not found:
+                    from engine.picks import _swap_odds
+                    for k in reversed_keys:
+                        if k in nba_odds:
+                            game["odds"] = _swap_odds(nba_odds[k])
                         matched += 1
                         break
             logger.info("NBA odds: matched %d/%d games", matched, len(games))
