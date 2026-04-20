@@ -241,15 +241,15 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
     _live_or_done: set[str] = set()
     try:
         scoreboard = _fetch_espn_scoreboard(target_date)
-        for ev in (scoreboard or []):
-            comp = ev.get("competitions", [{}])[0]
-            state = comp.get("status", {}).get("type", {}).get("state", "pre")
+        for game_info in (scoreboard or []):
+            state = (game_info.get("status") or {}).get("state", "pre")
             if state in ("in", "post"):
-                teams = comp.get("competitors", [])
-                for t in teams:
-                    abbr = t.get("team", {}).get("abbreviation", "")
-                    if abbr:
-                        _live_or_done.add(abbr)
+                h_abbr = (game_info.get("home") or {}).get("abbreviation", "")
+                a_abbr = (game_info.get("away") or {}).get("abbreviation", "")
+                if h_abbr:
+                    _live_or_done.add(h_abbr)
+                if a_abbr:
+                    _live_or_done.add(a_abbr)
     except Exception:
         pass
 
