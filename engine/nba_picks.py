@@ -187,6 +187,106 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
                 "odds": away_ml_odds,
             })
 
+    # ── Q1 Alt Line Shopping ──
+    # Check Q1 alt spreads and totals for better edges than primary.
+    predicted_total = pred.get("predicted_total", 0)
+    predicted_margin = pred.get("predicted_margin", 0)
+    q1_std = 8.63  # Q1 scoring margin std dev
+
+    q1_alt_spreads = odds.get("q1_alt_spreads", [])
+    q1_alt_totals = odds.get("q1_alt_totals", [])
+    juice_wall = -180
+
+    # Best existing Q1 spread/total edge for comparison.
+    # Use EDGE_LEAN (4%) as floor so alts only surface when they
+    # beat the playability threshold, not just beat zero.
+    from .config import EDGE_LEAN as _EDGE_LEAN
+    best_spread_edge = max(
+        (p["edge"] for p in picks if "SPREAD" in p.get("type", "")),
+        default=_EDGE_LEAN)
+    best_total_edge = max(
+        (p["edge"] for p in picks if "TOTAL" in p.get("type", "")),
+        default=_EDGE_LEAN)
+
+    # Collect alt candidates, then keep only the single best per market
+    alt_spread_candidates = []
+    alt_total_candidates = []
+
+    import math
+    for alt in q1_alt_spreads:
+        point = alt.get("point")
+        home_odds = alt.get("home_odds")
+        away_odds = alt.get("away_odds")
+        if point is None:
+            continue
+        # P(home covers spread) using normal CDF
+        z = (predicted_margin - (-point)) / q1_std
+        home_cover = 0.5 * (1 + math.erf(z / math.sqrt(2)))
+        home_cover = max(0.05, min(0.95, home_cover))
+
+        if home_odds is not None and abs(home_odds) >= 100 and home_odds >= juice_wall:
+            edge = (home_cover - _implied_prob(home_odds)) * 100
+            if edge > 0 and edge > best_spread_edge + 3.0:
+                sign = "+" if point > 0 else ""
+                alt_spread_candidates.append({
+                    "type": "Q1_SPREAD",
+                    "pick": f"{home_abbr} {sign}{point} Q1",
+                    "prob": round(home_cover, 4),
+                    "edge": round(edge, 1),
+                    "odds": home_odds,
+                    "is_alt": True,
+                })
+        if away_odds is not None and abs(away_odds) >= 100 and away_odds >= juice_wall:
+            away_cover = 1.0 - home_cover
+            edge = (away_cover - _implied_prob(away_odds)) * 100
+            if edge > 0 and edge > best_spread_edge + 3.0:
+                sign = "+" if -point > 0 else ""
+                alt_spread_candidates.append({
+                    "type": "Q1_SPREAD",
+                    "pick": f"{away_abbr} {sign}{-point} Q1",
+                    "prob": round(away_cover, 4),
+                    "edge": round(edge, 1),
+                    "odds": away_odds,
+                    "is_alt": True,
+                })
+
+    for alt in q1_alt_totals:
+        line = alt.get("line")
+        over_odds = alt.get("over_odds")
+        under_odds = alt.get("under_odds")
+        if line is None or not predicted_total:
+            continue
+        # Logistic probability for over/under
+        total_std = 8.0  # Q1 total std dev
+        diff = predicted_total - line
+        over_prob = 1.0 / (1.0 + math.exp(-diff / (total_std * 0.6)))
+        under_prob = 1.0 - over_prob
+
+        if over_odds is not None and abs(over_odds) >= 100 and over_odds >= juice_wall and over_prob > 0.5:
+            edge = (over_prob - _implied_prob(over_odds)) * 100
+            if edge > 0 and edge > best_total_edge + 3.0:
+                alt_total_candidates.append({
+                    "type": "Q1_TOTAL", "pick": f"Over {line} Q1",
+                    "prob": round(over_prob, 4), "edge": round(edge, 1),
+                    "odds": over_odds, "is_alt": True,
+                })
+        if under_odds is not None and abs(under_odds) >= 100 and under_odds >= juice_wall and under_prob > 0.5:
+            edge = (under_prob - _implied_prob(under_odds)) * 100
+            if edge > 0 and edge > best_total_edge + 3.0:
+                alt_total_candidates.append({
+                    "type": "Q1_TOTAL", "pick": f"Under {line} Q1",
+                    "prob": round(under_prob, 4), "edge": round(edge, 1),
+                    "odds": under_odds, "is_alt": True,
+                })
+
+    # Keep only the single best alt per market type
+    if alt_spread_candidates:
+        alt_spread_candidates.sort(key=lambda p: -p["edge"])
+        picks.append(alt_spread_candidates[0])
+    if alt_total_candidates:
+        alt_total_candidates.sort(key=lambda p: -p["edge"])
+        picks.append(alt_total_candidates[0])
+
     # Empirical recalibration from the nba_picks tracker. See
     # engine/picks.py for the same pattern applied to MLB.
     from .empirical_calibration import calibrate as _calibrate
@@ -220,6 +320,22 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
         reliability = NBA_BET_RELIABILITY.get(p["type"], 0.5)
         p["adjusted_ev"] = round(p["edge"] * reliability, 2)
     picks.sort(key=lambda p: -p["adjusted_ev"])
+
+    # Confidence tiers (same thresholds as MLB)
+    from .config import EDGE_STRONG, EDGE_MODERATE, EDGE_LEAN, EDGE_SKIP
+    for p in picks:
+        e = p.get("edge", 0)
+        if e >= EDGE_STRONG:
+            p["confidence"] = "strong"
+        elif e >= EDGE_MODERATE:
+            p["confidence"] = "moderate"
+        elif e >= EDGE_LEAN:
+            p["confidence"] = "lean"
+        else:
+            p["confidence"] = "skip"
+
+    # Filter out skips
+    picks = [p for p in picks if p["confidence"] != "skip"]
 
     return picks
 
