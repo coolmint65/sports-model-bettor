@@ -347,14 +347,14 @@ def generate_picks(home_team_id: int, away_team_id: int,
     from .empirical_calibration import calibrate as _calibrate
     for p in picks:
         prob = p.get("prob")
-        odds = p.get("odds")
+        p_odds = p.get("odds")
         if prob is None:
             continue
         cal = _calibrate(p["type"], float(prob))
         p["prob_raw"] = round(float(prob), 4)
         p["prob"] = round(float(cal), 4)
-        if odds is not None and _valid_odds(odds):
-            p["edge"] = round((cal - _implied(int(odds))) * 100, 1)
+        if p_odds is not None and _valid_odds(p_odds):
+            p["edge"] = round((cal - _implied(int(p_odds))) * 100, 1)
 
     # Also push the ML calibration back onto pred["win_prob"] so the
     # "Projected Outcome" WP on the frontend matches the ML pick's
@@ -687,6 +687,13 @@ def match_odds(home_abbr: str, away_abbr: str, all_odds: dict) -> dict:
         f"{away_alt}@{home_alt}",
         f"{away_alt}@{home_abbr}",
         f"{away_abbr}@{home_alt}",
+        # Also try swapped (DB and sportsbook sometimes disagree
+        # on home/away, especially early in the day or for
+        # doubleheaders).
+        f"{home_abbr}@{away_abbr}",
+        f"{home_alt}@{away_alt}",
+        f"{home_alt}@{away_abbr}",
+        f"{home_abbr}@{away_alt}",
     ]
 
     for key in keys_to_try:

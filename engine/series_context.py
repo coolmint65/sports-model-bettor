@@ -138,15 +138,20 @@ def infer_series(sport: str, home_abbr: str, away_abbr: str,
 
     # Abbreviation aliases — some scrapers use different abbreviations
     # than the DB (e.g. Hard Rock "TB" vs DB "TBL").
+    # Map scraper abbreviations to DB abbreviations (and vice versa).
+    # NHL DB uses: TBL, LAK, SJS, NJD
+    # NBA DB uses: NY, GS, NO, SA
     _ABBR_ALIASES: dict[str, str] = {
+        # NHL aliases
         "TB": "TBL", "TBL": "TBL",
         "SJ": "SJS", "SJS": "SJS",
         "LA": "LAK", "LAK": "LAK",
         "NJ": "NJD", "NJD": "NJD",
-        "GS": "GSW", "GSW": "GSW",
-        "NO": "NOP", "NOP": "NOP",
-        "SA": "SAS", "SAS": "SAS",
-        "NY": "NYK", "NYK": "NYK",
+        # NBA aliases (DB uses short forms)
+        "NYK": "NY", "NY": "NY",
+        "GSW": "GS", "GS": "GS",
+        "NOP": "NO", "NO": "NO",
+        "SAS": "SA", "SA": "SA",
     }
     home_db_abbr = _ABBR_ALIASES.get(home_abbr, home_abbr)
     away_db_abbr = _ABBR_ALIASES.get(away_abbr, away_abbr)
@@ -174,15 +179,25 @@ def infer_series(sport: str, home_abbr: str, away_abbr: str,
         # Use game_type=3 for NHL (playoff). For NBA the DB may not
         # have game_type, so fall back to date-based filtering (only
         # games after April 15 of the current year).
-        cutoff = (today - timedelta(days=30)).strftime("%Y-%m-%d")
         today_str = today.strftime("%Y-%m-%d")
 
-        # Build game_type filter if the column exists
+        # Build game_type filter if the column exists.
+        # NHL has game_type=3 for playoffs.
+        # NBA doesn't have game_type, so we use a tighter date window
+        # starting from the playoff start date (~April 18) to avoid
+        # counting late-season regular-season games between the same teams.
         game_type_filter = ""
         if sport == "nhl":
             game_type_filter = "AND game_type = 3"
-        # NBA doesn't reliably have game_type, so we rely on the
-        # date window (playoff games only happen after mid-April)
+            cutoff = (today - timedelta(days=30)).strftime("%Y-%m-%d")
+        elif sport == "nba":
+            # NBA/NHL playoffs start around April 18. Use the current
+            # year's playoff start as cutoff to exclude regular-season
+            # games between the same teams.
+            playoff_start = f"{today.year}-04-18"
+            cutoff = playoff_start
+        else:
+            cutoff = (today - timedelta(days=30)).strftime("%Y-%m-%d")
 
         query = f"""
             SELECT date, home_team_id, away_team_id, home_score, away_score
