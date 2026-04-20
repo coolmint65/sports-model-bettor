@@ -11,10 +11,11 @@ whether they stay losing or eventually recover.
 """
 
 # ── Market config ──
-# Juice wall: don't recommend bets with worse odds than this
-MLB_JUICE_WALL = -180
+# Juice wall: don't recommend bets with worse odds than this.
+# Set to -200 across the board — acceptable if the model is confident.
+MLB_JUICE_WALL = -200
 NHL_JUICE_WALL = -200
-NBA_JUICE_WALL = -180
+NBA_JUICE_WALL = -200
 
 # Minimum edge (%) to consider a pick playable
 MIN_EDGE_PCT = 4.0

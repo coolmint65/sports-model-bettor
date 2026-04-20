@@ -93,6 +93,7 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
         pred["q1_ml_away"] = 1.0 - float(ens["q1_home_win"])
 
     picks = []
+    from .config import NBA_JUICE_WALL as JUICE_WALL
 
     # ── Q1 Spread ──
     if q1_spread is not None:
@@ -103,7 +104,7 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
         if cover_prob is not None:
             implied = _implied_prob(h_spread_odds)
             edge = (cover_prob - implied) * 100
-            if edge > 0:
+            if edge > 0 and h_spread_odds >= JUICE_WALL:
                 picks.append({
                     "type": "Q1_SPREAD",
                     "pick": f"{home_abbr} {q1_spread:+.1f} Q1",
@@ -115,7 +116,7 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
             away_cover_prob = 1 - cover_prob
             away_implied = _implied_prob(a_spread_odds)
             away_edge = (away_cover_prob - away_implied) * 100
-            if away_edge > 0:
+            if away_edge > 0 and a_spread_odds >= JUICE_WALL:
                 picks.append({
                     "type": "Q1_SPREAD",
                     "pick": f"{away_abbr} {-q1_spread:+.1f} Q1",
@@ -133,7 +134,7 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
         if over_prob is not None:
             over_implied = _implied_prob(over_odds)
             over_edge = (over_prob - over_implied) * 100
-            if over_edge > 0:
+            if over_edge > 0 and over_odds >= JUICE_WALL:
                 picks.append({
                     "type": "Q1_TOTAL",
                     "pick": f"Over {q1_total} Q1",
@@ -145,7 +146,7 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
             under_prob = 1 - over_prob
             under_implied = _implied_prob(under_odds)
             under_edge = (under_prob - under_implied) * 100
-            if under_edge > 0:
+            if under_edge > 0 and under_odds >= JUICE_WALL:
                 picks.append({
                     "type": "Q1_TOTAL",
                     "pick": f"Under {q1_total} Q1",
@@ -161,7 +162,7 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
     home_ml_odds = odds.get("q1_home_ml") or odds.get("home_ml")
     away_ml_odds = odds.get("q1_away_ml") or odds.get("away_ml")
 
-    if home_ml_odds is not None:
+    if home_ml_odds is not None and home_ml_odds >= JUICE_WALL:
         home_ml_prob = pred["q1_ml_home"]
         implied = _implied_prob(home_ml_odds)
         edge = (home_ml_prob - implied) * 100
@@ -174,7 +175,7 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
                 "odds": home_ml_odds,
             })
 
-    if away_ml_odds is not None:
+    if away_ml_odds is not None and away_ml_odds >= JUICE_WALL:
         away_ml_prob = pred["q1_ml_away"]
         implied = _implied_prob(away_ml_odds)
         edge = (away_ml_prob - implied) * 100
@@ -195,7 +196,7 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
 
     q1_alt_spreads = odds.get("q1_alt_spreads", [])
     q1_alt_totals = odds.get("q1_alt_totals", [])
-    juice_wall = -180
+    juice_wall = JUICE_WALL
 
     # Best existing Q1 spread/total edge for comparison.
     # Use EDGE_LEAN (4%) as floor so alts only surface when they

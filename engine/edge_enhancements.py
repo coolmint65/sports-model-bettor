@@ -38,7 +38,7 @@ ENABLE_LINE_MOVEMENT_SIGNAL = True
 # ── Alt Line Shopping ─────────────────────────────────────────
 # Minimum edge improvement over primary to recommend an alt line.
 ALT_LINE_MIN_EDGE_IMPROVEMENT = 3.0  # percentage points above primary RL edge
-ALT_LINE_JUICE_WALL = -180  # max vig on alt picks (same as MLB default)
+ALT_LINE_JUICE_WALL = -200  # max vig on alt picks
 
 
 def _implied(ml: int) -> float:
