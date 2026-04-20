@@ -236,6 +236,23 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
 
     all_odds = fetch_real_odds_for_games()
 
+    # Build set of live/completed games from ESPN scoreboard so we
+    # don't record picks for in-progress or finished games.
+    _live_or_done: set[str] = set()
+    try:
+        scoreboard = _fetch_espn_scoreboard(target_date)
+        for ev in (scoreboard or []):
+            comp = ev.get("competitions", [{}])[0]
+            state = comp.get("status", {}).get("type", {}).get("state", "pre")
+            if state in ("in", "post"):
+                teams = comp.get("competitors", [])
+                for t in teams:
+                    abbr = t.get("team", {}).get("abbreviation", "")
+                    if abbr:
+                        _live_or_done.add(abbr)
+    except Exception:
+        pass
+
     print(f"[RECORD] Found {len(games)} games for {target_date}", flush=True)
 
     recorded = []
@@ -257,6 +274,10 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
         h = home_team["abbreviation"]
         a = away_team["abbreviation"]
         matchup = f"{a} @ {h}"
+
+        # Skip live or completed games
+        if h in _live_or_done or a in _live_or_done:
+            continue
 
         # Skip if already recorded (check by game_id OR by matchup+date to prevent dupes)
         existing = conn.execute(
