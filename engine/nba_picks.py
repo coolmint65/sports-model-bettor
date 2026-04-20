@@ -192,7 +192,7 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
     # Check Q1 alt spreads and totals for better edges than primary.
     predicted_total = pred.get("predicted_total", 0)
     predicted_margin = pred.get("predicted_margin", 0)
-    q1_std = 8.63  # Q1 scoring margin std dev
+    q1_std = 8.67  # Q1 scoring margin std dev (calibrated from 2,714 games)
 
     q1_alt_spreads = odds.get("q1_alt_spreads", [])
     q1_alt_totals = odds.get("q1_alt_totals", [])
@@ -258,7 +258,7 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
         if line is None or not predicted_total:
             continue
         # Logistic probability for over/under
-        total_std = 8.0  # Q1 total std dev
+        total_std = 8.5  # Q1 total std dev (calibrated from 2,714 games)
         diff = predicted_total - line
         over_prob = 1.0 / (1.0 + math.exp(-diff / (total_std * 0.6)))
         under_prob = 1.0 - over_prob

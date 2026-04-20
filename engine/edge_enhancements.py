@@ -101,7 +101,8 @@ def shop_alt_spreads(pred: dict, odds: dict, h_abbr: str, a_abbr: str,
         #   NHL: ~2.2 goals
         #   NBA: ~11.5 points
         import math
-        _MARGIN_STD = {"mlb": 3.8, "nhl": 2.2, "nba": 11.5}
+        # Calibrated from historical data (2024-2025 seasons)
+        _MARGIN_STD = {"mlb": 4.5, "nhl": 2.6, "nba": 11.5}
         # Detect sport from prediction context
         sport_key = "mlb"  # default; could be enhanced to detect
         if pred.get("puck_line") or pred.get("regulation_draw_prob"):
@@ -202,7 +203,8 @@ def shop_alt_totals(pred: dict, odds: dict,
         #   MLB: ~3.2 runs, NHL: ~1.8 goals, NBA: ~10.5 pts
         diff = model_total - line
         import math
-        _TOTAL_STD = {"mlb": 3.2, "nhl": 1.8, "nba": 10.5}
+        # Calibrated from historical data (2024-2025 seasons)
+        _TOTAL_STD = {"mlb": 4.5, "nhl": 2.3, "nba": 10.5}
         sport_key = "mlb"
         if model_total > 100:
             sport_key = "nba"
