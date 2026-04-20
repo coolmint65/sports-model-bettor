@@ -2230,8 +2230,7 @@ def _get_nhl_scoreboard(date: str = "") -> list[dict]:
                 matched_odds = _match(h, a, nhl_odds)
                 if matched_odds:
                     game["odds"] = matched_odds
-                        matched += 1
-                        break
+                    matched += 1
             logger.info("NHL odds: matched %d/%d games", matched, len(games))
 
             # Store odds snapshots for historical backtesting
@@ -3436,8 +3435,7 @@ def _get_nba_scoreboard(date: str = "") -> list[dict]:
                 matched_odds = _match(h, a, nba_odds)
                 if matched_odds:
                     game["odds"] = matched_odds
-                        matched += 1
-                        break
+                    matched += 1
             logger.info("NBA odds: matched %d/%d games", matched, len(games))
     except Exception as e:
         logger.warning("NBA odds failed: %s", e)
