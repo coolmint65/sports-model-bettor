@@ -806,13 +806,13 @@ _PICKS_STORE_LOCK = _threading.Lock()
 
 
 def _picks_store_put(sport: str, home: str, away: str, picks: list, odds: dict):
-    """Write picks to the store. Write-once per game — subsequent calls
-    for the same game are ignored so the pick doesn't change mid-day
-    when best-bets reruns with shifted odds."""
+    """Write picks to the store. Updates on every best-bets run so
+    the card always reflects the latest computation. The tracker
+    records once and doesn't change — the card should match what
+    the tracker recorded, but if the tracker hasn't run yet, the
+    card shows the current best-bets result."""
     key = f"{sport}:{away}@{home}"
     with _PICKS_STORE_LOCK:
-        if key in _PICKS_STORE:
-            return  # already locked in for today
         from engine.picks import get_best_pick
         _PICKS_STORE[key] = {
             "picks": picks,
@@ -832,6 +832,12 @@ def _picks_store_get(sport: str, home: str, away: str) -> dict | None:
                     if key in _PICKS_STORE:
                         return _PICKS_STORE[key]
     return None
+
+
+def _picks_store_clear():
+    """Clear the picks store (for new day or manual reset)."""
+    with _PICKS_STORE_LOCK:
+        _PICKS_STORE.clear()
 
 
 # Per-sport /best-bets progress state for the spinner. Frontend polls
