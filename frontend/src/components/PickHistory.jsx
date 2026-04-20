@@ -31,6 +31,9 @@ export default function PickHistory({ summary, history, loading, onRecord, onSet
     { key: 'F5', label: 'First 5 Innings' },
     { key: 'RL', label: 'Run Line' },
     { key: 'PL', label: 'Puck Line' },
+    { key: 'Q1_ML', label: 'Q1 Moneyline' },
+    { key: 'Q1_SPREAD', label: 'Q1 Spread' },
+    { key: 'Q1_TOTAL', label: 'Q1 Total' },
   ].filter(({ key }) => byType[key] && byType[key].total > 0)
 
   return (
