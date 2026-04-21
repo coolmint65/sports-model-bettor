@@ -72,10 +72,13 @@ def _parse_q1_scores(event: dict) -> dict | None:
     """
     comp = event.get("competitions", [{}])[0]
     status_type = comp.get("status", {}).get("type", {})
-    completed = status_type.get("completed", False)
+    state = status_type.get("state", "pre")
 
-    if not completed:
-        return None
+    # Q1 picks can be settled as soon as Q1 ends — we don't need to
+    # wait for the full game. Q1 scores appear in linescores once Q1
+    # is complete (state="in" with period > 1, or state="post").
+    if state == "pre":
+        return None  # game hasn't started
 
     result = {"game_id": event.get("id", "")}
 
