@@ -226,12 +226,11 @@ def select_potd(sport: str, games_with_bets: list[dict]) -> dict | None:
     candidates.sort(key=lambda c: _score_pick(c, sport), reverse=True)
     best = candidates[0]
 
-    # Resolve full team names for display
+    # Resolve full team names for the pick display
     home_info = best.get("home", {})
     away_info = best.get("away", {})
     home_name = home_info.get("name", home_info.get("abbreviation", "Home"))
     away_name = away_info.get("name", away_info.get("abbreviation", "Away"))
-    best["matchup_full"] = f"{away_name} at {home_name}"
 
     # Resolve pick to full team name
     pick_str = best.get("pick", "")
@@ -315,7 +314,8 @@ def get_or_create_potd(sport: str, games_with_bets: list[dict],
     if not selected:
         return None
 
-    # Lock it in - store full team names for display
+    # Lock it in — store the canonical abbr matchup so settler/closing-odds
+    # lookups never need to reverse-map full names back to team IDs.
     conn.execute("""
         INSERT OR IGNORE INTO pick_of_day (
             date, game_id, matchup, bet_type, pick,
@@ -324,7 +324,7 @@ def get_or_create_potd(sport: str, games_with_bets: list[dict],
     """, (
         target_date,
         selected.get("game_id"),
-        selected.get("matchup_full", selected.get("matchup")),
+        selected.get("matchup"),
         selected.get("type"),
         selected.get("pick_full", selected.get("pick")),
         selected.get("prob"),
@@ -627,6 +627,10 @@ def _matchup_to_abbrs(matchup: str, sport: str = "mlb") -> tuple[str | None, str
     Handles both ``"BOS @ NYY"`` and ``"Boston Red Sox at New York Yankees"``
     by looking up team names in the sport-specific DB. Returns
     (None, None) when parsing fails so the caller can skip silently.
+
+    New POTDs always store abbr format; this path remains for older rows
+    written before the format was normalized. Uses case-insensitive exact
+    then LIKE fallback so drifted casing/nickname rows still resolve.
     """
     if not matchup:
         return None, None
@@ -637,6 +641,8 @@ def _matchup_to_abbrs(matchup: str, sport: str = "mlb") -> tuple[str | None, str
         return None, None
     try:
         away_name, home_name = matchup.split(" at ", 1)
+        away_name = away_name.strip()
+        home_name = home_name.strip()
         if sport == "mlb":
             from .db import get_conn as _gc
             table = "teams"
@@ -649,12 +655,30 @@ def _matchup_to_abbrs(matchup: str, sport: str = "mlb") -> tuple[str | None, str
         else:
             return None, None
         c = _gc()
-        arow = c.execute(f"SELECT abbreviation FROM {table} WHERE name = ?",
-                         (away_name.strip(),)).fetchone()
-        hrow = c.execute(f"SELECT abbreviation FROM {table} WHERE name = ?",
-                         (home_name.strip(),)).fetchone()
-        if arow and hrow:
-            return arow["abbreviation"], hrow["abbreviation"]
+
+        def _lookup(name: str):
+            row = c.execute(
+                f"SELECT abbreviation FROM {table} WHERE LOWER(name) = LOWER(?)",
+                (name,),
+            ).fetchone()
+            if row:
+                return row["abbreviation"]
+            # Last-resort fuzzy: try matching against the final nickname token
+            # (handles "Toronto Maple Leafs" vs stored "Maple Leafs") in either
+            # direction. Uses LIKE rather than fetching all teams to keep the
+            # query cheap.
+            row = c.execute(
+                f"SELECT abbreviation FROM {table} "
+                f"WHERE LOWER(name) LIKE LOWER(?) OR LOWER(?) LIKE '%' || LOWER(name) || '%' "
+                f"LIMIT 1",
+                (f"%{name}%", name),
+            ).fetchone()
+            return row["abbreviation"] if row else None
+
+        a_abbr = _lookup(away_name)
+        h_abbr = _lookup(home_name)
+        if a_abbr and h_abbr:
+            return a_abbr, h_abbr
     except Exception:
         pass
     return None, None
