@@ -1028,6 +1028,7 @@ button:focus-visible {
   flex-direction: column;
   align-items: flex-end;
   gap: 2px;
+  overflow: hidden;
 }
 
 .pick-prob {
@@ -1278,8 +1279,8 @@ button:focus-visible {
   display: block;
   margin-top: 2px;
   margin-right: 4px;
-  max-width: 100%;
-  overflow: visible;
+  max-width: 70px;
+  overflow: hidden;
 }
 .pick-numbers { padding-right: 2px; }
 
