@@ -70,7 +70,6 @@ export default function PickOfDayHero({ sport }) {
             {potd.edge != null && (
               <span>Edge: <strong className="text-positive">+{potd.edge.toFixed(1)}%</strong></span>
             )}
-            {potd.kelly_pct != null && <span>Kelly: <strong>{potd.kelly_pct}%</strong></span>}
           </div>
           {potd.reasoning && (
             <div className="potd-reasoning">{potd.reasoning}</div>

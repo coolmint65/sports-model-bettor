@@ -5,7 +5,7 @@ import RestBadges from './gameDetail/RestBadges'
 import EdgeCallout from './gameDetail/EdgeCallout'
 import UnderdogNote from './gameDetail/UnderdogNote'
 import WhyThisPick from './gameDetail/WhyThisPick'
-import { kellyFraction, mlToProb, impliedFromOdds } from './gameDetail/kelly'
+import { mlToProb, impliedFromOdds } from './gameDetail/kelly'
 import ProbHistogram from './gameDetail/ProbHistogram'
 import ModelSignals from './gameDetail/ModelSignals'
 
@@ -643,14 +643,9 @@ function PickRow({ label, pick, prob, odds, pct, ciHw }) {
   const conf = prob > 0.60 ? 'high' : prob > 0.53 ? 'med' : 'low'
 
   let edge = null
-  let kelly = null
   if (odds && prob) {
     const implied = impliedFromOdds(odds)
     edge = ((prob - implied) * 100).toFixed(1)
-    // Only surface Kelly sizing when we have a positive edge
-    if (parseFloat(edge) > 0) {
-      kelly = kellyFraction(prob, odds)
-    }
   }
 
   // CI band from engine.nhl_predict.confidence.ci_half_width. Same
@@ -673,21 +668,6 @@ function PickRow({ label, pick, prob, odds, pct, ciHw }) {
         <ProbHistogram prob={prob} low={probLow} high={probHigh} halfWidth={ciHw} />
         {edge && parseFloat(edge) > 0 && (
           <span className="pick-edge positive">+{edge}%</span>
-        )}
-        {kelly != null && kelly > 0 && (
-          <span
-            className="pick-kelly"
-            title="Quarter-Kelly bet sizing. Bet this fraction of your bankroll to maximize long-run growth while staying safe from variance."
-            style={{
-              fontSize: '0.68rem',
-              color: '#94a3b8',
-              marginTop: 2,
-              letterSpacing: '0.02em',
-              cursor: 'help',
-            }}
-          >
-            Kelly: {(kelly * 100).toFixed(1)}%
-          </span>
         )}
       </div>
     </div>

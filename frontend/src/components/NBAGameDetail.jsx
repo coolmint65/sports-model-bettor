@@ -3,7 +3,7 @@ import WinProbBar from './primitives/WinProbBar'
 import StatRow from './primitives/StatRow'
 import EdgeCallout from './gameDetail/EdgeCallout'
 import WhyThisPick from './gameDetail/WhyThisPick'
-import { kellyFraction, impliedFromOdds } from './gameDetail/kelly'
+import { impliedFromOdds } from './gameDetail/kelly'
 import ProbHistogram from './gameDetail/ProbHistogram'
 import ModelSignals from './gameDetail/ModelSignals'
 
@@ -263,11 +263,9 @@ function Q1BettingPicks({ data, odds, home, away }) {
 function PickRow({ label, pick, prob, odds, pct, ciHw }) {
   const conf = prob > 0.60 ? 'high' : prob > 0.53 ? 'med' : 'low'
   let edge = null
-  let kelly = null
   if (odds && prob) {
     const implied = impliedFromOdds(odds)
     edge = ((prob - implied) * 100).toFixed(1)
-    if (parseFloat(edge) > 0) kelly = kellyFraction(prob, odds)
   }
 
   const probLow  = (prob != null && ciHw != null) ? Math.max(0, prob - ciHw) : null
@@ -284,11 +282,6 @@ function PickRow({ label, pick, prob, odds, pct, ciHw }) {
         <span className={`pick-prob conf-${conf}`}>{pct(prob)}</span>
         <ProbHistogram prob={prob} low={probLow} high={probHigh} halfWidth={ciHw} />
         {edge && parseFloat(edge) > 0 && <span className="pick-edge positive">+{edge}%</span>}
-        {kelly != null && kelly > 0 && (
-          <span style={{fontSize:'0.68rem',color:'#94a3b8',marginTop:2,cursor:'help'}} title="Quarter-Kelly">
-            Kelly: {(kelly * 100).toFixed(1)}%
-          </span>
-        )}
       </div>
     </div>
   )

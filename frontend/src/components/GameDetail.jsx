@@ -1,6 +1,6 @@
 import PredictionResults from './PredictionResults'
 import GameDetailShell from './primitives/GameDetailShell'
-import { kellyFraction } from './gameDetail/kelly'
+// Kelly removed — not used
 import ProbHistogram from './gameDetail/ProbHistogram'
 
 export default function GameDetail({ game, prediction, loading, onBack }) {
@@ -179,10 +179,6 @@ function PickRow({ engine, isBest, provider, pct }) {
     : confidence === 'lean' ? 'med'
     : 'low'
 
-  const kelly = (odds && prob && parseFloat(edge) > 0)
-    ? kellyFraction(prob, odds)
-    : null
-
   return (
     <div className={`pick-row conf-${conf}${isBest ? ' is-best' : ''}`}>
       <div className="pick-label">{labelForType(type)}</div>
@@ -211,14 +207,6 @@ function PickRow({ engine, isBest, provider, pct }) {
         />
         {edge != null && edge > 0 && (
           <span className="pick-edge positive">+{edge.toFixed ? edge.toFixed(1) : edge}%</span>
-        )}
-        {kelly != null && kelly > 0 && (
-          <span
-            title="Quarter-Kelly bet sizing - fraction of bankroll to wager"
-            style={{fontSize:'0.68rem',color:'#94a3b8',marginTop:2,cursor:'help'}}
-          >
-            Kelly: {(kelly * 100).toFixed(1)}%
-          </span>
         )}
       </div>
     </div>

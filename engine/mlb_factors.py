@@ -638,58 +638,78 @@ def _pitcher_detail(sp: dict | None, pitcher_id: int | None) -> dict | None:
 def _build_reasoning(home_team, away_team, home_stats, away_stats,
                      home_sp, away_sp, home_xr, away_xr,
                      park_factor, home_form, away_form, h2h_data) -> list[str]:
+    """Build reasoning lines that explain WHY a side has edge.
+
+    Focuses on the advantages of the favored side rather than
+    dumping stats for both teams. Each line should support the
+    pick direction.
+    """
     hn = home_team.get("abbreviation", "HOME")
     an = away_team.get("abbreviation", "AWAY")
     reasons = []
 
-    reasons.append(f"Model projects {hn} {round(home_xr)} - {round(away_xr)} {an} (expected runs: {home_xr:.1f} - {away_xr:.1f})")
+    # Determine which side the model favors
+    home_favored = home_xr > away_xr
+    fav = hn if home_favored else an
+    dog = an if home_favored else hn
+    fav_xr = home_xr if home_favored else away_xr
+    dog_xr = away_xr if home_favored else home_xr
 
-    if home_sp:
-        era = home_sp.get("era") or home_sp.get("fip")
-        if era:
-            reasons.append(f"{hn} SP: {era:.2f} ERA, "
-                          f"{home_sp.get('k_per_9', 0):.1f} K/9, "
-                          f"{home_sp.get('whip', 0):.2f} WHIP")
-    if away_sp:
-        era = away_sp.get("era") or away_sp.get("fip")
-        if era:
-            reasons.append(f"{an} SP: {era:.2f} ERA, "
-                          f"{away_sp.get('k_per_9', 0):.1f} K/9, "
-                          f"{away_sp.get('whip', 0):.2f} WHIP")
+    # 1. Projected score
+    margin = abs(home_xr - away_xr)
+    if margin > 0.5:
+        reasons.append(f"Model projects {fav} to win by ~{margin:.1f} runs ({home_xr:.1f}-{away_xr:.1f})")
+    else:
+        reasons.append(f"Tight matchup — model projects {home_xr:.1f}-{away_xr:.1f}")
 
-    h_ops = home_stats.get("ops")
-    a_ops = away_stats.get("ops")
-    if h_ops and a_ops:
-        reasons.append(f"Team OPS: {hn} {h_ops:.3f} | {an} {a_ops:.3f}")
+    # 2. Starting pitcher advantage
+    fav_sp = home_sp if home_favored else away_sp
+    dog_sp = away_sp if home_favored else home_sp
+    if fav_sp and dog_sp:
+        fav_era = fav_sp.get("era") or fav_sp.get("fip")
+        dog_era = dog_sp.get("era") or dog_sp.get("fip")
+        if fav_era and dog_era and fav_era < dog_era:
+            reasons.append(f"{fav} has the pitching edge ({fav_era:.2f} ERA vs {dog_era:.2f})")
+        elif fav_era and dog_era and dog_era < fav_era:
+            reasons.append(f"{dog} has the better arm ({dog_era:.2f} ERA vs {fav_era:.2f}), but {fav} offense compensates")
+    elif fav_sp:
+        fav_era = fav_sp.get("era") or fav_sp.get("fip")
+        if fav_era:
+            reasons.append(f"{fav} SP at {fav_era:.2f} ERA")
 
+    # 3. Offensive edge (wRC+ is more telling than raw OPS)
     h_wrc = home_stats.get("wrc_plus")
     a_wrc = away_stats.get("wrc_plus")
     if h_wrc and a_wrc:
-        reasons.append(f"wRC+: {hn} {h_wrc:.0f} | {an} {a_wrc:.0f}")
+        fav_wrc = h_wrc if home_favored else a_wrc
+        dog_wrc = a_wrc if home_favored else h_wrc
+        if fav_wrc > dog_wrc + 10:
+            reasons.append(f"{fav} ahead on wRC+ ({int(fav_wrc)} vs {int(dog_wrc)})")
+        elif dog_wrc > fav_wrc + 10:
+            reasons.append(f"{dog} has the stronger lineup by wRC+ ({int(dog_wrc)} vs {int(fav_wrc)})")
 
+    # 4. Park factor
     if park_factor and park_factor != 1.0:
-        if park_factor > 1.03:
-            reasons.append(f"Park factor {park_factor:.2f} - hitter-friendly venue")
-        elif park_factor < 0.97:
-            reasons.append(f"Park factor {park_factor:.2f} - pitcher-friendly venue")
+        if park_factor > 1.05:
+            reasons.append(f"Hitter-friendly park (factor {park_factor:.2f}) pushes run total up")
+        elif park_factor < 0.95:
+            reasons.append(f"Pitcher-friendly park (factor {park_factor:.2f}) suppresses scoring")
 
+    # 5. Recent form
     if abs(home_form) > 0.03:
-        reasons.append(f"{hn} running {'hot' if home_form > 0 else 'cold'} (form {home_form:+.1%})")
+        trend = "trending up" if home_form > 0 else "struggling"
+        reasons.append(f"{hn} {trend} recently")
     if abs(away_form) > 0.03:
-        reasons.append(f"{an} running {'hot' if away_form > 0 else 'cold'} (form {away_form:+.1%})")
+        trend = "trending up" if away_form > 0 else "struggling"
+        reasons.append(f"{an} {trend} recently")
 
+    # 6. H2H matchup history
     if "home_vs_sp" in h2h_data:
         h2h = h2h_data["home_vs_sp"]
-        if h2h["at_bats"] >= 20:
-            reasons.append(
-                f"{hn} batters vs {an} SP: {h2h['avg']:.3f} AVG "
-                f"({h2h['hits']}/{h2h['at_bats']}, {h2h['home_runs']} HR)")
-
-    hw = home_stats.get("wins", 0)
-    hl = home_stats.get("losses", 0)
-    aw = away_stats.get("wins", 0)
-    al = away_stats.get("losses", 0)
-    if hw + hl > 0 and aw + al > 0:
-        reasons.append(f"Records: {hn} {hw}-{hl} | {an} {aw}-{al}")
+        if h2h.get("at_bats", 0) >= 20:
+            if h2h.get("avg", 0) > .280:
+                reasons.append(f"{hn} historically hits well vs {an} starter ({h2h['avg']:.3f} AVG)")
+            elif h2h.get("avg", 0) < .200:
+                reasons.append(f"{hn} historically struggles vs {an} starter ({h2h['avg']:.3f} AVG)")
 
     return reasons

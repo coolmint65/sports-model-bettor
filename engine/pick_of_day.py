@@ -203,23 +203,34 @@ def select_potd(sport: str, games_with_bets: list[dict]) -> dict | None:
     return best
 
 
+_BET_TYPE_LABELS = {
+    "ML": "moneyline", "RL": "run line", "PL": "puck line",
+    "O/U": "over/under", "1st INN": "first inning",
+    "ALT RL": "alt run line", "ALT O/U": "alt over/under",
+    "ALT PL": "alt puck line",
+    "Q1_ML": "Q1 moneyline", "Q1_SPREAD": "Q1 spread",
+    "Q1_TOTAL": "Q1 total",
+    "F5 ML": "first 5 moneyline", "F5 OU": "first 5 over/under",
+}
+
+
 def _build_reasoning(pick: dict, sport: str) -> str:
     """Generate a human-readable explanation for the POTD selection."""
     edge = pick.get("edge", 0)
     prob = pick.get("prob", 0)
     bet_type = pick.get("type", "")
-    kelly = pick.get("kelly_pct", 0)
+    bt_label = _BET_TYPE_LABELS.get(bet_type, bet_type.replace("_", " "))
 
     strength = "strong" if edge > 8 else "moderate" if edge > 5 else "lean"
 
     pick_display = pick.get("pick_full", pick.get("pick", ""))
+    implied = _implied_from_odds(pick.get("odds", 0)) * 100
 
     parts = []
-    parts.append(f"Highest-EV {bet_type} play on the {sport.upper()} slate today.")
-    parts.append(f"Model gives {pick_display} a {prob * 100:.1f}% probability "
-                 f"vs market implied ({_implied_from_odds(pick.get('odds', 0)) * 100:.1f}%).")
-    parts.append(f"{edge:+.1f}% edge, {strength} conviction.")
-    parts.append(f"Kelly suggests {kelly}% of bankroll.")
+    parts.append(f"Best {bt_label} play on today's {sport.upper()} slate.")
+    parts.append(f"Model gives {pick_display} a {prob * 100:.1f}% chance "
+                 f"vs the market's {implied:.1f}%.")
+    parts.append(f"That's a {edge:+.1f}% edge with {strength} conviction.")
     return " ".join(parts)
 
 
