@@ -104,8 +104,11 @@ def generate_nhl_picks_with_context(home_key: str, away_key: str,
     # distributions stay on the factor model.
     ens = pred.get("ensemble") or {}
     if ens.get("home_win") is not None:
-        wp = {"home": float(ens["home_win"]),
-              "away": 1.0 - float(ens["home_win"])}
+        from .config import NHL_WIN_PROB_FLOOR, NHL_WIN_PROB_CAP
+        from .win_prob import compress_win_prob
+        raw_ens = float(ens["home_win"])
+        compressed = compress_win_prob(raw_ens, NHL_WIN_PROB_FLOOR, NHL_WIN_PROB_CAP)
+        wp = {"home": compressed, "away": 1.0 - compressed}
 
     h_abbr = pred["home"]["abbreviation"]
     a_abbr = pred["away"]["abbreviation"]
@@ -252,16 +255,14 @@ def generate_nhl_picks_with_context(home_key: str, away_key: str,
         if odds is not None and _valid_odds(odds):
             p["edge"] = round((cal - _implied(int(odds))) * 100, 1)
 
-    # Keep pred["win_prob"] consistent with the calibrated ML pick prob
-    # so the Projected Outcome panel and the pick card display the same
-    # number. See engine/picks.py for rationale.
-    wp = pred.get("win_prob") or {}
-    home_wp = wp.get("home")
-    if home_wp is not None:
-        # Preserve the pre-calibration factor value so Model Signals
-        # renders the true Factor column, not the calibrated one.
-        pred.setdefault("factor_win_prob", dict(wp))
-        cal_home = float(_calibrate("ML", float(home_wp), sport="nhl"))
+    # Keep pred["win_prob"] consistent with what the picks used.
+    # If ensemble was available, use the ensemble WP (same as picks).
+    # Otherwise fall back to the factor model WP.
+    ens_check = pred.get("ensemble") or {}
+    if ens_check.get("home_win") is not None:
+        ens_home = float(ens_check["home_win"])
+        pred.setdefault("factor_win_prob", dict(pred.get("win_prob", {})))
+        cal_home = float(_calibrate("ML", ens_home, sport="nhl"))
         pred["win_prob"] = {
             "home": round(cal_home, 4),
             "away": round(1.0 - cal_home, 4),
