@@ -125,14 +125,36 @@ def _fetch_espn_scoreboard(date: str) -> list[dict]:
                 "name": team.get("displayName", ""),
                 "team_id": None,
             }
-            # Resolve team_id from DB
+            # Resolve team_id from DB. ESPN sometimes reports abbrs that
+            # differ from what MLB Stats API seeds into the teams table
+            # (CWS vs CHW, AZ vs ARI, ATH vs OAK). Walk every known alias
+            # so the fallback finds the right team_id instead of leaving
+            # it None and dropping the game.
             from .db import get_conn as _gc
-            row = _gc().execute(
-                "SELECT mlb_id FROM teams WHERE abbreviation = ?",
-                (entry["abbreviation"],)
-            ).fetchone()
+            from .abbr import aliases_for as _aliases
+            conn = _gc()
+            row = None
+            for candidate in _aliases(entry["abbreviation"], sport="mlb"):
+                row = conn.execute(
+                    "SELECT mlb_id FROM teams WHERE abbreviation = ?",
+                    (candidate,),
+                ).fetchone()
+                if row:
+                    break
+            # Last-resort: match by displayName (catches cases where a
+            # brand-new abbreviation hasn't been added to abbr.py yet).
+            if not row and entry["name"]:
+                row = conn.execute(
+                    "SELECT mlb_id FROM teams WHERE name = ? OR name LIKE ?",
+                    (entry["name"], f"%{entry['name']}%"),
+                ).fetchone()
             if row:
                 entry["team_id"] = row["mlb_id"]
+            else:
+                logger.warning(
+                    "ESPN fallback: could not resolve team_id for '%s' (%s) — add to engine/abbr.py",
+                    entry["abbreviation"], entry["name"],
+                )
 
             if c.get("homeAway") == "home":
                 home_team = entry
@@ -237,7 +259,11 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
     all_odds = fetch_real_odds_for_games()
 
     # Build set of live/completed games from ESPN scoreboard so we
-    # don't record picks for in-progress or finished games.
+    # don't record picks for in-progress or finished games. ESPN abbrs
+    # and DB abbrs don't always match (CWS/CHW etc.), so seed the set
+    # with every known alias — otherwise a live-game check using the
+    # DB abbr misses when ESPN reports the alternate form.
+    from .abbr import aliases_for as _aliases
     _live_or_done: set[str] = set()
     try:
         scoreboard = _fetch_espn_scoreboard(target_date)
@@ -247,9 +273,9 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
                 h_abbr = (game_info.get("home") or {}).get("abbreviation", "")
                 a_abbr = (game_info.get("away") or {}).get("abbreviation", "")
                 if h_abbr:
-                    _live_or_done.add(h_abbr)
+                    _live_or_done.update(_aliases(h_abbr, sport="mlb"))
                 if a_abbr:
-                    _live_or_done.add(a_abbr)
+                    _live_or_done.update(_aliases(a_abbr, sport="mlb"))
     except Exception:
         pass
 
