@@ -41,6 +41,11 @@ data/logs/
 __pycache__/
 *.pyc
 data/*.db
+# SQLite WAL/shm journal files — runtime artifacts, never commit.
+*.db-wal
+*.db-shm
+data/*.db-wal
+data/*.db-shm
 data/odds_api_key.txt
 data/opening_odds.json
 # Hard Rock per-user overrides: session cookie + device tokens.
