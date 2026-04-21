@@ -104,11 +104,8 @@ def generate_nhl_picks_with_context(home_key: str, away_key: str,
     # distributions stay on the factor model.
     ens = pred.get("ensemble") or {}
     if ens.get("home_win") is not None:
-        from .config import NHL_WIN_PROB_FLOOR, NHL_WIN_PROB_CAP
-        from .win_prob import compress_win_prob
-        raw_ens = float(ens["home_win"])
-        compressed = compress_win_prob(raw_ens, NHL_WIN_PROB_FLOOR, NHL_WIN_PROB_CAP)
-        wp = {"home": compressed, "away": 1.0 - compressed}
+        wp = {"home": float(ens["home_win"]),
+              "away": 1.0 - float(ens["home_win"])}
 
     h_abbr = pred["home"]["abbreviation"]
     a_abbr = pred["away"]["abbreviation"]
@@ -255,32 +252,18 @@ def generate_nhl_picks_with_context(home_key: str, away_key: str,
         if odds is not None and _valid_odds(odds):
             p["edge"] = round((cal - _implied(int(odds))) * 100, 1)
 
-    # Keep pred["win_prob"] consistent with what the picks display.
-    # Find the ML pick's calibrated probability and use that directly,
-    # so the "Projected Outcome" panel matches the pick card exactly.
-    pred.setdefault("factor_win_prob", dict(pred.get("win_prob", {})))
-    ml_home_pick = next((p for p in picks if p.get("type") == "ML"
-                         and p.get("pick") == pred.get("home", {}).get("abbreviation")), None)
-    ml_away_pick = next((p for p in picks if p.get("type") == "ML"
-                         and p.get("pick") == pred.get("away", {}).get("abbreviation")), None)
-    if ml_home_pick:
+    # Keep pred["win_prob"] consistent with the calibrated ML pick prob
+    # so the Projected Outcome panel and the pick card display the same
+    # number.
+    wp = pred.get("win_prob") or {}
+    home_wp = wp.get("home")
+    if home_wp is not None:
+        pred.setdefault("factor_win_prob", dict(wp))
+        cal_home = float(_calibrate("ML", float(home_wp), sport="nhl"))
         pred["win_prob"] = {
-            "home": round(ml_home_pick["prob"], 4),
-            "away": round(1.0 - ml_home_pick["prob"], 4),
+            "home": round(cal_home, 4),
+            "away": round(1.0 - cal_home, 4),
         }
-    elif ml_away_pick:
-        pred["win_prob"] = {
-            "home": round(1.0 - ml_away_pick["prob"], 4),
-            "away": round(ml_away_pick["prob"], 4),
-        }
-    else:
-        # No ML pick generated — use ensemble or factor WP
-        ens_check = pred.get("ensemble") or {}
-        if ens_check.get("home_win") is not None:
-            pred["win_prob"] = {
-                "home": round(float(ens_check["home_win"]), 4),
-                "away": round(1.0 - float(ens_check["home_win"]), 4),
-            }
 
     # Drop picks that flipped to negative edge after calibration.
     picks = [p for p in picks if (p.get("edge") or 0) > 0]

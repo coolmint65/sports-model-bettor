@@ -356,14 +356,14 @@ def generate_picks(home_team_id: int, away_team_id: int,
         if p_odds is not None and _valid_odds(p_odds):
             p["edge"] = round((cal - _implied(int(p_odds))) * 100, 1)
 
-    # Push the win_prob used by picks onto pred["win_prob"] so the
-    # display matches the edge calculation. Use ensemble WP when
-    # available (same source the picks used above).
-    ens_wp = (pred.get("ensemble") or {}).get("home_win")
-    display_wp = float(ens_wp) if ens_wp is not None else (pred.get("win_prob") or {}).get("home")
-    if display_wp is not None:
-        pred.setdefault("factor_win_prob", dict(pred.get("win_prob", {})))
-        cal_home = float(_calibrate("ML", display_wp))
+    # Push the ML calibration back onto pred["win_prob"] so the
+    # "Projected Outcome" WP on the frontend matches the ML pick's
+    # calibrated probability.
+    wp = pred.get("win_prob") or {}
+    home_wp = wp.get("home")
+    if home_wp is not None:
+        pred.setdefault("factor_win_prob", dict(wp))
+        cal_home = float(_calibrate("ML", float(home_wp)))
         pred["win_prob"] = {
             "home": round(cal_home, 4),
             "away": round(1.0 - cal_home, 4),
