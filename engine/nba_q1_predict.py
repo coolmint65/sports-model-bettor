@@ -347,9 +347,7 @@ def predict_q1(home_abbr: str, away_abbr: str,
     in_playoffs = _is_nba_playoffs()
     if in_playoffs:
         pace_factor *= NBA_PLAYOFF_PACE_FACTOR
-        reasoning.append(
-            f"Playoff pace shrinkage applied (x{NBA_PLAYOFF_PACE_FACTOR:.2f})"
-        )
+        reasoning.append("Playoff intensity slows the pace, fewer scoring opportunities early")
 
     home_q1_expected *= pace_factor
     away_q1_expected *= pace_factor
@@ -386,14 +384,14 @@ def predict_q1(home_abbr: str, away_abbr: str,
             logger.warning("NBA series context error: %s", e)
 
     if pace_factor > 1.03:
-        reasoning.append(f"Fast-paced matchup (pace factor {pace_factor:.2f}) boosts Q1 scoring")
+        reasoning.append("Both teams play at a fast tempo, expect more Q1 scoring")
     elif pace_factor < 0.97:
-        reasoning.append(f"Slow-paced matchup (pace factor {pace_factor:.2f}) suppresses Q1 scoring")
+        reasoning.append("Slow-paced matchup should keep Q1 scoring down")
 
     # ── Step 3: Home court Q1 boost ──
     home_q1_expected += HOME_Q1_BOOST / 2
     away_q1_expected -= HOME_Q1_BOOST / 2
-    reasoning.append(f"Home court Q1 boost: +{HOME_Q1_BOOST} pts for {home_abbr}")
+    reasoning.append(f"{home_abbr} has home court advantage")
 
     # ── Step 4: Rest / B2B adjustment ──
     home_rest_adj = 0.0
@@ -404,11 +402,11 @@ def predict_q1(home_abbr: str, away_abbr: str,
     if home_b2b:
         home_rest_adj = B2B_PENALTY
         home_q1_expected += B2B_PENALTY
-        reasoning.append(f"{home_abbr} on back-to-back: {B2B_PENALTY} Q1 pts")
+        reasoning.append(f"{home_abbr} on a back-to-back, expect slower start")
     if away_b2b:
         away_rest_adj = B2B_PENALTY
         away_q1_expected += B2B_PENALTY
-        reasoning.append(f"{away_abbr} on back-to-back: {B2B_PENALTY} Q1 pts")
+        reasoning.append(f"{away_abbr} on a back-to-back, expect slower start")
 
     # ── Step 5: Recent Q1 form (70/30 weighting) ──
     home_recent = _get_recent_q1_form(home.get("team_id", 0), 10)
@@ -420,10 +418,15 @@ def predict_q1(home_abbr: str, away_abbr: str,
         blended_off = recent_off * RECENT_WEIGHT + season_off * SEASON_WEIGHT
         adj = blended_off - season_off
         home_q1_expected += adj * 0.5  # Dampen to avoid overreaction
-        if abs(home_recent["recent_q1_margin"]) > 2:
+        if home_recent["recent_q1_margin"] > 2:
             reasoning.append(
-                f"{home_abbr} recent Q1 form: {home_recent['recent_q1_margin']:+.1f} "
-                f"avg margin L{home_recent['recent_games']}"
+                f"{home_abbr} has been dominating Q1s lately "
+                f"(+{home_recent['recent_q1_margin']:.1f} avg margin over last {home_recent['recent_games']})"
+            )
+        elif home_recent["recent_q1_margin"] < -2:
+            reasoning.append(
+                f"{home_abbr} has been struggling in Q1s recently "
+                f"({home_recent['recent_q1_margin']:+.1f} avg margin)"
             )
 
     if away_recent["recent_q1_scored"] is not None and away_recent["recent_games"] >= 5:
@@ -443,10 +446,13 @@ def predict_q1(home_abbr: str, away_abbr: str,
         quality_adj = max(-1.5, min(1.5, quality_diff * 3.0))
         home_q1_expected += quality_adj / 2
         away_q1_expected -= quality_adj / 2
-        if abs(quality_adj) > 0.5:
+        if quality_adj > 0.5:
             reasoning.append(
-                f"Q1 quality edge: {home_abbr} wins Q1 {home_fast:.0%} vs "
-                f"{away_abbr} {away_fast:.0%}"
+                f"{home_abbr} wins Q1 more often ({home_fast:.0%}) than {away_abbr} ({away_fast:.0%})"
+            )
+        elif quality_adj < -0.5:
+            reasoning.append(
+                f"{away_abbr} is the stronger Q1 team ({away_fast:.0%} Q1 win rate vs {home_fast:.0%})"
             )
 
     # ── Step 6.5: Roster availability (injuries + load management) ──
@@ -558,8 +564,7 @@ def predict_q1(home_abbr: str, away_abbr: str,
             home_q1_expected += delta / 2
             away_q1_expected -= delta / 2
             reasoning.append(
-                f"Market anchor: model margin {model_margin:+.1f} -> {anchored_margin:+.1f} "
-                f"(blended {SPREAD_ANCHOR_WEIGHT:.0%} toward posted Q1 spread {spread:+.1f})"
+                f"Market consensus factored in (Q1 spread {spread:+.1f})"
             )
 
     # ── Clamp expected scores to realistic range ──
@@ -593,11 +598,11 @@ def predict_q1(home_abbr: str, away_abbr: str,
 
     # Add overall reasoning
     if predicted_margin > 2:
-        reasoning.insert(0, f"Model favors {home_abbr} Q1 by {predicted_margin:.1f}")
+        reasoning.insert(0, f"{home_abbr} projected to lead Q1 by {predicted_margin:.1f} points")
     elif predicted_margin < -2:
-        reasoning.insert(0, f"Model favors {away_abbr} Q1 by {abs(predicted_margin):.1f}")
+        reasoning.insert(0, f"{away_abbr} projected to lead Q1 by {abs(predicted_margin):.1f} points")
     else:
-        reasoning.insert(0, "Close Q1 matchup expected")
+        reasoning.insert(0, "Tight Q1 expected, small margins either way")
 
     return {
         "home_abbr": home_abbr,
