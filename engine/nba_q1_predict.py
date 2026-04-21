@@ -590,11 +590,31 @@ def predict_q1(home_abbr: str, away_abbr: str,
 
     # Over/under probability
     over_prob = None
+    total_sigma = Q1_STD_DEV * 0.98  # Calibrated: total var is slightly narrower than margin var
     if total is not None:
         # Calibration showed total std dev 8.46 vs margin std dev 8.63,
         # so total variance is actually slightly narrower (~0.98x).
-        z = (total - predicted_total) / (Q1_STD_DEV * 0.98)
+        z = (total - predicted_total) / total_sigma
         over_prob = 1 - _norm_cdf(z)
+
+    # Full margin / total distributions for alt-line shopping.
+    # Matches the MLB/NHL output shape: {line: probability} keyed by the
+    # integer bucket midpoint. Basketball Q1 scoring is continuous, so
+    # the Gaussian CDF is discretized into 1-point buckets over the
+    # realistic range. Callers can compute P(cover > X.5 line) as
+    # sum(p for m, p in margin_probs.items() if m > line) — same API
+    # the MLB alt-shopper uses against its Poisson matrix.
+    margin_probs: dict[int, float] = {}
+    for m in range(-30, 31):
+        z_hi = (m + 0.5 - predicted_margin) / Q1_STD_DEV
+        z_lo = (m - 0.5 - predicted_margin) / Q1_STD_DEV
+        margin_probs[m] = _norm_cdf(z_hi) - _norm_cdf(z_lo)
+
+    total_probs: dict[int, float] = {}
+    for t in range(30, 91):
+        z_hi = (t + 0.5 - predicted_total) / total_sigma
+        z_lo = (t - 0.5 - predicted_total) / total_sigma
+        total_probs[t] = _norm_cdf(z_hi) - _norm_cdf(z_lo)
 
     # Add overall reasoning
     if predicted_margin > 2:
@@ -615,6 +635,8 @@ def predict_q1(home_abbr: str, away_abbr: str,
         "over_prob": round(over_prob, 4) if over_prob is not None else None,
         "q1_ml_home": round(q1_ml_home, 4),
         "q1_ml_away": round(q1_ml_away, 4),
+        "margin_probs": margin_probs,
+        "total_probs": total_probs,
         "posted_spread": spread,
         "posted_total": total,
         "factors": {

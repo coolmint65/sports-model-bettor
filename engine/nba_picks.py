@@ -190,8 +190,14 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
 
     # ── Q1 Alt Line Shopping ──
     # Check Q1 alt spreads and totals for better edges than primary.
+    # Prefer the exact discretized-Gaussian distributions exposed by
+    # nba_q1_predict (margin_probs / total_probs) over ad-hoc CDF /
+    # logistic approximations — the latter drifted ~5-8% at alt lines
+    # more than 1 std away from the model spread.
     predicted_total = pred.get("predicted_total", 0)
     predicted_margin = pred.get("predicted_margin", 0)
+    margin_probs = pred.get("margin_probs") or {}
+    total_probs_dist = pred.get("total_probs") or {}
     q1_std = 8.67  # Q1 scoring margin std dev (calibrated from 2,714 games)
 
     q1_alt_spreads = odds.get("q1_alt_spreads", [])
@@ -220,9 +226,17 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
         away_odds = alt.get("away_odds")
         if point is None:
             continue
-        # P(home covers spread) using normal CDF
-        z = (predicted_margin - (-point)) / q1_std
-        home_cover = 0.5 * (1 + math.erf(z / math.sqrt(2)))
+        # P(home covers spread X) = P(home_margin > -X). Uses the exact
+        # discretized distribution from nba_q1_predict when available so
+        # alt edges at distant lines aren't subject to CDF approximation
+        # error. Falls back to the normal CDF when the dict isn't present
+        # (e.g. upstream pred was produced by an older code path).
+        if margin_probs:
+            threshold = -point
+            home_cover = sum(p for m, p in margin_probs.items() if m > threshold)
+        else:
+            z = (predicted_margin - (-point)) / q1_std
+            home_cover = 0.5 * (1 + math.erf(z / math.sqrt(2)))
         home_cover = max(0.05, min(0.95, home_cover))
 
         if home_odds is not None and abs(home_odds) >= 100 and home_odds >= juice_wall:
@@ -257,10 +271,16 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
         under_odds = alt.get("under_odds")
         if line is None or not predicted_total:
             continue
-        # Logistic probability for over/under
+        # P(total > line) from the exact discretized Gaussian distribution.
+        # The previous fallback used a logistic with a 0.6 scale fudge which
+        # systematically under-estimated tail mass; switching to the proper
+        # CDF fixes alt-total edges at the extremes (O 50.5 / U 68.5 etc).
         total_std = 8.5  # Q1 total std dev (calibrated from 2,714 games)
-        diff = predicted_total - line
-        over_prob = 1.0 / (1.0 + math.exp(-diff / (total_std * 0.6)))
+        if total_probs_dist:
+            over_prob = sum(p for t, p in total_probs_dist.items() if t > line)
+        else:
+            z = (predicted_total - line) / total_std
+            over_prob = 0.5 * (1 + math.erf(z / math.sqrt(2)))
         under_prob = 1.0 - over_prob
 
         if over_odds is not None and abs(over_odds) >= 100 and over_odds >= juice_wall and over_prob > 0.5:

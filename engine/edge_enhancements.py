@@ -79,7 +79,10 @@ def shop_alt_spreads(pred: dict, odds: dict, h_abbr: str, a_abbr: str,
 
     rl_data = pred.get("run_line") or {}
     model_spread = rl_data.get("model_spread", 0)
-    margin_probs = rl_data.get("margin_probs")  # from Poisson matrix
+    # Prefer MLB's Poisson margin_probs inside run_line; fall back to the
+    # top-level key used by NHL (Poisson puck line) and NBA Q1 (discretized
+    # Gaussian). Both expose the same {margin: prob} shape.
+    margin_probs = rl_data.get("margin_probs") or pred.get("margin_probs")
 
     if not rl_data.get("home_minus_1_5"):
         return []
@@ -197,9 +200,11 @@ def shop_alt_totals(pred: dict, odds: dict,
         import math
         diff = model_total - line
 
-        # Use Poisson total distribution when available (MLB).
-        # Gives exact P(total > line) from the score matrix.
-        total_probs = (pred.get("run_line") or {}).get("total_probs")
+        # Use exact total distribution when available.
+        # MLB nests it in run_line; NHL/NBA put it at top level.
+        # Gives exact P(total > line) instead of a normal-CDF approximation.
+        total_probs = (pred.get("run_line") or {}).get("total_probs") \
+            or pred.get("total_probs")
         if total_probs:
             # P(over X.5) = sum of P(total >= X+1)
             # For half-point lines, no push possible

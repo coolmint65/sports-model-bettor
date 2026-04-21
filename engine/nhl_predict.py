@@ -1760,6 +1760,16 @@ def predict_matchup(home_key: str, away_key: str,
     p_away_m15 = max(0.0, min(1.0, p_away_m15))
     p_home_p15 = max(0.0, min(1.0, p_home_p15))
 
+    # Full margin distribution for alt puck-line shopping. Matches the
+    # shape MLB exposes in mlb_scoring._run_line_probs() so alt-line
+    # edges on NHL puck lines use exact Poisson probs instead of a
+    # normal-CDF approximation. Key = home_goals - away_goals.
+    margin_probs: dict[int, float] = {}
+    for h in range(MAX_GOALS + 1):
+        for a in range(MAX_GOALS + 1):
+            m = h - a
+            margin_probs[m] = margin_probs.get(m, 0.0) + matrix[h][a]
+
     # ── Totals (must account for OT goal) ──
     # NHL O/U includes overtime. Tied games go to OT where exactly 1 more
     # goal is scored. So for each tie scenario (h == a), the actual total
@@ -1782,6 +1792,15 @@ def predict_matchup(home_key: str, away_key: str,
             "over": round(p_over, 4),
             "under": round(1 - p_over, 4),
         }
+
+    # Full total distribution for alt O/U shopping (includes OT goal on
+    # tied scores to match NHL book totals). Matches mlb_scoring shape:
+    # key = integer total goals, value = probability.
+    total_probs: dict[int, float] = {}
+    for h in range(MAX_GOALS + 1):
+        for a in range(MAX_GOALS + 1):
+            actual_total = h + a + 1 if h == a else h + a
+            total_probs[actual_total] = total_probs.get(actual_total, 0.0) + ou_matrix[h][a]
 
     # ── Period breakdown (use real P1 data when available) ──
     weights = [0.33, 0.34, 0.33]
@@ -1953,6 +1972,8 @@ def predict_matchup(home_key: str, away_key: str,
             "away_minus_1_5": round(p_away_m15, 4),
             "home_plus_1_5": round(p_home_p15, 4),
         },
+        "margin_probs": margin_probs,
+        "total_probs": total_probs,
         "over_under": ou_lines,
         "periods": periods,
         "first_period": {
