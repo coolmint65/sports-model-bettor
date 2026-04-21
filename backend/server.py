@@ -800,44 +800,106 @@ _PRED_CACHE_TTL_S = 300
 # Single source of truth for today's picks. Best-bets writes here;
 # predict endpoint + tracker read from here. Keyed by
 # "{sport}:{away}@{home}" → {"picks": [...], "odds": {...}, "best_pick": {...}}.
-# Cleared daily (or when best-bets reruns).
+# In-memory for fast reads, but mirrored to each sport's tracker DB
+# (engine.picks_cache) so a server restart doesn't lose the day's picks
+# and force best-bets to run again before the card is consistent.
 _PICKS_STORE: dict[str, dict] = {}
 _PICKS_STORE_LOCK = _threading.Lock()
 
 
 def _picks_store_put(sport: str, home: str, away: str, picks: list, odds: dict):
     """Write picks to the store. Updates on every best-bets run so
-    the card always reflects the latest computation. The tracker
-    records once and doesn't change — the card should match what
-    the tracker recorded, but if the tracker hasn't run yet, the
-    card shows the current best-bets result."""
+    the card always reflects the latest computation. Mirrors the write
+    to the sport's picks_cache table so the blob survives restarts."""
     key = f"{sport}:{away}@{home}"
+    from engine.picks import get_best_pick
+    best_pick = get_best_pick(picks) if picks else None
     with _PICKS_STORE_LOCK:
-        from engine.picks import get_best_pick
         _PICKS_STORE[key] = {
             "picks": picks,
             "odds": odds,
-            "best_pick": get_best_pick(picks) if picks else None,
+            "best_pick": best_pick,
         }
+    # Persist outside the lock: the tracker DB write can take tens of ms
+    # on a slow disk and there's no reason to block concurrent reads on it.
+    try:
+        from engine import picks_cache
+        picks_cache.put(sport, home, away, picks, odds, best_pick)
+    except Exception as e:
+        logger.warning("picks_cache persist failed for %s %s@%s: %s",
+                       sport, away, home, e)
 
 
 def _picks_store_get(sport: str, home: str, away: str) -> dict | None:
-    """Read picks for a game. Returns {"picks", "odds", "best_pick"} or None."""
+    """Read picks for a game. Returns {"picks", "odds", "best_pick"} or None.
+    Falls through to the picks_cache table when the in-memory store is
+    cold (first request after startup before rehydration completes, or
+    a game that didn't make it into today's best-bets sweep)."""
     from engine.abbr import aliases_for
     with _PICKS_STORE_LOCK:
-        # Try all alias combinations
         for h in aliases_for(home, sport):
             for a in aliases_for(away, sport):
                 for key in (f"{sport}:{a}@{h}", f"{sport}:{h}@{a}"):
                     if key in _PICKS_STORE:
                         return _PICKS_STORE[key]
+    # Cache miss — check on-disk cache. If found, rehydrate into memory
+    # so subsequent lookups stay hot.
+    try:
+        from engine import picks_cache
+        for h in aliases_for(home, sport):
+            for a in aliases_for(away, sport):
+                blob = picks_cache.get(sport, h, a)
+                if blob is None:
+                    blob = picks_cache.get(sport, a, h)
+                if blob is not None:
+                    with _PICKS_STORE_LOCK:
+                        _PICKS_STORE[f"{sport}:{a}@{h}"] = blob
+                    return blob
+    except Exception as e:
+        logger.warning("picks_cache lookup failed for %s %s@%s: %s",
+                       sport, away, home, e)
     return None
 
 
 def _picks_store_clear():
-    """Clear the picks store (for new day or manual reset)."""
+    """Clear the picks store (for new day or manual reset). In-memory
+    only; the DB cache is retained so load_today can rehydrate it."""
     with _PICKS_STORE_LOCK:
         _PICKS_STORE.clear()
+
+
+def _picks_store_rehydrate():
+    """Warm _PICKS_STORE from each sport's picks_cache table at startup.
+    Also prunes stale rows (>7 days) to keep the cache compact."""
+    from datetime import timedelta
+    try:
+        from engine import picks_cache
+    except Exception as e:
+        logger.warning("picks_cache unavailable at startup: %s", e)
+        return
+    today = datetime.now().strftime("%Y-%m-%d")
+    cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+    loaded = 0
+    for sport in ("mlb", "nhl", "nba"):
+        try:
+            picks_cache.prune_before(sport, cutoff)
+            for home, away, blob in picks_cache.load_today(sport, today):
+                key = f"{sport}:{away}@{home}"
+                with _PICKS_STORE_LOCK:
+                    _PICKS_STORE[key] = blob
+                loaded += 1
+        except Exception as e:
+            logger.warning("picks_cache rehydrate failed for %s: %s", sport, e)
+    if loaded:
+        logger.info("Rehydrated %d picks from picks_cache for %s", loaded, today)
+
+
+@app.on_event("startup")
+async def _rehydrate_picks_store_on_startup() -> None:
+    """Populate the in-memory picks store from the persistent cache so
+    the very first request after a restart sees the same picks the last
+    best-bets run produced — no blocking recompute on cold start."""
+    _picks_store_rehydrate()
 
 
 def _get_recorded_pick(sport: str, matchup: str, date: str) -> dict | None:
