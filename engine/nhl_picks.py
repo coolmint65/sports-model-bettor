@@ -116,7 +116,7 @@ def generate_nhl_picks_with_context(home_key: str, away_key: str,
     home_ml = odds.get("home_ml")
     away_ml = odds.get("away_ml")
 
-    # ML picks (disabled by default while NHL model is being rebuilt)
+    # ML picks
     if ENABLE_NHL_ML:
         if home_ml and home_ml >= JUICE_WALL:
             edge = (wp["home"] - _implied(home_ml)) * 100
