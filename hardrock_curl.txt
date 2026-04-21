@@ -1,0 +1,15 @@
+curl.exe ^"https://api.hardrocksportsbook.com/java-graphql/graphql?type=event_tree^" ^
+  --compressed ^
+  -X POST ^
+  -H ^"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:149.0) Gecko/20100101 Firefox/149.0^" ^
+  -H ^"Accept: application/json^" ^
+  -H ^"Accept-Language: en-US,en;q=0.9^" ^
+  -H ^"Accept-Encoding: gzip, deflate, br, zstd^" ^
+  -H ^"Referer: https://app.hardrock.bet/^" ^
+  -H ^"content-type: application/json^" ^
+  -H ^"Origin: https://app.hardrock.bet^" ^
+  -H ^"Connection: keep-alive^" ^
+  -H ^"Sec-Fetch-Dest: empty^" ^
+  -H ^"Sec-Fetch-Mode: cors^" ^
+  -H ^"Sec-Fetch-Site: cross-site^" ^
+  --data-raw ^"^{^\^"operationName^\^":^\^"betSync^\^",^\^"query^\^":^\^"query betSync(^\^\n  ^$locale: String^\^\n  ^$region: String^\^\n  ^$segment: String^\^\n  ^$language: String^\^\n  ^$nonTradingFilters: ^[NodeFilterType^]^\^\n  ^$channel: String^\^\n) ^{ ^\^\n  betSync(^\^\n    locale: ^$locale^\^\n    channel: ^$channel^\^\n    cmsSegment: ^$segment^\^\n    region: ^$region^\^\n    language: ^$language^\^\n  ) ^{  ^\^\n    sports(filters: ^$nonTradingFilters) ^{^\^\n      id^\^\n      code^\^\n      numEvents^\^\n      numEventsInplay^\^\n      numEventsDisplayed^\^\n      numOutrightEvents^\^\n      weighting^\^\n      groups ^{^\^\n        id^\^\n        name^\^\n        displayOrder^\^\n        types^\^\n      ^}^\^\n      keyMarkets ^{^\^\n        type^\^\n      ^}^\^\n      categories(filters: ^$nonTradingFilters) ^{^\^\n        id^\^\n        name^\^\n        numEvents^\^\n        numEventsInplay^\^\n        numEventsDisplayed^\^\n        weighting^\^\n        competitions(filters: ^$nonTradingFilters) ^{^\^\n          id^\^\n          name^\^\n          highlight^\^\n          weighting^\^\n          numEvents^\^\n          numEventsInplay^\^\n          numOutrightEvents^\^\n          numEventsDisplayed^\^\n          streaming^\^\n          streamingAvailable^\^\n          prebuiltsAvailable^\^\n          playerPropsAvailable^\^\n          events ^{^\^\n            count^\^\n          ^}^\^\n        ^}^\^\n      ^}^\^\n      templates ^{^\^\n        name^\^\n        marketTypes ^{^\^\n          marketCode^\^\n          marketName^\^\n          pillGroup^\^\n          pillGroupDisplayOrder^\^\n          marketScope^\^\n          displayType^\^\n          grouped^\^\n          header1^\^\n          header2^\^\n          header3^\^\n          oddsTypeBox^\^\n          selectionCount^\^\n          enabled^\^\n        ^}^\^\n      ^}^\^\n      events ^{^\^\n        count^\^\n      ^}^\^\n    ^}^\^\n  ^}^\^\n^}^\^\n^\^",^\^"variables^\^":^{^\^"channel^\^":^\^"FLORIDA_ONLINE^\^",^\^"segment^\^":^\^"fl^\^",^\^"region^\^":^\^"us^\^",^\^"language^\^":^\^"enus^\^",^\^"nonTradingFilters^\^":^[^\^"DISPLAYED^\^"^]^}^}^"
