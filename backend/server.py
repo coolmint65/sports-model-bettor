@@ -4073,6 +4073,7 @@ def api_nba_best_bets():
 
     games = _get_nba_scoreboard()
 
+    from engine.picks import match_odds as _match_nba
     predictable = []
     for game in games:
         state = game["status"].get("state", "pre")
@@ -4081,7 +4082,14 @@ def api_nba_best_bets():
         h_abbr = game["home"]["abbreviation"]
         a_abbr = game["away"]["abbreviation"]
         odds = dict(game.get("odds") or {})
-        market_odds = nba_odds_map.get(f"{a_abbr}@{h_abbr}") or {}
+        # Route the supplementary map through match_odds so the Hard Rock
+        # q1_alt_spreads (and anything else with home/away-keyed fields)
+        # are aligned to our schedule's home/away before merging. The
+        # raw key lookup we used before both missed reversed-key matches
+        # and merged unswapped sides on top of already-swapped scoreboard
+        # odds — surfaced as Spurs +1.5 @ +130 when the book actually
+        # had Spurs -1.5 @ -170.
+        market_odds = _match_nba(h_abbr, a_abbr, nba_odds_map) or {}
         for k, v in market_odds.items():
             if k not in odds or odds.get(k) is None:
                 odds[k] = v
