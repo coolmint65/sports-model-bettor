@@ -2295,12 +2295,11 @@ def _get_nhl_scoreboard(date: str = "") -> list[dict]:
             games = _parse_nhl_scoreboard(espn_data)
 
     # ── Hard Rock fallback ──────────────────────────────────────
-    # When ESPN hasn't posted today's schedule (common early in the
-    # day or during playoff transitions), build minimal scoreboard
-    # entries from Hard Rock's game list so best-bets can still run.
-    pre_games = [g for g in games
-                 if g.get("status", {}).get("state") == "pre"]
-    if not pre_games and date == "":
+    # When ESPN hasn't posted today's schedule at all (zero events),
+    # build minimal scoreboard entries from Hard Rock. Only triggers
+    # when ESPN returned nothing — NOT when all games are live/done
+    # (that would pull in tomorrow's games from HR).
+    if not games and date == "":
         try:
             from scrapers.hardrock_odds import fetch_nhl as _hr_nhl
             hr_odds = _hr_nhl()
@@ -2312,7 +2311,6 @@ def _get_nhl_scoreboard(date: str = "") -> list[dict]:
                     if len(parts) != 2:
                         continue
                     a_abbr, h_abbr = parts
-                    # Check if this game already exists (e.g. in-progress)
                     existing = any(
                         g["home"]["abbreviation"] == h_abbr and
                         g["away"]["abbreviation"] == a_abbr
@@ -3520,10 +3518,8 @@ def _get_nba_scoreboard(date: str = "") -> list[dict]:
             if games:
                 logger.info("Found %d NBA games for tomorrow", len(games))
 
-    # ── Hard Rock fallback ──────────────────────────────────────
-    pre_games = [g for g in games
-                 if g.get("status", {}).get("state") == "pre"]
-    if not pre_games and date == "":
+    # ── Hard Rock fallback (only when ESPN returned zero events) ──
+    if not games and date == "":
         try:
             from scrapers.hardrock_odds import fetch_nba as _hr_nba
             hr_odds = _hr_nba()
