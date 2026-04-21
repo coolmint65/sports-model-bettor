@@ -91,8 +91,12 @@ NHL_MAX_GOALS = 10
 # The model is systematically overconfident even with granular
 # factors off - capping raw p_home_ml prevents picks driven by
 # stated probabilities that the data says are fiction.
-NHL_WIN_PROB_FLOOR = 0.35
-NHL_WIN_PROB_CAP = 0.55
+# Widened from 0.35-0.55 (too tight — capped dominant favorites at
+# 62% after compression, creating false underdog edge against -300
+# lines). With compression=0.35, this allows raw 0.75 -> 0.655,
+# raw 0.85 -> 0.690, keeping strong favorites appropriately valued.
+NHL_WIN_PROB_FLOOR = 0.30
+NHL_WIN_PROB_CAP = 0.62
 
 # Granular factors (Factors 1-12 in nhl_predict.py).
 # PERMANENTLY OFF until each factor is individually validated.
