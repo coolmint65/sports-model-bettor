@@ -255,18 +255,32 @@ def generate_nhl_picks_with_context(home_key: str, away_key: str,
         if odds is not None and _valid_odds(odds):
             p["edge"] = round((cal - _implied(int(odds))) * 100, 1)
 
-    # Keep pred["win_prob"] consistent with what the picks used.
-    # If ensemble was available, use the ensemble WP (same as picks).
-    # Otherwise fall back to the factor model WP.
-    ens_check = pred.get("ensemble") or {}
-    if ens_check.get("home_win") is not None:
-        ens_home = float(ens_check["home_win"])
-        pred.setdefault("factor_win_prob", dict(pred.get("win_prob", {})))
-        cal_home = float(_calibrate("ML", ens_home, sport="nhl"))
+    # Keep pred["win_prob"] consistent with what the picks display.
+    # Find the ML pick's calibrated probability and use that directly,
+    # so the "Projected Outcome" panel matches the pick card exactly.
+    pred.setdefault("factor_win_prob", dict(pred.get("win_prob", {})))
+    ml_home_pick = next((p for p in picks if p.get("type") == "ML"
+                         and p.get("pick") == pred.get("home", {}).get("abbreviation")), None)
+    ml_away_pick = next((p for p in picks if p.get("type") == "ML"
+                         and p.get("pick") == pred.get("away", {}).get("abbreviation")), None)
+    if ml_home_pick:
         pred["win_prob"] = {
-            "home": round(cal_home, 4),
-            "away": round(1.0 - cal_home, 4),
+            "home": round(ml_home_pick["prob"], 4),
+            "away": round(1.0 - ml_home_pick["prob"], 4),
         }
+    elif ml_away_pick:
+        pred["win_prob"] = {
+            "home": round(1.0 - ml_away_pick["prob"], 4),
+            "away": round(ml_away_pick["prob"], 4),
+        }
+    else:
+        # No ML pick generated — use ensemble or factor WP
+        ens_check = pred.get("ensemble") or {}
+        if ens_check.get("home_win") is not None:
+            pred["win_prob"] = {
+                "home": round(float(ens_check["home_win"]), 4),
+                "away": round(1.0 - float(ens_check["home_win"]), 4),
+            }
 
     # Drop picks that flipped to negative edge after calibration.
     picks = [p for p in picks if (p.get("edge") or 0) > 0]
