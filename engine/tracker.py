@@ -437,6 +437,53 @@ def _record_from_scoreboard(conn, scoreboard: list, target_date: str,
     return recorded
 
 
+def capture_closing_odds() -> int:
+    """Snapshot current Hard Rock odds for all pending picks.
+
+    Call this before games start (e.g. from sync script at 6pm ET)
+    to capture the closing line. The CLV computed at settle time
+    will then reflect the true closing odds, not post-game odds.
+
+    Returns number of picks updated.
+    """
+    conn = get_conn()
+    pending = conn.execute(
+        "SELECT id, matchup, bet_type, pick, closing_odds FROM picks "
+        "WHERE result IS NULL AND closing_odds IS NULL"
+    ).fetchall()
+
+    if not pending:
+        return 0
+
+    from .picks import fetch_real_odds_for_games, match_odds
+    all_odds = fetch_real_odds_for_games()
+    updated = 0
+
+    for pick in pending:
+        matchup = pick["matchup"]
+        parts = matchup.split(" @ ")
+        if len(parts) != 2:
+            continue
+        away, home = parts[0].strip(), parts[1].strip()
+        game_odds = match_odds(home, away, all_odds)
+        if not game_odds:
+            continue
+
+        closing = _extract_closing_for_pick(
+            pick["bet_type"], pick["pick"], home, game_odds,
+        )
+        if closing is not None:
+            conn.execute(
+                "UPDATE picks SET closing_odds = ? WHERE id = ?",
+                (int(closing), pick["id"]),
+            )
+            updated += 1
+
+    conn.commit()
+    logger.info("Captured closing odds for %d/%d pending picks", updated, len(pending))
+    return updated
+
+
 def settle_picks() -> dict:
     """
     Settle all pending picks against final game results.
@@ -707,6 +754,15 @@ def settle_picks() -> dict:
         settled += 1
 
     conn.commit()
+
+    # Auto-refresh empirical calibration after settling so the model
+    # learns from its latest outcomes immediately.
+    if settled > 0:
+        try:
+            from .empirical_calibration import refresh_calibration
+            refresh_calibration("mlb")
+        except Exception:
+            pass
 
     return {
         "settled": settled,

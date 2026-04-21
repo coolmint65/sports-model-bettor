@@ -77,14 +77,11 @@ def shop_alt_spreads(pred: dict, odds: dict, h_abbr: str, a_abbr: str,
 
     new_picks = []
 
-    # Use the standard run line probabilities as reference.
-    # home_minus_1_5 = P(home wins by 2+) = home -1.5 cover
-    # home_plus_1_5  = P(home loses by 0 or 1, or wins) = home +1.5 cover
-    rl_home_minus = pred.get("run_line", {}).get("home_minus_1_5")
-    rl_home_plus = pred.get("run_line", {}).get("home_plus_1_5")
-    model_spread = pred.get("run_line", {}).get("model_spread", 0)
+    rl_data = pred.get("run_line") or {}
+    model_spread = rl_data.get("model_spread", 0)
+    margin_probs = rl_data.get("margin_probs")  # from Poisson matrix
 
-    if rl_home_minus is None or rl_home_plus is None:
+    if not rl_data.get("home_minus_1_5"):
         return []
 
     for alt in alt_spreads:
@@ -94,25 +91,24 @@ def shop_alt_spreads(pred: dict, odds: dict, h_abbr: str, a_abbr: str,
         if point is None:
             continue
 
-        # Estimate cover probability using normal CDF centered on
-        # the model's projected spread. Standard deviations calibrated
-        # from historical margin distributions:
-        #   MLB: ~3.8 runs (regular season avg margin std dev)
-        #   NHL: ~2.2 goals
-        #   NBA: ~11.5 points
         import math
-        # Calibrated from historical data (2024-2025 seasons)
-        _MARGIN_STD = {"mlb": 4.5, "nhl": 2.6, "nba": 11.5}
-        # Detect sport from prediction context
-        sport_key = "mlb"  # default; could be enhanced to detect
-        if pred.get("puck_line") or pred.get("regulation_draw_prob"):
-            sport_key = "nhl"
-        elif pred.get("q1_ml_home") or pred.get("predicted_margin"):
-            sport_key = "nba"
-        std = _MARGIN_STD.get(sport_key, 3.8)
 
-        z = (model_spread - (-point)) / std
-        home_cover_prob = 0.5 * (1 + math.erf(z / math.sqrt(2)))
+        if margin_probs:
+            # Exact probability from Poisson score matrix (MLB).
+            # P(home covers spread X) = P(margin > -X)
+            # For half-point lines: margin > -point is unambiguous
+            threshold = -point
+            home_cover_prob = sum(
+                p for m, p in margin_probs.items() if m > threshold
+            )
+        else:
+            # Fallback: normal CDF for NHL/NBA or missing Poisson data
+            _MARGIN_STD = {"nhl": 2.6, "nba": 11.5}
+            sport_key = "nhl" if pred.get("puck_line") else (
+                "nba" if pred.get("q1_ml_home") else "mlb")
+            std = _MARGIN_STD.get(sport_key, 4.5)
+            z = (model_spread - (-point)) / std
+            home_cover_prob = 0.5 * (1 + math.erf(z / math.sqrt(2)))
 
         # Sanity clamp
         home_cover_prob = max(0.05, min(0.95, home_cover_prob))
@@ -198,21 +194,27 @@ def shop_alt_totals(pred: dict, odds: dict,
         if line is None:
             continue
 
-        # Probability estimate using logistic function with
-        # sport-appropriate total standard deviations:
-        #   MLB: ~3.2 runs, NHL: ~1.8 goals, NBA: ~10.5 pts
-        diff = model_total - line
         import math
-        # Calibrated from historical data (2024-2025 seasons)
-        _TOTAL_STD = {"mlb": 4.5, "nhl": 2.3, "nba": 10.5}
-        sport_key = "mlb"
-        if model_total > 100:
-            sport_key = "nba"
-        elif model_total < 12:
-            sport_key = "nhl"
-        std = _TOTAL_STD.get(sport_key, 3.2)
-        over_prob = 1.0 / (1.0 + math.exp(-diff / std))
-        under_prob = 1.0 - over_prob
+        diff = model_total - line
+
+        # Use Poisson total distribution when available (MLB).
+        # Gives exact P(total > line) from the score matrix.
+        total_probs = (pred.get("run_line") or {}).get("total_probs")
+        if total_probs:
+            # P(over X.5) = sum of P(total >= X+1)
+            # For half-point lines, no push possible
+            over_prob = sum(
+                p for t, p in total_probs.items() if t > line
+            )
+            under_prob = 1.0 - over_prob
+        else:
+            # Fallback: logistic function for NHL/NBA
+            _TOTAL_STD = {"nhl": 2.3, "nba": 10.5}
+            sport_key = "nba" if model_total > 100 else (
+                "nhl" if model_total < 12 else "mlb")
+            std = _TOTAL_STD.get(sport_key, 4.5)
+            over_prob = 1.0 / (1.0 + math.exp(-diff / std))
+            under_prob = 1.0 - over_prob
 
         # Over side
         if over_odds is not None and abs(over_odds) >= 100 and over_odds >= ALT_LINE_JUICE_WALL and over_prob > 0.5:

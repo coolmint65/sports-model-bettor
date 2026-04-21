@@ -103,18 +103,66 @@ def _kelly_fraction(prob: float, odds: int) -> float:
     return max(0.0, min(0.25, kelly * 0.25))
 
 
-def _score_pick(pick: dict) -> float:
+def _get_market_win_rate(sport: str, bet_type: str, days: int = 30) -> float:
+    """Get recent win rate for a bet type from the tracker DB.
+
+    Returns win rate (0.0-1.0) or 0.5 if insufficient data.
+    """
+    try:
+        conn = _get_conn(sport)
+        table = {"mlb": "picks", "nhl": "nhl_picks", "nba": "nba_picks"}.get(sport, "picks")
+        from datetime import timedelta
+        cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+        row = conn.execute(
+            f"SELECT COUNT(*) as total, "
+            f"SUM(CASE WHEN result = 'W' THEN 1 ELSE 0 END) as wins "
+            f"FROM {table} WHERE bet_type = ? AND date >= ? AND result IS NOT NULL",
+            (bet_type, cutoff),
+        ).fetchone()
+        total = row["total"] if row else 0
+        wins = row["wins"] if row else 0
+        if total >= 5:
+            return wins / total
+    except Exception:
+        pass
+    return 0.5  # neutral when no data
+
+
+def _score_pick(pick: dict, sport: str = "mlb") -> float:
     """Score a pick candidate for POTD selection.
 
-    Uses Kelly fraction * edge as the ranking metric - this favors picks
-    that combine high edge with favorable bet sizing.
+    Ranking: edge × CI confidence × market reliability
+
+    - edge: raw edge percentage (higher = better)
+    - CI confidence: 1.0 / (1.0 + ci_half_width * 10). Narrow CI = more
+      trustworthy. Picks with wide confidence bands score lower.
+    - market reliability: recent win rate of this bet type from tracker.
+      Markets that have been hitting recently get a boost.
+
+    Also applies a penalty for extreme longshots (implied < 35%) where
+    the model's calibration is least accurate.
     """
+    edge = pick.get("edge", 0)
     prob = pick.get("prob", 0)
     odds = pick.get("odds", 0)
-    edge = pick.get("edge", 0)
-    kelly = _kelly_fraction(prob, odds)
-    # Score = kelly fraction × edge × 100, scaled
-    return kelly * edge * 100
+    ci_hw = pick.get("ci_half_width", 0.05)
+
+    # CI confidence: narrow band = high confidence
+    ci_confidence = 1.0 / (1.0 + ci_hw * 10)
+
+    # Market reliability: how has this bet type been performing?
+    bet_type = pick.get("type", "")
+    market_wr = _get_market_win_rate(sport, bet_type)
+    # Scale: 0.5 WR = 1.0x (neutral), 0.6 = 1.2x, 0.4 = 0.8x
+    market_reliability = market_wr * 2.0
+
+    # Longshot penalty: implied probability below 35% gets discounted
+    implied = 0.5
+    if odds and odds != 0:
+        implied = abs(odds) / (abs(odds) + 100) if odds < 0 else 100 / (odds + 100)
+    longshot_penalty = 1.0 if implied >= 0.35 else implied / 0.35
+
+    return edge * ci_confidence * market_reliability * longshot_penalty
 
 
 def select_potd(sport: str, games_with_bets: list[dict]) -> dict | None:
@@ -174,8 +222,8 @@ def select_potd(sport: str, games_with_bets: list[dict]) -> dict | None:
     if not candidates:
         return None
 
-    # Rank by Kelly × edge
-    candidates.sort(key=_score_pick, reverse=True)
+    # Rank by edge × CI confidence × market reliability
+    candidates.sort(key=lambda c: _score_pick(c, sport), reverse=True)
     best = candidates[0]
 
     # Resolve full team names for display

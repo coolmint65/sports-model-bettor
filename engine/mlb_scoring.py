@@ -202,6 +202,13 @@ def _run_line_probs(matrix: list[list[float]], home_xr: float = 0,
     p_away_minus_15 = max(0.15, min(0.65, p_away_minus_15))
     p_away_plus_15 = max(0.30, min(0.75, p_away_plus_15))
 
+    # Build total distribution for alt total shopping
+    total_probs: dict[float, float] = {}
+    for h in range(len(matrix)):
+        for a in range(len(matrix[0])):
+            t = h + a
+            total_probs[t] = total_probs.get(t, 0) + matrix[h][a]
+
     return {
         "home_minus_1_5": round(p_home_minus_15, 4),
         "away_plus_1_5": round(p_away_plus_15, 4),
@@ -209,6 +216,8 @@ def _run_line_probs(matrix: list[list[float]], home_xr: float = 0,
         "away_minus_1_5": round(p_away_minus_15, 4),
         "model_spread": model_spread,
         "spreads": spreads,
+        "margin_probs": margin_probs,  # {margin: probability} for alt spread shopping
+        "total_probs": total_probs,    # {total: probability} for alt total shopping
     }
 
 
