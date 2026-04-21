@@ -250,7 +250,7 @@ def _check_back_to_back(team_abbr: str) -> bool:
     import urllib.error
 
     try:
-        yesterday = (datetime.utcnow() - timedelta(days=1)).strftime("%Y%m%d")
+        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
         url = (
             "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
             f"/scoreboard?dates={yesterday}"

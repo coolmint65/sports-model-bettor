@@ -799,7 +799,7 @@ def _check_back_to_back(team_abbr: str) -> float:
     import urllib.request
 
     try:
-        today = datetime.utcnow().date()
+        today = datetime.now().date()
         teams_yesterday: set[str] = set()
         teams_day_before: set[str] = set()
 
