@@ -15,8 +15,10 @@ export default function PickHistory({ summary, history, loading, onRecord, onSet
   const overall = summary?.overall || {}
   const byType = summary?.by_type || {}
 
-  // Split history: today's picks vs historical
-  const today = new Date().toISOString().slice(0, 10)
+  // Split history: today's picks vs historical.
+  // Use local date (not UTC) so the split works correctly in the evening.
+  const now = new Date()
+  const today = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`
   const todaysPicks = (history || []).filter(p => p.date === today)
   const pastPicks = (history || []).filter(p => p.date !== today)
 
