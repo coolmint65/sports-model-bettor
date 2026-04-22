@@ -17,6 +17,27 @@ MLB_JUICE_WALL = -200
 NHL_JUICE_WALL = -200
 NBA_JUICE_WALL = -200
 
+# ── Conservatism ladder ──
+# Post-selection step that swaps a high-edge risky pick to the safest
+# same-direction sibling (alt spread/total, ML for favorites) that
+# still clears a reduced edge floor + the juice wall. Trades some
+# theoretical EV for higher hit-rate so bankroll survives cold streaks
+# while the empirical calibration tables build up. Lives in
+# engine/conservatism.py; each sport's generate_picks invokes it
+# after calibration and before confidence tiers.
+CONSERVATISM_ENABLED = True
+# Only consider a swap when the primary pick's probability is below
+# this threshold — there's no reason to "safen" a pick already north
+# of 55% that's also beating the market.
+CONSERVATISM_ACTIVATE_UNDER_PROB = 0.55
+# Candidate must still clear this edge AFTER the swap. Sits below
+# EDGE_LEAN (4%) by design — we're deliberately trading edge for WR.
+CONSERVATISM_MIN_EDGE_AFTER_SWAP = 2.0
+# Candidate must improve the probability by at least this much vs
+# the primary. Prevents swaps that barely move the needle but lose
+# meaningful edge in the process.
+CONSERVATISM_MIN_PROB_IMPROVEMENT = 0.05
+
 # Minimum edge (%) to consider a pick playable
 MIN_EDGE_PCT = 4.0
 
