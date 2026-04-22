@@ -350,7 +350,13 @@ def generate_picks(home_team_id: int, away_team_id: int,
         p_odds = p.get("odds")
         if prob is None:
             continue
-        cal = _calibrate(p["type"], float(prob))
+        # Route the pick through granular calibration when we have
+        # both edge and odds — the calibrator will fall back to the
+        # coarse bucket automatically when per-quadrant data is thin.
+        cal = _calibrate(
+            p["type"], float(prob), sport="mlb",
+            edge=p.get("edge"), odds=p_odds,
+        )
         p["prob_raw"] = round(float(prob), 4)
         p["prob"] = round(float(cal), 4)
         if p_odds is not None and _valid_odds(p_odds):

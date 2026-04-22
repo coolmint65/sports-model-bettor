@@ -246,7 +246,10 @@ def generate_nhl_picks_with_context(home_key: str, away_key: str,
         odds = p.get("odds")
         if prob is None:
             continue
-        cal = _calibrate(p["type"], float(prob), sport="nhl")
+        cal = _calibrate(
+            p["type"], float(prob), sport="nhl",
+            edge=p.get("edge"), odds=odds,
+        )
         p["prob_raw"] = round(float(prob), 4)
         p["prob"] = round(float(cal), 4)
         if odds is not None and _valid_odds(odds):

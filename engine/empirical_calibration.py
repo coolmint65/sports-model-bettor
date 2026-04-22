@@ -63,6 +63,71 @@ _BUCKETS = [
     (0.80, 1.01),
 ]
 
+# Secondary dimensions for granular calibration. The coarse (bet_type,
+# prob_bucket) bucket handled every pick the same way regardless of
+# whether it was a tight-juice favorite or a plus-money dog — which
+# masked systematic per-quadrant biases (e.g. -190 favorites hit
+# markedly worse than -110 favorites at the same raw prob). Granular
+# buckets split by (edge_tier, fav/dog, juice_tier) AND fall back to
+# the coarse key when the narrower bucket hasn't accumulated enough
+# samples yet.
+_EDGE_TIERS = (
+    ("low",   0.0, 3.0),
+    ("mid",   3.0, 7.0),
+    ("high",  7.0, 15.0),
+    ("xhigh", 15.0, 999.0),
+)
+# Juice tiers apply to favorites only. Dogs collapse to a single bucket
+# since plus-money prices span a much wider range with thinner volume.
+_JUICE_TIERS_FAV = (
+    ("cheap",  -110),  # odds in [-110, 0)
+    ("mid",    -150),  # odds in [-150, -110)
+    ("heavy",  -200),  # odds in [-200, -150)
+)
+
+
+def _edge_tier(edge: float | None) -> str | None:
+    if edge is None:
+        return None
+    e = float(edge)
+    for label, lo, hi in _EDGE_TIERS:
+        if lo <= e < hi:
+            return label
+    return None
+
+
+def _fav_flag(odds: int | float | None) -> str | None:
+    if odds is None:
+        return None
+    try:
+        o = int(odds)
+    except (TypeError, ValueError):
+        return None
+    if o == 0:
+        return None
+    return "fav" if o < 0 else "dog"
+
+
+def _juice_tier(odds: int | float | None) -> str | None:
+    """Return the juice bucket label. Dogs (odds > 0) collapse to 'plus'."""
+    if odds is None:
+        return None
+    try:
+        o = int(odds)
+    except (TypeError, ValueError):
+        return None
+    if o >= 0:
+        return "plus"
+    # Favorite: walk the tiers from cheapest to heaviest
+    prev = 0
+    for label, ceiling in _JUICE_TIERS_FAV:
+        if ceiling <= o < prev:
+            return label
+        prev = ceiling
+    # Below -200 — lumped with the existing heaviest tier rather than
+    # opening a fourth bucket that would rarely accumulate samples.
+    return "heavy"
+
 # Per-sport calibration tables: {sport: {bet_type: [(lo, hi, real_wr)]}}
 _TABLE: dict[str, dict[str, list[tuple[float, float, float]]]] = {}
 _TABLE_LOCK = threading.Lock()
@@ -88,14 +153,28 @@ def _normalize_bet_type(bt: str) -> str:
     return bt
 
 
-def calibrate(bet_type: str, raw_prob: float, sport: str = "mlb") -> float:
+def calibrate(bet_type: str, raw_prob: float, sport: str = "mlb",
+              edge: float | None = None, odds: int | float | None = None) -> float:
     """Map a raw model probability to the empirical win-rate bucket
     for `sport`.
+
+    Consults progressively coarser keys: the fully granular
+    (bet_type, edge_tier, fav/dog, juice_tier, prob_bucket) key first,
+    then (bet_type, fav/dog, prob_bucket), finally the legacy
+    (bet_type, prob_bucket). A bucket is "used" only when it has at
+    least MIN_BUCKET_N samples; below that the next coarser key is
+    tried. This lets granular buckets surface real per-quadrant biases
+    once volume accumulates without starving cold-start picks of any
+    calibration signal.
+
+    edge / odds are optional — when omitted (old callers), the function
+    skips the granular keys and behaves exactly like the previous
+    bet_type-only version.
 
     Falls back to raw passthrough when:
       - The sport's calibration table hasn't been built yet (cold start)
       - This bet_type has no data for the sport
-      - The matched bucket has fewer than MIN_BUCKET_N samples
+      - No fallback bucket cleared MIN_BUCKET_N samples
     """
     if raw_prob is None:
         return raw_prob
@@ -110,36 +189,44 @@ def calibrate(bet_type: str, raw_prob: float, sport: str = "mlb") -> float:
 
     bt = _normalize_bet_type(bet_type)
     sport_table = _TABLE.get(sport, {})
-    rows = sport_table.get(bt)
-    if not rows:
+    if not sport_table:
         return raw_prob
 
-    for row in rows:
-        # Support both the legacy (lo, hi, real_wr) tuple and the new
-        # (lo, hi, real_wr, n) tuple so in-flight processes surviving a
-        # partial redeploy don't crash.
-        lo, hi, real_wr = row[0], row[1], row[2]
-        n = row[3] if len(row) > 3 else 0
-        if lo <= raw_prob < hi:
-            # Shrink the empirical toward the raw model prob based on
-            # sample count. With n=10 the bucket has too little data to
-            # trust wholesale (a single hot streak moves the bar by 10pp);
-            # with n>=SHRINKAGE_TARGET_N it's reliable enough to apply
-            # fully. Without this, the NBA Q1 ML bucket [0.30, 0.40]
-            # with ~12 synthetic samples that hit 45% was lifting every
-            # heavy underdog from raw 32% to "calibrated" 45%, producing
-            # phantom +EV edges against heavy market prices.
-            w = min(1.0, n / SHRINKAGE_TARGET_N) if n > 0 else 0.0
-            return w * real_wr + (1.0 - w) * raw_prob
+    b = _bucket_for(raw_prob)
+    if b is None:
+        # Outside the bucket range (below lowest, above highest) —
+        # passthrough rather than clamp, matching legacy behavior.
+        return raw_prob
 
-    # raw is outside our bucket range (below the lowest or above the
-    # highest). Pass it through unchanged rather than clamping to the
-    # boundary bucket's real_wr: those tails have no data supporting a
-    # recalibration, and clamping WAS producing phantom +EV picks on
-    # heavy underdogs. A +700 NBA Q1 dog with raw prob 0.286 was being
-    # lifted to the [0.30, 0.40] bucket's empirical WR (~0.35),
-    # creating a fake 22% edge over the market's implied 12.5%.
-    # Favorites above 0.80 have the mirror problem.
+    # Build the fallback ladder from most to least specific.
+    keys: list[tuple] = []
+    etier = _edge_tier(edge)
+    fav = _fav_flag(odds)
+    jtier = _juice_tier(odds)
+    if etier and fav and jtier:
+        keys.append((bt, etier, fav, jtier, b))
+    if fav:
+        keys.append((bt, fav, b))
+    keys.append((bt, b))
+
+    for key in keys:
+        bucket = sport_table.get(key)
+        if not bucket:
+            continue
+        real_wr, n = bucket["real_wr"], bucket["n"]
+        if n < MIN_BUCKET_N:
+            continue
+        # Shrink the empirical toward the raw model prob based on
+        # sample count. With n=10 the bucket has too little data to
+        # trust wholesale (a single hot streak moves the bar by 10pp);
+        # with n>=SHRINKAGE_TARGET_N it's reliable enough to apply
+        # fully. Without this, a synthetic ~12-sample bucket that hit
+        # 45% was lifting every heavy underdog from raw 32% to
+        # "calibrated" 45%, producing phantom +EV edges against
+        # heavy market prices.
+        w = min(1.0, n / SHRINKAGE_TARGET_N)
+        return w * real_wr + (1.0 - w) * raw_prob
+
     return raw_prob
 
 
@@ -148,23 +235,28 @@ def calibrated_edge(bet_type: str, raw_prob: float, odds: int,
     """Edge = calibrated_prob - implied_prob, in percentage points.
 
     Use this everywhere the picks pipeline currently does
-    `(prob - implied(odds)) * 100`. It silently keeps the prior shape
-    when no calibration exists, so the change is safe to drop in."""
+    `(prob - implied(odds)) * 100`. The edge value computed against
+    the raw prob is also used to route the granular calibration lookup,
+    so the per-quadrant buckets apply automatically."""
     if odds is None or raw_prob is None:
         return 0.0
     if odds < 0:
         implied = abs(odds) / (abs(odds) + 100)
     else:
         implied = 100.0 / (odds + 100)
-    cal = calibrate(bet_type, raw_prob, sport=sport)
+    raw_edge = (raw_prob - implied) * 100.0
+    cal = calibrate(bet_type, raw_prob, sport=sport,
+                    edge=raw_edge, odds=odds)
     return (cal - implied) * 100.0
 
 
 def refresh_calibration(sport: str = "mlb") -> dict:
     """Rebuild the calibration table for `sport` from its picks table.
-    Returns a summary dict for callers that want to log progress."""
-    summary = {"sport": sport, "buckets_filled": 0,
-               "buckets_passthrough": 0, "total_rows": 0}
+    Populates three keyed views from the same rows — fully granular,
+    fav/dog-only, and legacy bet-type-only — so calibrate() can walk
+    the ladder and pick the first one with enough samples."""
+    summary = {"sport": sport, "granular_filled": 0, "fav_filled": 0,
+               "coarse_filled": 0, "total_rows": 0}
     src = _SPORT_SOURCES.get(sport)
     if not src:
         logger.warning("calibration: unknown sport %r", sport)
@@ -181,23 +273,23 @@ def refresh_calibration(sport: str = "mlb") -> dict:
         return summary
 
     try:
-        # UNION the live picks table with synthetic backfilled samples.
-        # The samples table is filled by scripts/backfill_calibration.py
-        # so we have meaningful per-bucket sample counts even before the
-        # real tracker has settled hundreds of picks. The calibrator
-        # treats both rows identically -- one (bet_type, model_prob,
-        # result) tuple is one sample regardless of source.
+        # Pull every settled live pick with its edge + odds so we can
+        # route each sample into the granular buckets. The synthetic
+        # samples table only carries (bet_type, model_prob, result) so
+        # those rows land in the coarse (bet_type, bucket) view only.
         conn = get_conn()
-        rows = conn.execute(
-            f"SELECT bet_type, model_prob, result FROM {table_name} "
+        live = conn.execute(
+            f"SELECT bet_type, model_prob, result, edge, odds "
+            f"FROM {table_name} "
             "WHERE result IN ('W', 'L') AND model_prob IS NOT NULL"
         ).fetchall()
+        synth = []
         try:
-            extra = conn.execute(
-                "SELECT bet_type, model_prob, result FROM calibration_samples "
+            synth = conn.execute(
+                "SELECT bet_type, model_prob, result "
+                "FROM calibration_samples "
                 "WHERE result IN ('W', 'L') AND model_prob IS NOT NULL"
             ).fetchall()
-            rows = list(rows) + list(extra)
         except Exception:
             # Table not present in this DB yet -- fine, just use real picks.
             pass
@@ -206,57 +298,83 @@ def refresh_calibration(sport: str = "mlb") -> dict:
                        table_name, e)
         return summary
 
-    summary["total_rows"] = len(rows)
-    if not rows:
+    total_rows = len(live) + len(synth)
+    summary["total_rows"] = total_rows
+    if total_rows == 0:
         with _TABLE_LOCK:
             _TABLE[sport] = {}
             _TABLE_LOADED[sport] = True
         return summary
 
-    # Count W and total per (bet_type, bucket).
-    counts: dict[tuple[str, tuple[float, float]], dict] = defaultdict(
-        lambda: {"n": 0, "w": 0}
-    )
-    for r in rows:
-        r = dict(r)
-        bt = _normalize_bet_type(r.get("bet_type"))
-        p = r.get("model_prob") or 0.0
-        b = _bucket_for(p)
+    # Accumulate counts into every applicable key so one sample
+    # contributes to coarse, fav-split, and granular simultaneously.
+    counts: dict[tuple, dict] = defaultdict(lambda: {"n": 0, "w": 0})
+
+    def _add(sample_bt: str, prob: float, won: bool,
+             sample_edge: float | None, sample_odds: int | float | None) -> None:
+        bt = _normalize_bet_type(sample_bt)
+        b = _bucket_for(prob or 0.0)
         if not b:
-            continue
+            return
+        # Coarse: (bet_type, bucket)
         c = counts[(bt, b)]
         c["n"] += 1
-        if r["result"] == "W":
+        if won:
             c["w"] += 1
+        # Fav-split: (bet_type, fav/dog, bucket)
+        fav = _fav_flag(sample_odds)
+        if fav:
+            c2 = counts[(bt, fav, b)]
+            c2["n"] += 1
+            if won:
+                c2["w"] += 1
+        # Granular: (bet_type, edge_tier, fav/dog, juice_tier, bucket)
+        et = _edge_tier(sample_edge)
+        jt = _juice_tier(sample_odds)
+        if fav and et and jt:
+            c3 = counts[(bt, et, fav, jt, b)]
+            c3["n"] += 1
+            if won:
+                c3["w"] += 1
 
-    # Table rows are (lo, hi, real_wr, n). The sample count is carried
-    # so calibrate() can shrink the empirical back toward the raw model
-    # prob at low sample sizes -- a single bad streak at n=12 shouldn't
-    # rewrite a whole bucket to 25% WR when the underlying truth is
-    # likely 45-55%.
-    new_table: dict[str, list[tuple[float, float, float, int]]] = defaultdict(list)
-    for (bt, (lo, hi)), c in counts.items():
+    for r in live:
+        r = dict(r)
+        _add(r.get("bet_type"), r.get("model_prob") or 0.0,
+             r["result"] == "W",
+             r.get("edge"), r.get("odds"))
+    for r in synth:
+        r = dict(r)
+        _add(r.get("bet_type"), r.get("model_prob") or 0.0,
+             r["result"] == "W",
+             None, None)
+
+    # Flatten counts into the lookup table. calibrate() only consults
+    # buckets that cleared MIN_BUCKET_N, but we still surface thinner
+    # buckets in the snapshot for diagnostics.
+    new_table: dict[tuple, dict] = {}
+    for key, c in counts.items():
+        if c["n"] == 0:
+            continue
+        real_wr = c["w"] / c["n"]
+        new_table[key] = {"n": c["n"], "w": c["w"], "real_wr": real_wr}
         if c["n"] >= MIN_BUCKET_N:
-            real_wr = c["w"] / c["n"]
-            new_table[bt].append((lo, hi, real_wr, c["n"]))
-            summary["buckets_filled"] += 1
-        else:
-            # Passthrough: midpoint of bucket. Sample too thin to trust.
-            new_table[bt].append((lo, hi, (lo + hi) / 2, 0))
-            summary["buckets_passthrough"] += 1
-
-    # Sort each bet-type's rows by lo so the lookup loop is deterministic.
-    for bt in list(new_table.keys()):
-        new_table[bt].sort(key=lambda row: row[0])
+            # Categorize by key length for the summary.
+            klen = len(key)
+            if klen == 5:
+                summary["granular_filled"] += 1
+            elif klen == 3:
+                summary["fav_filled"] += 1
+            else:
+                summary["coarse_filled"] += 1
 
     with _TABLE_LOCK:
-        _TABLE[sport] = dict(new_table)
+        _TABLE[sport] = new_table
         _TABLE_LOADED[sport] = True
 
-    logger.info("calibration[%s]: built from %d rows -- %d buckets "
-                "filled, %d passthrough",
-                sport, summary["total_rows"], summary["buckets_filled"],
-                summary["buckets_passthrough"])
+    logger.info("calibration[%s]: built from %d rows — %d granular / "
+                "%d fav-split / %d coarse buckets cleared MIN_BUCKET_N",
+                sport, total_rows, summary["granular_filled"],
+                summary["fav_filled"], summary["coarse_filled"])
     return summary
 
 
@@ -266,12 +384,13 @@ def refresh_all_sports() -> dict:
 
 
 def snapshot(sport: str | None = None) -> dict:
-    """Return the calibration table for `sport`, or all sports when None."""
+    """Return the calibration table for `sport`, or all sports when None.
+    Keys are the composite bucket tuples; values are {n, w, real_wr}."""
     with _TABLE_LOCK:
         if sport is None:
-            return {s: {bt: list(rows) for bt, rows in tbl.items()}
+            return {s: {k: dict(v) for k, v in tbl.items()}
                     for s, tbl in _TABLE.items()}
-        return {bt: list(rows) for bt, rows in _TABLE.get(sport, {}).items()}
+        return {k: dict(v) for k, v in _TABLE.get(sport, {}).items()}
 
 
 def _bucket_for(p: float) -> tuple[float, float] | None:
