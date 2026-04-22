@@ -54,6 +54,14 @@ echo Calibrating per-team factors...
 python scripts\run.py engine.team_calibration
 
 echo.
+echo Checking for late-lineup deltas (invalidates stale picks + POTD)...
+REM Snapshots today's confirmed lineups and compares vs the morning
+REM snapshot. On delta: drops picks_cache + unsettled POTD for the
+REM affected game and force-re-records the tracker with the fresh
+REM lineup. First run of the day just stores snapshots silently.
+python -c "from engine.lineup_refresh import refresh_for_date; import json; print(json.dumps(refresh_for_date(), indent=2, default=str))" 2>nul
+
+echo.
 echo Recording today's picks...
 python scripts\run.py engine.tracker --record
 
