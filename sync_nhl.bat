@@ -42,6 +42,13 @@ echo Calibrating NHL model...
 python -m engine.nhl_calibration
 echo.
 
+echo Checking for late-goalie deltas (invalidates stale picks + NHL POTD)...
+REM Snapshots announced starting goalies. On delta (confirmed
+REM starter differs from the morning snapshot) drops picks_cache +
+REM unsettled POTD for the affected game and force-re-records
+REM the NHL tracker with the confirmed goalie.
+python -c "from engine.nhl_goalie_refresh import refresh_for_date; import json; print(json.dumps(refresh_for_date(), indent=2, default=str))" 2>nul
+
 echo Recording today's NHL picks...
 python -m engine.nhl_tracker --record
 

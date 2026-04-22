@@ -406,6 +406,54 @@ def fetch_boxscore(game_id: int) -> dict | None:
     return updates
 
 
+def fetch_starting_goalies(game_id: int) -> dict | None:
+    """Pregame fetch of announced starting goalies.
+
+    The boxscore endpoint only returns player rows once the game is
+    FINAL. Before puck drop, teams announce their starters via the
+    landing endpoint's "matchup" block (usually 30min–3h pre-game;
+    Daily Faceoff / confirmed-starter lag). Returns
+    ``{"home_goalie_id": int | None, "away_goalie_id": int | None,
+    "confirmed": bool}`` or None if the feed doesn't expose starters
+    yet. Callers treat ``confirmed=False`` as "no delta to act on".
+    """
+    data = _fetch(f"{NHL_API}/gamecenter/{game_id}/landing")
+    if not data:
+        return None
+    matchup = data.get("matchup") or {}
+    gs = matchup.get("goalieComparison") or {}
+    home = (gs.get("homeTeam") or {}).get("leaders") or []
+    away = (gs.get("awayTeam") or {}).get("leaders") or []
+
+    def _first_id(leaders: list) -> int | None:
+        for entry in leaders:
+            pid = entry.get("playerId") or entry.get("id")
+            if pid:
+                try:
+                    return int(pid)
+                except (TypeError, ValueError):
+                    continue
+        return None
+
+    home_gid = _first_id(home)
+    away_gid = _first_id(away)
+
+    # Fallback: some NHL landing payloads expose starters under
+    # `summary.gameInfo.*.projectedGoalie` or the `gameInfo` block,
+    # depending on the game-state phase. Walk a few known paths.
+    if home_gid is None or away_gid is None:
+        gi = (data.get("summary") or {}).get("gameInfo") or data.get("gameInfo") or {}
+        home_gid = home_gid or ((gi.get("homeTeam") or {}).get("projectedGoalie") or {}).get("playerId")
+        away_gid = away_gid or ((gi.get("awayTeam") or {}).get("projectedGoalie") or {}).get("playerId")
+
+    confirmed = bool(home_gid and away_gid)
+    return {
+        "home_goalie_id": int(home_gid) if home_gid else None,
+        "away_goalie_id": int(away_gid) if away_gid else None,
+        "confirmed": confirmed,
+    }
+
+
 def fetch_boxscores_for_date(date_str: str) -> int:
     """Fetch boxscores for all final games on a date. Returns count."""
     from engine.nhl_db import get_conn
