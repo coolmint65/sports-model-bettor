@@ -415,6 +415,16 @@ def generate_picks(home_team_id: int, away_team_id: int,
     except Exception as e:
         logger.warning("Edge enhancements error: %s", e)
 
+    # Conservatism ladder: for every pick whose primary probability is
+    # below the activation threshold, swap to the safest same-direction
+    # sibling that still clears our edge + juice guardrails. Runs after
+    # alt-line shopping so alt candidates are available as ladder rungs.
+    try:
+        from .conservatism import apply_ladder as _conservatism_ladder
+        picks = _conservatism_ladder(picks, pred, odds, "mlb", h_abbr, a_abbr)
+    except Exception as e:
+        logger.warning("MLB conservatism ladder error: %s", e)
+
     # Adjusted EV: edge * reliability weight * CLV modifier * line move modifier
     for p in picks:
         reliability = MLB_BET_RELIABILITY.get(p["type"], 0.5)

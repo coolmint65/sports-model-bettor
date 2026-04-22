@@ -268,6 +268,15 @@ def generate_nhl_picks_with_context(home_key: str, away_key: str,
     # Drop picks that flipped to negative edge after calibration.
     picks = [p for p in picks if (p.get("edge") or 0) > 0]
 
+    # Conservatism ladder: swap low-probability picks to their safest
+    # qualifying same-direction sibling so WR% rides higher through
+    # variance. No-op for picks already above the activation threshold.
+    try:
+        from .conservatism import apply_ladder as _conservatism_ladder
+        picks = _conservatism_ladder(picks, pred, odds, "nhl", h_abbr, a_abbr)
+    except Exception as e:
+        logger.warning("NHL conservatism ladder error: %s", e)
+
     # Adjusted EV: edge * reliability weight
     for p in picks:
         reliability = NHL_BET_RELIABILITY.get(p["type"], 0.5)

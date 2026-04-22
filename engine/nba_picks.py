@@ -336,6 +336,15 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
 
     picks = [p for p in picks if (p.get("edge") or 0) > 0]
 
+    # Conservatism ladder: swap risky Q1 spread/total picks to safer
+    # same-direction siblings (smaller spread, Q1_ML, nearer total)
+    # when one still clears edge + juice guardrails.
+    try:
+        from .conservatism import apply_ladder as _conservatism_ladder
+        picks = _conservatism_ladder(picks, pred, odds, "nba", home_abbr, away_abbr)
+    except Exception as e:
+        logger.warning("NBA conservatism ladder error: %s", e)
+
     # Adjusted EV: edge * reliability weight
     for p in picks:
         reliability = NBA_BET_RELIABILITY.get(p["type"], 0.5)
