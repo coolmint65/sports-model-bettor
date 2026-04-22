@@ -100,7 +100,13 @@ MLB_SP_INNINGS_SHARE = 0.60
 # WR/ROI on held-out data. Infrastructure (nba_players, nba_injuries,
 # nba_injuries.py) stays intact for informational display, but
 # predict_q1 ignores it when this flag is False.
-NBA_ENABLE_ROSTER_ADJUSTMENT = False
+NBA_ENABLE_ROSTER_ADJUSTMENT = True  # re-enabled 2026-04-21 with
+# OUT-only gate (see engine/nba_injuries._classify_status). The old
+# probabilistic weights (questionable=0.25, doubtful=0.5) averaged
+# into a phantom 0.5pt shift because 75-80% of those listings ended
+# up playing. Confirmed-OUT stars are a per-game 3-6pt Q1 swing that
+# aggregate means drown. Pairs with engine/nba_injury_refresh.py which
+# invalidates stale picks when a star flips to/from OUT on game day.
 
 # ── NHL config ──
 NHL_HOME_EDGE = 0.15  # ~0.15 goal home-ice advantage
@@ -141,6 +147,19 @@ NHL_ENABLE_GRANULAR_FACTORS = False
 #   Abl WR > Base -> factor hurts (turn OFF).
 #   Avg Δp ~ 0    -> factor inert on this sample (turn OFF).
 NHL_ENABLE_GOALIE_SV         = False  # ablated 0.7% Δp / 34.0% WR (no signal)
+# Successor to NHL_ENABLE_GOALIE_SV — the old path used TEAM save%
+# (lumped starter + backup together) which diluted any real goalie
+# signal. The recency-weighted path blends the starting goalie's last
+# 5 starts with season SV% and applies it as an xG multiplier. Default
+# ON because it addresses the root cause of the ablation result.
+NHL_ENABLE_GOALIE_RECENCY    = True
+# Extend the L10 goals_for / goals_against blend (previously applied
+# only to the O/U-specific xG) to the BASE xG used by ML + PL too.
+# Hot/cold team form was flowing into totals but NOT into moneyline
+# predictions — which left ML prices relying on season averages even
+# when recent results clearly diverged. 60% season / 40% L10 matches
+# the O/U blend so callers see a consistent response to recent form.
+NHL_ENABLE_L10_BLEND         = True
 NHL_ENABLE_GOALIE_STARTER    = False  # ablated 0.0% Δp (inert - no live goalie data)
 NHL_ENABLE_GOALIE_BACKUP_PEN = False  # ablated 0.0% Δp (inert)
 NHL_ENABLE_PP_PK             = False  # ablated 1.1% Δp / 34.8% WR (mildly hurts: +0.8pp)

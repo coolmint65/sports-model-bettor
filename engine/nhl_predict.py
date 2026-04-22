@@ -86,6 +86,73 @@ def _expected_goals(off: float, opp_def: float, league_avg: float) -> float:
     return (off * opp_def) / league_avg
 
 
+def _recent_goalie_sv(goalie_id: int, as_of_date: str,
+                      n: int = 5) -> tuple[float | None, int]:
+    """Compute a goalie's save% over their last N completed starts.
+
+    Uses `nhl_games.home_goalie_id / away_goalie_id + shots` columns —
+    saves = shots_against − goals_allowed for games the goalie started.
+    Returns (sv_pct, n_games_used). n_games_used is 0 when no qualifying
+    starts with non-null shot data exist in the window.
+    """
+    try:
+        from .nhl_db import get_conn as _gc
+        rows = _gc().execute(
+            "SELECT home_goalie_id, away_goalie_id, "
+            "       home_score, away_score, home_shots, away_shots "
+            "FROM nhl_games "
+            "WHERE (home_goalie_id = ? OR away_goalie_id = ?) "
+            "  AND status = 'final' AND date < ? "
+            "  AND home_shots IS NOT NULL AND away_shots IS NOT NULL "
+            "ORDER BY date DESC LIMIT ?",
+            (goalie_id, goalie_id, as_of_date, n),
+        ).fetchall()
+    except Exception:
+        return None, 0
+    total_shots = 0
+    total_goals = 0
+    used = 0
+    for r in rows:
+        if r["home_goalie_id"] == goalie_id:
+            sa = r["away_shots"]
+            ga = r["away_score"]
+        else:
+            sa = r["home_shots"]
+            ga = r["home_score"]
+        if sa is None or ga is None or sa <= 0:
+            continue
+        total_shots += sa
+        total_goals += ga
+        used += 1
+    if total_shots == 0 or used == 0:
+        return None, 0
+    sv_pct = max(0.0, min(1.0, (total_shots - total_goals) / total_shots))
+    return round(sv_pct, 4), used
+
+
+def _blended_goalie_sv(goalie_info: dict | None, goalie_id: int,
+                       as_of_date: str, league_sv: float) -> float | None:
+    """Blend the starting goalie's season SV% with last-5 recent form.
+    60/40 recent/season when ≥3 recent starts, 30/70 with 1-2, pure
+    season when 0. Falls through to league-avg only if the goalie has
+    no recorded season row AND no recent-starts data."""
+    season_sv = None
+    if goalie_info:
+        sp = goalie_info.get("save_pct")
+        if sp and sp > 0:
+            season_sv = float(sp)
+    recent_sv, n_recent = _recent_goalie_sv(goalie_id, as_of_date, n=5)
+    if season_sv is None and recent_sv is None:
+        return None  # Let caller keep the team-level fallback
+    if season_sv is None:
+        return recent_sv
+    if recent_sv is None or n_recent == 0:
+        return season_sv
+    if n_recent >= 3:
+        return recent_sv * 0.60 + season_sv * 0.40
+    return recent_sv * 0.30 + season_sv * 0.70
+
+
 def _form_factor(team: dict) -> float:
     """Recent form adjustment (-0.12 to +0.12)."""
     sos = team.get("strength_of_schedule", {})
@@ -1092,6 +1159,36 @@ def predict_matchup(home_key: str, away_key: str,
     home_xg = _expected_goals(home_off, away_def, avg_ga) + home_edge / 2
     away_xg = _expected_goals(away_off, home_def, avg_ga) - home_edge / 2
 
+    # ── L10 recent-form blend on base xG ──
+    # Pulls `l10_gf_avg / l10_ga_avg` from live_stats (populated by the
+    # stats.rest team-summary endpoint) and blends 60% season / 40%
+    # last-10. Feeds ML, PL, and (via the ou_home_xg = home_xg copy
+    # below) O/U. Previously only O/U got this — ML/PL were priced
+    # against pure season aggregates, which lag actual team form by
+    # 2-3 weeks in a 82-game season.
+    if _cfg_bool("NHL_ENABLE_L10_BLEND"):
+        if h_abbr_for_stats in live_stats:
+            h_live = live_stats[h_abbr_for_stats]
+            h_l10_gf = h_live.get("l10_gf_avg")
+            h_season_gf = h_live.get("goals_for_avg")
+            if h_l10_gf and h_season_gf and h_season_gf > 0:
+                home_xg = home_xg * 0.6 + (home_xg * h_l10_gf / h_season_gf) * 0.4
+            h_l10_ga = h_live.get("l10_ga_avg")
+            h_season_ga = h_live.get("goals_against_avg")
+            if h_l10_ga and h_season_ga and h_season_ga > 0:
+                # Home conceding more recently → away's xG climbs
+                away_xg = away_xg * 0.6 + (away_xg * h_l10_ga / h_season_ga) * 0.4
+        if a_abbr_for_stats in live_stats:
+            a_live = live_stats[a_abbr_for_stats]
+            a_l10_gf = a_live.get("l10_gf_avg")
+            a_season_gf = a_live.get("goals_for_avg")
+            if a_l10_gf and a_season_gf and a_season_gf > 0:
+                away_xg = away_xg * 0.6 + (away_xg * a_l10_gf / a_season_gf) * 0.4
+            a_l10_ga = a_live.get("l10_ga_avg")
+            a_season_ga = a_live.get("goals_against_avg")
+            if a_l10_ga and a_season_ga and a_season_ga > 0:
+                home_xg = home_xg * 0.6 + (home_xg * a_l10_ga / a_season_ga) * 0.4
+
     # Playoff scoring environment: tighter systems + elite goaltenders
     # every night drops league GF/G from ~6.2 to ~5.6. Apply symmetric
     # shrinkage so both sides move together.
@@ -1143,12 +1240,38 @@ def predict_matchup(home_key: str, away_key: str,
             pp_edge = (a_pp - league_pp) + (league_pk - h_pk)
             away_xg += pp_edge * pp_weight
 
-    # ── Goaltending / save% adjustment ── Gated behind NHL_ENABLE_GOALIE_SV.
+    # ── Goaltending / save% adjustment ──
+    # Two paths live here now:
+    #   NHL_ENABLE_GOALIE_SV (old, default OFF): team-level save% —
+    #     lumped starter + backup together and contributed no signal
+    #     in ablation.
+    #   NHL_ENABLE_GOALIE_RECENCY (new, default ON): starter-specific
+    #     save%, blended 60% last 5 starts / 40% season so hot/cold
+    #     streaks move the xG multiplier while regressing toward the
+    #     long-run mean. Also applies per-starter so the backup can't
+    #     "average out" a star goalie's number.
     league_sv = la.get("save_pct", 0.905)
     h_sv = hs.get("save_pct", league_sv)
     a_sv = as_.get("save_pct", league_sv)
-    if _cfg_bool("NHL_ENABLE_GOALIE_SV"):
-        # Better save% suppresses opponent's expected goals
+
+    if _cfg_bool("NHL_ENABLE_GOALIE_RECENCY"):
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        if home_goalie_id is not None:
+            blended = _blended_goalie_sv(home_goalie_info, home_goalie_id,
+                                         today_str, league_sv)
+            if blended is not None:
+                h_sv = blended
+        if away_goalie_id is not None:
+            blended = _blended_goalie_sv(away_goalie_info, away_goalie_id,
+                                         today_str, league_sv)
+            if blended is not None:
+                a_sv = blended
+        if h_sv is not None and h_sv > 0 and league_sv > 0:
+            away_xg *= max(0.85, min(1.15, league_sv / h_sv))
+        if a_sv is not None and a_sv > 0 and league_sv > 0:
+            home_xg *= max(0.85, min(1.15, league_sv / a_sv))
+    elif _cfg_bool("NHL_ENABLE_GOALIE_SV"):
+        # Legacy path kept behind the old flag for ablation comparisons.
         if h_sv is not None and h_sv > 0 and league_sv > 0:
             away_xg *= max(0.85, min(1.15, league_sv / h_sv))
         if a_sv is not None and a_sv > 0 and league_sv > 0:
@@ -1604,38 +1727,15 @@ def predict_matchup(home_key: str, away_key: str,
     home_xg = max(home_xg, 1.0)
     away_xg = max(away_xg, 1.0)
 
-    # ── O/U-specific adjustments (L10 scoring + goalie impact on totals) ──
-    # These produce a separate xG pair used ONLY for the O/U Poisson matrix,
-    # so they don't pollute the ML/puck-line probabilities.
+    # ── O/U-specific adjustments (goalie impact on totals) ──
+    # Produces a separate xG pair used ONLY for the O/U Poisson matrix
+    # so goalie-backup effects on totals don't pollute ML/PL.
+    # The L10 scoring blend previously applied here was moved up to
+    # base xG (NHL_ENABLE_L10_BLEND) so ML + PL + O/U all share
+    # recent-form signal. Starting the O/U pair from the already-
+    # L10-blended base means we never double-apply.
     ou_home_xg = home_xg
     ou_away_xg = away_xg
-
-    # Fix 1: Blend season avg with L10 scoring for totals
-    # If both teams are scoring more in L10 than season average, total should
-    # be pushed higher; if they've gone cold, pushed lower.
-    if h_abbr_for_stats in live_stats:
-        h_live = live_stats[h_abbr_for_stats]
-        l10_gf = h_live.get("l10_gf_avg")
-        season_gf = h_live.get("goals_for_avg")
-        if l10_gf and season_gf and season_gf > 0:
-            # 40% weight on recent form for totals
-            ou_home_xg = ou_home_xg * 0.6 + (ou_home_xg * l10_gf / season_gf) * 0.4
-        l10_ga = h_live.get("l10_ga_avg")
-        season_ga = h_live.get("goals_against_avg")
-        if l10_ga and season_ga and season_ga > 0:
-            # If home team conceding more recently, away xG goes up for totals
-            ou_away_xg = ou_away_xg * 0.6 + (ou_away_xg * l10_ga / season_ga) * 0.4
-
-    if a_abbr_for_stats in live_stats:
-        a_live = live_stats[a_abbr_for_stats]
-        l10_gf = a_live.get("l10_gf_avg")
-        season_gf = a_live.get("goals_for_avg")
-        if l10_gf and season_gf and season_gf > 0:
-            ou_away_xg = ou_away_xg * 0.6 + (ou_away_xg * l10_gf / season_gf) * 0.4
-        l10_ga = a_live.get("l10_ga_avg")
-        season_ga = a_live.get("goals_against_avg")
-        if l10_ga and season_ga and season_ga > 0:
-            ou_home_xg = ou_home_xg * 0.6 + (ou_home_xg * l10_ga / season_ga) * 0.4
 
     # Fix 2: Goalie impact on totals (separate from ML goalie adjustment)
     # A backup goalie (.890 SV%) vs starter (.920) should push the total up.
