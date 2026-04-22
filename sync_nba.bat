@@ -30,6 +30,15 @@ echo Calibrating NBA Q1 model...
 python -m engine.nba_calibration
 
 echo.
+echo Checking for late-injury deltas (invalidates stale picks + NBA POTD)...
+REM Snapshots confirmed-OUT player sets per game. On delta (OUT
+REM set changed for either team) drops picks_cache + unsettled POTD
+REM for the affected game and force-re-records the NBA tracker.
+REM Only OUT / DNP / Suspended flips trigger invalidation; routine
+REM questionable / day-to-day reshuffles are ignored.
+python -c "from engine.nba_injury_refresh import refresh_for_date; import json; print(json.dumps(refresh_for_date(), indent=2, default=str))" 2>nul
+
+echo.
 echo Recording today's NBA picks...
 python -m engine.nba_tracker --record
 
