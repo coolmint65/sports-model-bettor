@@ -56,6 +56,17 @@ _TOTAL_TYPES_NHL = {"O/U", "ALT O/U"}
 _TOTAL_TYPES_NBA = {"Q1_TOTAL"}
 _ALL_TOTAL_TYPES = _TOTAL_TYPES_MLB | _TOTAL_TYPES_NHL | _TOTAL_TYPES_NBA
 
+# ML types live in their own set because the ladder is asymmetric:
+# favorite ML has no safer sibling, but UNDERDOG ML can drop into the
+# matching positive-spread PL/ALT PL (or Q1_SPREAD) for a meaningful
+# probability bump (a +1.5 dog only needs to lose by ≤1 instead of
+# winning outright). NRFI / 1st INN intentionally excluded — there's
+# no spread-line equivalent for inning markets.
+_ML_TYPES_MLB = {"ML", "F5 ML"}
+_ML_TYPES_NHL = {"ML"}
+_ML_TYPES_NBA = {"Q1_ML"}
+_ALL_ML_TYPES = _ML_TYPES_MLB | _ML_TYPES_NHL | _ML_TYPES_NBA
+
 
 def _juice_wall(sport: str) -> int:
     return {
@@ -120,8 +131,16 @@ def _apply_one(pick: dict, pred: dict, odds: dict,
         candidates = _spread_ladder(pick, pred, odds, sport, h_abbr, a_abbr)
     elif bet_type in _ALL_TOTAL_TYPES:
         candidates = _total_ladder(pick, pred, odds, sport)
+    elif bet_type in _ALL_ML_TYPES:
+        # ML for an underdog can drop into a +1.5 / +2.5 spread that's
+        # strictly higher probability — the dog only has to keep it
+        # close instead of winning outright. Favorite ML has no safer
+        # sibling so this returns [] and the pick stays as-is.
+        candidates = _ml_underdog_to_spread_ladder(
+            pick, pred, odds, sport, h_abbr, a_abbr,
+        )
     else:
-        return pick  # ML / 1st INN / Q1_ML — no safer sibling
+        return pick  # 1st INN / NRFI — no spread-line equivalent
 
     edge_floor = getattr(config, "CONSERVATISM_MIN_EDGE_AFTER_SWAP", 2.0)
     prob_bump = getattr(config, "CONSERVATISM_MIN_PROB_IMPROVEMENT", 0.05)
@@ -365,6 +384,114 @@ def _spread_ladder(pick: dict, pred: dict, odds: dict,
         ml = _ml_candidate(pick_abbr, is_home, pred, odds, sport)
         if ml is not None:
             candidates.append(ml)
+
+    return candidates
+
+
+# ── ML → underdog spread ladder ───────────────────────────────
+
+def _parse_ml_pick(pick_str: str, sport: str) -> str | None:
+    """Extract the team abbreviation from an ML pick label.
+
+    MLB / NHL ML labels are just the team abbr (``"BOS"``, ``"NYY"``).
+    NBA Q1_ML labels carry a suffix (``"BOS Q1 ML"``).
+    """
+    s = (pick_str or "").strip()
+    if not s:
+        return None
+    if sport == "nba":
+        # Strip ' Q1 ML' suffix if present
+        for suffix in (" Q1 ML", " Q1", " ML"):
+            if s.endswith(suffix):
+                return s[: -len(suffix)].strip()
+    # MLB / NHL — just the abbr (or "<ABBR> ML" / "F5 <ABBR>" if labeled)
+    parts = s.split()
+    if not parts:
+        return None
+    # F5 ML labels look like "BOS" too (the bet_type carries the F5 prefix)
+    return parts[0]
+
+
+def _ml_underdog_to_spread_ladder(pick: dict, pred: dict, odds: dict,
+                                   sport: str, h_abbr: str,
+                                   a_abbr: str) -> list[dict]:
+    """Walk PL/ALT PL (or NBA Q1_SPREAD) lines that give the picked dog
+    extra cushion. Returns [] for favorite ML picks — no safer sibling
+    exists since ML is already the cushion-free option."""
+    pick_abbr = _parse_ml_pick(pick.get("pick", ""), sport)
+    if not pick_abbr:
+        return []
+
+    if pick_abbr == h_abbr:
+        is_home = True
+    elif pick_abbr == a_abbr:
+        is_home = False
+    else:
+        return []
+
+    # Identify dog vs favorite from the pick's own odds. Plus money =
+    # underdog (the side this ladder applies to). Minus money = favorite,
+    # which has no spread-side cushion.
+    p_odds = pick.get("odds")
+    try:
+        if p_odds is None or int(p_odds) <= 0:
+            return []  # not a recognizable underdog price
+    except (TypeError, ValueError):
+        return []
+
+    margin_probs = _margin_probs(pred)
+    if not margin_probs:
+        return []
+
+    is_q1 = sport == "nba"
+    q1_suffix = " Q1" if is_q1 else ""
+    candidates: list[dict] = []
+    seen_lines: set[float] = set()
+
+    for home_point, h_odds, a_odds, is_alt in _enumerate_spread_lines(odds, sport):
+        # Spread from the picked team's perspective
+        team_point = home_point if is_home else -home_point
+        # Underdog cushion: only consider POSITIVE spreads (the team
+        # gets points). A 0 or negative spread is not safer than ML
+        # for a dog.
+        if team_point <= 0:
+            continue
+        line_odds = h_odds if is_home else a_odds
+        if not _valid_odds(line_odds):
+            continue
+        if team_point in seen_lines:
+            continue
+        seen_lines.add(team_point)
+
+        # P(pick_team_margin + team_point > 0) where pick_team_margin
+        # is positive when the picked team wins / loses by less.
+        if is_home:
+            prob = sum(p for m, p in margin_probs.items() if m > -team_point)
+        else:
+            prob = sum(p for m, p in margin_probs.items() if -m > -team_point)
+        prob = max(0.0, min(1.0, prob))
+        if prob <= 0:
+            continue
+
+        line_odds_i = int(line_odds)
+        edge = (prob - _implied(line_odds_i)) * 100
+        if edge <= 0:
+            continue
+
+        sign = "+" if team_point > 0 else ""
+        bet_type = _sport_spread_bet_type(sport, is_alt)
+        # Primary line keeps the primary bet_type label
+        if sport != "nba" and not is_alt:
+            bet_type = "PL" if sport == "nhl" else "RL"
+
+        pick_str = f"{pick_abbr} {sign}{team_point:g}{q1_suffix}"
+        candidates.append({
+            "type": bet_type,
+            "pick": pick_str,
+            "prob": round(prob, 4),
+            "edge": round(edge, 1),
+            "odds": line_odds_i,
+        })
 
     return candidates
 
