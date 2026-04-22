@@ -190,8 +190,12 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     # result equals team_offense - unchanged from before. When they differ,
     # the bullpen's ERA now carries its real innings-share weight instead
     # of being a 35% footnote.
-    home_sp_factor = _blended_pitcher(home_sp_pit, home_sp)
-    away_sp_factor = _blended_pitcher(away_sp_pit, away_sp)
+    home_sp_factor = _blended_pitcher(home_sp_pit, home_sp,
+                                      pitcher_id=home_pitcher_id,
+                                      as_of_date=today)
+    away_sp_factor = _blended_pitcher(away_sp_pit, away_sp,
+                                      pitcher_id=away_pitcher_id,
+                                      as_of_date=today)
     home_bp_factor = _bullpen_factor(home_bullpen)
     away_bp_factor = _bullpen_factor(away_bullpen)
 

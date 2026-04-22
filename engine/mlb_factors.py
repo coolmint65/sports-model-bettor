@@ -148,10 +148,58 @@ def _blended_offense(pit: dict | None, stats: dict) -> float:
         return pit_rpg
 
 
-def _blended_pitcher(sp_pit: dict | None, sp_db: dict | None) -> float:
+def _recent_era_approx(pitcher_id: int, as_of_date: str, n: int = 5) -> tuple[float | None, int]:
+    """Approximate a pitcher's ERA over their last N completed starts.
+
+    We don't store per-start pitcher lines (IP / ER), so this uses total
+    runs allowed by the pitcher's team in games the pitcher started as a
+    proxy, normalized to an approximate ERA via ~5.5 IP / start. Noisy
+    (attributes bullpen runs to the starter) but directionally useful:
+    a starter whose team has bled 7+ runs per outing for three straight
+    starts is either tipping pitches, pitching hurt, or the bullpen is
+    overused behind him — in any of those cases, the season-to-date
+    ERA understates current risk.
+
+    Returns (era_approx, n_starts_used). n_starts_used is 0 when no
+    qualifying starts were found.
     """
-    Blend PIT pitcher ERA with DB stats or league average.
-    Small sample: mostly league avg. More starts: mostly PIT.
+    try:
+        from .db import get_conn as _gc
+        rows = _gc().execute(
+            "SELECT home_pitcher_id, away_pitcher_id, "
+            "       home_score, away_score "
+            "FROM games "
+            "WHERE (home_pitcher_id = ? OR away_pitcher_id = ?) "
+            "  AND status = 'final' AND date < ? "
+            "  AND home_score IS NOT NULL AND away_score IS NOT NULL "
+            "ORDER BY date DESC LIMIT ?",
+            (pitcher_id, pitcher_id, as_of_date, n),
+        ).fetchall()
+    except Exception:
+        return None, 0
+    if not rows:
+        return None, 0
+    total_ra = 0
+    for r in rows:
+        if r["home_pitcher_id"] == pitcher_id:
+            total_ra += r["away_score"] or 0
+        else:
+            total_ra += r["home_score"] or 0
+    avg_ra = total_ra / len(rows)
+    era_approx = avg_ra * 9 / 5.5
+    return round(max(0.0, min(15.0, era_approx)), 2), len(rows)
+
+
+def _blended_pitcher(sp_pit: dict | None, sp_db: dict | None,
+                     pitcher_id: int | None = None,
+                     as_of_date: str | None = None) -> float:
+    """
+    Blend PIT pitcher ERA with DB stats or league average, then fold in
+    a recency-weighted correction from the pitcher's last 3-5 starts.
+    Small sample: mostly league avg. More starts: mostly PIT. Recent
+    form overlay responds to hot/cold streaks the season-to-date ERA
+    misses — especially relevant in April before season stats settle
+    and for pitchers returning from the IL / recent role changes.
     """
     db_factor = _pitcher_factor(sp_db)
 
@@ -159,7 +207,22 @@ def _blended_pitcher(sp_pit: dict | None, sp_db: dict | None) -> float:
         return db_factor
 
     starts = sp_pit.get("games_started", 0)
-    pit_factor = sp_pit["era"] / MLB_AVG_ERA
+    season_era = sp_pit["era"]
+
+    # Recency blend: weight last 3-5 starts 60% vs season 40% when we
+    # have a meaningful recent sample. Falls through to pure season
+    # ERA when the proxy isn't usable (pitcher has <3 recent starts).
+    effective_era = season_era
+    if pitcher_id is not None and as_of_date is not None:
+        recent_era, n_recent = _recent_era_approx(pitcher_id, as_of_date, n=5)
+        if recent_era is not None and n_recent >= 3:
+            effective_era = recent_era * 0.60 + season_era * 0.40
+        elif recent_era is not None and n_recent >= 1:
+            # 1-2 recent starts: keep season as primary but let form
+            # nudge the estimate (30% recent / 70% season).
+            effective_era = recent_era * 0.30 + season_era * 0.70
+
+    pit_factor = effective_era / MLB_AVG_ERA
     pit_factor = max(0.60, min(1.50, pit_factor))
 
     if starts == 0:
