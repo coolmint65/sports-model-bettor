@@ -476,7 +476,10 @@ def settle_picks() -> dict:
                 won = not home_won
             result = "W" if won else "L"
 
-        elif bt == "O/U":
+        elif bt in ("O/U", "ALT O/U"):
+            # ALT O/U mirrors primary O/U settlement — same Over/Under
+            # label, different line value. Without this the conservatism
+            # ladder's safer-line swaps stayed PEND on the NHL tracker.
             if "Over" in pk:
                 line = float(pk.split()[-1])
                 if total > line:
@@ -494,7 +497,9 @@ def settle_picks() -> dict:
                 else:
                     result = "P"
 
-        elif bt == "PL":
+        elif bt in ("PL", "ALT PL"):
+            # ALT PL settles the same as primary PL — pick label has the
+            # team + signed spread regardless of alt vs primary.
             parts = pk.split()
             pick_team = parts[0] if parts else ""
             spread = float(parts[1]) if len(parts) > 1 else 1.5

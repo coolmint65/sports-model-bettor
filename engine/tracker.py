@@ -615,7 +615,12 @@ def settle_picks() -> dict:
                 won = not home_won
             result = "W" if won else "L"
 
-        elif bt in ("ou", "O/U"):
+        elif bt in ("ou", "O/U", "ALT O/U"):
+            # ALT O/U picks (from edge_enhancements alt-line shopper /
+            # conservatism ladder swap) settle exactly like primary O/U
+            # — same "Over N.N" / "Under N.N" pick label, just a
+            # different line value. Without this branch they sat PEND
+            # forever after settle ran.
             if "Over" in pk:
                 line = float(pk.split()[-1])
                 if total_runs > line:
@@ -669,8 +674,12 @@ def settle_picks() -> dict:
             else:
                 result = "W" if not scoreless_1st else "L"
 
-        elif bt in ("rl", "RL"):
-            # Extract team and spread from pick (e.g. "DET -1.5", "COL +1.5")
+        elif bt in ("rl", "RL", "ALT RL"):
+            # ALT RL settles identically to primary RL — pick label
+            # carries the team + signed spread regardless of which side
+            # of the alt-line catalog it came from. Adding ALT RL here
+            # closed the gap that left CHC -2.5 / similar alt picks
+            # stuck on PEND after a full game settled.
             parts = pk.split()
             pick_team = parts[0] if parts else ""
             spread = float(parts[1]) if len(parts) > 1 else 1.5
