@@ -28,24 +28,26 @@ _QUESTIONABLE_STATUSES = {"questionable", "day-to-day", "dtd", "probable"}
 def _classify_status(status: str) -> float:
     """Return an availability-loss weight in [0, 1].
 
-    1.0 = fully out (apply full impact)
-    0.5 = doubtful (apply half impact)
-    0.25 = questionable (apply quarter impact)
-    0.0 = probable/active (no impact)
+    Only confirmed-OUT statuses apply full weight. The probabilistic
+    0.5 (doubtful) / 0.25 (questionable) bands were retired in April
+    2026: the factor_backtest showed the aggregate Q1 total shift
+    averaged only 0.5pt with those bands turned on, which turns out
+    to be the right answer in aggregate because ~75-80% of listed-
+    doubtful / questionable players do play. Per-game the signal
+    exists when a star is ruled OUT, so the adjustment is re-enabled
+    via NBA_ENABLE_ROSTER_ADJUSTMENT but gated to confirmed-OUT only.
+
+    1.0 = fully out / suspended / DNP (apply full impact)
+    0.0 = anything else (speculative — carry no weight)
     """
     s = (status or "").strip().lower()
     if not s:
         return 0.0
     if any(k in s for k in _OUT_STATUSES):
         return 1.0
-    if any(k in s for k in _DOUBTFUL_STATUSES):
-        return 0.5
-    if any(k in s for k in _QUESTIONABLE_STATUSES):
-        # "Probable" is very likely to play, treat as zero impact
-        if "probable" in s:
-            return 0.0
-        return 0.25
-    # Unknown - conservative zero
+    # Doubtful / questionable / probable / day-to-day all map to 0.
+    # The historical hit-rate didn't justify the aggregate downward
+    # adjustment they produced on Q1 totals.
     return 0.0
 
 
