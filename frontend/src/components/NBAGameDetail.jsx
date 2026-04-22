@@ -110,6 +110,19 @@ function Q1PredictionResults({ data, odds, home, away }) {
           nothing when pred.ensemble is empty. */}
       <ModelSignals pred={d} sport="nba" home={home} away={away} />
 
+      {/* Injury report: confirmed-OUT starters from the NBA injury
+          feed. Backend attaches these via compute_q1_adjustment —
+          factors.home_roster.out_players / away_roster.out_players.
+          Only renders when at least one side has someone out. */}
+      <InjuriesCard
+        home={home}
+        away={away}
+        homeOut={d.factors?.home_roster?.out_players}
+        awayOut={d.factors?.away_roster?.out_players}
+        homeDelta={d.factors?.home_roster?.q1_delta}
+        awayDelta={d.factors?.away_roster?.q1_delta}
+      />
+
       {/* Key Factors */}
       {d.factors && (
         <div className="result-card">
@@ -259,6 +272,65 @@ function Q1BettingPicks({ data, odds, home, away }) {
     </div>
   )
 }
+
+function InjuriesCard({ home, away, homeOut, awayOut, homeDelta, awayDelta }) {
+  // Only confirmed-OUT entries come through from the backend — the
+  // _classify_status filter drops questionable/doubtful so this list
+  // never shows players who will actually tip off.
+  const hOut = Array.isArray(homeOut) ? homeOut : []
+  const aOut = Array.isArray(awayOut) ? awayOut : []
+  if (hOut.length === 0 && aOut.length === 0) return null
+
+  const row = (p, teamAbbr) => (
+    <div key={`${teamAbbr}-${p.player_id || p.name}`} className="stat-row">
+      <span className="stat-label">
+        {p.starter ? <strong>{p.name}</strong> : p.name}
+        {p.position ? <span style={{color:'#64748b', marginLeft:6}}>({p.position})</span> : null}
+      </span>
+      <span className="stat-value" style={{color:'#ef4444'}}>
+        {(p.status || 'OUT').toUpperCase()}
+        {typeof p.q1_impact === 'number' && p.q1_impact > 0 && (
+          <span style={{color:'#64748b', marginLeft:6, fontSize:'0.75rem'}}>
+            -{p.q1_impact.toFixed(1)} Q1 pts
+          </span>
+        )}
+      </span>
+    </div>
+  )
+
+  return (
+    <div className="result-card">
+      <h2>Injuries (Out)</h2>
+      {hOut.length > 0 && (
+        <>
+          <div style={{color:'#94a3b8', fontSize:'0.75rem', margin:'4px 0 6px 0'}}>
+            {home.abbreviation} — {hOut.length} out
+            {typeof homeDelta === 'number' && homeDelta < 0 && (
+              <span style={{marginLeft:8, color:'#ef4444'}}>
+                ({homeDelta.toFixed(1)} Q1 pts)
+              </span>
+            )}
+          </div>
+          {hOut.map(p => row(p, home.abbreviation))}
+        </>
+      )}
+      {aOut.length > 0 && (
+        <>
+          <div style={{color:'#94a3b8', fontSize:'0.75rem', margin:'10px 0 6px 0'}}>
+            {away.abbreviation} — {aOut.length} out
+            {typeof awayDelta === 'number' && awayDelta < 0 && (
+              <span style={{marginLeft:8, color:'#ef4444'}}>
+                ({awayDelta.toFixed(1)} Q1 pts)
+              </span>
+            )}
+          </div>
+          {aOut.map(p => row(p, away.abbreviation))}
+        </>
+      )}
+    </div>
+  )
+}
+
 
 function PickRow({ label, pick, prob, odds, pct, ciHw }) {
   const conf = prob > 0.60 ? 'high' : prob > 0.53 ? 'med' : 'low'
