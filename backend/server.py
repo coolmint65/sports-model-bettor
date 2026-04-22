@@ -2139,6 +2139,28 @@ def api_settle_picks():
         return {"error": str(e), "settled": 0}
 
 
+@app.post("/api/mlb/refresh-lineups")
+def api_refresh_mlb_lineups(date: str | None = Query(None),
+                             record: bool = Query(True)):
+    """Re-check confirmed MLB lineups for `date` (defaults to today) and
+    invalidate picks for games whose lineup has changed since the last
+    snapshot. Intended to run 2-3h before first pitch via Windows Task
+    Scheduler / cron so day-of scratches and late lineup shuffles
+    don't strand a stale pick on the card.
+
+    Query params:
+      date: YYYY-MM-DD (defaults to today)
+      record: when True (default), re-run tracker.record_picks(force=True)
+              so the recorded rows reflect the confirmed lineup too.
+    """
+    try:
+        from engine.lineup_refresh import refresh_for_date
+        return refresh_for_date(date=date, record_picks=record)
+    except Exception as e:
+        logger.error("lineup refresh failed: %s", e, exc_info=True)
+        return {"error": str(e), "deltas": 0, "invalidated": 0}
+
+
 @app.get("/api/tracker/summary")
 def api_pick_summary():
     """Get running pick totals."""
