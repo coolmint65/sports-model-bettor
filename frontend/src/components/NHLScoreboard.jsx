@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import GameCard from './primitives/GameCard'
 import ScoreboardShell from './primitives/ScoreboardShell'
 
@@ -19,7 +20,7 @@ function svPctLabel(sv) {
 }
 
 
-export default function NHLScoreboard(props) {
+function NHLScoreboardImpl(props) {
   return (
     <ScoreboardShell
       {...props}
@@ -33,6 +34,9 @@ export default function NHLScoreboard(props) {
     />
   )
 }
+
+const NHLScoreboard = memo(NHLScoreboardImpl)
+export default NHLScoreboard
 
 function NHLGameCard({ game, bet, onClick }) {
   const { home, away } = game

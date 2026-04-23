@@ -1,7 +1,28 @@
+import { useMemo } from 'react'
 import { humanizeBetType } from '../lib/betType'
 
 export default function PickHistory({ summary, history, loading, onRecord, onSettle }) {
   const pct = n => `${(n * 100).toFixed(1)}%`
+
+  const overall = summary?.overall || {}
+  const byType = summary?.by_type || {}
+
+  // Split history: today's picks vs historical. Use local date (not
+  // UTC) so the evening split works. Memoize — history can be 300+
+  // rows on a mature tracker, and the parent re-renders on every
+  // scoreboard / best-bets refresh (every 5 min) even though history
+  // only changes on record/settle events.
+  const { todaysPicks, pastPicks } = useMemo(() => {
+    const now = new Date()
+    const today = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`
+    const todays = []
+    const past = []
+    for (const p of history || []) {
+      if (p.date === today) todays.push(p)
+      else past.push(p)
+    }
+    return { todaysPicks: todays, pastPicks: past }
+  }, [history])
 
   if (loading) {
     return (
@@ -11,16 +32,6 @@ export default function PickHistory({ summary, history, loading, onRecord, onSet
       </div>
     )
   }
-
-  const overall = summary?.overall || {}
-  const byType = summary?.by_type || {}
-
-  // Split history: today's picks vs historical.
-  // Use local date (not UTC) so the split works correctly in the evening.
-  const now = new Date()
-  const today = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`
-  const todaysPicks = (history || []).filter(p => p.date === today)
-  const pastPicks = (history || []).filter(p => p.date !== today)
 
   // Bet types that have data. F5 is the aggregate of F5 ML + F5 O/U +
   // F5 RL (summed server-side in engine.tracker.get_pick_summary); the

@@ -18,6 +18,7 @@
  * Scoreboard.jsx / NHLScoreboard.jsx / NBAScoreboard.jsx.
  */
 
+import { useCallback, useMemo } from 'react'
 import FinalRow from './FinalRow'
 
 export default function ScoreboardShell({
@@ -34,6 +35,42 @@ export default function ScoreboardShell({
   renderCard,
   renderFinal,
 }) {
+  // Derive betMap, partition, and sort in a single memo keyed on games
+  // + bestBets. Previously ran on every parent re-render (every time
+  // the 5-minute scoreboard refresh fired or any sibling state ticked),
+  // mutating activeGames in-place and re-filtering for the edge count.
+  const { betMap, activeGames, finalGames, edgeCount } = useMemo(() => {
+    const bm = {}
+    if (bestBets) {
+      for (const b of bestBets) bm[b.game_id] = b
+    }
+    const active = []
+    const final = []
+    for (const g of games || []) {
+      if (g.status?.state === 'post' || g.status?.completed) final.push(g)
+      else active.push(g)
+    }
+    active.sort((a, b) => {
+      const aEdge = bm[a.id]?.best_pick?.edge ?? -99
+      const bEdge = bm[b.id]?.best_pick?.edge ?? -99
+      return bEdge - aEdge
+    })
+    let ec = 0
+    for (const g of active) {
+      const c = bm[g.id]?.confidence
+      if (c === 'strong' || c === 'moderate') ec++
+    }
+    return { betMap: bm, activeGames: active, finalGames: final, edgeCount: ec }
+  }, [games, bestBets])
+
+  // Stable handler per game id. The previous `game => () => ...`
+  // closure allocated a new function for every card on every render,
+  // defeating any shallow-prop equality the card might use.
+  const handleClick = useCallback(
+    game => () => { if (onSelectGame) onSelectGame(game) },
+    [onSelectGame],
+  )
+
   if (loading) {
     return <LoadingState progress={progress} fallback={loadingLabel} />
   }
@@ -46,31 +83,6 @@ export default function ScoreboardShell({
       </div>
     )
   }
-
-  const betMap = {}
-  if (bestBets) {
-    for (const b of bestBets) betMap[b.game_id] = b
-  }
-
-  const activeGames = []
-  const finalGames = []
-  for (const g of games) {
-    if (g.status?.state === 'post' || g.status?.completed) finalGames.push(g)
-    else activeGames.push(g)
-  }
-
-  activeGames.sort((a, b) => {
-    const aEdge = betMap[a.id]?.best_pick?.edge ?? -99
-    const bEdge = betMap[b.id]?.best_pick?.edge ?? -99
-    return bEdge - aEdge
-  })
-
-  const edgeCount = activeGames.filter(g => {
-    const c = betMap[g.id]?.confidence
-    return c === 'strong' || c === 'moderate'
-  }).length
-
-  const handleClick = game => () => onSelectGame && onSelectGame(game)
 
   return (
     <div className="scoreboard">

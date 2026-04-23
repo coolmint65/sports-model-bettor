@@ -1,8 +1,9 @@
+import { memo } from 'react'
 import GameCard from './primitives/GameCard'
 import ScoreboardShell from './primitives/ScoreboardShell'
 import FinalRow from './primitives/FinalRow'
 
-export default function NBAScoreboard(props) {
+function NBAScoreboardImpl(props) {
   return (
     <ScoreboardShell
       {...props}
@@ -26,6 +27,9 @@ export default function NBAScoreboard(props) {
     />
   )
 }
+
+const NBAScoreboard = memo(NBAScoreboardImpl)
+export default NBAScoreboard
 
 
 function NBAGameCard({ game, bet, onClick }) {

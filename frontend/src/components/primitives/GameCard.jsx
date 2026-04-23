@@ -18,13 +18,14 @@
  *   restTiredLabel     -> "tired" (MLB) or "B2B" (NHL/NBA)
  */
 
+import { memo, useMemo } from 'react'
 import EdgeBadge from './EdgeBadge'
 import WinProbBar from './WinProbBar'
 import TeamRow from './TeamRow'
 import RestChips from './RestChips'
 import LineMovedChip from './LineMovedChip'
 
-export default function GameCard({
+function GameCardImpl({
   game,
   bet,
   onClick,
@@ -41,6 +42,14 @@ export default function GameCard({
   const isPre = status.state === 'pre'
   const conf = bet?.confidence || 'skip'
   const hasPick = bet?.best_pick && conf !== 'skip'
+  // Cached formatted game time — avoids allocating a Date + Intl
+  // formatter per card on every scoreboard refresh tick.
+  const gameTimeLabel = useMemo(
+    () => new Date(game.date).toLocaleTimeString(
+      [], { hour: 'numeric', minute: '2-digit' },
+    ),
+    [game.date],
+  )
 
   return (
     <div
@@ -98,9 +107,7 @@ export default function GameCard({
 
       <div className="game-meta">
         {isPre && (
-          <span className="game-time">
-            {new Date(game.date).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
-          </span>
+          <span className="game-time">{gameTimeLabel}</span>
         )}
         {isLive && <span className="game-inning">{status.detail}</span>}
         {game.broadcast && <span className="game-broadcast">{game.broadcast}</span>}
@@ -108,3 +115,13 @@ export default function GameCard({
     </div>
   )
 }
+
+// memo so parent refreshes (scoreboard 5-min polls) don't re-render
+// every card when the underlying game / bet hasn't changed. onClick
+// is already stable (useCallback in ScoreboardShell); the rest of
+// the props are either stable data blobs or simple render-prop nodes
+// the parent passes as JSX expressions — those change refs every
+// render but the cost of re-rendering their text-only content is
+// negligible vs the whole card tree.
+const GameCard = memo(GameCardImpl)
+export default GameCard

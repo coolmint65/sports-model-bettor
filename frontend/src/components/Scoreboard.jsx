@@ -1,7 +1,8 @@
+import { memo } from 'react'
 import GameCard from './primitives/GameCard'
 import ScoreboardShell from './primitives/ScoreboardShell'
 
-export default function Scoreboard(props) {
+function ScoreboardImpl(props) {
   return (
     <ScoreboardShell
       {...props}
@@ -15,6 +16,12 @@ export default function Scoreboard(props) {
     />
   )
 }
+
+// memo so App-level state changes (e.g. NHL/NBA polling updating
+// their progress) don't cascade into an MLB scoreboard re-render
+// when none of its props changed.
+const Scoreboard = memo(ScoreboardImpl)
+export default Scoreboard
 
 function MLBGameCard({ game, bet, onClick }) {
   const { home, away } = game

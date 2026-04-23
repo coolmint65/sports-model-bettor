@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import LineMovementBadge from './LineMovementBadge'
 
 /**
@@ -28,6 +29,15 @@ export default function SharedGameHeader({ game, onBack, matchupExtras }) {
   const isFinal = status.state === 'post'
 
   const lm = game.line_movement
+
+  // Formatted "Sat, Apr 22, 7:30 PM" string cached per game.date.
+  const gameDateLabel = useMemo(
+    () => new Date(game.date).toLocaleString([], {
+      weekday: 'short', month: 'short', day: 'numeric',
+      hour: 'numeric', minute: '2-digit',
+    }),
+    [game.date],
+  )
   const lmSignificant = lm && lm.significance && lm.significance !== 'none'
 
   return (
@@ -67,12 +77,7 @@ export default function SharedGameHeader({ game, onBack, matchupExtras }) {
         <div className="detail-info">
           {game.venue && <span>{game.venue}</span>}
           {game.broadcast && <span>{game.broadcast}</span>}
-          {status.state === 'pre' && (
-            <span>{new Date(game.date).toLocaleString([], {
-              weekday: 'short', month: 'short', day: 'numeric',
-              hour: 'numeric', minute: '2-digit',
-            })}</span>
-          )}
+          {status.state === 'pre' && <span>{gameDateLabel}</span>}
           {isLive && <span className="live-clock">{status.detail}</span>}
         </div>
 

@@ -1,6 +1,24 @@
+import { useMemo } from 'react'
 import { humanizeBetType } from '../lib/betType'
 
 export default function BestBets({ bets, loading }) {
+  // Bucket the bets into confidence tiers once per `bets` reference
+  // instead of running three full passes on every parent re-render
+  // (App.jsx rerenders frequently during scoreboard refresh / nav
+  // changes, and the list can exceed 30 games on big slate days).
+  const { strong, moderate, lean } = useMemo(() => {
+    if (!bets || bets.length === 0) {
+      return { strong: [], moderate: [], lean: [] }
+    }
+    const s = [], m = [], l = []
+    for (const b of bets) {
+      if (b.confidence === 'strong') s.push(b)
+      else if (b.confidence === 'moderate') m.push(b)
+      else if (b.confidence === 'lean') l.push(b)
+    }
+    return { strong: s, moderate: m, lean: l }
+  }, [bets])
+
   if (loading) {
     return (
       <div className="loading">
@@ -17,10 +35,6 @@ export default function BestBets({ bets, loading }) {
       </div>
     )
   }
-
-  const strong = bets.filter(b => b.confidence === 'strong')
-  const moderate = bets.filter(b => b.confidence === 'moderate')
-  const lean = bets.filter(b => b.confidence === 'lean')
 
   return (
     <div className="best-bets-page">
@@ -54,6 +68,15 @@ export default function BestBets({ bets, loading }) {
 function BetCard({ bet }) {
   const pct = n => `${(n * 100).toFixed(1)}%`
   const { best_pick, all_picks } = bet
+  // Cache the formatted time per-card. With 30+ cards on a big slate,
+  // this avoids spinning up 30 Date objects + Intl formatters on every
+  // parent re-render.
+  const gameTime = useMemo(
+    () => new Date(bet.time).toLocaleTimeString(
+      [], { hour: 'numeric', minute: '2-digit' },
+    ),
+    [bet.time],
+  )
 
   return (
     <div className={`bb-card conf-${bet.confidence}`}>
@@ -64,7 +87,7 @@ function BetCard({ bet }) {
           {bet.home.logo && <img src={bet.home.logo} alt="" className="bb-logo" />}
         </div>
         <div className="bb-meta">
-          <span>{new Date(bet.time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
+          <span>{gameTime}</span>
           {bet.venue && <span className="bb-venue">{bet.venue}</span>}
         </div>
       </div>
