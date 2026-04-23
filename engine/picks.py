@@ -256,7 +256,15 @@ def generate_picks(home_team_id: int, away_team_id: int,
         nrfi_edge = (nrfi_prob - _implied(nrfi_odds)) * 100
         allow = (nrfi_pick == "NRFI" and get_flag("MLB_ALLOW_NRFI", True)) or \
                 (nrfi_pick == "YRFI" and get_flag("MLB_ALLOW_YRFI", True))
-        if nrfi_edge > 1 and allow:
+        # YRFI gets a tighter edge floor than NRFI — its historical WR
+        # was softer, so we want only the strongest YRFI signals through.
+        # NRFI keeps the 1% floor it earned with 75% historical WR.
+        min_edge_required = (
+            get_flag("MLB_YRFI_MIN_EDGE", 5.0)
+            if nrfi_pick == "YRFI"
+            else 1.0
+        )
+        if nrfi_edge > min_edge_required and allow:
             picks.append({
                 "type": "1st INN", "pick": nrfi_pick, "prob": round(nrfi_prob, 4),
                 "edge": round(nrfi_edge, 1), "odds": nrfi_odds,

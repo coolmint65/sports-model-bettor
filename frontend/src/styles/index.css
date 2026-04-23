@@ -2583,3 +2583,68 @@ button:focus-visible {
   border-radius: 4px;
   font-variant-numeric: tabular-nums;
 }
+
+/* ── First Inning picks panel (MLB games tab) ── */
+.first-inning-picks {
+  margin: 16px 0 24px;
+  padding: 16px;
+  background: rgba(30, 41, 59, 0.35);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 10px;
+}
+.first-inning-title {
+  display: flex; align-items: center; gap: 10px;
+  margin: 0 0 4px 0;
+}
+.first-inning-count {
+  font-size: 0.75rem; font-weight: 600;
+  color: #94a3b8; padding: 2px 8px;
+  background: rgba(148, 163, 184, 0.12);
+  border-radius: 12px;
+}
+.first-inning-subtitle {
+  margin: 0 0 12px 0;
+  font-size: 0.8rem; color: #64748b;
+}
+.first-inning-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+.first-inning-card {
+  padding: 10px 12px;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 8px;
+  display: flex; flex-direction: column; gap: 6px;
+  transition: border-color 0.15s ease;
+}
+.first-inning-card.conf-strong   { border-color: rgba(52, 211, 153, 0.55); }
+.first-inning-card.conf-moderate { border-color: rgba(96, 165, 250, 0.45); }
+.first-inning-card.conf-lean     { border-color: rgba(148, 163, 184, 0.35); }
+.fi-matchup {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-size: 0.85rem;
+}
+.fi-teams  { font-weight: 600; color: #e2e8f0; }
+.fi-time   { font-size: 0.72rem; color: #64748b; }
+.fi-pick-row {
+  display: flex; justify-content: space-between; align-items: center;
+}
+.fi-pick-name {
+  font-size: 1.05rem; font-weight: 700;
+  letter-spacing: 0.03em;
+}
+.fi-nrfi { color: #34d399; }  /* green for no-runs */
+.fi-yrfi { color: #f59e0b; }  /* amber for yes-runs */
+.fi-odds {
+  font-size: 0.9rem; color: #94a3b8;
+  font-variant-numeric: tabular-nums;
+}
+.fi-stats {
+  display: flex; justify-content: space-between;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+.fi-prob { color: #cbd5e1; }
+.fi-edge.positive { color: #34d399; font-weight: 600; }

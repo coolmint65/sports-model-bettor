@@ -507,40 +507,74 @@ def _compute_first_inning(home_xr: float, away_xr: float,
     p_away_zero = p_away_zero_poisson
     p_home_zero = p_home_zero_poisson
 
-    # Blend with pitcher first-inning data when available
-    # Weight by sample size: more starts = more trust in pitcher data
-    if home_pitcher_id:
-        sp_pit = compute_pitcher_stats_at_date(home_pitcher_id, today, season)
-        if sp_pit and sp_pit.get("first_inning_scoreless_pct") is not None and sp_pit.get("first_inning_starts", 0) >= 3:
-            starts = sp_pit["first_inning_starts"]
-            pit_weight = min(0.7, starts / 30)  # Max 70% pitcher data, even with 30+ starts
-            p_away_zero = (pit_weight * sp_pit["first_inning_scoreless_pct"]
-                          + (1 - pit_weight) * p_away_zero_poisson)
+    # Blend Poisson + pitcher + team signals for each side. The 1st
+    # inning P(0 runs) for team T = blend of:
+    #   - Poisson baseline from xR
+    #   - Opposing SP's career first_inning_scoreless_pct
+    #   - Team T's season first_inning_score_pct (inverted to a
+    #     scoreless rate) — some teams score in the 1st more often
+    #     than their overall offense suggests (leadoff habits, order
+    #     construction). Previously ignored.
+    # Sample-size-weighted so small-sample noise doesn't dominate.
+    def _blend_team_scoreless(
+        team_id: int | None, opp_pitcher_id: int | None, poisson_zero: float,
+    ) -> float:
+        out = poisson_zero
+        # Pitcher contribution
+        pit_pct = None
+        pit_weight = 0.0
+        if opp_pitcher_id:
+            sp_pit = compute_pitcher_stats_at_date(opp_pitcher_id, today, season)
+            if (sp_pit and sp_pit.get("first_inning_scoreless_pct") is not None
+                    and sp_pit.get("first_inning_starts", 0) >= 3):
+                pit_pct = sp_pit["first_inning_scoreless_pct"]
+                pit_weight = min(0.5, sp_pit["first_inning_starts"] / 30)
+        # Team contribution — season first_inning_score_pct inverted
+        team_pct = None
+        team_weight = 0.0
+        if team_id:
+            t_pit = compute_team_stats_at_date(team_id, today, season)
+            if (t_pit and t_pit.get("first_inning_score_pct") is not None
+                    and t_pit.get("first_inning_games", 0) >= 10):
+                team_pct = 1.0 - t_pit["first_inning_score_pct"]
+                team_weight = min(0.35, t_pit["first_inning_games"] / 100)
+        total = pit_weight + team_weight
+        if total > 0.85:  # guard against overweighting signals
+            scale = 0.85 / total
+            pit_weight *= scale
+            team_weight *= scale
+            total = pit_weight + team_weight
+        poisson_weight = 1.0 - total
+        out = poisson_weight * poisson_zero
+        if pit_pct is not None:
+            out += pit_weight * pit_pct
+        if team_pct is not None:
+            out += team_weight * team_pct
+        return out
 
-    if away_pitcher_id:
-        sp_pit = compute_pitcher_stats_at_date(away_pitcher_id, today, season)
-        if sp_pit and sp_pit.get("first_inning_scoreless_pct") is not None and sp_pit.get("first_inning_starts", 0) >= 3:
-            starts = sp_pit["first_inning_starts"]
-            pit_weight = min(0.7, starts / 30)
-            p_home_zero = (pit_weight * sp_pit["first_inning_scoreless_pct"]
-                          + (1 - pit_weight) * p_home_zero_poisson)
+    p_away_zero = _blend_team_scoreless(
+        away_team_id, home_pitcher_id, p_away_zero_poisson,
+    )
+    p_home_zero = _blend_team_scoreless(
+        home_team_id, away_pitcher_id, p_home_zero_poisson,
+    )
 
-    # Cap at realistic bounds. Previous bounds (0.40-0.92) produced NRFI
-    # probabilities as high as 85% which are wildly miscalibrated - the
-    # backtest showed 1st INN picks at "80%+ confidence" were actually
-    # winning 46% of the time. Real per-team P(0 runs in 1st) is 65-80%,
-    # rarely outside that range.
+    # Cap at realistic bounds. Real per-team P(0 runs in 1st) is 65-80%,
+    # rarely outside that range even for ace-vs-weak-offense matchups.
     p_away_zero = max(0.55, min(0.80, p_away_zero))
     p_home_zero = max(0.55, min(0.80, p_home_zero))
 
     # NRFI = both teams score 0 in the first
     nrfi = p_home_zero * p_away_zero
 
-    # Regress hard toward MLB baseline (~56% NRFI) - individual matchups
-    # rarely deviate more than ±10% from the league average.
+    # Regress toward MLB baseline (~56% NRFI). Dropped from 65% → 45%
+    # baseline weight (2026-04-22) after the heavy 65% dampener was
+    # washing out legitimate pitcher + team signal. 45% still keeps
+    # us from overreaching on small-sample upper tails but lets real
+    # matchup edge through.
     MLB_NRFI_BASELINE = 0.56
-    nrfi = MLB_NRFI_BASELINE * 0.65 + nrfi * 0.35  # 65% baseline weight
-    nrfi = max(0.45, min(0.68, nrfi))  # Hard cap to realistic range
+    nrfi = MLB_NRFI_BASELINE * 0.45 + nrfi * 0.55
+    nrfi = max(0.45, min(0.72, nrfi))  # Hard cap — allow slightly higher upper bound now
     yrfi = 1 - nrfi
 
     # P(exactly 1 run total in 1st)

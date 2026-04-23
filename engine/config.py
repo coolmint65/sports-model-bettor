@@ -256,7 +256,16 @@ MLB_ENABLE_LINEUP_STRENGTH    = False  # 1.1% Δp / 51.0% (HURTS: +0.7pp)
 MLB_ALLOW_RL_FAVORITE = False   # -1.5 picks disabled
 MLB_ALLOW_RL_UNDERDOG = True    # +1.5 picks - the profitable side
 MLB_ALLOW_NRFI = True           # NRFI has real edge
-MLB_ALLOW_YRFI = False          # YRFI consistently loses
+MLB_ALLOW_YRFI = True           # Re-enabled 2026-04-22 with higher
+# edge floor (see MLB_YRFI_MIN_EDGE below). Was disabled after going
+# 9-14 on the old model; the current MC+GBM core + broader NRFI
+# regression rework should handle both directions. If YRFI tanks
+# again the tighter floor should filter most of it out.
+# Only YRFI picks with edge ≥ this % will be recorded / surfaced.
+# NRFI floor stays at the global 1%+ check in engine.picks — YRFI
+# gets this separate, stricter threshold because its historical WR
+# was lower.
+MLB_YRFI_MIN_EDGE = 5.0
 MLB_ALLOW_OU_OVER = True        # hold while sample is tiny
 MLB_ALLOW_OU_UNDER = False      # Unders hit 14% over 7 picks
 

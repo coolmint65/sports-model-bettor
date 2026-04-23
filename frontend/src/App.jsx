@@ -12,6 +12,7 @@ import NBAScoreboard from './components/NBAScoreboard'
 import NBAStandings from './components/NBAStandings'
 import NBAGameDetail from './components/NBAGameDetail'
 import PickOfDayHero from './components/PickOfDayHero'
+import FirstInningPicks from './components/FirstInningPicks'
 
 const api = axios.create({ baseURL: '/api' })
 
@@ -406,6 +407,7 @@ export default function App() {
       {isMLB && view === 'games' && !selectedGame && (
         <>
           <PickOfDayHero sport="mlb" />
+          <FirstInningPicks bestBets={bestBets} />
           <Scoreboard games={games} loading={gamesLoading} progress={bbProgress} onSelectGame={selectGame} bestBets={bestBets} />
         </>
       )}
