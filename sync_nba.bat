@@ -60,5 +60,6 @@ python -c "from engine.pick_of_day import settle_potd; print(settle_potd('nba'))
 
 echo.
 echo ============================================
-echo   NBA Sync Complete
+echo   NBA Sync Complete    [%DATE% %TIME%]
 echo ============================================
+if /i not "%SESSIONNAME%"=="" if /i not "%SESSIONNAME%"=="Services" if "%~1"=="" pause

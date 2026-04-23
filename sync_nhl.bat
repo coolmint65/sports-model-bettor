@@ -70,5 +70,6 @@ python -c "from engine.pick_of_day import settle_potd; print(settle_potd('nhl'))
 
 echo.
 echo ============================================
-echo   NHL Sync Complete
+echo   NHL Sync Complete    [%DATE% %TIME%]
 echo ============================================
+if /i not "%SESSIONNAME%"=="" if /i not "%SESSIONNAME%"=="Services" if "%~1"=="" pause

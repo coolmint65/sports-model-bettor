@@ -1,7 +1,9 @@
 @echo off
 cd /d "%~dp0"
+if not exist "data\logs" mkdir "data\logs"
+
 echo ============================================
-echo   Manual Data Sync
+echo   Manual Data Sync    [%DATE% %TIME%]
 echo ============================================
 echo.
 echo   NOTE: start.bat already does a full sync
@@ -58,10 +60,13 @@ goto :done
 :quick
 echo.
 echo ── MLB Sync ──
-call sync_mlb.bat
+call sync_mlb.bat --scheduled
 echo.
 echo ── NHL Sync ──
-call sync_nhl.bat
+call sync_nhl.bat --scheduled
+echo.
+echo ── NBA Sync ──
+call sync_nba.bat --scheduled
 goto :done
 
 :calibrate
@@ -84,4 +89,9 @@ echo ============================================
 echo   Sync Complete
 echo ============================================
 echo.
-pause
+REM Only pause when running interactively. Task Scheduler runs in a
+REM non-interactive "Services" session where pause hangs until the
+REM ExecutionTimeLimit kills the task (exit code 255). We detect
+REM Task Scheduler via SESSIONNAME (empty or "Services" when scheduled;
+REM "Console" or "RDP-Tcp#X" when a user is logged on).
+if /i not "%SESSIONNAME%"=="" if /i not "%SESSIONNAME%"=="Services" pause

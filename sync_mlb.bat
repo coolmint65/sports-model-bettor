@@ -98,5 +98,8 @@ python scripts\run.py scripts.backup_dbs
 
 echo.
 echo ============================================
-echo   MLB Sync Complete
+echo   MLB Sync Complete    [%DATE% %TIME%]
 echo ============================================
+REM Only pause when launched interactively (via double-click, not
+REM Task Scheduler). See sync.bat for the same SESSIONNAME check.
+if /i not "%SESSIONNAME%"=="" if /i not "%SESSIONNAME%"=="Services" if "%~1"=="" pause
