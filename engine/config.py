@@ -25,7 +25,15 @@ NBA_JUICE_WALL = -200
 # while the empirical calibration tables build up. Lives in
 # engine/conservatism.py; each sport's generate_picks invokes it
 # after calibration and before confidence tiers.
-CONSERVATISM_ENABLED = True
+CONSERVATISM_ENABLED = False  # Disabled 2026-04-22. Shipped on a
+# hypothesis (trade EV for WR by swapping risky picks to safer
+# siblings) but we never instrumented the `safened` flag to the DB,
+# so there was no way to measure whether swapped picks actually
+# performed better. Live-feel after ~1 week running was that the
+# ladder wasn't helping — picks felt over-compressed into marginal
+# +2% edge territory. The ladder module + ML→underdog extension
+# stay in engine/conservatism.py as dormant infrastructure in case
+# we want to re-enable with proper per-pick instrumentation later.
 # Only consider a swap when the primary pick's probability is below
 # this threshold — there's no reason to "safen" a pick already north
 # of 55% that's also beating the market.
