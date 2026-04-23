@@ -1,0 +1,29 @@
+[Unit]
+# Invokes the umbrella sync.sh which dispatches to MLB / NHL / NBA.
+# Driven by sports-sync.timer (same cadence as the Windows Task
+# Scheduler job on the old box: 8am, 11am, then every 2h from 1pm-9pm).
+#
+# Install on Beelink under ~/.config/systemd/user/sports-sync.service
+# and enable via: systemctl --user enable --now sports-sync.timer
+Description=Sports-model-bettor sync (MLB + NHL + NBA)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# CHANGE THIS to the absolute path where you cloned the repo on the Beelink
+WorkingDirectory=%h/sports-model-bettor
+ExecStart=%h/sports-model-bettor/scripts/sync.sh
+# Prevent overlapping runs if a previous sync is still grinding on the
+# N150 (e.g. full-refresh day took longer than the 2-hour window).
+# systemd won't start a new instance while one is still active because
+# Type=oneshot — but belt-and-braces:
+TimeoutStartSec=40min
+StandardOutput=append:%h/sports-model-bettor/data/logs/sync_systemd.log
+StandardError=append:%h/sports-model-bettor/data/logs/sync_systemd.log
+# Don't auto-restart on failure — a failed sync should surface; the
+# next timer tick will try again within 2 hours anyway.
+Restart=no
+
+[Install]
+WantedBy=default.target

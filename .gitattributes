@@ -1,0 +1,11 @@
+# Force LF endings on shell scripts + systemd units regardless of
+# checkout platform. Without this, Git's Windows autocrlf rewrites
+# these to CRLF on clone, which breaks them on Linux (WSL/Beelink)
+# with "bad interpreter" / unit-file parse errors.
+*.sh           text eol=lf
+*.service      text eol=lf
+*.timer        text eol=lf
+
+# Batch files stay CRLF for Windows.
+*.bat          text eol=crlf
+*.cmd          text eol=crlf

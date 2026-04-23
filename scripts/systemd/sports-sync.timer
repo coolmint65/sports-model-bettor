@@ -1,0 +1,24 @@
+[Unit]
+# Fires sports-sync.service on the same cadence as the old Windows
+# Task Scheduler setup:
+#   08:00  — morning sync (settle yesterday, fetch today, record)
+#   11:00  — mid-morning (catches afternoon game lineups)
+#   13:00, 15:00, 17:00, 19:00, 21:00 — every 2h through evening
+#
+# Persistent=true means a missed run (PC asleep / rebooting) still
+# fires once the box is back up, matching Windows "StartWhenAvailable".
+Description=Sports-model-bettor sync schedule
+
+[Timer]
+OnCalendar=*-*-* 08:00:00
+OnCalendar=*-*-* 11:00:00
+OnCalendar=*-*-* 13:00:00
+OnCalendar=*-*-* 15:00:00
+OnCalendar=*-*-* 17:00:00
+OnCalendar=*-*-* 19:00:00
+OnCalendar=*-*-* 21:00:00
+Persistent=true
+Unit=sports-sync.service
+
+[Install]
+WantedBy=timers.target
