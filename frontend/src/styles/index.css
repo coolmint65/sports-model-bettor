@@ -2648,3 +2648,112 @@ button:focus-visible {
 }
 .fi-prob { color: #cbd5e1; }
 .fi-edge.positive { color: #34d399; font-weight: 600; }
+
+/* ═══════════════════════════════════════════
+   Mobile / phone viewport (≤ 600px wide)
+   ═══════════════════════════════════════════
+   The desktop-first layouts use fixed padding, two- and three-column
+   grids, and wide card rows. On a 400px phone screen those collapse
+   into unreadable stacks. Tailnet-accessed viewers (phone browser
+   over Tailscale) hit these first. Goal: readable at 360-414px wide
+   without looking broken.
+*/
+@media (max-width: 600px) {
+  .app {
+    padding: 0 10px 24px;
+  }
+  .header {
+    padding: 12px 0 2px;
+  }
+  .header h1 { font-size: 1.15rem; }
+  .subtitle  { font-size: 0.72rem; }
+
+  /* Collapse every multi-column grid to single column. Cards stack
+     vertically; always readable regardless of screen width. */
+  .games-feature-grid,
+  .games-finals-grid,
+  .first-inning-grid,
+  .bb-sections,
+  .history-grid,
+  .standings-grid {
+    grid-template-columns: 1fr !important;
+    gap: 10px;
+  }
+
+  /* League switcher tabs — make them thumb-friendly */
+  .league-btn,
+  .nav-btn,
+  .tab-btn {
+    min-height: 44px;   /* iOS human-interface minimum tap target */
+    padding: 10px 14px;
+    font-size: 0.9rem;
+  }
+
+  /* Card body padding + spacing shrunk so content doesn't push off */
+  .game-card,
+  .bb-card,
+  .result-card,
+  .pick-hero,
+  .first-inning-card {
+    padding: 10px 12px;
+    border-radius: 8px;
+  }
+
+  /* Score displays stay legible at smaller scale */
+  .score-display .score       { font-size: 1.6rem; }
+  .score-display .name        { font-size: 0.85rem; }
+  .score-display .record      { font-size: 0.7rem; }
+
+  /* Pick-hero (POTD) compresses without breaking hierarchy */
+  .pick-hero-profit           { font-size: 1.8rem; }
+  .pick-hero-profit-label     { font-size: 0.7rem; }
+
+  /* Best-bets tiers take less vertical space */
+  .bb-tier                    { font-size: 0.8rem; padding: 6px 10px; }
+  .bb-pick-name               { font-size: 1rem; }
+  .bb-pick-edge               { font-size: 0.78rem; }
+  .bb-pick-prob               { font-size: 0.78rem; }
+
+  /* Game detail on phones — the side-by-side detail-matchup wraps
+     instead of cramming. Let the shell handle the stack direction. */
+  .detail-matchup {
+    flex-direction: column;
+    gap: 8px;
+    align-items: center;
+  }
+  .detail-info {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 6px 12px;
+    font-size: 0.75rem;
+  }
+
+  /* Hide elements that don't fit on narrow screens */
+  .bb-venue        { display: none; }    /* venue is noise on phone */
+  .game-broadcast  { display: none; }
+
+  /* Tables / rows with many columns become scrollable horizontally */
+  .history-table,
+  .bt-results-table {
+    font-size: 0.78rem;
+  }
+  .history-table-wrap,
+  .bt-results-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Section titles trimmed */
+  .section-title { font-size: 1rem; }
+
+  /* Prob histogram was sized for desktop width */
+  .prob-histogram { max-width: 100%; }
+}
+
+/* Very narrow phones (iPhone SE-class, 320-360px) get extra-tight padding */
+@media (max-width: 380px) {
+  .app { padding: 0 6px 20px; }
+  .score-display .score { font-size: 1.4rem; }
+  .pick-hero-profit { font-size: 1.5rem; }
+  .bb-pick-name { font-size: 0.92rem; }
+}
