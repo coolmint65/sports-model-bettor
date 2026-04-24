@@ -495,6 +495,45 @@ _Q1_MARKET_TYPES: dict[str, str] = {
     "P:OU": "q1_total",     # "1st Quarter Total Points"
 }
 
+# Phase 1 derivatives — Group 1 markets that our existing Poisson +
+# margin/total models can price without new math. Sport-prefixed so we
+# don't accidentally match the wrong sport's type-code suffix.
+#
+# Period field on the outcome (I1 / I3 / I5 / I7 / I9 etc. for MLB,
+# 1 / 2 / 3 for NHL periods) tells us which inning/period a P:* market
+# refers to — apply_market stores those under a per-period dict so
+# inning-specific picks can resolve cleanly.
+_DERIVATIVE_MARKET_TYPES: dict[str, str] = {
+    # ── MLB ──
+    "BASEBALL:FTOT:OE": "total_oe",            # Odd vs Even total runs
+    "BASEBALL:FT:WTBEI": "extra_innings",      # Game to go into extra innings
+    "BASEBALL:FT:INNINGW": "inning_winner",    # 1st inning winner (period=I1)
+    "BASEBALL:FT:I1T5W": "f5_winner",          # F5 ML
+    "BASEBALL:FTOT:A:OUEXSO": "team_total_away",
+    "BASEBALL:FTOT:B:OUEXSO": "team_total_home",
+    "BASEBALL:P:A:OU5": "f5_team_total_away",
+    "BASEBALL:P:B:OU5": "f5_team_total_home",
+    "BASEBALL:P:OU5": "f5_total",              # Already partially via legacy F5
+    "BASEBALL:P:OU": "inning_total",           # Period field carries inning #
+    "BASEBALL:P:BTS": "inning_bts",            # Both teams score in inning N
+    # ── NHL (Phase 1c) — staged for the next commit ──
+    "ICE_HOCKEY:FTOT:OE": "total_oe",
+    "ICE_HOCKEY:FT:OT": "overtime",
+    "ICE_HOCKEY:FT:BTS": "bts_full",
+    "ICE_HOCKEY:FTOT:A:OU": "team_total_away",
+    "ICE_HOCKEY:FTOT:B:OU": "team_total_home",
+    "ICE_HOCKEY:P:OU": "period_total",
+    "ICE_HOCKEY:P:DNB": "period_dnb",
+    "ICE_HOCKEY:P:BTS": "period_bts",
+    "ICE_HOCKEY:P:NEXTTEAMSCORE": "next_team_score",
+    # ── NBA (Phase 1d) — quarter-level extensions ──
+    "BASKETBALL:FTOT:A:OU": "team_total_away",
+    "BASKETBALL:FTOT:B:OU": "team_total_home",
+    # NBA :P:OU / :P:SPRD / :P:DNB are already partially handled by
+    # the Q1 codepath when period=Q1; we'll re-route through the
+    # period-aware handlers in this commit's Phase 1d work.
+}
+
 
 def _is_q1_market(label: str, period: str = "") -> bool:
     """Check if a period market is specifically Q1."""
@@ -524,6 +563,15 @@ def _market_kind(label: str, market_type: str = "",
     for suffix, kind in _GAME_MARKET_TYPES.items():
         if mtu.endswith(suffix):
             return "spread" if kind == "ml_spread" else kind
+
+    # ── Phase 1 derivative markets ──
+    # Sport-prefixed keys (BASEBALL:..., ICE_HOCKEY:..., BASKETBALL:...)
+    # so inning-total :P:OU doesn't collide with NBA Q1 :P:OU below.
+    # Match by exact prefix-anchored suffix to avoid a partial trigger
+    # on shorter overlapping codes.
+    for full_code, kind in _DERIVATIVE_MARKET_TYPES.items():
+        if mtu == full_code or mtu.endswith(":" + full_code):
+            return kind
 
     # ── Q1 period markets (NBA only) ──
     if _is_q1_market(label, period):
@@ -632,6 +680,7 @@ def _classify_outcome(outcome: dict, away_abbr: str, home_abbr: str,
         line = _extract_line_from_name(label)
 
     sel_lower = sel_type.lower()
+    label_lower = label.lower().strip()
 
     # ── 1. Selection type field (most reliable for Hard Rock) ──
     # "Over"/"Under" types are unambiguous
@@ -645,6 +694,22 @@ def _classify_outcome(outcome: dict, away_abbr: str, home_abbr: str,
         return "away", american, line
     if sel_type in ("B", "BH"):
         return "home", american, line
+
+    # ── 1b. Yes / No / Odd / Even / Tie (derivative markets) ──
+    # Hard Rock uses these literal labels for BTS, OT Y/N, extra-innings
+    # Y/N, odd-vs-even total, and three-way period DNB markets. The
+    # selection-type field is empty for these so we fall through to the
+    # label string.
+    if label_lower in ("yes", "y"):
+        return "yes", american, line
+    if label_lower in ("no", "n"):
+        return "no", american, line
+    if label_lower == "odd":
+        return "odd", american, line
+    if label_lower == "even":
+        return "even", american, line
+    if label_lower in ("tie", "draw"):
+        return "tie", american, line
 
     # ── 2. Team abbreviation matching ──
     # Strip any trailing line numbers from label for matching
@@ -794,6 +859,136 @@ def _apply_market(bucket: dict, kind: str, sides: dict, q1: bool) -> None:
                     alt = {"line": line,
                            "over_odds": over_price, "under_odds": under_price}
                     bucket.setdefault("alt_totals", []).append(alt)
+
+    # ── Phase 1 derivative kinds ──
+    # Storage shape per derivative is intentionally compact: a single
+    # dict on the bucket per market type, with per-period sub-dicts
+    # where the market is inning/period-specific. Pick generators read
+    # these via sport-aware getters so the raw HR field naming stays
+    # contained in this module.
+    elif kind == "total_oe":
+        odd_price = sides.get("odd", {}).get("price")
+        even_price = sides.get("even", {}).get("price")
+        if odd_price is not None or even_price is not None:
+            bucket["total_oe"] = {"odd_odds": odd_price, "even_odds": even_price}
+    elif kind == "extra_innings":
+        yes_price = sides.get("yes", {}).get("price")
+        no_price = sides.get("no", {}).get("price")
+        if yes_price is not None or no_price is not None:
+            bucket["extra_innings"] = {"yes_odds": yes_price, "no_odds": no_price}
+    elif kind == "overtime":
+        yes_price = sides.get("yes", {}).get("price")
+        no_price = sides.get("no", {}).get("price")
+        if yes_price is not None or no_price is not None:
+            bucket["overtime"] = {"yes_odds": yes_price, "no_odds": no_price}
+    elif kind == "bts_full":
+        yes_price = sides.get("yes", {}).get("price")
+        no_price = sides.get("no", {}).get("price")
+        if yes_price is not None or no_price is not None:
+            bucket["bts_full"] = {"yes_odds": yes_price, "no_odds": no_price}
+    elif kind in ("inning_winner", "f5_winner"):
+        # Three-way (away / home / tie) for F5 winner; usually two-way
+        # for 1st-inning winner. Store all three sides if present.
+        out = {}
+        for s in ("home", "away", "tie"):
+            p = sides.get(s, {}).get("price")
+            if p is not None:
+                out[f"{s}_ml"] = p
+        if out:
+            bucket[kind] = out
+    elif kind in ("team_total_home", "team_total_away",
+                  "f5_team_total_home", "f5_team_total_away"):
+        line = (sides.get("over", {}).get("line")
+                or sides.get("under", {}).get("line"))
+        over_price = sides.get("over", {}).get("price")
+        under_price = sides.get("under", {}).get("price")
+        if line is not None and (over_price is not None or under_price is not None):
+            bucket[kind] = {
+                "line": line,
+                "over_odds": over_price,
+                "under_odds": under_price,
+            }
+    elif kind == "f5_total":
+        # Mirror the existing primary "over_under" pattern under an
+        # f5_-prefixed top-level key so pick gen treats this
+        # symmetrically with the full-game total.
+        line = (sides.get("over", {}).get("line")
+                or sides.get("under", {}).get("line"))
+        over_price = sides.get("over", {}).get("price")
+        under_price = sides.get("under", {}).get("price")
+        if line is not None:
+            cur = bucket.get("f5_total")
+            if cur is None:
+                bucket["f5_total"] = line
+                if over_price is not None:
+                    bucket["f5_over_odds"] = over_price
+                if under_price is not None:
+                    bucket["f5_under_odds"] = under_price
+    elif kind == "inning_total":
+        # Period (I1, I3, I5, I7 ...) tells us which inning. Caller
+        # stashes the period as a synthetic "_period" key on sides.
+        period_key = sides.get("_period")
+        line = (sides.get("over", {}).get("line")
+                or sides.get("under", {}).get("line"))
+        over_price = sides.get("over", {}).get("price")
+        under_price = sides.get("under", {}).get("price")
+        if period_key and line is not None:
+            bucket.setdefault("inning_totals", {})[str(period_key)] = {
+                "line": line,
+                "over_odds": over_price,
+                "under_odds": under_price,
+            }
+    elif kind == "inning_bts":
+        period_key = sides.get("_period")
+        yes_price = sides.get("yes", {}).get("price")
+        no_price = sides.get("no", {}).get("price")
+        if period_key and (yes_price is not None or no_price is not None):
+            bucket.setdefault("inning_bts", {})[str(period_key)] = {
+                "yes_odds": yes_price, "no_odds": no_price,
+            }
+    elif kind == "period_total":
+        period_key = sides.get("_period")
+        line = (sides.get("over", {}).get("line")
+                or sides.get("under", {}).get("line"))
+        over_price = sides.get("over", {}).get("price")
+        under_price = sides.get("under", {}).get("price")
+        if period_key and line is not None:
+            bucket.setdefault("period_totals", {})[str(period_key)] = {
+                "line": line,
+                "over_odds": over_price,
+                "under_odds": under_price,
+            }
+    elif kind == "period_dnb":
+        period_key = sides.get("_period")
+        out = {}
+        for s in ("home", "away"):
+            p = sides.get(s, {}).get("price")
+            if p is not None:
+                out[f"{s}_ml"] = p
+        if period_key and out:
+            bucket.setdefault("period_dnb", {})[str(period_key)] = out
+    elif kind == "period_bts":
+        period_key = sides.get("_period")
+        yes_price = sides.get("yes", {}).get("price")
+        no_price = sides.get("no", {}).get("price")
+        if period_key and (yes_price is not None or no_price is not None):
+            bucket.setdefault("period_bts", {})[str(period_key)] = {
+                "yes_odds": yes_price, "no_odds": no_price,
+            }
+    elif kind == "next_team_score":
+        period_key = sides.get("_period")
+        out = {}
+        for s in ("home", "away"):
+            p = sides.get(s, {}).get("price")
+            if p is not None:
+                out[f"{s}_ml"] = p
+        # "No more goals" comes through as the "no" or "tie" outcome
+        no_more = (sides.get("no", {}).get("price")
+                   or sides.get("tie", {}).get("price"))
+        if no_more is not None:
+            out["no_more_odds"] = no_more
+        if period_key and out:
+            bucket.setdefault("next_team_score", {})[str(period_key)] = out
 
 
 # Competition name filters — only pull events from the target league,
@@ -1016,6 +1211,14 @@ def _parse_response(sport: str, data: Any) -> dict[str, dict]:
                         if line is None and market_line is not None:
                             line = market_line
                         sides[side] = {"price": price, "line": line}
+
+                    # Period stash for inning/period-aware derivative
+                    # handlers. HR encodes the period as e.g. I1, I3,
+                    # I5 for MLB or 1, 2, 3 for NHL. The handler reads
+                    # sides["_period"] to scope its bucket key.
+                    if mkt_period:
+                        sides["_period"] = mkt_period
+
                     # Normalize q1_* kinds to base kind for _apply_market
                     base_kind = kind.replace("q1_", "") if q1 else kind
                     _apply_market(bucket, base_kind, sides, q1)
