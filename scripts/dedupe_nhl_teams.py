@@ -41,8 +41,9 @@ def main(argv: list[str]) -> int:
     """).fetchall()
     print(f"Duplicate rows to remove: {len(dupes)}")
     if not dupes:
-        print("No duplicates found — DB is clean.")
-        return 0
+        print("No duplicates found — skipping dedupe step.")
+        # Fall through to name-fix step below; that's also idempotent.
+        return _fix_names(conn, dry)
     for r in dupes[:10]:
         print(f"  id={r['id']:>6}  {r['abbreviation']}  {r['name']}")
     if len(dupes) > 10:
@@ -109,6 +110,49 @@ def main(argv: list[str]) -> int:
         print(f"!! Still {len(remaining_dupes)} duplicate abbreviations remaining")
         return 1
     print("OK — every NHL team now has exactly one row.")
+    return _fix_names(conn, dry)
+
+
+def _fix_names(conn, dry: bool) -> int:
+    """Cosmetic name fixes — separate from dedupe so it runs even when
+    the dupe step finds nothing to do (idempotent on a clean DB).
+
+    The same bad scraper run that triplicated rows also concatenated
+    city + nickname twice for the New York teams, leaving names like
+    "NY Islanders Islanders" and cities like "NY Islanders". Normalize
+    to the standard "New York" city + "New York Islanders" /
+    "New York Rangers" form.
+    """
+    name_fixes = [
+        (2, "New York", "New York Islanders"),
+        (3, "New York", "New York Rangers"),
+    ]
+    needs_fix = []
+    for tid, city, name in name_fixes:
+        cur = conn.execute(
+            "SELECT city, name FROM nhl_teams WHERE id = ?", (tid,)
+        ).fetchone()
+        if cur and (cur["city"] != city or cur["name"] != name):
+            needs_fix.append((tid, city, name, dict(cur)))
+
+    if not needs_fix:
+        print("Team names already normalized.")
+        return 0
+
+    print(f"\nName fixes to apply: {len(needs_fix)}")
+    for tid, city, name, before in needs_fix:
+        print(f"  id={tid}: {before['city']!r} / {before['name']!r}  ->  "
+              f"{city!r} / {name!r}")
+    if dry:
+        print("DRY RUN — name fixes not applied.")
+        return 0
+    for tid, city, name, _ in needs_fix:
+        conn.execute(
+            "UPDATE nhl_teams SET city = ?, name = ? WHERE id = ?",
+            (city, name, tid),
+        )
+    conn.commit()
+    print(f"Normalized {len(needs_fix)} team-name rows.")
     return 0
 
 
