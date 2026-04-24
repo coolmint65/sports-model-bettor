@@ -201,14 +201,19 @@ def infer_series(sport: str, home_abbr: str, away_abbr: str,
         else:
             cutoff = (today - timedelta(days=30)).strftime("%Y-%m-%d")
 
+        # Count any past game between these two teams in the window —
+        # NOT just games with scores in our DB. Otherwise a missed
+        # score sync (which happens during late-night NHL playoff
+        # finals) makes today's game look one earlier in the series
+        # than it actually is. The win tally is computed below from
+        # whichever subset DOES have scores; the game_number itself
+        # reflects how many games have been *played*.
         query = f"""
-            SELECT date, home_team_id, away_team_id, home_score, away_score
+            SELECT date, home_team_id, away_team_id, home_score, away_score, status
             FROM {games_table}
             WHERE date >= ? AND date < ?
               AND ((home_team_id = ? AND away_team_id = ?)
                 OR (home_team_id = ? AND away_team_id = ?))
-              AND home_score IS NOT NULL
-              AND away_score IS NOT NULL
               {game_type_filter}
             ORDER BY date ASC
         """
@@ -227,18 +232,27 @@ def infer_series(sport: str, home_abbr: str, away_abbr: str,
             result["is_tied"] = True
             return result
 
-        # Count wins for each team (by abbreviation, not home/away)
+        # Count wins for each team (by abbreviation, not home/away).
+        # Track played games separately from games-with-known-result so
+        # the game_number is correct even when one of the prior games
+        # is missing a score in our DB.
         home_team_wins = 0
         away_team_wins = 0
+        played_games = 0
         last_game_date = None
 
         for row in rows:
             game_home_id = row["home_team_id"]
             h_score = row["home_score"]
             a_score = row["away_score"]
+            played_games += 1
+            last_game_date = row["date"]
 
-            if h_score == a_score:
-                continue  # shouldn't happen in playoffs but skip ties
+            # Tally wins only when both scores are known. Missing-score
+            # games still count toward played_games (the game number)
+            # but are skipped for the home_wins / away_wins display.
+            if h_score is None or a_score is None or h_score == a_score:
+                continue
 
             if game_home_id == home_id:
                 # Today's home team was home in this game
@@ -253,9 +267,10 @@ def infer_series(sport: str, home_abbr: str, away_abbr: str,
                 else:
                     away_team_wins += 1
 
-            last_game_date = row["date"]
-
-        game_number = home_team_wins + away_team_wins + 1  # +1 for today
+        # game_number reflects games actually played (incl. ones we
+        # missed scores for) so the UI shows the correct round-number
+        # even when sync hasn't caught up.
+        game_number = played_games + 1  # +1 for today
 
         # Calculate rest days
         if last_game_date:
