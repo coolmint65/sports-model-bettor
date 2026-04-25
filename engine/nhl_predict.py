@@ -20,6 +20,12 @@ LEAGUE = "NHL"
 HOME_EDGE = 0.15  # ~0.15 goal home-ice advantage
 MAX_GOALS = 10
 
+# Module-level backtest flag. Any helper that hits a live NHL/ESPN
+# endpoint (standings, team-summary, scoreboard for B2B) must check
+# this and short-circuit when True — otherwise historical-game
+# predictions get contaminated with current-season data.
+_BACKTEST_MODE = False
+
 
 def _cfg_bool(name: str, default: bool = True) -> bool:
     """Lazy per-factor toggle reader. Module-level so factor_backtest
@@ -455,6 +461,9 @@ def _ensure_standings_loaded() -> None:
     global _live_standings_cache, _live_standings_time
     global _playoff_context_cache, _playoff_context_time
 
+    if _BACKTEST_MODE:
+        return
+
     # All caches share the same 30-min TTL; check one representative timestamp
     if _standings_raw_cache and (_time.time() - _standings_raw_time) < 1800:
         return  # Already fresh
@@ -826,6 +835,9 @@ def _ensure_club_stats_loaded() -> None:
     import time as _time
     global _club_stats_cache, _club_stats_time, _live_stats_cache
 
+    if _BACKTEST_MODE:
+        return
+
     if _club_stats_cache and (_time.time() - _club_stats_time) < 1800:
         return
 
@@ -856,6 +868,9 @@ def _check_back_to_back(team_abbr: str) -> float:
     """
     import time as _time
     global _b2b_cache, _b2b_cache_time
+
+    if _BACKTEST_MODE:
+        return 1.0
 
     # Cache the yesterday + day-before scoreboard for 30 min
     if _b2b_cache and (_time.time() - _b2b_cache_time) < 1800:
@@ -1035,7 +1050,8 @@ def _build_factors_with_ranks(home, away, hs, as_,
 
 def predict_matchup(home_key: str, away_key: str,
                     home_goalie_id: int | None = None,
-                    away_goalie_id: int | None = None) -> dict | None:
+                    away_goalie_id: int | None = None,
+                    backtest: bool = False) -> dict | None:
     """
     Run full NHL matchup prediction.
 
@@ -1047,6 +1063,26 @@ def predict_matchup(home_key: str, away_key: str,
 
     Returns prediction dict or None on failure.
     """
+    # Toggle the module-level backtest flag for the duration of this call
+    # so every helper that hits a live endpoint short-circuits. Restored
+    # in `finally` so a single backtest run can't leak state into later
+    # live predictions in the same process.
+    global _BACKTEST_MODE
+    _prev_backtest_mode = _BACKTEST_MODE
+    if backtest:
+        _BACKTEST_MODE = True
+    try:
+        return _predict_matchup_inner(home_key, away_key,
+                                       home_goalie_id, away_goalie_id,
+                                       backtest=backtest)
+    finally:
+        _BACKTEST_MODE = _prev_backtest_mode
+
+
+def _predict_matchup_inner(home_key: str, away_key: str,
+                            home_goalie_id: int | None = None,
+                            away_goalie_id: int | None = None,
+                            backtest: bool = False) -> dict | None:
     home = load_team(LEAGUE, home_key)
     away = load_team(LEAGUE, away_key)
     if not home or not away:
@@ -1060,11 +1096,14 @@ def predict_matchup(home_key: str, away_key: str,
     # Override stale JSON stats with live NHL API data when available.
     # _ensure_club_stats_loaded() fetches PP%, PK%, faceoff%, shots, save%
     # from the stats.rest team summary endpoint and merges into _live_stats_cache.
-    try:
-        _ensure_club_stats_loaded()
-    except Exception:
-        pass
-    live_stats = _get_live_team_stats()
+    # Skipped in backtest mode — those endpoints serve current-season stats,
+    # which would inject 2026 PP/PK/faceoff numbers into historical predictions.
+    if not backtest:
+        try:
+            _ensure_club_stats_loaded()
+        except Exception:
+            pass
+    live_stats = {} if backtest else _get_live_team_stats()
     h_abbr_for_stats = home.get("abbreviation", "")
     a_abbr_for_stats = away.get("abbreviation", "")
     if h_abbr_for_stats in live_stats:
@@ -1202,7 +1241,7 @@ def predict_matchup(home_key: str, away_key: str,
     # home edge based on historical playoff tendencies.
     series: dict = {}
     series_reasons: list[str] = []
-    if in_playoffs:
+    if in_playoffs and not backtest:
         try:
             from .series_context import infer_series, apply_series_adjustments
             series = infer_series("nhl", home_key, away_key)
@@ -1317,7 +1356,10 @@ def predict_matchup(home_key: str, away_key: str,
         away_xg *= _split_adj(away, is_home=False)
 
     # ── Recent form (L10) adjustment - stacks with _form_factor ──
-    if _cfg_bool("NHL_ENABLE_STANDINGS_FORM"):
+    # Standings-based form pulls from the live NHL API (current season).
+    # Skip in backtest mode — would inject 2026 standings into historical
+    # predictions and drown the team-JSON form factor that's already in xg.
+    if _cfg_bool("NHL_ENABLE_STANDINGS_FORM") and not backtest:
         home_xg *= (1 + _compute_recent_form_from_standings(home))
         away_xg *= (1 + _compute_recent_form_from_standings(away))
 
@@ -1330,9 +1372,11 @@ def predict_matchup(home_key: str, away_key: str,
             away_xg *= (1 - motivation_gap * 0.05)
 
     # ── Win percentage / team quality adjustment ──
-    # Try live standings first (NHL API), fall back to JSON record
-    home_record = _get_live_record(home.get("abbreviation", "")) or home.get("record", "")
-    away_record = _get_live_record(away.get("abbreviation", "")) or away.get("record", "")
+    # Try live standings first (NHL API), fall back to JSON record. In
+    # backtest mode skip the live lookup so we don't blend 2026 records
+    # with historical-game predictions.
+    home_record = (None if backtest else _get_live_record(home.get("abbreviation", ""))) or home.get("record", "")
+    away_record = (None if backtest else _get_live_record(away.get("abbreviation", ""))) or away.get("record", "")
     home_pct = _record_to_points_pct(home_record)
     away_pct = _record_to_points_pct(away_record)
     quality_diff = home_pct - away_pct
@@ -1446,49 +1490,52 @@ def predict_matchup(home_key: str, away_key: str,
         pass
 
     # ── Injury adjustment ──
+    # Skipped in backtest mode: fetch_nhl_injuries hits the live feed, which
+    # would inject 2026 injury data into historical-game predictions and
+    # contaminate the calibration buckets the seeder writes back.
     injury_data = {"home": [], "away": [], "home_impact": 1.0, "away_impact": 1.0}
-    try:
-        from .injuries import fetch_nhl_injuries, compute_nhl_injury_impact
-        nhl_injuries = fetch_nhl_injuries()
-        h_abbr = home.get("abbreviation", "")
-        a_abbr = away.get("abbreviation", "")
+    if not backtest:
+        try:
+            from .injuries import fetch_nhl_injuries, compute_nhl_injury_impact
+            nhl_injuries = fetch_nhl_injuries()
+            h_abbr = home.get("abbreviation", "")
+            a_abbr = away.get("abbreviation", "")
 
-        # Try both original and alternate abbreviations (TBL/TB, NJD/NJ, etc.)
-        _INJ_ALT = {
-            "TBL": "TB", "TB": "TBL", "NJD": "NJ", "NJ": "NJD",
-            "SJS": "SJ", "SJ": "SJS", "LAK": "LA", "LA": "LAK",
-            "WSH": "WAS", "WAS": "WSH", "CBJ": "CLB", "CLB": "CBJ",
-            "MTL": "MON", "MON": "MTL",
-        }
-        h_injuries = nhl_injuries.get(h_abbr, []) or nhl_injuries.get(_INJ_ALT.get(h_abbr, ""), [])
-        a_injuries = nhl_injuries.get(a_abbr, []) or nhl_injuries.get(_INJ_ALT.get(a_abbr, ""), [])
+            _INJ_ALT = {
+                "TBL": "TB", "TB": "TBL", "NJD": "NJ", "NJ": "NJD",
+                "SJS": "SJ", "SJ": "SJS", "LAK": "LA", "LA": "LAK",
+                "WSH": "WAS", "WAS": "WSH", "CBJ": "CLB", "CLB": "CBJ",
+                "MTL": "MON", "MON": "MTL",
+            }
+            h_injuries = nhl_injuries.get(h_abbr, []) or nhl_injuries.get(_INJ_ALT.get(h_abbr, ""), [])
+            a_injuries = nhl_injuries.get(a_abbr, []) or nhl_injuries.get(_INJ_ALT.get(a_abbr, ""), [])
 
-        if h_injuries:
-            h_impact = compute_nhl_injury_impact(h_abbr, h_injuries)
-            home_xg *= h_impact
-            injury_data["home"] = h_injuries[:5]  # Top 5 for display
-            injury_data["home_impact"] = round(h_impact, 4)
+            if h_injuries:
+                h_impact = compute_nhl_injury_impact(h_abbr, h_injuries)
+                home_xg *= h_impact
+                injury_data["home"] = h_injuries[:5]
+                injury_data["home_impact"] = round(h_impact, 4)
 
-        if a_injuries:
-            a_impact = compute_nhl_injury_impact(a_abbr, a_injuries)
-            away_xg *= a_impact
-            injury_data["away"] = a_injuries[:5]
-            injury_data["away_impact"] = round(a_impact, 4)
-    except Exception as e:
-        logger.debug("Injury data unavailable: %s", e)
+            if a_injuries:
+                a_impact = compute_nhl_injury_impact(a_abbr, a_injuries)
+                away_xg *= a_impact
+                injury_data["away"] = a_injuries[:5]
+                injury_data["away_impact"] = round(a_impact, 4)
+        except Exception as e:
+            logger.debug("Injury data unavailable: %s", e)
 
     # ── Back-to-back / rest adjustment ──
     h_abbr_b2b = home.get("abbreviation", "")
     a_abbr_b2b = away.get("abbreviation", "")
     h_b2b = 1.0
     a_b2b = 1.0
-    if h_abbr_b2b:
+    if h_abbr_b2b and not backtest:
         h_b2b = _check_back_to_back(h_abbr_b2b)
         home_xg *= h_b2b
         if h_b2b < 1.0:
             # Tired team also concedes more
             away_xg *= (1 + (1 - h_b2b) * 0.5)
-    if a_abbr_b2b:
+    if a_abbr_b2b and not backtest:
         a_b2b = _check_back_to_back(a_abbr_b2b)
         away_xg *= a_b2b
         if a_b2b < 1.0:

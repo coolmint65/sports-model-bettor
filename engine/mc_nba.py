@@ -138,6 +138,38 @@ def aggregate_nba_q1(raw: dict) -> dict:
             "push": round(1.0 - over - under, 4),
         }
 
+    # ── Derivative market aggregations ──
+    # Q1 Team Total per side — empirical distribution at lines around
+    # each team's mean. Lets the derivative pickers swap factor's
+    # Gaussian tail for MC's empirical bucket counts.
+    def _team_q1_dist(arr) -> dict:
+        mean_q = float(arr.mean())
+        anchor_q = round(mean_q * 2) / 2
+        out = {}
+        for off in (-3, -2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2, 3):
+            line = anchor_q + off
+            if line < 0.5:
+                continue
+            out[f"{line:.1f}"] = {
+                "over": round(float((arr > line).sum()) / n, 4),
+                "under": round(float((arr < line).sum()) / n, 4),
+            }
+        return out
+
+    team_totals = {
+        "home": {"expected": round(float(h.mean()), 2),
+                 "lines": _team_q1_dist(h)},
+        "away": {"expected": round(float(a.mean()), 2),
+                 "lines": _team_q1_dist(a)},
+    }
+
+    # Q1 Total Odd/Even — direct count of sim totals' parity.
+    odd_count = int((total.astype(int) % 2 == 1).sum())
+    total_oe = {
+        "odd":  round(odd_count / n, 4),
+        "even": round((n - odd_count) / n, 4),
+    }
+
     return {
         "n_sims": n,
         "win_prob": {
@@ -154,4 +186,6 @@ def aggregate_nba_q1(raw: dict) -> dict:
         "total_std": round(float(total.std()), 3),
         "q1_spread": spreads,
         "q1_total": totals,
+        "team_totals": team_totals,
+        "total_oe": total_oe,
     }

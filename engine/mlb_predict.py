@@ -128,7 +128,8 @@ def reload_weights():
 def predict_matchup(home_team_id: int, away_team_id: int,
                     home_pitcher_id: int | None = None,
                     away_pitcher_id: int | None = None,
-                    venue: str | None = None) -> dict:
+                    venue: str | None = None,
+                    backtest: bool = False) -> dict:
     """
     Full MLB matchup prediction.
 
@@ -488,30 +489,32 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     away_xr *= (1 + away_form)
 
     # ── Injury adjustment ──
+    # Skipped in backtest mode: fetch_mlb_injuries scrapes the live feed,
+    # which would inject 2026 injury data into historical-game predictions
+    # and contaminate the calibration buckets the seeder writes back.
     injury_data = {"home": [], "away": []}
-    try:
-        from .injuries import fetch_mlb_injuries, compute_mlb_injury_impact
-        mlb_injuries = fetch_mlb_injuries()
-        h_abbr = home_team["abbreviation"] if home_team else ""
-        a_abbr = away_team["abbreviation"] if away_team else ""
+    if not backtest:
+        try:
+            from .injuries import fetch_mlb_injuries, compute_mlb_injury_impact
+            mlb_injuries = fetch_mlb_injuries()
+            h_abbr = home_team["abbreviation"] if home_team else ""
+            a_abbr = away_team["abbreviation"] if away_team else ""
 
-        # Try alternate abbreviations (CWS/CHW, WSH/WAS, ARI/AZ, etc.).
-        # Canonical alias table lives in engine.abbr.
-        from .abbr import alt_abbr as _alt
-        h_injuries = mlb_injuries.get(h_abbr, []) or mlb_injuries.get(_alt(h_abbr, "mlb"), [])
-        a_injuries = mlb_injuries.get(a_abbr, []) or mlb_injuries.get(_alt(a_abbr, "mlb"), [])
+            from .abbr import alt_abbr as _alt
+            h_injuries = mlb_injuries.get(h_abbr, []) or mlb_injuries.get(_alt(h_abbr, "mlb"), [])
+            a_injuries = mlb_injuries.get(a_abbr, []) or mlb_injuries.get(_alt(a_abbr, "mlb"), [])
 
-        if h_injuries:
-            h_impact = compute_mlb_injury_impact(home_team_id, h_injuries)
-            home_xr *= h_impact
-            injury_data["home"] = h_injuries[:5]
+            if h_injuries:
+                h_impact = compute_mlb_injury_impact(home_team_id, h_injuries)
+                home_xr *= h_impact
+                injury_data["home"] = h_injuries[:5]
 
-        if a_injuries:
-            a_impact = compute_mlb_injury_impact(away_team_id, a_injuries)
-            away_xr *= a_impact
-            injury_data["away"] = a_injuries[:5]
-    except Exception as e:
-        logger.debug("MLB injury data unavailable: %s", e)
+            if a_injuries:
+                a_impact = compute_mlb_injury_impact(away_team_id, a_injuries)
+                away_xr *= a_impact
+                injury_data["away"] = a_injuries[:5]
+        except Exception as e:
+            logger.debug("MLB injury data unavailable: %s", e)
 
     # ── Floor + cap ──
     # The prediction has ~17 multiplicative factors. When they all compound

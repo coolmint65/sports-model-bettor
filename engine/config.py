@@ -256,16 +256,16 @@ MLB_ENABLE_LINEUP_STRENGTH    = False  # 1.1% Δp / 51.0% (HURTS: +0.7pp)
 MLB_ALLOW_RL_FAVORITE = False   # -1.5 picks disabled
 MLB_ALLOW_RL_UNDERDOG = True    # +1.5 picks - the profitable side
 MLB_ALLOW_NRFI = True           # NRFI has real edge
-MLB_ALLOW_YRFI = True           # Re-enabled 2026-04-22 with higher
-# edge floor (see MLB_YRFI_MIN_EDGE below). Was disabled after going
-# 9-14 on the old model; the current MC+GBM core + broader NRFI
-# regression rework should handle both directions. If YRFI tanks
-# again the tighter floor should filter most of it out.
-# Only YRFI picks with edge ≥ this % will be recorded / surfaced.
-# NRFI floor stays at the global 1%+ check in engine.picks — YRFI
-# gets this separate, stricter threshold because its historical WR
-# was lower.
-MLB_YRFI_MIN_EDGE = 5.0
+MLB_ALLOW_YRFI = True           # Re-enabled 2026-04-22.
+# Edge floors for the 1st INN market. Both unified to the global
+# EDGE_LEAN/EDGE_SKIP value (4.0%) on 2026-04-24 — empirical
+# calibration already pulls historical WR into the calibrated prob
+# before this floor is checked, so the older asymmetric "YRFI 5% /
+# NRFI 1%" gate was redundant. If YRFI starts losing again the
+# tracker calibration shrinks its prob → edge naturally drops below
+# 4% → picks stop firing without a config edit.
+MLB_NRFI_MIN_EDGE = 4.0
+MLB_YRFI_MIN_EDGE = 4.0
 MLB_ALLOW_OU_OVER = True        # hold while sample is tiny
 MLB_ALLOW_OU_UNDER = False      # Unders hit 14% over 7 picks
 
@@ -307,6 +307,18 @@ MLB_BET_RELIABILITY = {
     "F5 ML":  0.60,
     "F5 O/U": 0.50,
     "F5 RL":  0.70,
+    # Phase 1 derivatives — start at 0.50 across the board until live
+    # tracker history accumulates. The empirical-calibration loop will
+    # bucket each new bet_type after ~50 settled samples and we can
+    # tune these manually based on observed WR/ROI.
+    "Team Total":      0.50,
+    "F5 Team Total":   0.50,
+    "Inning Total":    0.50,
+    "Inning BTS":      0.40,  # rare events; demote slightly
+    "1st Inn Winner":  0.50,
+    "F5 Winner":       0.55,
+    "Total O/E":       0.40,  # 50/50-shaped market; small edges suspect
+    "Extra Innings":   0.50,
 }
 
 NHL_BET_RELIABILITY = {
@@ -316,12 +328,67 @@ NHL_BET_RELIABILITY = {
     "O/U": 1.00,
     "PL": 1.00,
     "ML": 0.85,
+    # Phase 1 derivatives — start at 0.50 across the board until live
+    # tracker history accumulates. Empirical-calibration loop will
+    # bucket each new bet_type after ~50 settled samples and we can
+    # tune these manually based on observed WR/ROI.
+    "Team Total":   0.50,
+    "Period Total": 0.50,
+    "Period BTS":   0.40,  # rare events; demote slightly
+    "Period DNB":   0.50,
+    "Total O/E":    0.40,  # 50/50-shaped market; small edges suspect
+    "Overtime":     0.50,
+    "BTS":          0.50,
 }
 
 NBA_BET_RELIABILITY = {
     "Q1_SPREAD": 1.00,
     "Q1_TOTAL": 0.80,
     "Q1_ML": 0.60,
+    # Phase 1 derivatives — start at 0.50 across the board until live
+    # tracker history accumulates.
+    "Q1 Team Total": 0.50,
+    "Q1 Total O/E":  0.40,  # 50/50-shaped market; small edges suspect
+}
+
+# ── Derivative-market gating ──
+# Hard-blocked markets never get recorded by the auto-recorder or
+# selected as derivative POTD. Established from the leak-free retro
+# backtest on 2026-04-25. These markets are not "small sample" — they
+# fail at every confidence bucket, so a higher edge floor wouldn't help.
+DERIVATIVE_BLOCKED_MARKETS = {
+    "mlb": frozenset({
+        # Inning BTS: 5.3% WR vs 27% predicted across 6,911 picks (-21pp
+        # gap, every bucket overconfident, -73.67 ROI).
+        "Inning BTS",
+        # Inning Total: 45.8% WR vs 67% predicted across 71,906 picks
+        # (-18pp gap, -8.41 ROI). Pure systemic overconfidence.
+        "Inning Total",
+    }),
+    "nhl": frozenset(),
+    "nba": frozenset(),
+}
+
+# Per-market edge floor override. Picks must clear this to be recorded
+# or selected as POTD. Values omitted use the caller's default (4.0).
+# Set when the standard 4% floor is profitable in aggregate but the
+# higher-confidence buckets specifically lose money — raising the floor
+# trades volume for survival.
+DERIVATIVE_EDGE_FLOOR = {
+    "mlb": {
+        # F5 Winner: +7.94 ROI in aggregate but 60-80% predicted buckets
+        # hit ~44%. The profit comes only from the lowest-conf bucket;
+        # higher edges are all losers. Bump floor to drop the winners.
+        "F5 Winner": 8.0,
+    },
+    "nhl": {
+        # Team Total: +1.20 ROI evaporates with real-world juice. 60-70%
+        # bucket hits 34.6%, 70-80% hits 40% — strong overconfidence at
+        # high-edge picks. 8% floor cuts to the rare picks where
+        # calibration cooperates.
+        "Team Total": 8.0,
+    },
+    "nba": {},
 }
 
 # ── Weak markets - disabled by default ──
@@ -353,15 +420,64 @@ MLB_ALLOW_F5_OU_UNDER = True
 MLB_ALLOW_F5_RL_FAVORITE = True
 MLB_ALLOW_F5_RL_UNDERDOG = True
 
+# Phase 1 derivative markets — pure probability extraction from the
+# existing prediction (per-team xR, per-inning xR, F5 split, total/margin
+# distributions). No new factor multipliers. Master gate plus per-market
+# flags so a single misbehaving market can be turned off without losing
+# the others. Live tracker history will inform the per-market flips
+# after ~50 settled samples per bet_type. See engine/mlb_derivative_picks.py.
+ENABLE_MLB_DERIVATIVES = True
+ENABLE_MLB_TEAM_TOTAL = True
+ENABLE_MLB_F5_TEAM_TOTAL = True
+ENABLE_MLB_INNING_TOTAL = True
+ENABLE_MLB_INNING_BTS = True
+ENABLE_MLB_INNING_WINNER = True
+ENABLE_MLB_F5_WINNER_3WAY = True
+ENABLE_MLB_TOTAL_OE = True
+ENABLE_MLB_EXTRA_INNINGS = True
+
+# NHL Phase 1 derivative markets — pure probability extraction from the
+# existing prediction (per-team xG, per-period xG split, regulation-draw
+# probability, total/margin distributions). No new factor multipliers.
+# See engine/nhl_derivative_picks.py.
+ENABLE_NHL_DERIVATIVES = True
+ENABLE_NHL_TEAM_TOTAL = True
+ENABLE_NHL_PERIOD_TOTAL = True
+ENABLE_NHL_PERIOD_BTS = True
+ENABLE_NHL_PERIOD_DNB = True
+ENABLE_NHL_TOTAL_OE = True
+ENABLE_NHL_OVERTIME = True
+ENABLE_NHL_BTS_FULL = True
+
+# NBA Phase 1 derivative markets — Q1-specific extensions priced
+# directly off predict_q1's existing outputs (per-team Q1 expected
+# points, total_probs distribution). Per-team Q1 sigma is derived as
+# Q1_STD_DEV / sqrt(2) (independence assumption between the two team
+# scores). The HR scraper gates these on period.startswith("Q1") so
+# 1st-half markets sharing the same type code are dropped silently.
+# See engine/nba_derivative_picks.py.
+ENABLE_NBA_DERIVATIVES = True
+ENABLE_NBA_Q1_TEAM_TOTAL = True
+ENABLE_NBA_Q1_TOTAL_OE = True
+
 # Monte Carlo simulators (engine.mc_mlb / mc_nhl / mc_nba).
 # MLB is live; NHL/NBA still shadow-only while their MC calibration
-# accumulates outcome data.
+# accumulates outcome data. Bumped 50k → 100k on 2026-04-24 alongside
+# deterministic seeding (backend._mc_seed). 100k roughly halves the
+# standard error on probability estimates (1/√N scaling) — modest
+# accuracy gain, ~2x runtime per game; still fits in the per-slate
+# refresh budget.
 ENABLE_MLB_MC = True
-MLB_MC_N_SIMS = 50_000
-ENABLE_NHL_MC = False
-NHL_MC_N_SIMS = 50_000
-ENABLE_NBA_MC = False
-NBA_MC_N_SIMS = 50_000
+MLB_MC_N_SIMS = 100_000
+# NHL/NBA MC enabled 2026-04-24 so all derivative pickers can read
+# from MC empirical distributions (per-period, total odd/even,
+# overtime, BTS, team totals). Without MC enabled these derivatives
+# fall back to factor Poisson which the backtest showed is materially
+# overconfident on rare-event markets (BTS, Extras, Inning BTS).
+ENABLE_NHL_MC = True
+NHL_MC_N_SIMS = 100_000
+ENABLE_NBA_MC = True
+NBA_MC_N_SIMS = 100_000
 
 # Gradient-boosted-tree (GBM) model (engine.gbm). Each sport trains
 # ~4000-7500 historical games into 2-5 targets (home_win, total, and

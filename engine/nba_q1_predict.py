@@ -280,7 +280,8 @@ def _check_back_to_back(team_abbr: str) -> bool:
 def predict_q1(home_abbr: str, away_abbr: str,
                spread: float | None = None,
                total: float | None = None,
-               season: int | None = None) -> dict:
+               season: int | None = None,
+               backtest: bool = False) -> dict:
     """Predict 1st quarter spread using pace-adjusted efficiency.
 
     Q1 scoring model:
@@ -325,7 +326,16 @@ def predict_q1(home_abbr: str, away_abbr: str,
 
     # Opponent-adjusted: team's Q1 offense vs opponent's Q1 defense
     # home_expected = (home_off * away_def) / league_avg
-    league_q1_avg = LEAGUE_AVG_Q1_TOTAL / 2  # ~29.4 per team (calibrated)
+    # Routed through get_flag so the adaptive baselines system
+    # (engine.adaptive_baselines) can write a runtime override when
+    # the trailing 30-game window diverges from the long-term baseline
+    # — catches regime shifts (pace slowdowns in playoffs, etc.) without
+    # a source-code edit. Falls back to the module-level constant when
+    # no override exists.
+    from .config import get_flag as _get_flag
+    league_q1_total = _get_flag("LEAGUE_AVG_Q1_TOTAL",
+                                  LEAGUE_AVG_Q1_TOTAL, sport="nba")
+    league_q1_avg = float(league_q1_total) / 2  # ~29.4 per team
 
     if league_q1_avg > 0:
         home_q1_expected = (home_q1_off * away_q1_def) / league_q1_avg
@@ -362,7 +372,7 @@ def predict_q1(home_abbr: str, away_abbr: str,
     # ── Playoff series context ──
     series: dict = {}
     series_reasons: list[str] = []
-    if in_playoffs:
+    if in_playoffs and not backtest:
         try:
             from .series_context import infer_series, apply_series_adjustments
             series = infer_series("nba", home_abbr, away_abbr)
@@ -396,8 +406,8 @@ def predict_q1(home_abbr: str, away_abbr: str,
     # ── Step 4: Rest / B2B adjustment ──
     home_rest_adj = 0.0
     away_rest_adj = 0.0
-    home_b2b = _check_back_to_back(home_abbr)
-    away_b2b = _check_back_to_back(away_abbr)
+    home_b2b = False if backtest else _check_back_to_back(home_abbr)
+    away_b2b = False if backtest else _check_back_to_back(away_abbr)
 
     if home_b2b:
         home_rest_adj = B2B_PENALTY
@@ -469,7 +479,7 @@ def predict_q1(home_abbr: str, away_abbr: str,
     home_roster_adj = {"q1_delta": 0.0, "starters_out": 0, "load_management": False, "out_players": []}
     away_roster_adj = {"q1_delta": 0.0, "starters_out": 0, "load_management": False, "out_players": []}
     from .config import NBA_ENABLE_ROSTER_ADJUSTMENT
-    if NBA_ENABLE_ROSTER_ADJUSTMENT:
+    if NBA_ENABLE_ROSTER_ADJUSTMENT and not backtest:
         try:
             from .nba_injuries import compute_q1_adjustment, is_likely_resting_spot
             if home.get("team_id"):

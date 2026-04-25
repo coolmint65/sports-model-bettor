@@ -188,4 +188,93 @@ def aggregate_mc_outcomes(home_runs_per_sim: np.ndarray,
             "under_2_5": round(float((f3_total < 2.5).sum()) / n, 4),
         }
 
+        # ── Derivative market aggregations ──
+        # Per-team full-game totals — for Team Total picks. Probability
+        # of each team's runs being above each .5 line in a window
+        # around its mean. Captures the at-bat-level run distribution
+        # MC simulates (more skewed than the Poisson assumption the
+        # factor model uses).
+        def _team_total_dist(runs_arr, label: str) -> dict:
+            mean_r = float(runs_arr.mean())
+            anchor_r = round(mean_r * 2) / 2
+            out = {}
+            for off in (-2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2):
+                line = anchor_r + off
+                if line < 0.5:
+                    continue
+                over_p = float((runs_arr > line).sum()) / n
+                under_p = float((runs_arr < line).sum()) / n
+                out[f"{line:.1f}"] = {
+                    "over": round(over_p, 4),
+                    "under": round(under_p, 4),
+                }
+            return out
+
+        result["team_totals"] = {
+            "home": {
+                "expected": round(float(home_runs_per_sim.mean()), 3),
+                "lines": _team_total_dist(home_runs_per_sim, "home"),
+            },
+            "away": {
+                "expected": round(float(away_runs_per_sim.mean()), 3),
+                "lines": _team_total_dist(away_runs_per_sim, "away"),
+            },
+        }
+
+        # F5 per-team totals (analogous to full-game; for F5 Team Total)
+        result["f5_team_totals"] = {
+            "home": {
+                "expected": round(float(f5_home.mean()), 3),
+                "lines": _team_total_dist(f5_home, "f5_home"),
+            },
+            "away": {
+                "expected": round(float(f5_away.mean()), 3),
+                "lines": _team_total_dist(f5_away, "f5_away"),
+            },
+        }
+
+        # Per-inning markets — Inning Total over/under, Inning BTS
+        # yes/no, per-inning winner (used for 1st Inn Winner). Indexed
+        # by inning number 1..9.
+        per_inning: dict[str, dict] = {}
+        for i in range(home_inning_runs.shape[1]):
+            ih = home_inning_runs[:, i]
+            ia = away_inning_runs[:, i]
+            tot_i = ih + ia
+            both_score = (ih > 0) & (ia > 0)
+            home_wins_inn = ih > ia
+            away_wins_inn = ia > ih
+            tied_inn = ih == ia
+            per_inning[str(i + 1)] = {
+                "expected_total": round(float(tot_i.mean()), 3),
+                "over_0_5": round(float((tot_i > 0.5).sum()) / n, 4),
+                "over_1_5": round(float((tot_i > 1.5).sum()) / n, 4),
+                "over_2_5": round(float((tot_i > 2.5).sum()) / n, 4),
+                "bts_yes": round(float(both_score.sum()) / n, 4),
+                "winner": {
+                    "home": round(float(home_wins_inn.sum()) / n, 4),
+                    "away": round(float(away_wins_inn.sum()) / n, 4),
+                    "tie":  round(float(tied_inn.sum()) / n, 4),
+                },
+            }
+        result["per_inning"] = per_inning
+
+        # Total Odd / Even — direct from MC's discrete totals dist.
+        odd_count = int((totals.astype(int) % 2 == 1).sum())
+        result["total_oe"] = {
+            "odd":  round(odd_count / n, 4),
+            "even": round((n - odd_count) / n, 4),
+        }
+
+        # Extra Innings — game tied at end of regulation (after 9 innings)
+        # in the simulator. Use margins because tied means margin == 0.
+        # Note: MC sims simulate 9 innings; whether MC plays extras
+        # depends on the simulator. If margins == 0 means regulation tie,
+        # extra innings would happen.
+        extras_hits = (margins == 0)
+        result["extra_innings"] = {
+            "yes": round(float(extras_hits.sum()) / n, 4),
+            "no":  round(1.0 - float(extras_hits.sum()) / n, 4),
+        }
+
     return result

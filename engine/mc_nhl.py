@@ -222,6 +222,73 @@ def aggregate_nhl(raw: dict) -> dict:
         "away_win": round(float((p1_away > p1_home).sum()) / n, 4),
     }
 
+    # ── Derivative market aggregations ──
+    def _team_total_dist(goals_arr) -> dict:
+        mean_g = float(goals_arr.mean())
+        anchor_g = round(mean_g * 2) / 2
+        out = {}
+        for off in (-1.5, -1, -0.5, 0, 0.5, 1, 1.5):
+            line = anchor_g + off
+            if line < 0.5:
+                continue
+            out[f"{line:.1f}"] = {
+                "over": round(float((goals_arr > line).sum()) / n, 4),
+                "under": round(float((goals_arr < line).sum()) / n, 4),
+            }
+        return out
+
+    team_totals = {
+        "home": {"expected": round(float(home.mean()), 3),
+                 "lines": _team_total_dist(home)},
+        "away": {"expected": round(float(away.mean()), 3),
+                 "lines": _team_total_dist(away)},
+    }
+
+    # Per-period markets — Period Total, Period BTS, Period DNB.
+    # home_p / away_p shape (N, 3) for P1/P2/P3 (regulation only).
+    per_period: dict[str, dict] = {}
+    for i in range(home_p.shape[1]):
+        ph = home_p[:, i]
+        pa = away_p[:, i]
+        pt = ph + pa
+        bts = (ph > 0) & (pa > 0)
+        home_wp = ph > pa
+        away_wp = pa > ph
+        tied = ph == pa
+        per_period[str(i + 1)] = {
+            "expected_total": round(float(pt.mean()), 3),
+            "over_0_5": round(float((pt > 0.5).sum()) / n, 4),
+            "over_1_5": round(float((pt > 1.5).sum()) / n, 4),
+            "over_2_5": round(float((pt > 2.5).sum()) / n, 4),
+            "bts_yes": round(float(bts.sum()) / n, 4),
+            "winner": {
+                "home": round(float(home_wp.sum()) / n, 4),
+                "away": round(float(away_wp.sum()) / n, 4),
+                "tie":  round(float(tied.sum()) / n, 4),
+            },
+        }
+
+    # Total Odd/Even — using FULL game totals (incl. OT goal if any).
+    odd_count = int((totals.astype(int) % 2 == 1).sum())
+    total_oe = {
+        "odd":  round(odd_count / n, 4),
+        "even": round((n - odd_count) / n, 4),
+    }
+
+    # Both teams to score full game — distinct from period BTS.
+    full_bts = (home > 0) & (away > 0)
+    bts_full = {
+        "yes": round(float(full_bts.sum()) / n, 4),
+        "no":  round(1.0 - float(full_bts.sum()) / n, 4),
+    }
+
+    # Overtime probability = regulation_tie_prob already computed.
+    # Expose as a derivative-friendly key for symmetry with MLB.
+    overtime = {
+        "yes": round(float(raw["reg_ties"].sum()) / n, 4),
+        "no":  round(1.0 - float(raw["reg_ties"].sum()) / n, 4),
+    }
+
     return {
         "n_sims": n,
         "win_prob": {
@@ -240,4 +307,9 @@ def aggregate_nhl(raw: dict) -> dict:
         "puck_line": pl,
         "correct_scores": correct_scores,
         "first_period": p1,
+        "team_totals": team_totals,
+        "per_period": per_period,
+        "total_oe": total_oe,
+        "bts_full": bts_full,
+        "overtime": overtime,
     }
