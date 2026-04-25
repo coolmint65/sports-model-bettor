@@ -359,32 +359,52 @@ def _get_scoreboard(date: str = "") -> list[dict]:
     # Enrich with our DB data
     games = _enrich_games(games, target_date)
 
-    # Fetch real odds - try The Odds API first (has all lines with juice),
-    # then ESPN per-game as fallback
+    # Fetch real odds. Hard Rock is the authoritative book for this
+    # model — its alt-spread/team-total markets are what derivative
+    # picks resolve against and its 5-juice convention is what the
+    # tracker prices closing odds in. The Odds API was first here, but
+    # its -110/-110 default juice quietly displaced HR's actual prices
+    # on every game it covered. HR-first means cards, picks, and the
+    # CLV column all read from one source.
     odds_matched = 0
+    from engine.picks import match_odds as _match
     try:
-        from scrapers.odds_api import fetch_odds
-        logger.info("Calling Odds API...")
-        api_odds = fetch_odds()
-        logger.info("Odds API returned %d games", len(api_odds) if api_odds else 0)
-        if api_odds:
-            # Log what keys we're trying to match
-            api_keys = set(api_odds.keys())
-            from engine.picks import match_odds as _match
+        from scrapers.hardrock_odds import fetch_mlb as _hr_mlb
+        logger.info("Calling Hard Rock...")
+        hr_odds = _hr_mlb() or {}
+        logger.info("Hard Rock returned %d games", len(hr_odds))
+        if hr_odds:
             for game in games:
                 h_abbr = game["home"].get("abbreviation", "")
                 a_abbr = game["away"].get("abbreviation", "")
-                matched_odds = _match(h_abbr, a_abbr, api_odds)
+                matched_odds = _match(h_abbr, a_abbr, hr_odds)
                 if matched_odds:
                     game["odds"] = matched_odds
                     odds_matched += 1
-                else:
-                    logger.debug("No odds match for %s@%s", a_abbr, h_abbr)
-            logger.info("Odds API: matched %d/%d games", odds_matched, len(games))
+            logger.info("Hard Rock: matched %d/%d games", odds_matched, len(games))
     except Exception as e:
-        logger.warning("Odds API failed: %s", e, exc_info=True)
+        logger.warning("Hard Rock fetch failed: %s", e, exc_info=True)
 
-    # Fallback: ESPN per-game odds for games without API odds
+    # Fill any gaps from The Odds API
+    if odds_matched < len(games):
+        try:
+            from scrapers.odds_api import fetch_odds
+            api_odds = fetch_odds()
+            if api_odds:
+                for game in games:
+                    if game.get("odds"):
+                        continue
+                    h_abbr = game["home"].get("abbreviation", "")
+                    a_abbr = game["away"].get("abbreviation", "")
+                    matched_odds = _match(h_abbr, a_abbr, api_odds)
+                    if matched_odds:
+                        game["odds"] = matched_odds
+                        odds_matched += 1
+                logger.info("Odds API: matched %d/%d games", odds_matched, len(games))
+        except Exception as e:
+            logger.warning("Odds API fallback failed: %s", e, exc_info=True)
+
+    # Final fallback: ESPN per-game odds for games still without odds
     if odds_matched < len(games):
         try:
             from scrapers.espn_odds import fetch_all_game_odds
@@ -1697,14 +1717,13 @@ def _bb_predict_one(game: dict, all_odds) -> dict | None:
 
     h_abbr = game["home"]["abbreviation"]
     a_abbr = game["away"]["abbreviation"]
-    # Merge scoreboard-attached odds (partial: ML/RL/OU only) with the
-    # full HR scrape (includes team totals, F5, derivatives). Scoreboard
-    # values win on overlap so we keep the same primary lines the rest of
-    # the system already references; the merge only ADDS missing keys.
-    # Previously this was `game.get("odds") or match_odds(...)` — the
-    # truthy partial dict suppressed the derivative fallback entirely.
+    # Merge HR's full scrape (ML/RL/OU + alt spreads + team totals + F5
+    # + derivatives) with whatever the scoreboard attached (HR if HR
+    # matched, Odds API/ESPN otherwise). HR wins on overlap so the model
+    # always prices against the book it was tuned for; scoreboard fields
+    # only fill gaps where HR didn't ship a market for that game.
     matched = match_odds(h_abbr, a_abbr, all_odds) or {}
-    game_odds = {**matched, **(game.get("odds") or {})}
+    game_odds = {**(game.get("odds") or {}), **matched}
 
     # Bypass the 30-min pred cache for games starting within 1hr —
     # late lineup scratches, weather, line moves all matter most in
