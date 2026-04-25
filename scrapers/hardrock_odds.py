@@ -405,6 +405,36 @@ def _walk_events_flat(root: Any) -> list[dict]:
     return []
 
 
+def _event_already_started(event: dict) -> bool:
+    """True iff this HR event's startTime is in the past.
+
+    HR's BetSync ships in-game events alongside prematch ones — same
+    teams, same {away}@{home} key. The in-game alt-RL line (e.g. +4.5
+    on a 7-run blowout) was overwriting today's prematch -1.5 line
+    because the dedup logic only sorted by market count and live games
+    happen to have fewer active markets.
+
+    `startTime` is ISO-8601 (e.g. "2026-04-25T02:10:00Z"). We treat
+    parse failures as "not started" so a malformed-time event still
+    flows through — better to keep a noisy line than silently drop
+    legitimate prematch entries.
+    """
+    raw = event.get("startTime") or ""
+    if not isinstance(raw, str) or not raw:
+        return False
+    try:
+        # fromisoformat handles "Z" suffix on Python 3.11+. Fall back to
+        # stripping it for older runtimes.
+        s = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
+        from datetime import datetime as _dt, timezone as _tz
+        ts = _dt.fromisoformat(s)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=_tz.utc)
+        return ts <= _dt.now(_tz.utc)
+    except (ValueError, TypeError):
+        return False
+
+
 def _extract_teams(event: dict) -> tuple[str, str]:
     """Return (away_name, home_name) best-effort.
 
@@ -529,6 +559,13 @@ _DERIVATIVE_MARKET_TYPES: dict[str, str] = {
     # ── NBA (Phase 1d) — quarter-level extensions ──
     "BASKETBALL:FTOT:A:OU": "team_total_away",
     "BASKETBALL:FTOT:B:OU": "team_total_home",
+    # Q1-specific derivatives. The same :P:A:OU / :P:B:OU / :P:OE codes
+    # are also used for 1st-half markets we can't price without a half-
+    # game model, so the apply_market handlers below gate storage on
+    # period.startswith("Q1") — H1/Q2/Q3/Q4/H2 are dropped silently.
+    "BASKETBALL:P:A:OU": "q1_team_total_away",
+    "BASKETBALL:P:B:OU": "q1_team_total_home",
+    "BASKETBALL:P:OE":   "q1_total_oe",
     # NBA :P:OU / :P:SPRD / :P:DNB are already partially handled by
     # the Q1 codepath when period=Q1; we'll re-route through the
     # period-aware handlers in this commit's Phase 1d work.
@@ -903,22 +940,35 @@ def _apply_market(bucket: dict, kind: str, sides: dict, q1: bool) -> None:
         over_price = sides.get("over", {}).get("price")
         under_price = sides.get("under", {}).get("price")
         if line is not None and (over_price is not None or under_price is not None):
-            bucket[kind] = {
-                "line": line,
-                "over_odds": over_price,
-                "under_odds": under_price,
-            }
+            new_score = _juice_score(over_price, under_price, line)
+            cur = bucket.get(kind)
+            if cur is None or _juice_score(
+                cur.get("over_odds"), cur.get("under_odds"), cur.get("line"),
+            ) > new_score:
+                bucket[kind] = {
+                    "line": line,
+                    "over_odds": over_price,
+                    "under_odds": under_price,
+                }
     elif kind == "f5_total":
         # Mirror the existing primary "over_under" pattern under an
         # f5_-prefixed top-level key so pick gen treats this
-        # symmetrically with the full-game total.
+        # symmetrically with the full-game total. Promote on juice
+        # balance so HR's primary F5 line wins over alts (the unguarded
+        # "first-seen wins" version would lock in whichever response
+        # order HR shipped first — sometimes an alt at +250/-350).
         line = (sides.get("over", {}).get("line")
                 or sides.get("under", {}).get("line"))
         over_price = sides.get("over", {}).get("price")
         under_price = sides.get("under", {}).get("price")
         if line is not None:
-            cur = bucket.get("f5_total")
-            if cur is None:
+            new_score = _juice_score(over_price, under_price, line)
+            cur_line = bucket.get("f5_total")
+            cur_over = bucket.get("f5_over_odds")
+            cur_under = bucket.get("f5_under_odds")
+            if cur_line is None or _juice_score(
+                cur_over, cur_under, cur_line,
+            ) > new_score:
                 bucket["f5_total"] = line
                 if over_price is not None:
                     bucket["f5_over_odds"] = over_price
@@ -927,17 +977,25 @@ def _apply_market(bucket: dict, kind: str, sides: dict, q1: bool) -> None:
     elif kind == "inning_total":
         # Period (I1, I3, I5, I7 ...) tells us which inning. Caller
         # stashes the period as a synthetic "_period" key on sides.
+        # Promote on juice balance per period so the standard line
+        # wins over alts within the same inning bucket.
         period_key = sides.get("_period")
         line = (sides.get("over", {}).get("line")
                 or sides.get("under", {}).get("line"))
         over_price = sides.get("over", {}).get("price")
         under_price = sides.get("under", {}).get("price")
         if period_key and line is not None:
-            bucket.setdefault("inning_totals", {})[str(period_key)] = {
-                "line": line,
-                "over_odds": over_price,
-                "under_odds": under_price,
-            }
+            inning_totals = bucket.setdefault("inning_totals", {})
+            new_score = _juice_score(over_price, under_price, line)
+            cur = inning_totals.get(str(period_key))
+            if cur is None or _juice_score(
+                cur.get("over_odds"), cur.get("under_odds"), cur.get("line"),
+            ) > new_score:
+                inning_totals[str(period_key)] = {
+                    "line": line,
+                    "over_odds": over_price,
+                    "under_odds": under_price,
+                }
     elif kind == "inning_bts":
         period_key = sides.get("_period")
         yes_price = sides.get("yes", {}).get("price")
@@ -947,17 +1005,25 @@ def _apply_market(bucket: dict, kind: str, sides: dict, q1: bool) -> None:
                 "yes_odds": yes_price, "no_odds": no_price,
             }
     elif kind == "period_total":
+        # NHL period (P1/P2/P3) total. Promote on juice balance per
+        # period — same rationale as inning_total above.
         period_key = sides.get("_period")
         line = (sides.get("over", {}).get("line")
                 or sides.get("under", {}).get("line"))
         over_price = sides.get("over", {}).get("price")
         under_price = sides.get("under", {}).get("price")
         if period_key and line is not None:
-            bucket.setdefault("period_totals", {})[str(period_key)] = {
-                "line": line,
-                "over_odds": over_price,
-                "under_odds": under_price,
-            }
+            period_totals = bucket.setdefault("period_totals", {})
+            new_score = _juice_score(over_price, under_price, line)
+            cur = period_totals.get(str(period_key))
+            if cur is None or _juice_score(
+                cur.get("over_odds"), cur.get("under_odds"), cur.get("line"),
+            ) > new_score:
+                period_totals[str(period_key)] = {
+                    "line": line,
+                    "over_odds": over_price,
+                    "under_odds": under_price,
+                }
     elif kind == "period_dnb":
         period_key = sides.get("_period")
         out = {}
@@ -989,6 +1055,31 @@ def _apply_market(bucket: dict, kind: str, sides: dict, q1: bool) -> None:
             out["no_more_odds"] = no_more
         if period_key and out:
             bucket.setdefault("next_team_score", {})[str(period_key)] = out
+    elif kind in ("q1_team_total_home", "q1_team_total_away"):
+        # Same code (P:A:OU / P:B:OU) is used for 1st-half markets —
+        # only store when this is actually a Q1 market.
+        period_key = sides.get("_period") or ""
+        if not str(period_key).startswith("Q1"):
+            return
+        line = (sides.get("over", {}).get("line")
+                or sides.get("under", {}).get("line"))
+        over_price = sides.get("over", {}).get("price")
+        under_price = sides.get("under", {}).get("price")
+        if line is not None and (over_price is not None or under_price is not None):
+            bucket[kind] = {
+                "line": line,
+                "over_odds": over_price,
+                "under_odds": under_price,
+            }
+    elif kind == "q1_total_oe":
+        # Same code (P:OE) is used for 1st-half / 2nd-half odd-vs-even.
+        period_key = sides.get("_period") or ""
+        if not str(period_key).startswith("Q1"):
+            return
+        odd_price = sides.get("odd", {}).get("price")
+        even_price = sides.get("even", {}).get("price")
+        if odd_price is not None or even_price is not None:
+            bucket["q1_total_oe"] = {"odd_odds": odd_price, "even_odds": even_price}
 
 
 # Competition name filters — only pull events from the target league,
@@ -1135,6 +1226,15 @@ def _parse_response(sport: str, data: Any) -> dict[str, dict]:
 
         for event in events:
             if not isinstance(event, dict):
+                continue
+            # Skip events that have already started. HR ships in-game
+            # events alongside prematch ones for the same {away,home}
+            # key — the alt-RL line is +4.5 on a live blowout, which
+            # then overwrites today's prematch -1.5 entry. Only an
+            # already-tipped game's startTime is in the past, so a
+            # past-startTime filter is the cleanest cut without breaking
+            # the prematch deduplication that sorts by market count.
+            if _event_already_started(event):
                 continue
             away_name, home_name = _extract_teams(event)
             away_abbr = _team_abbr(sport, away_name)
