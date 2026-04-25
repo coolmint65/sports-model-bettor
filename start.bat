@@ -19,6 +19,15 @@ if errorlevel 1 (
 REM Clear stale bytecode cache so code changes take effect immediately
 for /d /r %%d in (__pycache__) do @rd /s /q "%%d" 2>nul
 
+REM Free :8000 / :5173 from any orphan process. Closing the launcher
+REM CMD windows doesn't cascade-kill the python/node children on
+REM Windows, so a previous run's uvicorn often survives. The new
+REM uvicorn then silently fails to bind and exits, leaving the dash
+REM hitting yesterday's stale backend. Killing the holders up front
+REM means start.bat is always idempotent.
+for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":8000.*LISTENING"') do taskkill /F /PID %%a >nul 2>&1
+for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":5173.*LISTENING"') do taskkill /F /PID %%a >nul 2>&1
+
 if not exist "data\logs" mkdir "data\logs"
 
 echo Starting everything...
