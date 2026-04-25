@@ -245,24 +245,33 @@ def generate_picks(home_team_id: int, away_team_id: int,
         nrfi_pick = "NRFI" if nrfi > 0.5 else "YRFI"
         nrfi_prob = nrfi if nrfi > 0.5 else fi.get("yrfi", 0.5)
         # NRFI = under 0.5 first-inning runs; YRFI = over.
-        # Prefer the real per-event DK/FD price; otherwise use the rolling
-        # median of stored historical NRFI prices (more accurate than the
-        # legacy -120 hardcode, which was DK-shaped but ignored that DK is
-        # often closer to -130/-145 on heavy NRFI matchups).
+        # Resolution order:
+        #   1. HR's `inning_totals["I1"]` from the Phase 1 derivative
+        #      scrape — this is the actual per-event NRFI/YRFI line
+        #      (Over/Under 0.5 first-inning runs).
+        #   2. Legacy `nrfi_*_odds` keys from older odds APIs.
+        #   3. Rolling median fallback (more accurate than the -120
+        #      hardcode the legacy path used).
+        i1 = (odds.get("inning_totals") or {}).get("I1") or {}
         if nrfi_pick == "NRFI":
-            nrfi_odds = odds.get("nrfi_under_odds") or _nrfi_fallback_odds("NRFI")
+            nrfi_odds = (i1.get("under_odds")
+                         or odds.get("nrfi_under_odds")
+                         or _nrfi_fallback_odds("NRFI"))
         else:
-            nrfi_odds = odds.get("nrfi_over_odds") or _nrfi_fallback_odds("YRFI")
+            nrfi_odds = (i1.get("over_odds")
+                         or odds.get("nrfi_over_odds")
+                         or _nrfi_fallback_odds("YRFI"))
         nrfi_edge = (nrfi_prob - _implied(nrfi_odds)) * 100
         allow = (nrfi_pick == "NRFI" and get_flag("MLB_ALLOW_NRFI", True)) or \
                 (nrfi_pick == "YRFI" and get_flag("MLB_ALLOW_YRFI", True))
-        # YRFI gets a tighter edge floor than NRFI — its historical WR
-        # was softer, so we want only the strongest YRFI signals through.
-        # NRFI keeps the 1% floor it earned with 75% historical WR.
+        # NRFI and YRFI both gated at the global 4% lean floor. Empirical
+        # calibration already corrects for historical WR drift before
+        # this check runs, so the previously asymmetric gate (NRFI 1%,
+        # YRFI 5%) was redundant. See config.MLB_*_MIN_EDGE.
         min_edge_required = (
-            get_flag("MLB_YRFI_MIN_EDGE", 5.0)
+            get_flag("MLB_YRFI_MIN_EDGE", 4.0)
             if nrfi_pick == "YRFI"
-            else 1.0
+            else get_flag("MLB_NRFI_MIN_EDGE", 4.0)
         )
         if nrfi_edge > min_edge_required and allow:
             picks.append({
@@ -344,6 +353,14 @@ def generate_picks(home_team_id: int, away_team_id: int,
     if get_flag("ENABLE_MLB_F5", False):
         f5 = pred.get("f5") or {}
         _append_f5_picks(picks, f5, odds, h_abbr, a_abbr)
+
+    # ── Phase 1 derivatives ──
+    # Team totals, inning totals/BTS, 1st-inning winner, F5 3-way winner,
+    # total odd/even, extra innings. All pure probability extraction
+    # from existing pred data — no factor stacking. Master gate +
+    # per-market gates live in engine/config.py.
+    from .mlb_derivative_picks import append_derivative_picks
+    append_derivative_picks(picks, pred, odds, h_abbr, a_abbr)
 
     # Empirical recalibration. The factor + MC + GBM blend is
     # systemically over-confident at the upper tail (tracker showed the
@@ -439,9 +456,15 @@ def generate_picks(home_team_id: int, away_team_id: int,
     except Exception as e:
         logger.warning("MLB conservatism ladder error: %s", e)
 
-    # Adjusted EV: edge * reliability weight * CLV modifier * line move modifier
+    # Adjusted EV: edge * reliability weight * CLV modifier * line move modifier.
+    # Reliability is auto-tuned from settled tracker history when there's
+    # enough volume (>=30 settled picks of this bet type); below that, falls
+    # back to the hand-tuned MLB_BET_RELIABILITY dict. Lets profitable
+    # markets (e.g. F5 Team Total at +25 ROI) outrank stale-default ones
+    # without hand-editing config.py.
+    from .dynamic_reliability import get_reliability as _get_reliability
     for p in picks:
-        reliability = MLB_BET_RELIABILITY.get(p["type"], 0.5)
+        reliability = _get_reliability("mlb", p["type"])
         clv_mult = p.get("clv_reliability", 1.0)
         lm_mult = p.get("line_move_modifier", 1.0)
         p["adjusted_ev"] = round(p["edge"] * reliability * clv_mult * lm_mult, 2)
@@ -704,8 +727,18 @@ def _swap_odds(odds: dict) -> dict:
     dict has home_ml = sportsbook's home (our away) and vice versa.
     This swaps all home_*/away_* pairs so the odds align with our
     schedule's home/away designation.
+
+    IMPORTANT: the returned dict is a FULLY INDEPENDENT copy. Previous
+    versions used dict(odds) which left nested alt_spreads lists (and
+    their inner alt dicts) as shared references to the scraper's
+    in-memory cache. Each match_odds() call would then mutate the
+    cache in place — swapping points/odds — so the NEXT match_odds()
+    call saw already-swapped data and flipped it back (double-swap).
+    Observed as NBA Q1 picks labeled "HOU +1.5 Q1 edge 35.9%" against
+    HR's actual HOU -1.5 line. Deepcopy kills the aliasing.
     """
-    swapped = dict(odds)
+    import copy
+    swapped = copy.deepcopy(odds)
     swap_pairs = [
         ("home_ml", "away_ml"),
         ("home_spread_point", "away_spread_point"),
@@ -725,7 +758,9 @@ def _swap_odds(odds: dict) -> dict:
         swapped["q1_spread"] = -swapped["q1_spread"]
 
     # Alt spreads: swap odds and negate points (point is relative to
-    # the home team). Apply to both full-game and Q1 alts.
+    # the home team). Apply to both full-game and Q1 alts. Safe to
+    # mutate the dicts in place now because deepcopy above gave us
+    # fresh copies disconnected from the scraper cache.
     for key in ("alt_spreads", "q1_alt_spreads"):
         for alt in swapped.get(key, []):
             alt["home_odds"], alt["away_odds"] = alt.get("away_odds"), alt.get("home_odds")

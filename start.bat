@@ -30,7 +30,11 @@ REM skip the later ones -- the tracker record/settle steps for each
 REM sport live inside that sport's sync, so an MLB hiccup must not
 REM block NBA from automating its record/settle pass.
 echo [1/4] Syncing data (auto-closes when done)...
-start "Data-Sync" cmd /c "cd /d %~dp0 & call sync_mlb.bat & call sync_nhl.bat & call sync_nba.bat & exit"
+REM Pass --scheduled to each sub-script so its pause guard skips. Without
+REM the arg the per-sport pause hits (SESSIONNAME=Console under start.bat)
+REM and the Data-Sync window sits forever waiting for a keypress instead
+REM of auto-closing.
+start "Data-Sync" cmd /c "cd /d %~dp0 & call sync_mlb.bat --scheduled & call sync_nhl.bat --scheduled & call sync_nba.bat --scheduled & exit"
 
 REM ── Backend server ──
 echo [3/4] Backend API server...

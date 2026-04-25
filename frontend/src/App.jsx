@@ -13,6 +13,7 @@ import NBAStandings from './components/NBAStandings'
 import NBAGameDetail from './components/NBAGameDetail'
 import PickOfDayHero from './components/PickOfDayHero'
 import FirstInningPicks from './components/FirstInningPicks'
+import DerivativeTracker from './components/DerivativeTracker'
 
 const api = axios.create({ baseURL: '/api' })
 
@@ -398,6 +399,10 @@ export default function App() {
         <button className={`nav-tab ${view === 'history' ? 'active' : ''}`} onClick={showHistory}>
           Pick Tracker
         </button>
+        <button className={`nav-tab ${view === 'derivatives' ? 'active' : ''}`}
+                onClick={() => { setView('derivatives'); setSelectedGame(null); setNhlSelectedGame(null); setNbaSelectedGame(null) }}>
+          Derivatives
+        </button>
         <button className={`nav-tab ${view === 'backtest' ? 'active' : ''}`} onClick={showBacktest}>
           Backtest
         </button>
@@ -430,6 +435,10 @@ export default function App() {
         />
       )}
 
+      {isMLB && view === 'derivatives' && (
+        <DerivativeTracker sport="mlb" api={api} />
+      )}
+
       {isMLB && view === 'backtest' && (
         <Backtest data={backtest} loading={btLoading} onRun={runBacktest} />
       )}
@@ -460,6 +469,10 @@ export default function App() {
         />
       )}
 
+      {isNHL && view === 'derivatives' && (
+        <DerivativeTracker sport="nhl" api={api} />
+      )}
+
       {isNHL && view === 'backtest' && (
         <Backtest data={backtest} loading={btLoading} onRun={runBacktest} />
       )}
@@ -488,6 +501,10 @@ export default function App() {
           onRecord={recordPicks}
           onSettle={settlePicks}
         />
+      )}
+
+      {isNBA && view === 'derivatives' && (
+        <DerivativeTracker sport="nba" api={api} />
       )}
 
       {isNBA && view === 'backtest' && (

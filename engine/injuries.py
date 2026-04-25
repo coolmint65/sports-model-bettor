@@ -25,13 +25,20 @@ ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports"
 
 _NHL_INJURIES_URL = f"{ESPN_BASE}/hockey/nhl/injuries"
 _MLB_INJURIES_URL = f"{ESPN_BASE}/baseball/mlb/injuries"
+_NBA_INJURIES_URL = f"{ESPN_BASE}/basketball/nba/injuries"
 
 _NHL_TEAM_INJURIES_URL = f"{ESPN_BASE}/hockey/nhl/teams/{{team_id}}/injuries"
 _MLB_TEAM_INJURIES_URL = f"{ESPN_BASE}/baseball/mlb/teams/{{team_id}}/injuries"
+_NBA_TEAM_INJURIES_URL = f"{ESPN_BASE}/basketball/nba/teams/{{team_id}}/injuries"
 
 # ── Module-level cache ──────────────────────────────────────
+# Shortened 2026-04-24: was 7200s (2hr), now 1800s (30min) so a
+# late ruling (star OUT 2hr pre-game) flows into the pick-gen path
+# within one pred-cache window instead of up to two hours. ESPN
+# injury endpoints are unauthenticated and free; ~4x more hits per
+# day is a trivial cost for the freshness win.
 
-CACHE_TTL = 7200  # 2 hours in seconds
+CACHE_TTL = 1800  # 30 minutes
 
 _cache: dict[str, tuple[float, dict]] = {}
 
@@ -87,6 +94,7 @@ _MLB_ABBR_MAP: dict[str, str] = {
 # NHL: 32 teams  MLB: 30 teams
 _NHL_TEAM_IDS = list(range(1, 36))  # ESPN IDs aren't contiguous; overshoot a bit
 _MLB_TEAM_IDS = list(range(1, 31))
+_NBA_TEAM_IDS = list(range(1, 31))  # 30 NBA teams, IDs 1-30
 
 
 _TEAM_NAME_TO_ABBR: dict[str, str] = {
@@ -113,6 +121,20 @@ _TEAM_NAME_TO_ABBR: dict[str, str] = {
     "Pittsburgh Pirates": "PIT", "San Diego Padres": "SD", "San Francisco Giants": "SF",
     "Seattle Mariners": "SEA", "St. Louis Cardinals": "STL", "Tampa Bay Rays": "TB",
     "Texas Rangers": "TEX", "Toronto Blue Jays": "TOR", "Washington Nationals": "WSH",
+    # NBA
+    "Atlanta Hawks": "ATL", "Boston Celtics": "BOS", "Brooklyn Nets": "BKN",
+    "Charlotte Hornets": "CHA", "Chicago Bulls": "CHI", "Cleveland Cavaliers": "CLE",
+    "Dallas Mavericks": "DAL", "Denver Nuggets": "DEN", "Detroit Pistons": "DET",
+    "Golden State Warriors": "GSW", "Houston Rockets": "HOU", "Indiana Pacers": "IND",
+    "LA Clippers": "LAC", "Los Angeles Clippers": "LAC",
+    "Los Angeles Lakers": "LAL", "Memphis Grizzlies": "MEM", "Miami Heat": "MIA",
+    "Milwaukee Bucks": "MIL", "Minnesota Timberwolves": "MIN",
+    "New Orleans Pelicans": "NOP", "New York Knicks": "NYK",
+    "Oklahoma City Thunder": "OKC", "Orlando Magic": "ORL",
+    "Philadelphia 76ers": "PHI", "Phoenix Suns": "PHX",
+    "Portland Trail Blazers": "POR", "Sacramento Kings": "SAC",
+    "San Antonio Spurs": "SAS", "Toronto Raptors": "TOR",
+    "Utah Jazz": "UTA", "Washington Wizards": "WAS",
 }
 
 
@@ -296,6 +318,70 @@ def fetch_nhl_injuries() -> dict[str, list[dict]]:
 
     _cache_set("nhl_injuries", result)
     logger.info("Fetched NHL injuries for %d teams", len(result))
+    return result
+
+
+def fetch_nba_injuries() -> dict[str, list[dict]]:
+    """Fetch all NBA injuries from ESPN (live — same 30-min cache as
+    MLB/NHL). Returns {team_abbr: [{name, position, status, type, detail}]}.
+
+    Parallel NBA structure to fetch_mlb/nhl_injuries. Previously NBA
+    relied on the nba_injuries DB table (populated only by sync 2x/day)
+    — this fetcher gives the prediction path live intra-day updates so
+    a star ruled out 2hr pre-tip flows into picks within one pred-cache
+    window, not the next sync.
+    """
+    cached = _cache_get("nba_injuries")
+    if cached is not None:
+        return cached
+
+    result: dict[str, list[dict]] = {}
+
+    data = _fetch_json(_NBA_INJURIES_URL)
+    if data:
+        team_blocks = (
+            data.get("injuries")
+            or data.get("teams")
+            or data.get("items")
+            or []
+        )
+        if not team_blocks and isinstance(data, dict):
+            for key in data:
+                if isinstance(data[key], list) and len(data[key]) > 0:
+                    if isinstance(data[key][0], dict) and "team" in data[key][0]:
+                        team_blocks = data[key]
+                        break
+
+        for block in team_blocks:
+            if not isinstance(block, dict):
+                continue
+            abbr, injuries = _parse_team_block(block, "nba")
+            if injuries:
+                result[abbr] = injuries
+
+    # Per-team fallback if league-wide returned empty.
+    if not result:
+        logger.info("League-wide NBA injuries empty; trying per-team endpoints")
+        for tid in _NBA_TEAM_IDS:
+            url = _NBA_TEAM_INJURIES_URL.format(team_id=tid)
+            team_data = _fetch_json(url)
+            if not team_data:
+                continue
+            team_info = team_data.get("team") or {}
+            abbr = _normalize_abbr(
+                team_info.get("abbreviation", ""), "nba"
+            )
+            raw = (
+                team_data.get("injuries")
+                or team_data.get("items")
+                or []
+            )
+            parsed = [_parse_injury_entry(e) for e in raw if isinstance(e, dict)]
+            if abbr and parsed:
+                result[abbr] = parsed
+
+    _cache_set("nba_injuries", result)
+    logger.info("Fetched NBA injuries for %d teams", len(result))
     return result
 
 

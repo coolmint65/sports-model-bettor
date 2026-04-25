@@ -2649,6 +2649,155 @@ button:focus-visible {
 .fi-prob { color: #cbd5e1; }
 .fi-edge.positive { color: #34d399; font-weight: 600; }
 
+/* ── Derivative picks panel (all sports) ── */
+.derivative-picks {
+  margin: 24px 0;
+  padding: 16px;
+  background: rgba(30, 41, 59, 0.35);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 10px;
+}
+.derivative-title {
+  display: flex; align-items: center; gap: 10px;
+  margin: 0 0 4px 0;
+}
+.derivative-count {
+  font-size: 0.75rem; font-weight: 600;
+  color: #94a3b8; padding: 2px 8px;
+  background: rgba(148, 163, 184, 0.12);
+  border-radius: 12px;
+}
+.derivative-subtitle {
+  margin: 0 0 12px 0;
+  font-size: 0.8rem; color: #64748b;
+}
+.derivative-list {
+  display: flex; flex-direction: column; gap: 6px;
+}
+.derivative-game {
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.derivative-game-header {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 14px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s ease;
+}
+.derivative-game-header:hover {
+  background: rgba(30, 41, 59, 0.35);
+}
+.derivative-arrow {
+  color: #64748b; width: 14px; font-size: 0.85rem;
+}
+.derivative-matchup {
+  font-weight: 600; color: #e2e8f0;
+}
+.derivative-time {
+  font-size: 0.72rem; color: #64748b;
+}
+.derivative-game-count {
+  font-size: 0.75rem; color: #94a3b8;
+  padding: 2px 8px; background: rgba(148, 163, 184, 0.12);
+  border-radius: 10px;
+}
+.derivative-top-edge {
+  font-size: 0.78rem; color: #34d399;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.derivative-picks-table {
+  border-top: 1px solid rgba(148, 163, 184, 0.1);
+  background: rgba(15, 23, 42, 0.4);
+}
+.derivative-pick-row {
+  display: grid;
+  grid-template-columns: 24px 1.4fr 2fr 0.7fr 0.7fr 0.7fr;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 14px;
+  font-size: 0.82rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.06);
+}
+.derivative-pick-row:last-child { border-bottom: none; }
+.derivative-pick-row.conf-strong   { background: rgba(52, 211, 153, 0.04); }
+.derivative-pick-row.conf-moderate { background: rgba(96, 165, 250, 0.03); }
+.derivative-paperbet {
+  cursor: pointer;
+}
+.derivative-type {
+  color: #94a3b8;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.derivative-pick {
+  color: #e2e8f0; font-weight: 600;
+}
+.derivative-odds, .derivative-prob {
+  color: #cbd5e1; text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.derivative-edge.positive {
+  color: #34d399; font-weight: 600; text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.derivative-generated, .bb-generated {
+  font-size: 0.7rem; color: #64748b;
+  margin-left: auto;
+  font-weight: 400;
+}
+
+/* ── Derivative Tracker view ──
+ * Most styles inherit from .history-page / .pick-hero / .pick-type-tiles
+ * / .picks-table so the derivative tracker matches the main pick
+ * tracker visually. Only the small subtitle next to the heading is
+ * derivative-specific.
+ */
+.derivative-tracker-subtitle {
+  font-size: 0.72rem; color: #64748b;
+  font-weight: 400;
+  margin-left: 12px;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+/* Pick-state badges on the BestBets card */
+.bb-pick-changed-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(168, 85, 247, 0.18);
+  color: #c4b5fd;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  animation: bb-pick-flash 0.6s ease-out 3;
+}
+.bb-pick-locked-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(148, 163, 184, 0.16);
+  color: #94a3b8;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+@keyframes bb-pick-flash {
+  0%, 100% { background: rgba(168, 85, 247, 0.18); }
+  50%      { background: rgba(168, 85, 247, 0.45); }
+}
+
 /* ═══════════════════════════════════════════
    Mobile / phone viewport (≤ 600px wide)
    ═══════════════════════════════════════════
@@ -2667,6 +2816,21 @@ button:focus-visible {
   }
   .header h1 { font-size: 1.15rem; }
   .subtitle  { font-size: 0.72rem; }
+
+  /* Derivative table needs tighter columns on phones. Drop the
+     paperbet checkbox column to icon-only and rely on the row's
+     vertical padding for tap targets. */
+  .derivative-pick-row {
+    grid-template-columns: 22px 1fr 1fr 0.6fr 0.6fr 0.7fr;
+    gap: 6px;
+    font-size: 0.76rem;
+    padding: 8px 10px;
+  }
+  .derivative-game-header {
+    grid-template-columns: auto 1fr auto auto;
+    padding: 10px 10px;
+  }
+  .derivative-time { display: none; }
 
   /* Collapse every multi-column grid to single column. Cards stack
      vertically; always readable regardless of screen width. */

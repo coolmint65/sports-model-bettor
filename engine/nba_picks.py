@@ -188,6 +188,13 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
                 "odds": away_ml_odds,
             })
 
+    # ── Phase 1 derivatives ──
+    # Q1 team totals (Gaussian tail off home/away_q1_expected) and Q1
+    # total odd/even (sum total_probs over odd vs even). All pure
+    # probability extraction — no factor stacking.
+    from .nba_derivative_picks import append_derivative_picks
+    append_derivative_picks(picks, pred, odds, home_abbr, away_abbr)
+
     # ── Q1 Alt Line Shopping ──
     # Check Q1 alt spreads and totals for better edges than primary.
     # Prefer the exact discretized-Gaussian distributions exposed by
@@ -348,9 +355,12 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
     except Exception as e:
         logger.warning("NBA conservatism ladder error: %s", e)
 
-    # Adjusted EV: edge * reliability weight
+    # Adjusted EV: edge * reliability weight. Reliability is auto-tuned
+    # from settled NBA tracker history when volume permits, falls back to
+    # NBA_BET_RELIABILITY for cold-start bet types. See engine.dynamic_reliability.
+    from .dynamic_reliability import get_reliability as _get_reliability
     for p in picks:
-        reliability = NBA_BET_RELIABILITY.get(p["type"], 0.5)
+        reliability = _get_reliability("nba", p["type"])
         p["adjusted_ev"] = round(p["edge"] * reliability, 2)
     picks.sort(key=lambda p: -p["adjusted_ev"])
 

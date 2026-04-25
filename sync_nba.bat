@@ -51,6 +51,14 @@ echo Refreshing empirical NBA pick-prob calibration...
 python -c "from engine.empirical_calibration import refresh_calibration; print(refresh_calibration('nba'))" 2>nul
 
 echo.
+echo Refreshing adaptive baselines (LEAGUE_AVG_Q1_TOTAL etc.)...
+REM Computes long+short rolling baselines from completed games and
+REM writes overrides via engine.model_overrides when the trailing
+REM window diverges significantly from the long-term mean. Catches
+REM regime shifts (playoff pace slowdowns etc.) without source edits.
+python -c "from engine.adaptive_baselines import update_all; import json; print(json.dumps(update_all(), indent=2, default=str))" 2>nul
+
+echo.
 echo Updating POTD closing odds (CLV capture)...
 python -c "from engine.pick_of_day import update_potd_closing_odds; print(update_potd_closing_odds('nba'))" 2>nul
 

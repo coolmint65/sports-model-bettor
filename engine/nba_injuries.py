@@ -62,9 +62,42 @@ def compute_q1_adjustment(team_id: int, season: int) -> dict:
             "load_management": True,           # auto-detected resting risk
         }
     """
-    from .nba_db import get_team_injuries, get_team_players
+    from .nba_db import get_team_injuries, get_team_players, get_conn
 
-    injuries = get_team_injuries(team_id)
+    # Live ESPN injuries (30-min cache) layered on top of the sync-refreshed
+    # DB rows. Added 2026-04-24 so a star ruled out intra-day flows into
+    # picks without waiting for the next sync. DB rows stay the fallback
+    # when the live fetch 403s / returns empty.
+    live_injuries: list[dict] = []
+    try:
+        abbr_row = get_conn().execute(
+            "SELECT abbreviation FROM nba_teams WHERE id = ?",
+            (team_id,),
+        ).fetchone()
+        abbr = (abbr_row["abbreviation"] if abbr_row else "").upper()
+        if abbr:
+            from .injuries import fetch_nba_injuries
+            all_live = fetch_nba_injuries() or {}
+            team_live = all_live.get(abbr) or all_live.get(abbr.upper()) or []
+            # Shape-match to the DB rows compute_q1_adjustment reads:
+            # {name, status, player_id}. ESPN doesn't ship player_id in
+            # this feed, so compute_q1_adjustment falls through to the
+            # name lookup — same path the DB rows already use when the
+            # ID is missing.
+            for e in team_live:
+                if not isinstance(e, dict):
+                    continue
+                live_injuries.append({
+                    "team_id": team_id,
+                    "name": e.get("name", ""),
+                    "status": e.get("status", ""),
+                    "player_id": None,
+                })
+    except Exception as e:
+        logger.debug("NBA live injury fetch failed for team %s: %s", team_id, e)
+
+    # Prefer live when non-empty; otherwise fall back to DB sync rows.
+    injuries = live_injuries if live_injuries else get_team_injuries(team_id)
     players = get_team_players(team_id, season)
 
     # Build name/player_id lookup into player table for impact values

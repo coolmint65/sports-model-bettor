@@ -29,10 +29,18 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Bet types that have proven profitable in backtesting
-MLB_ALLOWED_TYPES = {"RL", "ML"}
-NHL_ALLOWED_TYPES = {"O/U", "PL"}
-NBA_ALLOWED_TYPES = {"Q1_SPREAD", "Q1_TOTAL", "Q1_ML"}
+# Deprecated 2026-04-24 — POTD now considers every pick from
+# `all_picks`, ranked by `_score_pick`. The score formula already
+# incorporates per-market reliability + tracker win rate, so derivative
+# bet types fairly compete with proven ML/RL/PL/O/U markets without
+# the previous hardcoded whitelist excluding them. Cold-start markets
+# with no tracker history score at neutral 1.0x reliability — they win
+# only when their raw edge × CI confidence beats the proven markets
+# in adjusted terms. Kept here as documentation of the historical
+# whitelist so the intent isn't lost.
+MLB_ALLOWED_TYPES_LEGACY = {"RL", "ML"}
+NHL_ALLOWED_TYPES_LEGACY = {"O/U", "PL"}
+NBA_ALLOWED_TYPES_LEGACY = {"Q1_SPREAD", "Q1_TOTAL", "Q1_ML"}
 
 MIN_EDGE = 5.0  # Minimum edge % to qualify as POTD
 
@@ -176,8 +184,6 @@ def select_potd(sport: str, games_with_bets: list[dict]) -> dict | None:
     Returns:
         POTD dict or None if no qualifying picks
     """
-    allowed_types = {"mlb": MLB_ALLOWED_TYPES, "nhl": NHL_ALLOWED_TYPES, "nba": NBA_ALLOWED_TYPES}.get(sport, MLB_ALLOWED_TYPES)
-
     candidates = []
     for game in games_with_bets:
         # Check all picks from this game, not just the "best_pick"
@@ -187,8 +193,11 @@ def select_potd(sport: str, games_with_bets: list[dict]) -> dict | None:
 
         for pick in all_picks:
             pick_type = pick.get("type", "")
-            if pick_type not in allowed_types:
-                continue
+            # No bet-type whitelist — every pick that clears MIN_EDGE +
+            # has valid odds + matches the matchup is a candidate. The
+            # `_score_pick` formula already weights by per-market
+            # tracker reliability so unproven derivatives compete on
+            # adjusted-EV terms with proven markets.
             if pick.get("edge", 0) < MIN_EDGE:
                 continue
             if not pick.get("odds"):

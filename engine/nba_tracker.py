@@ -18,6 +18,14 @@ from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
+# Phase 1 Q1 derivatives — excluded from main NBA tracker recording.
+# Routed through engine.derivative_tracker for paper-bet evaluation.
+_NBA_DERIVATIVE_TYPES: set[str] = {"Q1 Team Total", "Q1 Total O/E"}
+
+
+def _core_picks(picks: list[dict]) -> list[dict]:
+    return [p for p in picks if p.get("type") not in _NBA_DERIVATIVE_TYPES]
+
 
 def _compute_clv(bet_odds, closing_odds):
     """Compute closing line value.
@@ -68,17 +76,29 @@ def _parse_q1_scores(event: dict) -> dict | None:
     """Parse Q1 scores and metadata from an ESPN event.
 
     Returns dict with home_abbr, away_abbr, home_q1, away_q1, etc.
-    Returns None if Q1 scores are not available.
+    Returns None when Q1 isn't LOCKED yet (game in progress, still in
+    Q1 with seconds left — score can still change). Q1 is locked when
+    either:
+      - state == "post" (game complete), OR
+      - state == "in" AND current period > 1 (Q2+ has tipped off)
+
+    Previously this only checked `state == "pre"` and returned partial
+    mid-Q1 scores, which prematurely settled Q1 picks (e.g. Under 53.5
+    settled W at 24-18 with 5:00 left in Q1, before any more points
+    could be scored).
     """
     comp = event.get("competitions", [{}])[0]
-    status_type = comp.get("status", {}).get("type", {})
+    status = comp.get("status", {})
+    status_type = status.get("type", {})
     state = status_type.get("state", "pre")
+    cur_period = status.get("period") or 0
 
-    # Q1 picks can be settled as soon as Q1 ends — we don't need to
-    # wait for the full game. Q1 scores appear in linescores once Q1
-    # is complete (state="in" with period > 1, or state="post").
     if state == "pre":
         return None  # game hasn't started
+    # Q1 locked = game over OR current period advanced past 1
+    q1_locked = (state == "post") or (state == "in" and cur_period > 1)
+    if not q1_locked:
+        return None
 
     result = {"game_id": event.get("id", "")}
 
@@ -130,6 +150,60 @@ def _normalize_espn_abbr(abbr: str) -> str:
     """Map an ESPN scoreboard team abbreviation to the internal form used
     by nba_odds / nba_db / nba_picks."""
     return _ESPN_TO_INTERNAL_ABBR.get(abbr, abbr)
+
+
+def refresh_pending_for_today(bets: list[dict],
+                               target_date: str | None = None) -> dict:
+    """NBA twin of engine.tracker.refresh_pending_for_today. See that
+    docstring for the design rationale."""
+    from .nba_db import get_conn as _conn
+    target_date = target_date or datetime.now().strftime("%Y-%m-%d")
+    conn = _conn()
+    current_by_matchup: dict[str, dict] = {}
+    for b in bets:
+        if b.get("is_locked"):
+            continue  # locked: tracker entry stays frozen
+        bp = b.get("best_pick")
+        if bp:
+            current_by_matchup[b["matchup"]] = bp
+
+    pending = conn.execute(
+        "SELECT id, matchup, bet_type, pick FROM nba_picks "
+        "WHERE date = ? AND result IS NULL",
+        (target_date,),
+    ).fetchall()
+
+    updated = swapped = voided = 0
+    for p in pending:
+        p = dict(p)
+        current = current_by_matchup.get(p["matchup"])
+        if not current:
+            matchup_in_response = any(b["matchup"] == p["matchup"] for b in bets)
+            if matchup_in_response:
+                conn.execute("DELETE FROM nba_picks WHERE id = ?", (p["id"],))
+                voided += 1
+            continue
+
+        if current.get("type") != p["bet_type"] or current.get("pick") != p["pick"]:
+            conn.execute(
+                "UPDATE nba_picks SET bet_type = ?, pick = ?, model_prob = ?, "
+                "edge = ?, odds = ? WHERE id = ?",
+                (current.get("type"), current.get("pick"),
+                 current.get("prob"), current.get("edge"),
+                 current.get("odds"), p["id"]),
+            )
+            swapped += 1
+        else:
+            conn.execute(
+                "UPDATE nba_picks SET model_prob = ?, edge = ?, odds = ? "
+                "WHERE id = ?",
+                (current.get("prob"), current.get("edge"),
+                 current.get("odds"), p["id"]),
+            )
+            updated += 1
+
+    conn.commit()
+    return {"updated": updated, "swapped": swapped, "voided": voided}
 
 
 def record_picks(date: str | None = None, min_edge: float = 1.5,
@@ -239,8 +313,12 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
         if not picks:
             continue
 
-        # Record the best pick (highest edge)
-        best = picks[0]
+        # Filter out derivatives — they go to engine.derivative_tracker
+        # via the /api/best-bets recorder, not the main tracker.
+        core = _core_picks(picks)
+        if not core:
+            continue
+        best = core[0]
         if best["edge"] < min_edge:
             continue
         from .nba_picks import _valid_odds as _nba_valid
@@ -469,6 +547,37 @@ def settle_picks() -> dict:
                         result = "L"
                     else:
                         result = "P"
+
+        # ── Phase 1 derivative markets ──
+        elif bt == "Q1 Team Total":
+            # "DEN Q1 Over 28.5" / "MIN Q1 Under 27.5"
+            parts = pk.split()
+            if len(parts) >= 4:
+                pick_team = parts[0]
+                direction = parts[2].lower()
+                try:
+                    line = float(parts[3])
+                except ValueError:
+                    continue
+                is_home_pick = (pick_team == h or pick_team == _ALT_ABBRS.get(h, ""))
+                team_q1 = h_q1 if is_home_pick else a_q1
+                if team_q1 > line:
+                    result = "W" if direction == "over" else "L"
+                elif team_q1 < line:
+                    result = "L" if direction == "over" else "W"
+                else:
+                    result = "P"
+
+        elif bt == "Q1 Total O/E":
+            # "Q1 Total Odd" / "Q1 Total Even"
+            parts = pk.split()
+            if len(parts) >= 3:
+                direction = parts[2].lower()
+                is_odd = (q1_total % 2 == 1)
+                if direction == "odd":
+                    result = "W" if is_odd else "L"
+                else:
+                    result = "W" if not is_odd else "L"
 
         if result is None:
             continue

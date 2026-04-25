@@ -22,6 +22,20 @@ from .bankroll import ml_to_implied_prob
 
 ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports"
 
+# Phase 1 derivative bet types — excluded from main tracker recording
+# at sync time. Derivatives flow through engine.derivative_tracker
+# instead so their performance is logged in isolation.
+_MLB_DERIVATIVE_TYPES: set[str] = {
+    "Team Total", "F5 Team Total", "Inning Total", "Inning BTS",
+    "1st Inn Winner", "F5 Winner", "Total O/E", "Extra Innings",
+}
+
+
+def _core_picks(picks: list[dict]) -> list[dict]:
+    """Drop derivative bet types so the main tracker stays focused on
+    core markets (ML/RL/O/U/F5/1st INN/ALT)."""
+    return [p for p in picks if p.get("type") not in _MLB_DERIVATIVE_TYPES]
+
 
 def _compute_clv(bet_odds, closing_odds):
     """Compute closing line value.
@@ -197,6 +211,86 @@ logger = logging.getLogger(__name__)
 SEASON = datetime.now().year
 
 
+def refresh_pending_for_today(bets: list[dict],
+                               target_date: str | None = None) -> dict:
+    """Reconcile today's tracker pending picks against the live model.
+
+    Called from /api/best-bets after each refresh so the tracker
+    dashboard reflects what the model thinks RIGHT NOW, not what it
+    recorded at the morning sync. Three transitions:
+
+        - same pick, same line  → update prob/edge/odds (calibration
+          may have shifted, line may have moved within the same pick)
+        - different bet_type or pick  → swap (model changed its mind)
+        - no current best for that matchup  → delete (model no longer
+          sees edge in this game)
+
+    Pending picks for live or completed games are left alone — once
+    the user could have placed the bet, the historical record stands.
+
+    Returns ``{"updated": N, "swapped": N, "voided": N}``.
+    """
+    target_date = target_date or datetime.now().strftime("%Y-%m-%d")
+    conn = get_conn()
+
+    # Index current bests by matchup, ONLY for games still UNLOCKED
+    # (more than 1hr from tip-off). Once locked, the tracker entry
+    # stays frozen at whatever was recorded — no last-minute swaps.
+    current_by_matchup: dict[str, dict] = {}
+    for b in bets:
+        if b.get("is_locked"):
+            continue
+        bp = b.get("best_pick")
+        if bp:
+            current_by_matchup[b["matchup"]] = bp
+
+    pending = conn.execute(
+        "SELECT id, matchup, bet_type, pick FROM picks "
+        "WHERE date = ? AND result IS NULL",
+        (target_date,),
+    ).fetchall()
+
+    updated = swapped = voided = 0
+    for p in pending:
+        p = dict(p)
+        current = current_by_matchup.get(p["matchup"])
+        if not current:
+            # Model has no playable pick for this matchup any more —
+            # could be no current edge OR the game already started.
+            # We can only safely delete in the no-edge case; for the
+            # game-started case we want to preserve history. Detect
+            # by checking if the matchup exists in `bets` at all.
+            matchup_in_response = any(b["matchup"] == p["matchup"] for b in bets)
+            if matchup_in_response:
+                # Game still in pre and shown on best-bets, but no
+                # best_pick → model lost edge. Drop the pending row.
+                conn.execute("DELETE FROM picks WHERE id = ?", (p["id"],))
+                voided += 1
+            # else: matchup absent (game live/completed) — leave alone
+            continue
+
+        if current.get("type") != p["bet_type"] or current.get("pick") != p["pick"]:
+            conn.execute(
+                "UPDATE picks SET bet_type = ?, pick = ?, model_prob = ?, "
+                "edge = ?, odds = ? WHERE id = ?",
+                (current.get("type"), current.get("pick"),
+                 current.get("prob"), current.get("edge"),
+                 current.get("odds"), p["id"]),
+            )
+            swapped += 1
+        else:
+            conn.execute(
+                "UPDATE picks SET model_prob = ?, edge = ?, odds = ? "
+                "WHERE id = ?",
+                (current.get("prob"), current.get("edge"),
+                 current.get("odds"), p["id"]),
+            )
+            updated += 1
+
+    conn.commit()
+    return {"updated": updated, "swapped": swapped, "voided": voided}
+
+
 def record_picks(date: str | None = None, min_edge: float = 1.5,
                  force: bool = False) -> list[dict]:
     """
@@ -323,7 +417,7 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
             if stored and stored.get("picks"):
                 picks = stored["picks"]
                 game_odds = stored.get("odds", {})
-                best = get_best_pick(picks)
+                best = get_best_pick(_core_picks(picks))
                 if best and best["edge"] >= min_edge and _valid_odds(best.get("odds")):
                     conn.execute("""
                         INSERT INTO picks (game_id, date, matchup, bet_type, pick,
@@ -356,7 +450,7 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
         # (nonsense American price), don't record it. generate_picks now
         # sanitizes the odds dict, but guard at the write boundary too so
         # this can never re-manifest without a fresh bug upstream.
-        best = get_best_pick(picks)
+        best = get_best_pick(_core_picks(picks))
         if not best or best["edge"] < min_edge:
             continue
         if not _valid_odds(best.get("odds")):
@@ -441,7 +535,7 @@ def _record_from_scoreboard(conn, scoreboard: list, target_date: str,
             logger.warning("Prediction failed for %s: %s", matchup, e)
             continue
 
-        best = get_best_pick(picks)
+        best = get_best_pick(_core_picks(picks))
         if not best or best["edge"] < min_edge:
             continue
 
@@ -698,10 +792,15 @@ def settle_picks() -> dict:
             else:
                 result = "L"
 
-        elif bt.upper().startswith("F5"):
-            # First-5-innings markets. Need 5 complete innings before we
-            # settle -- a mid-5th linescore entry would be partial data.
-            # Two ways to be sure:
+        elif bt.upper().startswith("F5") and bt not in ("F5 Team Total", "F5 Winner"):
+            # First-5-innings markets (F5 ML / F5 O/U / F5 RL). The two
+            # exclusions above have their own specific settlers later in
+            # the chain — without the exclusion, this branch swallows them
+            # ("F5 TEAM TOTAL"[2:] == "TEAM TOTAL" doesn't match ML/O/U/RL,
+            # so the pick stays pending forever).
+            #
+            # Need 5 complete innings before we settle -- a mid-5th
+            # linescore entry would be partial data. Two ways to be sure:
             #   - game is final (entire linescore is settled) OR
             #   - linescore has a 6th inning entry, which the MLB Stats
             #     API only adds once the 5th wraps.
@@ -769,6 +868,209 @@ def settle_picks() -> dict:
                     result = "P"
                 else:
                     result = "L"
+
+        # ── Phase 1 derivative markets ──
+        # Linescore-aware settlers for the new MLB bet types. Most need
+        # inning-by-inning data; we re-use the same h_inn/a_inn parse
+        # the F5 block does, plus a tiny "is the Nth inning locked yet"
+        # check (final OR linescore has inning N+1) so picks settle as
+        # early as possible without snapping on partial data.
+        elif bt == "Team Total":
+            # "NYY Over 4.5" / "BOS Under 4.0"
+            if (game.get("status") or "").lower() != "final":
+                continue
+            parts = pk.split()
+            if len(parts) >= 3:
+                pick_team = parts[0]
+                direction = parts[1].lower()
+                try:
+                    line = float(parts[2])
+                except ValueError:
+                    continue
+                team_runs = hs if pick_team == h else as_
+                if team_runs > line:
+                    result = "W" if direction == "over" else "L"
+                elif team_runs < line:
+                    result = "L" if direction == "over" else "W"
+                else:
+                    result = "P"
+
+        elif bt == "F5 Team Total":
+            # "NYY F5 Over 2.5" — same locking rule as F5 markets above.
+            import json as _json
+            try:
+                h_inn = _json.loads(game.get("home_linescore") or "[]")
+                a_inn = _json.loads(game.get("away_linescore") or "[]")
+            except Exception:
+                continue
+            status = (game.get("status") or "").lower()
+            full_innings = min(len(h_inn), len(a_inn))
+            if status == "final":
+                if full_innings < 5:
+                    continue
+            elif full_innings < 6:
+                continue
+            parts = pk.split()
+            if len(parts) >= 4:
+                pick_team = parts[0]
+                direction = parts[2].lower()
+                try:
+                    line = float(parts[3])
+                except ValueError:
+                    continue
+                team_f5 = sum(h_inn[:5]) if pick_team == h else sum(a_inn[:5])
+                if team_f5 > line:
+                    result = "W" if direction == "over" else "L"
+                elif team_f5 < line:
+                    result = "L" if direction == "over" else "W"
+                else:
+                    result = "P"
+
+        elif bt == "Inning Total":
+            # "Inn N Over 0.5" / "Inn N Under 0.5"
+            import json as _json
+            try:
+                h_inn = _json.loads(game.get("home_linescore") or "[]")
+                a_inn = _json.loads(game.get("away_linescore") or "[]")
+            except Exception:
+                continue
+            parts = pk.split()
+            if len(parts) >= 4:
+                try:
+                    inning_n = int(parts[1])
+                    line = float(parts[3])
+                except ValueError:
+                    continue
+                direction = parts[2].lower()
+                # Inning N is locked when game is final OR linescore has
+                # inning N+1 (mirror of NRFI's "next inning logged" rule).
+                status = (game.get("status") or "").lower()
+                full_innings = min(len(h_inn), len(a_inn))
+                if not (status == "final" or full_innings > inning_n):
+                    continue
+                if inning_n < 1 or inning_n > full_innings:
+                    continue
+                inn_total = h_inn[inning_n - 1] + a_inn[inning_n - 1]
+                if inn_total > line:
+                    result = "W" if direction == "over" else "L"
+                elif inn_total < line:
+                    result = "L" if direction == "over" else "W"
+                else:
+                    result = "P"
+
+        elif bt == "Inning BTS":
+            # "Inn N BTS Yes" / "Inn N BTS No"
+            import json as _json
+            try:
+                h_inn = _json.loads(game.get("home_linescore") or "[]")
+                a_inn = _json.loads(game.get("away_linescore") or "[]")
+            except Exception:
+                continue
+            parts = pk.split()
+            if len(parts) >= 4:
+                try:
+                    inning_n = int(parts[1])
+                except ValueError:
+                    continue
+                direction = parts[3].lower()
+                status = (game.get("status") or "").lower()
+                full_innings = min(len(h_inn), len(a_inn))
+                if not (status == "final" or full_innings > inning_n):
+                    continue
+                if inning_n < 1 or inning_n > full_innings:
+                    continue
+                bts_yes = (h_inn[inning_n - 1] > 0 and a_inn[inning_n - 1] > 0)
+                if direction == "yes":
+                    result = "W" if bts_yes else "L"
+                else:
+                    result = "W" if not bts_yes else "L"
+
+        elif bt == "1st Inn Winner":
+            # "1st Inn NYY" / "1st Inn BOS" / "1st Inn Tie"
+            import json as _json
+            try:
+                h_inn = _json.loads(game.get("home_linescore") or "[]")
+                a_inn = _json.loads(game.get("away_linescore") or "[]")
+            except Exception:
+                continue
+            status = (game.get("status") or "").lower()
+            full_innings = min(len(h_inn), len(a_inn))
+            if not (status == "final" or full_innings >= 2):
+                continue
+            if full_innings < 1:
+                continue
+            h1 = h_inn[0]
+            a1 = a_inn[0]
+            parts = pk.split()
+            if len(parts) >= 3:
+                pick_label = parts[2]  # team abbr or "Tie"
+                if pick_label.lower() == "tie":
+                    result = "W" if h1 == a1 else "L"
+                elif pick_label == h:
+                    result = "W" if h1 > a1 else "L"
+                else:
+                    result = "W" if a1 > h1 else "L"
+
+        elif bt == "F5 Winner":
+            # "F5 NYY" / "F5 BOS" / "F5 Tie" — 3-way, tie is a winnable
+            # outcome (different from F5 ML which pushes on tie).
+            import json as _json
+            try:
+                h_inn = _json.loads(game.get("home_linescore") or "[]")
+                a_inn = _json.loads(game.get("away_linescore") or "[]")
+            except Exception:
+                continue
+            status = (game.get("status") or "").lower()
+            full_innings = min(len(h_inn), len(a_inn))
+            if status == "final":
+                if full_innings < 5:
+                    continue
+            elif full_innings < 6:
+                continue
+            f5_home = sum(h_inn[:5])
+            f5_away = sum(a_inn[:5])
+            parts = pk.split()
+            if len(parts) >= 2:
+                pick_label = parts[1]
+                if pick_label.lower() == "tie":
+                    result = "W" if f5_home == f5_away else "L"
+                elif pick_label == h:
+                    result = "W" if f5_home > f5_away else "L"
+                else:
+                    result = "W" if f5_away > f5_home else "L"
+
+        elif bt == "Total O/E":
+            if (game.get("status") or "").lower() != "final":
+                continue
+            parts = pk.split()
+            if len(parts) >= 2:
+                direction = parts[1].lower()
+                is_odd = (total_runs % 2 == 1)
+                if direction == "odd":
+                    result = "W" if is_odd else "L"
+                else:
+                    result = "W" if not is_odd else "L"
+
+        elif bt == "Extra Innings":
+            # "Extra Innings Yes" / "Extra Innings No". Only settles on
+            # final — partial linescores can't tell us whether the game
+            # will reach a 10th inning.
+            if (game.get("status") or "").lower() != "final":
+                continue
+            import json as _json
+            try:
+                h_inn = _json.loads(game.get("home_linescore") or "[]")
+                a_inn = _json.loads(game.get("away_linescore") or "[]")
+            except Exception:
+                continue
+            went_extras = max(len(h_inn), len(a_inn)) > 9
+            parts = pk.split()
+            if len(parts) >= 3:
+                direction = parts[2].lower()
+                if direction == "yes":
+                    result = "W" if went_extras else "L"
+                else:
+                    result = "W" if not went_extras else "L"
 
         if result is None:
             continue  # Could not determine result - skip

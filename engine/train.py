@@ -422,6 +422,94 @@ def section_baselines(sport: str, out: list, recs: list) -> None:
             logger.debug("NBA baseline calc failed: %s", e)
 
 
+def section_derivatives(sport: str, out: list, recs: list) -> None:
+    """Phase 1 derivative markets report.
+
+    Two data sources combined:
+      1. Live paper-bet tracker (derivative_picks table) — real picks
+         logged since launch. Thin sample at first but that's the
+         forward-looking data.
+      2. Historical backtest replay — running the derivative pick
+         generators against every completed game in the DB with an
+         edge floor applied. Shows how derivatives would have
+         performed over 6+ months of history.
+
+    Calibration deltas (predicted prob vs actual outcome) feed directly
+    into the recommendation list so persistently overconfident markets
+    get flagged for reliability downgrades.
+    """
+    out.append(f"## 8. DERIVATIVE MARKETS")
+
+    # ── Live paper-bet tracker stats ──
+    try:
+        from .derivative_tracker import get_summary
+        live = get_summary(sport) or {}
+        grand = live.pop("_grand", None)
+        if grand and grand.get("total", 0) > 0:
+            out.append(f"   Live paper-bet tracker:")
+            out.append(f"     Total: {grand['total']} picks, "
+                       f"{grand.get('wins', 0)}-{grand.get('losses', 0)}-"
+                       f"{grand.get('pushes', 0)}, "
+                       f"WR {grand.get('win_pct', 0)}%, "
+                       f"P/L ${round(grand.get('profit', 0), 2):+}")
+            if live:
+                out.append(f"     Per-market:")
+                for bt, s in sorted(live.items()):
+                    if s.get("total", 0) == 0:
+                        continue
+                    out.append(f"       {bt:<18} {s['wins']}-{s['losses']}-{s['pushes']}  "
+                               f"WR {s.get('win_pct', 0)}%  "
+                               f"ROI {s.get('roi', 0):+}  "
+                               f"P/L ${round(s.get('profit', 0), 2):+}")
+        else:
+            out.append("   Live tracker: no settled picks yet")
+    except Exception as e:
+        logger.debug("derivative live summary failed for %s: %s", sport, e)
+
+    # ── Historical backtest ──
+    # Cheap: only runs when explicit --deriv-backtest flag is passed,
+    # since full replay takes 5-8 min per sport. Without the flag we
+    # just show the live tracker data above.
+    if globals().get("_DERIV_BACKTEST_ENABLED", False):
+        mod_by_sport = {
+            "mlb": "mlb_deriv_retrobt",
+            "nhl": "nhl_deriv_retrobt",
+            "nba": "nba_deriv_retrobt",
+        }
+        mod_name = mod_by_sport.get(sport)
+        if mod_name:
+            try:
+                mod = __import__(f"engine.{mod_name}", fromlist=["run"])
+                report = mod.run(min_edge=4.0)
+                if report:
+                    out.append(f"\n   Historical backtest (4%+ edge):")
+                    for bt in sorted(report):
+                        r = report[bt]
+                        out.append(f"     {bt:<18} n={r['total']:>5}  "
+                                   f"WR {r['wr']:>5.1f}%  "
+                                   f"ROI {r['roi']:>+6.2f}  "
+                                   f"avg_prob {r['avg_prob']*100:>5.1f}%")
+                    # Calibration-driven recs: bet types where
+                    # predicted prob is > 5pp above actual WR over
+                    # a decent sample → flag for reliability downgrade
+                    for bt, r in report.items():
+                        if r["total"] < 50:
+                            continue
+                        pred = r["avg_prob"] * 100
+                        actual = r["wr"]
+                        diff = pred - actual
+                        if diff > 8 and r["roi"] < -5:
+                            recs.append(
+                                f"{bt}: overconfident by {diff:.1f}pp "
+                                f"(model {pred:.1f}%, actual {actual:.1f}%); "
+                                f"ROI {r['roi']:+.1f} over {r['total']} picks. "
+                                f"Lower BET_RELIABILITY or disable."
+                            )
+            except Exception as e:
+                logger.warning("Derivative backtest (%s) failed: %s", sport, e)
+    out.append("")
+
+
 # ── Main ──
 
 def run_sport(sport: str, structured_recs: list | None = None) -> list[str]:
@@ -450,6 +538,7 @@ def run_sport(sport: str, structured_recs: list | None = None) -> list[str]:
     section_calibration(settled, out, recs, sport)
     section_factor_hints(sport, out, recs)
     section_baselines(sport, out, recs)
+    section_derivatives(sport, out, recs)
 
     if structured_recs is not None and sport == "mlb":
         # Walk the settled picks again to build {flag, value, n, p} dicts
@@ -504,12 +593,14 @@ def _structured_direction_recs(settled: list, sport: str) -> list[dict]:
             b["losses"] += 1
 
     for r in settled:
-        bt = canon_bet_type(r.get("bet_type", ""))
-        c = _canon(r.get("result"))
+        # r may be a sqlite3.Row (no .get) or a dict (has .get). Normalize.
+        rr = dict(r) if not isinstance(r, dict) else r
+        bt = canon_bet_type(rr.get("bet_type", ""))
+        c = _canon(rr.get("result"))
         if c not in ("win", "loss"):
             continue
         won = (c == "win")
-        pick = (r.get("pick") or "").strip()
+        pick = (rr.get("pick") or "").strip()
         if bt == "RL":
             if "-1.5" in pick or " -1.5" in pick:
                 _bump("MLB_ALLOW_RL_FAVORITE", won)
@@ -567,7 +658,20 @@ def main() -> None:
         "--revert", metavar="FLAG",
         help="Manually clear an active override (e.g. MLB_ALLOW_OU_UNDER).",
     )
+    parser.add_argument(
+        "--deriv-backtest", action="store_true",
+        help=("Include the historical derivative backtest in the report. "
+              "Runs the derivative pick generators against every completed "
+              "game in the DB (~5-8 min per sport) and adds a 'Historical "
+              "backtest' block with WR/ROI/calibration per market. Live "
+              "tracker stats always show; this flag is for the heavy replay."),
+    )
     args = parser.parse_args()
+
+    # Opt-in guard for the heavy backtest. section_derivatives reads this
+    # global; keeps the default `engine.train` run fast.
+    global _DERIV_BACKTEST_ENABLED
+    _DERIV_BACKTEST_ENABLED = bool(args.deriv_backtest)
 
     logging.basicConfig(level=logging.INFO if args.apply else logging.WARNING,
                         format="%(levelname)-7s %(message)s")

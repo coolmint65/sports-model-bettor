@@ -19,6 +19,18 @@ logger = logging.getLogger(__name__)
 
 _local = threading.local()
 
+# Phase 1 derivative bet types — excluded from main NHL tracker
+# recording at sync time. Derivatives flow through
+# engine.derivative_tracker for isolated paper-bet evaluation.
+_NHL_DERIVATIVE_TYPES: set[str] = {
+    "Team Total", "Period Total", "Period BTS", "Period DNB",
+    "Total O/E", "Overtime", "BTS",
+}
+
+
+def _core_picks(picks: list[dict]) -> list[dict]:
+    return [p for p in picks if p.get("type") not in _NHL_DERIVATIVE_TYPES]
+
 
 def _compute_clv(bet_odds, closing_odds):
     """Compute closing line value.
@@ -92,6 +104,59 @@ def _fetch_nhl_scoreboard(date: str) -> list[dict]:
     except (urllib.error.URLError, json.JSONDecodeError, OSError) as e:
         logger.warning("Failed to fetch NHL scoreboard for %s: %s", date, e)
         return []
+
+
+def refresh_pending_for_today(bets: list[dict],
+                               target_date: str | None = None) -> dict:
+    """NHL twin of engine.tracker.refresh_pending_for_today. See that
+    docstring for the design rationale."""
+    target_date = target_date or datetime.now().strftime("%Y-%m-%d")
+    conn = _get_nhl_db()
+    current_by_matchup: dict[str, dict] = {}
+    for b in bets:
+        if b.get("is_locked"):
+            continue  # locked: tracker entry stays frozen
+        bp = b.get("best_pick")
+        if bp:
+            current_by_matchup[b["matchup"]] = bp
+
+    pending = conn.execute(
+        "SELECT id, matchup, bet_type, pick FROM nhl_picks "
+        "WHERE date = ? AND result IS NULL",
+        (target_date,),
+    ).fetchall()
+
+    updated = swapped = voided = 0
+    for p in pending:
+        p = dict(p)
+        current = current_by_matchup.get(p["matchup"])
+        if not current:
+            matchup_in_response = any(b["matchup"] == p["matchup"] for b in bets)
+            if matchup_in_response:
+                conn.execute("DELETE FROM nhl_picks WHERE id = ?", (p["id"],))
+                voided += 1
+            continue
+
+        if current.get("type") != p["bet_type"] or current.get("pick") != p["pick"]:
+            conn.execute(
+                "UPDATE nhl_picks SET bet_type = ?, pick = ?, model_prob = ?, "
+                "edge = ?, odds = ? WHERE id = ?",
+                (current.get("type"), current.get("pick"),
+                 current.get("prob"), current.get("edge"),
+                 current.get("odds"), p["id"]),
+            )
+            swapped += 1
+        else:
+            conn.execute(
+                "UPDATE nhl_picks SET model_prob = ?, edge = ?, odds = ? "
+                "WHERE id = ?",
+                (current.get("prob"), current.get("edge"),
+                 current.get("odds"), p["id"]),
+            )
+            updated += 1
+
+    conn.commit()
+    return {"updated": updated, "swapped": swapped, "voided": voided}
 
 
 def record_picks(date: str | None = None, min_edge: float = 1.5,
@@ -272,7 +337,12 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
         if not picks:
             continue
 
-        best = picks[0]
+        # Filter out derivatives — they go to engine.derivative_tracker
+        # via the /api/best-bets recorder, not the main tracker.
+        core = _core_picks(picks)
+        if not core:
+            continue
+        best = core[0]
         if best["edge"] < min_edge:
             continue
         from .nhl_picks import _valid_odds as _nhl_valid
@@ -314,36 +384,87 @@ def settle_picks() -> dict:
     for p in pending:
         dates.add(p["date"])
 
-    # Fetch final scores for each date
-    final_scores = {}  # game_id -> {home_abbr, away_abbr, home_score, away_score, total}
+    # Fetch scoreboard for each date. Include in-progress games so
+    # period-specific picks (Period Total P1, Period BTS P1, Period
+    # DNB P1 etc) can settle as soon as their period ends — no waiting
+    # for the full game. Full-game bet types (ML, O/U, PL, Team Total,
+    # Total O/E, Overtime, BTS) still gate on `is_completed`.
+    final_scores = {}  # game_id -> {..., is_completed, periods_locked}
     for d in dates:
         events = _fetch_nhl_scoreboard(d)
         for event in events:
             eid = event.get("id", "")
             comp = event.get("competitions", [{}])[0]
-            status = comp.get("status", {}).get("type", {})
-            if not status.get("completed", False):
-                continue
+            status_info = comp.get("status", {})
+            status = status_info.get("type", {})
+            state = status.get("state", "pre")
+            if state == "pre":
+                continue  # hasn't started — nothing to settle
+            is_completed = status.get("completed", False)
+
+            # Period 4 = overtime (regular season + playoffs); period 5
+            # = shootout. Detail string ("Final/OT", "Final/SO") is the
+            # most reliable cross-check since some events report period=4
+            # for OT-only games even when regulation ended in a tie.
+            cur_period = status_info.get("period") or 0
+            detail = (status.get("detail") or status.get("shortDetail")
+                      or "").lower()
+            went_to_ot = (is_completed and (cur_period > 3
+                          or "ot" in detail or "shootout" in detail))
 
             home_score = 0
             away_score = 0
             h_abbr = ""
             a_abbr = ""
+            home_periods: list[int] = []
+            away_periods: list[int] = []
             for c in comp.get("competitors", []):
                 team = c.get("team", {})
                 raw = c.get("score", "0")
                 score = int(raw) if isinstance(raw, (int, str)) and str(raw).isdigit() else 0
+                # ESPN ships per-period scoring under linescores as a
+                # list of {value: N, displayValue: "N"} dicts. Length
+                # 3 in regulation, 4 in OT, 5 if shootout was decisive.
+                ls_raw = c.get("linescores") or []
+                periods = []
+                for ls in ls_raw:
+                    val = ls.get("value")
+                    try:
+                        periods.append(int(val))
+                    except (TypeError, ValueError):
+                        periods.append(0)
                 if c.get("homeAway") == "home":
                     home_score = score
                     h_abbr = team.get("abbreviation", "")
+                    home_periods = periods
                 else:
                     away_score = score
                     a_abbr = team.get("abbreviation", "")
+                    away_periods = periods
+
+            # A period N is "locked" when its linescore entry exists AND
+            # either the game is completed OR the current period has
+            # advanced past N. Mid-period scores are not locked — a goal
+            # scored in P1 5:00 could be followed by another before P1
+            # ends. ESPN populates the linescore entry for period N as
+            # soon as N is in progress, so use cur_period as the guard.
+            linescore_depth = min(len(home_periods), len(away_periods))
+            if is_completed:
+                periods_locked = linescore_depth
+            else:
+                # While game is in progress, only periods strictly before
+                # current are locked.
+                periods_locked = max(0, min(linescore_depth, cur_period - 1))
 
             final_scores[eid] = {
                 "home_abbr": h_abbr, "away_abbr": a_abbr,
                 "home_score": home_score, "away_score": away_score,
                 "total": home_score + away_score,
+                "home_periods": home_periods,
+                "away_periods": away_periods,
+                "went_to_ot": went_to_ot,
+                "is_completed": is_completed,
+                "periods_locked": periods_locked,
             }
 
     # Fetch current NHL odds for closing line capture
@@ -468,6 +589,17 @@ def settle_picks() -> dict:
         odds = pick["odds"] or -110
         result = None
 
+        # Per-bet-type readiness check. Full-game markets need the
+        # game completed; period-specific markets only need their
+        # period locked (enables intra-game settlement — a Period 1
+        # pick doesn't wait for Period 3).
+        _FULL_GAME_TYPES = {
+            "ML", "O/U", "ALT O/U", "PL", "ALT PL",
+            "Team Total", "Total O/E", "Overtime", "BTS",
+        }
+        if bt in _FULL_GAME_TYPES and not game.get("is_completed", False):
+            continue
+
         if bt == "ML":
             home_won = hs > as_
             if pk == h:
@@ -515,6 +647,139 @@ def settle_picks() -> dict:
                 result = "P"
             else:
                 result = "L"
+
+        # ── Phase 1 derivative markets ──
+        # Period-specific markets need linescores from ESPN (added to
+        # final_scores above). Markets that only need final scores
+        # (Team Total, Total O/E, BTS, Overtime) settle without
+        # touching linescores.
+        elif bt == "Team Total":
+            # "BOS Over 3.5" / "NYR Under 2.5"
+            parts = pk.split()
+            if len(parts) >= 3:
+                pick_team = parts[0]
+                direction = parts[1].lower()
+                try:
+                    line = float(parts[2])
+                except ValueError:
+                    continue
+                team_goals = hs if pick_team == h else as_
+                if team_goals > line:
+                    result = "W" if direction == "over" else "L"
+                elif team_goals < line:
+                    result = "L" if direction == "over" else "W"
+                else:
+                    result = "P"
+
+        elif bt == "Period Total":
+            # "P1 Over 1.5" / "P2 Under 1.5" — 3 tokens (P{n}, direction, line)
+            home_periods = game.get("home_periods") or []
+            away_periods = game.get("away_periods") or []
+            parts = pk.split()
+            if len(parts) >= 3 and parts[0].startswith("P"):
+                try:
+                    period_n = int(parts[0][1:])
+                    line = float(parts[2])
+                except ValueError:
+                    continue
+                direction = parts[1].lower()
+                # Need that period to have been played. Regulation = 3;
+                # OT = 4. We don't settle period totals on a period
+                # that didn't happen (e.g. P4 in a regulation game).
+                # Only settle once the period is locked (current period
+                # advanced past it OR game completed). Guards against
+                # mid-period snapshots where more goals could still come.
+                if period_n < 1 or period_n > game.get("periods_locked", 0):
+                    continue
+                period_total = (home_periods[period_n - 1]
+                                + away_periods[period_n - 1])
+                if period_total > line:
+                    result = "W" if direction == "over" else "L"
+                elif period_total < line:
+                    result = "L" if direction == "over" else "W"
+                else:
+                    result = "P"
+
+        elif bt == "Period BTS":
+            # "P1 BTS Yes" / "P1 BTS No" — 3 tokens (P{n}, "BTS", direction)
+            home_periods = game.get("home_periods") or []
+            away_periods = game.get("away_periods") or []
+            parts = pk.split()
+            if len(parts) >= 3 and parts[0].startswith("P"):
+                try:
+                    period_n = int(parts[0][1:])
+                except ValueError:
+                    continue
+                direction = parts[2].lower()
+                # Only settle once the period is locked (current period
+                # advanced past it OR game completed). Guards against
+                # mid-period snapshots where more goals could still come.
+                if period_n < 1 or period_n > game.get("periods_locked", 0):
+                    continue
+                bts_yes = (home_periods[period_n - 1] > 0
+                           and away_periods[period_n - 1] > 0)
+                if direction == "yes":
+                    result = "W" if bts_yes else "L"
+                else:
+                    result = "W" if not bts_yes else "L"
+
+        elif bt == "Period DNB":
+            # "P1 DNB BOS" / "P1 DNB NYR" — 3 tokens (P{n}, "DNB", team)
+            home_periods = game.get("home_periods") or []
+            away_periods = game.get("away_periods") or []
+            parts = pk.split()
+            if len(parts) >= 3 and parts[0].startswith("P"):
+                try:
+                    period_n = int(parts[0][1:])
+                except ValueError:
+                    continue
+                pick_team = parts[2]
+                # Only settle once the period is locked (current period
+                # advanced past it OR game completed). Guards against
+                # mid-period snapshots where more goals could still come.
+                if period_n < 1 or period_n > game.get("periods_locked", 0):
+                    continue
+                hp = home_periods[period_n - 1]
+                ap = away_periods[period_n - 1]
+                if hp == ap:
+                    result = "P"  # DNB pushes on a tied period
+                elif pick_team == h:
+                    result = "W" if hp > ap else "L"
+                else:
+                    result = "W" if ap > hp else "L"
+
+        elif bt == "Total O/E":
+            # "Total Odd" / "Total Even"
+            parts = pk.split()
+            if len(parts) >= 2:
+                direction = parts[1].lower()
+                is_odd = (total % 2 == 1)
+                if direction == "odd":
+                    result = "W" if is_odd else "L"
+                else:
+                    result = "W" if not is_odd else "L"
+
+        elif bt == "Overtime":
+            # "Overtime Yes" / "Overtime No"
+            went_to_ot = game.get("went_to_ot", False)
+            parts = pk.split()
+            if len(parts) >= 2:
+                direction = parts[1].lower()
+                if direction == "yes":
+                    result = "W" if went_to_ot else "L"
+                else:
+                    result = "W" if not went_to_ot else "L"
+
+        elif bt == "BTS":
+            # "BTS Yes" / "BTS No"
+            bts_yes = (hs > 0 and as_ > 0)
+            parts = pk.split()
+            if len(parts) >= 2:
+                direction = parts[1].lower()
+                if direction == "yes":
+                    result = "W" if bts_yes else "L"
+                else:
+                    result = "W" if not bts_yes else "L"
 
         if result is None:
             continue

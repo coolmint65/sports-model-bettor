@@ -19,7 +19,7 @@ REM Auto-detect: if no final games with linescores OR no player stats, do full s
 python -c "from engine.db import get_conn; c=get_conn(); g=c.execute('SELECT COUNT(*) as c FROM games WHERE status=\"final\" AND home_linescore IS NOT NULL').fetchone()['c']; p=c.execute('SELECT COUNT(*) FROM pitcher_stats').fetchone()[0]; exit(0 if g > 10 and p > 10 else 1)" 2>nul
 if errorlevel 1 (
     echo First run or missing data - running full MLB sync...
-    echo This fetches the full season + player stats (5-10 minutes).
+    echo This fetches the full season + player stats ^(5-10 minutes^).
     echo.
     python scripts\run.py scrapers.mlb_stats --full
     echo.

@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { humanizeBetType } from '../lib/betType'
 
 export default function BestBets({ bets, loading }) {
@@ -78,6 +78,36 @@ function BetCard({ bet }) {
     [bet.time],
   )
 
+  // Pick-changed flash. When the model swaps the headline pick (line
+  // moved enough to flip the recommendation), light up a "Pick updated"
+  // badge for 30s so the user notices. Persists across the 5-min
+  // auto-refresh via a localStorage key per (sport+game) so it doesn't
+  // re-flash on every reload — only on actual changes.
+  const pickKey = `${best_pick?.type}|${best_pick?.pick}`
+  const storageKey = `pickseen:${bet.game_id}`
+  const [flash, setFlash] = useState(false)
+  const flashTimerRef = useRef(null)
+  useEffect(() => {
+    if (typeof window === 'undefined' || !best_pick) return
+    let prev = null
+    try {
+      prev = window.localStorage.getItem(storageKey)
+    } catch {
+      // storage disabled — fall through, just won't flash
+    }
+    if (prev && prev !== pickKey) {
+      setFlash(true)
+      if (flashTimerRef.current) clearTimeout(flashTimerRef.current)
+      flashTimerRef.current = setTimeout(() => setFlash(false), 30_000)
+    }
+    try {
+      window.localStorage.setItem(storageKey, pickKey)
+    } catch {}
+    return () => {
+      if (flashTimerRef.current) clearTimeout(flashTimerRef.current)
+    }
+  }, [pickKey, storageKey, best_pick])
+
   return (
     <div className={`bb-card conf-${bet.confidence}`}>
       <div className="bb-card-header">
@@ -89,13 +119,33 @@ function BetCard({ bet }) {
         <div className="bb-meta">
           <span>{gameTime}</span>
           {bet.venue && <span className="bb-venue">{bet.venue}</span>}
+          {bet.generated_at && (
+            <span className="bb-generated" title={`Picks computed at ${bet.generated_at}`}>
+              picks as of {new Date(bet.generated_at).toLocaleTimeString(
+                [], { hour: 'numeric', minute: '2-digit' })}
+            </span>
+          )}
         </div>
       </div>
 
       <div className="bb-card-body">
         {/* Best pick callout */}
         <div className={`bb-best-pick conf-${bet.confidence}`}>
-          <div className="bb-pick-type">{humanizeBetType(best_pick.type)}</div>
+          <div className="bb-pick-type">
+            {humanizeBetType(best_pick.type)}
+            {flash && (
+              <span className="bb-pick-changed-badge"
+                    title="Model swapped this pick since your last view (line moved)">
+                Pick updated
+              </span>
+            )}
+            {bet.is_locked && (
+              <span className="bb-pick-locked-badge"
+                    title="Game has started — pick is locked">
+                🔒 Locked
+              </span>
+            )}
+          </div>
           <div className="bb-pick-name">{best_pick.pick}</div>
           <div className="bb-pick-edge">+{best_pick.edge}% edge</div>
           <div className="bb-pick-prob">{pct(best_pick.prob)}</div>

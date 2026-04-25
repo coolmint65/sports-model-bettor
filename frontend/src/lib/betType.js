@@ -32,6 +32,28 @@ const BET_TYPE_LABELS = {
   'ALT RL': 'Alt Run Line',
   'ALT O/U': 'Alt Over/Under',
   'ALT PL': 'Alt Puck Line',
+
+  // Phase 1 derivatives. Labels mirror the engine keys closely so the
+  // empirical-calibration tracker output and the UI use identical
+  // strings — the only places we humanize are abbreviations
+  // (BTS/DNB/O-E) that don't read cleanly on their own.
+  'Team Total': 'Team Total',
+  'F5 Team Total': 'F5 Team Total',
+  'Inning Total': 'Inning Total',
+  'Inning BTS': 'Inning Both Teams Score',
+  '1st Inn Winner': '1st Inning Winner',
+  'F5 Winner': 'F5 Winner',
+  'Total O/E': 'Total Odd / Even',
+  'Extra Innings': 'Extra Innings',
+
+  'Period Total': 'Period Total',
+  'Period BTS': 'Period Both Teams Score',
+  'Period DNB': 'Period Draw No Bet',
+  'Overtime': 'Overtime',
+  'BTS': 'Both Teams Score',
+
+  'Q1 Team Total': 'Q1 Team Total',
+  'Q1 Total O/E': 'Q1 Total Odd / Even',
 }
 
 export function humanizeBetType(t) {

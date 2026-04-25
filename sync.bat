@@ -89,9 +89,11 @@ echo ============================================
 echo   Sync Complete
 echo ============================================
 echo.
-REM Only pause when running interactively. Task Scheduler runs in a
-REM non-interactive "Services" session where pause hangs until the
-REM ExecutionTimeLimit kills the task (exit code 255). We detect
-REM Task Scheduler via SESSIONNAME (empty or "Services" when scheduled;
-REM "Console" or "RDP-Tcp#X" when a user is logged on).
-if /i not "%SESSIONNAME%"=="" if /i not "%SESSIONNAME%"=="Services" pause
+REM Only pause when launched via double-click. Task Scheduler launches
+REM in the user's Console session (SESSIONNAME=Console under Logon
+REM Mode "Interactive only"), so checking SESSIONNAME alone isn't
+REM enough — the schedule must explicitly pass an arg (e.g. --scheduled)
+REM so the third guard below catches it. Without the arg-passed guard,
+REM the parent paused after the children finished, hung the task for
+REM 30 min, and Task Scheduler killed it with exit 255.
+if /i not "%SESSIONNAME%"=="" if /i not "%SESSIONNAME%"=="Services" if "%~1"=="" pause

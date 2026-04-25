@@ -778,6 +778,73 @@ def _enrich_games(games: list[dict], date: str) -> list[dict]:
     return games
 
 
+# Lock semantics: a pick locks ONCE THE GAME STARTS, not before.
+# Pre-game, the card best_pick stays current — if HR moves the line
+# enough that the model picks a different bet, the card swaps to the
+# new pick (and the tracker pending row swaps too via
+# refresh_pending_for_today). What we want to prevent is mid-game
+# noise re-ranking the headline after the user could have placed
+# their bet. So lock fires when game time has passed (game started),
+# never before.
+def _is_game_locked(game_iso_time: str | None) -> bool:
+    """True iff the game has already started. Pre-game returns False
+    so the model can keep updating the card / tracker pending in
+    response to line moves. Once `gt < now`, lock fires and downstream
+    code (best-bets card, tracker refresh) skips swap logic."""
+    if not game_iso_time:
+        return False
+    try:
+        s = game_iso_time.rstrip("Z")
+        gt = datetime.fromisoformat(s)
+        from datetime import timezone as _tz
+        if gt.tzinfo is None:
+            gt = gt.replace(tzinfo=_tz.utc)
+        return gt < datetime.now(_tz.utc)
+    except Exception:
+        return False
+
+
+def _is_game_imminent(game_iso_time: str | None,
+                      window_s: int = 3600) -> bool:
+    """True iff game starts within `window_s` seconds (default 1hr)
+    and hasn't started yet. Used to bypass the 30-min pred cache for
+    soon-to-tip games — when seconds matter (line moves, late lineup
+    scratches), we want the freshest possible prediction every call."""
+    if not game_iso_time:
+        return False
+    try:
+        s = game_iso_time.rstrip("Z")
+        gt = datetime.fromisoformat(s)
+        from datetime import timezone as _tz
+        if gt.tzinfo is None:
+            gt = gt.replace(tzinfo=_tz.utc)
+        delta = (gt - datetime.now(_tz.utc)).total_seconds()
+        return 0 < delta <= window_s
+    except Exception:
+        return False
+
+
+# Phase 1 derivative bet types per sport. Used to:
+#   1. Top up `all_picks` so derivatives surface on cards even when their
+#      reliability-adjusted EV pushes them out of the top 4.
+#   2. Carve a separate `derivative_picks` field for the dedicated UI
+#      panel — keeps high-conviction main markets uncluttered while
+#      letting users browse + paper-bet the derivative shelf.
+# 1st INN is intentionally NOT in these sets — it has its own dedicated
+# FirstInningPicks card and is treated as a core market, not Phase 1.
+_MLB_DERIV_TYPES: set[str] = {
+    "Team Total", "F5 Team Total", "Inning Total", "Inning BTS",
+    "1st Inn Winner", "F5 Winner", "Total O/E", "Extra Innings",
+}
+_NHL_DERIV_TYPES: set[str] = {
+    "Team Total", "Period Total", "Period BTS", "Period DNB",
+    "Total O/E", "Overtime", "BTS",
+}
+_NBA_DERIV_TYPES: set[str] = {
+    "Q1 Team Total", "Q1 Total O/E",
+}
+
+
 class PredictRequest(BaseModel):
     home_team_id: int
     away_team_id: int
@@ -788,13 +855,31 @@ class PredictRequest(BaseModel):
 
 # Per-game prediction cache. Dashboard load (/api/best-bets) runs the
 # full MC+GBM chain across ~15 games, which is multi-minute cold. Repeat
-# refreshes within the TTL hit memory and return instantly. Game-state
-# inputs (umpire, lineups, weather) only update a few times an hour, so
-# 5 minutes is well under the noise floor of "what could have changed".
+# refreshes within the TTL hit memory and return instantly. Bumped from
+# 5 min to 30 min on 2026-04-24 — pre-derivative the only stochastic
+# input was MC seed (now deterministic, see _mc_seed below) and odds
+# (which we fetch fresh per call). 30 min lets a slate of predictions
+# stay stable across natural reload cadence (user opens app, refreshes
+# a few times) while still picking up the next sync's lineup snapshot
+# for the late-day check.
 import threading as _threading
+import hashlib as _hashlib
 _PRED_CACHE: dict = {}
 _PRED_CACHE_LOCK = _threading.Lock()
-_PRED_CACHE_TTL_S = 300
+_PRED_CACHE_TTL_S = 1800
+
+
+def _mc_seed(*parts) -> int:
+    """Derive a deterministic 32-bit seed from a tuple of identifiers
+    (sport, date, team IDs, pitcher IDs, etc.). Two predictions for the
+    same matchup on the same date get the same seed → same MC output →
+    stable picks across reloads. Different matchups → different seeds →
+    no cross-game correlation. md5 (not Python hash()) so the seed is
+    stable across processes; ``hash()`` is randomized per interpreter
+    boot when PYTHONHASHSEED isn't pinned."""
+    payload = "|".join(str(p) if p is not None else "" for p in parts)
+    digest = _hashlib.md5(payload.encode()).digest()
+    return int.from_bytes(digest[:4], "big")
 
 # ── Picks store ──────────────────────────────────────────────
 # Single source of truth for today's picks. Best-bets writes here;
@@ -1154,13 +1239,16 @@ def _predict_mlb_full(home_team_id: int, away_team_id: int,
         try:
             from engine.mc_mlb_run import run_mlb_mc
             import engine.config as _cfg
+            today_s = datetime.now().strftime("%Y-%m-%d")
             result["mc"] = run_mlb_mc(
                 home_team_id=home_team_id,
                 away_team_id=away_team_id,
                 home_pitcher_id=home_pitcher_id,
                 away_pitcher_id=away_pitcher_id,
                 venue=venue,
-                n_sims=int(getattr(_cfg, "MLB_MC_N_SIMS", 50_000)),
+                n_sims=int(getattr(_cfg, "MLB_MC_N_SIMS", 100_000)),
+                seed=_mc_seed("mlb", today_s, home_team_id, away_team_id,
+                              home_pitcher_id, away_pitcher_id),
             )
         except Exception as e:
             logger.warning("MC prediction failed for %s/%s: %s",
@@ -1220,9 +1308,11 @@ def _predict_nhl_full(home_key: str, away_key: str,
             import engine.config as _cfg
             home_abbr = (result.get("home") or {}).get("abbreviation") or home_key
             away_abbr = (result.get("away") or {}).get("abbreviation") or away_key
+            today_s = datetime.now().strftime("%Y-%m-%d")
             result["mc"] = run_nhl_mc(
                 home_abbr, away_abbr,
-                n_sims=int(getattr(_cfg, "NHL_MC_N_SIMS", 50_000)),
+                n_sims=int(getattr(_cfg, "NHL_MC_N_SIMS", 100_000)),
+                seed=_mc_seed("nhl", today_s, home_abbr, away_abbr),
             )
         except Exception as e:
             logger.warning("NHL MC failed for %s/%s: %s", home_key, away_key, e)
@@ -1308,9 +1398,11 @@ def _predict_nba_full(home_abbr: str, away_abbr: str,
         try:
             from engine.mc_nba_run import run_nba_q1_mc
             import engine.config as _cfg
+            today_s = datetime.now().strftime("%Y-%m-%d")
             result["mc"] = run_nba_q1_mc(
                 home_abbr, away_abbr,
-                n_sims=int(getattr(_cfg, "NBA_MC_N_SIMS", 50_000)),
+                n_sims=int(getattr(_cfg, "NBA_MC_N_SIMS", 100_000)),
+                seed=_mc_seed("nba", today_s, home_abbr, away_abbr),
             )
         except Exception as e:
             logger.warning("NBA MC failed for %s/%s: %s", home_abbr, away_abbr, e)
@@ -1605,8 +1697,20 @@ def _bb_predict_one(game: dict, all_odds) -> dict | None:
 
     h_abbr = game["home"]["abbreviation"]
     a_abbr = game["away"]["abbreviation"]
-    game_odds = game.get("odds") or match_odds(h_abbr, a_abbr, all_odds)
+    # Merge scoreboard-attached odds (partial: ML/RL/OU only) with the
+    # full HR scrape (includes team totals, F5, derivatives). Scoreboard
+    # values win on overlap so we keep the same primary lines the rest of
+    # the system already references; the merge only ADDS missing keys.
+    # Previously this was `game.get("odds") or match_odds(...)` — the
+    # truthy partial dict suppressed the derivative fallback entirely.
+    matched = match_odds(h_abbr, a_abbr, all_odds) or {}
+    game_odds = {**matched, **(game.get("odds") or {})}
 
+    # Bypass the 30-min pred cache for games starting within 1hr —
+    # late lineup scratches, weather, line moves all matter most in
+    # the final hour. Outside the 1hr window the cache stands so we
+    # don't redo full MC + GBM on every refresh of an early-slate game.
+    use_cache = not _is_game_imminent(game.get("date"))
     try:
         pred = _predict_mlb_full(
             home_team_id=home_id,
@@ -1614,6 +1718,7 @@ def _bb_predict_one(game: dict, all_odds) -> dict | None:
             home_pitcher_id=h_pitcher_id,
             away_pitcher_id=a_pitcher_id,
             venue=game.get("venue"),
+            use_cache=use_cache,
         )
     except Exception as e:
         logger.error("  Prediction crashed for %s: %s",
@@ -1717,14 +1822,24 @@ def api_best_bets():
 
         _picks_store_put("mlb", h_abbr, a_abbr, picks, game_odds)
 
-        # If a pick was already recorded in the tracker, use that as
-        # the canonical best_pick so the card matches the tracker.
+        # Card + POTD should always agree. To make that true, both
+        # are computed against CORE picks only — derivatives flow
+        # exclusively through `derivative_picks` and the dedicated
+        # tracker.
+        core_picks = [p for p in picks if p.get("type") not in _MLB_DERIV_TYPES]
         matchup = f"{a_abbr} @ {h_abbr}"
         recorded = _get_recorded_pick("mlb", matchup, target_date)
-        if recorded:
+
+        # Per-game lock: once the game is within 1 hour of tip-off,
+        # freeze the card's best_pick to whatever the tracker recorded
+        # (or fall back to current best if nothing recorded). Live
+        # in-game odds/score swings can't keep flipping the headline —
+        # what the user saw at lock time is what they bet.
+        locked = _is_game_locked(game.get("date"))
+        if locked and recorded:
             best = recorded
         else:
-            best = get_best_pick(picks)
+            best = get_best_pick(core_picks) if core_picks else None
         if not best:
             continue
 
@@ -1787,6 +1902,22 @@ def api_best_bets():
         except Exception as e:
             logger.debug("  Enrich-best-bet failed for %s/%s: %s", h_abbr, a_abbr, e)
 
+        # all_picks = top 4 CORE picks (no derivatives) plus the 1st
+        # INN top-up if outside top 4. Derivatives are routed entirely
+        # through `derivative_picks` below; they never appear in
+        # all_picks so the card and POTD always agree on the headline.
+        all_picks = list(core_picks[:4])
+        if not any(p.get("type") == "1st INN" for p in all_picks):
+            for p in core_picks[4:]:
+                if p.get("type") == "1st INN":
+                    all_picks.append(p)
+                    break
+
+        derivative_picks = sorted(
+            (p for p in picks if p.get("type") in _MLB_DERIV_TYPES),
+            key=lambda p: -(p.get("edge") or 0),
+        )
+
         bets.append({
             "game_id": game["id"],
             "matchup": f"{a_abbr} @ {h_abbr}",
@@ -1795,16 +1926,51 @@ def api_best_bets():
             "time": game["date"],
             "venue": game.get("venue", ""),
             "best_pick": best,
-            "all_picks": picks[:4],
+            "all_picks": all_picks,
+            "derivative_picks": derivative_picks,
             "confidence": best.get("confidence", "lean"),
             "win_prob": win_prob,
             "rest": rest,
             "factors": factors,
             "injuries": injuries,
             "season_context": season_context,
+            # When this game's picks were generated (ISO UTC). UI uses
+            # this to render an "as of HH:MM" tag so users can tell
+            # how stale the cards are vs HR's live odds. Combined with
+            # the frontend's 5-min auto-refresh, worst-case staleness
+            # is bounded; the timestamp makes it visible.
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "recorded_pick": recorded,
+            "is_locked": locked,
         })
 
     bets.sort(key=lambda b: b["best_pick"]["edge"], reverse=True)
+
+    # Reconcile tracker pending picks with the live model. When the
+    # line moves or the model swaps, the pending row updates so the
+    # tracker dashboard isn't stuck on yesterday's recommendation.
+    try:
+        from engine.tracker import refresh_pending_for_today
+        diff = refresh_pending_for_today(bets, target_date)
+        if any(diff.values()):
+            logger.info("Tracker pending sync (mlb): %s", diff)
+    except Exception as e:
+        logger.warning("Tracker pending refresh failed: %s", e)
+
+    # Paper-bet log for derivative markets — separate table so we can
+    # evaluate derivative profitability in isolation. Records top 3
+    # derivative picks per game with edge >= 4%; idempotent across
+    # repeat calls (UNIQUE constraint dedupes; live edge/odds refresh
+    # on re-call so the row stays current).
+    try:
+        from engine.derivative_tracker import record_top_derivatives
+        diff = record_top_derivatives("mlb", bets, n_per_game=1,
+                                       min_edge=4.0, target_date=target_date)
+        if diff.get("inserted") or diff.get("updated"):
+            logger.info("Derivative tracker (mlb): %s", diff)
+    except Exception as e:
+        logger.warning("MLB derivative recorder failed: %s", e)
+
     import time as _time
     _bb_progress_set(phase="idle", finished_at=_time.time())
     return bets
@@ -1960,12 +2126,89 @@ def _find_ou(ou_lines, vegas_total):
 
 @app.get("/api/tracker/history")
 def api_pick_history():
-    """Return recent pick history with results."""
+    """Return recent main-tracker pick history with results.
+
+    Filters out derivative bet types defensively. The MLB derivative
+    settler trampoline (engine.derivative_tracker._settle_mlb_derivatives)
+    inserts temp rows into the main `picks` table mid-flight to reuse
+    settle_picks(), then deletes them in the finally block. During that
+    window — observed via fast tab-switching between Pick Tracker and
+    Derivative Tracker — the temp rows leak into this endpoint's
+    response. Excluding derivative types here makes the leak invisible
+    to the UI even if the trampoline race condition fires.
+    """
     conn = get_conn()
-    picks = conn.execute("""
-        SELECT * FROM picks ORDER BY created_at DESC LIMIT 50
-    """).fetchall()
+    placeholders = ",".join("?" * len(_MLB_DERIV_TYPES))
+    picks = conn.execute(
+        f"SELECT * FROM picks WHERE bet_type NOT IN ({placeholders}) "
+        f"ORDER BY created_at DESC LIMIT 50",
+        tuple(_MLB_DERIV_TYPES),
+    ).fetchall()
     return [dict(p) for p in picks]
+
+
+# ── Derivative paper-bet tracker (separate from main pick tracker) ──
+# Mirrors the per-sport tracker endpoints. Lets the user evaluate
+# Phase 1 derivative profitability in isolation; the main tracker
+# stays focused on the primary ML/RL/PL/O/U markets.
+
+@app.get("/api/{sport}/derivative-tracker/history")
+def api_derivative_history(sport: str):
+    if sport not in ("mlb", "nhl", "nba"):
+        raise HTTPException(status_code=400, detail="Unknown sport")
+    from engine.derivative_tracker import get_history
+    return get_history(sport, limit=200)
+
+
+@app.get("/api/{sport}/derivative-tracker/summary")
+def api_derivative_summary(sport: str):
+    if sport not in ("mlb", "nhl", "nba"):
+        raise HTTPException(status_code=400, detail="Unknown sport")
+    from engine.derivative_tracker import get_summary, settle_derivative_picks
+    # Auto-settle any pending whose games have completed before
+    # returning summary. Mirrors the main tracker's auto-settle on
+    # summary fetch.
+    try:
+        settle_derivative_picks(sport)
+    except Exception as e:
+        logger.warning("Derivative auto-settle (%s) failed: %s", sport, e)
+    return get_summary(sport)
+
+
+@app.post("/api/{sport}/derivative-tracker/settle")
+def api_derivative_settle(sport: str):
+    if sport not in ("mlb", "nhl", "nba"):
+        raise HTTPException(status_code=400, detail="Unknown sport")
+    from engine.derivative_tracker import settle_derivative_picks
+    return settle_derivative_picks(sport)
+
+
+@app.get("/api/{sport}/derivative-pick-of-day")
+def api_derivative_potd(sport: str):
+    """Today's derivative POTD per sport. Locks on first call (uses
+    today's best-bets to select); subsequent calls return the locked
+    pick from the per-sport derivative_pick_of_day table."""
+    if sport not in ("mlb", "nhl", "nba"):
+        raise HTTPException(status_code=400, detail="Unknown sport")
+    from engine.derivative_tracker import (
+        get_today_derivative_potd, get_or_create_derivative_potd,
+    )
+    existing = get_today_derivative_potd(sport)
+    if existing:
+        return existing
+    if sport == "mlb":
+        bets = api_best_bets()
+    elif sport == "nhl":
+        bets = api_nhl_best_bets()
+    elif sport == "nba":
+        bets = api_nba_best_bets()
+    else:
+        bets = []
+    if isinstance(bets, list):
+        return get_or_create_derivative_potd(sport, bets) or {
+            "message": "No qualifying derivative picks today", "sport": sport,
+        }
+    return {"error": "Could not generate bets"}
 
 
 @app.get("/api/teams/{team_id}/profile")
@@ -3177,7 +3420,8 @@ def api_nhl_best_bets():
 
     def _predict_one(row):
         try:
-            return (row, _predict_nhl_full(row["h_key"], row["a_key"]))
+            uc = not _is_game_imminent((row.get("game") or {}).get("date"))
+            return (row, _predict_nhl_full(row["h_key"], row["a_key"], use_cache=uc))
         except Exception as e:
             logger.error("NHL predict crashed for %s @ %s: %s",
                          row["a_abbr"], row["h_abbr"], e, exc_info=True)
@@ -3231,11 +3475,17 @@ def api_nhl_best_bets():
         pred["_cached_odds"] = odds
         _picks_store_put("nhl", h_abbr, a_abbr, picks, odds)
 
-        # Use recorded pick from tracker if available
+        core_picks = [p for p in picks if p.get("type") not in _NHL_DERIV_TYPES]
         nhl_matchup = f"{a_abbr} @ {h_abbr}"
         nhl_target = datetime.now().strftime("%Y-%m-%d")
         recorded = _get_recorded_pick("nhl", nhl_matchup, nhl_target)
-        best = recorded if recorded else picks[0]
+        locked = _is_game_locked(game.get("date"))
+        if locked and recorded:
+            best = recorded
+        else:
+            best = core_picks[0] if core_picks else None
+        if not best:
+            continue
 
         goalie_info = {}
         if home_goalie_name:
@@ -3244,6 +3494,13 @@ def api_nhl_best_bets():
         if away_goalie_name:
             a_gs = df_goalies.get(a_abbr, df_goalies.get(_nhl_alt_abbr(a_abbr), {}))
             goalie_info["away"] = {"name": away_goalie_name, "status": a_gs.get("status", "unconfirmed")}
+
+        # all_picks = top 4 CORE only (derivatives in their own panel).
+        all_picks = list(core_picks[:4])
+        derivative_picks = sorted(
+            (p for p in picks if p.get("type") in _NHL_DERIV_TYPES),
+            key=lambda p: -(p.get("edge") or 0),
+        )
 
         bets.append({
             "game_id": game["id"],
@@ -3254,7 +3511,8 @@ def api_nhl_best_bets():
             "venue": game.get("venue", ""),
             "goalies": goalie_info,
             "best_pick": best,
-            "all_picks": picks[:4],
+            "all_picks": all_picks,
+            "derivative_picks": derivative_picks,
             "confidence": best.get("confidence", "lean"),
             "rest": ctx.get("rest", {}),
             "injuries": ctx.get("injuries", {}),
@@ -3262,21 +3520,51 @@ def api_nhl_best_bets():
             "expected_score": ctx.get("expected_score", {}),
             "factors": ctx.get("factors", {}),
             "season_context": ctx.get("season_context", {}),
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "recorded_pick": recorded,
+            "is_locked": locked,
         })
 
     bets.sort(key=lambda b: b["best_pick"]["edge"], reverse=True)
+
+    try:
+        from engine.nhl_tracker import refresh_pending_for_today as _nhl_refresh
+        nhl_target = datetime.now().strftime("%Y-%m-%d")
+        diff = _nhl_refresh(bets, nhl_target)
+        if any(diff.values()):
+            logger.info("Tracker pending sync (nhl): %s", diff)
+    except Exception as e:
+        logger.warning("NHL tracker pending refresh failed: %s", e)
+
+    try:
+        from engine.derivative_tracker import record_top_derivatives
+        diff = record_top_derivatives("nhl", bets, n_per_game=1,
+                                       min_edge=4.0,
+                                       target_date=datetime.now().strftime("%Y-%m-%d"))
+        if diff.get("inserted") or diff.get("updated"):
+            logger.info("Derivative tracker (nhl): %s", diff)
+    except Exception as e:
+        logger.warning("NHL derivative recorder failed: %s", e)
+
     _bb_progress_set("nhl", phase="idle", finished_at=_time.time())
     return bets
 
 
 @app.get("/api/nhl/tracker/history")
 def api_nhl_pick_history():
-    """Return recent NHL pick history."""
+    """Return recent NHL pick history.
+
+    Filters out derivative bet types — see api_pick_history docstring
+    for the trampoline-race rationale. Same pattern applies here.
+    """
     from engine.nhl_tracker import _get_nhl_db
     conn = _get_nhl_db()
-    picks = conn.execute("""
-        SELECT * FROM nhl_picks ORDER BY created_at DESC LIMIT 50
-    """).fetchall()
+    placeholders = ",".join("?" * len(_NHL_DERIV_TYPES))
+    picks = conn.execute(
+        f"SELECT * FROM nhl_picks WHERE bet_type NOT IN ({placeholders}) "
+        f"ORDER BY created_at DESC LIMIT 50",
+        tuple(_NHL_DERIV_TYPES),
+    ).fetchall()
     return [dict(p) for p in picks]
 
 
@@ -4125,7 +4413,9 @@ def api_nba_best_bets():
 
     def _predict_one(row):
         try:
-            return (row, _predict_nba_full(row["h_abbr"], row["a_abbr"], row["odds"]))
+            uc = not _is_game_imminent((row.get("game") or {}).get("date"))
+            return (row, _predict_nba_full(row["h_abbr"], row["a_abbr"],
+                                              row["odds"], use_cache=uc))
         except Exception as e:
             logger.error("NBA predict crashed for %s @ %s: %s",
                          row["a_abbr"], row["h_abbr"], e, exc_info=True)
@@ -4173,11 +4463,20 @@ def api_nba_best_bets():
         pred_full["_cached_odds"] = odds
         _picks_store_put("nba", h_abbr, a_abbr, picks, odds)
 
-        # Use recorded pick from tracker if available
+        # Card + POTD agree by construction: both built from CORE
+        # picks only. Derivatives flow through `derivative_picks` /
+        # the dedicated tracker.
+        core_picks = [p for p in picks if p.get("type") not in _NBA_DERIV_TYPES]
         nba_matchup = f"{a_abbr} @ {h_abbr}"
         nba_target = datetime.now().strftime("%Y-%m-%d")
         recorded = _get_recorded_pick("nba", nba_matchup, nba_target)
-        best = recorded if recorded else picks[0]
+        locked = _is_game_locked(game.get("date"))
+        if locked and recorded:
+            best = recorded
+        else:
+            best = core_picks[0] if core_picks else None
+        if not best:
+            continue
 
         # Surface Q1 roster/injury info as a unified "injuries" field so
         # the scoreboard CardInsight can render shorthanded warnings the
@@ -4201,6 +4500,13 @@ def api_nba_best_bets():
             "away_list": _away_roster.get("out_players") or [],
         }
 
+        # all_picks = top 4 CORE only (derivatives in their own panel).
+        all_picks = list(core_picks[:4])
+        derivative_picks = sorted(
+            (p for p in picks if p.get("type") in _NBA_DERIV_TYPES),
+            key=lambda p: -(p.get("edge") or 0),
+        )
+
         bets.append({
             "game_id": game["id"],
             "matchup": f"{a_abbr} @ {h_abbr}",
@@ -4209,7 +4515,8 @@ def api_nba_best_bets():
             "time": game["date"],
             "venue": game.get("venue", ""),
             "best_pick": best,
-            "all_picks": picks[:4],
+            "all_picks": all_picks,
+            "derivative_picks": derivative_picks,
             "confidence": best.get("confidence", "lean"),
             "win_prob": pred.get("win_prob", {}),
             "expected_q1_score": pred.get("expected_q1_score", {}),
@@ -4217,19 +4524,47 @@ def api_nba_best_bets():
             "rest": pred.get("rest", {}),
             "injuries": injuries_payload,
             "season_context": pred.get("season_context") or _nba_season_context(),
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "recorded_pick": recorded,
+            "is_locked": locked,
         })
 
     bets.sort(key=lambda b: b["best_pick"].get("edge", 0), reverse=True)
+
+    try:
+        from engine.nba_tracker import refresh_pending_for_today as _nba_refresh
+        nba_target = datetime.now().strftime("%Y-%m-%d")
+        diff = _nba_refresh(bets, nba_target)
+        if any(diff.values()):
+            logger.info("Tracker pending sync (nba): %s", diff)
+    except Exception as e:
+        logger.warning("NBA tracker pending refresh failed: %s", e)
+
+    try:
+        from engine.derivative_tracker import record_top_derivatives
+        diff = record_top_derivatives("nba", bets, n_per_game=1,
+                                       min_edge=4.0,
+                                       target_date=datetime.now().strftime("%Y-%m-%d"))
+        if diff.get("inserted") or diff.get("updated"):
+            logger.info("Derivative tracker (nba): %s", diff)
+    except Exception as e:
+        logger.warning("NBA derivative recorder failed: %s", e)
+
     _bb_progress_set("nba", phase="idle", finished_at=_time.time())
     return bets
 
 
 @app.get("/api/nba/tracker/history")
 def api_nba_pick_history():
-    """Return recent NBA pick history."""
+    """Return recent NBA pick history.
+
+    Filters out derivative bet types — see api_pick_history docstring
+    for the trampoline-race rationale. Same pattern applies here.
+    """
     try:
         from engine.nba_tracker import get_nba_pick_history
-        return get_nba_pick_history()
+        rows = get_nba_pick_history() or []
+        return [r for r in rows if r.get("bet_type") not in _NBA_DERIV_TYPES]
     except ImportError:
         return []
     except Exception as e:

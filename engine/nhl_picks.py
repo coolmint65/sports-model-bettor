@@ -223,6 +223,14 @@ def generate_nhl_picks_with_context(home_key: str, away_key: str,
                     "edge": round(a_edge, 1), "odds": away_pl_odds,
                 })
 
+    # ── Phase 1 derivatives ──
+    # Team totals, per-period totals/BTS/DNB, total odd/even, overtime
+    # yes/no, full-game BTS. All pure probability extraction from the
+    # existing pred data — no factor stacking. Master gate +
+    # per-market gates live in engine/config.py.
+    from .nhl_derivative_picks import append_derivative_picks
+    append_derivative_picks(picks, pred, odds, h_abbr, a_abbr)
+
     # CI band on the win-probability point estimate (data-quality
     # uncertainty). Same shape as MLB so the shared ProbHistogram
     # component renders identically across all three sports.
@@ -280,9 +288,12 @@ def generate_nhl_picks_with_context(home_key: str, away_key: str,
     except Exception as e:
         logger.warning("NHL conservatism ladder error: %s", e)
 
-    # Adjusted EV: edge * reliability weight
+    # Adjusted EV: edge * reliability weight. Reliability is auto-tuned
+    # from settled NHL tracker history when volume permits, falls back to
+    # NHL_BET_RELIABILITY for cold-start bet types. See engine.dynamic_reliability.
+    from .dynamic_reliability import get_reliability as _get_reliability
     for p in picks:
-        reliability = NHL_BET_RELIABILITY.get(p["type"], 0.5)
+        reliability = _get_reliability("nhl", p["type"])
         p["adjusted_ev"] = round(p["edge"] * reliability, 2)
     picks.sort(key=lambda p: -p["adjusted_ev"])
 
