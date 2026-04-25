@@ -1300,6 +1300,20 @@ def _predict_mlb_full(home_team_id: int, away_team_id: int,
         logger.debug("MLB ensemble blend failed: %s", e)
         result["ensemble"] = {}
 
+    # Backfill the factor-model NRFI/YRFI scalars with the blended
+    # ensemble value so every surface shows the same number. The pick
+    # engine reads ens["nrfi"] (e.g. 51.2%) while PredictionResults
+    # reads first_inning.nrfi (factor-only, e.g. 50.1%); without this
+    # backfill the game-detail panel disagreed with the headline pick.
+    # Per-team scores_1st stay factor-derived (ensemble doesn't model
+    # them) so only the top-line scalars are rewritten.
+    ens = result.get("ensemble") or {}
+    fi = result.get("first_inning")
+    if isinstance(fi, dict) and ens.get("nrfi") is not None:
+        nrfi_val = float(ens["nrfi"])
+        fi["nrfi"] = nrfi_val
+        fi["yrfi"] = 1.0 - nrfi_val
+
     if use_cache:
         _pred_cache_put(cache_key, result)
     return result
