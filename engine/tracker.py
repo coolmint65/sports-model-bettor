@@ -663,8 +663,18 @@ def settle_picks() -> dict:
             continue  # Game not loaded yet
 
         game = dict(game)
-        hs = game.get("home_score", 0) or 0
-        as_ = game.get("away_score", 0) or 0
+
+        # Postponed/cancelled games leave the row in the DB but with NULL
+        # scores. Without this guard, settle_picks reads scores as 0,
+        # computes total_runs=0, and silently turns "Under N.5" picks
+        # into phantom W's. Skip until a real result is recorded.
+        if game.get("status") == "postponed":
+            continue
+        if game.get("home_score") is None or game.get("away_score") is None:
+            continue
+
+        hs = game["home_score"]
+        as_ = game["away_score"]
         total_runs = hs + as_
         margin = hs - as_
 

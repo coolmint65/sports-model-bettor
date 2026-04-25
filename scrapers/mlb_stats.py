@@ -162,7 +162,7 @@ def fetch_schedule(start_date: str, end_date: str) -> list[dict]:
     for date_entry in data.get("dates", []):
         for g in date_entry.get("games", []):
             game_id = g.get("gamePk")
-            status_code = g.get("status", {}).get("abstractGameCode", "")
+            status_dict = g.get("status", {}) or {}
 
             home_team = g.get("teams", {}).get("home", {})
             away_team = g.get("teams", {}).get("away", {})
@@ -181,7 +181,7 @@ def fetch_schedule(start_date: str, end_date: str) -> list[dict]:
                 "away_team_id": away_team.get("team", {}).get("id"),
                 "home_score": home_team.get("score"),
                 "away_score": away_team.get("score"),
-                "status": _map_status(status_code),
+                "status": _map_status(status_dict),
                 "home_pitcher_id": home_pp.get("id"),
                 "away_pitcher_id": away_pp.get("id"),
                 "venue": g.get("venue", {}).get("name", ""),
@@ -723,7 +723,30 @@ def sync_all_player_stats(season: int | None = None):
 
 # ── Helpers ─────────────────────────────────────────────────
 
-def _map_status(code: str) -> str:
+def _map_status(status: dict | str) -> str:
+    """Map MLB Stats API game status to our internal status string.
+
+    Postponed/Cancelled/Suspended games ship `abstractGameCode="F"` even
+    though no real result exists, so a code-only mapping silently turned
+    them into "final" rows with NULL scores — and the settler then
+    counted "Under N.5" picks as wins on 0-0. Inspect the full status
+    dict so detailedState/codedGameState can override the abstract code.
+
+    Accepts the bare code for back-compat with older callers.
+    """
+    if isinstance(status, str):
+        code = status
+        detailed = ""
+        coded = ""
+    else:
+        code = status.get("abstractGameCode", "") or ""
+        detailed = (status.get("detailedState") or "").lower()
+        coded = (status.get("codedGameState") or "").upper()
+
+    if "postpone" in detailed or "cancel" in detailed or "suspend" in detailed:
+        return "postponed"
+    if coded == "D":
+        return "postponed"
     return {"P": "scheduled", "S": "scheduled", "L": "live",
             "I": "live", "F": "final"}.get(code, "scheduled")
 
