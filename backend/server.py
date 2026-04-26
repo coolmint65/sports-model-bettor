@@ -864,6 +864,28 @@ _NBA_DERIV_TYPES: set[str] = {
     "Q1 Team Total", "Q1 Total O/E",
 }
 
+# Player-prop bet-type sets (Phase 2f-i foundation).
+# Filtering pattern matches _*_DERIV_TYPES — anything in these sets is
+# a player prop, routed to the player_props_picks table + tracker UI
+# instead of the core/derivative trackers. Predictors that emit them
+# land in 2g (MLB), 2h (NBA), 2i (NHL).
+_MLB_PROP_TYPES: set[str] = {
+    "Pitcher Ks O/U", "Pitcher Walks O/U", "Pitcher Outs Recorded",
+    "Pitcher Earned Runs", "Pitcher Hits Allowed",
+    "Batter HR", "Batter Hits O/U", "Batter TB", "Batter RBI",
+    "Batter Runs Scored", "Batter Stolen Bases", "Batter Strikeouts",
+}
+_NBA_PROP_TYPES: set[str] = {
+    "Player Points", "Player Rebounds", "Player Assists",
+    "Player PRA", "Player 3PM", "Player Steals", "Player Blocks",
+    "Player Turnovers", "Player FT Made",
+}
+_NHL_PROP_TYPES: set[str] = {
+    "Skater SOG", "Skater Points", "Skater Goals", "Skater Assists",
+    "Skater Hits", "Skater Blocks",
+    "Goalie Saves", "Goalie Goals Against",
+}
+
 
 class PredictRequest(BaseModel):
     home_team_id: int
