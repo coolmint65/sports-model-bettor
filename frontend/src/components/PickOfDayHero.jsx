@@ -251,9 +251,28 @@ function teamName(sport, abbr) {
   return (TEAM_NAMES[sport] || {})[key] || abbr
 }
 
+// Per-team logo overrides. Use this when ESPN's default logo is hard
+// to read against our dark theme (e.g. Padres brown disappears) or
+// when the user has a specific design preference. Maps sport.abbr →
+// absolute URL. onError fall-through still renders the name when a
+// URL 404s, so a stale override is never a hard failure.
+const LOGO_OVERRIDE = {
+  mlb: {
+    // Throwback yellow swinging friar — 1969-2003 era. Reads cleanly
+    // against the dark surface where the modern brown blends in.
+    SD: 'https://upload.wikimedia.org/wikipedia/en/thumb/2/2b/San_Diego_Padres_1985-2003_logo.svg/1200px-San_Diego_Padres_1985-2003_logo.svg.png',
+    SDP: 'https://upload.wikimedia.org/wikipedia/en/thumb/2/2b/San_Diego_Padres_1985-2003_logo.svg/1200px-San_Diego_Padres_1985-2003_logo.svg.png',
+  },
+  nhl: {},
+  nba: {},
+}
+
 function logoUrl(sport, abbr) {
   if (!abbr) return null
   const key = String(abbr).toUpperCase()
+  // Override wins if present.
+  const override = (LOGO_OVERRIDE[sport] || {})[key]
+  if (override) return override
   const aliasMap = ABBR_ALIAS[sport] || {}
   const slug = (aliasMap[key] || key.toLowerCase()).toLowerCase()
   const sportSlug = sport === 'mlb' ? 'mlb'
