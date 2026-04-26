@@ -808,37 +808,94 @@ def _detect_sport(all_odds: dict) -> str:
     return "mlb"
 
 
+def _hhmm_utc_from_iso(start_time: str) -> str:
+    """UTC HHMM from an ISO-8601 timestamp; '' on parse failure."""
+    if not isinstance(start_time, str) or not start_time:
+        return ""
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        s = start_time.replace("Z", "+00:00") if start_time.endswith("Z") else start_time
+        ts = _dt.fromisoformat(s)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=_tz.utc)
+        return ts.astimezone(_tz.utc).strftime("%H%M")
+    except (ValueError, TypeError):
+        return ""
+
+
 def _find_odds_by_team_pair(team_a: str, team_b: str,
-                            all_odds: dict) -> dict | None:
+                            all_odds: dict,
+                            start_time: str | None = None) -> dict | None:
     """Find an odds dict containing these two teams, regardless of key order.
 
     Uses the ``odds_home`` / ``odds_away`` fields embedded in the odds
     dict by the scraper, plus abbreviation aliases. Returns the raw
     odds dict (not yet aligned to any schedule).
+
+    When ``start_time`` (ISO-8601) is provided, prefers the entry keyed
+    ``AWAY@HOME@HHMM`` over the plain ``AWAY@HOME`` so doubleheader
+    games route to the right odds bucket. Without this, both DH games
+    inherit Game 1's odds blob and Game 2 reads as "crazy ML/spread".
     """
     from .abbr import alt_abbr, aliases_for
     sport = _detect_sport(all_odds)
     a_alts = set(aliases_for(team_a, sport))
     b_alts = set(aliases_for(team_b, sport))
+    hhmm = _hhmm_utc_from_iso(start_time or "")
 
-    # Fast path: try direct key lookups
+    # Collect every entry matching this abbr-pair across all key shapes
+    # (plain ``A@B``, suffixed ``A@B@HHMM``, and identity-tag scan). With
+    # the full candidate set we can pick the entry whose start_time is
+    # closest to the target — a fast-path early-return on the plain key
+    # would silently grab Game 1's odds when the target is Game 2.
+    candidates: list[dict] = []
+    seen_ids: set[int] = set()
+    def _add(odds_dict):
+        if not isinstance(odds_dict, dict):
+            return
+        oid = id(odds_dict)
+        if oid in seen_ids:
+            return
+        seen_ids.add(oid)
+        candidates.append(odds_dict)
+
     for a in a_alts:
         for b in b_alts:
             for key in (f"{a}@{b}", f"{b}@{a}"):
                 if key in all_odds:
-                    return all_odds[key]
-
-    # Slow path: scan odds dicts for matching team identity tags
+                    _add(all_odds[key])
+            # All HHMM-suffixed variants (key has 3+ ``@`` segments).
+            for k, v in all_odds.items():
+                parts = k.split("@")
+                if len(parts) == 3 and parts[0] in (a, b) and parts[1] in (a, b):
+                    _add(v)
+    # Identity-tag fallback (catches scrapers that don't use abbr keys).
     for odds in all_odds.values():
         oh = odds.get("odds_home", "")
         oa = odds.get("odds_away", "")
         if (oh in a_alts and oa in b_alts) or (oh in b_alts and oa in a_alts):
-            return odds
+            _add(odds)
 
-    return None
+    if not candidates:
+        return None
+    if len(candidates) == 1 or not hhmm:
+        return candidates[0]
+
+    # Closest start_time wins (minute-of-day so 10-30 min drift between
+    # ESPN and HR's reschedule timestamps still routes correctly).
+    target_min = int(hhmm[:2]) * 60 + int(hhmm[2:])
+    def _drift(m: dict) -> int:
+        m_hhmm = _hhmm_utc_from_iso(str(m.get("start_time") or ""))
+        if not m_hhmm:
+            return 24 * 60
+        m_min = int(m_hhmm[:2]) * 60 + int(m_hhmm[2:])
+        return abs(target_min - m_min)
+    candidates.sort(key=_drift)
+    return candidates[0]
 
 
-def match_odds(home_abbr: str, away_abbr: str, all_odds: dict) -> dict:
+def match_odds(home_abbr: str, away_abbr: str, all_odds: dict,
+               start_time: str | None = None) -> dict:
     """Find odds for a matchup and align home/away to our schedule.
 
     Matches by team pair (ignoring key order), then checks whether
@@ -847,9 +904,13 @@ def match_odds(home_abbr: str, away_abbr: str, all_odds: dict) -> dict:
 
     The schedule source (ESPN / DB) is always the authority on
     which team is home.
+
+    ``start_time`` (ISO-8601 from the scoreboard) disambiguates
+    doubleheader games — without it, both games of a DH share the same
+    abbr-pair key and the second game inherits the first game's odds.
     """
     from .abbr import aliases_for
-    raw = _find_odds_by_team_pair(home_abbr, away_abbr, all_odds)
+    raw = _find_odds_by_team_pair(home_abbr, away_abbr, all_odds, start_time)
     if not raw:
         return {}
 

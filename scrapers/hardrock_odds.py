@@ -419,12 +419,19 @@ def _event_already_started(event: dict) -> bool:
     flows through — better to keep a noisy line than silently drop
     legitimate prematch entries.
     """
-    raw = event.get("startTime") or ""
+    # Intentionally only fires for the legacy string-shaped startTime.
+    # HR's current schema keeps prematch entries listed with their
+    # ORIGINAL (now-past) start time even while the game is in progress,
+    # so a tighter "started?" check would drop every in-progress game's
+    # only odds entry. The filter exists for the older case where HR
+    # shipped a separate live-state entry that overwrote the prematch
+    # one in the dedupe loop — that codepath only ships the legacy
+    # ISO-string field, so checking only that shape preserves the
+    # filter's original intent without nuking today's active slate.
+    raw = event.get("startTime")
     if not isinstance(raw, str) or not raw:
         return False
     try:
-        # fromisoformat handles "Z" suffix on Python 3.11+. Fall back to
-        # stripping it for older runtimes.
         s = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
         from datetime import datetime as _dt, timezone as _tz
         ts = _dt.fromisoformat(s)
@@ -1188,9 +1195,77 @@ def _collect_events_from_sport(sport_node: dict,
     return events
 
 
+def _event_time_iso(event: dict) -> str:
+    """Best-effort UTC ISO-8601 string from an HR event's time field.
+
+    HR ships two fields with overlapping semantics:
+      - ``startTime`` — currently a numeric epoch-millis (float), used
+        on prematch games. Was an ISO string in an older schema, so
+        we still accept that form for back-compat.
+      - ``eventTime`` — numeric epoch-millis, present on every event
+        in the new schema (futures, prematch, in-play). Use as fallback
+        when startTime is missing.
+
+    Discovery: live HR feed on 2026-04-26 returned BOTH games of the
+    NYM/COL doubleheader as separate events but with one having
+    ``startTime`` (numeric) and the other only ``eventTime``. Without
+    handling both, the second DH game collapsed into the first.
+    Returns "" only when neither field is parseable.
+    """
+    from datetime import datetime as _dt, timezone as _tz
+
+    def _from_millis(v) -> str:
+        try:
+            ts = _dt.fromtimestamp(float(v) / 1000.0, tz=_tz.utc)
+            return ts.strftime("%Y-%m-%dT%H:%M:%SZ")
+        except (ValueError, TypeError, OSError):
+            return ""
+
+    for field in ("startTime", "eventTime"):
+        v = event.get(field)
+        if isinstance(v, str) and v:
+            return v
+        if isinstance(v, (int, float)) and v > 0:
+            iso = _from_millis(v)
+            if iso:
+                return iso
+    return ""
+
+
+def _hhmm_utc_from_iso(start_time: str) -> str:
+    """Extract a UTC ``HHMM`` stamp from an ISO-8601 startTime so the
+    matcher can disambiguate doubleheader games. Returns empty string
+    on parse failure — caller treats that as "no time-suffixed key"."""
+    if not isinstance(start_time, str) or not start_time:
+        return ""
+    try:
+        s = start_time.replace("Z", "+00:00") if start_time.endswith("Z") else start_time
+        from datetime import datetime as _dt, timezone as _tz
+        ts = _dt.fromisoformat(s)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=_tz.utc)
+        return ts.astimezone(_tz.utc).strftime("%H%M")
+    except (ValueError, TypeError):
+        return ""
+
+
 def _parse_response(sport: str, data: Any) -> dict[str, dict]:
-    """Walk the Hard Rock response and extract {'AWAY@HOME': odds_dict}."""
-    result: dict[str, dict] = {}
+    """Walk the Hard Rock response and extract odds keyed by matchup.
+
+    Returns ``{'AWAY@HOME': odds_dict, 'AWAY@HOME@HHMM': odds_dict}`` —
+    the plain key always points to the earliest game by start_time
+    (back-compat for non-doubleheader days). When a matchup has 2+
+    events on the same day (MLB doubleheaders, NBA/NHL doesn't ship
+    these), additional ``HHMM``-suffixed keys are emitted so callers
+    that know the game's start time can route to the right bucket.
+    Without this, both DH games inherited the same odds blob and the
+    second game showed nonsense ML/spread/total.
+    """
+    # In-flight: keyed by (away, home, start_time_iso) so two events
+    # for the same matchup with different start times get separate
+    # buckets. Same event from different competitions has identical
+    # startTime and so collapses cleanly via setdefault.
+    buckets: dict[tuple[str, str, str], dict] = {}
 
     # Descend into data.* -- GraphQL results are wrapped in {"data": {...}}
     if isinstance(data, dict) and "data" in data and isinstance(data["data"], dict):
@@ -1241,11 +1316,13 @@ def _parse_response(sport: str, data: Any) -> dict[str, dict]:
             home_abbr = _team_abbr(sport, home_name)
             if not (away_abbr and home_abbr):
                 continue
-            key = f"{away_abbr}@{home_abbr}"
-            bucket = result.setdefault(key, {
+            event_start = _event_time_iso(event)
+            triple = (away_abbr, home_abbr, event_start)
+            bucket = buckets.setdefault(triple, {
                 "provider": "HardRock",
                 "odds_home": home_abbr,
                 "odds_away": away_abbr,
+                "start_time": event_start,
             })
 
             event_participants = event.get("participants") or []
@@ -1326,15 +1403,36 @@ def _parse_response(sport: str, data: Any) -> dict[str, dict]:
     # Post-process: pick the best primary spread/total from all
     # collected lines. The "primary" should be the one closest to
     # even juice (-110/-110), which is the standard/consensus line.
-    for v in result.values():
+    for v in buckets.values():
         _promote_best_primary(v)
 
-    # Drop entries without real pricing -- an empty stub isn't useful.
-    return {k: v for k, v in result.items()
-            if any(x in v for x in (
-                "home_ml", "away_ml", "over_under",
-                "q1_spread", "q1_total", "q1_home_ml",
-            ))}
+    # Group by abbr-pair so we can emit dual keys: plain key (Game 1)
+    # for back-compat + HHMM-suffixed keys for doubleheader routing.
+    by_pair: dict[str, list[tuple[str, dict]]] = {}
+    for (away, home, start_time), bucket in buckets.items():
+        by_pair.setdefault(f"{away}@{home}", []).append((start_time, bucket))
+
+    result: dict[str, dict] = {}
+    has_pricing = lambda v: any(x in v for x in (
+        "home_ml", "away_ml", "over_under",
+        "q1_spread", "q1_total", "q1_home_ml",
+    ))
+    for pair, entries in by_pair.items():
+        # Earliest start_time first — plain key always points to Game 1.
+        entries.sort(key=lambda e: e[0] or "")
+        priced = [(st, b) for st, b in entries if has_pricing(b)]
+        if not priced:
+            continue
+        result[pair] = priced[0][1]
+        # Only emit HHMM-suffixed keys when the matchup has 2+ events
+        # (the doubleheader case). A single-event matchup with the
+        # suffixed key would just be noise.
+        if len(priced) > 1:
+            for st, b in priced:
+                hhmm = _hhmm_utc_from_iso(st)
+                if hhmm:
+                    result[f"{pair}@{hhmm}"] = b
+    return result
 
 
 def _juice_score(home_odds: int | None, away_odds: int | None,

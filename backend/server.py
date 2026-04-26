@@ -377,7 +377,12 @@ def _get_scoreboard(date: str = "") -> list[dict]:
             for game in games:
                 h_abbr = game["home"].get("abbreviation", "")
                 a_abbr = game["away"].get("abbreviation", "")
-                matched_odds = _match(h_abbr, a_abbr, hr_odds)
+                # Pass the game's start time so doubleheader games route
+                # to the right HR odds bucket via the AWAY@HOME@HHMM
+                # suffixed key. Without this both COL/NYM DH games
+                # would share Game 1's odds blob.
+                matched_odds = _match(h_abbr, a_abbr, hr_odds,
+                                      start_time=game.get("date"))
                 if matched_odds:
                     game["odds"] = matched_odds
                     odds_matched += 1
