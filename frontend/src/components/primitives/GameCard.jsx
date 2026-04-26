@@ -89,18 +89,21 @@ function GameCardImpl({
         </span>
       )}
 
+      {/* EdgeBadge + 📜 popover sit on the same row so the badge never
+          overlaps the +edge% text. Pick-events badge takes its own slot
+          to the right of the EdgeBadge with no overlap risk. */}
       {isPre && (
-        hasPick
-          ? <EdgeBadge pick={bet.best_pick} confidence={conf} accent={pickAccent} />
-          : <EdgeBadge empty />
-      )}
-
-      {/* Pick-events 📜 popover anchored top-right when no live/final
-          badge is occupying that slot. Live games hide the badge (no
-          tracker activity expected) — see GameCard isPre gate. */}
-      {isPre && sport && bet?.game_id && (
-        <div className="absolute top-3 right-3 z-10">
-          <PickEventsBadge sport={sport} gameId={bet.game_id} />
+        <div className="flex items-stretch gap-2">
+          <div className="flex-1 min-w-0">
+            {hasPick
+              ? <EdgeBadge pick={bet.best_pick} confidence={conf} accent={pickAccent} />
+              : <EdgeBadge empty />}
+          </div>
+          {sport && bet?.game_id && (
+            <div className="flex-shrink-0">
+              <PickEventsBadge sport={sport} gameId={bet.game_id} />
+            </div>
+          )}
         </div>
       )}
 

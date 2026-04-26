@@ -915,15 +915,24 @@ _PICKS_STORE_LOCK = _threading.Lock()
 def _picks_store_put(sport: str, home: str, away: str, picks: list, odds: dict):
     """Write picks to the store. Updates on every best-bets run so
     the card always reflects the latest computation. Mirrors the write
-    to the sport's picks_cache table so the blob survives restarts."""
+    to the sport's picks_cache table so the blob survives restarts.
+
+    Stamps the blob with today's date so reads after midnight can
+    discard yesterday's payload — without this, same-matchup games
+    on consecutive days (PHI @ ATL, then PHI @ ATL again tomorrow)
+    return yesterday's stale live odds because the in-memory key
+    (sport:away@home) doesn't include the date.
+    """
     key = f"{sport}:{away}@{home}"
     from engine.picks import get_best_pick
     best_pick = get_best_pick(picks) if picks else None
+    today = datetime.now().strftime("%Y-%m-%d")
     with _PICKS_STORE_LOCK:
         _PICKS_STORE[key] = {
             "picks": picks,
             "odds": odds,
             "best_pick": best_pick,
+            "date": today,
         }
     # Persist outside the lock: the tracker DB write can take tens of ms
     # on a slow disk and there's no reason to block concurrent reads on it.
@@ -936,19 +945,32 @@ def _picks_store_put(sport: str, home: str, away: str, picks: list, odds: dict):
 
 
 def _picks_store_get(sport: str, home: str, away: str) -> dict | None:
-    """Read picks for a game. Returns {"picks", "odds", "best_pick"} or None.
-    Falls through to the picks_cache table when the in-memory store is
-    cold (first request after startup before rehydration completes, or
-    a game that didn't make it into today's best-bets sweep)."""
+    """Read picks for a game. Returns {"picks", "odds", "best_pick", "date"}
+    or None. Falls through to the picks_cache table when the in-memory
+    store is cold.
+
+    Date-aware: the in-memory key doesn't include the date, so when a
+    same-matchup game runs on consecutive days the cache would return
+    yesterday's blob. Comparing blob["date"] to today and dropping
+    stale entries on read keeps the post-midnight slate clean even
+    when the server hasn't restarted.
+    """
     from engine.abbr import aliases_for
+    today = datetime.now().strftime("%Y-%m-%d")
     with _PICKS_STORE_LOCK:
         for h in aliases_for(home, sport):
             for a in aliases_for(away, sport):
                 for key in (f"{sport}:{a}@{h}", f"{sport}:{h}@{a}"):
-                    if key in _PICKS_STORE:
-                        return _PICKS_STORE[key]
-    # Cache miss — check on-disk cache. If found, rehydrate into memory
-    # so subsequent lookups stay hot.
+                    blob = _PICKS_STORE.get(key)
+                    if blob is None:
+                        continue
+                    if blob.get("date") == today:
+                        return blob
+                    # Stale entry from a previous calendar day —
+                    # evict so subsequent fetches go to picks_cache
+                    # (which IS date-keyed) for today's data.
+                    _PICKS_STORE.pop(key, None)
+    # Cache miss — check on-disk cache (date-keyed for today).
     try:
         from engine import picks_cache
         for h in aliases_for(home, sport):
@@ -957,6 +979,7 @@ def _picks_store_get(sport: str, home: str, away: str) -> dict | None:
                 if blob is None:
                     blob = picks_cache.get(sport, a, h)
                 if blob is not None:
+                    blob.setdefault("date", today)
                     with _PICKS_STORE_LOCK:
                         _PICKS_STORE[f"{sport}:{a}@{h}"] = blob
                     return blob
