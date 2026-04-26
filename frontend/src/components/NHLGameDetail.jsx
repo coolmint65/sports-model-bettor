@@ -1,6 +1,10 @@
 import GameDetailShell from './primitives/GameDetailShell'
 import WinProbBar from './primitives/WinProbBar'
 import StatRow from './primitives/StatRow'
+import SectionCard from './primitives/SectionCard'
+import ScoreDisplay from './primitives/ScoreDisplay'
+import { ProbRow, ProbRowHeader, ProbBox } from './primitives/ProbBar'
+import { KeyStatsGrid, KeyStat } from './primitives/KeyStatsGrid'
 import RestBadges from './gameDetail/RestBadges'
 import EdgeCallout from './gameDetail/EdgeCallout'
 import UnderdogNote from './gameDetail/UnderdogNote'
@@ -8,56 +12,46 @@ import WhyThisPick from './gameDetail/WhyThisPick'
 import { mlToProb, impliedFromOdds } from './gameDetail/kelly'
 import ProbHistogram from './gameDetail/ProbHistogram'
 import ModelSignals from './gameDetail/ModelSignals'
+import { cn } from '../lib/utils'
 
+/**
+ * NHL Game Detail page. Phase 2-cleanup: every section composes
+ * Tailwind primitives. The thick logic blocks (getReasoning,
+ * findBestEdge, OT-tie display, etc.) stay verbatim — only the
+ * visible chrome changed.
+ */
 export default function NHLGameDetail({ game, prediction, loading, onBack }) {
   const { home, away } = game
   const pred = prediction
 
-  // Goalie data-source indicator - DailyFaceoff "confirmed" is the gold standard
   const anyConfirmed =
     game.home_goalie?.status === 'confirmed' ||
     game.away_goalie?.status === 'confirmed'
   const anyGoalie = game.home_goalie || game.away_goalie
 
   const matchupExtras = (
-    <>
-      {/* Goalie matchup */}
+    <div className="space-y-3">
       {anyGoalie && (
-        <div className="pitching-matchup">
-          <GoalieCard
-            label="Away G"
-            goalie={game.away_goalie}
-            predGoalie={pred?.goalie_matchup?.away}
-          />
-          <div className="vs-label">VS</div>
-          <GoalieCard
-            label="Home G"
-            goalie={game.home_goalie}
-            predGoalie={pred?.goalie_matchup?.home}
-          />
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto_1fr] sm:items-center">
+          <GoalieCard label="Away G" goalie={game.away_goalie} predGoalie={pred?.goalie_matchup?.away} />
+          <span className="text-center text-[10px] font-bold uppercase tracking-widest text-muted-foreground/60">VS</span>
+          <GoalieCard label="Home G" goalie={game.home_goalie} predGoalie={pred?.goalie_matchup?.home} />
         </div>
       )}
-
-      {/* Goalie confirmation badge */}
       {anyGoalie && (
-        <div style={{textAlign:'center',marginTop:6}}>
-          <span style={{
-            display:'inline-block',
-            padding:'2px 10px',
-            borderRadius:6,
-            fontSize:'0.72rem',
-            fontWeight:600,
-            background: anyConfirmed ? 'rgba(52,211,153,0.12)' : 'rgba(251,191,36,0.10)',
-            color: anyConfirmed ? '#34d399' : '#fbbf24',
-            border: `1px solid ${anyConfirmed ? 'rgba(52,211,153,0.25)' : 'rgba(251,191,36,0.20)'}`,
-          }}>
-            {anyConfirmed ? '\u2713 Confirmed goalies' : '~ Expected goalies'}
+        <div className="text-center">
+          <span className={cn(
+            'inline-flex items-center rounded-md border px-2.5 py-0.5 text-[11px] font-semibold',
+            anyConfirmed
+              ? 'border-positive/30 bg-positive/10 text-positive'
+              : 'border-warning/30 bg-warning/10 text-warning',
+          )}>
+            {anyConfirmed ? '✓ Confirmed goalies' : '~ Expected goalies'}
           </span>
         </div>
       )}
-
       <RestBadges rest={pred?.rest} home={home} away={away} />
-    </>
+    </div>
   )
 
   return (
@@ -76,31 +70,7 @@ export default function NHLGameDetail({ game, prediction, loading, onBack }) {
 }
 
 
-function FactorRow({ label, awayVal, awayRank, homeVal, homeRank }) {
-  const rankColor = (r) => {
-    if (!r) return '#64748b'
-    if (r <= 5) return '#34d399'   // Top 5 = green
-    if (r <= 10) return '#60a5fa'  // Top 10 = blue
-    if (r <= 20) return '#94a3b8'  // Middle = gray
-    if (r <= 27) return '#f59e0b'  // Bottom 10 = yellow
-    return '#ef4444'               // Bottom 5 = red
-  }
-  const rankLabel = (r) => r ? ordinal(r) : '-'
-
-  return (
-    <tr>
-      <td style={{textAlign:'left',fontWeight:500}}>{label}</td>
-      <td style={{textAlign:'center'}}>{awayVal}</td>
-      <td style={{textAlign:'center',color:rankColor(awayRank),fontWeight:600}}>{rankLabel(awayRank)}</td>
-      <td style={{textAlign:'center'}}>{homeVal}</td>
-      <td style={{textAlign:'center',color:rankColor(homeRank),fontWeight:600}}>{rankLabel(homeRank)}</td>
-    </tr>
-  )
-}
-
-
 function GoalieCard({ label, goalie, predGoalie }) {
-  // Use DailyFaceoff data first (has SV%, GAA, record), fall back to prediction model
   const name = goalie?.name || predGoalie?.name || 'TBD'
   const svPct = goalie?.save_pct || predGoalie?.save_pct || 0
   const gaa = goalie?.gaa || predGoalie?.gaa || 0
@@ -111,18 +81,20 @@ function GoalieCard({ label, goalie, predGoalie }) {
   const hasRecord = wins != null && losses != null
 
   return (
-    <div className="pitcher-card">
-      <div className="pitcher-label">{label}</div>
-      <div className="pitcher-name">
+    <div className="rounded-md border border-border bg-background/40 px-3 py-2.5">
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        {label}
+      </div>
+      <div className="mt-0.5 flex items-center gap-1 text-sm font-bold text-foreground">
         {name}
-        {status === 'confirmed' && <span style={{color:'#34d399',marginLeft:6}}>✓</span>}
-        {status === 'expected' && <span style={{color:'#fbbf24',marginLeft:6}}>~</span>}
+        {status === 'confirmed' && <span className="text-positive">✓</span>}
+        {status === 'expected' && <span className="text-warning">~</span>}
       </div>
       {(svPct > 0 || hasRecord) && (
-        <div className="pitcher-stats-row">
-          {svPct > 0 && <span className="pitcher-stat">SV%: {svPct.toFixed(3)}</span>}
-          {gaa > 0 && <span className="pitcher-stat">GAA: {gaa.toFixed(2)}</span>}
-          {hasRecord && <span className="pitcher-stat">{wins}-{losses}-{otl || 0}</span>}
+        <div className="mt-1 flex flex-wrap gap-x-3 text-[11px] tabular-nums text-muted-foreground">
+          {svPct > 0 && <span>SV%: {svPct.toFixed(3)}</span>}
+          {gaa > 0 && <span>GAA: {gaa.toFixed(2)}</span>}
+          {hasRecord && <span>{wins}-{losses}-{otl || 0}</span>}
         </div>
       )}
     </div>
@@ -137,99 +109,58 @@ function NHLPredictionResults({ data, odds, home, away }) {
   const homeWins = es.home > es.away
   const pct = n => `${(n * 100).toFixed(1)}%`
 
-  // Prefer the engine-generated pick attached by /api/nhl/predict --
-  // same selector + empirical calibration that powers the Scoreboard
-  // card. When backend ran picks at all (d.picks present), trust its
-  // verdict including an explicit null (no +EV play). Only fall back
-  // to the client-side findBestEdge when d.picks isn't there at all
-  // (older cached prediction shape, pre-server upgrade).
   const backendRanPicks = Array.isArray(d.picks)
   const bestEdge = backendRanPicks
     ? (d.best_pick ? edgeFromBackendPick(d.best_pick) : null)
     : (odds ? findBestEdge(d, odds, home, away) : null)
   const reasons = getReasoning(d, home, away)
 
+  // Hockey doesn't end in draws — give the OT goal to the better
+  // win-prob side when projected scores tie, and surface the OT
+  // disclaimer + regulation-draw odds.
+  let homeScore = Math.round(es.home)
+  let awayScore = Math.round(es.away)
+  const goesToOT = homeScore === awayScore
+  const regDrawPct = d.regulation_draw_prob || 0
+  if (goesToOT) {
+    if (wp.home >= wp.away) homeScore += 1
+    else awayScore += 1
+  }
+  const homeWinsDisplay = homeScore > awayScore
+
   return (
-    <div className="results">
-      {/* Season Context Banner */}
+    <div className="space-y-4">
       {d.season_context && d.season_context.implications && (
-        <div style={{
-          background: d.season_context.phase === 'playoffs' ? '#1e3a2f' : '#1e2a3f',
-          border: `1px solid ${d.season_context.phase === 'playoffs' ? '#34d399' : '#60a5fa'}`,
-          borderRadius: 8, padding: '8px 16px', marginBottom: 12,
-          fontSize: '0.8rem', fontWeight: 600,
-          color: d.season_context.phase === 'playoffs' ? '#34d399' : '#60a5fa',
-          textAlign: 'center',
-        }}>
-          {d.season_context.phase === 'playoffs' ? 'PLAYOFF GAME' : 'LATE SEASON - Playoff Race'}
-          {' '}- Model adjusts for higher intensity
-        </div>
+        <SeasonContextBanner ctx={d.season_context} />
       )}
 
-      {/* Projected Outcome */}
-      <div className="result-card" style={{minHeight: 260}}>
-        <h2>Projected Outcome</h2>
-        {(() => {
-          // Hockey doesn't end in draws. If scores round equal, show OT winner.
-          let homeScore = Math.round(es.home)
-          let awayScore = Math.round(es.away)
-          const goesToOT = homeScore === awayScore
-          const regDrawPct = d.regulation_draw_prob || 0
+      <SectionCard title="Projected Outcome">
+        <ScoreDisplay
+          home={home}
+          away={away}
+          homeScore={homeScore}
+          awayScore={awayScore}
+          homeWins={homeWinsDisplay}
+        />
 
-          if (goesToOT) {
-            // Break the tie: give the OT goal to the team with higher win prob
-            if (wp.home >= wp.away) {
-              homeScore += 1
-            } else {
-              awayScore += 1
-            }
-          }
-          const homeWinsDisplay = homeScore > awayScore
+        {goesToOT && regDrawPct >= 0.30 && (
+          <div className="mt-2 text-center">
+            <span className="inline-flex items-center rounded-md border border-warning/25 bg-warning/10 px-2.5 py-0.5 text-[11px] font-semibold text-warning">
+              Projected to go to OT/SO
+            </span>
+          </div>
+        )}
 
-          return (
-            <>
-              <div className="score-display">
-                <div className="score-team">
-                  <div className="name">{home.name}</div>
-                  <div className="record">{home.record}</div>
-                  <div className={`score ${homeWinsDisplay ? 'winner' : ''}`}>{homeScore}</div>
-                </div>
-                <div className="score-vs">-</div>
-                <div className="score-team">
-                  <div className="name">{away.name}</div>
-                  <div className="record">{away.record}</div>
-                  <div className={`score ${!homeWinsDisplay ? 'winner' : ''}`}>{awayScore}</div>
-                </div>
-              </div>
+        <div className="mt-2 text-center text-xs text-muted-foreground tabular-nums">
+          ~{(es.home + es.away).toFixed(1)} regulation goals expected
+          {regDrawPct > 0.10 && ` (${pct(regDrawPct)} chance of OT)`}
+        </div>
 
-              {goesToOT && regDrawPct >= 0.30 && (
-                <div style={{textAlign:'center',marginTop:-6,marginBottom:6}}>
-                  <span style={{
-                    display:'inline-block',
-                    padding:'2px 10px',
-                    borderRadius:6,
-                    fontSize:'0.72rem',
-                    fontWeight:600,
-                    background:'rgba(251,191,36,0.10)',
-                    color:'#fbbf24',
-                    border:'1px solid rgba(251,191,36,0.20)',
-                  }}>
-                    Projected to go to OT/SO
-                  </span>
-                </div>
-              )}
+        <div className="mt-4">
+          <WinProbBar wp={wp} home={home} away={away} variant="detail" />
+        </div>
 
-              <div style={{textAlign:'center',color:'#64748b',fontSize:'0.75rem',marginTop: goesToOT ? 2 : -8,marginBottom:8}}>
-                ~{(es.home + es.away).toFixed(1)} regulation goals expected
-                {regDrawPct > 0.10 && ` (${pct(regDrawPct)} chance of OT)`}
-              </div>
-            </>
-          )
-        })()}
-
-        <WinProbBar wp={wp} home={home} away={away} variant="detail" />
-
-        <div className="key-stats">
+        <div className="mt-4 space-y-2">
           <StatRow label="Total" value={d.total.toFixed(1)} />
           <StatRow
             label="Spread"
@@ -237,73 +168,19 @@ function NHLPredictionResults({ data, odds, home, away }) {
           />
         </div>
 
-        <EdgeCallout edge={bestEdge} badgeClassName={bestEdge ? `conf-badge conf-${bestEdge.rating}` : undefined} />
-        <UnderdogNote pick={pickFromEdge(bestEdge, home, away)} wp={wp} home={home} away={away} />
-      </div>
+        <div className="mt-4 space-y-2">
+          <EdgeCallout edge={bestEdge} />
+          <UnderdogNote pick={pickFromEdge(bestEdge, home, away)} wp={wp} home={home} away={away} />
+        </div>
+      </SectionCard>
 
-      {/* Model Signals: factor / MC breakdown for home_win + total.
-          GBM column stays blank until the NHL GBM pipeline ships.
-          Renders nothing when pred.ensemble is empty. */}
       <ModelSignals pred={d} sport="nhl" home={home} away={away} />
 
-      {/* Key Factors with Rankings - moved up for immediate visibility */}
-      {d.factors && (
-        <div className="result-card">
-          <h2>Key Factors</h2>
-          <table className="standings-table" style={{fontSize:'0.85rem'}}>
-            <thead>
-              <tr>
-                <th style={{textAlign:'left'}}>Stat</th>
-                <th>{away.abbreviation}</th>
-                <th>Rank</th>
-                <th>{home.abbreviation}</th>
-                <th>Rank</th>
-              </tr>
-            </thead>
-            <tbody>
-              <FactorRow
-                label="Power Play"
-                awayVal={d.factors.away_pp != null ? (d.factors.away_pp * 100).toFixed(1) + '%' : '-'}
-                awayRank={d.factors.away_pp_rank}
-                homeVal={d.factors.home_pp != null ? (d.factors.home_pp * 100).toFixed(1) + '%' : '-'}
-                homeRank={d.factors.home_pp_rank}
-              />
-              <FactorRow
-                label="Penalty Kill"
-                awayVal={d.factors.away_pk != null ? (d.factors.away_pk * 100).toFixed(1) + '%' : '-'}
-                awayRank={d.factors.away_pk_rank}
-                homeVal={d.factors.home_pk != null ? (d.factors.home_pk * 100).toFixed(1) + '%' : '-'}
-                homeRank={d.factors.home_pk_rank}
-              />
-              <FactorRow
-                label="Save %"
-                awayVal={d.factors.away_sv?.toFixed(3) || '-'}
-                awayRank={d.factors.away_sv_rank}
-                homeVal={d.factors.home_sv?.toFixed(3) || '-'}
-                homeRank={d.factors.home_sv_rank}
-              />
-              <FactorRow
-                label="Shots/Game"
-                awayVal={d.factors.away_shots}
-                awayRank={d.factors.away_shots_rank}
-                homeVal={d.factors.home_shots}
-                homeRank={d.factors.home_shots_rank}
-              />
-              <FactorRow
-                label="Faceoff %"
-                awayVal={(d.factors.away_fo * 100).toFixed(1) + '%'}
-                awayRank={d.factors.away_fo_rank}
-                homeVal={(d.factors.home_fo * 100).toFixed(1) + '%'}
-                homeRank={d.factors.home_fo_rank}
-              />
-            </tbody>
-          </table>
-        </div>
-      )}
+      {d.factors && <NHLKeyFactorsCard factors={d.factors} home={home} away={away} />}
 
-      {/* Goalie Impact */}
-      {d.goalie_matchup && (d.goalie_matchup.home || d.goalie_matchup.away) &&
-       (d.goalie_matchup.home?.save_pct || d.goalie_matchup.away?.save_pct) && (
+      {d.goalie_matchup
+        && (d.goalie_matchup.home || d.goalie_matchup.away)
+        && (d.goalie_matchup.home?.save_pct || d.goalie_matchup.away?.save_pct) && (
         <GoalieImpactCard gm={d.goalie_matchup} home={home} away={away} />
       )}
 
@@ -314,222 +191,292 @@ function NHLPredictionResults({ data, odds, home, away }) {
         away={away}
       />
 
-      {/* Betting Lines */}
-      <div className="result-card">
-        <h2>Betting Lines</h2>
-
-        {/* O/U */}
+      <SectionCard title="Betting Lines">
         {d.over_under && Object.keys(d.over_under).length > 0 && (
-          <>
-            <h3>Over / Under</h3>
-            <div className="ou-row header">
-              <span>Line</span><span>Over</span><span>Under</span>
-            </div>
+          <div>
+            <SectionLabel>Over / Under</SectionLabel>
+            <ProbRowHeader leftLabel="Over" rightLabel="Under" />
             {Object.entries(d.over_under).map(([line, probs]) => (
-              <div key={line} className="ou-row">
-                <span className="ou-line">{line}</span>
-                <span className={`ou-prob ${probs.over > 0.55 ? 'over' : ''}`}>{pct(probs.over)}</span>
-                <span className={`ou-prob ${probs.under > 0.55 ? 'under' : ''}`}>{pct(probs.under)}</span>
-              </div>
+              <ProbRow key={line} line={line} leftProb={probs.over} rightProb={probs.under} />
             ))}
-          </>
-        )}
-
-        {/* Puck Line */}
-        {d.puck_line && (
-          <>
-            <h3 style={{marginTop: 20}}>Puck Line</h3>
-            <div className="ou-row">
-              <span className="ou-line">{home.abbreviation} -1.5</span>
-              <span className={`ou-prob ${d.puck_line.home_minus_1_5 > 0.50 ? 'over' : ''}`}>{pct(d.puck_line.home_minus_1_5)}</span>
-              <span className="ou-prob">{pct(1 - d.puck_line.home_minus_1_5)}</span>
-            </div>
-            <div className="ou-row">
-              <span className="ou-line">{away.abbreviation} +1.5</span>
-              <span className={`ou-prob ${d.puck_line.away_plus_1_5 > 0.50 ? 'over' : ''}`}>{pct(d.puck_line.away_plus_1_5)}</span>
-              <span className="ou-prob">{pct(1 - d.puck_line.away_plus_1_5)}</span>
-            </div>
-          </>
-        )}
-      </div>
-
-      {/* First Period Total Goals */}
-      {d.first_period && (
-        <div className="result-card">
-          <h2>1st Period Total Goals</h2>
-          <div className="nrfi-display">
-            <div className={`nrfi-box ${d.first_period.over_15 > 0.55 ? 'favored' : ''}`}>
-              <div className="nrfi-label">Over 1.5</div>
-              <div className="nrfi-value">{pct(d.first_period.over_15)}</div>
-              <div className="nrfi-sub">2+ goals in 1st period</div>
-            </div>
-            <div className={`nrfi-box yrfi ${d.first_period.under_15 > 0.55 ? 'favored' : ''}`}>
-              <div className="nrfi-label">Under 1.5</div>
-              <div className="nrfi-value">{pct(d.first_period.under_15)}</div>
-              <div className="nrfi-sub">0-1 goals in 1st period</div>
-            </div>
           </div>
-          <div style={{textAlign:'center',color:'#64748b',fontSize:'0.75rem',marginTop:8}}>
+        )}
+        {d.puck_line && (
+          <div className="mt-5">
+            <SectionLabel>Puck Line</SectionLabel>
+            <ProbRowHeader leftLabel={`${home.abbreviation} side`} rightLabel="Other side" />
+            <ProbRow line={`${home.abbreviation} -1.5`}
+              leftProb={d.puck_line.home_minus_1_5}
+              rightProb={1 - d.puck_line.home_minus_1_5} />
+            <ProbRow line={`${away.abbreviation} +1.5`}
+              leftProb={d.puck_line.away_plus_1_5}
+              rightProb={1 - d.puck_line.away_plus_1_5} />
+          </div>
+        )}
+      </SectionCard>
+
+      {d.first_period && (
+        <SectionCard title="1st Period Total Goals">
+          <div className="flex gap-3">
+            <ProbBox label="Over 1.5" value={pct(d.first_period.over_15)}
+              sub="2+ goals in 1st period" favored={d.first_period.over_15 > 0.55} />
+            <ProbBox label="Under 1.5" value={pct(d.first_period.under_15)}
+              sub="0-1 goals in 1st period" favored={d.first_period.under_15 > 0.55} />
+          </div>
+          <div className="mt-3 text-center text-xs text-muted-foreground tabular-nums">
             Expected P1 total: ~{Math.round(d.first_period.expected_total)} goals
           </div>
-        </div>
+        </SectionCard>
       )}
 
-      {/* Period Breakdown */}
       {d.periods && d.periods.length > 0 && (
-        <div className="result-card">
-          <h2>Period Breakdown</h2>
-          <table className="standings-table" style={{fontSize:'0.85rem'}}>
-            <thead>
-              <tr>
-                <th style={{textAlign:'left'}}>Period</th>
-                <th>{home.abbreviation}</th>
-                <th>{away.abbreviation}</th>
-                <th>Total</th>
-                <th>Scoring %</th>
-              </tr>
-            </thead>
-            <tbody>
-              {d.periods.map(p => {
-                const scoringPct = (es.home + es.away) > 0
-                  ? (p.total / (es.home + es.away)) * 100
-                  : 33
-                const homeLeads = p.home > p.away
-                return (
-                  <tr key={p.period}>
-                    <td style={{fontWeight:600,textAlign:'left'}}>
-                      {p.period === 'P1' ? '1st Period' : p.period === 'P2' ? '2nd Period' : '3rd Period'}
-                    </td>
-                    <td style={{color: homeLeads ? '#34d399' : '#cbd5e1', fontWeight: homeLeads ? 600 : 400}}>
-                      {p.home.toFixed(2)}
-                    </td>
-                    <td style={{color: !homeLeads ? '#34d399' : '#cbd5e1', fontWeight: !homeLeads ? 600 : 400}}>
-                      {p.away.toFixed(2)}
-                    </td>
-                    <td style={{fontWeight:600}}>{p.total.toFixed(2)}</td>
-                    <td style={{color:'#64748b'}}>{scoringPct.toFixed(0)}%</td>
-                  </tr>
-                )
-              })}
-              <tr style={{borderTop:'1px solid #334155',fontWeight:700}}>
-                <td style={{textAlign:'left'}}>Regulation</td>
-                <td>{es.home.toFixed(2)}</td>
-                <td>{es.away.toFixed(2)}</td>
-                <td>{(es.home + es.away).toFixed(2)}</td>
-                <td></td>
-              </tr>
-            </tbody>
-          </table>
-          {d.regulation_draw_prob > 0.05 && (
-            <div style={{
-              marginTop:10,
-              padding:'6px 12px',
-              background:'rgba(251,191,36,0.06)',
-              border:'1px solid rgba(251,191,36,0.15)',
-              borderRadius:6,
-              fontSize:'0.78rem',
-              color:'#fbbf24',
-              textAlign:'center',
-            }}>
-              {pct(d.regulation_draw_prob)} chance this game is tied after regulation and goes to OT
-            </div>
-          )}
-        </div>
+        <PeriodBreakdownCard periods={d.periods} es={es} regDrawPct={regDrawPct}
+          home={home} away={away} pct={pct} />
       )}
 
-      {/* H2H History */}
       {d.h2h && d.h2h.games > 0 && (
-        <div className="result-card">
-          <h2>Head to Head (3yr)</h2>
-          <div className="key-stats" style={{gap:24}}>
-            <div className="key-stat">
-              <span className="key-value" style={{fontSize:'1.1rem'}}>{home.abbreviation}</span>
-              <span className="key-label" style={{fontSize:'0.7rem',marginTop:2}}>
+        <SectionCard title="Head to Head (3yr)">
+          <div className="flex items-center justify-center gap-6">
+            <div className="text-center">
+              <div className="text-lg font-bold text-foreground">{home.abbreviation}</div>
+              <div className="text-xs text-muted-foreground tabular-nums mt-0.5">
                 {d.h2h.team1_wins} {d.h2h.team1_wins === 1 ? 'Win' : 'Wins'}
-              </span>
+              </div>
             </div>
-            <div className="key-stat">
-              <span className="key-value" style={{color:'#64748b',fontSize:'0.85rem'}}>vs</span>
-            </div>
-            <div className="key-stat">
-              <span className="key-value" style={{fontSize:'1.1rem'}}>{away.abbreviation}</span>
-              <span className="key-label" style={{fontSize:'0.7rem',marginTop:2}}>
+            <span className="text-sm text-muted-foreground">vs</span>
+            <div className="text-center">
+              <div className="text-lg font-bold text-foreground">{away.abbreviation}</div>
+              <div className="text-xs text-muted-foreground tabular-nums mt-0.5">
                 {d.h2h.team2_wins} {d.h2h.team2_wins === 1 ? 'Win' : 'Wins'}
-              </span>
+              </div>
             </div>
           </div>
-          <div style={{textAlign:'center',color:'#64748b',fontSize:'0.72rem',marginTop:8}}>
+          <div className="mt-3 text-center text-xs text-muted-foreground">
             {d.h2h.games} meetings over the last 3 seasons
             {d.h2h.team1_wins > d.h2h.team2_wins
-              ? ` \u2014 ${home.abbreviation} owns the matchup`
+              ? ` — ${home.abbreviation} owns the matchup`
               : d.h2h.team2_wins > d.h2h.team1_wins
-                ? ` \u2014 ${away.abbreviation} owns the matchup`
-                : ' \u2014 Even'}
+                ? ` — ${away.abbreviation} owns the matchup`
+                : ' — Even'}
           </div>
-        </div>
+        </SectionCard>
       )}
 
-      {/* Injuries */}
       {d.injuries && (d.injuries.home?.length > 0 || d.injuries.away?.length > 0) && (
-        <div className="result-card">
-          <h2>Injuries</h2>
-
-          {/* Quantified xG impact summary */}
-          {(d.injuries.home_impact != null && d.injuries.home_impact < 1) ||
-           (d.injuries.away_impact != null && d.injuries.away_impact < 1) ? (
-            <div style={{
-              textAlign:'center',
-              fontSize:'0.82rem',
-              marginBottom:10,
-              display:'flex',
-              justifyContent:'center',
-              gap:16,
-              flexWrap:'wrap',
-            }}>
+        <SectionCard title="Injuries">
+          {((d.injuries.home_impact != null && d.injuries.home_impact < 1)
+            || (d.injuries.away_impact != null && d.injuries.away_impact < 1)) && (
+            <div className="mb-3 flex flex-wrap justify-center gap-4 text-sm">
               {d.injuries.home_impact != null && d.injuries.home_impact < 1 && (
-                <span style={{color:'#ef4444'}}>
+                <span className="text-negative">
                   {home.abbreviation}: ~{Math.round((1 - d.injuries.home_impact) * 100)}% weaker from injuries
                 </span>
               )}
               {d.injuries.away_impact != null && d.injuries.away_impact < 1 && (
-                <span style={{color:'#ef4444'}}>
+                <span className="text-negative">
                   {away.abbreviation}: ~{Math.round((1 - d.injuries.away_impact) * 100)}% weaker from injuries
                 </span>
               )}
             </div>
-          ) : null}
-
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
-            <div>
-              <h3 style={{fontSize:'0.85rem',color:'#94a3b8',marginBottom:8}}>{home.abbreviation}</h3>
-              {d.injuries.home?.length > 0 ? d.injuries.home.map((inj, i) => (
-                <div key={i} style={{fontSize:'0.8rem',marginBottom:4,display:'flex',justifyContent:'space-between'}}>
-                  <span>
-                    <span style={{fontWeight:600}}>{inj.name}</span>
-                    {inj.position && <span style={{color:'#64748b',marginLeft:4}}>({inj.position})</span>}
-                  </span>
-                  <span style={{color: inj.status === 'Out' ? '#ef4444' : '#f59e0b',fontSize:'0.75rem'}}>
-                    {inj.status || inj.type || 'Out'}
-                  </span>
-                </div>
-              )) : <span style={{color:'#64748b',fontSize:'0.8rem'}}>No injuries reported</span>}
-            </div>
-            <div>
-              <h3 style={{fontSize:'0.85rem',color:'#94a3b8',marginBottom:8}}>{away.abbreviation}</h3>
-              {d.injuries.away?.length > 0 ? d.injuries.away.map((inj, i) => (
-                <div key={i} style={{fontSize:'0.8rem',marginBottom:4,display:'flex',justifyContent:'space-between'}}>
-                  <span>
-                    <span style={{fontWeight:600}}>{inj.name}</span>
-                    {inj.position && <span style={{color:'#64748b',marginLeft:4}}>({inj.position})</span>}
-                  </span>
-                  <span style={{color: inj.status === 'Out' ? '#ef4444' : '#f59e0b',fontSize:'0.75rem'}}>
-                    {inj.status || inj.type || 'Out'}
-                  </span>
-                </div>
-              )) : <span style={{color:'#64748b',fontSize:'0.8rem'}}>No injuries reported</span>}
-            </div>
+          )}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <InjuryColumn abbr={home.abbreviation} injuries={d.injuries.home} />
+            <InjuryColumn abbr={away.abbreviation} injuries={d.injuries.away} />
           </div>
+        </SectionCard>
+      )}
+    </div>
+  )
+}
+
+
+function NHLKeyFactorsCard({ factors: f, home, away }) {
+  return (
+    <SectionCard title="Key Factors" bodyClassName="px-0 py-0">
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border bg-background/40">
+              <Th>Stat</Th>
+              <Th align="right">{away.abbreviation}</Th>
+              <Th align="right">Rank</Th>
+              <Th align="right">{home.abbreviation}</Th>
+              <Th align="right">Rank</Th>
+            </tr>
+          </thead>
+          <tbody>
+            <FactorRow label="Power Play"
+              awayVal={f.away_pp != null ? (f.away_pp * 100).toFixed(1) + '%' : '-'} awayRank={f.away_pp_rank}
+              homeVal={f.home_pp != null ? (f.home_pp * 100).toFixed(1) + '%' : '-'} homeRank={f.home_pp_rank} />
+            <FactorRow label="Penalty Kill"
+              awayVal={f.away_pk != null ? (f.away_pk * 100).toFixed(1) + '%' : '-'} awayRank={f.away_pk_rank}
+              homeVal={f.home_pk != null ? (f.home_pk * 100).toFixed(1) + '%' : '-'} homeRank={f.home_pk_rank} />
+            <FactorRow label="Save %"
+              awayVal={f.away_sv?.toFixed(3) || '-'} awayRank={f.away_sv_rank}
+              homeVal={f.home_sv?.toFixed(3) || '-'} homeRank={f.home_sv_rank} />
+            <FactorRow label="Shots/Game"
+              awayVal={f.away_shots} awayRank={f.away_shots_rank}
+              homeVal={f.home_shots} homeRank={f.home_shots_rank} />
+            <FactorRow label="Faceoff %"
+              awayVal={(f.away_fo * 100).toFixed(1) + '%'} awayRank={f.away_fo_rank}
+              homeVal={(f.home_fo * 100).toFixed(1) + '%'} homeRank={f.home_fo_rank} />
+          </tbody>
+        </table>
+      </div>
+    </SectionCard>
+  )
+}
+
+
+function FactorRow({ label, awayVal, awayRank, homeVal, homeRank }) {
+  return (
+    <tr className="border-b border-border/60 last:border-0 hover:bg-accent/20 transition-colors">
+      <td className="px-5 py-2.5 font-semibold text-foreground/90">{label}</td>
+      <td className="px-3 py-2.5 text-right tabular-nums">{awayVal}</td>
+      <td className={cn('px-3 py-2.5 text-right tabular-nums font-bold', rankTone(awayRank))}>
+        {awayRank ? ordinal(awayRank) : '-'}
+      </td>
+      <td className="px-3 py-2.5 text-right tabular-nums">{homeVal}</td>
+      <td className={cn('px-3 py-2.5 text-right tabular-nums font-bold', rankTone(homeRank))}>
+        {homeRank ? ordinal(homeRank) : '-'}
+      </td>
+    </tr>
+  )
+}
+
+function rankTone(r) {
+  if (!r) return 'text-muted-foreground'
+  if (r <= 5) return 'text-positive'
+  if (r <= 10) return 'text-primary'
+  if (r <= 20) return 'text-foreground/70'
+  if (r <= 27) return 'text-warning'
+  return 'text-negative'
+}
+
+
+function PeriodBreakdownCard({ periods, es, regDrawPct, home, away, pct }) {
+  return (
+    <SectionCard title="Period Breakdown" bodyClassName="px-0 py-0">
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border bg-background/40">
+              <Th>Period</Th>
+              <Th align="right">{home.abbreviation}</Th>
+              <Th align="right">{away.abbreviation}</Th>
+              <Th align="right">Total</Th>
+              <Th align="right">Scoring %</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {periods.map(p => {
+              const scoringPct = (es.home + es.away) > 0
+                ? (p.total / (es.home + es.away)) * 100 : 33
+              const homeLeads = p.home > p.away
+              return (
+                <tr key={p.period} className="border-b border-border/60 last:border-0 hover:bg-accent/20 transition-colors">
+                  <td className="px-5 py-2.5 font-semibold text-foreground/90">
+                    {p.period === 'P1' ? '1st Period' : p.period === 'P2' ? '2nd Period' : '3rd Period'}
+                  </td>
+                  <td className={cn(
+                    'px-3 py-2.5 text-right tabular-nums',
+                    homeLeads ? 'font-bold text-positive' : 'text-foreground/85',
+                  )}>
+                    {p.home.toFixed(2)}
+                  </td>
+                  <td className={cn(
+                    'px-3 py-2.5 text-right tabular-nums',
+                    !homeLeads ? 'font-bold text-positive' : 'text-foreground/85',
+                  )}>
+                    {p.away.toFixed(2)}
+                  </td>
+                  <td className="px-3 py-2.5 text-right tabular-nums font-semibold">{p.total.toFixed(2)}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">{scoringPct.toFixed(0)}%</td>
+                </tr>
+              )
+            })}
+            <tr className="border-t border-border bg-background/40 font-bold">
+              <td className="px-5 py-2.5">Regulation</td>
+              <td className="px-3 py-2.5 text-right tabular-nums">{es.home.toFixed(2)}</td>
+              <td className="px-3 py-2.5 text-right tabular-nums">{es.away.toFixed(2)}</td>
+              <td className="px-3 py-2.5 text-right tabular-nums">{(es.home + es.away).toFixed(2)}</td>
+              <td className="px-3 py-2.5"></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      {regDrawPct > 0.05 && (
+        <div className="mx-5 my-3 rounded-md border border-warning/20 bg-warning/5 px-3 py-1.5 text-center text-xs font-semibold text-warning">
+          {pct(regDrawPct)} chance this game is tied after regulation and goes to OT
         </div>
+      )}
+    </SectionCard>
+  )
+}
+
+
+function GoalieImpactCard({ gm, home, away }) {
+  const hSv = gm.home?.save_pct || 0
+  const aSv = gm.away?.save_pct || 0
+  const diff = hSv - aSv
+  const SHOTS = 30
+  const xgAdvantage = Math.abs(diff) * SHOTS
+  const better = diff > 0 ? home.abbreviation : away.abbreviation
+  const hasEdge = Math.abs(diff) >= 0.005
+
+  return (
+    <SectionCard title="Goalie Impact">
+      <div className="space-y-2">
+        <StatRow label={`${away.abbreviation} SV%`} value={aSv > 0 ? aSv.toFixed(3) : '-'} />
+        <StatRow label={`${home.abbreviation} SV%`} value={hSv > 0 ? hSv.toFixed(3) : '-'} />
+        <StatRow
+          label="SV% differential"
+          value={`${diff >= 0 ? '+' : ''}${diff.toFixed(3)}`}
+          valueClassName={!hasEdge ? '' : diff > 0 ? 'positive' : 'warning'}
+        />
+      </div>
+      {hasEdge ? (
+        <div className="mt-3 rounded-md border border-positive/15 bg-positive/[0.06] px-3 py-2 text-center text-sm text-positive">
+          <span className="font-semibold">{better}</span> goalie edge:
+          ~{xgAdvantage.toFixed(2)} goals suppressed per game
+        </div>
+      ) : (
+        <div className="mt-3 text-center text-xs text-muted-foreground">
+          Goalie matchup is roughly even
+        </div>
+      )}
+    </SectionCard>
+  )
+}
+
+
+function InjuryColumn({ abbr, injuries }) {
+  return (
+    <div>
+      <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        {abbr}
+      </div>
+      {injuries?.length > 0 ? (
+        <ul className="space-y-1.5">
+          {injuries.map((inj, i) => (
+            <li key={i} className="flex items-baseline justify-between gap-2 text-xs">
+              <span>
+                <span className="font-semibold text-foreground">{inj.name}</span>
+                {inj.position && (
+                  <span className="ml-1 text-muted-foreground">({inj.position})</span>
+                )}
+              </span>
+              <span className={cn(
+                'text-[10px] font-semibold uppercase tracking-wider',
+                inj.status === 'Out' ? 'text-negative' : 'text-warning',
+              )}>
+                {inj.status || inj.type || 'Out'}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="text-xs text-muted-foreground">No injuries reported</div>
       )}
     </div>
   )
@@ -568,19 +515,14 @@ function NHLBettingPicks({ data, odds, home, away }) {
     }
   }
 
-  // Puck line pick - determine which side has higher probability
-  // and use the actual spread point from odds when available
   const pl = d.puck_line
-  let plPick = null
-  let plProb = null
-  let plOdds = null
+  let plPick = null, plProb = null, plOdds = null
   if (pl) {
     const hPt = odds?.home_spread_point
     const aPt = odds?.away_spread_point
     const homeIsFav = (hPt != null && hPt < 0) || (pl.home_minus_1_5 > pl.away_minus_1_5)
 
     if (homeIsFav) {
-      // Home is -1.5 favorite
       if (pl.home_minus_1_5 > 0.50) {
         plPick = `${home.abbreviation} ${hPt != null ? hPt : '-1.5'}`
         plProb = pl.home_minus_1_5
@@ -591,7 +533,6 @@ function NHLBettingPicks({ data, odds, home, away }) {
         plOdds = odds?.away_spread_odds
       }
     } else {
-      // Away is -1.5 favorite
       if (pl.away_minus_1_5 > 0.50) {
         plPick = `${away.abbreviation} ${aPt != null ? aPt : '-1.5'}`
         plProb = pl.away_minus_1_5
@@ -608,39 +549,36 @@ function NHLBettingPicks({ data, odds, home, away }) {
   const p1Pick = p1 ? (p1.over_15 > 0.50 ? 'Over 1.5' : 'Under 1.5') : null
   const p1Prob = p1 ? Math.max(p1.over_15, p1.under_15) : null
 
-  // CI half-width on the win-probability point estimate, served by
-  // engine.nhl_predict alongside the confidence score. Drives the
-  // small histogram under each pick's percentage.
   const ciHw = d.confidence?.ci_half_width ?? null
 
   return (
-    <div className="picks-card">
-      <h2>Model Picks</h2>
-
-      <PickRow label="Moneyline" pick={mlPick.abbreviation} prob={mlProb} odds={mlOdds} pct={pct} ciHw={ciHw} />
-
-      {ouPick && (
-        <PickRow label={`O/U ${vegasTotal}`} pick={ouPick} prob={ouConf} odds={ouOdds} pct={pct} ciHw={ciHw} />
-      )}
-
-      {plPick && (
-        <PickRow label="Puck Line" pick={plPick} prob={plProb} odds={plOdds} pct={pct} ciHw={ciHw} />
-      )}
-
-      {p1Pick && (
-        <PickRow label="1st Period" pick={p1Pick} prob={p1Prob} pct={pct} ciHw={ciHw} />
-      )}
-
-      <div className="picks-footer">
-        Model projected total: <strong>{d.total.toFixed(1)}</strong>
+    <SectionCard
+      title="Model Picks"
+      rightSlot={
+        <span className="text-[11px] text-muted-foreground tabular-nums">
+          Total: <strong>{d.total.toFixed(1)}</strong>
+        </span>
+      }
+    >
+      <div className="space-y-3">
+        <PickRow label="Moneyline" pick={mlPick.abbreviation} prob={mlProb} odds={mlOdds} pct={pct} ciHw={ciHw} />
+        {ouPick && <PickRow label={`O/U ${vegasTotal}`} pick={ouPick} prob={ouConf} odds={ouOdds} pct={pct} ciHw={ciHw} />}
+        {plPick && <PickRow label="Puck Line" pick={plPick} prob={plProb} odds={plOdds} pct={pct} ciHw={ciHw} />}
+        {p1Pick && <PickRow label="1st Period" pick={p1Pick} prob={p1Prob} pct={pct} ciHw={ciHw} />}
       </div>
-    </div>
+    </SectionCard>
   )
 }
 
 
 function PickRow({ label, pick, prob, odds, pct, ciHw }) {
   const conf = prob > 0.60 ? 'high' : prob > 0.53 ? 'med' : 'low'
+  const confTone =
+    conf === 'high' ? 'text-positive' :
+    conf === 'med'  ? 'text-primary'  :
+                       'text-muted-foreground'
+  const probLow  = (prob != null && ciHw != null) ? Math.max(0, prob - ciHw) : null
+  const probHigh = (prob != null && ciHw != null) ? Math.min(1, prob + ciHw) : null
 
   let edge = null
   if (odds && prob) {
@@ -648,95 +586,84 @@ function PickRow({ label, pick, prob, odds, pct, ciHw }) {
     edge = ((prob - implied) * 100).toFixed(1)
   }
 
-  // CI band from engine.nhl_predict.confidence.ci_half_width. Same
-  // shape MLB ships to GameDetail; rendered via the shared histogram
-  // component so the three sports look identical.
-  const probLow  = (prob != null && ciHw != null) ? Math.max(0, prob - ciHw) : null
-  const probHigh = (prob != null && ciHw != null) ? Math.min(1, prob + ciHw) : null
-
   return (
-    <div className={`pick-row conf-${conf}`}>
-      <div className="pick-label">{label}</div>
-      <div className="pick-choice">
-        <span className="pick-name">{pick}</span>
-        {odds && (
-          <span className="pick-odds">({odds > 0 ? '+' : ''}{odds})</span>
-        )}
-      </div>
-      <div className="pick-numbers">
-        <span className={`pick-prob conf-${conf}`}>{pct(prob)}</span>
-        <ProbHistogram prob={prob} low={probLow} high={probHigh} halfWidth={ciHw} />
-        {edge && parseFloat(edge) > 0 && (
-          <span className="pick-edge positive">+{edge}%</span>
-        )}
-      </div>
-    </div>
-  )
-}
-
-
-function GoalieImpactCard({ gm, home, away }) {
-  const hSv = gm.home?.save_pct || 0
-  const aSv = gm.away?.save_pct || 0
-  const diff = hSv - aSv  // positive -> home goalie is better
-  // Rough xG suppression estimate: ~30 shots/game * SV% differential
-  // (same shots * 0.015 SV% gap = ~0.45 goals suppressed)
-  const SHOTS = 30
-  const xgAdvantage = Math.abs(diff) * SHOTS
-  const better = diff > 0 ? home.abbreviation : away.abbreviation
-  const hasEdge = Math.abs(diff) >= 0.005
-
-  return (
-    <div className="result-card">
-      <h2>Goalie Impact</h2>
-      <div className="stat-row">
-        <span className="stat-label">{away.abbreviation} SV%</span>
-        <span className="stat-value">{aSv > 0 ? aSv.toFixed(3) : '-'}</span>
-      </div>
-      <div className="stat-row">
-        <span className="stat-label">{home.abbreviation} SV%</span>
-        <span className="stat-value">{hSv > 0 ? hSv.toFixed(3) : '-'}</span>
-      </div>
-      <div className="stat-row">
-        <span className="stat-label">SV% differential</span>
-        <span className="stat-value" style={{color: hasEdge ? (diff > 0 ? '#34d399' : '#60a5fa') : '#94a3b8'}}>
-          {diff >= 0 ? '+' : ''}{diff.toFixed(3)}
+    <div className="rounded-md border border-border bg-background/40 px-3 py-2.5">
+      <div className="flex items-center justify-between text-xs">
+        <span className="font-semibold uppercase tracking-wider text-muted-foreground">
+          {label}
         </span>
+        {edge && parseFloat(edge) > 0 && (
+          <span className="font-bold tabular-nums text-positive">+{edge}%</span>
+        )}
       </div>
-      {hasEdge && (
-        <div style={{
-          marginTop:10,
-          padding:'8px 12px',
-          background: 'rgba(52,211,153,0.06)',
-          border: '1px solid rgba(52,211,153,0.15)',
-          borderRadius: 6,
-          fontSize: '0.82rem',
-          color: '#34d399',
-          textAlign: 'center',
-        }}>
-          {better} goalie edge: ~{xgAdvantage.toFixed(2)} goals suppressed per game
-        </div>
-      )}
-      {!hasEdge && (
-        <div style={{marginTop:10,textAlign:'center',color:'#64748b',fontSize:'0.78rem'}}>
-          Goalie matchup is roughly even
-        </div>
-      )}
+      <div className="mt-1 flex items-baseline gap-2">
+        <span className="text-sm font-bold text-foreground">{pick}</span>
+        {odds && (
+          <span className="text-xs tabular-nums text-muted-foreground">
+            ({odds > 0 ? '+' : ''}{odds})
+          </span>
+        )}
+      </div>
+      <div className="mt-1 flex items-center gap-2">
+        <span className={cn('text-sm font-semibold tabular-nums', confTone)}>
+          {pct(prob)}
+        </span>
+        <ProbHistogram prob={prob} low={probLow} high={probHigh} halfWidth={ciHw} />
+      </div>
     </div>
   )
 }
 
 
-/**
- * Produce the top reasons that explain the model's lean for this game.
- * Keeps it to at most 4 bullet points, ordered by impact.
- */
+function SeasonContextBanner({ ctx }) {
+  const isPlayoffs = ctx.phase === 'playoffs'
+  return (
+    <div className={cn(
+      'rounded-md border px-4 py-2 text-center text-sm font-semibold',
+      isPlayoffs
+        ? 'border-positive/40 bg-positive/10 text-positive'
+        : 'border-primary/40 bg-primary/10 text-primary',
+    )}>
+      {isPlayoffs ? 'PLAYOFF GAME' : 'LATE SEASON · Playoff Race'}
+      {' — '}Model adjusts for higher intensity
+    </div>
+  )
+}
+
+
+function SectionLabel({ children }) {
+  return (
+    <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+      {children}
+    </h4>
+  )
+}
+
+
+function Th({ children, align = 'left' }) {
+  return (
+    <th
+      scope="col"
+      className={cn(
+        'px-3 py-2.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground',
+        align === 'right' && 'text-right',
+      )}
+    >
+      {children}
+    </th>
+  )
+}
+
+
 function ordinal(n) {
   if (!n) return ''
-  const s = ['th','st','nd','rd']
+  const s = ['th', 'st', 'nd', 'rd']
   const v = n % 100
-  return n + (s[(v-20)%10] || s[v] || s[0])
+  return n + (s[(v - 20) % 10] || s[v] || s[0])
 }
+
+
+// ─── Reasoning + edge selection (logic preserved verbatim) ──────────
 
 function getReasoning(pred, home, away) {
   const reasons = []
@@ -746,7 +673,6 @@ function getReasoning(pred, home, away) {
   const aCtx = ctx.away || {}
   const wp = pred.win_prob || {}
 
-  // Goalie matchup
   if (pred.goalie_matchup?.home && pred.goalie_matchup?.away) {
     const h_sv = pred.goalie_matchup.home.save_pct || 0
     const a_sv = pred.goalie_matchup.away.save_pct || 0
@@ -764,7 +690,6 @@ function getReasoning(pred, home, away) {
     }
   }
 
-  // Record / quality gap
   const hPace = hCtx.points_pace || 0
   const aPace = aCtx.points_pace || 0
   if (Math.abs(hPace - aPace) > 0.12) {
@@ -776,16 +701,10 @@ function getReasoning(pred, home, away) {
     reasons.push(`${better} has a slight edge in overall team quality this season`)
   }
 
-  // Home ice advantage
   if (wp.home > 0.55) {
     reasons.push(`${home.abbreviation} playing at home where they have a clear advantage this season`)
   }
 
-  // Power play vs penalty kill mismatch. Previously labeled any PK
-  // under 78% as "weak" which caught nearly half the league (NHL
-  // average PK is ~79%). Switched to rank-based thresholds so the
-  // language matches reality: "weak" means bottom-10 PK, "strong PP"
-  // means top-10 PP. We only editorialize when we have rank data.
   const strongPP = (rank) => rank != null && rank <= 10
   const weakPK   = (rank) => rank != null && rank >= 23
   if (f.home_pp != null && f.away_pk != null
@@ -801,7 +720,6 @@ function getReasoning(pred, home, away) {
     reasons.push(`${away.abbreviation}'s top-${Math.min(10, f.away_pp_rank)} power play (${a_pp.toFixed(1)}%) lines up against ${home.abbreviation}'s ${ordinal(f.home_pk_rank)}-ranked penalty kill (${h_pk.toFixed(1)}%)`)
   }
 
-  // Save % rankings
   if (f.home_sv_rank && f.home_sv_rank <= 5) {
     reasons.push(`${home.abbreviation} has one of the best goaltending units in the league (ranked ${ordinal(f.home_sv_rank)})`)
   } else if (f.home_sv_rank && f.home_sv_rank >= 28) {
@@ -813,7 +731,6 @@ function getReasoning(pred, home, away) {
     reasons.push(`${away.abbreviation}'s goaltending has been a liability all season`)
   }
 
-  // Recent form
   const hL10 = hCtx.l10_pts_pct
   const aL10 = aCtx.l10_pts_pct
   if (hL10 != null && hL10 > 0.7) {
@@ -827,7 +744,6 @@ function getReasoning(pred, home, away) {
     reasons.push(`${away.abbreviation} has been struggling, going ${aCtx.l10_record} in their last 10`)
   }
 
-  // Back-to-back fatigue
   if (pred.rest?.home_b2b) {
     reasons.push(`${home.abbreviation} played last night, so tired legs tend to cost about half a goal`)
   }
@@ -841,10 +757,6 @@ function getReasoning(pred, home, away) {
     reasons.push(`${away.abbreviation} has had extra rest, giving them a fresh-legs advantage`)
   }
 
-  // Injuries. Only surface when meaningful (>=8% strength loss). The
-  // old "depth should cover it" fallback implied we knew something
-  // about roster depth, which we don't -- just listing players without
-  // context reads as filler. If the impact is small, stay silent.
   if (pred.injuries?.home_impact != null && pred.injuries.home_impact < 0.92) {
     const pct = Math.round((1 - pred.injuries.home_impact) * 100)
     reasons.push(`${home.abbreviation} is notably shorthanded (~${pct}% weaker from injuries)`)
@@ -854,7 +766,6 @@ function getReasoning(pred, home, away) {
     reasons.push(`${away.abbreviation} is notably shorthanded (~${pct}% weaker from injuries)`)
   }
 
-  // Motivation / playoff context
   if (hCtx.fighting && aCtx.eliminated) {
     reasons.push(`${home.abbreviation} is fighting for their playoff life while ${away.abbreviation} has nothing to play for`)
   } else if (aCtx.fighting && hCtx.eliminated) {
@@ -865,7 +776,6 @@ function getReasoning(pred, home, away) {
     reasons.push(`${away.abbreviation} has their spot locked while ${home.abbreviation} needs this win more`)
   }
 
-  // Shot volume advantage
   if (f.home_shots_rank && f.away_shots_rank) {
     if (f.home_shots_rank <= 5 && f.away_shots_rank >= 25) {
       reasons.push(`${home.abbreviation} generates a ton of shots (${f.home_shots}/game) while ${away.abbreviation} gives up a lot, creating more scoring chances`)
@@ -874,7 +784,6 @@ function getReasoning(pred, home, away) {
     }
   }
 
-  // Faceoff dominance
   if (f.home_fo_rank && f.away_fo_rank) {
     if (f.home_fo_rank <= 5 && f.away_fo_rank >= 25) {
       reasons.push(`${home.abbreviation} dominates the faceoff circle (ranked ${ordinal(f.home_fo_rank)}) which means more puck possession`)
@@ -883,7 +792,6 @@ function getReasoning(pred, home, away) {
     }
   }
 
-  // H2H history
   if (pred.h2h && typeof pred.h2h === 'object' && pred.h2h.games >= 3) {
     const h2h = pred.h2h
     const homeWins = h2h.team1_wins || 0
@@ -895,7 +803,6 @@ function getReasoning(pred, home, away) {
     }
   }
 
-  // Overall model conviction
   const maxWp = Math.max(wp.home || 0, wp.away || 0)
   const fav = (wp.home || 0) > (wp.away || 0) ? home.abbreviation : away.abbreviation
   if (maxWp > 0.65) {
@@ -910,7 +817,6 @@ function findBestEdge(data, odds, home, away) {
   const candidates = []
   const wp = data.win_prob
 
-  // ML edges
   if (odds.home_ml && wp.home) {
     const e = (wp.home - mlToProb(odds.home_ml)) * 100
     if (e > 1.5) candidates.push({ label: `${home.abbreviation} ML`, odds: odds.home_ml, edge: e })
@@ -920,7 +826,6 @@ function findBestEdge(data, odds, home, away) {
     if (e > 1.5) candidates.push({ label: `${away.abbreviation} ML`, odds: odds.away_ml, edge: e })
   }
 
-  // O/U edge
   if (odds.over_under && data.over_under) {
     const vt = parseFloat(odds.over_under)
     const key = Object.keys(data.over_under).find(k => Math.abs(parseFloat(k) - vt) < 0.5)
@@ -936,12 +841,8 @@ function findBestEdge(data, odds, home, away) {
     }
   }
 
-  // PL edge - use actual spread points to determine which prob to compare
   if (data.puck_line && odds.home_spread_odds && odds.home_spread_point != null) {
     const pt = odds.home_spread_point
-    // Spread point tells us which side home is on:
-    // pt = -1.5 means home is -1.5 (favorite), use home_minus_1_5 prob
-    // pt = +1.5 means home is +1.5 (underdog), use home_plus_1_5 prob
     const hProb = pt < 0
       ? data.puck_line.home_minus_1_5
       : (data.puck_line.home_plus_1_5 || 1 - data.puck_line.away_minus_1_5)
@@ -970,25 +871,15 @@ function findBestEdge(data, odds, home, away) {
   }
 
   if (candidates.length === 0) return null
-
   const best = candidates.sort((a, b) => b.edge - a.edge)[0]
   best.rating = best.edge > 8 ? 'strong' : best.edge > 4 ? 'moderate' : 'lean'
   return best
 }
 
 
-// NHL's findBestEdge emits {label, odds, edge, rating} without the
-// engine's raw pick shape. Reconstruct a minimal {type, pick, odds}
-// object so the shared UnderdogNote can do its model_prob < 0.5 check.
-// Adapt the engine's best_pick shape (type/pick/prob/edge/odds/confidence)
-// into the {label, odds, edge, rating} shape EdgeCallout expects. Keeps
-// the existing downstream components unchanged while letting us swap
-// the pick source from the client-side findBestEdge to the engine's.
 function edgeFromBackendPick(pick) {
   if (!pick) return null
   const type = pick.type || ''
-  // ML shows "{abbr} ML"; O/U and PL already render their full label in
-  // pick.pick (e.g. "Over 6.5", "MTL +1.5").
   const label = type === 'ML' ? `${pick.pick} ML` : pick.pick
   return {
     label,
