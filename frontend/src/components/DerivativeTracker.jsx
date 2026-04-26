@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { humanizeBetType } from '../lib/betType'
 import { cn } from '../lib/utils'
+import PicksTable from './primitives/PicksTable'
+
+// Derivative ROI breaks down to cents on small-edge alt markets, so
+// the table needs 2-decimal precision on the P/L column. PickHistory
+// is whole-dollar; this overrides via the profitFormatter prop.
+const derivProfitFmt = n => `$${n.toFixed(2)}`
 
 /**
  * DerivativeTracker — Tracker tab default content.
@@ -42,8 +48,6 @@ export default function DerivativeTracker({ sport, api }) {
       .then(() => refresh())
       .catch(() => setLoading(false))
   }
-
-  const pct = n => n != null ? `${(n * 100).toFixed(1)}%` : '-'
 
   const { todaysPicks, pastPicks } = useMemo(() => {
     const now = new Date()
@@ -189,7 +193,11 @@ export default function DerivativeTracker({ sport, api }) {
               {todaysPicks.length} live
             </span>
           </div>
-          <DerivativePicksTable picks={todaysPicks} pct={pct} />
+          <PicksTable
+            picks={todaysPicks}
+            typeColumnLabel="Market"
+            profitFormatter={derivProfitFmt}
+          />
         </section>
       )}
 
@@ -203,7 +211,11 @@ export default function DerivativeTracker({ sport, api }) {
               {pastPicks.length} settled
             </span>
           </div>
-          <DerivativePicksTable picks={pastPicks} pct={pct} />
+          <PicksTable
+            picks={pastPicks}
+            typeColumnLabel="Market"
+            profitFormatter={derivProfitFmt}
+          />
         </section>
       )}
 
@@ -223,57 +235,3 @@ export default function DerivativeTracker({ sport, api }) {
 }
 
 
-function DerivativePicksTable({ picks, pct }) {
-  return (
-    <div className="overflow-x-auto">
-      <table className="picks-table">
-        <thead>
-          <tr>
-            <th>Date</th>
-            <th>Matchup</th>
-            <th>Market</th>
-            <th>Pick</th>
-            <th>Odds</th>
-            <th>Prob</th>
-            <th>Edge</th>
-            <th>Result</th>
-            <th>P/L</th>
-          </tr>
-        </thead>
-        <tbody>
-          {picks.map((p, i) => {
-            const resultClass = p.result === 'W' ? 'row-win'
-              : p.result === 'L' ? 'row-loss' : 'row-pending'
-            return (
-              <tr key={p.id || i} className={resultClass}>
-                <td className="col-date">{p.date?.slice(5)}</td>
-                <td className="col-matchup">{p.matchup}</td>
-                <td><span className="type-badge">{humanizeBetType(p.bet_type)}</span></td>
-                <td style={{ fontWeight: 600 }}>{p.pick}</td>
-                <td style={{ color: '#94a3b8' }}>
-                  {p.odds ? `${p.odds > 0 ? '+' : ''}${p.odds}` : '-'}
-                </td>
-                <td>{p.model_prob ? pct(p.model_prob) : '-'}</td>
-                <td className={p.edge > 4 ? 'positive' : ''}>
-                  {p.edge ? `+${p.edge.toFixed(1)}%` : '-'}
-                </td>
-                <td>
-                  {p.result === 'W' && <span className="result-pill win">W</span>}
-                  {p.result === 'L' && <span className="result-pill loss">L</span>}
-                  {p.result === 'P' && <span className="result-pill push">P</span>}
-                  {!p.result && <span className="result-pill pending">PEND</span>}
-                </td>
-                <td className={p.profit > 0 ? 'positive' : p.profit < 0 ? 'negative' : ''}
-                    style={{ fontWeight: 600 }}>
-                  {p.profit != null
-                    ? `${p.profit > 0 ? '+' : ''}$${p.profit.toFixed(2)}`
-                    : '-'}
-                </td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
-    </div>
-  )
-}
