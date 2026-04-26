@@ -34,9 +34,12 @@ logger = logging.getLogger(__name__)
 # Centralizing here so the ingest can target the same keys without
 # duplicating the contract.
 _MLB_STAT_KEY: dict[str, str] = {
-    "Pitcher Ks O/U":         "k",          # pitcher strikeouts
-    "Pitcher Walks O/U":      "bb",         # pitcher walks
-    "Pitcher Outs Recorded":  "outs",       # IP * 3
+    # Pitcher / batter Ks and BBs are namespaced per role so two-way
+    # players (Ohtani-style) keep both lines on one row without a
+    # collision. Other stats are uniquely pitcher-only or batter-only.
+    "Pitcher Ks O/U":         "k_p",
+    "Pitcher Walks O/U":      "bb_p",
+    "Pitcher Outs Recorded":  "outs",
     "Pitcher Earned Runs":    "er",
     "Pitcher Hits Allowed":   "h_allowed",
     "Batter HR":              "hr",
@@ -45,8 +48,8 @@ _MLB_STAT_KEY: dict[str, str] = {
     "Batter RBI":             "rbi",
     "Batter Runs Scored":     "r",
     "Batter Stolen Bases":    "sb",
-    "Batter Walks":           "bb",         # batter walks (same key, different player role)
-    "Batter Strikeouts":      "k",
+    "Batter Walks":           "bb_b",
+    "Batter Strikeouts":      "k_b",
 }
 
 

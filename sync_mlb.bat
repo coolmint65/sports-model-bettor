@@ -89,6 +89,16 @@ echo Settling POTD...
 python -c "from engine.pick_of_day import settle_potd; print(settle_potd('mlb'))" 2>nul
 
 echo.
+echo Ingesting today's player game logs (Phase 2g-i)...
+REM Drains finalized games into player_game_logs so the player-props
+REM settler has the actual stats it needs to mark prop picks W/L.
+python -c "from engine.mlb_player_logs import ingest_today; print(ingest_today())" 2>nul
+
+echo.
+echo Settling player props...
+python -c "from engine.player_props_tracker import settle_player_props; print(settle_player_props('mlb'))" 2>nul
+
+echo.
 echo Auto-tuning ensemble weights (skipped when < 200 settled signals/market)...
 python scripts\run.py engine.ensemble_auto_tune mlb -v 2>nul
 
