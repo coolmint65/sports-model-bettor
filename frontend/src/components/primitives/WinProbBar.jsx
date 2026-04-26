@@ -1,17 +1,15 @@
 /**
- * WinProbBar
- * ──────────────────────────────────────────────────────────────
- * Two-color horizontal bar showing home vs away win probability.
- * Two visual sizes:
- *   variant="card"   -> compact bar inside scorecards (.wp-bar-card)
- *   variant="detail" -> larger bar inside game-detail panes (.prob-bar)
+ * WinProbBar — two-color bar showing home vs away win probability.
  *
- * Both variants share the same underlying data shape:
- *   wp = { home: 0..1, away: 0..1 }
- * Replaces three near-identical local WinProbBar components in
- * Scoreboard.jsx, NHLScoreboard.jsx and the prob-bar JSX duplicated
- * inside NHLGameDetail / NBAGameDetail / PredictionResults.
+ * Phase 2d-iv restyle: Tailwind tokens. The card variant is now
+ * thinner (4px) and pairs with smaller labels for better card density.
+ * Detail variant keeps the larger size used inside game-detail panes.
+ *
+ * Color: home gets the warning hue (amber, "home cooking"), away
+ * gets primary blue. Favored side renders bold in the labels.
  */
+
+import { cn } from '../../lib/utils'
 
 function pct(v) {
   return `${Math.round((v || 0) * 100)}%`
@@ -23,6 +21,9 @@ export default function WinProbBar({ wp, home, away, variant = 'card' }) {
   const homeFavored = h > a
 
   if (variant === 'detail') {
+    // Larger variant for the game-detail page. Kept on legacy CSS for
+    // now (.prob-bar-container) since the detail page hasn't been
+    // restyled yet — Phase 2 frontend work focused on the scoreboard.
     return (
       <div className="prob-bar-container">
         <div className="prob-bar-labels">
@@ -37,17 +38,21 @@ export default function WinProbBar({ wp, home, away, variant = 'card' }) {
     )
   }
 
-  // card variant: away first to match the existing scorecard layout
+  // Card variant — away first to match the existing scorecard layout.
   return (
-    <>
-      <div className="wp-labels">
-        <span className={!homeFavored ? 'wp-favored' : ''}>{away.abbreviation} {pct(a)}</span>
-        <span className={homeFavored ? 'wp-favored' : ''}>{home.abbreviation} {pct(h)}</span>
+    <div className="mt-1">
+      <div className="flex justify-between text-[10px] tabular-nums text-muted-foreground mb-1">
+        <span className={cn(!homeFavored && 'font-semibold text-foreground')}>
+          {away.abbreviation} {pct(a)}
+        </span>
+        <span className={cn(homeFavored && 'font-semibold text-foreground')}>
+          {home.abbreviation} {pct(h)}
+        </span>
       </div>
-      <div className="wp-bar-card">
-        <div className="wp-away" style={{ width: pct(a) }} />
-        <div className="wp-home" style={{ width: pct(h) }} />
+      <div className="flex h-1 overflow-hidden rounded-full bg-secondary">
+        <div className="bg-primary" style={{ width: pct(a) }} />
+        <div className="bg-warning" style={{ width: pct(h) }} />
       </div>
-    </>
+    </div>
   )
 }
