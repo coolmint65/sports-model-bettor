@@ -1,18 +1,13 @@
 /**
- * WhyThisPick
- * ──────────────────────────────────────────────────────────────
- * The "Why this pick?" card shown above the factors table on
- * every GameDetail view. Replaces three near-identical inline
- * blocks in PredictionResults (MLB), NHLGameDetail, NBAGameDetail.
+ * WhyThisPick — curated reasoning bullets above the factor table.
  *
- * Key change vs the old inline block: reasoning strings are run
- * through curateReasoning() first so the list only surfaces
- * signals that support (or are neutral toward) the recommended
- * pick, instead of dumping every stat comparison — which reads as
- * self-contradictory on +EV underdog plays.
+ * Phase 2-cleanup restyle: Tailwind chrome around the existing data
+ * (insights + curated reasoning lines, deduped, numbered).
  *
- * `matchup_insights` are pick-specific interaction signals from
- * the engine and always render first when present.
+ * Reasoning strings run through curateReasoning() so the list only
+ * surfaces signals that support (or are neutral toward) the
+ * recommended pick — avoids self-contradictory dumps on +EV
+ * underdog plays.
  */
 
 import { curateReasoning } from './curateReasoning'
@@ -21,7 +16,6 @@ export default function WhyThisPick({ pred, pick, home, away, title = 'Why this 
   const insights = pred?.matchup_insights || []
   const curated = curateReasoning(pred?.reasoning || [], pick, home, away)
 
-  // Dedupe between insights and curated list, preserving order.
   const seen = new Set()
   const lines = []
   for (const s of [...insights, ...curated]) {
@@ -33,16 +27,20 @@ export default function WhyThisPick({ pred, pick, home, away, title = 'Why this 
   if (lines.length === 0) return null
 
   return (
-    <div className="result-card why-pick-card">
-      <h2>{title}</h2>
-      <ul className="why-pick-list">
+    <section className="rounded-lg border border-border bg-card overflow-hidden">
+      <div className="flex items-center gap-2 px-5 py-3 border-b border-border">
+        <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+      </div>
+      <ol className="divide-y divide-border">
         {lines.map((line, i) => (
-          <li key={i} className="why-pick-item">
-            <span className="why-pick-num">{i + 1}.</span>
-            <span className="why-pick-text">{line}</span>
+          <li key={i} className="flex gap-3 px-5 py-2.5 text-sm">
+            <span className="flex-shrink-0 text-xs font-semibold tabular-nums text-muted-foreground">
+              {i + 1}.
+            </span>
+            <span className="text-foreground/90 leading-relaxed">{line}</span>
           </li>
         ))}
-      </ul>
-    </div>
+      </ol>
+    </section>
   )
 }

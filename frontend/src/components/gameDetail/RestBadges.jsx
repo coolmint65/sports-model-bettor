@@ -1,65 +1,44 @@
+import { cn } from '../../lib/utils'
+
 /**
  * Rest / back-to-back context pills shown under the matchup header.
  *
- * Only renders anything when the prediction exposes a `rest` object with
- * at least one meaningful flag. Currently NHL-only, but kept sport-agnostic
- * so MLB can plug in when the engine starts exposing the same shape.
+ * Phase 2-cleanup restyle: Tailwind tokens; no more inline styles.
+ * Renders nothing when the prediction exposes no meaningful rest
+ * flag.
  */
 export default function RestBadges({ rest, home, away }) {
   if (!rest) return null
-  const {
-    home_b2b,
-    away_b2b,
-    home_rest_advantage,
-    away_rest_advantage,
-  } = rest
+  const { home_b2b, away_b2b, home_rest_advantage, away_rest_advantage } = rest
 
   if (!home_b2b && !away_b2b && !home_rest_advantage && !away_rest_advantage) {
     return null
   }
 
-  const b2bStyle = {
-    padding: '2px 10px',
-    borderRadius: 6,
-    fontSize: '0.72rem',
-    fontWeight: 600,
-    background: 'rgba(239,68,68,0.12)',
-    color: '#ef4444',
-    border: '1px solid rgba(239,68,68,0.25)',
-  }
-  const restStyle = {
-    padding: '2px 10px',
-    borderRadius: 6,
-    fontSize: '0.72rem',
-    fontWeight: 600,
-    background: 'rgba(96,165,250,0.10)',
-    color: '#60a5fa',
-    border: '1px solid rgba(96,165,250,0.20)',
-  }
-
   return (
-    <div
-      style={{
-        textAlign: 'center',
-        marginTop: 6,
-        display: 'flex',
-        justifyContent: 'center',
-        gap: 8,
-        flexWrap: 'wrap',
-      }}
-    >
-      {home_b2b && (
-        <span style={b2bStyle}>{home.abbreviation} on back-to-back</span>
-      )}
-      {away_b2b && (
-        <span style={b2bStyle}>{away.abbreviation} on back-to-back</span>
-      )}
+    <div className="flex flex-wrap items-center justify-center gap-2">
+      {home_b2b && <Pill tone="warn">{home.abbreviation} on back-to-back</Pill>}
+      {away_b2b && <Pill tone="warn">{away.abbreviation} on back-to-back</Pill>}
       {home_rest_advantage && !away_rest_advantage && (
-        <span style={restStyle}>{home.abbreviation} extra rest</span>
+        <Pill tone="info">{home.abbreviation} extra rest</Pill>
       )}
       {away_rest_advantage && !home_rest_advantage && (
-        <span style={restStyle}>{away.abbreviation} extra rest</span>
+        <Pill tone="info">{away.abbreviation} extra rest</Pill>
       )}
     </div>
+  )
+}
+
+function Pill({ tone, children }) {
+  const cls = tone === 'warn'
+    ? 'bg-negative/10 text-negative border-negative/25'
+    : 'bg-primary/10 text-primary border-primary/20'
+  return (
+    <span className={cn(
+      'inline-flex items-center rounded-md border px-2.5 py-0.5 text-[11px] font-semibold',
+      cls,
+    )}>
+      {children}
+    </span>
   )
 }

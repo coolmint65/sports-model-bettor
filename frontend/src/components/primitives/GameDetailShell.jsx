@@ -1,23 +1,13 @@
 /**
- * GameDetailShell
- * ──────────────────────────────────────────────────────────────
- * Sport-agnostic game-detail page skeleton. Wraps the three
- * shared phases (loading, prediction, empty) around the
- * two-column prediction layout. Each sport just passes the
- * main/sidebar render callbacks and a few labels.
+ * GameDetailShell — sport-agnostic game-detail page skeleton.
  *
- * Replaces the duplicated shell JSX in GameDetail.jsx,
- * NHLGameDetail.jsx, and NBAGameDetail.jsx.
+ * Phase 2-cleanup restyle: Tailwind tokens. Shell now matches the
+ * Tracker / Backtest page rhythm (header section spacing, dashed
+ * empty state, spinner-with-label loading). Two-column layout for
+ * prediction body collapses to one column below lg.
  *
- * Props:
- *   game, onBack, matchupExtras -> passed straight to SharedGameHeader
- *   loading                     -> boolean
- *   loadingLabel                -> "Running model..." etc.
- *   prediction                  -> prediction payload (truthy triggers main content)
- *   noPredictionMessage         -> first line in the no-prediction fallback
- *   noPredictionCommand         -> second line (rendered in <code>) e.g. "sync_nhl.bat --full"
- *   renderMain(pred)            -> left column node (PredictionResults)
- *   renderSidebar(pred)         -> right column node (BettingPicks)
+ * Each sport just passes the main/sidebar render callbacks and a
+ * few labels — see GameDetail / NHLGameDetail / NBAGameDetail.
  */
 
 import SharedGameHeader from '../gameDetail/SharedGameHeader'
@@ -27,7 +17,7 @@ export default function GameDetailShell({
   onBack,
   matchupExtras,
   loading,
-  loadingLabel = 'Running model...',
+  loadingLabel = 'Running model…',
   prediction,
   noPredictionMessage = 'Prediction unavailable.',
   noPredictionCommand,
@@ -35,31 +25,33 @@ export default function GameDetailShell({
   renderSidebar,
 }) {
   return (
-    <div className="game-detail">
+    <div className="space-y-5 py-4">
       <SharedGameHeader game={game} onBack={onBack} matchupExtras={matchupExtras} />
 
-      <div className="detail-prediction">
-        {loading && (
-          <div className="loading">
-            <div className="spinner" />
-            <p>{loadingLabel}</p>
-          </div>
-        )}
+      {loading && (
+        <div className="flex items-center justify-center gap-3 rounded-lg border border-border bg-card py-12 text-sm text-muted-foreground">
+          <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
+          {loadingLabel}
+        </div>
+      )}
 
-        {prediction && (
-          <div className="prediction-layout">
-            <div className="prediction-main">{renderMain(prediction)}</div>
-            <div className="prediction-sidebar">{renderSidebar(prediction)}</div>
-          </div>
-        )}
+      {prediction && (
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[2fr_1fr]">
+          <div className="space-y-4 min-w-0">{renderMain(prediction)}</div>
+          <div className="space-y-4 min-w-0">{renderSidebar(prediction)}</div>
+        </div>
+      )}
 
-        {!loading && !prediction && (
-          <div className="no-prediction">
-            <p>{noPredictionMessage}</p>
-            {noPredictionCommand && <code>{noPredictionCommand}</code>}
-          </div>
-        )}
-      </div>
+      {!loading && !prediction && (
+        <div className="rounded-lg border border-dashed border-border bg-card/50 px-6 py-10 text-center">
+          <div className="text-sm font-semibold text-foreground">{noPredictionMessage}</div>
+          {noPredictionCommand && (
+            <code className="mt-2 inline-block rounded bg-secondary px-2 py-1 text-[11px] font-mono text-muted-foreground">
+              {noPredictionCommand}
+            </code>
+          )}
+        </div>
+      )}
     </div>
   )
 }

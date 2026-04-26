@@ -1,10 +1,26 @@
+import { cn } from '../../lib/utils'
+
 /**
- * At-a-glance badge summarizing sportsbook line movement for a game.
- * Rendered inside the detail-odds row next to the moneyline / total chips.
+ * Line-movement badge in the detail-odds row.
  *
- * Currently only NHL prediction data surfaces `line_movement`, but this
- * component lives under gameDetail/ so MLB can opt in without duplication.
+ * Phase 2-cleanup restyle: Tailwind tokens; significance maps to
+ * negative/warning/muted tones instead of inline hex colors.
+ *
+ * Currently NHL-only data shape but lives under gameDetail/ so MLB
+ * can opt in once line_movement is plumbed.
  */
+const SIG_TONE = {
+  major:    'border-negative/40 bg-negative/10 text-negative',
+  moderate: 'border-warning/40 bg-warning/10 text-warning',
+  minor:    'border-border bg-muted text-muted-foreground',
+}
+
+const SIG_PREFIX = {
+  major:    '!! ',
+  moderate: '! ',
+  minor:    '',
+}
+
 export default function LineMovementBadge({ lm, home, away }) {
   if (!lm) return null
 
@@ -19,29 +35,18 @@ export default function LineMovementBadge({ lm, home, away }) {
   }
   if (parts.length === 0) return null
 
-  const sigColor = lm.significance === 'major'
-    ? '#ef4444'
-    : lm.significance === 'moderate'
-      ? '#f59e0b'
-      : '#94a3b8'
-  const icon = lm.significance === 'major'
-    ? '!! '
-    : lm.significance === 'moderate'
-      ? '! '
-      : ''
+  const tone = SIG_TONE[lm.significance] || SIG_TONE.minor
+  const prefix = SIG_PREFIX[lm.significance] || ''
 
   return (
     <span
-      className="odds-chip"
-      style={{
-        background: 'rgba(245,158,11,0.08)',
-        color: sigColor,
-        border: `1px solid ${sigColor}33`,
-        fontWeight: 600,
-      }}
+      className={cn(
+        'inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] font-semibold',
+        tone,
+      )}
       title={`Line has moved ${lm.significance} since opening`}
     >
-      {icon}LINE MOVED: {parts.join(', ')}
+      {prefix}LINE MOVED: {parts.join(', ')}
     </span>
   )
 }

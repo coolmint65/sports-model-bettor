@@ -1,53 +1,47 @@
+import { cn } from '../../lib/utils'
+
 /**
- * Edge callout with STRONG / MODERATE / LEAN confidence badge.
+ * Edge callout — STRONG / MODERATE / LEAN confidence rating shown
+ * above the per-pick details on game-detail pages.
  *
- * Used by both MLB (PredictionResults) and NHL (NHLPredictionResults).
+ * Phase 2-cleanup restyle: Tailwind tokens; no more inline styles.
+ *
  * Accepts an `edge` object of shape:
  *   { label, odds, edge, rating: 'strong' | 'moderate' | 'lean' }
- *
- * NHL also applied a `conf-badge conf-{rating}` className to the badge span;
- * MLB did not. `badgeClassName` is optional so both are preserved.
  */
-export default function EdgeCallout({ edge, badgeClassName }) {
+const RATING_STYLE = {
+  strong:   'bg-positive/15 text-positive border-positive/30',
+  moderate: 'bg-primary/15 text-primary border-primary/30',
+  lean:     'bg-warning/15 text-warning border-warning/30',
+}
+
+const RATING_LABEL = {
+  strong:   'STRONG',
+  moderate: 'MODERATE',
+  lean:     'LEAN',
+}
+
+export default function EdgeCallout({ edge }) {
   if (!edge) return null
-
-  const background = edge.rating === 'strong'
-    ? 'rgba(52,211,153,0.25)'
-    : edge.rating === 'moderate'
-      ? 'rgba(96,165,250,0.25)'
-      : 'rgba(251,191,36,0.25)'
-
-  const color = edge.rating === 'strong'
-    ? '#34d399'
-    : edge.rating === 'moderate'
-      ? '#60a5fa'
-      : '#fbbf24'
-
-  const label = edge.rating === 'strong'
-    ? 'STRONG'
-    : edge.rating === 'moderate'
-      ? 'MODERATE'
-      : 'LEAN'
+  const tone = RATING_STYLE[edge.rating] || RATING_STYLE.lean
+  const label = RATING_LABEL[edge.rating] || 'LEAN'
 
   return (
-    <div className={`edge-callout ${edge.rating}`}>
-      <span
-        className={badgeClassName}
-        style={{
-          padding: '2px 8px',
-          borderRadius: 4,
-          fontSize: '0.68rem',
-          fontWeight: 700,
-          letterSpacing: '0.05em',
-          background,
-          color,
-          marginRight: 8,
-        }}
-      >
+    <div className="flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2">
+      <span className={cn(
+        'rounded px-2 py-0.5 text-[10px] font-bold tracking-wider uppercase border',
+        tone,
+      )}>
         {label}
       </span>
-      <span className="edge-text">
-        {edge.label} ({edge.odds > 0 ? '+' : ''}{edge.odds}) - +{edge.edge.toFixed(1)}% edge
+      <span className="text-sm font-semibold text-foreground">
+        {edge.label}
+      </span>
+      <span className="text-xs text-muted-foreground tabular-nums">
+        ({edge.odds > 0 ? '+' : ''}{edge.odds})
+      </span>
+      <span className="ml-auto text-sm font-bold tabular-nums text-positive">
+        +{edge.edge.toFixed(1)}%
       </span>
     </div>
   )
