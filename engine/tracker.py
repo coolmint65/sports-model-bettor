@@ -236,9 +236,16 @@ def refresh_pending_for_today(bets: list[dict],
     # Index current bests by matchup, ONLY for games still UNLOCKED
     # (more than 1hr from tip-off). Once locked, the tracker entry
     # stays frozen at whatever was recorded — no last-minute swaps.
+    # Track locked matchups separately so the void path below can
+    # tell "model lost edge" (DELETE) from "game is locked, leave the
+    # frozen pick in place" — earlier code only checked the unlocked
+    # index and silently deleted every locked pending row as soon as
+    # the game entered the 1hr window.
     current_by_matchup: dict[str, dict] = {}
+    locked_matchups: set[str] = set()
     for b in bets:
         if b.get("is_locked"):
+            locked_matchups.add(b["matchup"])
             continue
         bp = b.get("best_pick")
         if bp:
@@ -253,6 +260,11 @@ def refresh_pending_for_today(bets: list[dict],
     updated = swapped = voided = 0
     for p in pending:
         p = dict(p)
+        # Locked games are frozen — never swap, never void. The pick
+        # the user could have placed at lock time is the historical
+        # record we want to keep.
+        if p["matchup"] in locked_matchups:
+            continue
         current = current_by_matchup.get(p["matchup"])
         if not current:
             # Model has no playable pick for this matchup any more —

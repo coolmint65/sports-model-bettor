@@ -112,9 +112,13 @@ def refresh_pending_for_today(bets: list[dict],
     docstring for the design rationale."""
     target_date = target_date or datetime.now().strftime("%Y-%m-%d")
     conn = _get_nhl_db()
+    # Track locked matchups separately so the void path leaves their
+    # pending picks alone — see engine.tracker for the bug history.
     current_by_matchup: dict[str, dict] = {}
+    locked_matchups: set[str] = set()
     for b in bets:
         if b.get("is_locked"):
+            locked_matchups.add(b["matchup"])
             continue  # locked: tracker entry stays frozen
         bp = b.get("best_pick")
         if bp:
@@ -129,6 +133,8 @@ def refresh_pending_for_today(bets: list[dict],
     updated = swapped = voided = 0
     for p in pending:
         p = dict(p)
+        if p["matchup"] in locked_matchups:
+            continue  # frozen at lock time
         current = current_by_matchup.get(p["matchup"])
         if not current:
             matchup_in_response = any(b["matchup"] == p["matchup"] for b in bets)
