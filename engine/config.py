@@ -76,6 +76,15 @@ MLB_WIN_PROB_CAP = 0.58  # tightened from 0.65. engine.train on 159 picks
                           # stated - off by 27pp. 0.58 cap aligns the top
                           # bucket with real WR (~53-58%).
 
+# Same compression band, applied to O/U side probabilities. The tracker
+# (244 picks, 04-25 train report) showed the 70-100% bucket hit 54.1%
+# real WR vs 78.9% predicted — same pattern as ML, fixed via the same
+# soft-compression. NegBin tails (engine.mlb_scoring) widened the raw
+# distribution so the predicted probs should already drop toward the
+# real-WR zone; this is defense-in-depth for any residual overconfidence.
+MLB_OU_PROB_FLOOR = 0.40
+MLB_OU_PROB_CAP = 0.60
+
 MLB_EXPECTED_RUNS_FLOOR = 2.0
 MLB_EXPECTED_RUNS_CAP = 6.5
 

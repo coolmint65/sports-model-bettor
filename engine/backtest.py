@@ -21,9 +21,16 @@ from datetime import datetime
 from .db import get_conn, get_team_by_id
 from .mlb_predict import (
     predict_matchup, _poisson_prob, _build_score_matrix,
-    _win_probs_from_matrix, MLB_AVG_RPG, MLB_HOME_EDGE,
+    _win_probs_from_matrix, MLB_AVG_RPG as _MLB_AVG_RPG_DEFAULT, MLB_HOME_EDGE,
 )
+from .config import get_flag as _get_flag
 from .pit_stats import compute_team_stats_at_date, compute_pitcher_stats_at_date
+
+# Read MLB_AVG_RPG via the override layer so adaptive_baselines tuning
+# affects backtests too. Override-layer read happens once per backtest
+# run (module load), which matches the prediction-path behavior — the
+# constant is captured at predict_matchup() boundary, not per-game.
+MLB_AVG_RPG = _get_flag("MLB_AVG_RPG", _MLB_AVG_RPG_DEFAULT, sport="mlb")
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +179,7 @@ def run_backtest(season: int | None = None, days: int | None = None,
         away_xr *= wx * away_rest * home_sp_rest
 
         total_pred = home_xr + away_xr
-        matrix = _build_score_matrix(home_xr, away_xr, max_runs=15)
+        matrix = _build_score_matrix(home_xr, away_xr, max_runs=20)
         p_home, p_away = _win_probs_from_matrix(matrix)
 
         results["games_tested"] += 1

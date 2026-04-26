@@ -530,7 +530,13 @@ def predict_matchup(home_team_id: int, away_team_id: int,
     # ── Win probability (Poisson-based) ──
     conf = _compute_confidence(home_pit, away_pit, home_sp_pit, away_sp_pit)
 
-    matrix = _build_score_matrix(home_xr, away_xr, max_runs=15)
+    # max_runs=20 (was 15). NegBin scoring has fatter upper tails than
+    # the prior Poisson model — at xr=4.5 about 1.5% of per-team mass
+    # sits past 15. Truncating at 15 + renormalizing biased the matrix
+    # mean down ~0.15 runs (hidden Under bias). 20 captures >99.5%
+    # natively so the conditional-vs-marginal mean discrepancy is
+    # within 0.02 runs.
+    matrix = _build_score_matrix(home_xr, away_xr, max_runs=20)
     p_home, p_away = _win_probs_from_matrix(matrix)
 
     # Calibration: MLB win probabilities are systematically over-confident

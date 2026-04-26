@@ -88,6 +88,25 @@ def _nba_q1_totals(conn, n: int) -> list[float]:
     return [float(r["home_q1"]) + float(r["away_q1"]) for r in rows]
 
 
+def _mlb_team_runs(conn, n: int) -> list[float]:
+    """Return per-team runs from the last completed MLB games.
+
+    Two team-rows per game (home and away) so the sample is twice the
+    game count. Pulls the most recent ``n`` rows by date.
+    """
+    rows = conn.execute(
+        "SELECT r FROM ("
+        "  SELECT home_score AS r, date FROM games "
+        "  WHERE status='final' AND home_score IS NOT NULL "
+        "  UNION ALL "
+        "  SELECT away_score AS r, date FROM games "
+        "  WHERE status='final' AND away_score IS NOT NULL"
+        ") ORDER BY date DESC LIMIT ?",
+        (n,),
+    ).fetchall()
+    return [float(r["r"]) for r in rows]
+
+
 # ── Spec registry ──────────────────────────────────────────────────
 
 BASELINES: list[BaselineSpec] = [
@@ -104,6 +123,26 @@ BASELINES: list[BaselineSpec] = [
         regime_z_threshold=2.0,
         expiry_days=14,
         compute_actual=_nba_q1_totals,
+    ),
+    BaselineSpec(
+        sport="mlb",
+        flag_name="MLB_AVG_RPG",
+        # Per-team runs/game. Source-code default in mlb_scoring.py is
+        # 4.85 (held high to bias the model toward Overs while we hunt
+        # the Under-WR regression); adaptive tuning will pull it back
+        # toward observed reality (~4.6 last 90d) once min_n samples
+        # accumulate. Cold-start before tracker has 200 team-rows: the
+        # source-code default stands.
+        default=4.85,
+        min_value=3.5,     # league avg below 3.5 means broken data
+        max_value=5.5,     # 5.5+ means a juiced-ball era; flag, don't auto-set
+        max_step=0.10,     # never move more than 0.10 r/g per refresh
+        long_window=400,   # ~200 games (each game contributes 2 team-rows)
+        short_window=60,   # ~30 games for streak detection
+        min_n=200,
+        regime_z_threshold=2.0,
+        expiry_days=14,
+        compute_actual=_mlb_team_runs,
     ),
 ]
 

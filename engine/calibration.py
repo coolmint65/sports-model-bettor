@@ -162,7 +162,12 @@ def calibrate(season: int | None = None, days: int = 0,
         return {"error": "Not enough games to calibrate", "games": len(games)}
 
     from .pit_stats import compute_team_stats_at_date, compute_pitcher_stats_at_date
-    from .mlb_predict import MLB_AVG_RPG, MLB_AVG_ERA
+    from .mlb_predict import MLB_AVG_RPG as _MLB_AVG_RPG_DEFAULT, MLB_AVG_ERA
+    from .config import get_flag
+    # Read MLB_AVG_RPG via the override layer so engine.adaptive_baselines
+    # nightly auto-tune can re-baseline it without a code edit. Falls
+    # through to the source-code default when no override is active.
+    MLB_AVG_RPG = get_flag("MLB_AVG_RPG", _MLB_AVG_RPG_DEFAULT, sport="mlb")
 
     weights = get_weights()
 

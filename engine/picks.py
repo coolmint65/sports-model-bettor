@@ -212,7 +212,20 @@ def generate_picks(home_team_id: int, away_team_id: int,
         ou_data = _find_ou(pred["over_under"], vegas_total)
         if ou_data:
             ou_pick_over = ou_data["over"] > ou_data["under"]
-            ou_prob = max(ou_data["over"], ou_data["under"])
+            # Soft-compress the raw side probability the same way ML
+            # gets shaped (engine.win_prob.compress_win_prob). The 244-
+            # pick tracker showed O/U above the 60% bucket hit ~54%
+            # real WR — same overconfidence pattern as ML pre-cap. The
+            # NegBin matrix already widened the raw distribution; this
+            # catches any residual upper-tail bias before edge math
+            # runs against vegas's implied price.
+            from .win_prob import compress_win_prob
+            ou_prob_raw = max(ou_data["over"], ou_data["under"])
+            ou_prob = compress_win_prob(
+                ou_prob_raw,
+                get_flag("MLB_OU_PROB_FLOOR", 0.40),
+                get_flag("MLB_OU_PROB_CAP", 0.60),
+            )
             ou_label = f"{'Over' if ou_pick_over else 'Under'} {vegas_total}"
 
             real_ou_odds = odds.get("over_odds") if ou_pick_over else odds.get("under_odds")
