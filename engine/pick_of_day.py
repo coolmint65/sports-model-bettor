@@ -860,7 +860,12 @@ def _determine_outcome(sport: str, conn, potd: dict) -> tuple[str | None, float]
         won = (pick_home and home_won) or (not pick_home and not home_won)
         result = "W" if won else "L"
 
-    elif bet_type == "O/U":
+    elif bet_type in ("O/U", "ALT O/U"):
+        # ALT O/U is identical to O/U for settlement — same "Over N.N" /
+        # "Under N.N" pick label, just at a different line value. Without
+        # this, MLB POTD picks landing on alt lines (which they routinely
+        # do when the model finds value at non-standard totals) sit
+        # PENDING forever.
         total = hs + as_
         if "Over" in pick:
             line = float(pick.split()[-1])
@@ -879,7 +884,7 @@ def _determine_outcome(sport: str, conn, potd: dict) -> tuple[str | None, float]
             else:
                 result = "P"
 
-    elif bet_type in ("RL", "PL"):
+    elif bet_type in ("RL", "PL", "ALT RL", "ALT PL"):
         # Parse spread from pick string (e.g. "St. Louis Cardinals +1.5" or "STL +1.5")
         import re
         spread_match = re.search(r'([+-]?\d+\.?\d*)\s*$', pick)

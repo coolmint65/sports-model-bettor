@@ -255,9 +255,53 @@ def _settle_mlb_derivatives() -> dict:
         resolved_pk = _resolve_mlb_game_pk(conn, p["game_id"], p["date"],
                                            p["matchup"])
         if resolved_pk is None:
-            # Game not in DB yet (e.g. scoreboard hasn't synced). Leave
-            # the row pending and try again next settler tick.
+            # Game not in DB yet (scoreboard hasn't synced) — leave the
+            # row pending IF the pick is recent. But once the pick date
+            # is more than 2 days old and we still can't find the game,
+            # the underlying ESPN event has almost certainly been
+            # rewritten by a postponement-makeup or schedule edit
+            # (live example: COL @ NYM 04-25 ESPN id 401815082 was
+            # rewritten when the rain-postponed game was rescheduled
+            # to 04-26 with new event IDs). Push the row so it doesn't
+            # sit PEND forever — we can't tell what happened.
+            from datetime import datetime, timedelta
+            try:
+                pick_dt = datetime.strptime(p["date"], "%Y-%m-%d")
+                age_days = (datetime.now() - pick_dt).days
+            except Exception:
+                age_days = 0
+            if age_days >= 1:
+                conn.execute(
+                    "UPDATE derivative_picks SET result = 'P', profit = 0, "
+                    "settled_at = datetime('now') WHERE id = ?",
+                    (p["id"],),
+                )
+                conn.commit()
+                settled += 1
+                pushes += 1
             continue
+
+        # Postponed games never produce a result on the original date.
+        # Without this guard the trampoline calls settle_picks(), which
+        # correctly skips the row (engine.tracker postponed guard, see
+        # commit 3c8af77), but settle_picks leaves the temp row's
+        # result NULL — and the derivative pick stays PEND forever
+        # because the trampoline's "row.result is not None" check fails.
+        # Push the derivative when the underlying game is postponed.
+        game_row = conn.execute(
+            "SELECT status FROM games WHERE mlb_game_id = ?", (resolved_pk,),
+        ).fetchone()
+        if game_row and game_row["status"] == "postponed":
+            conn.execute(
+                "UPDATE derivative_picks SET result = 'P', profit = 0, "
+                "settled_at = datetime('now') WHERE id = ?",
+                (p["id"],),
+            )
+            conn.commit()
+            settled += 1
+            pushes += 1
+            continue
+
         cur = conn.execute(
             "INSERT INTO picks (game_id, date, matchup, bet_type, pick, "
             "model_prob, edge, odds) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
