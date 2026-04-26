@@ -14,6 +14,7 @@ import NBAGameDetail from './components/NBAGameDetail'
 import PickOfDayHero from './components/PickOfDayHero'
 import FirstInningPicks from './components/FirstInningPicks'
 import DerivativeTracker from './components/DerivativeTracker'
+import Sidebar from './components/Sidebar'
 
 const api = axios.create({ baseURL: '/api' })
 
@@ -360,34 +361,30 @@ export default function App() {
   const isNHL = league === 'NHL'
   const isNBA = league === 'NBA'
 
-  return (
-    <div className="app">
-      <div className="header">
-        <h1>{league} Prediction Engine</h1>
-        <p className="subtitle">Data-driven {league} game predictions</p>
-      </div>
+  // Game counts for sidebar badge — pass length of each scoreboard so
+  // the "where's the action tonight" hint is current. Passing 0 hides
+  // the badge instead of showing "0".
+  const gameCounts = {
+    mlb: games.length,
+    nhl: nhlGames.length,
+    nba: nbaGames.length,
+  }
 
-      {/* League switcher */}
-      <div className="league-switcher">
-        <button
-          className={`league-btn ${isMLB ? 'active' : ''}`}
-          onClick={() => switchLeague('MLB')}
-        >
-          MLB
-        </button>
-        <button
-          className={`league-btn ${isNHL ? 'active' : ''}`}
-          onClick={() => switchLeague('NHL')}
-        >
-          NHL
-        </button>
-        <button
-          className={`league-btn ${isNBA ? 'active' : ''}`}
-          onClick={() => switchLeague('NBA')}
-        >
-          NBA
-        </button>
-      </div>
+  return (
+    <div className="flex min-h-screen bg-background">
+      <Sidebar
+        sports={['mlb', 'nhl', 'nba']}
+        selected={league.toLowerCase()}
+        onSelect={s => switchLeague(s.toUpperCase())}
+        gameCounts={gameCounts}
+      />
+
+      <main className="flex-1 min-w-0 overflow-x-hidden">
+       <div className="app">
+        <div className="header">
+          <h1>{league} Prediction Engine</h1>
+          <p className="subtitle">Data-driven {league} game predictions</p>
+        </div>
 
       <nav className="nav-tabs">
         <button className={`nav-tab ${view === 'games' && !selectedGame && !nhlSelectedGame && !nbaSelectedGame ? 'active' : ''}`} onClick={goBack}>
@@ -510,6 +507,8 @@ export default function App() {
       {isNBA && view === 'backtest' && (
         <Backtest data={backtest} loading={btLoading} onRun={runBacktest} />
       )}
+       </div>
+      </main>
     </div>
   )
 }
