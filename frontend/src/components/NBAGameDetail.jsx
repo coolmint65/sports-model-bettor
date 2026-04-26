@@ -1,12 +1,22 @@
 import GameDetailShell from './primitives/GameDetailShell'
 import WinProbBar from './primitives/WinProbBar'
 import StatRow from './primitives/StatRow'
+import SectionCard from './primitives/SectionCard'
+import ScoreDisplay from './primitives/ScoreDisplay'
 import EdgeCallout from './gameDetail/EdgeCallout'
 import WhyThisPick from './gameDetail/WhyThisPick'
 import { impliedFromOdds } from './gameDetail/kelly'
 import ProbHistogram from './gameDetail/ProbHistogram'
 import ModelSignals from './gameDetail/ModelSignals'
+import { cn } from '../lib/utils'
 
+/**
+ * NBA Game Detail — Q1 prediction page. Phase 2-cleanup restyle:
+ * every section composes Tailwind primitives. Sport-specific Q1
+ * factors (pace / home boost / B2B / Q1 PPG) inline since they're
+ * single-use; injuries get their own InjuriesCard for the per-side
+ * "out players" pattern Q1 cares about.
+ */
 export default function NBAGameDetail({ game, prediction, loading, onBack }) {
   const { home, away } = game
 
@@ -15,7 +25,7 @@ export default function NBAGameDetail({ game, prediction, loading, onBack }) {
       game={game}
       onBack={onBack}
       loading={loading}
-      loadingLabel="Running Q1 model..."
+      loadingLabel="Running Q1 model…"
       prediction={prediction}
       noPredictionMessage="Q1 prediction unavailable. Run NBA sync first:"
       noPredictionCommand="sync_nba.bat --full"
@@ -35,63 +45,42 @@ function Q1PredictionResults({ data, odds, home, away }) {
   const total = d.predicted_total || 0
   const homeFav = margin > 0
 
-  // Prefer the engine-generated pick attached by /api/nba/predict.
-  // When backend ran picks at all (d.picks present), trust its verdict
-  // including an explicit null (no +EV play). Only fall back to the
-  // local findBestQ1Edge when d.picks isn't there (older cached shape).
   const backendRanPicks = Array.isArray(d.picks)
   const bestEdge = backendRanPicks
     ? (d.best_pick ? edgeFromBackendPick(d.best_pick) : null)
     : (odds ? findBestQ1Edge(d, odds, home, away) : null)
 
   return (
-    <div className="results">
-      {/* Season Context Banner - parity with NHL. Shows regular-season
-          vs playoff context when the prediction payload provides it. */}
+    <div className="space-y-4">
       {d.season_context && d.season_context.implications && (
-        <div style={{
-          background: d.season_context.phase === 'playoffs' ? '#1e3a2f' : '#1e2a3f',
-          border: `1px solid ${d.season_context.phase === 'playoffs' ? '#34d399' : '#60a5fa'}`,
-          borderRadius: 8, padding: '8px 16px', marginBottom: 12,
-          fontSize: '0.8rem', fontWeight: 600,
-          color: d.season_context.phase === 'playoffs' ? '#34d399' : '#60a5fa',
-          textAlign: 'center',
-        }}>
-          {d.season_context.phase === 'playoffs' ? 'PLAYOFF GAME' : 'LATE SEASON - Playoff Race'}
-          {' '}- Model adjusts for higher intensity
-        </div>
+        <SeasonContextBanner ctx={d.season_context} />
       )}
 
-      <div className="result-card" style={{minHeight: 240}}>
-        <h2>Q1 Projected Outcome</h2>
-        <div className="score-display">
-          <div className="score-team">
-            <div className="name">{home.name}</div>
-            <div className="record">{home.record}</div>
-            <div className={`score ${homeFav ? 'winner' : ''}`}>{homeQ1.toFixed(1)}</div>
-          </div>
-          <div className="score-vs">-</div>
-          <div className="score-team">
-            <div className="name">{away.name}</div>
-            <div className="record">{away.record}</div>
-            <div className={`score ${!homeFav ? 'winner' : ''}`}>{awayQ1.toFixed(1)}</div>
-          </div>
-        </div>
-
-        <div style={{textAlign:'center',color:'#64748b',fontSize:'0.75rem',marginTop:4,marginBottom:8}}>
-          Projected Q1 total: {total.toFixed(1)} pts | Spread: {homeFav ? home.abbreviation : away.abbreviation} {Math.abs(margin).toFixed(1)}
+      <SectionCard title="Q1 Projected Outcome">
+        <ScoreDisplay
+          home={home}
+          away={away}
+          homeScore={homeQ1.toFixed(1)}
+          awayScore={awayQ1.toFixed(1)}
+          homeWins={homeFav}
+        />
+        <div className="mt-2 text-center text-xs text-muted-foreground tabular-nums">
+          Projected Q1 total: <strong>{total.toFixed(1)}</strong> pts ·
+          Spread: <strong>{homeFav ? home.abbreviation : away.abbreviation} {Math.abs(margin).toFixed(1)}</strong>
         </div>
 
         {d.spread_cover_prob != null && (
-          <WinProbBar
-            wp={{ home: d.q1_ml_home || 0.5, away: 1 - (d.q1_ml_home || 0.5) }}
-            home={home}
-            away={away}
-            variant="detail"
-          />
+          <div className="mt-4">
+            <WinProbBar
+              wp={{ home: d.q1_ml_home || 0.5, away: 1 - (d.q1_ml_home || 0.5) }}
+              home={home}
+              away={away}
+              variant="detail"
+            />
+          </div>
         )}
 
-        <div className="key-stats">
+        <div className="mt-4 space-y-2">
           <StatRow label="Q1 Total" value={total.toFixed(1)} />
           <StatRow
             label="Q1 Spread"
@@ -102,18 +91,13 @@ function Q1PredictionResults({ data, odds, home, away }) {
           )}
         </div>
 
-        <EdgeCallout edge={bestEdge} />
-      </div>
+        <div className="mt-4">
+          <EdgeCallout edge={bestEdge} />
+        </div>
+      </SectionCard>
 
-      {/* Model Signals: factor / MC breakdown for Q1 home_win + total.
-          GBM column stays blank until NBA GBM is trained. Renders
-          nothing when pred.ensemble is empty. */}
       <ModelSignals pred={d} sport="nba" home={home} away={away} />
 
-      {/* Injury report: confirmed-OUT starters from the NBA injury
-          feed. Backend attaches these via compute_q1_adjustment —
-          factors.home_roster.out_players / away_roster.out_players.
-          Only renders when at least one side has someone out. */}
       <InjuriesCard
         home={home}
         away={away}
@@ -123,86 +107,7 @@ function Q1PredictionResults({ data, odds, home, away }) {
         awayDelta={d.factors?.away_roster?.q1_delta}
       />
 
-      {/* Key Factors */}
-      {d.factors && (
-        <div className="result-card">
-          <h2>Q1 Key Factors</h2>
-          {d.factors.pace_factor && (
-            <div className="stat-row">
-              <span
-                className="stat-label"
-                title="Combined possessions per game vs the league baseline (1.00x = average). Above 1 means more shot attempts in Q1 = higher scoring; below 1 = slower."
-              >
-                Pace Factor
-              </span>
-              <span className="stat-value">{d.factors.pace_factor.toFixed(2)}x</span>
-            </div>
-          )}
-          {d.factors.home_court_boost && (
-            <div className="stat-row">
-              <span
-                className="stat-label"
-                title="Empirically-calibrated home-team Q1 advantage (~+0.7 pts vs road)."
-              >
-                Home Court Q1 Boost
-              </span>
-              <span className="stat-value positive">+{d.factors.home_court_boost} pts</span>
-            </div>
-          )}
-          {d.factors.rest_adj && (
-            <>
-              {d.factors.rest_adj.home !== 0 && (
-                <div className="stat-row">
-                  <span
-                    className="stat-label"
-                    title="Penalty for playing on the second night of a back-to-back. Tired legs typically cost ~1 pt in Q1."
-                  >
-                    {home.abbreviation} on back-to-back
-                  </span>
-                  <span className={`stat-value ${d.factors.rest_adj.home < 0 ? 'negative' : 'positive'}`}>
-                    {d.factors.rest_adj.home > 0 ? '+' : ''}{d.factors.rest_adj.home} pts
-                  </span>
-                </div>
-              )}
-              {d.factors.rest_adj.away !== 0 && (
-                <div className="stat-row">
-                  <span
-                    className="stat-label"
-                    title="Penalty for playing on the second night of a back-to-back. Tired legs typically cost ~1 pt in Q1."
-                  >
-                    {away.abbreviation} on back-to-back
-                  </span>
-                  <span className={`stat-value ${d.factors.rest_adj.away < 0 ? 'negative' : 'positive'}`}>
-                    {d.factors.rest_adj.away > 0 ? '+' : ''}{d.factors.rest_adj.away} pts
-                  </span>
-                </div>
-              )}
-            </>
-          )}
-          {d.factors.home_q1_off && (
-            <div className="stat-row">
-              <span
-                className="stat-label"
-                title="Average points each team scores in Q1 over the season (higher = better offense)."
-              >
-                Q1 PPG scored
-              </span>
-              <span className="stat-value">{away.abbreviation} {d.factors.away_q1_off?.toFixed(1)} / {home.abbreviation} {d.factors.home_q1_off?.toFixed(1)}</span>
-            </div>
-          )}
-          {d.factors.home_q1_def && (
-            <div className="stat-row">
-              <span
-                className="stat-label"
-                title="Average points each team allows in Q1 over the season (lower = better defense)."
-              >
-                Q1 PPG allowed
-              </span>
-              <span className="stat-value">{away.abbreviation} {d.factors.away_q1_def?.toFixed(1)} / {home.abbreviation} {d.factors.home_q1_def?.toFixed(1)}</span>
-            </div>
-          )}
-        </div>
-      )}
+      {d.factors && <Q1FactorsCard factors={d.factors} home={home} away={away} />}
 
       <WhyThisPick
         pred={d}
@@ -215,13 +120,141 @@ function Q1PredictionResults({ data, odds, home, away }) {
   )
 }
 
+
+function Q1FactorsCard({ factors: f, home, away }) {
+  return (
+    <SectionCard title="Q1 Key Factors">
+      <div className="space-y-2">
+        {f.pace_factor && (
+          <StatRow
+            label={
+              <span title="Combined possessions per game vs the league baseline (1.00x = average). Above 1 means more shot attempts in Q1; below 1 = slower.">
+                Pace Factor
+              </span>
+            }
+            value={`${f.pace_factor.toFixed(2)}x`}
+          />
+        )}
+        {f.home_court_boost && (
+          <StatRow
+            label={
+              <span title="Empirically-calibrated home-team Q1 advantage (~+0.7 pts vs road).">
+                Home Court Q1 Boost
+              </span>
+            }
+            value={`+${f.home_court_boost} pts`}
+            valueClassName="positive"
+          />
+        )}
+        {f.rest_adj?.home !== 0 && f.rest_adj?.home != null && (
+          <StatRow
+            label={`${home.abbreviation} on back-to-back`}
+            value={`${f.rest_adj.home > 0 ? '+' : ''}${f.rest_adj.home} pts`}
+            valueClassName={f.rest_adj.home < 0 ? 'negative' : 'positive'}
+          />
+        )}
+        {f.rest_adj?.away !== 0 && f.rest_adj?.away != null && (
+          <StatRow
+            label={`${away.abbreviation} on back-to-back`}
+            value={`${f.rest_adj.away > 0 ? '+' : ''}${f.rest_adj.away} pts`}
+            valueClassName={f.rest_adj.away < 0 ? 'negative' : 'positive'}
+          />
+        )}
+        {f.home_q1_off && (
+          <StatRow
+            label="Q1 PPG scored"
+            value={`${away.abbreviation} ${f.away_q1_off?.toFixed(1)} / ${home.abbreviation} ${f.home_q1_off?.toFixed(1)}`}
+          />
+        )}
+        {f.home_q1_def && (
+          <StatRow
+            label="Q1 PPG allowed"
+            value={`${away.abbreviation} ${f.away_q1_def?.toFixed(1)} / ${home.abbreviation} ${f.home_q1_def?.toFixed(1)}`}
+          />
+        )}
+      </div>
+    </SectionCard>
+  )
+}
+
+
+function InjuriesCard({ home, away, homeOut, awayOut, homeDelta, awayDelta }) {
+  const hOut = Array.isArray(homeOut) ? homeOut : []
+  const aOut = Array.isArray(awayOut) ? awayOut : []
+  if (hOut.length === 0 && aOut.length === 0) return null
+
+  return (
+    <SectionCard title="Injuries (Out)">
+      <div className="space-y-4">
+        {hOut.length > 0 && (
+          <InjurySide
+            abbr={home.abbreviation}
+            count={hOut.length}
+            delta={homeDelta}
+            out={hOut}
+          />
+        )}
+        {aOut.length > 0 && (
+          <InjurySide
+            abbr={away.abbreviation}
+            count={aOut.length}
+            delta={awayDelta}
+            out={aOut}
+          />
+        )}
+      </div>
+    </SectionCard>
+  )
+}
+
+function InjurySide({ abbr, count, delta, out }) {
+  return (
+    <div>
+      <div className="mb-1.5 flex items-center gap-2 text-xs">
+        <span className="font-semibold uppercase tracking-wider text-muted-foreground">
+          {abbr} — {count} out
+        </span>
+        {typeof delta === 'number' && delta < 0 && (
+          <span className="font-semibold tabular-nums text-negative">
+            ({delta.toFixed(1)} Q1 pts)
+          </span>
+        )}
+      </div>
+      <ul className="space-y-1">
+        {out.map(p => (
+          <li
+            key={`${abbr}-${p.player_id || p.name}`}
+            className="flex items-baseline justify-between gap-2 text-xs"
+          >
+            <span>
+              {p.starter
+                ? <strong className="text-foreground">{p.name}</strong>
+                : <span className="text-foreground">{p.name}</span>}
+              {p.position && (
+                <span className="ml-1 text-muted-foreground">({p.position})</span>
+              )}
+            </span>
+            <span className="text-negative font-semibold">
+              {(p.status || 'OUT').toUpperCase()}
+              {typeof p.q1_impact === 'number' && p.q1_impact > 0 && (
+                <span className="ml-2 text-muted-foreground tabular-nums">
+                  -{p.q1_impact.toFixed(1)} Q1 pts
+                </span>
+              )}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+
 function Q1BettingPicks({ data, odds, home, away }) {
   const d = data
   const pct = n => `${(n * 100).toFixed(1)}%`
 
   const picks = []
-
-  // Q1 Spread
   if (d.spread_cover_prob != null) {
     const margin = d.predicted_margin || 0
     const fav = margin > 0 ? home : away
@@ -232,8 +265,6 @@ function Q1BettingPicks({ data, odds, home, away }) {
       odds: odds?.q1_spread_home_odds || -110,
     })
   }
-
-  // Q1 Total
   if (d.over_prob != null) {
     const total = d.predicted_total || 0
     const pickOver = d.over_prob > 0.5
@@ -244,8 +275,6 @@ function Q1BettingPicks({ data, odds, home, away }) {
       odds: pickOver ? (odds?.q1_over_odds || -110) : (odds?.q1_under_odds || -110),
     })
   }
-
-  // Q1 ML
   if (d.q1_ml_home != null) {
     const homeFav = d.q1_ml_home > 0.5
     picks.push({
@@ -256,112 +285,87 @@ function Q1BettingPicks({ data, odds, home, away }) {
     })
   }
 
-  // CI half-width on the win-probability point estimate, driven by
-  // team games played. Served on engine.nba_q1_predict.confidence_ci.
   const ciHw = d.confidence_ci?.ci_half_width ?? null
 
   return (
-    <div className="picks-card">
-      <h2>Q1 Model Picks</h2>
-      {picks.map((p, i) => (
-        <PickRow key={i} label={p.label} pick={p.pick} prob={p.prob} odds={p.odds} pct={pct} ciHw={ciHw} />
-      ))}
-      <div className="picks-footer">
-        Q1 projected total: <strong>{(d.predicted_total || 0).toFixed(1)}</strong>
+    <SectionCard
+      title="Q1 Model Picks"
+      rightSlot={
+        <span className="text-[11px] text-muted-foreground tabular-nums">
+          Total: <strong>{(d.predicted_total || 0).toFixed(1)}</strong>
+        </span>
+      }
+    >
+      <div className="space-y-3">
+        {picks.map((p, i) => (
+          <PickRow key={i} {...p} pct={pct} ciHw={ciHw} />
+        ))}
       </div>
-    </div>
-  )
-}
-
-function InjuriesCard({ home, away, homeOut, awayOut, homeDelta, awayDelta }) {
-  // Only confirmed-OUT entries come through from the backend — the
-  // _classify_status filter drops questionable/doubtful so this list
-  // never shows players who will actually tip off.
-  const hOut = Array.isArray(homeOut) ? homeOut : []
-  const aOut = Array.isArray(awayOut) ? awayOut : []
-  if (hOut.length === 0 && aOut.length === 0) return null
-
-  const row = (p, teamAbbr) => (
-    <div key={`${teamAbbr}-${p.player_id || p.name}`} className="stat-row">
-      <span className="stat-label">
-        {p.starter ? <strong>{p.name}</strong> : p.name}
-        {p.position ? <span style={{color:'#64748b', marginLeft:6}}>({p.position})</span> : null}
-      </span>
-      <span className="stat-value" style={{color:'#ef4444'}}>
-        {(p.status || 'OUT').toUpperCase()}
-        {typeof p.q1_impact === 'number' && p.q1_impact > 0 && (
-          <span style={{color:'#64748b', marginLeft:6, fontSize:'0.75rem'}}>
-            -{p.q1_impact.toFixed(1)} Q1 pts
-          </span>
-        )}
-      </span>
-    </div>
-  )
-
-  return (
-    <div className="result-card">
-      <h2>Injuries (Out)</h2>
-      {hOut.length > 0 && (
-        <>
-          <div style={{color:'#94a3b8', fontSize:'0.75rem', margin:'4px 0 6px 0'}}>
-            {home.abbreviation} — {hOut.length} out
-            {typeof homeDelta === 'number' && homeDelta < 0 && (
-              <span style={{marginLeft:8, color:'#ef4444'}}>
-                ({homeDelta.toFixed(1)} Q1 pts)
-              </span>
-            )}
-          </div>
-          {hOut.map(p => row(p, home.abbreviation))}
-        </>
-      )}
-      {aOut.length > 0 && (
-        <>
-          <div style={{color:'#94a3b8', fontSize:'0.75rem', margin:'10px 0 6px 0'}}>
-            {away.abbreviation} — {aOut.length} out
-            {typeof awayDelta === 'number' && awayDelta < 0 && (
-              <span style={{marginLeft:8, color:'#ef4444'}}>
-                ({awayDelta.toFixed(1)} Q1 pts)
-              </span>
-            )}
-          </div>
-          {aOut.map(p => row(p, away.abbreviation))}
-        </>
-      )}
-    </div>
+    </SectionCard>
   )
 }
 
 
 function PickRow({ label, pick, prob, odds, pct, ciHw }) {
   const conf = prob > 0.60 ? 'high' : prob > 0.53 ? 'med' : 'low'
+  const confTone =
+    conf === 'high' ? 'text-positive' :
+    conf === 'med'  ? 'text-primary'  :
+                       'text-muted-foreground'
+  const probLow  = (prob != null && ciHw != null) ? Math.max(0, prob - ciHw) : null
+  const probHigh = (prob != null && ciHw != null) ? Math.min(1, prob + ciHw) : null
+
   let edge = null
   if (odds && prob) {
     const implied = impliedFromOdds(odds)
     edge = ((prob - implied) * 100).toFixed(1)
   }
 
-  const probLow  = (prob != null && ciHw != null) ? Math.max(0, prob - ciHw) : null
-  const probHigh = (prob != null && ciHw != null) ? Math.min(1, prob + ciHw) : null
-
   return (
-    <div className={`pick-row conf-${conf}`}>
-      <div className="pick-label">{label}</div>
-      <div className="pick-choice">
-        <span className="pick-name">{pick}</span>
-        {odds && <span className="pick-odds">({odds > 0 ? '+' : ''}{odds})</span>}
+    <div className="rounded-md border border-border bg-background/40 px-3 py-2.5">
+      <div className="flex items-center justify-between text-xs">
+        <span className="font-semibold uppercase tracking-wider text-muted-foreground">
+          {label}
+        </span>
+        {edge && parseFloat(edge) > 0 && (
+          <span className="font-bold tabular-nums text-positive">+{edge}%</span>
+        )}
       </div>
-      <div className="pick-numbers">
-        <span className={`pick-prob conf-${conf}`}>{pct(prob)}</span>
+      <div className="mt-1 flex items-baseline gap-2">
+        <span className="text-sm font-bold text-foreground">{pick}</span>
+        {odds && (
+          <span className="text-xs tabular-nums text-muted-foreground">
+            ({odds > 0 ? '+' : ''}{odds})
+          </span>
+        )}
+      </div>
+      <div className="mt-1 flex items-center gap-2">
+        <span className={cn('text-sm font-semibold tabular-nums', confTone)}>
+          {pct(prob)}
+        </span>
         <ProbHistogram prob={prob} low={probLow} high={probHigh} halfWidth={ciHw} />
-        {edge && parseFloat(edge) > 0 && <span className="pick-edge positive">+{edge}%</span>}
       </div>
     </div>
   )
 }
 
-// Engine best_pick → EdgeCallout shape. engine.nba_picks already emits
-// the full display label in pick.pick for every Q1 market type
-// ("MIA Q1 ML", "LAL -3.5 Q1", "Over 54.5 Q1"), so we pass it through.
+
+function SeasonContextBanner({ ctx }) {
+  const isPlayoffs = ctx.phase === 'playoffs'
+  return (
+    <div className={cn(
+      'rounded-md border px-4 py-2 text-center text-sm font-semibold',
+      isPlayoffs
+        ? 'border-positive/40 bg-positive/10 text-positive'
+        : 'border-primary/40 bg-primary/10 text-primary',
+    )}>
+      {isPlayoffs ? 'PLAYOFF GAME' : 'LATE SEASON · Playoff Race'}
+      {' — '}Model adjusts for higher intensity
+    </div>
+  )
+}
+
+
 function edgeFromBackendPick(pick) {
   if (!pick) return null
   return {

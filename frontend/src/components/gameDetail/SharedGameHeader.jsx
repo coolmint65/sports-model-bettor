@@ -58,9 +58,9 @@ export default function SharedGameHeader({ game, onBack, matchupExtras }) {
           </div>
         )}
 
-        <div className="flex items-center gap-4">
+        <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
           <DetailTeam team={away} isLive={isLive} isFinal={isFinal} align="right" />
-          <span className="text-2xl font-bold text-muted-foreground/40">@</span>
+          <span className="text-xl font-bold text-muted-foreground/40 px-1">@</span>
           <DetailTeam team={home} isLive={isLive} isFinal={isFinal} align="left" />
         </div>
 
@@ -108,30 +108,37 @@ export default function SharedGameHeader({ game, onBack, matchupExtras }) {
 
 function DetailTeam({ team, isLive, isFinal, align }) {
   const showScore = isLive || isFinal
+  // Score now sits adjacent to the team identity (logo+name+record)
+  // inside a single bordered tile, instead of pushed out to the
+  // card edge. Tile scales with column width so two teams stay
+  // visually balanced regardless of name length.
   return (
     <div className={cn(
-      'flex flex-1 items-center gap-3 min-w-0',
+      'flex items-center gap-3 rounded-lg border border-border bg-background/40 px-4 py-3 min-w-0',
       align === 'right' && 'flex-row-reverse text-right',
     )}>
       {team.logo && (
         <img
           src={team.logo}
           alt=""
-          className="h-12 w-12 flex-shrink-0 object-contain"
+          className="h-10 w-10 flex-shrink-0 object-contain"
         />
       )}
-      <div className="min-w-0">
-        <div className="text-base font-bold text-foreground truncate">
+      <div className="min-w-0 flex-1">
+        <div className={cn(
+          'text-sm font-bold truncate',
+          showScore && team.winner ? 'text-foreground' :
+          showScore ? 'text-muted-foreground' : 'text-foreground',
+        )}>
           {team.name}
         </div>
-        <div className="text-xs text-muted-foreground tabular-nums">
+        <div className="text-[11px] text-muted-foreground tabular-nums">
           {team.record}
         </div>
       </div>
       {showScore && (
         <div className={cn(
-          'text-3xl tabular-nums ml-auto',
-          align === 'right' && 'mr-auto ml-0',
+          'text-2xl tabular-nums flex-shrink-0',
           team.winner ? 'font-bold text-foreground' : 'font-semibold text-muted-foreground',
         )}>
           {team.score}

@@ -119,8 +119,9 @@ function SidebarImpl({ sports, selected, onSelect, gameCounts = {} }) {
       >
         <div className="flex items-center justify-between px-5 pt-6 pb-4 border-b border-border">
           <div>
-            <div className="text-base font-semibold text-foreground tracking-tight">
-              Sportsbook Edge
+            <div className="flex items-center gap-1.5 text-base font-semibold tracking-tight">
+              <span aria-hidden="true">🌿</span>
+              <span className="text-primary">PickMint</span>
             </div>
             <div className="text-xs text-muted-foreground mt-0.5">
               Data-driven picks

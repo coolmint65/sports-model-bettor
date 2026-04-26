@@ -31,11 +31,22 @@
   --slate-950: #0d1117;
   --slate-1000: #0a0e17;
 
-  /* Blue (brand + signal) */
+  /* Blue (signal — secondary accent for non-brand contexts) */
   --blue-300: #60a5fa;
   --blue-400: #3b82f6;
   --blue-500: #2563eb;
   --blue-900: #1e3a5f;
+
+  /* Mint (PickMint brand). Distinct from --green-* (positive/win)
+     so brand chrome doesn't look like every win indicator. Teal-leaning
+     so it reads as "fresh / sharp" rather than alert-green. */
+  --mint-100: #ccfbf1;
+  --mint-200: #99f6e4;
+  --mint-300: #5eead4;
+  --mint-400: #2dd4bf;
+  --mint-500: #14b8a6;
+  --mint-600: #0d9488;
+  --mint-900: #042f2e;
 
   /* Green (win / positive / over) */
   --green-300: #34d399;
@@ -71,9 +82,9 @@
   --color-text-faint:      var(--slate-500);
 
   /* ── Semantic accents ── */
-  --color-brand:           var(--blue-400);
-  --color-brand-hover:     var(--blue-300);
-  --color-brand-bg:        var(--blue-900);
+  --color-brand:           var(--mint-400);
+  --color-brand-hover:     var(--mint-300);
+  --color-brand-bg:        var(--mint-900);
 
   --color-positive:        var(--green-300);
   --color-positive-strong: var(--green-400);
@@ -164,8 +175,8 @@
   --popover:              222 32% 13%;
   --popover-foreground:   210 40% 98%;
 
-  /* Brand / interactive */
-  --primary:              217 91% 60%;   /* mirrors --blue-400 */
+  /* Brand / interactive — PickMint mint/teal */
+  --primary:              172 66% 50%;   /* mirrors --mint-400 */
   --primary-foreground:   222 47% 6%;
   --secondary:            217 33% 17%;   /* mirrors --slate-700 */
   --secondary-foreground: 210 40% 98%;
@@ -182,8 +193,8 @@
   --destructive:          0 72% 51%;     /* mirrors --red-400 */
   --destructive-foreground: 210 40% 98%;
 
-  /* Borders + inputs + focus ring */
+  /* Borders + inputs + focus ring (ring follows brand) */
   --border:               217 33% 17%;
   --input:                217 33% 17%;
-  --ring:                 217 91% 60%;
+  --ring:                 172 66% 50%;
 }

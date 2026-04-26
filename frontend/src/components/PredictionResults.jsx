@@ -4,69 +4,51 @@ import UnderdogNote from './gameDetail/UnderdogNote'
 import WhyThisPick from './gameDetail/WhyThisPick'
 import WinProbBar from './primitives/WinProbBar'
 import StatRow from './primitives/StatRow'
+import SectionCard from './primitives/SectionCard'
+import ScoreDisplay from './primitives/ScoreDisplay'
+import { ProbRow, ProbRowHeader, ProbBox } from './primitives/ProbBar'
+import { KeyStatsGrid, KeyStat } from './primitives/KeyStatsGrid'
+import { cn } from '../lib/utils'
 
+/**
+ * PredictionResults — main column of the MLB GameDetail page.
+ *
+ * Phase 2-cleanup restyle: every section now composes Tailwind-tokened
+ * primitives (SectionCard, ScoreDisplay, ProbRow, ProbBox, KeyStat,
+ * StatRow) instead of legacy CSS classes. Result-cards, ou-rows,
+ * nrfi-displays, key-stats grids — all gone.
+ */
 export default function PredictionResults({ data, odds }) {
   const d = data
   const home = d.home
   const away = d.away
   const es = d.expected_score
   const wp = d.win_prob
-
   const homeWins = es.home > es.away
   const pct = n => `${(n * 100).toFixed(1)}%`
 
-  // Pull the EdgeCallout pick directly from d.best_pick (produced by
-  // engine.picks.get_best_pick()). This is the SAME pick the Scoreboard
-  // best-bet badge and the POTD selector use, so the three surfaces can
-  // no longer drift.
   const bestEdge = getBestEdge(d)
 
   return (
-    <div className="results">
-      {/* Season Context Banner - parity with NHL. Renders when the
-          prediction payload includes season_context (late-season,
-          playoff race, etc). Gated on availability so MLB data without
-          this key just skips the banner. */}
+    <div className="space-y-4">
+      {/* Season Context Banner */}
       {d.season_context && d.season_context.implications && (
-        <div style={{
-          background: d.season_context.phase === 'playoffs' ? '#1e3a2f' : '#1e2a3f',
-          border: `1px solid ${d.season_context.phase === 'playoffs' ? '#34d399' : '#60a5fa'}`,
-          borderRadius: 8, padding: '8px 16px', marginBottom: 12,
-          fontSize: '0.8rem', fontWeight: 600,
-          color: d.season_context.phase === 'playoffs' ? '#34d399' : '#60a5fa',
-          textAlign: 'center',
-        }}>
-          {d.season_context.phase === 'playoffs' ? 'PLAYOFF GAME' : 'LATE SEASON - Playoff Race'}
-          {' '}- Model adjusts for higher intensity
-        </div>
+        <SeasonContextBanner ctx={d.season_context} />
       )}
 
-      {/* ── Top Card: Score + Win Prob + Edge ── */}
-      <div className="result-card">
-        <h2>Projected Outcome</h2>
-        <div className="score-display">
-          <div className="score-team">
-            <div className="name">{home.name}</div>
-            <div className="record">{home.record}</div>
-            <div className={`score ${homeWins ? 'winner' : ''}`}>
-              {Math.round(es.home)}
-            </div>
-          </div>
-          <div className="score-vs">-</div>
-          <div className="score-team">
-            <div className="name">{away.name}</div>
-            <div className="record">{away.record}</div>
-            <div className={`score ${!homeWins ? 'winner' : ''}`}>
-              {Math.round(es.away)}
-            </div>
-          </div>
+      {/* Projected Outcome */}
+      <SectionCard title="Projected Outcome">
+        <ScoreDisplay
+          home={home}
+          away={away}
+          homeScore={Math.round(es.home)}
+          awayScore={Math.round(es.away)}
+          homeWins={homeWins}
+        />
+        <div className="mt-4">
+          <WinProbBar wp={wp} home={home} away={away} variant="detail" />
         </div>
-
-        {/* Win Prob Bar inline */}
-        <WinProbBar wp={wp} home={home} away={away} variant="detail" />
-
-        {/* Key numbers */}
-        <div className="key-stats">
+        <div className="mt-4 space-y-2">
           <StatRow label="Total" value={d.total.toFixed(1)} />
           <StatRow
             label="Spread"
@@ -80,490 +62,471 @@ export default function PredictionResults({ data, odds }) {
             />
           )}
         </div>
-
-        {/* Edge vs Vegas callout */}
-        <EdgeCallout edge={bestEdge} />
-        <UnderdogNote pick={d.best_pick} wp={wp} home={home} away={away} />
-      </div>
+        <div className="mt-4 space-y-2">
+          <EdgeCallout edge={bestEdge} />
+          <UnderdogNote pick={d.best_pick} wp={wp} home={home} away={away} />
+        </div>
+      </SectionCard>
 
       <WhyThisPick pred={d} pick={d.best_pick} home={home} away={away} />
 
-      {/* ── Pitching Matchup ── */}
+      {/* Pitching Matchup */}
       {(home.pitcher || away.pitcher) && (
-        <div className="result-card">
-          <h2>Starting Pitchers</h2>
-          <div className="pitcher-comparison">
+        <SectionCard title="Starting Pitchers">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {[
               { label: home.abbreviation, p: home.pitcher },
               { label: away.abbreviation, p: away.pitcher },
             ].map(({ label, p }) => p && (
-              <div key={label} className="pitcher-detail">
-                <div className="pitcher-header">
-                  <span className="pitcher-team">{label}</span>
-                  <span className="pitcher-name-lg">{p.name}</span>
-                  {p.throws && <span className="pitcher-hand">({p.throws}HP)</span>}
-                </div>
-                {p.era != null && (
-                  <div className="pitcher-stats-grid">
-                    <div className="pstat"><span className="pstat-val">{p.record || '-'}</span><span className="pstat-label">W-L</span></div>
-                    <div className="pstat"><span className="pstat-val">{p.era?.toFixed(2) || '-'}</span><span className="pstat-label">ERA</span></div>
-                    <div className="pstat"><span className="pstat-val">{p.fip?.toFixed(2) || '-'}</span><span className="pstat-label">FIP</span></div>
-                    <div className="pstat"><span className="pstat-val">{p.whip?.toFixed(2) || '-'}</span><span className="pstat-label">WHIP</span></div>
-                    <div className="pstat"><span className="pstat-val">{p.k_per_9?.toFixed(1) || '-'}</span><span className="pstat-label">K/9</span></div>
-                    <div className="pstat"><span className="pstat-val">{p.innings?.toFixed(1) || '-'}</span><span className="pstat-label">IP</span></div>
-                  </div>
-                )}
-              </div>
+              <PitcherCard key={label} label={label} pitcher={p} />
             ))}
           </div>
-        </div>
+        </SectionCard>
       )}
 
-      {/* ── Confirmed Lineups ── */}
+      {/* Confirmed Lineups */}
       {d.lineups && (d.lineups.home?.length > 0 || d.lineups.away?.length > 0) && (
-        <div className="result-card">
-          <h2>Confirmed Lineups</h2>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
+        <SectionCard
+          title="Confirmed Lineups"
+          subtitle="Lineups post ~2 hours before first pitch."
+        >
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <LineupColumn abbr={home.abbreviation} lineup={d.lineups.home} />
             <LineupColumn abbr={away.abbreviation} lineup={d.lineups.away} />
           </div>
-          <p style={{fontSize:'0.72rem',color:'#64748b',marginTop:8,textAlign:'center'}}>
-            Lineups post ~2 hours before first pitch. Blank teams haven't posted yet.
-          </p>
-        </div>
+        </SectionCard>
       )}
 
-      {/* ── Weather (non-domed venues) ── */}
+      {/* Weather */}
       {d.weather && (d.weather.temp_f != null || d.weather.wind_mph != null) && (
-        <div className="result-card">
-          <h2>Weather</h2>
-          <div style={{display:'flex',gap:24,flexWrap:'wrap',alignItems:'center'}}>
+        <SectionCard
+          title="Weather"
+          rightSlot={
+            <span className="text-[11px] text-muted-foreground">
+              {d.weather.applied ? 'Factor active' : 'Factor gated off'}
+            </span>
+          }
+        >
+          <KeyStatsGrid cols="auto">
             {d.weather.temp_f != null && (
-              <div>
-                <div style={{fontSize:'0.72rem',color:'#64748b',textTransform:'uppercase'}}>Temp</div>
-                <div style={{fontSize:'1.15rem',fontWeight:700,color:'#e2e8f0'}}>{Math.round(d.weather.temp_f)}&deg;F</div>
-              </div>
+              <KeyStat label="Temp" value={`${Math.round(d.weather.temp_f)}°F`} />
             )}
-            {(() => {
-              // wind_mph can come in as a number or as a string like
-              // "SW 8 mph" or "Calm" from the DB. Parse out the first
-              // numeric chunk when present; otherwise render the raw
-              // string so we never display NaN.
-              const w = d.weather.wind_mph
-              if (w == null) return null
-              if (typeof w === 'number' && isFinite(w)) {
-                return (
-                  <div>
-                    <div style={{fontSize:'0.72rem',color:'#64748b',textTransform:'uppercase'}}>Wind</div>
-                    <div style={{fontSize:'1.15rem',fontWeight:700,color:'#e2e8f0'}}>{Math.round(w)} mph</div>
-                  </div>
-                )
-              }
-              const s = String(w).trim()
-              if (!s || s.toLowerCase() === 'nan') return null
-              const numMatch = s.match(/(-?\d+(?:\.\d+)?)/)
-              if (numMatch) {
-                // Keep the direction prefix (e.g. "SW 8 mph") but show rounded value
-                const dir = s.slice(0, numMatch.index).trim()
-                return (
-                  <div>
-                    <div style={{fontSize:'0.72rem',color:'#64748b',textTransform:'uppercase'}}>Wind</div>
-                    <div style={{fontSize:'1.15rem',fontWeight:700,color:'#e2e8f0'}}>
-                      {dir ? `${dir} ` : ''}{Math.round(parseFloat(numMatch[1]))} mph
-                    </div>
-                  </div>
-                )
-              }
-              return (
-                <div>
-                  <div style={{fontSize:'0.72rem',color:'#64748b',textTransform:'uppercase'}}>Wind</div>
-                  <div style={{fontSize:'1.15rem',fontWeight:700,color:'#e2e8f0'}}>{s}</div>
-                </div>
-              )
-            })()}
+            <WindStat wind={d.weather.wind_mph} />
             {d.weather.adjustment != null && d.weather.adjustment !== 1 && (
-              <div>
-                <div style={{fontSize:'0.72rem',color:'#64748b',textTransform:'uppercase'}}>Run Impact</div>
-                <div style={{
-                  fontSize:'1.15rem', fontWeight:700,
-                  color: d.weather.adjustment > 1.02 ? '#34d399' : d.weather.adjustment < 0.98 ? '#ef4444' : '#e2e8f0',
-                }}>
-                  {d.weather.adjustment > 1 ? '+' : ''}{((d.weather.adjustment - 1) * 100).toFixed(1)}%
-                </div>
-              </div>
+              <KeyStat
+                label="Run impact"
+                value={`${d.weather.adjustment > 1 ? '+' : ''}${((d.weather.adjustment - 1) * 100).toFixed(1)}%`}
+                valueClassName={
+                  d.weather.adjustment > 1.02 ? 'positive' :
+                  d.weather.adjustment < 0.98 ? 'negative' : ''
+                }
+              />
             )}
-            <div style={{flex:1,textAlign:'right',fontSize:'0.72rem',color:'#64748b'}}>
-              {d.weather.applied ? 'Weather factor active' : 'Weather data fetched; factor currently gated off'}
-            </div>
-          </div>
-        </div>
+          </KeyStatsGrid>
+        </SectionCard>
       )}
 
-      {/* ── HP Umpire tendency ── */}
-      {/* Factor is the all-time rollup from `umpires`, clamped ±5%. Name
-          is the MLB Stats API HP ump pulled pre-game. Factor > 1.0 means
-          this ump's games historically score above league average (hitter
-          friendly / big zone); < 1.0 means pitcher-friendly. The GBM
-          model uses a separate point-in-time (prior-season) lookup that
-          isn't clamped -- display here is the legacy factor-path value
-          so bettors see a stable career tendency. */}
+      {/* HP Umpire */}
       {d.umpire && d.umpire.name && (
-        <div className="result-card">
-          <h2>HP Umpire</h2>
-          <div style={{display:'flex',gap:24,flexWrap:'wrap',alignItems:'center'}}>
-            <div>
-              <div style={{fontSize:'0.72rem',color:'#64748b',textTransform:'uppercase'}}>Umpire</div>
-              <div style={{fontSize:'1.15rem',fontWeight:700,color:'#e2e8f0'}}>{d.umpire.name}</div>
-            </div>
-            {d.umpire.factor != null && (
-              <div>
-                <div style={{fontSize:'0.72rem',color:'#64748b',textTransform:'uppercase'}}>Run Factor</div>
-                <div style={{
-                  fontSize:'1.15rem', fontWeight:700,
-                  color: d.umpire.factor > 1.01 ? '#34d399' : d.umpire.factor < 0.99 ? '#ef4444' : '#e2e8f0',
-                }}>
-                  {d.umpire.factor > 1 ? '+' : ''}{((d.umpire.factor - 1) * 100).toFixed(1)}%
-                </div>
-              </div>
-            )}
-            <div style={{flex:1,textAlign:'right',fontSize:'0.72rem',color:'#64748b'}}>
+        <SectionCard
+          title="HP Umpire"
+          rightSlot={
+            <span className="text-[11px] text-muted-foreground">
               {d.umpire.factor != null && Math.abs(d.umpire.factor - 1) > 1e-4
-                ? 'Lean: ' + (d.umpire.factor > 1 ? 'hitter-friendly' : 'pitcher-friendly')
-                : 'No historical lean (or new umpire)'}
-            </div>
-          </div>
-        </div>
+                ? d.umpire.factor > 1 ? 'Lean: hitter-friendly' : 'Lean: pitcher-friendly'
+                : 'No historical lean'}
+            </span>
+          }
+        >
+          <KeyStatsGrid cols="auto">
+            <KeyStat label="Umpire" value={d.umpire.name} />
+            {d.umpire.factor != null && (
+              <KeyStat
+                label="Run factor"
+                value={`${d.umpire.factor > 1 ? '+' : ''}${((d.umpire.factor - 1) * 100).toFixed(1)}%`}
+                valueClassName={
+                  d.umpire.factor > 1.01 ? 'positive' :
+                  d.umpire.factor < 0.99 ? 'negative' : ''
+                }
+              />
+            )}
+          </KeyStatsGrid>
+        </SectionCard>
       )}
 
-      {/* ── Betting Lines ── */}
-      <div className="result-card">
-        <h2>Betting Lines</h2>
-
-        {/* O/U */}
+      {/* Betting Lines */}
+      <SectionCard title="Betting Lines">
         {d.over_under && Object.keys(d.over_under).length > 0 && (
-          <>
-            <h3>Over / Under</h3>
+          <div>
+            <SectionLabel>Over / Under</SectionLabel>
+            <ProbRowHeader leftLabel="Over" rightLabel="Under" />
             {Object.entries(d.over_under).map(([line, probs]) => (
-              <div key={line} className="ou-row">
-                <span className="ou-line">{line}</span>
-                <span className={`ou-prob ${probs.over > 0.55 ? 'over' : ''}`}>{pct(probs.over)}</span>
-                <span className={`ou-prob ${probs.under > 0.55 ? 'under' : ''}`}>{pct(probs.under)}</span>
-              </div>
+              <ProbRow key={line} line={line} leftProb={probs.over} rightProb={probs.under} />
             ))}
-          </>
+          </div>
         )}
 
-        {/* Run Line / Spreads */}
         {d.run_line && (
-          <>
-            <h3 style={{marginTop: 20}}>
-              Run Line
-              {d.run_line.model_spread != null && (
-                <span style={{fontWeight: 400, color: '#64748b', fontSize: '0.7rem', marginLeft: 8}}>
-                  Model spread: {home.abbreviation} {d.run_line.model_spread > 0 ? '-' : '+'}{Math.abs(d.run_line.model_spread).toFixed(1)}
+          <div className="mt-5">
+            <SectionLabel
+              right={d.run_line.model_spread != null && (
+                <span className="text-[11px] text-muted-foreground tabular-nums">
+                  Model spread: {home.abbreviation}{' '}
+                  {d.run_line.model_spread > 0 ? '-' : '+'}{Math.abs(d.run_line.model_spread).toFixed(1)}
                 </span>
               )}
-            </h3>
-            {d.run_line.spreads && Object.entries(d.run_line.spreads).map(([spread, probs]) => {
-              const s = parseFloat(spread)
-              const homeLabel = s > 0
-                ? `${home.abbreviation} -${s.toFixed(1)}`
-                : `${home.abbreviation} +${Math.abs(s).toFixed(1)}`
-              const awayLabel = s > 0
-                ? `${away.abbreviation} +${s.toFixed(1)}`
-                : `${away.abbreviation} -${Math.abs(s).toFixed(1)}`
-              return (
-                <div key={spread} className="ou-row">
-                  <span className="ou-line">{homeLabel}</span>
-                  <span className={`ou-prob ${probs.home_cover > 0.55 ? 'over' : ''}`}>{pct(probs.home_cover)}</span>
-                  <span className={`ou-prob ${probs.away_cover > 0.55 ? 'over' : ''}`}>{pct(probs.away_cover)}</span>
-                </div>
-              )
-            })}
-            {!d.run_line.spreads && (
+            >
+              Run Line
+            </SectionLabel>
+            <ProbRowHeader leftLabel={home.abbreviation} rightLabel={away.abbreviation} />
+            {d.run_line.spreads ? (
+              Object.entries(d.run_line.spreads).map(([spread, probs]) => {
+                const s = parseFloat(spread)
+                const homeLabel = s > 0
+                  ? `${home.abbreviation} -${s.toFixed(1)}`
+                  : `${home.abbreviation} +${Math.abs(s).toFixed(1)}`
+                return (
+                  <ProbRow key={spread} line={homeLabel.split(' ').slice(-1)[0]}
+                    leftProb={probs.home_cover} rightProb={probs.away_cover} />
+                )
+              })
+            ) : (
               <>
-                <div className="ou-row">
-                  <span className="ou-line">{home.abbreviation} -1.5</span>
-                  <span className={`ou-prob ${d.run_line.home_minus_1_5 > 0.50 ? 'over' : ''}`}>{pct(d.run_line.home_minus_1_5)}</span>
-                  <span className="ou-prob">{pct(1 - d.run_line.home_minus_1_5)}</span>
-                </div>
-                <div className="ou-row">
-                  <span className="ou-line">{away.abbreviation} +1.5</span>
-                  <span className={`ou-prob ${d.run_line.away_plus_1_5 > 0.50 ? 'over' : ''}`}>{pct(d.run_line.away_plus_1_5)}</span>
-                  <span className="ou-prob">{pct(1 - d.run_line.away_plus_1_5)}</span>
-                </div>
+                <ProbRow line="-1.5"
+                  leftProb={d.run_line.home_minus_1_5}
+                  rightProb={1 - d.run_line.home_minus_1_5} />
+                <ProbRow line="+1.5"
+                  leftProb={d.run_line.away_plus_1_5}
+                  rightProb={1 - d.run_line.away_plus_1_5} />
               </>
             )}
-          </>
+          </div>
         )}
 
-        {/* F5 */}
         {d.f5 && (
-          <>
-            <h3 style={{marginTop: 20}}>First 5 Innings</h3>
-            <div className="stat-row">
-              <span className="stat-label">F5 Total</span>
-              <span className="stat-value">{d.f5.total}</span>
+          <div className="mt-5">
+            <SectionLabel>First 5 Innings</SectionLabel>
+            <div className="space-y-2">
+              <StatRow label="F5 Total" value={d.f5.total} />
+              <StatRow
+                label="F5 Winner"
+                value={`${d.f5.win_prob.home > d.f5.win_prob.away ? home.abbreviation : away.abbreviation} ${pct(Math.max(d.f5.win_prob.home, d.f5.win_prob.away))}`}
+              />
             </div>
-            <div className="stat-row">
-              <span className="stat-label">F5 Winner</span>
-              <span className="stat-value">
-                {d.f5.win_prob.home > d.f5.win_prob.away ? home.abbreviation : away.abbreviation}{' '}
-                {pct(Math.max(d.f5.win_prob.home, d.f5.win_prob.away))}
-              </span>
-            </div>
-          </>
+          </div>
         )}
-      </div>
+      </SectionCard>
 
-      {/* ── First Inning / NRFI ── */}
+      {/* First Inning / NRFI */}
       {d.first_inning && (
-        <div className="result-card">
-          <h2>First Inning</h2>
-          <div className="nrfi-display">
-            <div className={`nrfi-box ${d.first_inning.nrfi > 0.55 ? 'favored' : ''}`}>
-              <div className="nrfi-label">NRFI</div>
-              <div className="nrfi-value">{pct(d.first_inning.nrfi)}</div>
-              <div className="nrfi-sub">No Run First Inning</div>
-            </div>
-            <div className={`nrfi-box yrfi ${d.first_inning.yrfi > 0.55 ? 'favored' : ''}`}>
-              <div className="nrfi-label">YRFI</div>
-              <div className="nrfi-value">{pct(d.first_inning.yrfi)}</div>
-              <div className="nrfi-sub">Yes Run First Inning</div>
-            </div>
+        <SectionCard title="First Inning">
+          <div className="flex gap-3">
+            <ProbBox
+              label="NRFI"
+              value={pct(d.first_inning.nrfi)}
+              sub="No Run First Inning"
+              favored={d.first_inning.nrfi > 0.55}
+            />
+            <ProbBox
+              label="YRFI"
+              value={pct(d.first_inning.yrfi)}
+              sub="Yes Run First Inning"
+              favored={d.first_inning.yrfi > 0.55}
+            />
           </div>
-
-          <div className="stat-row">
-            <span className="stat-label">{away.abbreviation} scores in 1st</span>
-            <span className="stat-value">{pct(d.first_inning.away_scores_1st)}</span>
+          <div className="mt-3 space-y-2">
+            <StatRow label={`${away.abbreviation} scores in 1st`} value={pct(d.first_inning.away_scores_1st)} />
+            <StatRow label={`${home.abbreviation} scores in 1st`} value={pct(d.first_inning.home_scores_1st)} />
           </div>
-          <div className="stat-row">
-            <span className="stat-label">{home.abbreviation} scores in 1st</span>
-            <span className="stat-value">{pct(d.first_inning.home_scores_1st)}</span>
-          </div>
-        </div>
+        </SectionCard>
       )}
 
-      {/* ── H2H History ── */}
+      {/* H2H */}
       {d.h2h_history && d.h2h_history.games > 0 && (
-        <div className="result-card">
-          <h2>Head to Head ({d.h2h_history.seasons_covered || 3}yr)</h2>
-          <div className="key-stats">
-            <div className="key-stat">
-              <span className="key-value">{d.h2h_history.a_wins}-{d.h2h_history.b_wins}</span>
-              <span className="key-label">{home.abbreviation} Record</span>
-            </div>
-            <div className="key-stat">
-              <span className="key-value">{d.h2h_history.a_runs_pg}</span>
-              <span className="key-label">{home.abbreviation} R/G</span>
-            </div>
-            <div className="key-stat">
-              <span className="key-value">{d.h2h_history.b_runs_pg}</span>
-              <span className="key-label">{away.abbreviation} R/G</span>
-            </div>
-            <div className="key-stat">
-              <span className="key-value">{d.h2h_history.games}</span>
-              <span className="key-label">Games</span>
-            </div>
-          </div>
+        <SectionCard title={`Head to Head (${d.h2h_history.seasons_covered || 3}yr)`}>
+          <KeyStatsGrid cols={4}>
+            <KeyStat label={`${home.abbreviation} Record`} value={`${d.h2h_history.a_wins}-${d.h2h_history.b_wins}`} />
+            <KeyStat label={`${home.abbreviation} R/G`} value={d.h2h_history.a_runs_pg} />
+            <KeyStat label={`${away.abbreviation} R/G`} value={d.h2h_history.b_runs_pg} />
+            <KeyStat label="Games" value={d.h2h_history.games} />
+          </KeyStatsGrid>
           {d.h2h_history.recent && d.h2h_history.recent.length > 0 && (
-            <div style={{marginTop: 12}}>
-              <h3>Recent Meetings</h3>
-              {d.h2h_history.recent.slice(0, 5).map((g, i) => (
-                <div key={i} className="stat-row">
-                  <span className="stat-label">{g.date}</span>
-                  <span className={`stat-value ${g.a_won ? 'positive' : 'negative'}`}>
-                    {home.abbreviation} {g.a_score} - {g.b_score} {away.abbreviation}
-                  </span>
-                </div>
-              ))}
+            <div className="mt-4">
+              <SectionLabel>Recent Meetings</SectionLabel>
+              <div className="space-y-2">
+                {d.h2h_history.recent.slice(0, 5).map((g, i) => (
+                  <StatRow key={i} label={g.date}
+                    value={`${home.abbreviation} ${g.a_score} - ${g.b_score} ${away.abbreviation}`}
+                    valueClassName={g.a_won ? 'positive' : 'negative'}
+                  />
+                ))}
+              </div>
             </div>
           )}
-        </div>
+        </SectionCard>
       )}
 
-      {/* ── Injuries - NHL-style two-column layout with quantified impact ── */}
+      {/* Injuries */}
       {d.injuries && (d.injuries.home?.length > 0 || d.injuries.away?.length > 0) && (
-        <div className="result-card">
-          <h2>Injuries</h2>
-
-          {/* Quantified impact summary */}
+        <SectionCard title="Injuries">
           {((d.injuries.home_impact != null && d.injuries.home_impact < 1)
             || (d.injuries.away_impact != null && d.injuries.away_impact < 1)) && (
-            <div style={{
-              textAlign:'center', fontSize:'0.82rem', marginBottom:10,
-              display:'flex', justifyContent:'center', gap:16, flexWrap:'wrap',
-            }}>
+            <div className="flex flex-wrap justify-center gap-4 text-sm mb-3">
               {d.injuries.home_impact != null && d.injuries.home_impact < 1 && (
-                <span style={{color:'#ef4444'}}>
+                <span className="text-negative">
                   {home.abbreviation}: ~{Math.round((1 - d.injuries.home_impact) * 100)}% weaker from injuries
                 </span>
               )}
               {d.injuries.away_impact != null && d.injuries.away_impact < 1 && (
-                <span style={{color:'#ef4444'}}>
+                <span className="text-negative">
                   {away.abbreviation}: ~{Math.round((1 - d.injuries.away_impact) * 100)}% weaker from injuries
                 </span>
               )}
             </div>
           )}
-
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
-            <div>
-              <h3 style={{fontSize:'0.85rem',color:'#94a3b8',marginBottom:8}}>{home.abbreviation}</h3>
-              {d.injuries.home?.length > 0 ? d.injuries.home.map((inj, i) => (
-                <div key={i} style={{fontSize:'0.8rem',marginBottom:4,display:'flex',justifyContent:'space-between'}}>
-                  <span>
-                    <span style={{fontWeight:600}}>{inj.name}</span>
-                    {inj.position && <span style={{color:'#64748b',marginLeft:4}}>({inj.position})</span>}
-                  </span>
-                  <span style={{color: inj.status === 'Out' ? '#ef4444' : '#f59e0b',fontSize:'0.75rem'}}>
-                    {inj.status || inj.type || 'Out'}
-                  </span>
-                </div>
-              )) : <span style={{color:'#64748b',fontSize:'0.8rem'}}>No injuries reported</span>}
-            </div>
-            <div>
-              <h3 style={{fontSize:'0.85rem',color:'#94a3b8',marginBottom:8}}>{away.abbreviation}</h3>
-              {d.injuries.away?.length > 0 ? d.injuries.away.map((inj, i) => (
-                <div key={i} style={{fontSize:'0.8rem',marginBottom:4,display:'flex',justifyContent:'space-between'}}>
-                  <span>
-                    <span style={{fontWeight:600}}>{inj.name}</span>
-                    {inj.position && <span style={{color:'#64748b',marginLeft:4}}>({inj.position})</span>}
-                  </span>
-                  <span style={{color: inj.status === 'Out' ? '#ef4444' : '#f59e0b',fontSize:'0.75rem'}}>
-                    {inj.status || inj.type || 'Out'}
-                  </span>
-                </div>
-              )) : <span style={{color:'#64748b',fontSize:'0.8rem'}}>No injuries reported</span>}
-            </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <InjuryColumn abbr={home.abbreviation} injuries={d.injuries.home} />
+            <InjuryColumn abbr={away.abbreviation} injuries={d.injuries.away} />
           </div>
-        </div>
+        </SectionCard>
       )}
 
-      {/* ── Model Signals: factor / MC / GBM breakdown ──
-          Renders the three component models side-by-side with the
-          ensemble blend the picks layer actually uses. Null-safe
-          so pre-flag-flip cached predictions just skip the card. */}
       <ModelSignals pred={d} sport="mlb" home={home} away={away} />
 
-      {/* ── Key Factors - ranked stat comparison matching NHL ── */}
-      {(() => {
-        const hRec = d.home?.record_details || d.home
-        const aRec = d.away?.record_details || d.away
-        // Pull comparative stats that are almost always populated.
-        // Rank is best-of-two here (small universe) but the structure
-        // mirrors the NHL factors table visually.
-        const stats = []
-        const push = (label, hv, av, hvFmt, avFmt, higherBetter=true) => {
-          if (hv == null || av == null) return
-          const hBetter = higherBetter ? hv >= av : hv <= av
-          stats.push({label, hv, av, hvFmt: hvFmt ?? String(hv), avFmt: avFmt ?? String(av), hBetter})
-        }
-        const hF = d.factors || {}
-        const aF = d.factors || {}
-        // Offense
-        if (hF.home_wrc_plus != null || d.home?.wrc_plus != null) {
-          push('wRC+',
-            d.home?.wrc_plus ?? hF.home_wrc_plus,
-            d.away?.wrc_plus ?? hF.away_wrc_plus,
-            null, null, true)
-        }
-        if (d.home?.ops != null || d.away?.ops != null) {
-          push('OPS',
-            d.home?.ops, d.away?.ops,
-            d.home?.ops?.toFixed(3), d.away?.ops?.toFixed(3), true)
-        }
-        // Pitching
-        const hPit = d.home?.pitcher || {}
-        const aPit = d.away?.pitcher || {}
-        if (hPit.era != null && aPit.era != null) {
-          push('SP ERA',
-            hPit.era, aPit.era,
-            hPit.era.toFixed(2), aPit.era.toFixed(2), false)
-        }
-        if (hPit.whip != null && aPit.whip != null) {
-          push('SP WHIP',
-            hPit.whip, aPit.whip,
-            hPit.whip.toFixed(2), aPit.whip.toFixed(2), false)
-        }
-
-        if (stats.length === 0) return null
-        return (
-          <div className="result-card">
-            <h2>Key Factors</h2>
-            <table style={{width:'100%',fontSize:'0.82rem',borderCollapse:'collapse'}}>
-              <thead>
-                <tr style={{color:'#64748b',textAlign:'left',fontSize:'0.72rem',textTransform:'uppercase'}}>
-                  <th style={{padding:'6px 0',fontWeight:600}}></th>
-                  <th style={{padding:'6px 0',fontWeight:600,textAlign:'right'}}>{home.abbreviation}</th>
-                  <th style={{padding:'6px 0',fontWeight:600,textAlign:'right'}}>{away.abbreviation}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {stats.map((s, i) => (
-                  <tr key={i} style={{borderTop:'1px solid #1e293b'}}>
-                    <td style={{padding:'8px 0',color:'#94a3b8',fontWeight:600}}>{s.label}</td>
-                    <td style={{padding:'8px 0',textAlign:'right',fontWeight:600,color: s.hBetter ? '#34d399' : '#cbd5e1'}}>
-                      {s.hvFmt}
-                    </td>
-                    <td style={{padding:'8px 0',textAlign:'right',fontWeight:600,color: !s.hBetter ? '#34d399' : '#cbd5e1'}}>
-                      {s.avFmt}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )
-      })()}
-
+      {/* Key Factors */}
+      <KeyFactorsCard data={d} home={home} away={away} />
     </div>
   )
 }
+
+
+function SeasonContextBanner({ ctx }) {
+  const isPlayoffs = ctx.phase === 'playoffs'
+  return (
+    <div className={cn(
+      'rounded-md border px-4 py-2 text-center text-sm font-semibold',
+      isPlayoffs
+        ? 'border-positive/40 bg-positive/10 text-positive'
+        : 'border-primary/40 bg-primary/10 text-primary',
+    )}>
+      {isPlayoffs ? 'PLAYOFF GAME' : 'LATE SEASON · Playoff Race'}
+      {' — '}Model adjusts for higher intensity
+    </div>
+  )
+}
+
+
+function SectionLabel({ children, right }) {
+  return (
+    <div className="mb-2 flex items-center justify-between">
+      <h4 className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+        {children}
+      </h4>
+      {right && <div>{right}</div>}
+    </div>
+  )
+}
+
+
+function PitcherCard({ label, pitcher: p }) {
+  return (
+    <div className="rounded-md border border-border bg-background/40 px-4 py-3">
+      <div className="flex items-center gap-2">
+        <span className="text-xs font-bold text-muted-foreground tabular-nums">{label}</span>
+        <span className="text-sm font-bold text-foreground">{p.name}</span>
+        {p.throws && (
+          <span className="text-[10px] text-muted-foreground">({p.throws}HP)</span>
+        )}
+      </div>
+      {p.era != null && (
+        <div className="mt-2 grid grid-cols-3 gap-x-3 gap-y-1.5">
+          <PitcherStat label="W-L" value={p.record || '-'} />
+          <PitcherStat label="ERA" value={p.era?.toFixed(2) || '-'} />
+          <PitcherStat label="FIP" value={p.fip?.toFixed(2) || '-'} />
+          <PitcherStat label="WHIP" value={p.whip?.toFixed(2) || '-'} />
+          <PitcherStat label="K/9" value={p.k_per_9?.toFixed(1) || '-'} />
+          <PitcherStat label="IP" value={p.innings?.toFixed(1) || '-'} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+function PitcherStat({ label, value }) {
+  return (
+    <div className="text-center">
+      <div className="text-sm font-bold tabular-nums text-foreground">{value}</div>
+      <div className="text-[9px] uppercase tracking-wider text-muted-foreground">{label}</div>
+    </div>
+  )
+}
+
 
 function LineupColumn({ abbr, lineup }) {
   if (!lineup || lineup.length === 0) {
     return (
       <div>
-        <h3 style={{fontSize:'0.85rem',color:'#94a3b8',marginBottom:8}}>{abbr}</h3>
-        <span style={{color:'#64748b',fontSize:'0.8rem'}}>Lineup not posted yet</span>
+        <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          {abbr}
+        </div>
+        <div className="text-xs text-muted-foreground">Lineup not posted yet</div>
       </div>
     )
   }
   return (
     <div>
-      <h3 style={{fontSize:'0.85rem',color:'#94a3b8',marginBottom:8}}>{abbr}</h3>
-      {lineup.map((b, i) => (
-        <div key={i} style={{
-          fontSize:'0.8rem',
-          marginBottom:4,
-          display:'flex',
-          gap:8,
-          alignItems:'baseline',
-        }}>
-          <span style={{color:'#64748b',fontWeight:600,minWidth:16}}>{i + 1}.</span>
-          <span style={{fontWeight:600,color:'#e2e8f0'}}>{b.name || b.full_name || b.player || '?'}</span>
-          {b.position && (
-            <span style={{color:'#64748b',fontSize:'0.72rem'}}>{b.position}</span>
-          )}
-          {b.bats && (
-            <span style={{color:'#64748b',fontSize:'0.72rem',marginLeft:'auto'}}>{b.bats}</span>
-          )}
-        </div>
-      ))}
+      <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        {abbr}
+      </div>
+      <ol className="space-y-1">
+        {lineup.map((b, i) => (
+          <li key={i} className="flex items-baseline gap-2 text-xs">
+            <span className="w-5 font-semibold tabular-nums text-muted-foreground">{i + 1}.</span>
+            <span className="font-semibold text-foreground">
+              {b.name || b.full_name || b.player || '?'}
+            </span>
+            {b.position && (
+              <span className="text-[10px] text-muted-foreground">{b.position}</span>
+            )}
+            {b.bats && (
+              <span className="ml-auto text-[10px] text-muted-foreground tabular-nums">{b.bats}</span>
+            )}
+          </li>
+        ))}
+      </ol>
     </div>
   )
 }
 
 
-// Build the EdgeCallout payload directly from data.best_pick, which is
-// produced by engine.picks.generate_picks() and engine.picks.get_best_pick()
-// on the backend. This is the SAME pick the Scoreboard best-bet badge and
-// POTD selector use -- no client-side edge/direction-filter logic here.
+function InjuryColumn({ abbr, injuries }) {
+  return (
+    <div>
+      <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        {abbr}
+      </div>
+      {injuries?.length > 0 ? (
+        <ul className="space-y-1.5">
+          {injuries.map((inj, i) => (
+            <li key={i} className="flex items-baseline justify-between gap-2 text-xs">
+              <span>
+                <span className="font-semibold text-foreground">{inj.name}</span>
+                {inj.position && (
+                  <span className="ml-1 text-muted-foreground">({inj.position})</span>
+                )}
+              </span>
+              <span className={cn(
+                'text-[10px] font-semibold uppercase tracking-wider',
+                inj.status === 'Out' ? 'text-negative' : 'text-warning',
+              )}>
+                {inj.status || inj.type || 'Out'}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="text-xs text-muted-foreground">No injuries reported</div>
+      )}
+    </div>
+  )
+}
+
+
+function KeyFactorsCard({ data: d, home, away }) {
+  const stats = []
+  const push = (label, hv, av, hvFmt, avFmt, higherBetter = true) => {
+    if (hv == null || av == null) return
+    const hBetter = higherBetter ? hv >= av : hv <= av
+    stats.push({
+      label, hvFmt: hvFmt ?? String(hv), avFmt: avFmt ?? String(av), hBetter,
+    })
+  }
+  const hF = d.factors || {}
+  if (hF.home_wrc_plus != null || d.home?.wrc_plus != null) {
+    push('wRC+',
+      d.home?.wrc_plus ?? hF.home_wrc_plus,
+      d.away?.wrc_plus ?? hF.away_wrc_plus,
+      null, null, true)
+  }
+  if (d.home?.ops != null || d.away?.ops != null) {
+    push('OPS',
+      d.home?.ops, d.away?.ops,
+      d.home?.ops?.toFixed(3), d.away?.ops?.toFixed(3), true)
+  }
+  const hPit = d.home?.pitcher || {}
+  const aPit = d.away?.pitcher || {}
+  if (hPit.era != null && aPit.era != null) {
+    push('SP ERA', hPit.era, aPit.era, hPit.era.toFixed(2), aPit.era.toFixed(2), false)
+  }
+  if (hPit.whip != null && aPit.whip != null) {
+    push('SP WHIP', hPit.whip, aPit.whip, hPit.whip.toFixed(2), aPit.whip.toFixed(2), false)
+  }
+
+  if (stats.length === 0) return null
+
+  return (
+    <SectionCard title="Key Factors" bodyClassName="px-0 py-0">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-border bg-background/40">
+            <th className="px-5 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"></th>
+            <th className="px-3 py-2.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              {home.abbreviation}
+            </th>
+            <th className="px-3 py-2.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              {away.abbreviation}
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {stats.map((s, i) => (
+            <tr key={i} className="border-b border-border/60 last:border-0 hover:bg-accent/20 transition-colors">
+              <td className="px-5 py-2.5 text-muted-foreground font-semibold">{s.label}</td>
+              <td className={cn(
+                'px-3 py-2.5 text-right font-bold tabular-nums',
+                s.hBetter ? 'text-positive' : 'text-foreground/85',
+              )}>
+                {s.hvFmt}
+              </td>
+              <td className={cn(
+                'px-3 py-2.5 text-right font-bold tabular-nums',
+                !s.hBetter ? 'text-positive' : 'text-foreground/85',
+              )}>
+                {s.avFmt}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </SectionCard>
+  )
+}
+
+
+function WindStat({ wind: w }) {
+  if (w == null) return null
+  if (typeof w === 'number' && isFinite(w)) {
+    return <KeyStat label="Wind" value={`${Math.round(w)} mph`} />
+  }
+  const s = String(w).trim()
+  if (!s || s.toLowerCase() === 'nan') return null
+  const numMatch = s.match(/(-?\d+(?:\.\d+)?)/)
+  if (numMatch) {
+    const dir = s.slice(0, numMatch.index).trim()
+    return (
+      <KeyStat
+        label="Wind"
+        value={`${dir ? `${dir} ` : ''}${Math.round(parseFloat(numMatch[1]))} mph`}
+      />
+    )
+  }
+  return <KeyStat label="Wind" value={s} />
+}
+
+
 function getBestEdge(data) {
   const bp = data?.best_pick
   if (!bp) return null
-  // engine confidence is 'strong' | 'moderate' | 'lean' | 'skip'
   if (bp.confidence === 'skip') return null
   return {
     label: _formatBestPickLabel(bp),
@@ -575,8 +538,6 @@ function getBestEdge(data) {
 
 
 function _formatBestPickLabel(pick) {
-  // For ML we render "{team} ML"; for other markets the engine's pick
-  // string already contains the team + line (e.g. "Over 8.5", "NYM +1.5").
   switch (pick.type) {
     case 'ML':    return `${pick.pick} ML`
     case 'F5 ML': return `${pick.pick} F5 ML`

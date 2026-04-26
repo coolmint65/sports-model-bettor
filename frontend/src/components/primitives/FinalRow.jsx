@@ -32,25 +32,17 @@ export default function FinalRow({ game, onClick, extra }) {
         'focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
       )}
     >
-      <div className="flex items-center gap-3">
+      {/* Fixed grid: each cell has a min-width so 1- vs 3-digit scores
+          and 2- vs 4-char abbrs (LAA / ATH / NYM) don't shift the dash
+          column. Across a row of FinalRows the dash and scores all line
+          up vertically. */}
+      <div className="grid grid-cols-[3rem_1fr_auto_1fr] items-center gap-2">
         <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
           Final
         </span>
-        <div className="flex flex-1 items-center justify-center gap-3 min-w-0">
-          <TeamCell
-            team={away}
-            score={as}
-            winner={!homeWon}
-            align="right"
-          />
-          <span className="text-muted-foreground/60 px-0.5">-</span>
-          <TeamCell
-            team={home}
-            score={hs}
-            winner={homeWon}
-            align="left"
-          />
-        </div>
+        <TeamCell team={away} score={as} winner={!homeWon} align="right" />
+        <span className="text-muted-foreground/60 text-center w-3">-</span>
+        <TeamCell team={home} score={hs} winner={homeWon} align="left" />
       </div>
       {extra && (
         <div className="text-[10px] text-muted-foreground tabular-nums text-center">
@@ -65,30 +57,30 @@ function TeamCell({ team, score, winner, align }) {
   const tone = winner
     ? 'font-bold text-foreground'
     : 'font-semibold text-muted-foreground'
+  // Internal sub-grid locks score / logo / abbr to fixed slots so
+  // names of varying lengths never shift the score column.
+  // Away: [score | logo | abbr]   right-aligned
+  // Home: [logo | abbr | score]   left-aligned
   return (
-    <div
-      className={cn(
-        'flex items-center gap-1.5 min-w-0',
-        align === 'right' && 'justify-end',
-      )}
-    >
+    <div className={cn(
+      'grid items-center gap-1.5 min-w-0',
+      align === 'right'
+        ? 'grid-cols-[1fr_auto_3rem] justify-end'
+        : 'grid-cols-[auto_3rem_1fr] justify-start',
+    )}>
       {align === 'right' && (
-        <span className={cn('text-base tabular-nums min-w-[2ch] text-right', tone)}>
+        <span className={cn('text-base tabular-nums text-right', tone)}>
           {score}
         </span>
       )}
-      {team.logo && (
-        <img
-          src={team.logo}
-          alt=""
-          className="h-5 w-5 flex-shrink-0 object-contain"
-        />
-      )}
-      <span className={cn('text-sm tabular-nums', tone)}>
+      {team.logo
+        ? <img src={team.logo} alt="" className="h-5 w-5 flex-shrink-0 object-contain" />
+        : <span className="h-5 w-5" aria-hidden="true" />}
+      <span className={cn('text-sm tabular-nums', tone, align === 'right' ? 'text-right' : 'text-left')}>
         {team.abbreviation}
       </span>
       {align === 'left' && (
-        <span className={cn('text-base tabular-nums min-w-[2ch]', tone)}>
+        <span className={cn('text-base tabular-nums text-left', tone)}>
           {score}
         </span>
       )}
