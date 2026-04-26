@@ -904,6 +904,41 @@ def compute_all_q1_stats(season: int) -> int:
 # -- Orchestrators ---------------------------------------------------------
 
 
+def _backfill_stale_games(today_yyyymmdd: str, lookback_days: int = 14) -> int:
+    """Refresh rows still status=scheduled/live whose date is in the past.
+    Returns the count of stale dates touched.
+
+    ESPN's scoreboard takes a YYYYMMDD date arg; ``upsert_nba_game`` only
+    overwrites fields the upstream returns, so a refetch that comes back
+    final fills missing scores without trampling other columns.
+    """
+    from engine.nba_db import get_conn
+    conn = get_conn()
+    today_iso = (datetime.strptime(today_yyyymmdd, "%Y%m%d")
+                 .strftime("%Y-%m-%d"))
+    cutoff = (datetime.strptime(today_yyyymmdd, "%Y%m%d")
+              - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+    rows = conn.execute(
+        "SELECT DISTINCT date FROM nba_games "
+        "WHERE status IN ('scheduled', 'live') "
+        "  AND date < ? AND date >= ? "
+        "ORDER BY date",
+        (today_iso, cutoff),
+    ).fetchall()
+    if not rows:
+        return 0
+    dates = [r["date"] if hasattr(r, "keys") else r[0] for r in rows]
+    touched = 0
+    for d in dates:
+        try:
+            yyyymmdd = d.replace("-", "")
+            fetch_scoreboard(yyyymmdd)
+            touched += 1
+        except Exception as e:
+            logger.warning("NBA backfill %s failed: %s", d, e)
+    return touched
+
+
 def sync_nba(full: bool = False) -> None:
     """
     Main sync orchestrator.
@@ -971,6 +1006,16 @@ def sync_nba(full: bool = False) -> None:
         yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
         yesterday_games = fetch_scoreboard(yesterday)
         _progress(f"       {len(yesterday_games)} games yesterday")
+
+        # Backfill any games still status=scheduled/live but in the past.
+        # Quick sync only refetches today + yesterday, so games from 2-7
+        # days ago whose final never landed stay stale forever — surfaces
+        # in series_context as "Game 4 · Tied 1-1" because game_number
+        # counts played games but win tally only counts games with scores.
+        _progress("[3.5] Backfilling stale game rows...")
+        n_stale = _backfill_stale_games(today)
+        if n_stale:
+            _progress(f"       {n_stale} stale rows refreshed")
 
         _progress("[4] Fetching current injury report...")
         fetch_nba_injuries()

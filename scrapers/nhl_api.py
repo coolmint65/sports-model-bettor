@@ -796,6 +796,44 @@ def fetch_period_scores_range(start_date: str, end_date: str) -> int:
 # ── Orchestrators ──────────────────────────────────────────
 
 
+def _backfill_stale_games(today_str: str, lookback_days: int = 14) -> int:
+    """Refresh any rows that are still status=scheduled/live but whose
+    date is in the past. Returns the count of stale rows touched.
+
+    Quick sync only refetches today + yesterday. Anything older that's
+    still pending stays pending forever — until either a full sync runs
+    or we explicitly target it. This pass closes that gap by querying
+    the DB for stuck rows and re-firing the schedule + boxscore fetch
+    for each affected date. ``upsert_nhl_game`` only overwrites fields
+    the upstream actually returns, so a refetch that comes back as
+    status=final with scores cleanly fills the missing data without
+    clobbering anything else."""
+    from engine.nhl_db import get_conn
+    conn = get_conn()
+    cutoff = (datetime.strptime(today_str, "%Y-%m-%d")
+              - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+    rows = conn.execute(
+        "SELECT DISTINCT date FROM nhl_games "
+        "WHERE status IN ('scheduled', 'live') "
+        "  AND date < ? AND date >= ? "
+        "ORDER BY date",
+        (today_str, cutoff),
+    ).fetchall()
+    if not rows:
+        return 0
+    dates = [r["date"] if isinstance(r, dict) or hasattr(r, "keys") else r[0]
+             for r in rows]
+    touched = 0
+    for d in dates:
+        try:
+            fetch_schedule(d, d)
+            fetch_boxscores_for_date(d)
+            touched += 1
+        except Exception as e:
+            logger.warning("NHL backfill %s failed: %s", d, e)
+    return touched
+
+
 def sync_nhl(full: bool = False) -> None:
     """
     Main sync orchestrator.
@@ -854,6 +892,18 @@ def sync_nhl(full: bool = False) -> None:
         _progress("[3] Fetching yesterday's boxscores...")
         yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
         fetch_boxscores_for_date(yesterday)
+
+        # Backfill any games that are still status=scheduled/live in our DB
+        # but whose date is in the past — happens during playoffs when
+        # games are spaced 2-3 days apart and quick sync (today + yesterday
+        # only) never circles back to grab the final score. Without this,
+        # series_context shows e.g. "Game 4 · Tied 1-1" because the game-3
+        # row never finalized (game number = played_games, but win tally
+        # only counts games with a known score).
+        _progress("[3.5] Backfilling stale game rows...")
+        n_stale = _backfill_stale_games(today)
+        if n_stale:
+            _progress(f"       {n_stale} stale rows refreshed")
 
         _progress("[4] Fetching period scores from ESPN...")
         ps_total = 0
