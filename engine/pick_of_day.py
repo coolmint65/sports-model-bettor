@@ -343,34 +343,44 @@ def get_or_create_potd(sport: str, games_with_bets: list[dict],
         selected.get("reasoning"),
     ))
     # Mirror into the per-sport picks table so the pick tracker shows
-    # the POTD alongside the day's other picks. Without this, POTDs
-    # that come from alt-line bet types (which aren't always in the
-    # per-game top-N picks the tracker stores) are invisible — surfaced
-    # as "POTD missing from tracker" by the user. MLB uses ``picks``;
-    # NHL/NBA use ``nhl_picks`` / ``nba_picks``.
+    # the POTD alongside the day's other picks — but ONLY when the
+    # tracker doesn't already represent this bet. Surfaced as
+    # "POTD missing from tracker" by the user when the POTD comes from
+    # an alt-line bet type that wasn't in the top-N per-game picks the
+    # tracker stores (MLB ALT O/U today). NHL/NBA usually have their
+    # main bet (PL / Q1_TOTAL) already in picks under the abbreviated
+    # display label ("COL -1.5") while POTD stores the full team name
+    # ("Colorado Avalanche -1.5") — these aren't dupes, they're the
+    # same bet at the (game_id, bet_type) level. Match on that instead
+    # of pick text to avoid the doubling-up the user reported.
     picks_table = "picks" if sport == "mlb" else f"{sport}_picks"
     pick_text = selected.get("pick_full", selected.get("pick"))
+    game_id = selected.get("game_id")
+    bet_type = selected.get("type")
     try:
-        conn.execute(
-            f"INSERT OR IGNORE INTO {picks_table} ("
-            "  date, game_id, matchup, bet_type, pick,"
-            "  model_prob, edge, odds"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                target_date,
-                selected.get("game_id"),
-                selected.get("matchup"),
-                selected.get("type"),
-                pick_text,
-                selected.get("prob"),
-                selected.get("edge"),
-                selected.get("odds"),
-            ),
-        )
+        existing = conn.execute(
+            f"SELECT id FROM {picks_table} "
+            f"WHERE date=? AND game_id=? AND bet_type=? LIMIT 1",
+            (target_date, game_id, bet_type),
+        ).fetchone()
+        if not existing:
+            conn.execute(
+                f"INSERT INTO {picks_table} ("
+                "  date, game_id, matchup, bet_type, pick,"
+                "  model_prob, edge, odds"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    target_date, game_id,
+                    selected.get("matchup"),
+                    bet_type, pick_text,
+                    selected.get("prob"),
+                    selected.get("edge"),
+                    selected.get("odds"),
+                ),
+            )
     except Exception as e:
         # Don't let a tracker-mirror failure block POTD creation — the
-        # POTD itself is committed above and the tracker can be backfilled
-        # later if the schema diverges.
+        # POTD itself is committed above.
         logger.warning("POTD mirror to %s failed for %s: %s",
                        picks_table, sport, e)
     conn.commit()
