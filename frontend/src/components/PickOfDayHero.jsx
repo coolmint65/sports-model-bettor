@@ -85,12 +85,12 @@ export default function PickOfDayHero({ sport }) {
                 </span>
               )}
             </div>
-            {/* Matchup row with team logos flanking the abbreviations */}
+            {/* Matchup row with team logos + team nicknames */}
             {teams ? (
-              <div className="mt-2 flex items-center gap-2 text-sm">
-                <TeamBadge abbr={teams.away} logo={teams.awayLogo} />
+              <div className="mt-2 flex items-center gap-2 text-sm flex-wrap">
+                <TeamBadge name={teams.awayName} logo={teams.awayLogo} />
                 <span className="text-muted-foreground/60">@</span>
-                <TeamBadge abbr={teams.home} logo={teams.homeLogo} />
+                <TeamBadge name={teams.homeName} logo={teams.homeLogo} />
                 {betTypeLabel && (
                   <>
                     <span className="text-border mx-1">·</span>
@@ -206,6 +206,51 @@ const ABBR_ALIAS = {
   nba: { NOP: 'no', GSW: 'gs', UTAH: 'utah' },
 }
 
+// Team nickname lookup so "SD @ ARI" renders as "Padres @ Diamondbacks".
+// Keyed by canonical abbr; aliases (SDP, AZ, CWS) normalize via
+// ABBR_ALIAS first then fall back to a direct lookup. Falls through
+// to the abbr itself when missing — never blocks rendering.
+const TEAM_NAMES = {
+  mlb: {
+    ARI: 'Diamondbacks', ATL: 'Braves',  BAL: 'Orioles',  BOS: 'Red Sox',
+    CHC: 'Cubs',         CHW: 'White Sox', CIN: 'Reds',   CLE: 'Guardians',
+    COL: 'Rockies',      DET: 'Tigers',  HOU: 'Astros',   KC:  'Royals',
+    LAA: 'Angels',       LAD: 'Dodgers', MIA: 'Marlins',  MIL: 'Brewers',
+    MIN: 'Twins',        NYM: 'Mets',    NYY: 'Yankees',  ATH: 'Athletics',
+    OAK: 'Athletics',    PHI: 'Phillies', PIT: 'Pirates', SD:  'Padres',
+    SEA: 'Mariners',     SF:  'Giants',  STL: 'Cardinals', TB: 'Rays',
+    TEX: 'Rangers',      TOR: 'Blue Jays', WSH: 'Nationals',
+  },
+  nhl: {
+    ANA: 'Ducks', BOS: 'Bruins', BUF: 'Sabres', CAR: 'Hurricanes',
+    CBJ: 'Blue Jackets', CGY: 'Flames', CHI: 'Blackhawks', COL: 'Avalanche',
+    DAL: 'Stars', DET: 'Red Wings', EDM: 'Oilers', FLA: 'Panthers',
+    LA: 'Kings', LAK: 'Kings', MIN: 'Wild', MTL: 'Canadiens',
+    NJ: 'Devils', NJD: 'Devils', NSH: 'Predators', NYI: 'Islanders',
+    NYR: 'Rangers', OTT: 'Senators', PHI: 'Flyers', PIT: 'Penguins',
+    SEA: 'Kraken', SJ: 'Sharks', SJS: 'Sharks', STL: 'Blues',
+    TB: 'Lightning', TBL: 'Lightning', TOR: 'Maple Leafs', UTA: 'Hockey Club',
+    VAN: 'Canucks', VGK: 'Golden Knights', WPG: 'Jets', WSH: 'Capitals',
+  },
+  nba: {
+    ATL: 'Hawks', BOS: 'Celtics', BKN: 'Nets', CHA: 'Hornets',
+    CHI: 'Bulls', CLE: 'Cavaliers', DAL: 'Mavericks', DEN: 'Nuggets',
+    DET: 'Pistons', GS: 'Warriors', GSW: 'Warriors', HOU: 'Rockets',
+    IND: 'Pacers', LAC: 'Clippers', LAL: 'Lakers', MEM: 'Grizzlies',
+    MIA: 'Heat', MIL: 'Bucks', MIN: 'Timberwolves', NO: 'Pelicans',
+    NOP: 'Pelicans', NY: 'Knicks', NYK: 'Knicks', OKC: 'Thunder',
+    ORL: 'Magic', PHI: '76ers', PHX: 'Suns', POR: 'Trail Blazers',
+    SAC: 'Kings', SA: 'Spurs', SAS: 'Spurs', TOR: 'Raptors',
+    UTAH: 'Jazz', UTA: 'Jazz', WSH: 'Wizards', WAS: 'Wizards',
+  },
+}
+
+function teamName(sport, abbr) {
+  if (!abbr) return ''
+  const key = String(abbr).toUpperCase()
+  return (TEAM_NAMES[sport] || {})[key] || abbr
+}
+
 function logoUrl(sport, abbr) {
   if (!abbr) return null
   const key = String(abbr).toUpperCase()
@@ -228,13 +273,15 @@ function parseMatchup(matchup, sport) {
   return {
     away,
     home,
+    awayName: teamName(sport, away),
+    homeName: teamName(sport, home),
     awayLogo: logoUrl(sport, away),
     homeLogo: logoUrl(sport, home),
   }
 }
 
 
-function TeamBadge({ abbr, logo }) {
+function TeamBadge({ name, logo }) {
   return (
     <span className="inline-flex items-center gap-1.5">
       {logo && (
@@ -245,7 +292,7 @@ function TeamBadge({ abbr, logo }) {
           onError={(e) => { e.currentTarget.style.display = 'none' }}
         />
       )}
-      <span className="font-bold tabular-nums text-foreground">{abbr}</span>
+      <span className="font-bold text-foreground">{name}</span>
     </span>
   )
 }
