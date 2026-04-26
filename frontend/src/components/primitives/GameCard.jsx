@@ -127,8 +127,8 @@ function GameCardImpl({
       )}
 
       <div className="flex flex-col gap-1">
-        <TeamRow team={away} isLive={isLive} isFinal={isFinal} />
-        <TeamRow team={home} isLive={isLive} isFinal={isFinal} />
+        <TeamRow team={away} isLive={isLive} isFinal={isFinal} sport={sport} />
+        <TeamRow team={home} isLive={isLive} isFinal={isFinal} sport={sport} />
       </div>
 
       {liveExtras}

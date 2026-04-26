@@ -11,16 +11,18 @@
  */
 
 import { cn } from '../../lib/utils'
+import { resolveTeamLogo } from '../../lib/teamLogo'
 
-export default function TeamRow({ team, isLive, isFinal }) {
+export default function TeamRow({ team, isLive, isFinal, sport }) {
   const showScore = isLive || isFinal
+  const logo = resolveTeamLogo(sport, team.abbreviation, team.logo)
   return (
     <div className="flex items-center gap-2.5 min-w-0">
-      {team.logo && (
+      {logo && (
         <img
-          src={team.logo}
+          src={logo}
           alt=""
-          className="h-7 w-7 flex-shrink-0 object-contain"
+          className="h-8 w-8 flex-shrink-0 rounded-full object-contain bg-foreground/[0.06] ring-1 ring-border p-0.5"
         />
       )}
       <span className="text-sm font-bold text-foreground tabular-nums">

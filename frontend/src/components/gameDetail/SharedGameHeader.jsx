@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import LineMovementBadge from './LineMovementBadge'
+import { resolveTeamLogo } from '../../lib/teamLogo'
 import { cn } from '../../lib/utils'
 
 /**
@@ -17,7 +18,7 @@ import { cn } from '../../lib/utils'
  * rest pills) plug in via the `matchupExtras` slot — see
  * NHLGameDetail / GameDetail / NBAGameDetail wrappers.
  */
-export default function SharedGameHeader({ game, onBack, matchupExtras }) {
+export default function SharedGameHeader({ game, sport, onBack, matchupExtras }) {
   const { home, away, status } = game
   const isLive = status.state === 'in'
   const isFinal = status.state === 'post'
@@ -59,9 +60,9 @@ export default function SharedGameHeader({ game, onBack, matchupExtras }) {
         )}
 
         <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
-          <DetailTeam team={away} isLive={isLive} isFinal={isFinal} align="right" />
+          <DetailTeam team={away} sport={sport} isLive={isLive} isFinal={isFinal} align="right" />
           <span className="text-xl font-bold text-muted-foreground/40 px-1">@</span>
-          <DetailTeam team={home} isLive={isLive} isFinal={isFinal} align="left" />
+          <DetailTeam team={home} sport={sport} isLive={isLive} isFinal={isFinal} align="left" />
         </div>
 
         {matchupExtras}
@@ -106,8 +107,9 @@ export default function SharedGameHeader({ game, onBack, matchupExtras }) {
   )
 }
 
-function DetailTeam({ team, isLive, isFinal, align }) {
+function DetailTeam({ team, sport, isLive, isFinal, align }) {
   const showScore = isLive || isFinal
+  const logo = resolveTeamLogo(sport, team.abbreviation, team.logo)
   // Score now sits adjacent to the team identity (logo+name+record)
   // inside a single bordered tile, instead of pushed out to the
   // card edge. Tile scales with column width so two teams stay
@@ -117,11 +119,11 @@ function DetailTeam({ team, isLive, isFinal, align }) {
       'flex items-center gap-3 rounded-lg border border-border bg-background/40 px-4 py-3 min-w-0',
       align === 'right' && 'flex-row-reverse text-right',
     )}>
-      {team.logo && (
+      {logo && (
         <img
-          src={team.logo}
+          src={logo}
           alt=""
-          className="h-10 w-10 flex-shrink-0 object-contain"
+          className="h-11 w-11 flex-shrink-0 rounded-full object-contain bg-foreground/[0.06] ring-1 ring-border p-1"
         />
       )}
       <div className="min-w-0 flex-1">

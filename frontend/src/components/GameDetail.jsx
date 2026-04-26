@@ -25,6 +25,7 @@ export default function GameDetail({ game, prediction, loading, onBack }) {
   return (
     <GameDetailShell
       game={game}
+      sport="mlb"
       onBack={onBack}
       matchupExtras={matchupExtras}
       loading={loading}

@@ -23,6 +23,7 @@ export default function NBAGameDetail({ game, prediction, loading, onBack }) {
   return (
     <GameDetailShell
       game={game}
+      sport="nba"
       onBack={onBack}
       loading={loading}
       loadingLabel="Running Q1 model…"

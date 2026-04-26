@@ -57,6 +57,7 @@ export default function NHLGameDetail({ game, prediction, loading, onBack }) {
   return (
     <GameDetailShell
       game={game}
+      sport="nhl"
       onBack={onBack}
       matchupExtras={matchupExtras}
       loading={loading}

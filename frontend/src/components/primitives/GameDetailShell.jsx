@@ -14,6 +14,7 @@ import SharedGameHeader from '../gameDetail/SharedGameHeader'
 
 export default function GameDetailShell({
   game,
+  sport,
   onBack,
   matchupExtras,
   loading,
@@ -26,7 +27,7 @@ export default function GameDetailShell({
 }) {
   return (
     <div className="space-y-5 py-4">
-      <SharedGameHeader game={game} onBack={onBack} matchupExtras={matchupExtras} />
+      <SharedGameHeader game={game} sport={sport} onBack={onBack} matchupExtras={matchupExtras} />
 
       {loading && (
         <div className="flex items-center justify-center gap-3 rounded-lg border border-border bg-card py-12 text-sm text-muted-foreground">

@@ -16,6 +16,7 @@
 import { useEffect, useState } from 'react'
 import axios from 'axios'
 import { humanizeBetType } from '../lib/betType'
+import { resolveTeamLogo } from '../lib/teamLogo'
 import { cn } from '../lib/utils'
 
 export default function PickOfDayHero({ sport }) {
@@ -196,16 +197,6 @@ function impliedFromAmerican(odds) {
 }
 
 
-// ESPN's CDN serves logos at a stable per-sport URL pattern keyed by
-// lowercase team abbr. Tracker matchups can use either the canonical
-// abbr ("SD") or the alias ESPN uses on its own pages ("SDP" etc.) —
-// the alias map below normalizes the most common drift cases.
-const ABBR_ALIAS = {
-  mlb: { AZ: 'ari', SDP: 'sd', CWS: 'chw', WAS: 'wsh', TBR: 'tb', KCR: 'kc', SFG: 'sf' },
-  nhl: { LAK: 'la', SJS: 'sj', NJD: 'nj', TBL: 'tb' },
-  nba: { NOP: 'no', GSW: 'gs', UTAH: 'utah' },
-}
-
 // Team nickname lookup so "SD @ ARI" renders as "Padres @ Diamondbacks".
 // Keyed by canonical abbr; aliases (SDP, AZ, CWS) normalize via
 // ABBR_ALIAS first then fall back to a direct lookup. Falls through
@@ -251,37 +242,6 @@ function teamName(sport, abbr) {
   return (TEAM_NAMES[sport] || {})[key] || abbr
 }
 
-// Per-team logo overrides. Use this when ESPN's default logo is hard
-// to read against our dark theme (e.g. Padres brown disappears) or
-// when the user has a specific design preference. Maps sport.abbr →
-// absolute URL. onError fall-through still renders the name when a
-// URL 404s, so a stale override is never a hard failure.
-const LOGO_OVERRIDE = {
-  mlb: {
-    // Throwback yellow swinging friar — 1969-2003 era. Reads cleanly
-    // against the dark surface where the modern brown blends in.
-    SD: 'https://upload.wikimedia.org/wikipedia/en/thumb/2/2b/San_Diego_Padres_1985-2003_logo.svg/1200px-San_Diego_Padres_1985-2003_logo.svg.png',
-    SDP: 'https://upload.wikimedia.org/wikipedia/en/thumb/2/2b/San_Diego_Padres_1985-2003_logo.svg/1200px-San_Diego_Padres_1985-2003_logo.svg.png',
-  },
-  nhl: {},
-  nba: {},
-}
-
-function logoUrl(sport, abbr) {
-  if (!abbr) return null
-  const key = String(abbr).toUpperCase()
-  // Override wins if present.
-  const override = (LOGO_OVERRIDE[sport] || {})[key]
-  if (override) return override
-  const aliasMap = ABBR_ALIAS[sport] || {}
-  const slug = (aliasMap[key] || key.toLowerCase()).toLowerCase()
-  const sportSlug = sport === 'mlb' ? 'mlb'
-                  : sport === 'nhl' ? 'nhl'
-                  : 'nba'
-  return `https://a.espncdn.com/i/teamlogos/${sportSlug}/500/scoreboard/${slug}.png`
-}
-
-
 function parseMatchup(matchup, sport) {
   if (!matchup || typeof matchup !== 'string') return null
   // Common forms: "SD @ ARI", "Boston Red Sox at Baltimore Orioles".
@@ -294,8 +254,8 @@ function parseMatchup(matchup, sport) {
     home,
     awayName: teamName(sport, away),
     homeName: teamName(sport, home),
-    awayLogo: logoUrl(sport, away),
-    homeLogo: logoUrl(sport, home),
+    awayLogo: resolveTeamLogo(sport, away, null),
+    homeLogo: resolveTeamLogo(sport, home, null),
   }
 }
 
@@ -307,7 +267,7 @@ function TeamBadge({ name, logo }) {
         <img
           src={logo}
           alt=""
-          className="h-5 w-5 object-contain"
+          className="h-6 w-6 rounded-full object-contain bg-foreground/[0.06] ring-1 ring-border p-0.5"
           onError={(e) => { e.currentTarget.style.display = 'none' }}
         />
       )}
