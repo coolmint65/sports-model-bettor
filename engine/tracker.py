@@ -333,9 +333,14 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
         SELECT * FROM games WHERE date = ?
     """, (target_date,)).fetchall()
 
-    # If no games in DB, try syncing today's schedule first
-    if not games:
-        logger.info("No games in DB for %s - fetching from MLB API", target_date)
+    # Try to sync today's schedule when the DB is empty OR partial.
+    # Partial-table case happens when a postponement got rescheduled
+    # (so 1 row exists from yesterday's import) but the day's actual
+    # 14-game slate hasn't been ingested yet — without the partial
+    # check, record_picks would only process the lone postponed row.
+    if len(games) < 5:
+        logger.info("Only %d games in DB for %s — fetching MLB API to fill gaps",
+                    len(games), target_date)
         try:
             from scrapers.mlb_stats import fetch_schedule
             fetch_schedule(target_date, target_date)
@@ -345,7 +350,7 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
         except Exception as e:
             logger.warning("Could not fetch today's schedule: %s", e)
 
-    # Still no games? Try ESPN scoreboard as last resort
+    # Still empty? Fall through to ESPN scoreboard as last resort
     if not games:
         try:
             scoreboard = _fetch_espn_scoreboard(target_date)
