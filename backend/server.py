@@ -4234,9 +4234,15 @@ def api_nba_scoreboard(date: str = Query(default="")):
 
 @app.get("/api/nba/standings")
 def api_nba_standings():
-    """Return NBA standings by conference/division from ESPN."""
+    """Return NBA standings by conference/division from ESPN.
+
+    ESPN flattened the legacy site-v2 endpoint ({fullViewLink} only,
+    no children) so we hit the apis/v2 path with level=3 to get the
+    Conference -> Division -> Teams tree the parser expects. Verified
+    2026-04-25 returning 6 divisions x 5 teams across both conferences.
+    """
     try:
-        url = f"{ESPN_BASE}/basketball/nba/standings"
+        url = "https://site.api.espn.com/apis/v2/sports/basketball/nba/standings?level=3"
         data = _fetch_espn_json(url)
         if not data:
             return []
