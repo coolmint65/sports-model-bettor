@@ -75,20 +75,18 @@ function GameCardImpl({
       role="button"
       tabIndex={0}
     >
-      {/* Status badges, top-right, never overlapping the EdgeBadge */}
-      {(isLive || isFinal) && (
-        <div className="absolute top-3 right-3 flex items-center gap-2">
-          {isLive && (
-            <span className="rounded-full bg-negative/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-negative">
-              ● Live
-            </span>
-          )}
-          {isFinal && (
-            <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-              Final
-            </span>
-          )}
-        </div>
+      {/* Top status row — LIVE/FINAL inline so the team-row score on
+          the right never collides with an absolute corner pill. Pre-game
+          renders the EdgeBadge here instead; the slot is single-occupant. */}
+      {isLive && (
+        <span className="inline-flex w-max items-center gap-1 rounded-full bg-negative/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-negative">
+          ● Live
+        </span>
+      )}
+      {isFinal && (
+        <span className="inline-flex w-max items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+          Final
+        </span>
       )}
 
       {isPre && (

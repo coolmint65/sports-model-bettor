@@ -77,28 +77,38 @@ export default function ScoreboardShell({
 
   if (!games || games.length === 0) {
     return (
-      <div className="no-games">
-        <p>{emptyPrimary}</p>
-        <p className="sub">{emptySub}</p>
+      <div className="rounded-lg border border-dashed border-border bg-card/50 px-6 py-10 text-center">
+        <div className="text-sm font-semibold text-foreground">{emptyPrimary}</div>
+        <div className="mt-1 text-xs text-muted-foreground">{emptySub}</div>
       </div>
     )
   }
 
   return (
-    <div className="scoreboard">
-      <h2 className="section-title">
-        {title} ({games.length})
-        {edgeCount > 0 && <span className="edge-count">{edgeCount} {edgeLabel}</span>}
-      </h2>
+    <div className="space-y-3">
+      <header className="flex items-baseline justify-between gap-3 pt-2">
+        <h2 className="text-lg font-semibold tracking-tight text-foreground">
+          {title}
+          <span className="ml-2 text-sm font-normal tabular-nums text-muted-foreground">
+            ({games.length})
+          </span>
+        </h2>
+        {edgeCount > 0 && (
+          <span className="rounded-full bg-positive/15 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-positive">
+            {edgeCount} {edgeLabel}
+          </span>
+        )}
+      </header>
 
       {activeGames.length > 0 && (
         <>
           {finalGames.length > 0 && (
-            <div className="games-section-header">
-              {activeGames.some(g => g.status?.state === 'in') ? 'Live & Upcoming' : 'Upcoming'} ({activeGames.length})
-            </div>
+            <SectionHeader
+              label={activeGames.some(g => g.status?.state === 'in') ? 'Live & Upcoming' : 'Upcoming'}
+              count={activeGames.length}
+            />
           )}
-          <div className="games-feature-grid">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {activeGames.map(game =>
               renderCard({
                 game,
@@ -113,8 +123,8 @@ export default function ScoreboardShell({
 
       {finalGames.length > 0 && (
         <>
-          <div className="games-section-header">Final ({finalGames.length})</div>
-          <div className="games-finals-grid">
+          <SectionHeader label="Final" count={finalGames.length} />
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
             {finalGames.map(game => {
               const props = {
                 game,
@@ -133,10 +143,23 @@ export default function ScoreboardShell({
   )
 }
 
+function SectionHeader({ label, count }) {
+  return (
+    <div className="flex items-center gap-2 pt-2">
+      <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+        {label}
+      </span>
+      <span className="text-[10px] tabular-nums text-muted-foreground/70">
+        ({count})
+      </span>
+      <span className="flex-1 border-t border-border ml-1" aria-hidden="true" />
+    </div>
+  )
+}
+
 function LoadingState({ progress, fallback }) {
   const total = progress?.total || 0
   const rawDone = progress?.done || 0
-  // Backend single-flight keeps done <= total, but clamp defensively.
   const done = total > 0 ? Math.min(rawDone, total) : rawDone
   const pct = total ? Math.min(100, Math.round((done / total) * 100)) : null
   const phase = progress?.phase
@@ -144,12 +167,12 @@ function LoadingState({ progress, fallback }) {
   if (phase === 'predicting' && total > 0) {
     label = `Computing predictions: ${done}/${total} games (${pct}%)`
   } else if (phase === 'building') {
-    label = 'Assembling picks...'
+    label = 'Assembling picks…'
   }
   return (
-    <div className="loading">
-      <div className="spinner" />
-      <p>{label}</p>
+    <div className="flex items-center justify-center gap-3 py-16 text-sm text-muted-foreground">
+      <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
+      {label}
     </div>
   )
 }
