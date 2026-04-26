@@ -69,6 +69,14 @@ echo Settling POTD...
 python -c "from engine.pick_of_day import settle_potd; print(settle_potd('nhl'))" 2>nul
 
 echo.
+echo Ingesting today's player game logs (Phase 2i-i)...
+python -c "from engine.nhl_player_logs import ingest_today; print(ingest_today())" 2>nul
+
+echo.
+echo Settling player props...
+python -c "from engine.player_props_tracker import settle_player_props; print(settle_player_props('nhl'))" 2>nul
+
+echo.
 echo ============================================
 echo   NHL Sync Complete    [%DATE% %TIME%]
 echo ============================================

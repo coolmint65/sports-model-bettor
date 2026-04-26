@@ -310,10 +310,24 @@ def summarize_all_mlb_stats(min_games_per_player: int = 5) -> list[dict]:
         # Batter
         "hr", "h", "tb", "rbi", "r", "sb", "bb_b", "k_b",
     ]
-    out = []
-    for s in stats:
-        out.append(summarize_stat("mlb", s, min_games_per_player))
-    return out
+    return [summarize_stat("mlb", s, min_games_per_player) for s in stats]
+
+
+def summarize_all_nba_stats(min_games_per_player: int = 5) -> list[dict]:
+    """Run the leaderboard on every NBA stat the props pipeline tracks."""
+    stats = ["pts", "reb", "ast", "tpm", "ftm", "to", "stl", "blk"]
+    return [summarize_stat("nba", s, min_games_per_player) for s in stats]
+
+
+def summarize_all_nhl_stats(min_games_per_player: int = 5) -> list[dict]:
+    """Run the leaderboard on every NHL stat the props pipeline tracks.
+    Skater + goalie stats live in the same table — goalies just don't
+    have skater fields populated and vice versa."""
+    stats = [
+        "g", "a", "sog", "hits", "blocks",          # Skater
+        "saves", "shots_against", "ga",             # Goalie
+    ]
+    return [summarize_stat("nhl", s, min_games_per_player) for s in stats]
 
 
 # ── Locked decisions ──────────────────────────────────────────
@@ -335,6 +349,45 @@ def summarize_all_mlb_stats(min_games_per_player: int = 5) -> list[dict]:
 # Decisions locked from pooled MLB fit on 2026-04-26 (n≥3319 per
 # pitcher stat, n=8411 per batter stat). Re-run summarize_all_mlb_stats
 # quarterly and update if the AIC leader changes.
+
+_NBA_STAT_DISTRIBUTIONS: dict[str, dict] = {
+    # Decisions locked from pooled NBA fit on 2026-04-26 (n=3536 per
+    # stat from 167 backfilled games).
+    # Every NBA stat is overdispersed vs Poisson — usage-rate variance
+    # is the dominant noise source. NegBin sweeps almost every stat;
+    # blk is the lone exception where Geometric edges by 2 AIC.
+    "pts":  {"family": "negbin", "dispersion_k": 1.30,
+             "note": "od=6.74; Poisson off by 14k AIC"},
+    "reb":  {"family": "negbin", "dispersion_k": 2.06},
+    "ast":  {"family": "negbin", "dispersion_k": 1.40},
+    "tpm":  {"family": "negbin", "dispersion_k": 1.27},
+    "ftm":  {"family": "negbin", "dispersion_k": 0.62,
+             "note": "heavy overdispersion (od=3.23) -- foul-line games"},
+    "to":   {"family": "negbin", "dispersion_k": 2.09},
+    "stl":  {"family": "negbin", "dispersion_k": 2.77},
+    "blk":  {"family": "geometric",
+             "note": "Geom edges NegBin r=0.97 by 2 AIC, KS=0.0025 either way"},
+}
+
+_NHL_STAT_DISTRIBUTIONS: dict[str, dict] = {
+    # Decisions locked from pooled NHL fit on 2026-04-26 (n=6757 per
+    # skater stat from 191 backfilled games; n=383 per goalie stat).
+    # Skaters: g, a, sog, hits, blocks
+    "g":      {"family": "negbin", "dispersion_k": 1.68},
+    "a":      {"family": "zip",
+               "note": "ZIP edges NegBin r=3.38 by 1.3 AIC; pi=0.218 captures zero-inflation"},
+    "sog":    {"family": "negbin", "dispersion_k": 3.59,
+               "note": "large sample; mild overdispersion (od=1.43)"},
+    "hits":   {"family": "negbin", "dispersion_k": 1.55},
+    "blocks": {"family": "negbin", "dispersion_k": 2.12},
+    # Goalies: saves, shots_against, ga
+    "saves":         {"family": "negbin", "dispersion_k": 12.96,
+                      "note": "high k = near-Poisson but still overdispersed (od=2.44)"},
+    "shots_against": {"family": "negbin", "dispersion_k": 16.36},
+    "ga":            {"family": "poisson",
+                      "note": "under-dispersed (od=0.86); Poisson tighter than NegBin/Geom"},
+}
+
 
 _MLB_STAT_DISTRIBUTIONS: dict[str, dict] = {
     # Pitcher
@@ -366,12 +419,17 @@ def get_distribution(sport: str, stat_key: str) -> dict | None:
     ``{family, dispersion_k?, note?}`` or None when stat isn't known."""
     if sport == "mlb":
         return _MLB_STAT_DISTRIBUTIONS.get(stat_key)
-    # NBA / NHL land with 2h-ii / 2i-ii after their game-log ingest.
+    if sport == "nba":
+        return _NBA_STAT_DISTRIBUTIONS.get(stat_key)
+    if sport == "nhl":
+        return _NHL_STAT_DISTRIBUTIONS.get(stat_key)
     return None
 
 
 __all__ = [
-    "summarize_stat", "summarize_all_mlb_stats",
+    "summarize_stat",
+    "summarize_all_mlb_stats", "summarize_all_nba_stats", "summarize_all_nhl_stats",
     "fit_all", "pull_observations",
-    "get_distribution", "_MLB_STAT_DISTRIBUTIONS",
+    "get_distribution",
+    "_MLB_STAT_DISTRIBUTIONS", "_NBA_STAT_DISTRIBUTIONS", "_NHL_STAT_DISTRIBUTIONS",
 ]

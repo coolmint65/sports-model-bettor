@@ -53,10 +53,37 @@ _MLB_STAT_KEY: dict[str, str] = {
 }
 
 
+_NBA_STAT_KEY: dict[str, str] = {
+    "Player Points":    "pts",
+    "Player Rebounds":  "reb",
+    "Player Assists":   "ast",
+    "Player PRA":       "pra",        # synthesized from pts+reb+ast at lookup
+    "Player 3PM":       "tpm",
+    "Player Steals":    "stl",
+    "Player Blocks":    "blk",
+    "Player Turnovers": "to",
+    "Player FT Made":   "ftm",
+}
+
+_NHL_STAT_KEY: dict[str, str] = {
+    "Skater SOG":         "sog",
+    "Skater Points":      "p",          # synthesized from g+a at lookup
+    "Skater Goals":       "g",
+    "Skater Assists":     "a",
+    "Skater Hits":        "hits",
+    "Skater Blocks":      "blocks",
+    "Goalie Saves":       "saves",
+    "Goalie Goals Against": "ga",
+}
+
+
 def _stat_key_for(sport: str, bet_type: str) -> str | None:
     if sport == "mlb":
         return _MLB_STAT_KEY.get(bet_type)
-    # NBA / NHL maps land with 2h / 2i.
+    if sport == "nba":
+        return _NBA_STAT_KEY.get(bet_type)
+    if sport == "nhl":
+        return _NHL_STAT_KEY.get(bet_type)
     return None
 
 
@@ -97,10 +124,22 @@ def _profit_for(result: str, odds: int | None, stake: float = 100.0) -> float:
     return 0.0
 
 
+# Composite stat keys synthesized from base stats at settle time. Stored
+# as derived rather than written into player_game_logs so a box-score
+# correction on any base stat propagates without a re-ingest.
+_COMPOSITE_KEYS: dict[str, tuple[str, ...]] = {
+    "pra": ("pts", "reb", "ast"),    # NBA Player PRA
+    "p":   ("g", "a"),                # NHL Skater Points
+}
+
+
 def _lookup_actual(sport: str, player_id: int, game_id: str,
                    stat_key: str) -> float | None:
     """Return the observed stat value from player_game_logs, or None
-    when the log row doesn't exist or doesn't carry that stat."""
+    when the log row doesn't exist or doesn't carry that stat. Composite
+    keys (PRA, Points) sum their base stats — handles missing components
+    by short-circuiting to None so we don't false-settle on partial data.
+    """
     conn = _conn_for(sport)
     row = conn.execute(
         "SELECT stats_json FROM player_game_logs "
@@ -113,6 +152,20 @@ def _lookup_actual(sport: str, player_id: int, game_id: str,
         stats = json.loads(row["stats_json"] or "{}")
     except (ValueError, TypeError):
         return None
+
+    components = _COMPOSITE_KEYS.get(stat_key)
+    if components:
+        total = 0.0
+        for c in components:
+            v = stats.get(c)
+            if v is None:
+                return None
+            try:
+                total += float(v)
+            except (TypeError, ValueError):
+                return None
+        return total
+
     val = stats.get(stat_key)
     if val is None:
         return None
