@@ -21,18 +21,22 @@ export default function WinProbBar({ wp, home, away, variant = 'card' }) {
   const homeFavored = h > a
 
   if (variant === 'detail') {
-    // Larger variant for the game-detail page. Kept on legacy CSS for
-    // now (.prob-bar-container) since the detail page hasn't been
-    // restyled yet — Phase 2 frontend work focused on the scoreboard.
+    // Larger variant for the game-detail page. Same color story as the
+    // card variant (home = warning amber, away = primary blue) but at
+    // ~3x the height + bigger labels so it can headline a section.
     return (
-      <div className="prob-bar-container">
-        <div className="prob-bar-labels">
-          <span className={homeFavored ? 'favored' : ''}>{home.abbreviation} {pct(h)}</span>
-          <span className={!homeFavored ? 'favored' : ''}>{away.abbreviation} {pct(a)}</span>
+      <div className="space-y-2">
+        <div className="flex justify-between text-sm tabular-nums">
+          <span className={cn(homeFavored && 'font-bold text-foreground', !homeFavored && 'text-muted-foreground')}>
+            {home.abbreviation} {pct(h)}
+          </span>
+          <span className={cn(!homeFavored && 'font-bold text-foreground', homeFavored && 'text-muted-foreground')}>
+            {away.abbreviation} {pct(a)}
+          </span>
         </div>
-        <div className="prob-bar">
-          <div className="home" style={{ width: pct(h) }} />
-          <div className="away" style={{ width: pct(a) }} />
+        <div className="flex h-3 overflow-hidden rounded-full bg-secondary">
+          <div className="bg-warning" style={{ width: pct(h) }} />
+          <div className="bg-primary" style={{ width: pct(a) }} />
         </div>
       </div>
     )

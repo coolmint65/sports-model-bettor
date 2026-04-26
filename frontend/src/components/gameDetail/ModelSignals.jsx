@@ -1,72 +1,96 @@
 /**
- * Three-signal breakdown card: shows what each component model
- * (factor / MC / GBM) predicted per market, the ensemble-blended
+ * ModelSignals — three-signal breakdown table per market.
+ *
+ * Phase 2-cleanup restyle: Tailwind tokens. Shows what each component
+ * model (factor / MC / GBM) predicted per market, the ensemble-blended
  * result the picks layer actually uses, and the blend weights.
  *
- * Renders nothing when the prediction lacks an `ensemble` key. That
- * keeps older cached predictions (pre-flag-flip) from showing an
- * empty shell, and keeps NHL/NBA surfaces gracefully degraded while
- * their MC simulators are still shadow-only.
+ * Renders nothing when prediction lacks an `ensemble` key — keeps
+ * older cached predictions and shadow-only NHL/NBA MC stacks gracefully
+ * degraded.
  *
  * Props:
- *   pred  — full /api/predict response (MLB), /api/nhl/predict, or
- *           /api/nba/predict.
+ *   pred  — full /api/{sport}/predict response.
  *   sport — 'mlb' | 'nhl' | 'nba' — drives which markets are shown.
  *   home  — { abbreviation } (for ML market labelling)
  *   away  — { abbreviation }
  */
+
+import { cn } from '../../lib/utils'
+
 export default function ModelSignals({ pred, sport, home, away }) {
   const ens = pred?.ensemble
   if (!ens || Object.keys(ens).length === 0) return null
 
-  // Per-sport market config: (key in ensemble, label, raw component
-  // extractors, value formatter). Extractors return null/undefined
-  // when the component didn't run so the row renders a dash.
   const markets = marketsFor(sport, pred, home, away)
   if (markets.length === 0) return null
 
   return (
-    <div className="result-card">
-      <h2>Model Signals</h2>
-      <p style={{fontSize:'0.75rem', color:'#64748b', marginTop:-6, marginBottom:10}}>
-        Each market is the weighted blend of up to three independent models.
-        Picks and edges use the <em>Blended</em> column.
-      </p>
-      <table style={{width:'100%', fontSize:'0.82rem', borderCollapse:'collapse'}}>
-        <thead>
-          <tr style={{color:'#64748b', textAlign:'right', fontSize:'0.72rem', textTransform:'uppercase'}}>
-            <th style={{padding:'6px 0', fontWeight:600, textAlign:'left'}}>Market</th>
-            <th style={{padding:'6px 0', fontWeight:600}}>Factor</th>
-            <th style={{padding:'6px 0', fontWeight:600}}>MC</th>
-            <th style={{padding:'6px 0', fontWeight:600}}>GBM</th>
-            <th style={{padding:'6px 0', fontWeight:600, color:'#60a5fa'}}>Blended</th>
-          </tr>
-        </thead>
-        <tbody>
-          {markets.map((m, i) => (
-            <tr key={i} style={{borderTop:'1px solid #1e293b'}}>
-              <td style={{padding:'8px 0', color:'#cbd5e1', fontWeight:600}}>
-                {m.label}
-                {m.weights && (
-                  <div style={{fontSize:'0.68rem', color:'#64748b', fontWeight:400, marginTop:2}}>
-                    {formatWeights(m.weights)}
-                  </div>
-                )}
-              </td>
-              <ComponentCell value={m.factor} fmt={m.fmt} weight={m.weights?.factor} />
-              <ComponentCell value={m.mc} fmt={m.fmt} weight={m.weights?.mc} />
-              <ComponentCell value={m.gbm} fmt={m.fmt} weight={m.weights?.gbm} />
-              <td style={{
-                padding:'8px 0', textAlign:'right', fontWeight:700,
-                color: m.blended != null ? '#60a5fa' : '#475569',
-              }}>
-                {m.blended != null ? m.fmt(m.blended) : '-'}
-              </td>
+    <section className="rounded-lg border border-border bg-card overflow-hidden">
+      <div className="px-5 py-3 border-b border-border">
+        <h3 className="text-sm font-semibold text-foreground">Model Signals</h3>
+        <p className="mt-0.5 text-[11px] text-muted-foreground leading-snug">
+          Each market is the weighted blend of up to three independent models.
+          Picks and edges use the <em>Blended</em> column.
+        </p>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border bg-background/40">
+              <Th>Market</Th>
+              <Th align="right">Factor</Th>
+              <Th align="right">MC</Th>
+              <Th align="right">GBM</Th>
+              <Th align="right" className="text-primary">Blended</Th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {markets.map((m, i) => (
+              <tr
+                key={i}
+                className="border-b border-border/60 hover:bg-accent/20 transition-colors"
+              >
+                <td className="px-3 py-2.5">
+                  <div className="font-semibold text-foreground">{m.label}</div>
+                  {m.weights && (
+                    <div className="mt-0.5 text-[10px] text-muted-foreground tabular-nums">
+                      {formatWeights(m.weights)}
+                    </div>
+                  )}
+                </td>
+                <ComponentCell value={m.factor} fmt={m.fmt} weight={m.weights?.factor} />
+                <ComponentCell value={m.mc}     fmt={m.fmt} weight={m.weights?.mc} />
+                <ComponentCell value={m.gbm}    fmt={m.fmt} weight={m.weights?.gbm} />
+                <td className={cn(
+                  'px-3 py-2.5 text-right tabular-nums font-bold',
+                  m.blended != null ? 'text-primary' : 'text-muted-foreground/40',
+                )}>
+                  {m.blended != null ? m.fmt(m.blended) : '-'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )
+}
+
+
+function Th({ children, align = 'left', className }) {
+  return (
+    <th
+      scope="col"
+      className={cn(
+        'px-3 py-2.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground',
+        align === 'right' && 'text-right',
+        className,
+      )}
+    >
+      {children}
+    </th>
   )
 }
 
@@ -74,11 +98,10 @@ export default function ModelSignals({ pred, sport, home, away }) {
 function ComponentCell({ value, fmt, weight }) {
   const dim = value == null || weight == null || weight === 0
   return (
-    <td style={{
-      padding:'8px 0', textAlign:'right',
-      color: dim ? '#475569' : '#cbd5e1',
-      fontWeight: 600,
-    }}>
+    <td className={cn(
+      'px-3 py-2.5 text-right tabular-nums font-semibold',
+      dim ? 'text-muted-foreground/50' : 'text-foreground',
+    )}>
       {value != null ? fmt(value) : '-'}
     </td>
   )

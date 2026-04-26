@@ -1,19 +1,16 @@
 /**
- * RestChips
- * ──────────────────────────────────────────────────────────────
- * The "tired"/"B2B"/"rested" chip row that sat above every game
- * card across all three sports, each with its own inline-styled
- * 20-line block. Renders nothing when there's no rest signal to
- * surface, so scoreboards can unconditionally mount it.
+ * RestChips — "tired"/"B2B"/"rested" chip row above each game card.
  *
- * Sport label variance: MLB used "tired", NHL+NBA used "B2B".
- * Caller sets `tiredLabel` if it wants the NHL variant. Default
- * is "tired" to match current MLB behavior.
+ * Phase 2-cleanup restyle: Tailwind tokens. Sport label variance:
+ * MLB uses "tired", NHL+NBA use "B2B". Renders nothing when no rest
+ * signal is present so callers can mount unconditionally.
  *
  * Signals:
- *   home_b2b / home_short_rest        -> red "tired" / "B2B" chip
- *   home_rest_advantage (one-sided)   -> blue "rested" chip
+ *   home_b2b / home_short_rest        -> negative "tired" / "B2B" chip
+ *   home_rest_advantage (one-sided)   -> primary "rested" chip
  */
+
+import { cn } from '../../lib/utils'
 
 export default function RestChips({ rest, home, away, tiredLabel = 'tired' }) {
   if (!rest) return null
@@ -26,7 +23,7 @@ export default function RestChips({ rest, home, away, tiredLabel = 'tired' }) {
   if (!homeTired && !awayTired && !homeRested && !awayRested) return null
 
   return (
-    <div className="rest-chips">
+    <div className="flex flex-wrap gap-1">
       {awayTired && <Chip tone="warn">{away.abbreviation} {tiredLabel}</Chip>}
       {homeTired && <Chip tone="warn">{home.abbreviation} {tiredLabel}</Chip>}
       {awayRested && <Chip tone="info">{away.abbreviation} rested</Chip>}
@@ -36,5 +33,15 @@ export default function RestChips({ rest, home, away, tiredLabel = 'tired' }) {
 }
 
 function Chip({ tone, children }) {
-  return <span className={`rest-chip rest-chip-${tone}`}>{children}</span>
+  const cls = tone === 'warn'
+    ? 'bg-negative/15 text-negative border-negative/25'
+    : 'bg-primary/10 text-primary border-primary/25'
+  return (
+    <span className={cn(
+      'inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-bold',
+      cls,
+    )}>
+      {children}
+    </span>
+  )
 }
