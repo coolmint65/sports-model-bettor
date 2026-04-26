@@ -15,12 +15,30 @@ import PickOfDayHero from './components/PickOfDayHero'
 import FirstInningPicks from './components/FirstInningPicks'
 import DerivativeTracker from './components/DerivativeTracker'
 import Sidebar from './components/Sidebar'
+import SubNav from './components/SubNav'
+import RootDashboard from './components/RootDashboard'
 
 const api = axios.create({ baseURL: '/api' })
 
+// Per-sport sub-nav. Standings dropped from the new shell — accessible
+// via Tracker drill-downs in 2d. Props is locked until 2g+.
+const SPORT_TABS = [
+  { id: 'bets',      label: 'Bets' },
+  { id: 'props',     label: 'Props', locked: true, badge: 'Soon' },
+  { id: 'tracker',   label: 'Tracker' },
+  { id: 'history',   label: 'History' },
+  { id: 'standings', label: 'Standings' },
+  { id: 'backtest',  label: 'Backtest' },
+]
+
 export default function App() {
   const [league, setLeague] = useState('MLB')
-  const [view, setView] = useState('games')
+  // 'dashboard' is the cross-sport root view; otherwise this is one
+  // of SPORT_TABS ids inside the active sport's landing.
+  const [view, setView] = useState('bets')
+  // Sidebar surface: 'dashboard' or a sport key. Tracks separately from
+  // `league` so the dashboard view doesn't lose the user's last sport.
+  const [surface, setSurface] = useState('mlb')
 
   // MLB state
   const [games, setGames] = useState([])
@@ -174,7 +192,7 @@ export default function App() {
   // MLB handlers
   const selectGame = useCallback((game) => {
     setSelectedGame(game)
-    setView('games')
+    setView('bets')
     setPrediction(null)
     setPredLoading(true)
 
@@ -198,7 +216,7 @@ export default function App() {
   // NHL handlers
   const selectNhlGame = useCallback((game) => {
     setNhlSelectedGame(game)
-    setView('games')
+    setView('bets')
     setNhlPrediction(null)
     setNhlPredLoading(true)
 
@@ -215,7 +233,7 @@ export default function App() {
   // NBA handlers
   const selectNbaGame = useCallback((game) => {
     setNbaSelectedGame(game)
-    setView('games')
+    setView('bets')
     setNbaPrediction(null)
     setNbaPredLoading(true)
 
@@ -252,6 +270,45 @@ export default function App() {
   const showBacktest = useCallback(() => {
     setView('backtest'); setSelectedGame(null); setNhlSelectedGame(null); setNbaSelectedGame(null)
   }, [])
+
+  // Internal: load tracker history into state for the active league.
+  // Keeps the `showHistory` legacy entry point working and lets the
+  // new Tracker/History sub-nav tabs share one data fetch. The `view`
+  // string is set by the caller (selectView) so this loader doesn't
+  // care which tab actually renders the result.
+  const loadTrackerHistory = useCallback(() => {
+    if (league === 'MLB') {
+      setPhLoading(true)
+      Promise.all([
+        api.get('/tracker/summary'),
+        api.get('/tracker/history'),
+      ]).then(([s, h]) => {
+        setPickSummary(s.data)
+        setPickHistory(h.data)
+      }).catch(() => {})
+        .finally(() => setPhLoading(false))
+    } else if (league === 'NHL') {
+      setNhlPhLoading(true)
+      Promise.all([
+        api.get('/nhl/tracker/summary'),
+        api.get('/nhl/tracker/history'),
+      ]).then(([s, h]) => {
+        setNhlPickSummary(s.data)
+        setNhlPickHistory(h.data)
+      }).catch(() => {})
+        .finally(() => setNhlPhLoading(false))
+    } else if (league === 'NBA') {
+      setNbaPhLoading(true)
+      Promise.all([
+        api.get('/nba/tracker/summary'),
+        api.get('/nba/tracker/history'),
+      ]).then(([s, h]) => {
+        setNbaPickSummary(s.data)
+        setNbaPickHistory(Array.isArray(h.data) ? h.data : [])
+      }).catch(() => {})
+        .finally(() => setNbaPhLoading(false))
+    }
+  }, [league])
 
   const runBacktest = useCallback((days, minEdge, season) => {
     setBtLoading(true); setBacktest(null)
@@ -343,12 +400,13 @@ export default function App() {
   const goBack = useCallback(() => {
     setSelectedGame(null); setNhlSelectedGame(null); setNbaSelectedGame(null)
     setPrediction(null); setNhlPrediction(null); setNbaPrediction(null)
-    setView('games')
+    setView('bets')
   }, [])
 
   const switchLeague = useCallback((l) => {
     setLeague(l)
-    setView('games')
+    setSurface(l.toLowerCase())
+    setView('bets')
     setSelectedGame(null)
     setNhlSelectedGame(null)
     setNbaSelectedGame(null)
@@ -356,6 +414,48 @@ export default function App() {
     setNhlPrediction(null)
     setNbaPrediction(null)
   }, [])
+
+  // Sidebar entry point — dispatches to dashboard surface OR a sport.
+  // Kept separate from switchLeague so the dashboard view doesn't have
+  // to fake a sport key just to satisfy switchLeague's signature.
+  const handleSidebarSelect = useCallback((id) => {
+    if (id === 'dashboard') {
+      setSurface('dashboard')
+      setSelectedGame(null)
+      setNhlSelectedGame(null)
+      setNbaSelectedGame(null)
+    } else {
+      switchLeague(id.toUpperCase())
+    }
+  }, [switchLeague])
+
+  // Sub-nav tab dispatch — sets the view AND fires lazy data loaders.
+  // Bets/Props don't need a loader (Bets is default; Props is a
+  // placeholder until 2g+). Standings/Tracker/History/Backtest each
+  // hit their respective endpoints on first visit.
+  const selectView = useCallback((tabId) => {
+    setSelectedGame(null); setNhlSelectedGame(null); setNbaSelectedGame(null)
+    setView(tabId)
+    if (tabId === 'standings') {
+      // Reuse showStandings's data fetch but skip its setView (which
+      // would override the new tab id back to 'standings'; that's
+      // harmless because both names are now the same, but keep the
+      // dispatcher authoritative).
+      if (league === 'MLB' && standings.length === 0) {
+        api.get('/standings').then(r => setStandings(r.data)).catch(() => {})
+      } else if (league === 'NHL' && nhlStandings.length === 0) {
+        setNhlStandingsLoading(true)
+        api.get('/nhl/standings').then(r => setNhlStandings(r.data)).catch(() => {}).finally(() => setNhlStandingsLoading(false))
+      } else if (league === 'NBA' && nbaStandings.length === 0) {
+        setNbaStandingsLoading(true)
+        api.get('/nba/standings').then(r => setNbaStandings(Array.isArray(r.data) ? r.data : [])).catch(() => {}).finally(() => setNbaStandingsLoading(false))
+      }
+    } else if (tabId === 'tracker' || tabId === 'history') {
+      loadTrackerHistory()
+    }
+    // 'backtest' has no auto-load — Backtest component fires its own
+    // request when the user clicks Run.
+  }, [league, standings.length, nhlStandings.length, nbaStandings.length, loadTrackerHistory])
 
   const isMLB = league === 'MLB'
   const isNHL = league === 'NHL'
@@ -374,39 +474,31 @@ export default function App() {
     <div className="flex min-h-screen bg-background">
       <Sidebar
         sports={['mlb', 'nhl', 'nba']}
-        selected={league.toLowerCase()}
-        onSelect={s => switchLeague(s.toUpperCase())}
+        selected={surface === 'dashboard' ? 'dashboard' : league.toLowerCase()}
+        onSelect={handleSidebarSelect}
         gameCounts={gameCounts}
       />
 
       <main className="flex-1 min-w-0 overflow-x-hidden">
+       {surface === 'dashboard' ? (
+         <div className="app">
+           <RootDashboard
+             sports={['mlb', 'nhl', 'nba']}
+             bestBetsBySport={{ mlb: bestBets || [], nhl: nhlBestBets || [], nba: nbaBestBets || [] }}
+             onSelectSport={s => { switchLeague(s.toUpperCase()) }}
+           />
+         </div>
+       ) : (
        <div className="app">
         <div className="header">
-          <h1>{league} Prediction Engine</h1>
-          <p className="subtitle">Data-driven {league} game predictions</p>
+          <h1>{league}</h1>
+          <p className="subtitle">Data-driven {league} predictions</p>
         </div>
 
-      <nav className="nav-tabs">
-        <button className={`nav-tab ${view === 'games' && !selectedGame && !nhlSelectedGame && !nbaSelectedGame ? 'active' : ''}`} onClick={goBack}>
-          Games
-        </button>
-        <button className={`nav-tab ${view === 'standings' ? 'active' : ''}`} onClick={showStandings}>
-          Standings
-        </button>
-        <button className={`nav-tab ${view === 'history' ? 'active' : ''}`} onClick={showHistory}>
-          Pick Tracker
-        </button>
-        <button className={`nav-tab ${view === 'derivatives' ? 'active' : ''}`}
-                onClick={() => { setView('derivatives'); setSelectedGame(null); setNhlSelectedGame(null); setNbaSelectedGame(null) }}>
-          Derivatives
-        </button>
-        <button className={`nav-tab ${view === 'backtest' ? 'active' : ''}`} onClick={showBacktest}>
-          Backtest
-        </button>
-      </nav>
+      <SubNav tabs={SPORT_TABS} active={view} onChange={selectView} />
 
       {/* ── MLB Views ── */}
-      {isMLB && view === 'games' && !selectedGame && (
+      {isMLB && view === 'bets' && !selectedGame && (
         <>
           <PickOfDayHero sport="mlb" />
           <FirstInningPicks bestBets={bestBets} />
@@ -418,9 +510,9 @@ export default function App() {
         <GameDetail game={selectedGame} prediction={prediction} loading={predLoading} onBack={goBack} />
       )}
 
-      {isMLB && view === 'standings' && (
-        <Standings divisions={standings} />
-      )}
+      {isMLB && view === 'props' && <PropsPlaceholder sport="MLB" />}
+      {isMLB && view === 'standings' && <Standings divisions={standings} />}
+      {isMLB && view === 'tracker' && <DerivativeTracker sport="mlb" api={api} />}
 
       {isMLB && view === 'history' && (
         <PickHistory
@@ -432,16 +524,12 @@ export default function App() {
         />
       )}
 
-      {isMLB && view === 'derivatives' && (
-        <DerivativeTracker sport="mlb" api={api} />
-      )}
-
       {isMLB && view === 'backtest' && (
         <Backtest data={backtest} loading={btLoading} onRun={runBacktest} />
       )}
 
       {/* ── NHL Views ── */}
-      {isNHL && view === 'games' && !nhlSelectedGame && (
+      {isNHL && view === 'bets' && !nhlSelectedGame && (
         <>
           <PickOfDayHero sport="nhl" />
           <NHLScoreboard games={nhlGames} loading={nhlLoading} progress={nhlBbProgress} onSelectGame={selectNhlGame} bestBets={nhlBestBets} />
@@ -452,9 +540,9 @@ export default function App() {
         <NHLGameDetail game={nhlSelectedGame} prediction={nhlPrediction} loading={nhlPredLoading} onBack={goBack} />
       )}
 
-      {isNHL && view === 'standings' && (
-        <NHLStandings divisions={nhlStandings} loading={nhlStandingsLoading} />
-      )}
+      {isNHL && view === 'props' && <PropsPlaceholder sport="NHL" />}
+      {isNHL && view === 'standings' && <NHLStandings divisions={nhlStandings} loading={nhlStandingsLoading} />}
+      {isNHL && view === 'tracker' && <DerivativeTracker sport="nhl" api={api} />}
 
       {isNHL && view === 'history' && (
         <PickHistory
@@ -466,16 +554,12 @@ export default function App() {
         />
       )}
 
-      {isNHL && view === 'derivatives' && (
-        <DerivativeTracker sport="nhl" api={api} />
-      )}
-
       {isNHL && view === 'backtest' && (
         <Backtest data={backtest} loading={btLoading} onRun={runBacktest} />
       )}
 
       {/* ── NBA Views ── */}
-      {isNBA && view === 'games' && !nbaSelectedGame && (
+      {isNBA && view === 'bets' && !nbaSelectedGame && (
         <>
           <PickOfDayHero sport="nba" />
           <NBAScoreboard games={nbaGames} loading={nbaLoading} progress={nbaBbProgress} onSelectGame={selectNbaGame} bestBets={nbaBestBets} />
@@ -486,9 +570,9 @@ export default function App() {
         <NBAGameDetail game={nbaSelectedGame} prediction={nbaPrediction} loading={nbaPredLoading} onBack={goBack} />
       )}
 
-      {isNBA && view === 'standings' && (
-        <NBAStandings divisions={nbaStandings} loading={nbaStandingsLoading} />
-      )}
+      {isNBA && view === 'props' && <PropsPlaceholder sport="NBA" />}
+      {isNBA && view === 'standings' && <NBAStandings divisions={nbaStandings} loading={nbaStandingsLoading} />}
+      {isNBA && view === 'tracker' && <DerivativeTracker sport="nba" api={api} />}
 
       {isNBA && view === 'history' && (
         <PickHistory
@@ -500,15 +584,31 @@ export default function App() {
         />
       )}
 
-      {isNBA && view === 'derivatives' && (
-        <DerivativeTracker sport="nba" api={api} />
-      )}
-
       {isNBA && view === 'backtest' && (
         <Backtest data={backtest} loading={btLoading} onRun={runBacktest} />
       )}
        </div>
+       )}
       </main>
+    </div>
+  )
+}
+
+// Inline placeholder for the locked Props sub-nav tab. Real props
+// surface lands in Phase 2g+ once the MC extension + DB schema are
+// in place. Keeps the tab visible (and styleable) so the new shell
+// doesn't render an empty area when users land on it.
+function PropsPlaceholder({ sport }) {
+  return (
+    <div className="py-12">
+      <div className="mx-auto max-w-md rounded-lg border border-dashed border-border bg-card/50 px-6 py-10 text-center">
+        <div className="text-sm font-semibold text-foreground">{sport} Player Props</div>
+        <div className="mt-1.5 text-xs text-muted-foreground">
+          Props markets land in Phase 2g (MLB), 2h (NBA), 2i (NHL).
+          The MC stack will track per-player events and surface picks
+          alongside core markets here.
+        </div>
+      </div>
     </div>
   )
 }

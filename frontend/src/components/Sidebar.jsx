@@ -1,5 +1,5 @@
 import { memo } from 'react'
-import { Beer, Snowflake, Dribbble } from 'lucide-react'
+import { Beer, Snowflake, Dribbble, LayoutDashboard } from 'lucide-react'
 import { sortSports } from '../lib/sportSort'
 import { cn } from '../lib/utils'
 
@@ -22,8 +22,10 @@ import { cn } from '../lib/utils'
  *
  * Props:
  *   sports        - array of sport keys (e.g. ['mlb','nhl','nba'])
- *   selected      - currently active sport key (lowercase)
- *   onSelect      - callback (sport: string) => void
+ *   selected      - currently active sport key (lowercase) OR
+ *                   'dashboard' when the cross-sport root is showing
+ *   onSelect      - callback (sport: string) => void; called with
+ *                   either a sport key or the literal 'dashboard'
  *   gameCounts    - { sport: number } for today's slate sizes
  */
 const SPORT_LABELS = {
@@ -53,6 +55,27 @@ function SidebarImpl({ sports, selected, onSelect, gameCounts = {} }) {
       </div>
 
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+        {/* Dashboard pinned above the sport list — cross-sport root view */}
+        <button
+          onClick={() => onSelect('dashboard')}
+          className={cn(
+            'flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium transition-colors',
+            'focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            selected === 'dashboard'
+              ? 'bg-primary text-primary-foreground'
+              : 'text-foreground hover:bg-accent hover:text-accent-foreground',
+          )}
+        >
+          <LayoutDashboard className="h-4 w-4" aria-hidden="true" />
+          <span>Dashboard</span>
+        </button>
+
+        <div className="my-2 px-3">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Sports
+          </div>
+        </div>
+
         {ranked.map(({ sport, gameCount, inSeason }) => {
           const isActive = selected === sport
           const Icon = SPORT_ICONS[sport]
