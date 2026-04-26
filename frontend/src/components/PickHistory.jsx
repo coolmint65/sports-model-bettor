@@ -1,17 +1,22 @@
 import { useMemo } from 'react'
 import { humanizeBetType } from '../lib/betType'
+import { cn } from '../lib/utils'
 
+/**
+ * PickHistory — Tracker / History tab content.
+ *
+ * Two tables (today's live activity + recent settled), a hero summary
+ * (overall P/L + WR + CLV), and a row of per-bet-type tiles. Phase 2d
+ * restyle: hero / tiles / shell on Tailwind + design tokens, table
+ * keeps the legacy `.picks-table` styles for now (table-cell density
+ * is its own redesign — Phase 2e polish).
+ */
 export default function PickHistory({ summary, history, loading, onRecord, onSettle }) {
   const pct = n => `${(n * 100).toFixed(1)}%`
 
   const overall = summary?.overall || {}
   const byType = summary?.by_type || {}
 
-  // Split history: today's picks vs historical. Use local date (not
-  // UTC) so the evening split works. Memoize — history can be 300+
-  // rows on a mature tracker, and the parent re-renders on every
-  // scoreboard / best-bets refresh (every 5 min) even though history
-  // only changes on record/settle events.
   const { todaysPicks, pastPicks } = useMemo(() => {
     const now = new Date()
     const today = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`
@@ -26,63 +31,81 @@ export default function PickHistory({ summary, history, loading, onRecord, onSet
 
   if (loading) {
     return (
-      <div className="loading">
-        <div className="spinner" />
-        <p>Loading pick history...</p>
+      <div className="flex items-center justify-center gap-3 py-16 text-sm text-muted-foreground">
+        <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
+        Loading pick history…
       </div>
     )
   }
 
-  // Bet types that have data. F5 is the aggregate of F5 ML + F5 O/U +
-  // F5 RL (summed server-side in engine.tracker.get_pick_summary); the
-  // per-market splits are still in byType under their individual keys
-  // for anyone who wants the breakdown.
   const typesWithData = [
-    { key: 'ML', label: 'Moneyline' },
-    { key: 'O/U', label: 'Over/Under' },
-    { key: '1st INN', label: '1st Inning' },
-    { key: 'F5', label: 'First 5 Innings' },
-    { key: 'RL', label: 'Run Line' },
-    { key: 'PL', label: 'Puck Line' },
-    { key: 'Q1_ML', label: 'Q1 Moneyline' },
-    { key: 'Q1_SPREAD', label: 'Q1 Spread' },
-    { key: 'Q1_TOTAL', label: 'Q1 Total' },
+    { key: 'ML',         label: 'Moneyline' },
+    { key: 'O/U',        label: 'Over/Under' },
+    { key: '1st INN',    label: '1st Inning' },
+    { key: 'F5',         label: 'First 5 Innings' },
+    { key: 'RL',         label: 'Run Line' },
+    { key: 'PL',         label: 'Puck Line' },
+    { key: 'Q1_ML',      label: 'Q1 Moneyline' },
+    { key: 'Q1_SPREAD',  label: 'Q1 Spread' },
+    { key: 'Q1_TOTAL',   label: 'Q1 Total' },
   ].filter(({ key }) => byType[key] && byType[key].total > 0)
 
+  const profitTone = overall.profit > 0
+    ? 'text-positive' : overall.profit < 0 ? 'text-negative' : 'text-foreground'
+
   return (
-    <div className="history-page">
-      <div className="history-header">
-        <h2 className="section-title">Pick Tracker</h2>
-        <div className="bt-controls">
-          <button className="bt-run-btn" onClick={onRecord}>Record Today's Picks</button>
-          <button className="bt-run-btn" onClick={onSettle} style={{ background: '#059669' }}>Settle Completed</button>
+    <div className="space-y-5 py-4">
+      {/* Header + actions */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-semibold tracking-tight text-foreground">
+            Pick Tracker
+          </h2>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Live and settled picks for the active sport.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onRecord}
+            className="rounded-md border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground hover:bg-accent transition-colors"
+          >
+            Record today
+          </button>
+          <button
+            onClick={onSettle}
+            className="rounded-md bg-positive-strong px-3 py-1.5 text-xs font-semibold text-background hover:opacity-90 transition-opacity"
+          >
+            Settle completed
+          </button>
         </div>
       </div>
 
-      {/* Hero summary - big, prominent */}
+      {/* Hero summary */}
       {overall.total > 0 && (
-        <div className="pick-hero">
-          <div className="pick-hero-main">
-            <div className="pick-hero-profit-label">OVERALL P/L</div>
-            <div className={`pick-hero-profit ${overall.profit > 0 ? 'positive' : overall.profit < 0 ? 'negative' : ''}`}>
+        <section className="rounded-lg border border-border bg-card p-5">
+          <div className="flex flex-col gap-1">
+            <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+              Overall P/L
+            </div>
+            <div className={cn('text-3xl font-bold tabular-nums', profitTone)}>
               {overall.profit > 0 ? '+' : ''}${overall.profit}
             </div>
-            <div className="pick-hero-meta">
-              <span>{overall.wins}-{overall.losses}</span>
-              <span className="sep">|</span>
-              <span>{overall.win_pct}% WR</span>
-              <span className="sep">|</span>
-              <span>{overall.total} picks</span>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+              <span className="tabular-nums">{overall.wins}-{overall.losses}</span>
+              <span className="text-border">·</span>
+              <span className="tabular-nums">{overall.win_pct}% WR</span>
+              <span className="text-border">·</span>
+              <span className="tabular-nums">{overall.total} picks</span>
               {overall.avg_clv != null && (
                 <>
-                  <span className="sep">|</span>
+                  <span className="text-border">·</span>
                   <span
-                    title={`Average Closing Line Value. Positive = model is getting better prices than close (sharp). Negative = fading the market. Based on ${overall.clv_sample || 0} settled picks with closing odds.`}
-                    style={{
-                      color: overall.avg_clv > 0 ? '#34d399' : overall.avg_clv < 0 ? '#ef4444' : '#94a3b8',
-                      fontWeight: 600,
-                      cursor: 'help',
-                    }}
+                    title={`Average Closing Line Value across ${overall.clv_sample || 0} settled picks. Positive = beating close (sharp).`}
+                    className={cn(
+                      'tabular-nums font-semibold cursor-help',
+                      overall.avg_clv > 0 ? 'text-positive' : overall.avg_clv < 0 ? 'text-negative' : '',
+                    )}
                   >
                     CLV {overall.avg_clv > 0 ? '+' : ''}{overall.avg_clv}%
                   </span>
@@ -90,26 +113,34 @@ export default function PickHistory({ summary, history, loading, onRecord, onSet
               )}
               {overall.pending > 0 && (
                 <>
-                  <span className="sep">|</span>
-                  <span className="pending">{overall.pending} pending</span>
+                  <span className="text-border">·</span>
+                  <span className="rounded-full bg-warning/15 px-2 py-0.5 text-warning font-semibold tabular-nums">
+                    {overall.pending} pending
+                  </span>
                 </>
               )}
             </div>
           </div>
 
-          {/* Compact bet type tiles */}
+          {/* Per-bet-type tiles */}
           {typesWithData.length > 0 && (
-            <div className="pick-type-tiles">
+            <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
               {typesWithData.map(({ key, label }) => {
                 const s = byType[key]
-                const profitable = s.profit > 0
+                const tone = s.profit > 0
+                  ? 'text-positive' : s.profit < 0 ? 'text-negative' : 'text-foreground'
                 return (
-                  <div key={key} className={`pick-type-tile ${profitable ? 'profitable' : s.profit < 0 ? 'losing' : ''}`}>
-                    <div className="pick-type-label">{label}</div>
-                    <div className={`pick-type-profit ${profitable ? 'positive' : s.profit < 0 ? 'negative' : ''}`}>
+                  <div
+                    key={key}
+                    className="rounded-md border border-border bg-background/50 px-3 py-2.5"
+                  >
+                    <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground truncate">
+                      {label}
+                    </div>
+                    <div className={cn('mt-0.5 text-base font-semibold tabular-nums', tone)}>
                       {s.profit > 0 ? '+' : ''}${s.profit}
                     </div>
-                    <div className="pick-type-record">
+                    <div className="text-[10px] text-muted-foreground tabular-nums">
                       {s.wins}-{s.losses} ({s.win_pct}%)
                     </div>
                   </div>
@@ -117,29 +148,45 @@ export default function PickHistory({ summary, history, loading, onRecord, onSet
               })}
             </div>
           )}
-        </div>
+        </section>
       )}
 
-      {/* Today's picks (live activity) */}
+      {/* Today's picks */}
       {todaysPicks.length > 0 && (
-        <div className="result-card">
-          <h2>Today's Picks ({todaysPicks.length})</h2>
+        <section className="rounded-lg border border-border bg-card overflow-hidden">
+          <div className="flex items-center justify-between px-5 py-3 border-b border-border">
+            <h3 className="text-sm font-semibold text-foreground">
+              Today's Picks
+            </h3>
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              {todaysPicks.length} live
+            </span>
+          </div>
           <PicksTable picks={todaysPicks} pct={pct} />
-        </div>
+        </section>
       )}
 
-      {/* Historical picks */}
+      {/* Past picks */}
       {pastPicks.length > 0 && (
-        <div className="result-card" style={{ marginTop: 16 }}>
-          <h2>Recent History</h2>
+        <section className="rounded-lg border border-border bg-card overflow-hidden">
+          <div className="flex items-center justify-between px-5 py-3 border-b border-border">
+            <h3 className="text-sm font-semibold text-foreground">
+              Recent History
+            </h3>
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              {pastPicks.length} settled
+            </span>
+          </div>
           <PicksTable picks={pastPicks} pct={pct} />
-        </div>
+        </section>
       )}
 
       {(!history || history.length === 0) && (!summary || overall.total === 0) && (
-        <div className="no-games" style={{ marginTop: 20 }}>
-          <p>No picks recorded yet.</p>
-          <p className="sub">Click "Record Today's Picks" to start tracking.</p>
+        <div className="rounded-lg border border-dashed border-border bg-card/50 px-6 py-10 text-center">
+          <div className="text-sm font-semibold text-foreground">No picks recorded yet.</div>
+          <div className="mt-1 text-xs text-muted-foreground">
+            Click "Record today" to start tracking the slate.
+          </div>
         </div>
       )}
     </div>
@@ -148,46 +195,51 @@ export default function PickHistory({ summary, history, loading, onRecord, onSet
 
 
 function PicksTable({ picks, pct }) {
+  // Wrapper class kept to inherit the tuned column widths / row colors
+  // from index.css. Internal markup stays the same shape so the legacy
+  // styles continue to apply.
   return (
-    <table className="picks-table">
-      <thead>
-        <tr>
-          <th>Date</th>
-          <th>Matchup</th>
-          <th>Type</th>
-          <th>Pick</th>
-          <th>Odds</th>
-          <th>Prob</th>
-          <th>Edge</th>
-          <th>Result</th>
-          <th>P/L</th>
-        </tr>
-      </thead>
-      <tbody>
-        {picks.map((p, i) => {
-          const resultClass = p.result === 'W' ? 'row-win' : p.result === 'L' ? 'row-loss' : 'row-pending'
-          return (
-            <tr key={p.id || i} className={resultClass}>
-              <td className="col-date">{p.date?.slice(5)}</td>
-              <td className="col-matchup">{p.matchup}</td>
-              <td><span className="type-badge">{humanizeBetType(p.bet_type)}</span></td>
-              <td style={{ fontWeight: 600 }}>{p.pick}</td>
-              <td style={{ color: '#94a3b8' }}>{p.odds ? `${p.odds > 0 ? '+' : ''}${p.odds}` : '-'}</td>
-              <td>{p.model_prob ? pct(p.model_prob) : '-'}</td>
-              <td className={p.edge > 4 ? 'positive' : ''}>{p.edge ? `+${p.edge.toFixed(1)}%` : '-'}</td>
-              <td>
-                {p.result === 'W' && <span className="result-pill win">W</span>}
-                {p.result === 'L' && <span className="result-pill loss">L</span>}
-                {p.result === 'P' && <span className="result-pill push">P</span>}
-                {!p.result && <span className="result-pill pending">PEND</span>}
-              </td>
-              <td className={p.profit > 0 ? 'positive' : p.profit < 0 ? 'negative' : ''} style={{ fontWeight: 600 }}>
-                {p.profit != null ? `${p.profit > 0 ? '+' : ''}$${p.profit}` : '-'}
-              </td>
-            </tr>
-          )
-        })}
-      </tbody>
-    </table>
+    <div className="overflow-x-auto">
+      <table className="picks-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Matchup</th>
+            <th>Type</th>
+            <th>Pick</th>
+            <th>Odds</th>
+            <th>Prob</th>
+            <th>Edge</th>
+            <th>Result</th>
+            <th>P/L</th>
+          </tr>
+        </thead>
+        <tbody>
+          {picks.map((p, i) => {
+            const resultClass = p.result === 'W' ? 'row-win' : p.result === 'L' ? 'row-loss' : 'row-pending'
+            return (
+              <tr key={p.id || i} className={resultClass}>
+                <td className="col-date">{p.date?.slice(5)}</td>
+                <td className="col-matchup">{p.matchup}</td>
+                <td><span className="type-badge">{humanizeBetType(p.bet_type)}</span></td>
+                <td style={{ fontWeight: 600 }}>{p.pick}</td>
+                <td style={{ color: '#94a3b8' }}>{p.odds ? `${p.odds > 0 ? '+' : ''}${p.odds}` : '-'}</td>
+                <td>{p.model_prob ? pct(p.model_prob) : '-'}</td>
+                <td className={p.edge > 4 ? 'positive' : ''}>{p.edge ? `+${p.edge.toFixed(1)}%` : '-'}</td>
+                <td>
+                  {p.result === 'W' && <span className="result-pill win">W</span>}
+                  {p.result === 'L' && <span className="result-pill loss">L</span>}
+                  {p.result === 'P' && <span className="result-pill push">P</span>}
+                  {!p.result && <span className="result-pill pending">PEND</span>}
+                </td>
+                <td className={p.profit > 0 ? 'positive' : p.profit < 0 ? 'negative' : ''} style={{ fontWeight: 600 }}>
+                  {p.profit != null ? `${p.profit > 0 ? '+' : ''}$${p.profit}` : '-'}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
   )
 }

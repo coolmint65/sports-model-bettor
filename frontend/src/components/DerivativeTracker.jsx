@@ -1,17 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
 import { humanizeBetType } from '../lib/betType'
+import { cn } from '../lib/utils'
 
 /**
- * DerivativeTracker
- * ──────────────────────────────────────────────────────────────
- * Paper-bet log view for Phase 1 derivative markets — separate from
- * the main Pick Tracker so derivative profitability can be evaluated
- * in isolation. Backend auto-records the best derivative pick per
- * game per day at 4%+ edge; this view shows the W/L/profit history
- * per bet_type plus a recent-pick list.
+ * DerivativeTracker — Tracker tab default content.
  *
- * Style mirrors PickHistory.jsx (same hero, same per-bet-type tiles,
- * same picks-table) so the two trackers feel like siblings.
+ * Paper-bet log for Phase 1 derivative markets, separated from the
+ * core PickHistory so derivative profitability tracks in isolation.
+ * Phase 2d restyle: hero / POTD callout / per-bet-type tiles / shell
+ * on Tailwind. Table uses the existing `.picks-table` styles for
+ * consistency with PickHistory until table redesign in 2e.
  *
  * Props:
  *   sport — 'mlb' | 'nhl' | 'nba'
@@ -47,7 +45,6 @@ export default function DerivativeTracker({ sport, api }) {
 
   const pct = n => n != null ? `${(n * 100).toFixed(1)}%` : '-'
 
-  // Same today/past split as PickHistory.
   const { todaysPicks, pastPicks } = useMemo(() => {
     const now = new Date()
     const today = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`
@@ -62,15 +59,14 @@ export default function DerivativeTracker({ sport, api }) {
 
   if (loading && !summary) {
     return (
-      <div className="loading">
-        <div className="spinner" />
-        <p>Loading derivative tracker...</p>
+      <div className="flex items-center justify-center gap-3 py-16 text-sm text-muted-foreground">
+        <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
+        Loading derivative tracker…
       </div>
     )
   }
 
   const grand = summary?._grand || {}
-  // Bet types with at least one row, sorted by ROI desc then volume.
   const typesWithData = summary
     ? Object.entries(summary)
         .filter(([k, v]) => k !== '_grand' && (v?.total || 0) > 0)
@@ -80,94 +76,99 @@ export default function DerivativeTracker({ sport, api }) {
         })
     : []
 
+  const profitTone = grand.profit > 0
+    ? 'text-positive' : grand.profit < 0 ? 'text-negative' : 'text-foreground'
+
   return (
-    <div className="history-page">
-      <div className="history-header">
-        <h2 className="section-title">
-          {sport.toUpperCase()} Derivative Tracker
-          <span className="derivative-tracker-subtitle">
-            paper-bet log, 4%+ edge, top 1 per game
-          </span>
-        </h2>
-        <div className="bt-controls">
-          <button className="bt-run-btn" onClick={settleNow}
-                  style={{ background: '#059669' }}>
-            Settle Completed
-          </button>
+    <div className="space-y-5 py-4">
+      {/* Header + actions */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-semibold tracking-tight text-foreground">
+            {sport.toUpperCase()} Derivative Tracker
+          </h2>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Paper-bet log · top 1 per game above 4% edge
+          </p>
         </div>
+        <button
+          onClick={settleNow}
+          className="rounded-md bg-positive-strong px-3 py-1.5 text-xs font-semibold text-background hover:opacity-90 transition-opacity"
+        >
+          Settle completed
+        </button>
       </div>
 
+      {/* POTD callout */}
       {potd && potd.matchup && (
-        <div className="pick-hero" style={{ marginBottom: 16, borderColor: 'rgba(168, 85, 247, 0.45)' }}>
-          <div className="pick-hero-main">
-            <div className="pick-hero-profit-label" style={{ color: '#a855f7' }}>
-              {sport.toUpperCase()} DERIVATIVE PICK OF THE DAY
-            </div>
-            <div style={{ fontSize: '1.4rem', fontWeight: 700, color: '#e2e8f0', margin: '6px 0' }}>
-              {potd.matchup} — {humanizeBetType(potd.bet_type)}
-            </div>
-            <div style={{ fontSize: '1.1rem', color: '#a855f7', fontWeight: 600 }}>
-              {potd.pick}
-            </div>
-            <div className="pick-hero-meta" style={{ marginTop: 6 }}>
-              <span>edge {potd.edge != null ? `+${potd.edge.toFixed(1)}%` : '-'}</span>
-              <span className="sep">|</span>
-              <span>odds {potd.odds > 0 ? '+' : ''}{potd.odds}</span>
-              <span className="sep">|</span>
-              <span>prob {potd.model_prob ? `${(potd.model_prob * 100).toFixed(1)}%` : '-'}</span>
-              {potd.kelly_pct != null && (
-                <>
-                  <span className="sep">|</span>
-                  <span>Kelly {potd.kelly_pct}%</span>
-                </>
-              )}
-            </div>
+        <section className="rounded-lg border border-warning/40 bg-warning/5 p-5">
+          <div className="text-[10px] font-semibold uppercase tracking-widest text-warning">
+            {sport.toUpperCase()} Derivative Pick of the Day
           </div>
-        </div>
+          <div className="mt-1 text-lg font-bold text-foreground">
+            {potd.matchup} · {humanizeBetType(potd.bet_type)}
+          </div>
+          <div className="mt-0.5 text-base font-semibold text-warning">
+            {potd.pick}
+          </div>
+          <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            <span>edge {potd.edge != null ? `+${potd.edge.toFixed(1)}%` : '-'}</span>
+            <span className="text-border">·</span>
+            <span className="tabular-nums">odds {potd.odds > 0 ? '+' : ''}{potd.odds}</span>
+            <span className="text-border">·</span>
+            <span className="tabular-nums">prob {potd.model_prob ? `${(potd.model_prob * 100).toFixed(1)}%` : '-'}</span>
+            {potd.kelly_pct != null && (
+              <>
+                <span className="text-border">·</span>
+                <span className="tabular-nums">Kelly {potd.kelly_pct}%</span>
+              </>
+            )}
+          </div>
+        </section>
       )}
 
+      {/* Hero summary */}
       {grand.total > 0 && (
-        <div className="pick-hero">
-          <div className="pick-hero-main">
-            <div className="pick-hero-profit-label">DERIVATIVE P/L</div>
-            <div className={`pick-hero-profit ${
-              grand.profit > 0 ? 'positive'
-              : grand.profit < 0 ? 'negative' : ''}`}>
-              {grand.profit > 0 ? '+' : ''}${(grand.profit || 0).toFixed(2)}
-            </div>
-            <div className="pick-hero-meta">
-              <span>{grand.wins || 0}-{grand.losses || 0}</span>
-              <span className="sep">|</span>
-              <span>{grand.win_pct || 0}% WR</span>
-              <span className="sep">|</span>
-              <span>{grand.total || 0} picks</span>
-              {grand.pending > 0 && (
-                <>
-                  <span className="sep">|</span>
-                  <span className="pending">{grand.pending} pending</span>
-                </>
-              )}
-            </div>
+        <section className="rounded-lg border border-border bg-card p-5">
+          <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+            Derivative P/L
+          </div>
+          <div className={cn('mt-1 text-3xl font-bold tabular-nums', profitTone)}>
+            {grand.profit > 0 ? '+' : ''}${(grand.profit || 0).toFixed(2)}
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            <span className="tabular-nums">{grand.wins || 0}-{grand.losses || 0}</span>
+            <span className="text-border">·</span>
+            <span className="tabular-nums">{grand.win_pct || 0}% WR</span>
+            <span className="text-border">·</span>
+            <span className="tabular-nums">{grand.total || 0} picks</span>
+            {grand.pending > 0 && (
+              <>
+                <span className="text-border">·</span>
+                <span className="rounded-full bg-warning/15 px-2 py-0.5 text-warning font-semibold tabular-nums">
+                  {grand.pending} pending
+                </span>
+              </>
+            )}
           </div>
 
-          {/* Per-bet-type tiles, same style as PickHistory's */}
           {typesWithData.length > 0 && (
-            <div className="pick-type-tiles">
+            <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
               {typesWithData.map(([key, s]) => {
-                const profitable = s.profit > 0
+                const tone = s.profit > 0
+                  ? 'text-positive' : s.profit < 0 ? 'text-negative' : 'text-foreground'
                 return (
-                  <div key={key} className={`pick-type-tile ${
-                    profitable ? 'profitable'
-                    : s.profit < 0 ? 'losing' : ''}`}>
-                    <div className="pick-type-label">
+                  <div
+                    key={key}
+                    className="rounded-md border border-border bg-background/50 px-3 py-2.5"
+                  >
+                    <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground truncate">
                       {humanizeBetType(key)}
                     </div>
-                    <div className={`pick-type-profit ${
-                      profitable ? 'positive'
-                      : s.profit < 0 ? 'negative' : ''}`}>
+                    <div className={cn('mt-0.5 text-base font-semibold tabular-nums', tone)}>
                       {s.profit > 0 ? '+' : ''}${(s.profit || 0).toFixed(2)}
                     </div>
-                    <div className="pick-type-record">
+                    <div className="text-[10px] text-muted-foreground tabular-nums">
                       {s.wins}-{s.losses} ({s.win_pct}%)
                     </div>
                   </div>
@@ -175,30 +176,46 @@ export default function DerivativeTracker({ sport, api }) {
               })}
             </div>
           )}
-        </div>
+        </section>
       )}
 
       {todaysPicks.length > 0 && (
-        <div className="result-card">
-          <h2>Today's Picks ({todaysPicks.length})</h2>
+        <section className="rounded-lg border border-border bg-card overflow-hidden">
+          <div className="flex items-center justify-between px-5 py-3 border-b border-border">
+            <h3 className="text-sm font-semibold text-foreground">
+              Today's Picks
+            </h3>
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              {todaysPicks.length} live
+            </span>
+          </div>
           <DerivativePicksTable picks={todaysPicks} pct={pct} />
-        </div>
+        </section>
       )}
 
       {pastPicks.length > 0 && (
-        <div className="result-card" style={{ marginTop: 16 }}>
-          <h2>Recent History</h2>
+        <section className="rounded-lg border border-border bg-card overflow-hidden">
+          <div className="flex items-center justify-between px-5 py-3 border-b border-border">
+            <h3 className="text-sm font-semibold text-foreground">
+              Recent History
+            </h3>
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              {pastPicks.length} settled
+            </span>
+          </div>
           <DerivativePicksTable picks={pastPicks} pct={pct} />
-        </div>
+        </section>
       )}
 
       {(!history || history.length === 0) && (!summary || grand.total === 0) && (
-        <div className="no-games" style={{ marginTop: 20 }}>
-          <p>No derivative picks logged yet.</p>
-          <p className="sub">
-            Auto-records on each best-bets refresh once today's slate
-            has playable derivative edges.
-          </p>
+        <div className="rounded-lg border border-dashed border-border bg-card/50 px-6 py-10 text-center">
+          <div className="text-sm font-semibold text-foreground">
+            No derivative picks logged yet.
+          </div>
+          <div className="mt-1 text-xs text-muted-foreground">
+            Auto-records on each best-bets refresh once today's slate has
+            playable derivative edges.
+          </div>
         </div>
       )}
     </div>
@@ -208,53 +225,55 @@ export default function DerivativeTracker({ sport, api }) {
 
 function DerivativePicksTable({ picks, pct }) {
   return (
-    <table className="picks-table">
-      <thead>
-        <tr>
-          <th>Date</th>
-          <th>Matchup</th>
-          <th>Market</th>
-          <th>Pick</th>
-          <th>Odds</th>
-          <th>Prob</th>
-          <th>Edge</th>
-          <th>Result</th>
-          <th>P/L</th>
-        </tr>
-      </thead>
-      <tbody>
-        {picks.map((p, i) => {
-          const resultClass = p.result === 'W' ? 'row-win'
-            : p.result === 'L' ? 'row-loss' : 'row-pending'
-          return (
-            <tr key={p.id || i} className={resultClass}>
-              <td className="col-date">{p.date?.slice(5)}</td>
-              <td className="col-matchup">{p.matchup}</td>
-              <td><span className="type-badge">{humanizeBetType(p.bet_type)}</span></td>
-              <td style={{ fontWeight: 600 }}>{p.pick}</td>
-              <td style={{ color: '#94a3b8' }}>
-                {p.odds ? `${p.odds > 0 ? '+' : ''}${p.odds}` : '-'}
-              </td>
-              <td>{p.model_prob ? pct(p.model_prob) : '-'}</td>
-              <td className={p.edge > 4 ? 'positive' : ''}>
-                {p.edge ? `+${p.edge.toFixed(1)}%` : '-'}
-              </td>
-              <td>
-                {p.result === 'W' && <span className="result-pill win">W</span>}
-                {p.result === 'L' && <span className="result-pill loss">L</span>}
-                {p.result === 'P' && <span className="result-pill push">P</span>}
-                {!p.result && <span className="result-pill pending">PEND</span>}
-              </td>
-              <td className={p.profit > 0 ? 'positive' : p.profit < 0 ? 'negative' : ''}
-                  style={{ fontWeight: 600 }}>
-                {p.profit != null
-                  ? `${p.profit > 0 ? '+' : ''}$${p.profit.toFixed(2)}`
-                  : '-'}
-              </td>
-            </tr>
-          )
-        })}
-      </tbody>
-    </table>
+    <div className="overflow-x-auto">
+      <table className="picks-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Matchup</th>
+            <th>Market</th>
+            <th>Pick</th>
+            <th>Odds</th>
+            <th>Prob</th>
+            <th>Edge</th>
+            <th>Result</th>
+            <th>P/L</th>
+          </tr>
+        </thead>
+        <tbody>
+          {picks.map((p, i) => {
+            const resultClass = p.result === 'W' ? 'row-win'
+              : p.result === 'L' ? 'row-loss' : 'row-pending'
+            return (
+              <tr key={p.id || i} className={resultClass}>
+                <td className="col-date">{p.date?.slice(5)}</td>
+                <td className="col-matchup">{p.matchup}</td>
+                <td><span className="type-badge">{humanizeBetType(p.bet_type)}</span></td>
+                <td style={{ fontWeight: 600 }}>{p.pick}</td>
+                <td style={{ color: '#94a3b8' }}>
+                  {p.odds ? `${p.odds > 0 ? '+' : ''}${p.odds}` : '-'}
+                </td>
+                <td>{p.model_prob ? pct(p.model_prob) : '-'}</td>
+                <td className={p.edge > 4 ? 'positive' : ''}>
+                  {p.edge ? `+${p.edge.toFixed(1)}%` : '-'}
+                </td>
+                <td>
+                  {p.result === 'W' && <span className="result-pill win">W</span>}
+                  {p.result === 'L' && <span className="result-pill loss">L</span>}
+                  {p.result === 'P' && <span className="result-pill push">P</span>}
+                  {!p.result && <span className="result-pill pending">PEND</span>}
+                </td>
+                <td className={p.profit > 0 ? 'positive' : p.profit < 0 ? 'negative' : ''}
+                    style={{ fontWeight: 600 }}>
+                  {p.profit != null
+                    ? `${p.profit > 0 ? '+' : ''}$${p.profit.toFixed(2)}`
+                    : '-'}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
   )
 }
