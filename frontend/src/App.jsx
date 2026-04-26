@@ -479,7 +479,7 @@ export default function App() {
         gameCounts={gameCounts}
       />
 
-      <main className="flex-1 min-w-0 overflow-x-hidden">
+      <main className="flex-1 min-w-0 overflow-x-hidden pt-14 md:pt-0">
        {surface === 'dashboard' ? (
          <div className="app">
            <RootDashboard

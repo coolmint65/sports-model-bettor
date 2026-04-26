@@ -95,7 +95,7 @@ function PickEventsBadgeImpl({ sport, gameId }) {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full z-20 mt-1 w-72 rounded-lg border border-border bg-popover shadow-lg">
+        <div className="absolute right-0 top-full z-20 mt-1 w-72 rounded-lg border border-border bg-popover shadow-lg animate-in fade-in zoom-in-95 duration-150 origin-top-right">
           <div className="px-3 py-2 border-b border-border text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             Pick history (24h)
           </div>
