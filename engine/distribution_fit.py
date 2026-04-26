@@ -1,0 +1,377 @@
+"""
+Per-stat distribution fitter for the per-player MC extension
+(Phase 2g-ii / 2h-ii / 2i-ii).
+
+Decides which parametric family best describes a player-stat's
+per-game distribution, so the MC loop can sample from the right shape
+when projecting prop probabilities. Defaults like "Poisson for batter
+HR" looked plausible but missed the over-dispersion that drives both
+the zero-inflation and the multi-HR tail — wrong family means our
+prop edges are wrong by 5-10% for the high-stakes stats.
+
+Approach: pool every (player, game) observation for a stat, fit
+candidate families on the pooled data, score by AIC, and check
+goodness of fit with K-S. The mean variance budget is what matters
+for MC (each player gets their own μ from rolling history; the family
++ dispersion describes shape around that μ).
+
+Entry point::
+
+    summarize_stat(sport, stat_key) -> dict
+
+prints / returns the leaderboard so the model author can see the gap
+between candidates instead of trusting one number.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import math
+import sqlite3
+from typing import Any, Callable
+
+logger = logging.getLogger(__name__)
+
+try:
+    import numpy as np
+    from scipy import stats as _stats
+    from scipy.optimize import minimize
+    _HAVE_SCIPY = True
+except ImportError:
+    _HAVE_SCIPY = False
+
+
+def _conn_for(sport: str) -> sqlite3.Connection:
+    if sport == "mlb":
+        from .db import get_conn
+    elif sport == "nhl":
+        from .nhl_db import get_conn
+    elif sport == "nba":
+        from .nba_db import get_conn
+    else:
+        raise ValueError(f"unknown sport: {sport}")
+    return get_conn()
+
+
+def pull_observations(sport: str, stat_key: str,
+                      min_games_per_player: int = 5,
+                      since_date: str | None = None) -> "np.ndarray":
+    """Returns a 1-D numpy array of every observed value for `stat_key`
+    across all (player, game) rows in player_game_logs. Filters out
+    players with fewer than ``min_games_per_player`` observations so
+    the fit doesn't get dragged by tiny-sample noise."""
+    conn = _conn_for(sport)
+    where = []
+    params: list = []
+    if since_date:
+        where.append("date >= ?")
+        params.append(since_date)
+    sql = "SELECT player_id, stats_json FROM player_game_logs"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    rows = conn.execute(sql, params).fetchall()
+
+    by_player: dict[int, list[float]] = {}
+    for r in rows:
+        pid = r["player_id"] if hasattr(r, "keys") else r[0]
+        sj = r["stats_json"] if hasattr(r, "keys") else r[1]
+        try:
+            stats = json.loads(sj or "{}")
+        except (TypeError, ValueError):
+            continue
+        if stat_key not in stats:
+            continue
+        v = stats[stat_key]
+        if v is None:
+            continue
+        try:
+            by_player.setdefault(pid, []).append(float(v))
+        except (TypeError, ValueError):
+            continue
+
+    pooled: list[float] = []
+    for pid, vals in by_player.items():
+        if len(vals) >= min_games_per_player:
+            pooled.extend(vals)
+    return np.asarray(pooled, dtype=float) if _HAVE_SCIPY else pooled
+
+
+# ── Candidate families ────────────────────────────────────────
+# Each candidate returns (name, neg_log_likelihood, aic, bic, params,
+# pmf_callable). pmf_callable maps int k → P(X=k) for K-S testing
+# against the observed empirical CDF.
+
+def _fit_poisson(data) -> dict:
+    mu = float(np.mean(data))
+    if mu <= 0:
+        return {"name": "Poisson", "ll": -float("inf"), "aic": float("inf"),
+                "bic": float("inf"), "params": {"mu": mu}, "pmf": None}
+    ll = float(np.sum(_stats.poisson.logpmf(data, mu)))
+    k = 1
+    n = len(data)
+    return {
+        "name": "Poisson",
+        "ll": ll,
+        "aic": 2 * k - 2 * ll,
+        "bic": k * math.log(n) - 2 * ll,
+        "params": {"mu": mu},
+        "pmf": lambda x: _stats.poisson.pmf(x, mu),
+    }
+
+
+def _fit_negbin(data) -> dict:
+    """NegBin(r, p) parametrization. r = dispersion (smaller r =
+    more overdispersed). Solved via MLE on (r, p) jointly."""
+    mu = float(np.mean(data))
+    var = float(np.var(data))
+    if var <= mu or mu <= 0:
+        # No overdispersion — NegBin reduces to Poisson, will lose
+        # by AIC penalty for the extra parameter.
+        return {"name": "NegBin", "ll": -float("inf"), "aic": float("inf"),
+                "bic": float("inf"), "params": {}, "pmf": None}
+    # Method-of-moments init
+    r0 = mu * mu / (var - mu)
+    p0 = r0 / (r0 + mu)
+    def neg_ll(params):
+        r, p = params
+        if r <= 0 or p <= 0 or p >= 1:
+            return 1e10
+        return -float(np.sum(_stats.nbinom.logpmf(data, r, p)))
+    res = minimize(neg_ll, [r0, p0], method="Nelder-Mead",
+                   options={"xatol": 1e-4, "fatol": 1e-4, "maxiter": 500})
+    r, p = res.x
+    if r <= 0 or p <= 0 or p >= 1:
+        return {"name": "NegBin", "ll": -float("inf"), "aic": float("inf"),
+                "bic": float("inf"), "params": {}, "pmf": None}
+    ll = -float(res.fun)
+    k = 2
+    n = len(data)
+    return {
+        "name": "NegBin",
+        "ll": ll,
+        "aic": 2 * k - 2 * ll,
+        "bic": k * math.log(n) - 2 * ll,
+        "params": {"r": float(r), "p": float(p),
+                   "mu": float(r * (1 - p) / p),
+                   "dispersion_k": float(r)},
+        "pmf": lambda x: _stats.nbinom.pmf(x, r, p),
+    }
+
+
+def _fit_zip(data) -> dict:
+    """Zero-inflated Poisson. Mixture: with prob π emit 0; else draw
+    from Poisson(λ). Useful when data has more zeros than Poisson
+    expects (rare-event stats like HR, SB)."""
+    n = len(data)
+    if n == 0:
+        return {"name": "ZIP", "ll": -float("inf"), "aic": float("inf"),
+                "bic": float("inf"), "params": {}, "pmf": None}
+    # MLE init: π = excess zeros above Poisson, λ = mean of non-zero block
+    p0_obs = float(np.mean(data == 0))
+    mu0 = float(np.mean(data))
+    if mu0 <= 0 or p0_obs <= math.exp(-mu0):
+        # No excess zeros — ZIP reduces to Poisson
+        return {"name": "ZIP", "ll": -float("inf"), "aic": float("inf"),
+                "bic": float("inf"), "params": {}, "pmf": None}
+    pi0 = (p0_obs - math.exp(-mu0)) / (1 - math.exp(-mu0))
+    lam0 = mu0 / (1 - pi0) if pi0 < 1 else mu0
+    def neg_ll(params):
+        pi, lam = params
+        if pi < 0 or pi >= 1 or lam <= 0:
+            return 1e10
+        zero_prob = pi + (1 - pi) * math.exp(-lam)
+        if zero_prob <= 0:
+            return 1e10
+        ll_z = math.log(zero_prob) * float(np.sum(data == 0))
+        nz = data[data > 0]
+        ll_nz = float(np.sum(np.log(1 - pi) + _stats.poisson.logpmf(nz, lam)))
+        return -(ll_z + ll_nz)
+    res = minimize(neg_ll, [max(pi0, 0.01), max(lam0, 0.01)],
+                   method="Nelder-Mead",
+                   options={"xatol": 1e-4, "fatol": 1e-4, "maxiter": 500})
+    pi, lam = res.x
+    if pi < 0 or pi >= 1 or lam <= 0:
+        return {"name": "ZIP", "ll": -float("inf"), "aic": float("inf"),
+                "bic": float("inf"), "params": {}, "pmf": None}
+    ll = -float(res.fun)
+    k = 2
+    return {
+        "name": "ZIP",
+        "ll": ll,
+        "aic": 2 * k - 2 * ll,
+        "bic": k * math.log(n) - 2 * ll,
+        "params": {"pi": float(pi), "lambda": float(lam),
+                   "mu": float((1 - pi) * lam)},
+        "pmf": lambda x: (pi if x == 0 else 0.0) + (1 - pi) * float(_stats.poisson.pmf(x, lam)),
+    }
+
+
+def _fit_geometric(data) -> dict:
+    """Geometric for stats where most observations are 0 with
+    a long tail (rarely used but worth checking for SB/HR)."""
+    mu = float(np.mean(data))
+    if mu <= 0:
+        return {"name": "Geometric", "ll": -float("inf"), "aic": float("inf"),
+                "bic": float("inf"), "params": {}, "pmf": None}
+    p = 1 / (1 + mu)
+    # scipy.stats.geom is 1-indexed; we use the "number of failures"
+    # convention which is k=0,1,2,...
+    ll = float(np.sum(np.log(p) + data * np.log(1 - p)))
+    k = 1
+    n = len(data)
+    return {
+        "name": "Geometric",
+        "ll": ll,
+        "aic": 2 * k - 2 * ll,
+        "bic": k * math.log(n) - 2 * ll,
+        "params": {"p": float(p), "mu": mu},
+        "pmf": lambda x: float(p * (1 - p) ** x),
+    }
+
+
+def _ks_test(data, pmf: Callable[[int], float], max_k: int = 50) -> float:
+    """One-sample K-S statistic between empirical CDF and the fitted
+    family's CDF. Lower is better; D < 0.05 is "very close fit."""
+    if pmf is None:
+        return float("inf")
+    n = len(data)
+    sorted_data = np.sort(data)
+    # Build fitted CDF
+    fitted_pmf = np.array([pmf(k) for k in range(max_k + 1)])
+    fitted_cdf = np.cumsum(fitted_pmf)
+    # For each observation, compare empirical vs fitted CDF
+    max_diff = 0.0
+    for k_int in range(max_k + 1):
+        empirical = float(np.sum(sorted_data <= k_int)) / n
+        fitted = float(fitted_cdf[k_int]) if k_int < len(fitted_cdf) else 1.0
+        max_diff = max(max_diff, abs(empirical - fitted))
+    return max_diff
+
+
+_CANDIDATES = [_fit_poisson, _fit_negbin, _fit_zip, _fit_geometric]
+
+
+def fit_all(data) -> list[dict]:
+    """Fit every candidate, return list sorted by AIC (lowest first)."""
+    results = []
+    for fitter in _CANDIDATES:
+        try:
+            r = fitter(data)
+        except Exception as e:
+            logger.warning("%s failed: %s", fitter.__name__, e)
+            continue
+        if r["pmf"] is not None:
+            r["ks"] = _ks_test(data, r["pmf"])
+        else:
+            r["ks"] = float("inf")
+        results.append(r)
+    return sorted(results, key=lambda r: r["aic"])
+
+
+def summarize_stat(sport: str, stat_key: str,
+                   min_games_per_player: int = 5,
+                   since_date: str | None = None) -> dict:
+    """Print + return the leaderboard for one (sport, stat). Includes
+    descriptive stats so you can sanity-check the fit choice."""
+    if not _HAVE_SCIPY:
+        raise RuntimeError("scipy + numpy required")
+    data = pull_observations(sport, stat_key, min_games_per_player, since_date)
+    if len(data) < 30:
+        return {"stat": stat_key, "n": len(data),
+                "warning": "insufficient data (<30 observations)"}
+
+    desc = {
+        "n": int(len(data)),
+        "mean": float(np.mean(data)),
+        "var": float(np.var(data)),
+        "p_zero": float(np.mean(data == 0)),
+        "max": int(np.max(data)),
+    }
+    desc["overdispersion"] = round(desc["var"] / desc["mean"], 2) if desc["mean"] > 0 else float("inf")
+    fits = fit_all(data)
+    return {
+        "sport": sport, "stat": stat_key,
+        "descriptive": desc,
+        "leaderboard": [
+            {"family": f["name"], "aic": round(f["aic"], 1),
+             "ks": round(f["ks"], 4), "params": f["params"]}
+            for f in fits
+        ],
+        "best": fits[0]["name"] if fits else None,
+    }
+
+
+def summarize_all_mlb_stats(min_games_per_player: int = 5) -> list[dict]:
+    """Run the leaderboard on every MLB stat the props pipeline tracks."""
+    stats = [
+        # Pitcher
+        "k_p", "bb_p", "outs", "er", "h_allowed",
+        # Batter
+        "hr", "h", "tb", "rbi", "r", "sb", "bb_b", "k_b",
+    ]
+    out = []
+    for s in stats:
+        out.append(summarize_stat("mlb", s, min_games_per_player))
+    return out
+
+
+# ── Locked decisions ──────────────────────────────────────────
+# Source of truth for the MC sampler in 2g-ii / 2h-ii / 2i-ii. Each
+# entry: which parametric family to use, and (for NegBin) the pooled
+# dispersion ``k`` to combine with each player's rolling mean μ.
+#
+# Per-player μ comes from rolling history at MC time. The dispersion
+# ``k`` is shared across players within a stat — the data shows a
+# stable shape parameter even when means vary 5-10x, so a pooled fit
+# is the right granularity. If a stat shows mean-dependent shape we
+# can revisit by tier.
+#
+# Family meanings:
+#   poisson   → sample ~ Poisson(μ)
+#   negbin    → sample ~ NegBin(r=k, p=k/(k+μ)); var = μ + μ²/k
+#   geometric → sample ~ Geom(p=1/(1+μ)) on {0, 1, 2, ...}
+#
+# Decisions locked from pooled MLB fit on 2026-04-26 (n≥3319 per
+# pitcher stat, n=8411 per batter stat). Re-run summarize_all_mlb_stats
+# quarterly and update if the AIC leader changes.
+
+_MLB_STAT_DISTRIBUTIONS: dict[str, dict] = {
+    # Pitcher
+    "k_p":       {"family": "negbin",   "dispersion_k": 1.67},
+    "bb_p":      {"family": "negbin",   "dispersion_k": 1.80},
+    "outs":      {"family": "negbin",   "dispersion_k": 1.83,
+                  "note": "bimodal SP/RP — fit per-role in 2g-ii (KS=0.22 pooled)"},
+    "er":        {"family": "negbin",   "dispersion_k": 0.56,
+                  "note": "heavy overdispersion — Poisson would underprice tail by ~10%"},
+    "h_allowed": {"family": "negbin",   "dispersion_k": 1.13},
+    # Batter
+    "hr":        {"family": "poisson",
+                  "note": "ZIP/NegBin within 0.1 AIC; Poisson simpler wins"},
+    "h":         {"family": "poisson",
+                  "note": "under-dispersed (od=0.91); beta-binom was unnecessary"},
+    "tb":        {"family": "negbin",   "dispersion_k": 0.975},
+    "rbi":       {"family": "negbin",   "dispersion_k": 0.66},
+    "r":         {"family": "poisson",
+                  "note": "var~mean (od=0.99) -- Poisson, not NegBin"},
+    "sb":        {"family": "geometric",
+                  "note": "rare event μ=0.07; all families within 12 AIC"},
+    "bb_b":      {"family": "poisson"},
+    "k_b":       {"family": "poisson"},
+}
+
+
+def get_distribution(sport: str, stat_key: str) -> dict | None:
+    """Locked per-stat distribution choice for the MC sampler. Returns
+    ``{family, dispersion_k?, note?}`` or None when stat isn't known."""
+    if sport == "mlb":
+        return _MLB_STAT_DISTRIBUTIONS.get(stat_key)
+    # NBA / NHL land with 2h-ii / 2i-ii after their game-log ingest.
+    return None
+
+
+__all__ = [
+    "summarize_stat", "summarize_all_mlb_stats",
+    "fit_all", "pull_observations",
+    "get_distribution", "_MLB_STAT_DISTRIBUTIONS",
+]
