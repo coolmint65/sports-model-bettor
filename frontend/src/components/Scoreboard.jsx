@@ -28,10 +28,10 @@ function MLBGameCard({ game, bet, onClick, sport }) {
   const { home, away } = game
 
   const starters = (game.home_pitcher || game.away_pitcher) ? (
-    <div className="game-pitchers">
-      <span className="pitcher">{game.away_pitcher?.name || 'TBD'}</span>
-      <span className="vs">vs</span>
-      <span className="pitcher">{game.home_pitcher?.name || 'TBD'}</span>
+    <div className="flex items-center justify-center gap-2 text-xs">
+      <span className="font-medium text-foreground/85 truncate">{game.away_pitcher?.name || 'TBD'}</span>
+      <span className="text-muted-foreground">vs</span>
+      <span className="font-medium text-foreground/85 truncate">{game.home_pitcher?.name || 'TBD'}</span>
     </div>
   ) : null
 

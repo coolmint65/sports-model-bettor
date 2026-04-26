@@ -1,15 +1,23 @@
 import PredictionResults from './PredictionResults'
 import GameDetailShell from './primitives/GameDetailShell'
-// Kelly removed — not used
+import SectionCard from './primitives/SectionCard'
 import ProbHistogram from './gameDetail/ProbHistogram'
+import { cn } from '../lib/utils'
 
+/**
+ * MLB GameDetail page wrapper. Phase 2-cleanup restyle: matchup
+ * pitcher row + sidebar Model Picks now Tailwind. Main column
+ * delegates to PredictionResults (already restyled in 2-cleanup).
+ */
 export default function GameDetail({ game, prediction, loading, onBack }) {
   const mergedPrediction = prediction ? mergePitcherData(prediction, game) : null
 
   const matchupExtras = (game.home_pitcher || game.away_pitcher) ? (
-    <div className="pitching-matchup">
+    <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto_1fr] sm:items-center">
       <PitcherCard label="Away SP" pitcher={game.away_pitcher} />
-      <div className="vs-label">VS</div>
+      <span className="text-center text-[10px] font-bold uppercase tracking-widest text-muted-foreground/60">
+        VS
+      </span>
       <PitcherCard label="Home SP" pitcher={game.home_pitcher} />
     </div>
   ) : null
@@ -29,15 +37,20 @@ export default function GameDetail({ game, prediction, loading, onBack }) {
   )
 }
 
+
 function PitcherCard({ label, pitcher }) {
   return (
-    <div className="pitcher-card">
-      <div className="pitcher-label">{label}</div>
-      <div className="pitcher-name">{pitcher?.name || 'TBD'}</div>
+    <div className="rounded-md border border-border bg-background/40 px-3 py-2.5">
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        {label}
+      </div>
+      <div className="mt-0.5 text-sm font-bold text-foreground truncate">
+        {pitcher?.name || 'TBD'}
+      </div>
       {pitcher?.stats?.length > 0 && (
-        <div className="pitcher-stats-row">
+        <div className="mt-1 flex flex-wrap gap-x-3 text-[11px] tabular-nums text-muted-foreground">
           {pitcher.stats.map((s, i) => (
-            <span key={i} className="pitcher-stat">{s.name}: {s.value}</span>
+            <span key={i}>{s.name}: {s.value}</span>
           ))}
         </div>
       )}
@@ -46,66 +59,46 @@ function PitcherCard({ label, pitcher }) {
 }
 
 
-// Render the unified picks list from engine.picks.generate_picks() -- the
-// SAME engine the Scoreboard best-bet badge and POTD selection use. No
-// client-side edge/direction-filter logic lives here: if the engine says a
-// market has no playable edge (or the direction is disabled in config),
-// the row simply doesn't appear. This guarantees the sidebar, scoreboard
-// card, and POTD never disagree on what the model is recommending.
 function BettingPicks({ data }) {
   const d = data
   const pct = n => n == null ? '-' : `${(n * 100).toFixed(1)}%`
   const picks = Array.isArray(d?.picks) ? d.picks : []
-  const bestKey = d?.best_pick
-    ? `${d.best_pick.type}|${d.best_pick.pick}`
-    : null
+  const bestKey = d?.best_pick ? `${d.best_pick.type}|${d.best_pick.pick}` : null
   const total = d?.total
-  // Odds snapshot the engine used. Carries `provider` (full-game book,
-  // typically DraftKings) and `per_event_provider` (NRFI/F5 book, which
-  // is whichever of DK/FD/MGM/Bovada had data). Surfaced per row so the
-  // user knows where each price came from.
   const odds = d?.odds || {}
-  // Runtime overrides written by engine.train --apply. When non-empty
-  // the sidebar renders a subtle notice so the user knows certain
-  // markets have been suppressed by data, not by a source-code edit.
   const overrides = Array.isArray(d?.active_overrides) ? d.active_overrides : []
 
   return (
-    <div className="picks-card">
-      <h2>Model Picks</h2>
-
-      <OverrideNotice overrides={overrides} />
-
-      {picks.length === 0 && (
-        <div className="picks-empty" style={{padding:'1rem', color:'#94a3b8', fontSize:'0.85rem'}}>
-          No playable edge found on any market.
-        </div>
+    <SectionCard
+      title="Model Picks"
+      rightSlot={total != null && (
+        <span className="text-[11px] text-muted-foreground tabular-nums">
+          Total: <strong>{total.toFixed(1)}</strong>
+        </span>
       )}
-
-      {picks.map((p, i) => (
-        <PickRow
-          key={`${p.type}-${p.pick}-${i}`}
-          engine={p}
-          isBest={bestKey === `${p.type}|${p.pick}`}
-          provider={_providerForPick(p.type, odds)}
-          pct={pct}
-        />
-      ))}
-
-      {total != null && (
-        <div className="picks-footer">
-          Model projected total: <strong>{total.toFixed(1)}</strong>
-        </div>
-      )}
-    </div>
+    >
+      <div className="space-y-3">
+        <OverrideNotice overrides={overrides} />
+        {picks.length === 0 && (
+          <div className="rounded-md border border-dashed border-border bg-card/50 px-3 py-4 text-center text-xs text-muted-foreground">
+            No playable edge found on any market.
+          </div>
+        )}
+        {picks.map((p, i) => (
+          <PickRow
+            key={`${p.type}-${p.pick}-${i}`}
+            engine={p}
+            isBest={bestKey === `${p.type}|${p.pick}`}
+            provider={_providerForPick(p.type, odds)}
+            pct={pct}
+          />
+        ))}
+      </div>
+    </SectionCard>
   )
 }
 
 
-// Small amber notice listing any runtime overrides currently silencing
-// picks. Individual overrides show on hover with the supporting stats
-// (N samples, p-value, days until expiry). Rendering nothing when the
-// list is empty keeps the card clean in the default case.
 function OverrideNotice({ overrides }) {
   if (!overrides || overrides.length === 0) return null
   const labels = overrides.map(o => _prettyFlagName(o.key))
@@ -118,31 +111,17 @@ function OverrideNotice({ overrides }) {
   return (
     <div
       title={tooltip}
-      style={{
-        margin: '0.25rem 0 0.75rem',
-        padding: '0.5rem 0.75rem',
-        borderRadius: 4,
-        background: 'rgba(251,191,36,0.08)',
-        border: '1px solid rgba(251,191,36,0.35)',
-        color: '#fbbf24',
-        fontSize: '0.72rem',
-        cursor: 'help',
-        lineHeight: 1.35,
-      }}
+      className="rounded-md border border-warning/35 bg-warning/10 px-3 py-2 text-xs text-warning cursor-help leading-snug"
     >
-      <strong style={{ letterSpacing: '0.04em' }}>
+      <strong className="tracking-wider">
         {overrides.length === 1 ? '1 MARKET' : `${overrides.length} MARKETS`} SUPPRESSED BY DATA
       </strong>
-      <div style={{ opacity: 0.85, marginTop: 2 }}>
-        {labels.join(', ')}
-      </div>
+      <div className="mt-0.5 opacity-85">{labels.join(', ')}</div>
     </div>
   )
 }
 
 
-// Pretty-print a flag name for the override notice. Strips the
-// MLB_ALLOW_ prefix so "MLB_ALLOW_OU_UNDER" renders as "OU Under".
 function _prettyFlagName(flag) {
   return String(flag)
     .replace(/^MLB_ALLOW_/, '')
@@ -156,66 +135,67 @@ function _prettyFlagName(flag) {
 }
 
 
-// Per-event markets (NRFI / F5*) come from whichever of DK/FD/MGM/Bovada
-// had the line. Full-game markets (ML/O/U/RL) always use DraftKings.
 const _PER_EVENT_TYPES = new Set(['1st INN', 'F5 ML', 'F5 O/U', 'F5 RL'])
 function _providerForPick(type, odds) {
-  if (_PER_EVENT_TYPES.has(type)) {
-    return odds.per_event_provider || null
-  }
+  if (_PER_EVENT_TYPES.has(type)) return odds.per_event_provider || null
   return odds.provider || null
 }
 
 
-// Engine-produced pick fields: {type, pick, prob, prob_low, prob_high,
-// ci_half_width, edge, odds, confidence, adjusted_ev}. The engine
-// already filtered for positive edge + allowed direction, so the client
-// renders fields verbatim without recomputation.
 function PickRow({ engine, isBest, provider, pct }) {
-  const {type, pick, prob, prob_low, prob_high, ci_half_width,
-         edge, odds, confidence} = engine
+  const { type, pick, prob, prob_low, prob_high, ci_half_width,
+          edge, odds, confidence } = engine
   const conf = confidence === 'strong' ? 'high'
     : confidence === 'moderate' ? 'med'
     : confidence === 'lean' ? 'med'
     : 'low'
+  const confTone =
+    conf === 'high' ? 'text-positive' :
+    conf === 'med'  ? 'text-primary'  :
+                       'text-muted-foreground'
 
   return (
-    <div className={`pick-row conf-${conf}${isBest ? ' is-best' : ''}`}>
-      <div className="pick-label">{labelForType(type)}</div>
-      <div className="pick-choice">
-        <span className="pick-name">{pick}</span>
+    <div className={cn(
+      'rounded-md border bg-background/40 px-3 py-2.5',
+      isBest ? 'border-primary/40 ring-1 ring-primary/20' : 'border-border',
+    )}>
+      <div className="flex items-center justify-between text-xs">
+        <span className="font-semibold uppercase tracking-wider text-muted-foreground">
+          {labelForType(type)}
+        </span>
+        {edge != null && edge > 0 && (
+          <span className="font-bold tabular-nums text-positive">
+            +{edge.toFixed ? edge.toFixed(1) : edge}%
+          </span>
+        )}
+      </div>
+      <div className="mt-1 flex items-baseline gap-2">
+        <span className="text-sm font-bold text-foreground">{pick}</span>
         {odds != null && (
-          <span className="pick-odds">({odds > 0 ? '+' : ''}{odds})</span>
+          <span className="text-xs tabular-nums text-muted-foreground">
+            ({odds > 0 ? '+' : ''}{odds})
+          </span>
         )}
         {provider && (
           <span
-            className="pick-provider"
             title={`Price source: ${provider}`}
-            style={{fontSize:'0.62rem', color:'#64748b', marginLeft:6, letterSpacing:'0.04em'}}
+            className="ml-auto text-[10px] uppercase tracking-wider text-muted-foreground/70"
           >
             {provider}
           </span>
         )}
       </div>
-      <div className="pick-numbers">
-        <span className={`pick-prob conf-${conf}`}>{pct(prob)}</span>
-        <ProbHistogram
-          prob={prob}
-          low={prob_low}
-          high={prob_high}
-          halfWidth={ci_half_width}
-        />
-        {edge != null && edge > 0 && (
-          <span className="pick-edge positive">+{edge.toFixed ? edge.toFixed(1) : edge}%</span>
-        )}
+      <div className="mt-1 flex items-center gap-2">
+        <span className={cn('text-sm font-semibold tabular-nums', confTone)}>
+          {pct(prob)}
+        </span>
+        <ProbHistogram prob={prob} low={prob_low} high={prob_high} halfWidth={ci_half_width} />
       </div>
     </div>
   )
 }
 
 
-// Map engine pick types to sidebar row labels. Keep the Moneyline / O/U
-// phrasing the old UI used for familiarity.
 function labelForType(type) {
   switch (type) {
     case 'ML':      return 'Moneyline'

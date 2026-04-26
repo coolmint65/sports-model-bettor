@@ -1,21 +1,11 @@
 import { memo, useMemo } from 'react'
+import { cn } from '../lib/utils'
 
 /**
- * FirstInningPicks
- * ──────────────────────────────────────────────────────────────
- * Side section on the MLB games tab that surfaces NRFI/YRFI picks
- * the model likes today. Scans the per-game `all_picks` list (top 4
- * by adjusted EV) for any entry tagged `type === '1st INN'` with
- * meaningful edge, and renders them as a compact card list.
+ * FirstInningPicks — NRFI/YRFI surface section above the MLB scoreboard.
  *
- * Rendered above the main scoreboard so users can see the first-inning
- * plays at a glance without scrolling. Renders nothing when no games
- * have qualifying 1st-inning picks — avoids an empty-state card.
- *
- * Props:
- *   bestBets   — the array of per-game objects the Scoreboard gets.
- *                Each entry has { game_id, matchup, home, away,
- *                all_picks: [{type, pick, prob, edge, odds, ...}], time }
+ * Phase 2-cleanup restyle: Tailwind tokens. Backend already filters by
+ * MLB_*_MIN_EDGE so anything reaching this component is playable.
  */
 function FirstInningPicksImpl({ bestBets }) {
   const firstInningPicks = useMemo(() => {
@@ -23,10 +13,6 @@ function FirstInningPicksImpl({ bestBets }) {
     const out = []
     for (const bet of bestBets) {
       const picks = bet.all_picks || []
-      // NRFI must clear the 1% edge floor the backend already applies;
-      // YRFI must clear MLB_YRFI_MIN_EDGE (5% as of 2026-04-22). The
-      // backend filters those out before they hit here, so whatever
-      // reaches us is already playable — we just surface it.
       const fi = picks.find(p => p.type === '1st INN')
       if (!fi) continue
       out.push({
@@ -38,7 +24,6 @@ function FirstInningPicksImpl({ bestBets }) {
         pick: fi,
       })
     }
-    // Sort by edge descending so the strongest picks render first.
     out.sort((a, b) => (b.pick.edge || 0) - (a.pick.edge || 0))
     return out
   }, [bestBets])
@@ -48,20 +33,24 @@ function FirstInningPicksImpl({ bestBets }) {
   const pct = n => `${(n * 100).toFixed(1)}%`
 
   return (
-    <div className="first-inning-picks">
-      <h3 className="section-title first-inning-title">
-        First Inning Picks
-        <span className="first-inning-count">{firstInningPicks.length}</span>
-      </h3>
-      <p className="first-inning-subtitle">
+    <section className="mb-5">
+      <header className="mb-2 flex items-center gap-2">
+        <h3 className="text-lg font-semibold tracking-tight text-foreground">
+          First Inning Picks
+        </h3>
+        <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-semibold tabular-nums text-muted-foreground">
+          {firstInningPicks.length}
+        </span>
+      </header>
+      <p className="mb-3 text-xs text-muted-foreground">
         NRFI / YRFI plays the model likes for today's slate
       </p>
-      <div className="first-inning-grid">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
         {firstInningPicks.map(entry => (
           <FirstInningCard key={entry.game_id} entry={entry} pct={pct} />
         ))}
       </div>
-    </div>
+    </section>
   )
 }
 
@@ -69,35 +58,45 @@ function FirstInningPicksImpl({ bestBets }) {
 function FirstInningCard({ entry, pct }) {
   const { pick } = entry
   const isNrfi = pick.pick === 'NRFI'
-  const confClass =
-    pick.edge >= 8 ? 'strong' : pick.edge >= 4 ? 'moderate' : 'lean'
+  const confTint =
+    pick.edge >= 8 ? 'border-l-positive' :
+    pick.edge >= 4 ? 'border-l-primary'  :
+                     'border-l-border'
 
-  // Formatted game time cached once per entry.time ref.
   const gameTime = useMemo(
     () => entry.time
-      ? new Date(entry.time).toLocaleTimeString(
-          [], { hour: 'numeric', minute: '2-digit' })
+      ? new Date(entry.time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
       : '',
     [entry.time],
   )
 
   return (
-    <div className={`first-inning-card conf-${confClass}`}>
-      <div className="fi-matchup">
-        <span className="fi-teams">{entry.matchup}</span>
-        {gameTime && <span className="fi-time">{gameTime}</span>}
+    <div className={cn(
+      'rounded-lg border border-border border-l-4 bg-card px-3 py-2.5',
+      confTint,
+    )}>
+      <div className="flex items-center justify-between text-xs">
+        <span className="font-semibold text-foreground">{entry.matchup}</span>
+        {gameTime && (
+          <span className="tabular-nums text-muted-foreground">{gameTime}</span>
+        )}
       </div>
-      <div className="fi-pick-row">
-        <span className={`fi-pick-name fi-${isNrfi ? 'nrfi' : 'yrfi'}`}>
+      <div className="mt-1 flex items-baseline justify-between">
+        <span className={cn(
+          'text-lg font-bold',
+          isNrfi ? 'text-primary' : 'text-warning',
+        )}>
           {pick.pick}
         </span>
-        <span className="fi-odds">
+        <span className="text-sm font-semibold tabular-nums text-muted-foreground">
           {pick.odds > 0 ? '+' : ''}{pick.odds}
         </span>
       </div>
-      <div className="fi-stats">
-        <span className="fi-prob">{pct(pick.prob)}</span>
-        <span className={`fi-edge positive`}>+{pick.edge}% edge</span>
+      <div className="mt-1 flex items-center justify-between text-xs">
+        <span className="tabular-nums text-foreground/85">{pct(pick.prob)}</span>
+        <span className="font-semibold tabular-nums text-positive">
+          +{pick.edge}% edge
+        </span>
       </div>
     </div>
   )

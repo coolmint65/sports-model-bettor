@@ -42,15 +42,17 @@ function NBAGameCard({ game, bet, onClick, sport }) {
   const liveExtras = (
     <>
       {(isLive || isFinal) && q1.home != null && q1.away != null && (
-        <div className="q1-score-display">
-          <span className="q1-label">Q1</span>
-          <span className="q1-score-away">{away.abbreviation} {q1.away}</span>
-          <span className="q1-separator">-</span>
-          <span className="q1-score-home">{home.abbreviation} {q1.home}</span>
+        <div className="flex items-center justify-center gap-1.5 text-[11px] tabular-nums">
+          <span className="font-bold uppercase tracking-widest text-warning">Q1</span>
+          <span className="font-semibold text-foreground">{away.abbreviation} {q1.away}</span>
+          <span className="text-muted-foreground/60">-</span>
+          <span className="font-semibold text-foreground">{home.abbreviation} {q1.home}</span>
         </div>
       )}
       {isLive && (
-        <div className="live-quarter-indicator">{status.detail}</div>
+        <div className="text-center text-[10px] font-semibold uppercase tracking-wider text-negative tabular-nums">
+          {status.detail}
+        </div>
       )}
     </>
   )

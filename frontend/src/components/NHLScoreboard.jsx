@@ -43,9 +43,9 @@ function NHLGameCard({ game, bet, onClick, sport }) {
   const { home, away } = game
 
   const starters = (game.away_goalie || game.home_goalie) ? (
-    <div className="game-pitchers">
+    <div className="flex items-center justify-center gap-2 text-xs">
       <GoalieSlot g={game.away_goalie} />
-      <span className="vs">vs</span>
+      <span className="text-muted-foreground">vs</span>
       <GoalieSlot g={game.home_goalie} />
     </div>
   ) : null
@@ -69,27 +69,27 @@ function NHLGameCard({ game, bet, onClick, sport }) {
 }
 
 function GoalieSlot({ g }) {
-  if (!g?.name) return <span className="pitcher">TBD</span>
+  if (!g?.name) return <span className="font-medium text-foreground/70">TBD</span>
   return (
-    <span className="pitcher">
+    <span className="inline-flex items-center gap-1 font-medium text-foreground/85">
       {g.name}
       {g.status === 'confirmed' && (
         <span
-          className="goalie-mark goalie-confirmed"
+          className="text-positive"
           title="Confirmed starter (DailyFaceoff)"
           aria-label="Confirmed starting goalie"
         >✓</span>
       )}
       {g.status === 'expected' && (
         <span
-          className="goalie-mark goalie-expected"
+          className="text-warning"
           title="Projected starter (not yet confirmed)"
           aria-label="Projected starting goalie, not confirmed"
         >~</span>
       )}
       {g.save_pct > 0 && (
         <span
-          className="goalie-svpct"
+          className="ml-1 text-[10px] tabular-nums"
           style={{ color: svPctColor(g.save_pct) }}
           title={`League average: ~0.905. This starter ${svPctLabel(g.save_pct)}.`}
         >
