@@ -874,6 +874,7 @@ _MLB_PROP_TYPES: set[str] = {
     "Pitcher Earned Runs", "Pitcher Hits Allowed",
     "Batter HR", "Batter Hits O/U", "Batter TB", "Batter RBI",
     "Batter Runs Scored", "Batter Stolen Bases", "Batter Strikeouts",
+    "Batter Walks",
 }
 _NBA_PROP_TYPES: set[str] = {
     "Player Points", "Player Rebounds", "Player Assists",
@@ -2292,6 +2293,69 @@ def api_derivative_settle(sport: str):
         raise HTTPException(status_code=400, detail="Unknown sport")
     from engine.derivative_tracker import settle_derivative_picks
     return settle_derivative_picks(sport)
+
+
+# ── Player props (Phase 2f-iii) ──────────────────────────────
+# Props are heavy (4k+ rows for MLB) and only relevant on the Props
+# tab — never load them in the cold best-bets path. The tab fetches
+# /api/{sport}/props/today on demand. Today only MLB is wired; NBA
+# and NHL get their own scraper extensions in 2h / 2i.
+
+@app.get("/api/{sport}/props/today")
+def api_props_today(sport: str):
+    """Live HR player-prop lines for ``sport``. Returns dict keyed by
+    matchup (``AWAY@HOME``) → list of prop rows. 60s cache TTL inside
+    the scraper protects upstream from per-tick repeats."""
+    if sport != "mlb":
+        # NBA / NHL prop scrapers land in 2h / 2i; until then return
+        # empty rather than 404 so the frontend can render a "coming
+        # soon" empty state without distinguishing per-sport.
+        return {}
+    from scrapers.hardrock_props import fetch_mlb_props
+    try:
+        return fetch_mlb_props()
+    except Exception as e:
+        logger.warning("props fetch failed: %s", e)
+        return {}
+
+
+@app.get("/api/{sport}/props-tracker/summary")
+def api_props_summary(sport: str):
+    """Settled prop-pick history + pending list. Mirrors the derivative
+    summary endpoint shape so the same PicksTable shell renders both."""
+    if sport not in ("mlb", "nhl", "nba"):
+        raise HTTPException(status_code=400, detail="Unknown sport")
+    from engine.player_props_tracker import settle_player_props
+    from engine.player_props_db import list_picks
+    # Auto-settle any pending whose game logs have landed before
+    # returning the summary — same pattern as /derivative-tracker/summary.
+    try:
+        settle_player_props(sport)
+    except Exception as e:
+        logger.warning("player_props auto-settle (%s) failed: %s", sport, e)
+    settled = list_picks(sport, limit=200)
+    pending = [p for p in settled if p.get("result") is None]
+    finished = [p for p in settled if p.get("result") is not None]
+    wins   = sum(1 for p in finished if p["result"] == "W")
+    losses = sum(1 for p in finished if p["result"] == "L")
+    pushes = sum(1 for p in finished if p["result"] == "P")
+    profit = sum(float(p.get("profit") or 0) for p in finished)
+    return {
+        "wins": wins, "losses": losses, "pushes": pushes,
+        "total": wins + losses + pushes,
+        "win_pct": round(wins / (wins + losses) * 100, 1) if (wins + losses) else 0.0,
+        "profit": round(profit, 2),
+        "pending": pending,
+        "history": finished,
+    }
+
+
+@app.post("/api/{sport}/props-tracker/settle")
+def api_props_settle(sport: str):
+    if sport not in ("mlb", "nhl", "nba"):
+        raise HTTPException(status_code=400, detail="Unknown sport")
+    from engine.player_props_tracker import settle_player_props
+    return settle_player_props(sport)
 
 
 @app.get("/api/{sport}/derivative-pick-of-day")
