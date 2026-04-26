@@ -142,4 +142,48 @@
 
   /* ── Focus ring ── */
   --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-border-focus);
+
+  /* ═══════════════════════════════════════════════════════════════
+     shadcn-ui semantic tokens (HSL components, no leading hsl())
+     ───────────────────────────────────────────────────────────────
+     shadcn-ui generated components reference these names directly
+     (e.g. `bg-background text-foreground`). Tailwind config wraps
+     each in `hsl(...)` so opacity modifiers (`bg-primary/50`) work.
+     Values mirror the existing hex semantic palette above so both
+     systems render the same colors — change the hex tokens and the
+     HSL twins below in lockstep until the legacy CSS is migrated out.
+
+     Format: "<hue> <saturation>% <lightness>%"  (no commas, no hsl())
+     ═══════════════════════════════════════════════════════════════ */
+
+  /* Surfaces */
+  --background:           222 47% 6%;    /* mirrors --slate-1000 */
+  --foreground:           210 40% 98%;   /* mirrors --slate-50 */
+  --card:                 222 32% 13%;   /* mirrors --slate-850 */
+  --card-foreground:      210 40% 98%;
+  --popover:              222 32% 13%;
+  --popover-foreground:   210 40% 98%;
+
+  /* Brand / interactive */
+  --primary:              217 91% 60%;   /* mirrors --blue-400 */
+  --primary-foreground:   222 47% 6%;
+  --secondary:            217 33% 17%;   /* mirrors --slate-700 */
+  --secondary-foreground: 210 40% 98%;
+
+  /* Muted text + sunken bg */
+  --muted:                222 32% 13%;
+  --muted-foreground:     215 20% 65%;   /* mirrors --slate-300 */
+
+  /* Accent (hover states) */
+  --accent:               217 33% 17%;
+  --accent-foreground:    210 40% 98%;
+
+  /* Destructive */
+  --destructive:          0 72% 51%;     /* mirrors --red-400 */
+  --destructive-foreground: 210 40% 98%;
+
+  /* Borders + inputs + focus ring */
+  --border:               217 33% 17%;
+  --input:                217 33% 17%;
+  --ring:                 217 91% 60%;
 }

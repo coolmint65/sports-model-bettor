@@ -1,3 +1,11 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Tailwind's preflight (`@tailwind base`) already does a `* { margin:0;
+   padding:0; box-sizing:border-box; }` reset plus more. Phase 2c+2d will
+   migrate components onto Tailwind utilities; until then the legacy CSS
+   below stays in force and visual output is unchanged. */
 * {
   margin: 0;
   padding: 0;
