@@ -1,5 +1,6 @@
 import { memo } from 'react'
 import GameCard from './primitives/GameCard'
+import { OddsGrid, OddsRow } from './primitives/OddsGrid'
 import ScoreboardShell from './primitives/ScoreboardShell'
 import FinalRow from './primitives/FinalRow'
 
@@ -72,35 +73,26 @@ function NBAGameCard({ game, bet, onClick, sport }) {
 
 function NBAOddsGrid({ odds, home, away }) {
   return (
-    <div className="game-odds-grid">
+    <OddsGrid>
       {(odds.home_spread_point != null || odds.away_spread_point != null) && (
-        <div className="odds-line">
-          <span className="odds-label">SPR</span>
-          <span className="odds-val">
-            {away.abbreviation} {odds.away_spread_point > 0 ? '+' : ''}{odds.away_spread_point || '-'}
-            {odds.away_spread_odds ? ` (${odds.away_spread_odds > 0 ? '+' : ''}${Math.round(odds.away_spread_odds)})` : ''}
-          </span>
-          <span className="odds-val">
-            {home.abbreviation} {odds.home_spread_point > 0 ? '+' : ''}{odds.home_spread_point || '-'}
-            {odds.home_spread_odds ? ` (${odds.home_spread_odds > 0 ? '+' : ''}${Math.round(odds.home_spread_odds)})` : ''}
-          </span>
-        </div>
+        <OddsRow label="SPR"
+          away={`${away.abbreviation} ${odds.away_spread_point > 0 ? '+' : ''}${odds.away_spread_point || '-'}${odds.away_spread_odds ? ` (${odds.away_spread_odds > 0 ? '+' : ''}${Math.round(odds.away_spread_odds)})` : ''}`}
+          home={`${home.abbreviation} ${odds.home_spread_point > 0 ? '+' : ''}${odds.home_spread_point || '-'}${odds.home_spread_odds ? ` (${odds.home_spread_odds > 0 ? '+' : ''}${Math.round(odds.home_spread_odds)})` : ''}`}
+        />
       )}
       {odds.over_under && (
-        <div className="odds-line">
-          <span className="odds-label">O/U</span>
-          <span className="odds-val">o{odds.over_under} {odds.over_odds ? `(${Math.round(odds.over_odds) > 0 ? '+' : ''}${Math.round(odds.over_odds)})` : ''}</span>
-          <span className="odds-val">u{odds.over_under} {odds.under_odds ? `(${Math.round(odds.under_odds) > 0 ? '+' : ''}${Math.round(odds.under_odds)})` : ''}</span>
-        </div>
+        <OddsRow label="O/U"
+          away={`o${odds.over_under}${odds.over_odds ? ` (${Math.round(odds.over_odds) > 0 ? '+' : ''}${Math.round(odds.over_odds)})` : ''}`}
+          home={`u${odds.over_under}${odds.under_odds ? ` (${Math.round(odds.under_odds) > 0 ? '+' : ''}${Math.round(odds.under_odds)})` : ''}`}
+        />
       )}
       {(odds.home_ml || odds.away_ml) && (
-        <div className="odds-line">
-          <span className="odds-label">ML</span>
-          <span className="odds-val">{away.abbreviation} {odds.away_ml > 0 ? '+' : ''}{odds.away_ml || '-'}</span>
-          <span className="odds-val">{home.abbreviation} {odds.home_ml > 0 ? '+' : ''}{odds.home_ml || '-'}</span>
-        </div>
+        <OddsRow label="ML"
+          away={`${away.abbreviation} ${odds.away_ml > 0 ? '+' : ''}${odds.away_ml || '-'}`}
+          home={`${home.abbreviation} ${odds.home_ml > 0 ? '+' : ''}${odds.home_ml || '-'}`}
+        />
       )}
-    </div>
+    </OddsGrid>
   )
 }
 

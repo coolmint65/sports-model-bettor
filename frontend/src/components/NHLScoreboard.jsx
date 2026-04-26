@@ -1,5 +1,6 @@
 import { memo } from 'react'
 import GameCard from './primitives/GameCard'
+import { OddsGrid, OddsRow, CardInsight as CardInsightShell } from './primitives/OddsGrid'
 import ScoreboardShell from './primitives/ScoreboardShell'
 
 // League-average NHL SV% is ~0.905. Color + tooltip labels anchor the
@@ -51,7 +52,7 @@ function NHLGameCard({ game, bet, onClick, sport }) {
 
   const odds = game.odds ? <NHLOddsGrid odds={game.odds} home={home} away={away} /> : null
 
-  const insight = <CardInsight bet={bet} home={home} away={away} game={game} />
+  const insight = <NHLCardInsight bet={bet} home={home} away={away} game={game} />
 
   return (
     <GameCard
@@ -108,38 +109,29 @@ function NHLOddsGrid({ odds, home, away }) {
   const dHomeOdds = odds.home_spread_odds || (dHomePt > 0 ? -180 : 150)
 
   return (
-    <div className="game-odds-grid">
+    <OddsGrid>
       {(odds.home_ml || odds.away_ml) && (
-        <div className="odds-line">
-          <span className="odds-label">ML</span>
-          <span className="odds-val">{away.abbreviation} {odds.away_ml > 0 ? '+' : ''}{odds.away_ml || '-'}</span>
-          <span className="odds-val">{home.abbreviation} {odds.home_ml > 0 ? '+' : ''}{odds.home_ml || '-'}</span>
-        </div>
+        <OddsRow label="ML"
+          away={`${away.abbreviation} ${odds.away_ml > 0 ? '+' : ''}${odds.away_ml || '-'}`}
+          home={`${home.abbreviation} ${odds.home_ml > 0 ? '+' : ''}${odds.home_ml || '-'}`}
+        />
       )}
       {odds.over_under && (
-        <div className="odds-line">
-          <span className="odds-label">O/U</span>
-          <span className="odds-val">o{odds.over_under} {odds.over_odds ? `(${Math.round(odds.over_odds) > 0 ? '+' : ''}${Math.round(odds.over_odds)})` : ''}</span>
-          <span className="odds-val">u{odds.over_under} {odds.under_odds ? `(${Math.round(odds.under_odds) > 0 ? '+' : ''}${Math.round(odds.under_odds)})` : ''}</span>
-        </div>
+        <OddsRow label="O/U"
+          away={`o${odds.over_under}${odds.over_odds ? ` (${Math.round(odds.over_odds) > 0 ? '+' : ''}${Math.round(odds.over_odds)})` : ''}`}
+          home={`u${odds.over_under}${odds.under_odds ? ` (${Math.round(odds.under_odds) > 0 ? '+' : ''}${Math.round(odds.under_odds)})` : ''}`}
+        />
       )}
-      <div className="odds-line">
-        <span className="odds-label">PL</span>
-        <span className="odds-val">
-          {away.abbreviation} {dAwayPt > 0 ? '+' : ''}{dAwayPt}
-          {` (${dAwayOdds > 0 ? '+' : ''}${Math.round(dAwayOdds)})`}
-        </span>
-        <span className="odds-val">
-          {home.abbreviation} {dHomePt > 0 ? '+' : ''}{dHomePt}
-          {` (${dHomeOdds > 0 ? '+' : ''}${Math.round(dHomeOdds)})`}
-        </span>
-      </div>
-    </div>
+      <OddsRow label="PL"
+        away={`${away.abbreviation} ${dAwayPt > 0 ? '+' : ''}${dAwayPt} (${dAwayOdds > 0 ? '+' : ''}${Math.round(dAwayOdds)})`}
+        home={`${home.abbreviation} ${dHomePt > 0 ? '+' : ''}${dHomePt} (${dHomeOdds > 0 ? '+' : ''}${Math.round(dHomeOdds)})`}
+      />
+    </OddsGrid>
   )
 }
 
 
-function CardInsight({ bet, home, away, game }) {
+function NHLCardInsight({ bet, home, away, game }) {
   // Generate a short "why" reason from the strongest factor
   const f = bet.factors || {}
   const wp = bet.win_prob || {}
@@ -226,9 +218,5 @@ function CardInsight({ bet, home, away, game }) {
 
   // Show strongest
   reasons.sort((a, b) => b.weight - a.weight)
-  return (
-    <div className="card-insight">
-      {reasons[0].text}
-    </div>
-  )
+  return <CardInsightShell>{reasons[0].text}</CardInsightShell>
 }

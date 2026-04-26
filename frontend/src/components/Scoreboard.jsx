@@ -1,6 +1,7 @@
 import { memo } from 'react'
 import GameCard from './primitives/GameCard'
 import ScoreboardShell from './primitives/ScoreboardShell'
+import { OddsGrid, OddsRow, CardInsight } from './primitives/OddsGrid'
 
 function ScoreboardImpl(props) {
   return (
@@ -62,33 +63,24 @@ function MLBOddsGrid({ odds, home, away }) {
   const dHomeOdds = odds.home_spread_odds || (dHomePt > 0 ? -140 : 120)
 
   return (
-    <div className="game-odds-grid">
+    <OddsGrid>
       {(odds.home_ml || odds.away_ml) && (
-        <div className="odds-line">
-          <span className="odds-label">ML</span>
-          <span className="odds-val">{away.abbreviation} {odds.away_ml > 0 ? '+' : ''}{odds.away_ml || '-'}</span>
-          <span className="odds-val">{home.abbreviation} {odds.home_ml > 0 ? '+' : ''}{odds.home_ml || '-'}</span>
-        </div>
+        <OddsRow label="ML"
+          away={`${away.abbreviation} ${odds.away_ml > 0 ? '+' : ''}${odds.away_ml || '-'}`}
+          home={`${home.abbreviation} ${odds.home_ml > 0 ? '+' : ''}${odds.home_ml || '-'}`}
+        />
       )}
       {odds.over_under && (
-        <div className="odds-line">
-          <span className="odds-label">O/U</span>
-          <span className="odds-val">o{odds.over_under} {odds.over_odds ? `(${Math.round(odds.over_odds) > 0 ? '+' : ''}${Math.round(odds.over_odds)})` : ''}</span>
-          <span className="odds-val">u{odds.over_under} {odds.under_odds ? `(${Math.round(odds.under_odds) > 0 ? '+' : ''}${Math.round(odds.under_odds)})` : ''}</span>
-        </div>
+        <OddsRow label="O/U"
+          away={`o${odds.over_under}${odds.over_odds ? ` (${Math.round(odds.over_odds) > 0 ? '+' : ''}${Math.round(odds.over_odds)})` : ''}`}
+          home={`u${odds.over_under}${odds.under_odds ? ` (${Math.round(odds.under_odds) > 0 ? '+' : ''}${Math.round(odds.under_odds)})` : ''}`}
+        />
       )}
-      <div className="odds-line">
-        <span className="odds-label">RL</span>
-        <span className="odds-val">
-          {away.abbreviation} {dAwayPt > 0 ? '+' : ''}{dAwayPt}
-          {` (${dAwayOdds > 0 ? '+' : ''}${Math.round(dAwayOdds)})`}
-        </span>
-        <span className="odds-val">
-          {home.abbreviation} {dHomePt > 0 ? '+' : ''}{dHomePt}
-          {` (${dHomeOdds > 0 ? '+' : ''}${Math.round(dHomeOdds)})`}
-        </span>
-      </div>
-    </div>
+      <OddsRow label="RL"
+        away={`${away.abbreviation} ${dAwayPt > 0 ? '+' : ''}${dAwayPt} (${dAwayOdds > 0 ? '+' : ''}${Math.round(dAwayOdds)})`}
+        home={`${home.abbreviation} ${dHomePt > 0 ? '+' : ''}${dHomePt} (${dHomeOdds > 0 ? '+' : ''}${Math.round(dHomeOdds)})`}
+      />
+    </OddsGrid>
   )
 }
 
@@ -165,9 +157,5 @@ function MLBCardInsight({ bet, home, away, game }) {
   if (reasons.length === 0) return null
 
   reasons.sort((a, b) => b.weight - a.weight)
-  return (
-    <div className="card-insight">
-      {reasons[0].text}
-    </div>
-  )
+  return <CardInsight>{reasons[0].text}</CardInsight>
 }
