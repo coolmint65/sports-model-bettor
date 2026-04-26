@@ -1,5 +1,5 @@
 import { memo } from 'react'
-import { Beer, Snowflake, Dribbble, LayoutDashboard } from 'lucide-react'
+import { LayoutDashboard } from 'lucide-react'
 import { sortSports } from '../lib/sportSort'
 import { cn } from '../lib/utils'
 
@@ -34,10 +34,16 @@ const SPORT_LABELS = {
   nba: 'NBA',
 }
 
+// Sport glyphs as Unicode emoji rather than lucide icons — lucide
+// doesn't ship per-sport icons (no Baseball/Basketball/Hockey-stick),
+// and the closest matches (Beer for MLB, Dribbble for NBA) read as
+// noise. Emoji renders consistently on Win Segoe UI Emoji + Apple
+// Color Emoji and lets future sports (Tennis 🎾, Soccer ⚽, Golf 🏌️)
+// plug in without hunting for substitutes.
 const SPORT_ICONS = {
-  mlb: Beer,         // placeholder — swap for a baseball-specific icon
-  nhl: Snowflake,    // ice / cold = hockey
-  nba: Dribbble,     // basketball-ish
+  mlb: '⚾',
+  nhl: '🏒',
+  nba: '🏀',
 }
 
 function SidebarImpl({ sports, selected, onSelect, gameCounts = {} }) {
@@ -78,7 +84,7 @@ function SidebarImpl({ sports, selected, onSelect, gameCounts = {} }) {
 
         {ranked.map(({ sport, gameCount, inSeason }) => {
           const isActive = selected === sport
-          const Icon = SPORT_ICONS[sport]
+          const glyph = SPORT_ICONS[sport]
           return (
             <button
               key={sport}
@@ -93,7 +99,11 @@ function SidebarImpl({ sports, selected, onSelect, gameCounts = {} }) {
               )}
             >
               <span className="flex items-center gap-2.5">
-                {Icon && <Icon className="h-4 w-4" aria-hidden="true" />}
+                {glyph && (
+                  <span className="text-base leading-none" aria-hidden="true">
+                    {glyph}
+                  </span>
+                )}
                 <span>{SPORT_LABELS[sport] ?? sport.toUpperCase()}</span>
               </span>
               {inSeason && gameCount > 0 && (
