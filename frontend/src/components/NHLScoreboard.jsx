@@ -29,7 +29,7 @@ function NHLScoreboardImpl(props) {
       emptyPrimary="No NHL games scheduled today."
       emptySub="Check back for the next slate."
       renderCard={({ game, bet, onClick, key }) => (
-        <NHLGameCard key={key} game={game} bet={bet} onClick={onClick} />
+        <NHLGameCard key={key} game={game} bet={bet} onClick={onClick} sport="nhl" />
       )}
     />
   )
@@ -38,7 +38,7 @@ function NHLScoreboardImpl(props) {
 const NHLScoreboard = memo(NHLScoreboardImpl)
 export default NHLScoreboard
 
-function NHLGameCard({ game, bet, onClick }) {
+function NHLGameCard({ game, bet, onClick, sport }) {
   const { home, away } = game
 
   const starters = (game.away_goalie || game.home_goalie) ? (
@@ -62,6 +62,7 @@ function NHLGameCard({ game, bet, onClick }) {
       starters={starters}
       odds={odds}
       restTiredLabel="B2B"
+      sport={sport}
     />
   )
 }

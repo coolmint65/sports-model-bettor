@@ -11,7 +11,7 @@ function ScoreboardImpl(props) {
       emptyPrimary="No games scheduled today."
       emptySub="Check back tomorrow for the next slate."
       renderCard={({ game, bet, onClick, key }) => (
-        <MLBGameCard key={key} game={game} bet={bet} onClick={onClick} />
+        <MLBGameCard key={key} game={game} bet={bet} onClick={onClick} sport="mlb" />
       )}
     />
   )
@@ -23,7 +23,7 @@ function ScoreboardImpl(props) {
 const Scoreboard = memo(ScoreboardImpl)
 export default Scoreboard
 
-function MLBGameCard({ game, bet, onClick }) {
+function MLBGameCard({ game, bet, onClick, sport }) {
   const { home, away } = game
 
   const starters = (game.home_pitcher || game.away_pitcher) ? (
@@ -46,6 +46,7 @@ function MLBGameCard({ game, bet, onClick }) {
       insight={insight}
       starters={starters}
       odds={odds}
+      sport={sport}
     />
   )
 }

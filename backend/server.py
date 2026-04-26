@@ -1703,6 +1703,22 @@ def api_nba_best_bets_progress():
     return api_best_bets_progress(sport="nba")
 
 
+@app.get("/api/{sport}/pick-events")
+def api_pick_events(sport: str, game_id: str | None = None,
+                    hours: int = 24):
+    """Recent pick-event log for the BestBets card 📜 breadcrumb.
+
+    Returns the appeared / swapped / pulled / line_shift transitions
+    the model has emitted today (or longer via ``hours``). Scope to a
+    single matchup with ``game_id`` so each card only loads its own
+    thread instead of the whole slate.
+    """
+    if sport not in ("mlb", "nhl", "nba"):
+        return {"error": f"unknown sport: {sport}"}
+    from engine.pick_events import list_events
+    return list_events(sport, game_id=game_id, hours=hours)
+
+
 def _bb_predict_one(game: dict, all_odds) -> dict | None:
     """Compute the full prediction + odds payload for a single game.
 
@@ -2003,6 +2019,23 @@ def api_best_bets():
             logger.info("Derivative tracker (mlb): %s", diff)
     except Exception as e:
         logger.warning("MLB derivative recorder failed: %s", e)
+
+    # Pick-events breadcrumb log — drives the 📜 badge on BestBets cards.
+    # Diffs the current best_pick per game vs the most recent event row
+    # and emits appeared / swapped / pulled / line_shift transitions.
+    # Idempotent within a poll cycle because state lives in the events
+    # table, not in-memory.
+    try:
+        from engine.pick_events import detect_transitions
+        ev = detect_transitions("mlb", [
+            {"game_id": b["game_id"], "matchup": b["matchup"],
+             "best_pick": b.get("best_pick")}
+            for b in bets
+        ], date=target_date)
+        if any(ev.values()):
+            logger.info("Pick events (mlb): %s", ev)
+    except Exception as e:
+        logger.warning("MLB pick-events failed: %s", e)
 
     import time as _time
     _bb_progress_set(phase="idle", finished_at=_time.time())
@@ -3579,6 +3612,18 @@ def api_nhl_best_bets():
     except Exception as e:
         logger.warning("NHL derivative recorder failed: %s", e)
 
+    try:
+        from engine.pick_events import detect_transitions
+        ev = detect_transitions("nhl", [
+            {"game_id": b["game_id"], "matchup": b["matchup"],
+             "best_pick": b.get("best_pick")}
+            for b in bets
+        ], date=datetime.now().strftime("%Y-%m-%d"))
+        if any(ev.values()):
+            logger.info("Pick events (nhl): %s", ev)
+    except Exception as e:
+        logger.warning("NHL pick-events failed: %s", e)
+
     _bb_progress_set("nhl", phase="idle", finished_at=_time.time())
     return bets
 
@@ -4582,6 +4627,18 @@ def api_nba_best_bets():
             logger.info("Derivative tracker (nba): %s", diff)
     except Exception as e:
         logger.warning("NBA derivative recorder failed: %s", e)
+
+    try:
+        from engine.pick_events import detect_transitions
+        ev = detect_transitions("nba", [
+            {"game_id": b["game_id"], "matchup": b["matchup"],
+             "best_pick": b.get("best_pick")}
+            for b in bets
+        ], date=datetime.now().strftime("%Y-%m-%d"))
+        if any(ev.values()):
+            logger.info("Pick events (nba): %s", ev)
+    except Exception as e:
+        logger.warning("NBA pick-events failed: %s", e)
 
     _bb_progress_set("nba", phase="idle", finished_at=_time.time())
     return bets

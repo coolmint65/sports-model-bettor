@@ -24,6 +24,7 @@ import WinProbBar from './WinProbBar'
 import TeamRow from './TeamRow'
 import RestChips from './RestChips'
 import LineMovedChip from './LineMovedChip'
+import PickEventsBadge from '../PickEventsBadge'
 
 function GameCardImpl({
   game,
@@ -35,6 +36,7 @@ function GameCardImpl({
   liveExtras,
   pickAccent,
   restTiredLabel = 'tired',
+  sport,
 }) {
   const { home, away, status } = game
   const isLive = status.state === 'in'
@@ -53,7 +55,7 @@ function GameCardImpl({
 
   return (
     <div
-      className={`game-card ${isLive ? 'live' : ''} card-${conf}`}
+      className={`game-card relative ${isLive ? 'live' : ''} card-${conf}`}
       onClick={onClick}
       role="button"
       tabIndex={0}
@@ -65,6 +67,12 @@ function GameCardImpl({
         hasPick
           ? <EdgeBadge pick={bet.best_pick} confidence={conf} accent={pickAccent} />
           : <EdgeBadge empty />
+      )}
+
+      {isPre && sport && bet?.game_id && (
+        <div className="absolute top-2 right-2 z-10">
+          <PickEventsBadge sport={sport} gameId={bet.game_id} />
+        </div>
       )}
 
       {isPre && <RestChips rest={bet?.rest} home={home} away={away} tiredLabel={restTiredLabel} />}

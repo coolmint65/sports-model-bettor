@@ -13,7 +13,7 @@ function NBAScoreboardImpl(props) {
       emptySub="Check back for the next slate."
       edgeLabel="Q1 plays with edge"
       renderCard={({ game, bet, onClick, key }) => (
-        <NBAGameCard key={key} game={game} bet={bet} onClick={onClick} />
+        <NBAGameCard key={key} game={game} bet={bet} onClick={onClick} sport="nba" />
       )}
       renderFinal={({ game, onClick, key }) => {
         const q1 = game.q1 || {}
@@ -32,7 +32,7 @@ const NBAScoreboard = memo(NBAScoreboardImpl)
 export default NBAScoreboard
 
 
-function NBAGameCard({ game, bet, onClick }) {
+function NBAGameCard({ game, bet, onClick, sport }) {
   const { home, away, status } = game
   const isLive = status.state === 'in'
   const isFinal = status.state === 'post'
@@ -65,6 +65,7 @@ function NBAGameCard({ game, bet, onClick }) {
       restTiredLabel="B2B"
       liveExtras={liveExtras}
       odds={odds}
+      sport={sport}
     />
   )
 }
