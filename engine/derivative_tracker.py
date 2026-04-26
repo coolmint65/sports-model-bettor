@@ -128,13 +128,47 @@ def record_top_derivatives(sport: str, bets: list[dict],
     blocked = DERIVATIVE_BLOCKED_MARKETS.get(sport, frozenset())
     floor_overrides = DERIVATIVE_EDGE_FLOOR.get(sport, {})
 
-    inserted = updated = skipped = 0
+    inserted = updated = skipped = voided = 0
+    # Build an index of (game_id, bet_type, pick) → kept per game from
+    # the current best-bets payload so we can detect rows in the DB
+    # that were recorded earlier today but no longer appear in any
+    # current best-bets card. Those happen when HR pulls an alt line
+    # mid-day and the model swaps to a different (still-offered) line:
+    # the old row would otherwise sit PEND at an unbettable price.
+    keep: set[tuple[str, str, str]] = set()
+    for bet in bets:
+        gid = str(bet.get("game_id") or "")
+        for p in (bet.get("derivative_picks") or [])[:n_per_game]:
+            bt = p.get("type")
+            if bt in blocked:
+                continue
+            if (p.get("edge") or 0) < floor_overrides.get(bt, min_edge):
+                continue
+            keep.add((gid, p.get("type") or "", p.get("pick") or ""))
+
     for bet in bets:
         derivs = bet.get("derivative_picks") or []
         if not derivs:
             continue
         game_id = str(bet.get("game_id") or "")
         matchup = bet.get("matchup", "")
+
+        # Void unsettled rows for THIS game that aren't in today's
+        # `keep` set. Only touches result IS NULL so settled history
+        # stays untouched.
+        stale_rows = conn.execute(
+            f"SELECT id, bet_type, pick FROM {table} "
+            f"WHERE game_id = ? AND date = ? AND result IS NULL",
+            (game_id, target_date),
+        ).fetchall()
+        for sr in stale_rows:
+            key = (game_id, sr["bet_type"] or "", sr["pick"] or "")
+            if key not in keep:
+                conn.execute(
+                    f"DELETE FROM {table} WHERE id = ?", (sr["id"],),
+                )
+                voided += 1
+
         for p in derivs[:n_per_game]:
             bt = p.get("type")
             if bt in blocked:
@@ -177,7 +211,8 @@ def record_top_derivatives(sport: str, bets: list[dict],
             except Exception as e:
                 logger.warning("Could not insert derivative pick: %s", e)
     conn.commit()
-    return {"inserted": inserted, "updated": updated, "skipped": skipped}
+    return {"inserted": inserted, "updated": updated,
+            "skipped": skipped, "voided": voided}
 
 
 def settle_derivative_picks(sport: str) -> dict:
