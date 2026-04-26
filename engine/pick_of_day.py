@@ -342,6 +342,37 @@ def get_or_create_potd(sport: str, games_with_bets: list[dict],
         selected.get("kelly_pct"),
         selected.get("reasoning"),
     ))
+    # Mirror into the per-sport picks table so the pick tracker shows
+    # the POTD alongside the day's other picks. Without this, POTDs
+    # that come from alt-line bet types (which aren't always in the
+    # per-game top-N picks the tracker stores) are invisible — surfaced
+    # as "POTD missing from tracker" by the user. MLB uses ``picks``;
+    # NHL/NBA use ``nhl_picks`` / ``nba_picks``.
+    picks_table = "picks" if sport == "mlb" else f"{sport}_picks"
+    pick_text = selected.get("pick_full", selected.get("pick"))
+    try:
+        conn.execute(
+            f"INSERT OR IGNORE INTO {picks_table} ("
+            "  date, game_id, matchup, bet_type, pick,"
+            "  model_prob, edge, odds"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                target_date,
+                selected.get("game_id"),
+                selected.get("matchup"),
+                selected.get("type"),
+                pick_text,
+                selected.get("prob"),
+                selected.get("edge"),
+                selected.get("odds"),
+            ),
+        )
+    except Exception as e:
+        # Don't let a tracker-mirror failure block POTD creation — the
+        # POTD itself is committed above and the tracker can be backfilled
+        # later if the schema diverges.
+        logger.warning("POTD mirror to %s failed for %s: %s",
+                       picks_table, sport, e)
     conn.commit()
 
     logger.info("Created %s POTD for %s: %s %s (%s edge %+.1f%%)",
