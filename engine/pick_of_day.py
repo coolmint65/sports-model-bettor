@@ -139,38 +139,20 @@ def _get_market_win_rate(sport: str, bet_type: str, days: int = 30) -> float:
 def _score_pick(pick: dict, sport: str = "mlb") -> float:
     """Score a pick candidate for POTD selection.
 
-    Ranking: edge × CI confidence × market reliability
+    Switched 2026-04-27 to raw edge — the previous formula
+    (edge × CI × market_reliability × longshot_penalty) chose
+    different headlines than the GameCard's best_pick (which uses
+    raw edge), causing visible "POTD card different to its actual
+    card" disagreement on shared matchups (today's MIA@LAD: GameCard
+    showed ML MIA +250 / 20.8% edge, POTD showed ALT RL Marlins +1.5
+    / 18.2% edge because the +250 longshot penalty cut ML's score).
 
-    - edge: raw edge percentage (higher = better)
-    - CI confidence: 1.0 / (1.0 + ci_half_width * 10). Narrow CI = more
-      trustworthy. Picks with wide confidence bands score lower.
-    - market reliability: recent win rate of this bet type from tracker.
-      Markets that have been hitting recently get a boost.
-
-    Also applies a penalty for extreme longshots (implied < 35%) where
-    the model's calibration is least accurate.
+    Headline picks should agree. POTD = highest raw edge among
+    today's eligible picks, period. Longshot calibration risk is
+    handled upstream by the per-bet-type edge floors and the
+    odds-based MAX_PICK_ODDS guards in the pickers.
     """
-    edge = pick.get("edge", 0)
-    prob = pick.get("prob", 0)
-    odds = pick.get("odds", 0)
-    ci_hw = pick.get("ci_half_width", 0.05)
-
-    # CI confidence: narrow band = high confidence
-    ci_confidence = 1.0 / (1.0 + ci_hw * 10)
-
-    # Market reliability: how has this bet type been performing?
-    bet_type = pick.get("type", "")
-    market_wr = _get_market_win_rate(sport, bet_type)
-    # Scale: 0.5 WR = 1.0x (neutral), 0.6 = 1.2x, 0.4 = 0.8x
-    market_reliability = market_wr * 2.0
-
-    # Longshot penalty: implied probability below 35% gets discounted
-    implied = 0.5
-    if odds and odds != 0:
-        implied = abs(odds) / (abs(odds) + 100) if odds < 0 else 100 / (odds + 100)
-    longshot_penalty = 1.0 if implied >= 0.35 else implied / 0.35
-
-    return edge * ci_confidence * market_reliability * longshot_penalty
+    return float(pick.get("edge", 0) or 0)
 
 
 def select_potd(sport: str, games_with_bets: list[dict]) -> dict | None:
