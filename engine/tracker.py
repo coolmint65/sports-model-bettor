@@ -243,8 +243,29 @@ def refresh_pending_for_today(bets: list[dict],
     # the game entered the 1hr window.
     current_by_matchup: dict[str, dict] = {}
     locked_matchups: set[str] = set()
+    # Defense: also derive lock from the bets entry's own start time.
+    # ``is_locked`` is precomputed elsewhere and has been seen to return
+    # False on games clearly underway. Treating any past-tip game as
+    # locked here is the right semantic regardless of upstream flag.
+    from datetime import datetime as _dt, timezone as _tz
+    now_utc = _dt.now(_tz.utc)
+    def _bet_started(bet: dict) -> bool:
+        if bet.get("is_locked"):
+            return True
+        t = bet.get("time") or bet.get("date") or ""
+        if not isinstance(t, str) or not t:
+            return False
+        try:
+            s = t.replace("Z", "+00:00") if t.endswith("Z") else t
+            ts = _dt.fromisoformat(s)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=_tz.utc)
+            return ts < now_utc
+        except (ValueError, TypeError):
+            return False
+
     for b in bets:
-        if b.get("is_locked"):
+        if _bet_started(b):
             locked_matchups.add(b["matchup"])
             continue
         bp = b.get("best_pick")

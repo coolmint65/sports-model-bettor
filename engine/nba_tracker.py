@@ -163,8 +163,32 @@ def refresh_pending_for_today(bets: list[dict],
     # pending picks alone — see engine.tracker for the bug history.
     current_by_matchup: dict[str, dict] = {}
     locked_matchups: set[str] = set()
+    # Defense: also derive lock from the bets entry's own start-time
+    # field. ``is_locked`` is precomputed elsewhere and has been seen
+    # to return False on games clearly underway (NBA BOS@PHI today
+    # silently swapped Under 54.5 → Q1_SPREAD BOS -2.5 Q1 at 22:54
+    # ET, hours after tip-off). Treating any past-tip game as locked
+    # at this point is the right semantic regardless of the upstream
+    # flag's reliability.
+    from datetime import datetime as _dt, timezone as _tz
+    now_utc = _dt.now(_tz.utc)
+    def _bet_started(bet: dict) -> bool:
+        if bet.get("is_locked"):
+            return True
+        t = bet.get("time") or bet.get("date") or ""
+        if not isinstance(t, str) or not t:
+            return False
+        try:
+            s = t.replace("Z", "+00:00") if t.endswith("Z") else t
+            ts = _dt.fromisoformat(s)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=_tz.utc)
+            return ts < now_utc
+        except (ValueError, TypeError):
+            return False
+
     for b in bets:
-        if b.get("is_locked"):
+        if _bet_started(b):
             locked_matchups.add(b["matchup"])
             continue  # locked: tracker entry stays frozen
         bp = b.get("best_pick")
