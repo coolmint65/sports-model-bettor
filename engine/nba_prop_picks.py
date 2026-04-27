@@ -158,8 +158,13 @@ def _score(samples: dict, prop: dict) -> dict | None:
     over_odds = prop.get("over_odds")
     under_odds = prop.get("under_odds")
     from .mlb_player_mc import prob_over, prob_under
+    from .distribution_fit import get_prob_shrink
     p_over = prob_over(samp, line)
     p_under = prob_under(samp, line)
+    shrink = get_prob_shrink("nba", stat_key)
+    if shrink < 1.0:
+        p_over = 0.5 + (p_over - 0.5) * shrink
+        p_under = 0.5 + (p_under - 0.5) * shrink
     cands: list[dict] = []
     for side, odds, p in [("Over", over_odds, p_over), ("Under", under_odds, p_under)]:
         if odds is None:

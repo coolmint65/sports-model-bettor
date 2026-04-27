@@ -426,10 +426,41 @@ def get_distribution(sport: str, stat_key: str) -> dict | None:
     return None
 
 
+# Per-stat probability shrinkage factor — pulls model_prob toward 50%
+# to correct overconfidence found by replay calibration. Only stats
+# with statistically meaningful overconfidence get a non-1.0 entry;
+# defaults to 1.0 for everything else.
+#
+# Locked from replay calibration on 2026-04-26 across 30 days of
+# game logs per sport. Re-run engine.player_props_calibration
+# periodically and update if avg_delta drifts.
+#
+# Direction: model_prob = 0.5 + (model_prob - 0.5) * shrink. shrink<1
+# pulls toward 50% (less aggressive); shrink=1 means no adjustment.
+# Underconfident stats (MLB outs, NHL g) intentionally NOT inflated
+# — expanding probability is dangerous (could push picks above the
+# edge floor that should have been filtered).
+_PROB_SHRINK: dict[tuple[str, str], float] = {
+    ("mlb", "tb"):              0.92,
+    ("mlb", "h_allowed"):       0.94,
+    ("nba", "pts"):             0.89,
+    ("nba", "ftm"):             0.90,
+    ("nhl", "saves"):           0.77,
+    ("nhl", "shots_against"):   0.89,
+}
+
+
+def get_prob_shrink(sport: str, stat_key: str) -> float:
+    """Returns the per-stat shrinkage multiplier in (0, 1]. Defaults
+    to 1.0 (no shrinkage) when the stat isn't in the calibrated list."""
+    return _PROB_SHRINK.get((sport, stat_key), 1.0)
+
+
 __all__ = [
     "summarize_stat",
     "summarize_all_mlb_stats", "summarize_all_nba_stats", "summarize_all_nhl_stats",
     "fit_all", "pull_observations",
-    "get_distribution",
+    "get_distribution", "get_prob_shrink",
     "_MLB_STAT_DISTRIBUTIONS", "_NBA_STAT_DISTRIBUTIONS", "_NHL_STAT_DISTRIBUTIONS",
+    "_PROB_SHRINK",
 ]

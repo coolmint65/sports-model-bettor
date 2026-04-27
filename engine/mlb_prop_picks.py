@@ -38,6 +38,7 @@ from typing import Any
 from .player_props_db import _conn_for, insert_pick
 from .player_props_tracker import _MLB_STAT_KEY
 from .mlb_player_mc import build_player_mc, prob_over, prob_under
+from .distribution_fit import get_prob_shrink
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +137,13 @@ def score_player_prop(samples: dict, prop: dict) -> dict | None:
     under_odds = prop.get("under_odds")
     p_over = prob_over(samp, line)
     p_under = prob_under(samp, line)
+    # Shrink toward 50% per the per-stat calibration findings. Only
+    # the "winning side" gets pulled in (whichever has p > 0.5); the
+    # losing side gets the complement so we don't over-correct.
+    shrink = get_prob_shrink("mlb", stat_key)
+    if shrink < 1.0:
+        p_over = 0.5 + (p_over - 0.5) * shrink
+        p_under = 0.5 + (p_under - 0.5) * shrink
 
     candidates: list[dict] = []
     if over_odds is not None:
