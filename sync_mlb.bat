@@ -99,6 +99,13 @@ echo Settling player props...
 python -c "from engine.player_props_tracker import settle_player_props; print(settle_player_props('mlb'))" 2>nul
 
 echo.
+echo Generating MLB player-prop picks (Phase 2g-iii)...
+REM Picker runs after ingest+settle so today's just-finalized games
+REM contribute to per-player rolling means before tomorrow's slate
+REM is scored.
+python -c "from engine.mlb_prop_picks import generate_picks; from datetime import datetime, timedelta; print(generate_picks(date=(datetime.now()+timedelta(days=1)).strftime('%%Y-%%m-%%d')))" 2>nul
+
+echo.
 echo Auto-tuning ensemble weights (skipped when < 200 settled signals/market)...
 python scripts\run.py engine.ensemble_auto_tune mlb -v 2>nul
 

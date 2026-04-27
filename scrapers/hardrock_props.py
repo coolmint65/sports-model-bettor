@@ -72,6 +72,7 @@ from scrapers.hardrock_odds import (  # noqa: E402
     _load_headers,
     _parse_odds_string,
     _extract_teams,
+    _team_abbr,
 )
 
 
@@ -275,12 +276,15 @@ def _selections_to_odds(selections: list[dict]) -> tuple[int | None, int | None]
 
 # ── Public API ────────────────────────────────────────────────
 
-def _matchup_key(event_name: str, away: str, home: str) -> str:
-    """Prefer the abbr-based key (``BAL@BOS``) when team extraction
-    succeeded. Falls back to the event name (``"Orioles vs Red Sox"``)
-    so the caller can still join on something deterministic."""
-    if away and home:
-        return f"{away}@{home}"
+def _matchup_key(event_name: str, away_abbr: str, home_abbr: str) -> str:
+    """Prefer the abbr-based key (``BAL@BOS``) when team-name → abbr
+    resolution succeeded. Keeps prop matchup keys aligned with the
+    game-line scraper's keys so downstream code (picker, tracker)
+    only needs one shape. Falls back to the event name when abbr
+    lookup fails so the caller can still join on something
+    deterministic."""
+    if away_abbr and home_abbr:
+        return f"{away_abbr}@{home_abbr}"
     return event_name or ""
 
 
@@ -310,10 +314,15 @@ def _fetch_raw(comp_id: str) -> dict:
     return {}
 
 
-def _parse_event(event: dict) -> tuple[str, list[dict]]:
+def _parse_event(event: dict, sport: str = "mlb") -> tuple[str, list[dict]]:
     """Convert one HR event blob into ``(matchup_key, [prop_rows])``."""
-    away, home = _extract_teams(event)
-    key = _matchup_key(event.get("name", ""), away, home)
+    away_name, home_name = _extract_teams(event)
+    # Resolve names → abbreviations so matchup keys match the game-line
+    # scraper's shape ("BAL@BOS"). Without this the picker can't join
+    # props back to today's game by abbr-pair.
+    away_abbr = _team_abbr(sport, away_name)
+    home_abbr = _team_abbr(sport, home_name)
+    key = _matchup_key(event.get("name", ""), away_abbr, home_abbr)
     rows: list[dict] = []
     for market in (event.get("markets") or []):
         mtype = market.get("type") or ""
