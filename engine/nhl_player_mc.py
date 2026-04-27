@@ -62,16 +62,26 @@ def _player_observations(player_id: int, stat_key: str,
 def build_player_mc(player_id: int,
                     stats: list[str] | None = None,
                     *,
+                    game_id: str | None = None,
                     n_sims: int = 10_000,
                     lookback_days: int = 60,
                     min_games: int = 5,
                     seed: int | None = None) -> dict[str, np.ndarray]:
     """Build sorted sample arrays for every NHL stat we have enough
-    history on. Returns ``{stat_key: sorted_samples}``."""
+    history on. Returns ``{stat_key: sorted_samples}``.
+
+    GBM-injected μ for shipped stats (g, a) when ``game_id`` is
+    provided. Other stats fall back to rolling-mean μ."""
     target_stats = stats or sorted(_SKATER_STATS | _GOALIE_STATS)
     since = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
     rng = np.random.default_rng(seed if seed is not None else
                                 hash((player_id, since)) & 0xFFFFFFFF)
+    use_gbm = game_id is not None
+    if use_gbm:
+        try:
+            from .nhl_prop_gbm import has_model as _gbm_has, predict_mu as _gbm_predict
+        except ImportError:
+            use_gbm = False
     out: dict[str, np.ndarray] = {}
     raw: dict[str, np.ndarray] = {}
     for stat_key in target_stats:
@@ -81,7 +91,12 @@ def build_player_mc(player_id: int,
         obs = _player_observations(player_id, stat_key, since)
         if len(obs) < min_games:
             continue
-        raw[stat_key] = _sample(obs, dist, n_sims, rng)
+        dist_use = dist
+        if use_gbm and _gbm_has(stat_key):
+            gbm_mu = _gbm_predict(stat_key, player_id, str(game_id))
+            if gbm_mu is not None:
+                dist_use = {**dist, "_override_mu": gbm_mu}
+        raw[stat_key] = _sample(obs, dist_use, n_sims, rng)
 
     out: dict[str, np.ndarray] = {k: np.sort(v) for k, v in raw.items()}
     # Skater Points = G + A composite.

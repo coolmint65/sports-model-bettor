@@ -99,12 +99,14 @@ def generate_picks(date: str | None = None,
                 counts["skipped_no_player"] += 1
                 continue
 
-            if player_id not in mc_cache:
-                mc_cache[player_id] = build_player_mc(
+            cache_key = (player_id, str(game_id))
+            if cache_key not in mc_cache:
+                mc_cache[cache_key] = build_player_mc(
                     player_id, n_sims=n_sims,
                     lookback_days=lookback_days,
+                    game_id=str(game_id),
                 )
-            samples = mc_cache[player_id]
+            samples = mc_cache[cache_key]
             best = _score(samples, prop)
             if best is None:
                 if not samples:

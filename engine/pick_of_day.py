@@ -355,8 +355,29 @@ def get_or_create_potd(sport: str, games_with_bets: list[dict],
     # of pick text to avoid the doubling-up the user reported.
     picks_table = "picks" if sport == "mlb" else f"{sport}_picks"
     pick_text = selected.get("pick_full", selected.get("pick"))
-    game_id = selected.get("game_id")
     bet_type = selected.get("type")
+    raw_game_id = selected.get("game_id")
+    # MLB ID translation: best-bets / POTD store ESPN event IDs
+    # (9-digit, e.g. 401815109), but the picks table joins to the
+    # games table on mlb_game_id (the 6-digit MLB Stats game_pk).
+    # Without this translation the settler can never match the
+    # mirrored POTD row and the pick stays PEND forever -- which
+    # was the bug today on SD@ARI ALT O/U Under 12.5.
+    if sport == "mlb":
+        try:
+            from .derivative_tracker import _resolve_mlb_game_pk
+            resolved_pk = _resolve_mlb_game_pk(
+                conn, str(raw_game_id), target_date,
+                selected.get("matchup", ""),
+            )
+            game_id = resolved_pk if resolved_pk else raw_game_id
+        except Exception:
+            game_id = raw_game_id
+    else:
+        # NHL / NBA picks tables share their respective game_id (the
+        # ESPN event id for NBA, the NHL gamePk for NHL) -- no
+        # translation needed.
+        game_id = raw_game_id
     try:
         existing = conn.execute(
             f"SELECT id FROM {picks_table} "

@@ -1,0 +1,18 @@
+{
+  "sport": "nhl",
+  "stat": "g",
+  "feature_cols": [
+    "rolling_30d",
+    "rolling_l5",
+    "rest_days",
+    "is_home",
+    "opp_gaa",
+    "opp_goalie_save_pct",
+    "opp_pp_pct"
+  ],
+  "n_rows": 6113,
+  "cv_baseline_mae": 0.2756661751259001,
+  "cv_gbm_mae": 0.1763298714513483,
+  "reduction_pct": 36.0219861302473,
+  "trained_at": "2026-04-27T02:14:03Z"
+}

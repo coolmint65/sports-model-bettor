@@ -1,0 +1,17 @@
+{
+  "sport": "nba",
+  "stat": "blk",
+  "feature_cols": [
+    "rolling_30d",
+    "rolling_l5",
+    "rest_days",
+    "is_home",
+    "season_mpg",
+    "opp_pace"
+  ],
+  "n_rows": 3119,
+  "cv_baseline_mae": 0.521685889576063,
+  "cv_gbm_mae": 0.4670099002443502,
+  "reduction_pct": 10.504302821546707,
+  "trained_at": "2026-04-27T02:09:58Z"
+}
