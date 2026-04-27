@@ -115,9 +115,12 @@ function ModelBar({ modelPct }) {
         <span>Model probability</span>
         <span className="tabular-nums font-bold text-foreground">{modelPct}%</span>
       </div>
-      <div className="relative h-2 w-full rounded-full bg-secondary overflow-hidden">
+      {/* Bumped from h-2/bg-secondary to h-2.5/bg-muted for more
+          contrast against the card background; fill is now full-
+          opacity bg-positive so it actually reads in dark mode. */}
+      <div className="relative h-2.5 w-full rounded-full bg-muted overflow-hidden ring-1 ring-border/50">
         <div
-          className="absolute inset-y-0 left-0 rounded-full bg-positive/80 transition-all"
+          className="absolute inset-y-0 left-0 rounded-full bg-positive transition-all"
           style={{ width: w }}
         />
       </div>

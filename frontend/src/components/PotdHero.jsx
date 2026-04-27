@@ -15,8 +15,10 @@
  *                  ('primary' = mint core, 'warning' = amber derivative)
  */
 
+import { useState } from 'react'
 import { humanizeBetType } from '../lib/betType'
 import { resolveTeamLogo } from '../lib/teamLogo'
+import { playerPhotoUrl } from '../lib/playerPhoto'
 import { cn } from '../lib/utils'
 
 
@@ -93,38 +95,46 @@ export default function PotdHero({
             )}
           </div>
 
-          <div>
-            <div className="flex items-baseline gap-3 flex-wrap">
-              <h2 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
-                {pick.pick}
-              </h2>
-              {oddsStr && (
-                <span className="text-lg font-semibold tabular-nums text-muted-foreground">
-                  {oddsStr}
-                </span>
+          {/* Player POTDs (props) lead with the player photo + name;
+              team POTDs (core / derivative / 1st INN) lead with the
+              bet headline. The pick.player_id flag is set only on
+              player_props_picks rows. */}
+          {pick.player_id ? (
+            <PlayerHeader pick={pick} sport={sport} betTypeLabel={betTypeLabel} oddsStr={oddsStr} />
+          ) : (
+            <div>
+              <div className="flex items-baseline gap-3 flex-wrap">
+                <h2 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
+                  {pick.pick}
+                </h2>
+                {oddsStr && (
+                  <span className="text-lg font-semibold tabular-nums text-muted-foreground">
+                    {oddsStr}
+                  </span>
+                )}
+              </div>
+              {teams ? (
+                <div className="mt-2 flex items-center gap-2 text-sm flex-wrap">
+                  <TeamBadge name={teams.awayName} logo={teams.awayLogo} />
+                  <span className="text-muted-foreground/60">@</span>
+                  <TeamBadge name={teams.homeName} logo={teams.homeLogo} />
+                  {betTypeLabel && (
+                    <>
+                      <span className="text-border mx-1">·</span>
+                      <span className="text-muted-foreground">{betTypeLabel}</span>
+                    </>
+                  )}
+                </div>
+              ) : (
+                <div className="mt-1.5 text-sm">
+                  <span className="font-semibold text-foreground">{pick.matchup}</span>
+                  {betTypeLabel && (
+                    <span className="ml-2 text-muted-foreground">· {betTypeLabel}</span>
+                  )}
+                </div>
               )}
             </div>
-            {teams ? (
-              <div className="mt-2 flex items-center gap-2 text-sm flex-wrap">
-                <TeamBadge name={teams.awayName} logo={teams.awayLogo} />
-                <span className="text-muted-foreground/60">@</span>
-                <TeamBadge name={teams.homeName} logo={teams.homeLogo} />
-                {betTypeLabel && (
-                  <>
-                    <span className="text-border mx-1">·</span>
-                    <span className="text-muted-foreground">{betTypeLabel}</span>
-                  </>
-                )}
-              </div>
-            ) : (
-              <div className="mt-1.5 text-sm">
-                <span className="font-semibold text-foreground">{pick.matchup}</span>
-                {betTypeLabel && (
-                  <span className="ml-2 text-muted-foreground">· {betTypeLabel}</span>
-                )}
-              </div>
-            )}
-          </div>
+          )}
 
           {modelProb != null && impliedProb != null && (
             <ModelMarketBar
@@ -220,6 +230,44 @@ function impliedFromAmerican(odds) {
   const n = Number(odds)
   if (!isFinite(n) || n === 0) return null
   return n > 0 ? 100 / (n + 100) : Math.abs(n) / (Math.abs(n) + 100)
+}
+
+
+function PlayerHeader({ pick, sport, betTypeLabel, oddsStr }) {
+  const [photoErr, setPhotoErr] = useState(false)
+  const photo = !photoErr ? playerPhotoUrl(sport, pick.player_id) : null
+  return (
+    <div className="flex items-center gap-4">
+      {photo ? (
+        <img
+          src={photo}
+          alt=""
+          className="h-20 w-20 rounded-full object-cover bg-muted ring-1 ring-border flex-shrink-0"
+          onError={() => setPhotoErr(true)}
+        />
+      ) : (
+        <div className="h-20 w-20 rounded-full bg-muted ring-1 ring-border flex items-center justify-center text-2xl font-bold text-muted-foreground flex-shrink-0">
+          {(pick.player_name || '?').slice(0, 1)}
+        </div>
+      )}
+      <div className="min-w-0 flex-1">
+        <div className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl truncate">
+          {pick.player_name}
+        </div>
+        <div className="mt-0.5 text-sm text-muted-foreground truncate">
+          {betTypeLabel}{pick.matchup ? ` · ${pick.matchup}` : ''}
+        </div>
+        <div className="mt-2 flex items-baseline gap-3 flex-wrap">
+          <span className="text-xl font-bold text-foreground">{pick.pick}</span>
+          {oddsStr && (
+            <span className="text-base font-semibold tabular-nums text-muted-foreground">
+              {oddsStr}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  )
 }
 
 
