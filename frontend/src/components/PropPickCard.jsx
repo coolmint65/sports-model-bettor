@@ -23,12 +23,13 @@ const CONF_ACCENT = {
 
 export default function PropPickCard({ pick, sport }) {
   const [photoErr, setPhotoErr] = useState(false)
+  if (!pick) return null
   const photo = !photoErr ? playerPhotoUrl(sport, pick.player_id) : null
   const odds = pick.odds
   const oddsStr = odds != null ? `${odds > 0 ? '+' : ''}${odds}` : ''
-  const conf = (pick.confidence || 'lean').toLowerCase()
+  const conf = (pick.confidence || 'lean').toString().toLowerCase()
   const edgePct = Number(pick.edge || 0)
-  const modelPct = Math.round((pick.model_prob || 0) * 100)
+  const modelPct = Math.round((Number(pick.model_prob) || 0) * 100)
 
   return (
     <div
