@@ -129,6 +129,20 @@ def record_top_derivatives(sport: str, bets: list[dict],
     floor_overrides = DERIVATIVE_EDGE_FLOOR.get(sport, {})
 
     inserted = updated = skipped = voided = 0
+    # Filter bets to ONLY those whose actual game date == target_date.
+    # The live /api/best-bets payload can include tomorrow's games
+    # once today's slate finishes (HR/ESPN roll over the scoreboard
+    # mid-evening); without this guard the picker writes derivatives
+    # for tomorrow's games stamped with today's date, surfacing as
+    # phantom picks (NHL PHI/PIT today: no such game on 2026-04-26
+    # but tomorrow's PIT@PHI was on the live feed).
+    def _bet_date(bet: dict) -> str:
+        t = bet.get("time") or bet.get("date") or ""
+        if isinstance(t, str) and len(t) >= 10:
+            return t[:10]
+        return ""
+    bets = [b for b in bets if _bet_date(b) == target_date or not _bet_date(b)]
+
     # Build an index of (game_id, bet_type, pick) → kept per game from
     # the current best-bets payload so we can detect rows in the DB
     # that were recorded earlier today but no longer appear in any

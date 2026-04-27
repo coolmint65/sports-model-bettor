@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { humanizeBetType } from '../lib/betType'
 import { cn } from '../lib/utils'
 import PicksTable from './primitives/PicksTable'
+import PotdHero from './PotdHero'
 
 // Derivative ROI breaks down to cents on small-edge alt markets, so
 // the table needs 2-decimal precision on the P/L column. PickHistory
@@ -103,32 +104,16 @@ export default function DerivativeTracker({ sport, api }) {
         </button>
       </div>
 
-      {/* POTD callout */}
+      {/* Derivative POTD — same shell as the core POTD card so the
+          two read as siblings. Amber accent keeps them visually
+          distinct. */}
       {potd && potd.matchup && (
-        <section className="rounded-lg border border-warning/40 bg-warning/5 p-5">
-          <div className="text-[10px] font-semibold uppercase tracking-widest text-warning">
-            {sport.toUpperCase()} Derivative Pick of the Day
-          </div>
-          <div className="mt-1 text-lg font-bold text-foreground">
-            {potd.matchup} · {humanizeBetType(potd.bet_type)}
-          </div>
-          <div className="mt-0.5 text-base font-semibold text-warning">
-            {potd.pick}
-          </div>
-          <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-            <span>edge {potd.edge != null ? `+${potd.edge.toFixed(1)}%` : '-'}</span>
-            <span className="text-border">·</span>
-            <span className="tabular-nums">odds {potd.odds > 0 ? '+' : ''}{potd.odds}</span>
-            <span className="text-border">·</span>
-            <span className="tabular-nums">prob {potd.model_prob ? `${(potd.model_prob * 100).toFixed(1)}%` : '-'}</span>
-            {potd.kelly_pct != null && (
-              <>
-                <span className="text-border">·</span>
-                <span className="tabular-nums">Kelly {potd.kelly_pct}%</span>
-              </>
-            )}
-          </div>
-        </section>
+        <PotdHero
+          label={`${sport.toUpperCase()} · Derivative Pick of the Day`}
+          sport={sport}
+          pick={potd}
+          accent="warning"
+        />
       )}
 
       {/* Hero summary */}
