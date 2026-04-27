@@ -264,15 +264,23 @@ MLB_ENABLE_LINEUP_STRENGTH    = False  # 1.1% Δp / 51.0% (HURTS: +0.7pp)
 # Setting False stops that direction from being selected as a pick.
 MLB_ALLOW_RL_FAVORITE = False   # -1.5 picks disabled
 MLB_ALLOW_RL_UNDERDOG = True    # +1.5 picks - the profitable side
-MLB_ALLOW_NRFI = True           # NRFI has real edge
-MLB_ALLOW_YRFI = True           # Re-enabled 2026-04-22.
-# Edge floors for the 1st INN market. Both unified to the global
-# EDGE_LEAN/EDGE_SKIP value (4.0%) on 2026-04-24 — empirical
-# calibration already pulls historical WR into the calibrated prob
-# before this floor is checked, so the older asymmetric "YRFI 5% /
-# NRFI 1%" gate was redundant. If YRFI starts losing again the
-# tracker calibration shrinks its prob → edge naturally drops below
-# 4% → picks stop firing without a config edit.
+MLB_ALLOW_NRFI = True           # NRFI has real edge (3-1 in tracker)
+# YRFI disabled 2026-04-26 after the 1st-INN GBM deep dive proved
+# the legacy 2-signal model is doing the right thing and there's
+# no recoverable edge in our available features (see
+# engine.mlb_first_inning_train — 18-feature GBM lost to baseline
+# on every CV fold; per-feature ablation showed every feature
+# either noise or actively hurting). The -28% YRFI ROI on 23
+# picks is the legacy model overshooting on the YRFI side rather
+# than a feature-quality problem we can fix.
+# Re-enable when forward backtest with stricter calibration shows
+# positive realized ROI, or when materially better data lands
+# (real lineup-aware top-3 OPS, pitch-mix feeds, etc.).
+MLB_ALLOW_YRFI = False
+# Edge floors. The auto-calibration was supposed to shrink YRFI
+# probs into oblivion when ROI went negative but didn't move fast
+# enough (small-N inertia), which is why the explicit ALLOW flag
+# above is the safer kill-switch.
 MLB_NRFI_MIN_EDGE = 4.0
 MLB_YRFI_MIN_EDGE = 4.0
 MLB_ALLOW_OU_OVER = True        # hold while sample is tiny
