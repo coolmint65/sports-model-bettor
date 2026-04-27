@@ -125,16 +125,36 @@ def refresh_pending_for_today(bets: list[dict],
             current_by_matchup[b["matchup"]] = bp
 
     pending = conn.execute(
-        "SELECT id, matchup, bet_type, pick FROM nhl_picks "
+        "SELECT id, matchup, bet_type, pick, game_id FROM nhl_picks "
         "WHERE date = ? AND result IS NULL",
         (target_date,),
     ).fetchall()
+
+    # Belt-and-suspenders DB-level lock check — see engine.tracker for
+    # the full rationale. NHL games table uses ``game_id`` as PK.
+    def _pick_game_started(game_id) -> bool:
+        if not game_id:
+            return False
+        row = conn.execute(
+            "SELECT date, status FROM nhl_games WHERE game_id = ? LIMIT 1",
+            (game_id,),
+        ).fetchone()
+        if not row:
+            return False
+        if row["status"] in ("live", "final", "postponed"):
+            return True
+        try:
+            return str(row["date"]) < target_date
+        except Exception:
+            return False
 
     updated = swapped = voided = 0
     for p in pending:
         p = dict(p)
         if p["matchup"] in locked_matchups:
             continue  # frozen at lock time
+        if _pick_game_started(p.get("game_id")):
+            continue  # game underway per DB; freeze regardless of bets dict
         current = current_by_matchup.get(p["matchup"])
         if not current:
             matchup_in_response = any(b["matchup"] == p["matchup"] for b in bets)

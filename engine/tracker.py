@@ -252,10 +252,39 @@ def refresh_pending_for_today(bets: list[dict],
             current_by_matchup[b["matchup"]] = bp
 
     pending = conn.execute(
-        "SELECT id, matchup, bet_type, pick FROM picks "
+        "SELECT id, matchup, bet_type, pick, game_id FROM picks "
         "WHERE date = ? AND result IS NULL",
         (target_date,),
     ).fetchall()
+
+    # Per-pick fallback lock check: query games table directly for the
+    # pick's own game start time. Belt-and-suspenders against the bets
+    # dict missing the game (e.g. doubleheaders where the matchup
+    # string is shared, or scoreboard filtering an in-progress game out
+    # for any reason). Without this, a pending Under 7.5 can be silently
+    # swapped to a NYM ML +2250 *during the game* because no one in the
+    # bets dict claimed the matchup as locked at refresh time.
+    def _pick_game_started(game_id) -> bool:
+        if not game_id:
+            return False
+        row = conn.execute(
+            "SELECT date, status FROM games WHERE mlb_game_id = ? LIMIT 1",
+            (game_id,),
+        ).fetchone()
+        if not row:
+            return False
+        # Status-based lock first (most reliable): live/final/postponed
+        # all mean "the user could have placed by now, freeze it".
+        if row["status"] in ("live", "final", "postponed"):
+            return True
+        # Date-based fallback for scheduled rows: the row's `date` field
+        # is the game date (not the precise tip-off ISO), so we only
+        # treat it as "started" when date < today (yesterday's row that
+        # never finalized).
+        try:
+            return str(row["date"]) < target_date
+        except Exception:
+            return False
 
     updated = swapped = voided = 0
     for p in pending:
@@ -264,6 +293,12 @@ def refresh_pending_for_today(bets: list[dict],
         # the user could have placed at lock time is the historical
         # record we want to keep.
         if p["matchup"] in locked_matchups:
+            continue
+        if _pick_game_started(p.get("game_id")):
+            # Defense in depth: even if the bets dict didn't flag this
+            # matchup as locked (game missing from /api/best-bets, dh
+            # collision, etc.), the games table says it's already
+            # underway. Don't touch the pending row.
             continue
         current = current_by_matchup.get(p["matchup"])
         if not current:
