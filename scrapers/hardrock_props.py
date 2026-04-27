@@ -115,15 +115,13 @@ query betSync(
 }
 """.strip()
 
-# League competition IDs (compId) — discovered from HAR captures and
-# confirmed against live responses on 2026-04-26.
+# League competition IDs (compId) — discovered from live HR feed on
+# 2026-04-26. NBA has two compIds (full season + playoff event groups);
+# we use the larger event-count one.
 _COMP_ID = {
     "mlb": "2899138833758814469",
-    # NBA / NHL: discovered via HAR but unused until 2h / 2i ship
-    # the per-player MC extensions. Kept here so the lookup is one
-    # change away from enabled.
-    # "nba": "<compId>",
-    # "nhl": "<compId>",
+    "nba": "691033199537586178",
+    "nhl": "691036012789334019",
 }
 
 
@@ -152,7 +150,7 @@ def _build_request_body(comp_id: str) -> dict:
 # be added to the bet-type set or the settler trampoline will
 # silently drop them.
 
-# Main O/U markets (selection has Over and Under sides).
+# Per-sport main O/U markets (selection has Over and Under sides).
 _MLB_MAIN: dict[str, str] = {
     "BASEBALL:FT:PROPSO":  "Pitcher Ks O/U",
     "BASEBALL:FT:PROPBB":  "Pitcher Walks O/U",
@@ -168,9 +166,28 @@ _MLB_MAIN: dict[str, str] = {
     "BASEBALL:FT:PROPBBB": "Batter Walks",
 }
 
-# Alt yes-only markets. Suffix N is the line threshold (5+, 10+, etc.)
-# Each tuple: (regex matching the type code, base bet_type label).
-# The threshold is parsed from the captured group.
+_NBA_MAIN: dict[str, str] = {
+    "BASKETBALL:FT:PROPPTS":   "Player Points",
+    "BASKETBALL:FT:PROPREB":   "Player Rebounds",
+    "BASKETBALL:FT:PROPAST":   "Player Assists",
+    "BASKETBALL:FT:PROPPPAPR": "Player PRA",
+    "BASKETBALL:FT:PROP3PM":   "Player 3PM",
+    "BASKETBALL:FT:PROPSTL":   "Player Steals",
+    "BASKETBALL:FT:PROPBLK":   "Player Blocks",
+}
+
+_NHL_MAIN: dict[str, str] = {
+    "ICE_HOCKEY:FT:PROPG":   "Skater Goals",
+    "ICE_HOCKEY:FT:PROPA":   "Skater Assists",
+    "ICE_HOCKEY:FT:PROPPTS": "Skater Points",
+    "ICE_HOCKEY:FT:PROPS":   "Skater SOG",
+    "ICE_HOCKEY:FT:PROPSV":  "Goalie Saves",
+    "ICE_HOCKEY:FT:PROPGA":  "Goalie Goals Against",
+}
+
+# Alt yes-only markets per sport. Suffix N is the line threshold (5+,
+# 10+, etc.) — converted to standard Over X.5 by the parser so the
+# settler doesn't need a separate ">=" branch.
 _MLB_ALT: list[tuple[re.Pattern, str]] = [
     (re.compile(r"^BASEBALL:FT:PROPALTSTRIKEOUTS(\d+)$"), "Pitcher Ks O/U"),
     (re.compile(r"^BASEBALL:FT:PROPALTHR(\d+)$"),         "Batter HR"),
@@ -180,13 +197,31 @@ _MLB_ALT: list[tuple[re.Pattern, str]] = [
     (re.compile(r"^BASEBALL:FT:PROPALTBASES(\d+)$"),      "Batter TB"),
 ]
 
+_NBA_ALT: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"^BASKETBALL:FT:PROPALTPTS(\d+)$"),    "Player Points"),
+    (re.compile(r"^BASKETBALL:FT:PROPALTREB(\d+)$"),    "Player Rebounds"),
+    (re.compile(r"^BASKETBALL:FT:PROPALTAST(\d+)$"),    "Player Assists"),
+    (re.compile(r"^BASKETBALL:FT:PROPALT3MADE(\d+)$"),  "Player 3PM"),
+]
 
-def _classify_market(market_type: str) -> tuple[str, bool, float | None]:
+_NHL_ALT: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"^ICE_HOCKEY:FT:PROPALTGOALS(\d+)$"), "Skater Goals"),
+    (re.compile(r"^ICE_HOCKEY:FT:PROPALTSHOTS(\d+)$"), "Skater SOG"),
+]
+
+
+_MAIN_BY_SPORT = {"mlb": _MLB_MAIN, "nba": _NBA_MAIN, "nhl": _NHL_MAIN}
+_ALT_BY_SPORT  = {"mlb": _MLB_ALT,  "nba": _NBA_ALT,  "nhl": _NHL_ALT}
+
+
+def _classify_market(market_type: str, sport: str = "mlb") -> tuple[str, bool, float | None]:
     """Returns ``(bet_type, is_alt, alt_threshold)``. ``bet_type`` is
     empty when the market is unrecognized — caller should drop it."""
-    if market_type in _MLB_MAIN:
-        return _MLB_MAIN[market_type], False, None
-    for pattern, label in _MLB_ALT:
+    main = _MAIN_BY_SPORT.get(sport, {})
+    alts = _ALT_BY_SPORT.get(sport, [])
+    if market_type in main:
+        return main[market_type], False, None
+    for pattern, label in alts:
         m = pattern.match(market_type)
         if m:
             return label, True, float(m.group(1))
@@ -326,7 +361,7 @@ def _parse_event(event: dict, sport: str = "mlb") -> tuple[str, list[dict]]:
     rows: list[dict] = []
     for market in (event.get("markets") or []):
         mtype = market.get("type") or ""
-        bet_type, is_alt, alt_threshold = _classify_market(mtype)
+        bet_type, is_alt, alt_threshold = _classify_market(mtype, sport)
         if not bet_type:
             continue
         if market.get("state") != "OPEN":
@@ -359,19 +394,19 @@ def _parse_event(event: dict, sport: str = "mlb") -> tuple[str, list[dict]]:
     return key, rows
 
 
-def fetch_mlb_props() -> dict[str, list[dict]]:
-    """Fetch all MLB player props from Hard Rock. Cached for
-    ``CACHE_TTL`` seconds to spare the upstream from per-tick load
-    when best-bets fans out across many calls."""
+def _fetch_props(sport: str) -> dict[str, list[dict]]:
+    """Fetch + parse player props for a sport. Cached for
+    ``CACHE_TTL`` seconds to spare upstream."""
     now = time.time()
-    cache_key = "mlb"
-    if cache_key in _cache:
-        ts, cached = _cache[cache_key]
+    if sport in _cache:
+        ts, cached = _cache[sport]
         ttl = EMPTY_CACHE_TTL if not cached else CACHE_TTL
         if now - ts < ttl:
             return cached
 
-    comp_id = _COMP_ID["mlb"]
+    comp_id = _COMP_ID.get(sport)
+    if not comp_id:
+        return {}
     payload = _fetch_raw(comp_id)
     events = (
         payload.get("data", {}).get("betSync", {})
@@ -380,15 +415,20 @@ def fetch_mlb_props() -> dict[str, list[dict]]:
 
     out: dict[str, list[dict]] = {}
     for event in events:
-        key, rows = _parse_event(event)
+        key, rows = _parse_event(event, sport)
         if not key or not rows:
             continue
         out.setdefault(key, []).extend(rows)
 
-    _cache[cache_key] = (now, out)
-    logger.info("HR props MLB: %d matchups, %d total rows",
-                len(out), sum(len(v) for v in out.values()))
+    _cache[sport] = (now, out)
+    logger.info("HR props %s: %d matchups, %d total rows",
+                sport.upper(), len(out), sum(len(v) for v in out.values()))
     return out
 
 
-__all__ = ["fetch_mlb_props"]
+def fetch_mlb_props() -> dict[str, list[dict]]: return _fetch_props("mlb")
+def fetch_nba_props() -> dict[str, list[dict]]: return _fetch_props("nba")
+def fetch_nhl_props() -> dict[str, list[dict]]: return _fetch_props("nhl")
+
+
+__all__ = ["fetch_mlb_props", "fetch_nba_props", "fetch_nhl_props"]

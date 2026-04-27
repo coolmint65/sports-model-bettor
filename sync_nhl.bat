@@ -77,6 +77,10 @@ echo Settling player props...
 python -c "from engine.player_props_tracker import settle_player_props; print(settle_player_props('nhl'))" 2>nul
 
 echo.
+echo Generating NHL player-prop picks (Phase 2i-iii)...
+python -c "from engine.nhl_prop_picks import generate_picks; from datetime import datetime, timedelta; print(generate_picks(date=(datetime.now()+timedelta(days=1)).strftime('%%Y-%%m-%%d')))" 2>nul
+
+echo.
 echo ============================================
 echo   NHL Sync Complete    [%DATE% %TIME%]
 echo ============================================
