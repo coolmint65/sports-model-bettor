@@ -24,12 +24,15 @@ const api = axios.create({ baseURL: '/api' })
 
 // Per-sport sub-nav. Standings dropped from the new shell — accessible
 // via Tracker drill-downs in 2d. Props is locked until 2g+.
+// Sport-aware sub-nav. ``firstinning`` is MLB-only — filtered out
+// for NHL/NBA below in the SubNav render.
 const SPORT_TABS = [
-  { id: 'bets',      label: 'Bets' },
-  { id: 'props',     label: 'Props' },
-  { id: 'tracker',   label: 'Tracker' },
-  { id: 'history',   label: 'History' },
-  { id: 'standings', label: 'Standings' },
+  { id: 'bets',         label: 'Bets' },
+  { id: 'props',        label: 'Props' },
+  { id: 'derivatives',  label: 'Derivatives' },
+  { id: 'firstinning',  label: '1st Inn', mlbOnly: true },
+  { id: 'history',      label: 'History' },
+  { id: 'standings',    label: 'Standings' },
 ]
 
 export default function App() {
@@ -496,7 +499,11 @@ export default function App() {
           <p className="subtitle">Data-driven {league} predictions</p>
         </div>
 
-      <SubNav tabs={SPORT_TABS} active={view} onChange={selectView} />
+      <SubNav
+        tabs={SPORT_TABS.filter(t => !t.mlbOnly || isMLB)}
+        active={view}
+        onChange={selectView}
+      />
 
       {/* ── MLB Views ── */}
       {isMLB && view === 'bets' && !selectedGame && (
@@ -513,12 +520,8 @@ export default function App() {
 
       {isMLB && view === 'props' && <PropsPanel sport="mlb" />}
       {isMLB && view === 'standings' && <Standings divisions={standings} />}
-      {isMLB && view === 'tracker' && (
-        <>
-          <DerivativeTracker sport="mlb" api={api} />
-          <FirstInningTracker />
-        </>
-      )}
+      {isMLB && view === 'derivatives' && <DerivativeTracker sport="mlb" api={api} />}
+      {isMLB && view === 'firstinning' && <FirstInningTracker />}
 
       {isMLB && view === 'history' && (
         <PickHistory
@@ -545,7 +548,7 @@ export default function App() {
 
       {isNHL && view === 'props' && <PropsPanel sport="nhl" />}
       {isNHL && view === 'standings' && <NHLStandings divisions={nhlStandings} loading={nhlStandingsLoading} />}
-      {isNHL && view === 'tracker' && <DerivativeTracker sport="nhl" api={api} />}
+      {isNHL && view === 'derivatives' && <DerivativeTracker sport="nhl" api={api} />}
 
       {isNHL && view === 'history' && (
         <PickHistory
@@ -572,7 +575,7 @@ export default function App() {
 
       {isNBA && view === 'props' && <PropsPanel sport="nba" />}
       {isNBA && view === 'standings' && <NBAStandings divisions={nbaStandings} loading={nbaStandingsLoading} />}
-      {isNBA && view === 'tracker' && <DerivativeTracker sport="nba" api={api} />}
+      {isNBA && view === 'derivatives' && <DerivativeTracker sport="nba" api={api} />}
 
       {isNBA && view === 'history' && (
         <PickHistory
