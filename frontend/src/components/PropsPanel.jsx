@@ -36,6 +36,31 @@ export default function PropsPanel({ sport }) {
     }).finally(() => setLoading(false))
   }, [sport])
 
+  const pending = summary?.pending || []
+  const finished = summary?.history || []
+
+  // Group pending picks by matchup so the UI reads as
+  // "DEN @ MIN: 5 picks" rather than 290 cards in a wall.
+  // useMemo MUST be declared before any early return — React's
+  // rules-of-hooks: hook order has to be identical across renders,
+  // so an early-return-then-useMemo pattern breaks on the second
+  // render with "Rendered more hooks than during the previous
+  // render" and the whole tree unmounts.
+  const grouped = useMemo(() => {
+    const m = new Map()
+    for (const p of pending) {
+      const key = p.matchup || '?'
+      if (!m.has(key)) m.set(key, [])
+      m.get(key).push(p)
+    }
+    return [...m.entries()]
+      .map(([matchup, picks]) => ({
+        matchup,
+        picks: picks.slice().sort((a, b) => (b.edge || 0) - (a.edge || 0)),
+      }))
+      .sort((a, b) => (b.picks[0]?.edge || 0) - (a.picks[0]?.edge || 0))
+  }, [pending])
+
   if (loading) {
     return (
       <div className="flex items-center justify-center gap-3 py-12 text-sm text-muted-foreground">
@@ -44,28 +69,6 @@ export default function PropsPanel({ sport }) {
       </div>
     )
   }
-
-  const pending = summary?.pending || []
-  const finished = summary?.history || []
-
-  // Group pending picks by matchup so the UI reads as
-  // "DEN @ MIN: 5 picks" rather than 290 cards in a wall.
-  const grouped = useMemo(() => {
-    const m = new Map()
-    for (const p of pending) {
-      const key = p.matchup || '?'
-      if (!m.has(key)) m.set(key, [])
-      m.get(key).push(p)
-    }
-    // Sort matchups by max edge inside each group; sort picks within
-    // by edge desc so the strongest play in each game leads the card.
-    return [...m.entries()]
-      .map(([matchup, picks]) => ({
-        matchup,
-        picks: picks.slice().sort((a, b) => (b.edge || 0) - (a.edge || 0)),
-      }))
-      .sort((a, b) => (b.picks[0]?.edge || 0) - (a.picks[0]?.edge || 0))
-  }, [pending])
 
   return (
     <div className="space-y-5 py-4">
