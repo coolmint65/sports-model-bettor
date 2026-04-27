@@ -2363,6 +2363,70 @@ def api_props_settle(sport: str):
     return settle_player_props(sport)
 
 
+@app.get("/api/mlb/first-inning-tracker/summary")
+def api_first_inning_summary():
+    """Settled + pending 1st INN (NRFI/YRFI) picks, MLB only.
+    Mirrors the derivative-tracker summary shape so the same
+    PicksTable shell can render it."""
+    from engine.db import get_conn as _mlb_conn
+    conn = _mlb_conn()
+    rows = [dict(r) for r in conn.execute(
+        "SELECT * FROM picks WHERE bet_type = '1st INN' "
+        "ORDER BY date DESC, id DESC LIMIT 200"
+    ).fetchall()]
+    pending = [r for r in rows if r.get("result") is None]
+    finished = [r for r in rows if r.get("result") is not None]
+    wins = sum(1 for r in finished if r["result"] == "W")
+    losses = sum(1 for r in finished if r["result"] == "L")
+    pushes = sum(1 for r in finished if r["result"] == "P")
+    profit = sum(float(r.get("profit") or 0) for r in finished)
+    # NRFI vs YRFI breakdown so the frontend can show the
+    # direction-specific records the user cares about.
+    by_dir: dict[str, dict] = {}
+    for r in finished:
+        d = "NRFI" if "NRFI" in (r.get("pick") or "").upper() else "YRFI"
+        s = by_dir.setdefault(d, {"wins": 0, "losses": 0, "profit": 0.0, "total": 0})
+        s["total"] += 1
+        if r["result"] == "W":
+            s["wins"] += 1
+        elif r["result"] == "L":
+            s["losses"] += 1
+        s["profit"] += float(r.get("profit") or 0)
+    for s in by_dir.values():
+        s["profit"] = round(s["profit"], 2)
+        if s["wins"] + s["losses"] > 0:
+            s["win_pct"] = round(s["wins"] / (s["wins"] + s["losses"]) * 100, 1)
+        else:
+            s["win_pct"] = 0.0
+    return {
+        "wins": wins, "losses": losses, "pushes": pushes,
+        "total": wins + losses + pushes,
+        "win_pct": round(wins / (wins + losses) * 100, 1) if (wins + losses) else 0.0,
+        "profit": round(profit, 2),
+        "pending": pending,
+        "history": finished,
+        "by_direction": by_dir,
+    }
+
+
+@app.get("/api/mlb/first-inning-pick-of-day")
+def api_first_inning_potd():
+    """Today's top-edge 1st INN pick (NRFI direction only — YRFI
+    disabled per engine.config). Returned shape matches the other
+    POTD endpoints so PotdHero can render it directly."""
+    from engine.db import get_conn as _mlb_conn
+    from datetime import datetime as _dt
+    today = _dt.now().strftime("%Y-%m-%d")
+    conn = _mlb_conn()
+    row = conn.execute(
+        "SELECT * FROM picks WHERE bet_type = '1st INN' AND date = ? "
+        "ORDER BY edge DESC LIMIT 1", (today,),
+    ).fetchone()
+    if not row:
+        return {"message": "No qualifying 1st INN pick today."}
+    return dict(row)
+
+
 @app.get("/api/{sport}/player-props/potd")
 def api_player_props_potd(sport: str):
     """Today's player-prop Pick-of-the-Day. Locks on first call;

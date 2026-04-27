@@ -18,7 +18,7 @@ import { cn } from '../lib/utils'
  */
 function SubNavImpl({ tabs, active, onChange }) {
   return (
-    <nav className="sticky top-0 z-10 flex items-center gap-1 border-b border-border bg-background/95 backdrop-blur px-1 -mx-1 overflow-x-auto">
+    <nav className="sticky top-0 z-10 flex items-center gap-1 border-b border-border bg-background/95 backdrop-blur px-1 -mx-1 overflow-x-auto overflow-y-hidden no-scrollbar">
       {tabs.map(t => {
         const isActive = active === t.id
         const interactive = !t.locked

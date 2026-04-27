@@ -28,6 +28,13 @@ body {
 ::-webkit-scrollbar-track { background: #111827; }
 ::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
 
+/* Hide scrollbar entirely on horizontal-scroll containers (e.g. SubNav).
+   We still allow horizontal overflow for narrow viewports — just don't
+   show the tiny vertical thumb the browser was painting from leftover
+   y-overflow on the row. */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { scrollbar-width: none; }
+
 /* ═══════════════════════════════════════════
    App Layout
    ═══════════════════════════════════════════ */

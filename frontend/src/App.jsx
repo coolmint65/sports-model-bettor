@@ -14,6 +14,7 @@ import NBAGameDetail from './components/NBAGameDetail'
 import PickOfDayHero from './components/PickOfDayHero'
 import FirstInningPicks from './components/FirstInningPicks'
 import DerivativeTracker from './components/DerivativeTracker'
+import FirstInningTracker from './components/FirstInningTracker'
 import Sidebar from './components/Sidebar'
 import SubNav from './components/SubNav'
 import RootDashboard from './components/RootDashboard'
@@ -29,7 +30,6 @@ const SPORT_TABS = [
   { id: 'tracker',   label: 'Tracker' },
   { id: 'history',   label: 'History' },
   { id: 'standings', label: 'Standings' },
-  { id: 'backtest',  label: 'Backtest' },
 ]
 
 export default function App() {
@@ -513,7 +513,12 @@ export default function App() {
 
       {isMLB && view === 'props' && <PropsPanel sport="mlb" />}
       {isMLB && view === 'standings' && <Standings divisions={standings} />}
-      {isMLB && view === 'tracker' && <DerivativeTracker sport="mlb" api={api} />}
+      {isMLB && view === 'tracker' && (
+        <>
+          <DerivativeTracker sport="mlb" api={api} />
+          <FirstInningTracker />
+        </>
+      )}
 
       {isMLB && view === 'history' && (
         <PickHistory
@@ -525,9 +530,6 @@ export default function App() {
         />
       )}
 
-      {isMLB && view === 'backtest' && (
-        <Backtest data={backtest} loading={btLoading} onRun={runBacktest} />
-      )}
 
       {/* ── NHL Views ── */}
       {isNHL && view === 'bets' && !nhlSelectedGame && (
@@ -555,9 +557,6 @@ export default function App() {
         />
       )}
 
-      {isNHL && view === 'backtest' && (
-        <Backtest data={backtest} loading={btLoading} onRun={runBacktest} />
-      )}
 
       {/* ── NBA Views ── */}
       {isNBA && view === 'bets' && !nbaSelectedGame && (
@@ -585,9 +584,6 @@ export default function App() {
         />
       )}
 
-      {isNBA && view === 'backtest' && (
-        <Backtest data={backtest} loading={btLoading} onRun={runBacktest} />
-      )}
        </div>
        )}
       </main>
