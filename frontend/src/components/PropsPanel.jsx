@@ -1,20 +1,26 @@
 /**
- * PropsPanel — per-sport player-prop picks display.
+ * PropsPanel — per-sport player-prop tab.
  *
- * Renders today's POTD via the shared <PotdHero>, then today's
- * pending picks as a card grid grouped by matchup (one
- * <PropPickCard> per pick), then settled history as a compact
- * table. Card layout matches the GameCard visual language so the
- * Props tab reads as a sibling of the Bets tab rather than a
- * spreadsheet.
+ * Mirrors DerivativeTracker / FirstInningTracker structure exactly
+ * so the three trackers read as siblings:
+ *   - Header + Settle button
+ *   - POTD card via shared <PotdHero> (player-headed for props)
+ *   - Hero summary block (W-L, P/L, per-bet-type tiles)
+ *   - Today's Picks: card grid grouped by matchup
+ *   - Recent History: compact table
+ *
+ * Settlement performance leads the page so users can see "am I
+ * winning props?" without scrolling past pending picks first.
  */
 
 import { useEffect, useMemo, useState } from 'react'
 import axios from 'axios'
 import PotdHero from './PotdHero'
 import PropPickCard from './PropPickCard'
-import SectionCard from './primitives/SectionCard'
+import { humanizeBetType } from '../lib/betType'
 import { cn } from '../lib/utils'
+
+const fmtMoney = n => `${n > 0 ? '+' : ''}$${(n || 0).toFixed(2)}`
 
 
 export default function PropsPanel({ sport }) {
@@ -23,7 +29,7 @@ export default function PropsPanel({ sport }) {
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState(null)
 
-  useEffect(() => {
+  const fetchAll = () => {
     setLoading(true)
     const a = axios.create({ baseURL: '/api' })
     Promise.all([
@@ -34,19 +40,24 @@ export default function PropsPanel({ sport }) {
       setSummary(s)
       setErr(s ? null : 'Failed to load props')
     }).finally(() => setLoading(false))
-  }, [sport])
+  }
 
+  useEffect(fetchAll, [sport])
+
+  const settleNow = async () => {
+    try {
+      await axios.post(`/api/${sport}/props-tracker/settle`)
+      fetchAll()
+    } catch (e) {
+      console.warn('settle failed', e)
+    }
+  }
+
+  // Always declare hooks before any early return -- React's
+  // rules-of-hooks. See PropsPanel commit ecb7a0b.
   const pending = summary?.pending || []
   const finished = summary?.history || []
-
-  // Group pending picks by matchup so the UI reads as
-  // "DEN @ MIN: 5 picks" rather than 290 cards in a wall.
-  // useMemo MUST be declared before any early return — React's
-  // rules-of-hooks: hook order has to be identical across renders,
-  // so an early-return-then-useMemo pattern breaks on the second
-  // render with "Rendered more hooks than during the previous
-  // render" and the whole tree unmounts.
-  const grouped = useMemo(() => {
+  const groupedPending = useMemo(() => {
     const m = new Map()
     for (const p of pending) {
       const key = p.matchup || '?'
@@ -61,6 +72,27 @@ export default function PropsPanel({ sport }) {
       .sort((a, b) => (b.picks[0]?.edge || 0) - (a.picks[0]?.edge || 0))
   }, [pending])
 
+  const byBetType = useMemo(() => {
+    const out = {}
+    for (const r of finished) {
+      const k = r.bet_type || '?'
+      const s = out[k] || (out[k] = {wins: 0, losses: 0, pushes: 0, profit: 0, total: 0})
+      s.total += 1
+      if (r.result === 'W') s.wins += 1
+      else if (r.result === 'L') s.losses += 1
+      else if (r.result === 'P') s.pushes += 1
+      s.profit += Number(r.profit || 0)
+    }
+    for (const k of Object.keys(out)) {
+      const s = out[k]
+      s.profit = Math.round(s.profit * 100) / 100
+      s.win_pct = s.wins + s.losses > 0
+        ? Math.round((s.wins / (s.wins + s.losses)) * 1000) / 10
+        : 0
+    }
+    return out
+  }, [finished])
+
   if (loading) {
     return (
       <div className="flex items-center justify-center gap-3 py-12 text-sm text-muted-foreground">
@@ -70,8 +102,33 @@ export default function PropsPanel({ sport }) {
     )
   }
 
+  const total = summary?.total || 0
+  const profit = summary?.profit || 0
+  const profitTone = profit > 0 ? 'text-positive'
+                    : profit < 0 ? 'text-negative' : 'text-foreground'
+  const typesWithData = Object.entries(byBetType)
+    .sort(([, a], [, b]) => b.total - a.total)
+
   return (
     <div className="space-y-5 py-4">
+      {/* Header + actions — matches DerivativeTracker */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-semibold tracking-tight text-foreground">
+            {sport.toUpperCase()} Player Props
+          </h2>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Per-player paper-bet log · {pending.length} pending · {total} settled
+          </p>
+        </div>
+        <button
+          onClick={settleNow}
+          className="rounded-md bg-positive-strong px-3 py-1.5 text-xs font-semibold text-background hover:opacity-90 transition-opacity"
+        >
+          Settle completed
+        </button>
+      </div>
+
       {potd && (
         <PotdHero
           label={`${sport.toUpperCase()} · Prop Pick of the Day`}
@@ -81,45 +138,101 @@ export default function PropsPanel({ sport }) {
         />
       )}
 
-      <SectionCard
-        title={`${sport.toUpperCase()} Prop Picks`}
-        subtitle={
-          summary?.total > 0
-            ? `${summary.wins}-${summary.losses} (${summary.win_pct}%) · ${summary.profit > 0 ? '+' : ''}$${summary.profit}`
-            : 'No settled picks yet'
-        }
-      >
-        {grouped.length > 0 ? (
-          <div className="space-y-6">
-            {grouped.map(g => (
-              <div key={g.matchup} className="space-y-3">
-                <div className="flex items-baseline justify-between gap-3">
-                  <h3 className="text-sm font-bold text-foreground tracking-tight">
-                    {g.matchup}
-                  </h3>
-                  <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                    {g.picks.length} pick{g.picks.length === 1 ? '' : 's'}
-                  </span>
-                </div>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                  {g.picks.map(p => (
-                    <PropPickCard key={p.id} pick={p} sport={sport} />
-                  ))}
-                </div>
-              </div>
-            ))}
+      {/* Hero summary — same shape as DerivativeTracker hero */}
+      {total > 0 && (
+        <section className="rounded-lg border border-border bg-card p-5">
+          <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+            Props P/L
           </div>
-        ) : (
-          <div className="rounded-md border border-dashed border-border bg-card/50 px-4 py-8 text-center text-sm text-muted-foreground">
-            No pending prop picks today.
+          <div className={cn('mt-1 text-3xl font-bold tabular-nums', profitTone)}>
+            {fmtMoney(profit)}
           </div>
-        )}
-      </SectionCard>
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            <span className="tabular-nums">{summary?.wins || 0}-{summary?.losses || 0}</span>
+            <span className="text-border">·</span>
+            <span className="tabular-nums">{summary?.win_pct || 0}% WR</span>
+            <span className="text-border">·</span>
+            <span className="tabular-nums">{total} picks</span>
+            {pending.length > 0 && (
+              <>
+                <span className="text-border">·</span>
+                <span className="rounded-full bg-warning/15 px-2 py-0.5 text-warning font-semibold tabular-nums">
+                  {pending.length} pending
+                </span>
+              </>
+            )}
+          </div>
 
+          {typesWithData.length > 0 && (
+            <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+              {typesWithData.map(([key, s]) => {
+                const tone = s.profit > 0 ? 'text-positive'
+                            : s.profit < 0 ? 'text-negative' : 'text-foreground'
+                return (
+                  <div key={key} className="rounded-md border border-border bg-background/50 px-3 py-2.5">
+                    <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground truncate">
+                      {humanizeBetType(key)}
+                    </div>
+                    <div className={cn('mt-0.5 text-base font-semibold tabular-nums', tone)}>
+                      {fmtMoney(s.profit)}
+                    </div>
+                    <div className="text-[10px] text-muted-foreground tabular-nums">
+                      {s.wins}-{s.losses} ({s.win_pct}%)
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* Today's Picks — card grid grouped by matchup */}
+      {groupedPending.length > 0 && (
+        <section className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-foreground">Today's Picks</h3>
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              {pending.length} live
+            </span>
+          </div>
+          {groupedPending.map(g => (
+            <div key={g.matchup} className="space-y-3">
+              <div className="flex items-baseline justify-between gap-3">
+                <h4 className="text-sm font-bold text-foreground tracking-tight">
+                  {g.matchup}
+                </h4>
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  {g.picks.length} pick{g.picks.length === 1 ? '' : 's'}
+                </span>
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {g.picks.map(p => (
+                  <PropPickCard key={p.id} pick={p} sport={sport} />
+                ))}
+              </div>
+            </div>
+          ))}
+        </section>
+      )}
+
+      {!groupedPending.length && total === 0 && (
+        <div className="rounded-md border border-dashed border-border bg-card/50 px-4 py-8 text-center text-sm text-muted-foreground">
+          No prop picks recorded yet.
+        </div>
+      )}
+
+      {/* Recent History — compact settled table */}
       {finished.length > 0 && (
-        <SectionCard title="Settled History" subtitle={`Last ${finished.length}`}>
+        <section className="rounded-lg border border-border bg-card overflow-hidden">
+          <div className="flex items-center justify-between px-5 py-3 border-b border-border">
+            <h3 className="text-sm font-semibold text-foreground">Recent History</h3>
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              {finished.length} settled
+            </span>
+          </div>
           <SettledTable rows={finished} />
-        </SectionCard>
+        </section>
       )}
 
       {err && (
@@ -132,24 +245,19 @@ export default function PropsPanel({ sport }) {
 }
 
 
-/**
- * Settled-history table — kept as a compact table since reviewing
- * past results doesn't need the visual richness of card layout.
- * Card grid for pending; table for history.
- */
 function SettledTable({ rows }) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead className="border-b border-border text-[10px] uppercase tracking-wider text-muted-foreground">
           <tr>
-            <th className="px-2 py-2 text-left">Player</th>
+            <th className="px-4 py-2 text-left">Player</th>
             <th className="px-2 py-2 text-left">Type</th>
             <th className="px-2 py-2 text-left">Pick</th>
             <th className="px-2 py-2 text-right">Odds</th>
             <th className="px-2 py-2 text-right">Edge</th>
             <th className="px-2 py-2 text-right">Result</th>
-            <th className="px-2 py-2 text-right">P/L</th>
+            <th className="px-4 py-2 text-right">P/L</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-border">
@@ -161,8 +269,8 @@ function SettledTable({ rows }) {
                               : 'text-muted-foreground'
             return (
               <tr key={r.id} className="hover:bg-accent/30">
-                <td className="px-2 py-2 font-semibold text-foreground">{r.player_name}</td>
-                <td className="px-2 py-2 text-muted-foreground">{r.bet_type}</td>
+                <td className="px-4 py-2 font-semibold text-foreground">{r.player_name}</td>
+                <td className="px-2 py-2 text-muted-foreground">{humanizeBetType(r.bet_type)}</td>
                 <td className="px-2 py-2 text-foreground">{r.pick}</td>
                 <td className="px-2 py-2 text-right tabular-nums text-muted-foreground">{oddsStr}</td>
                 <td className="px-2 py-2 text-right tabular-nums text-positive">+{Number(r.edge).toFixed(1)}%</td>
@@ -170,7 +278,7 @@ function SettledTable({ rows }) {
                   r.result === 'W' ? 'text-positive' :
                   r.result === 'L' ? 'text-negative' : 'text-muted-foreground'
                 )}>{r.result || '–'}</td>
-                <td className={cn('px-2 py-2 text-right tabular-nums', profitTone)}>
+                <td className={cn('px-4 py-2 text-right tabular-nums', profitTone)}>
                   {r.profit > 0 ? '+' : ''}${Number(r.profit || 0).toFixed(2)}
                 </td>
               </tr>
