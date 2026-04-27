@@ -265,24 +265,20 @@ MLB_ENABLE_LINEUP_STRENGTH    = False  # 1.1% Δp / 51.0% (HURTS: +0.7pp)
 MLB_ALLOW_RL_FAVORITE = False   # -1.5 picks disabled
 MLB_ALLOW_RL_UNDERDOG = True    # +1.5 picks - the profitable side
 MLB_ALLOW_NRFI = True           # NRFI has real edge (3-1 in tracker)
-# YRFI disabled 2026-04-26 after the 1st-INN GBM deep dive proved
-# the legacy 2-signal model is doing the right thing and there's
-# no recoverable edge in our available features (see
-# engine.mlb_first_inning_train — 18-feature GBM lost to baseline
-# on every CV fold; per-feature ablation showed every feature
-# either noise or actively hurting). The -28% YRFI ROI on 23
-# picks is the legacy model overshooting on the YRFI side rather
-# than a feature-quality problem we can fix.
-# Re-enable when forward backtest with stricter calibration shows
-# positive realized ROI, or when materially better data lands
-# (real lineup-aware top-3 OPS, pitch-mix feeds, etc.).
-MLB_ALLOW_YRFI = False
-# Edge floors. The auto-calibration was supposed to shrink YRFI
-# probs into oblivion when ROI went negative but didn't move fast
-# enough (small-N inertia), which is why the explicit ALLOW flag
-# above is the safer kill-switch.
-MLB_NRFI_MIN_EDGE = 4.0
-MLB_YRFI_MIN_EDGE = 4.0
+# YRFI re-enabled 2026-04-27 with a lowered 2% edge floor (per user:
+# "I'd still like to get a bet for them here or there"). The
+# 1st-INN GBM deep dive proved the legacy 2-signal model is doing
+# the right thing and there's no recoverable edge from features
+# we have (see engine.mlb_first_inning_train — 18-feature GBM
+# lost to baseline on every CV fold). The 9-14 / -$650 YRFI track
+# was on a 4% floor; user accepts marginal picks at 2% to keep
+# the market live for observation while we accumulate forward
+# data. Track ROI carefully and revisit if it stays underwater.
+MLB_ALLOW_YRFI = True
+# Edge floors lowered from 4.0 → 2.0 on 2026-04-27 to keep YRFI
+# (and symmetrically NRFI) firing on smaller-edge plays.
+MLB_NRFI_MIN_EDGE = 2.0
+MLB_YRFI_MIN_EDGE = 2.0
 MLB_ALLOW_OU_OVER = True        # hold while sample is tiny
 MLB_ALLOW_OU_UNDER = False      # Unders hit 14% over 7 picks
 
