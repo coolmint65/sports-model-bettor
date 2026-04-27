@@ -14,7 +14,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 
-_UNIVERSAL = ["rolling_30d", "rolling_l5", "rest_days", "is_home", "season_mpg"]
+_UNIVERSAL = ["rolling_30d", "rolling_l5", "rest_days", "is_home",
+              "season_mpg"]
+# projected_min was tested and added 0% MAE reduction across 7 of 8
+# stats — the live nba_injuries snapshot doesn't carry historical
+# OUT data, so for every training row from past games projected_min
+# collapsed to season_mpg (a feature we already had). Re-add once
+# we backfill historical OUT lists from player_game_logs.
 
 _PER_STAT = {
     "pts": ["opp_def_rating", "opp_pace", "opp_q1_opp_ppg"],
@@ -143,11 +149,11 @@ def extract_features(player_id: int, game_id: str, stat_key: str) -> dict | None
     season_mpg = _player_season_mpg(games_conn, player_id, season)
 
     feats = {
-        "rolling_30d": rolling_30d,
-        "rolling_l5":  rolling_l5,
-        "rest_days":   rest,
-        "is_home":     1 if is_home else 0,
-        "season_mpg":  season_mpg,
+        "rolling_30d":  rolling_30d,
+        "rolling_l5":   rolling_l5,
+        "rest_days":    rest,
+        "is_home":      1 if is_home else 0,
+        "season_mpg":   season_mpg,
     }
     extras = _PER_STAT.get(stat_key, [])
     for col in extras:
