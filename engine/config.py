@@ -265,18 +265,16 @@ MLB_ENABLE_LINEUP_STRENGTH    = False  # 1.1% Δp / 51.0% (HURTS: +0.7pp)
 MLB_ALLOW_RL_FAVORITE = False   # -1.5 picks disabled
 MLB_ALLOW_RL_UNDERDOG = True    # +1.5 picks - the profitable side
 MLB_ALLOW_NRFI = True           # NRFI has real edge (3-1 in tracker)
-# YRFI re-enabled 2026-04-27 with a lowered 2% edge floor (per user:
-# "I'd still like to get a bet for them here or there"). The
-# 1st-INN GBM deep dive proved the legacy 2-signal model is doing
-# the right thing and there's no recoverable edge from features
-# we have (see engine.mlb_first_inning_train — 18-feature GBM
-# lost to baseline on every CV fold). The 9-14 / -$650 YRFI track
-# was on a 4% floor; user accepts marginal picks at 2% to keep
-# the market live for observation while we accumulate forward
-# data. Track ROI carefully and revisit if it stays underwater.
-MLB_ALLOW_YRFI = True
-# Edge floors lowered from 4.0 → 2.0 on 2026-04-27 to keep YRFI
-# (and symmetrically NRFI) firing on smaller-edge plays.
+# YRFI off (final): 1st-INN GBM deep dive proved the legacy
+# 2-signal model is the best we can do (18-feature GBM lost on
+# every CV fold; engine.mlb_first_inning_train). The 9-14 /
+# -$650 YRFI track wasn't a feature-quality problem we can fix.
+# Re-enable when forward backtest with materially better data
+# (lineup-aware top-3 OPS, pitch-mix feeds) shows positive ROI.
+MLB_ALLOW_YRFI = False
+# NRFI stays at the lowered 2% floor — its tracker is positive
+# (3-1) so a more permissive gate accumulates evidence faster
+# without the per-pick downside YRFI showed.
 MLB_NRFI_MIN_EDGE = 2.0
 MLB_YRFI_MIN_EDGE = 2.0
 MLB_ALLOW_OU_OVER = True        # hold while sample is tiny
