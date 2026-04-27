@@ -49,18 +49,59 @@ def select_potd(sport: str, date: str | None = None,
 
     ``min_edge`` floor avoids POTDs we don't actually believe in --
     a thin slate shouldn't force a marginal pick into the headline.
+
+    Filters out picks for games already in 'live' or 'final' state.
+    Without this, late-night UTC date drift (NBA games starting at
+    8pm EDT crossing midnight UTC) lets yesterday's already-played
+    games bleed into today's POTD pool — surfaced as "POTD is for a
+    game from yesterday" by the user.
     """
     target_date = date or datetime.now().strftime("%Y-%m-%d")
     candidates = list_picks(sport, date=target_date, limit=1000)
     eligible = [p for p in candidates
                 if (p.get("edge") or 0.0) >= min_edge
-                and p.get("result") is None]
+                and p.get("result") is None
+                and not _game_already_started(sport, p.get("game_id"))]
     if not eligible:
         return None
     eligible.sort(key=_selection_score, reverse=True)
     top = eligible[0]
     top["selection_score"] = _selection_score(top)
     return top
+
+
+def _game_already_started(sport: str, game_id) -> bool:
+    """Returns True if the underlying game has 'live' / 'final' /
+    'postponed' status. POTD shouldn't surface picks on games the
+    user can no longer place."""
+    if not game_id:
+        return False
+    try:
+        if sport == "mlb":
+            from .db import get_conn as _gc
+            row = _gc().execute(
+                "SELECT status FROM games WHERE mlb_game_id = ? LIMIT 1",
+                (str(game_id),),
+            ).fetchone()
+        elif sport == "nba":
+            from .nba_db import get_conn as _gc
+            row = _gc().execute(
+                "SELECT status FROM nba_games WHERE game_id = ? LIMIT 1",
+                (str(game_id),),
+            ).fetchone()
+        elif sport == "nhl":
+            from .nhl_db import get_conn as _gc
+            row = _gc().execute(
+                "SELECT status FROM nhl_games WHERE game_id = ? LIMIT 1",
+                (str(game_id),),
+            ).fetchone()
+        else:
+            return False
+    except Exception:
+        return False
+    if not row:
+        return False
+    return row["status"] in ("live", "final", "postponed")
 
 
 def get_or_create_potd(sport: str, date: str | None = None,

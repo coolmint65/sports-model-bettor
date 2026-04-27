@@ -238,6 +238,14 @@ def generate_picks(date: str | None = None,
             counts["skipped_no_player"] += len(prop_rows)
             continue
 
+        # Dedup at (player_id, bet_type): HR ships ~10 alt lines per
+        # player per stat (Over 0.5 / 1.5 / 2.5 etc.) and the picker
+        # would otherwise insert one row per qualifying line. Surfaced
+        # as "the player has 6 picks for the same stat" in the UI.
+        # Keep one row per (player, bet_type) — the highest-edge
+        # (line, side) combo — so each player shows at most one pick
+        # per stat per game.
+        best_per_pair: dict[tuple, dict] = {}
         for prop in prop_rows:
             counts["evaluated"] += 1
             player_name = prop.get("player_name") or ""
@@ -246,12 +254,6 @@ def generate_picks(date: str | None = None,
             if not player_id:
                 counts["skipped_no_player"] += 1
                 continue
-
-            # Cache key is (player_id, game_pk) so the GBM-injected μ
-            # for THIS game's matchup doesn't get reused for the next
-            # day's slate. Without game_pk in the key, a player who
-            # appears across multiple slates would lock in their first
-            # game's GBM prediction.
             cache_key = (player_id, str(game_pk))
             if cache_key not in mc_cache:
                 mc_cache[cache_key] = build_player_mc(
@@ -260,27 +262,36 @@ def generate_picks(date: str | None = None,
                     game_pk=str(game_pk),
                 )
             samples = mc_cache[cache_key]
-            best = score_player_prop(samples, prop)
-            if best is None:
+            scored = score_player_prop(samples, prop)
+            if scored is None:
                 if not samples:
                     counts["skipped_no_mc"] += 1
                 else:
                     counts["skipped_low_edge"] += 1
                 continue
+            pair_key = (player_id, prop.get("bet_type", ""))
+            if pair_key in best_per_pair and \
+                    scored["edge"] <= best_per_pair[pair_key]["scored"]["edge"]:
+                continue
+            best_per_pair[pair_key] = {
+                "player_id": player_id,
+                "player_name": player_name,
+                "prop": prop,
+                "scored": scored,
+            }
 
+        for entry in best_per_pair.values():
+            best = entry["scored"]
             confidence = _confidence_for(best["edge"])
-            # pick stores just the bet (Over 9.5) — player_name is its
-            # own column, no need to prefix and risk POTD reasoning
-            # double-printing the player.
             pick_text = f"{best['side']} {best['line']:g}"
             insert_pick(
                 "mlb",
                 game_id=str(game_pk),
                 date=target_date,
                 matchup=f"{away_abbr} @ {home_abbr}",
-                player_id=player_id,
-                player_name=player_name,
-                bet_type=prop.get("bet_type", ""),
+                player_id=entry["player_id"],
+                player_name=entry["player_name"],
+                bet_type=entry["prop"].get("bet_type", ""),
                 pick=pick_text,
                 line=best["line"],
                 side=best["side"],

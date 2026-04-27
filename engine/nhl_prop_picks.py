@@ -220,6 +220,11 @@ def generate_picks(date: str | None = None,
         away_tid = gt_row["away_team_id"] if gt_row else 0
         home_tid = gt_row["home_team_id"] if gt_row else 0
 
+        # Dedup at (player_id, bet_type) — keep highest-edge line per
+        # pair. See mlb_prop_picks for full rationale (HR ships ~6 alt
+        # lines per stat per player; without this filter the UI shows
+        # one player with multiple picks for the same stat).
+        best_per_pair: dict[tuple, dict] = {}
         for prop in prop_rows:
             counts["evaluated"] += 1
             player_name = prop.get("player_name") or ""
@@ -231,7 +236,6 @@ def generate_picks(date: str | None = None,
             if not player_id:
                 counts["skipped_no_player"] += 1
                 continue
-
             cache_key = (player_id, str(game_id))
             if cache_key not in mc_cache:
                 mc_cache[cache_key] = build_player_mc(
@@ -240,30 +244,37 @@ def generate_picks(date: str | None = None,
                     game_id=str(game_id),
                 )
             samples = mc_cache[cache_key]
-            best = _score(samples, prop)
-            if best is None:
+            scored = _score(samples, prop)
+            if scored is None:
                 if not samples:
                     counts["skipped_no_mc"] += 1
                 else:
                     counts["skipped_low_edge"] += 1
                 continue
+            pair_key = (player_id, bet_type)
+            if pair_key in best_per_pair and \
+                    scored["edge"] <= best_per_pair[pair_key]["scored"]["edge"]:
+                continue
+            best_per_pair[pair_key] = {
+                "player_id": player_id, "player_name": player_name,
+                "prop": prop, "scored": scored,
+            }
 
+        for entry in best_per_pair.values():
+            best = entry["scored"]
             confidence = _confidence_for(best["edge"])
             pick_text = f"{best['side']} {best['line']:g}"
             insert_pick(
                 "nhl",
-                game_id=game_id,
-                date=target_date,
+                game_id=game_id, date=target_date,
                 matchup=f"{away_abbr} @ {home_abbr}",
-                player_id=player_id,
-                player_name=player_name,
-                bet_type=prop.get("bet_type", ""),
+                player_id=entry["player_id"],
+                player_name=entry["player_name"],
+                bet_type=entry["prop"].get("bet_type", ""),
                 pick=pick_text,
-                line=best["line"],
-                side=best["side"],
+                line=best["line"], side=best["side"],
                 model_prob=best["model_prob"],
-                edge=best["edge"],
-                odds=best["odds"],
+                edge=best["edge"], odds=best["odds"],
                 confidence=confidence,
             )
             counts["picked"] += 1
