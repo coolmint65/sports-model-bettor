@@ -114,7 +114,7 @@ def generate_picks(date: str | None = None,
                 continue
 
             confidence = _confidence_for(best["edge"])
-            pick_text = f"{player_name} {best['side']} {best['line']:g}"
+            pick_text = f"{best['side']} {best['line']:g}"
             insert_pick(
                 "nba",
                 game_id=game_id,

@@ -17,6 +17,7 @@ import DerivativeTracker from './components/DerivativeTracker'
 import Sidebar from './components/Sidebar'
 import SubNav from './components/SubNav'
 import RootDashboard from './components/RootDashboard'
+import PropsPanel from './components/PropsPanel'
 
 const api = axios.create({ baseURL: '/api' })
 
@@ -24,7 +25,7 @@ const api = axios.create({ baseURL: '/api' })
 // via Tracker drill-downs in 2d. Props is locked until 2g+.
 const SPORT_TABS = [
   { id: 'bets',      label: 'Bets' },
-  { id: 'props',     label: 'Props', locked: true, badge: 'Soon' },
+  { id: 'props',     label: 'Props' },
   { id: 'tracker',   label: 'Tracker' },
   { id: 'history',   label: 'History' },
   { id: 'standings', label: 'Standings' },
@@ -510,7 +511,7 @@ export default function App() {
         <GameDetail game={selectedGame} prediction={prediction} loading={predLoading} onBack={goBack} />
       )}
 
-      {isMLB && view === 'props' && <PropsPlaceholder sport="MLB" />}
+      {isMLB && view === 'props' && <PropsPanel sport="mlb" />}
       {isMLB && view === 'standings' && <Standings divisions={standings} />}
       {isMLB && view === 'tracker' && <DerivativeTracker sport="mlb" api={api} />}
 
@@ -540,7 +541,7 @@ export default function App() {
         <NHLGameDetail game={nhlSelectedGame} prediction={nhlPrediction} loading={nhlPredLoading} onBack={goBack} />
       )}
 
-      {isNHL && view === 'props' && <PropsPlaceholder sport="NHL" />}
+      {isNHL && view === 'props' && <PropsPanel sport="nhl" />}
       {isNHL && view === 'standings' && <NHLStandings divisions={nhlStandings} loading={nhlStandingsLoading} />}
       {isNHL && view === 'tracker' && <DerivativeTracker sport="nhl" api={api} />}
 
@@ -570,7 +571,7 @@ export default function App() {
         <NBAGameDetail game={nbaSelectedGame} prediction={nbaPrediction} loading={nbaPredLoading} onBack={goBack} />
       )}
 
-      {isNBA && view === 'props' && <PropsPlaceholder sport="NBA" />}
+      {isNBA && view === 'props' && <PropsPanel sport="nba" />}
       {isNBA && view === 'standings' && <NBAStandings divisions={nbaStandings} loading={nbaStandingsLoading} />}
       {isNBA && view === 'tracker' && <DerivativeTracker sport="nba" api={api} />}
 
@@ -594,21 +595,3 @@ export default function App() {
   )
 }
 
-// Inline placeholder for the locked Props sub-nav tab. Real props
-// surface lands in Phase 2g+ once the MC extension + DB schema are
-// in place. Keeps the tab visible (and styleable) so the new shell
-// doesn't render an empty area when users land on it.
-function PropsPlaceholder({ sport }) {
-  return (
-    <div className="py-12">
-      <div className="mx-auto max-w-md rounded-lg border border-dashed border-border bg-card/50 px-6 py-10 text-center">
-        <div className="text-sm font-semibold text-foreground">{sport} Player Props</div>
-        <div className="mt-1.5 text-xs text-muted-foreground">
-          Props markets land in Phase 2g (MLB), 2h (NBA), 2i (NHL).
-          The MC stack will track per-player events and surface picks
-          alongside core markets here.
-        </div>
-      </div>
-    </div>
-  )
-}

@@ -254,7 +254,10 @@ def generate_picks(date: str | None = None,
                 continue
 
             confidence = _confidence_for(best["edge"])
-            pick_text = (f"{player_name} {best['side']} {best['line']:g}")
+            # pick stores just the bet (Over 9.5) — player_name is its
+            # own column, no need to prefix and risk POTD reasoning
+            # double-printing the player.
+            pick_text = f"{best['side']} {best['line']:g}"
             insert_pick(
                 "mlb",
                 game_id=str(game_pk),

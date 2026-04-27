@@ -2363,6 +2363,21 @@ def api_props_settle(sport: str):
     return settle_player_props(sport)
 
 
+@app.get("/api/{sport}/player-props/potd")
+def api_player_props_potd(sport: str):
+    """Today's player-prop Pick-of-the-Day. Locks on first call;
+    subsequent calls return the locked POTD even if the slate
+    re-ranks. Returns the full pick row joined with POTD metadata,
+    or {message} when no qualifying pick exists today."""
+    if sport not in ("mlb", "nhl", "nba"):
+        raise HTTPException(status_code=400, detail="Unknown sport")
+    from engine.player_props_potd import get_or_create_potd
+    potd = get_or_create_potd(sport)
+    if not potd:
+        return {"message": "No qualifying prop POTD today."}
+    return potd
+
+
 @app.get("/api/{sport}/derivative-pick-of-day")
 def api_derivative_potd(sport: str):
     """Today's derivative POTD per sport. Locks on first call (uses
