@@ -1,0 +1,19 @@
+{
+  "stat": "er",
+  "feature_cols": [
+    "rolling_30d",
+    "rolling_l5",
+    "rest_days",
+    "is_home",
+    "weather_temp_f",
+    "opp_team_runs_pg",
+    "season_era",
+    "park_run_factor",
+    "ump_run_factor"
+  ],
+  "n_rows": 3547,
+  "cv_baseline_mae": 0.9549633915623762,
+  "cv_gbm_mae": 0.827405313698373,
+  "reduction_pct": 13.350995893305674,
+  "trained_at": "2026-04-27T01:41:21Z"
+}

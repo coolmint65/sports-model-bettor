@@ -115,9 +115,18 @@ def _sample(observations: np.ndarray, dist_choice: dict, n: int,
     ``observations`` are the player's recent values for this stat
     (used to derive μ and, for NegBin with ≥10 games, a player-
     specific dispersion that overrides the pooled k from the
-    locked decision)."""
+    locked decision).
+
+    Optional kwargs (passed via dist_choice) — ``override_mu``: when
+    set, replaces the observation mean as the location parameter.
+    Used by Phase 2k-i to inject GBM-predicted μ for stats whose
+    feature model survived the ship gate (HR, RBI, SB, etc.).
+    Dispersion still comes from observations so the player's own
+    variance shape is preserved.
+    """
     family = dist_choice.get("family", "poisson")
-    mu = float(np.mean(observations))
+    override_mu = dist_choice.get("_override_mu")
+    mu = float(override_mu) if override_mu is not None else float(np.mean(observations))
 
     if family == "negbin":
         # Player-specific dispersion when sample is big enough; otherwise
@@ -187,6 +196,7 @@ def build_player_mc(player_id: int,
                     stats: list[str] | None = None,
                     *,
                     sport: str = "mlb",
+                    game_pk: str | None = None,
                     n_sims: int = 10_000,
                     lookback_days: int = 60,
                     min_games: int = 5,
@@ -204,6 +214,16 @@ def build_player_mc(player_id: int,
     rng = np.random.default_rng(seed if seed is not None else
                                 hash((player_id, since)) & 0xFFFFFFFF)
     out: dict[str, np.ndarray] = {}
+    # Lazy-load GBM only when we have a game_pk to predict against and
+    # the sport has shipped models. Today only MLB has them (Phase
+    # 2k-i — only stats that beat the 10% MAE-reduction gate).
+    use_gbm = sport == "mlb" and game_pk is not None
+    if use_gbm:
+        try:
+            from .mlb_prop_gbm import has_model as _gbm_has, predict_mu as _gbm_predict
+        except ImportError:
+            use_gbm = False
+
     for stat_key in target_stats:
         dist = get_distribution(sport, stat_key)
         if dist is None:
@@ -211,7 +231,15 @@ def build_player_mc(player_id: int,
         obs = _player_observations(sport, player_id, stat_key, since)
         if len(obs) < min_games:
             continue
-        samples = _sample(obs, dist, n_sims, rng)
+        # Inject GBM-predicted μ for stats that survived the ship gate.
+        # Dispersion still derives from observations so the player's
+        # own variance shape carries over; only the location moves.
+        dist_with_override = dist
+        if use_gbm and _gbm_has(stat_key):
+            gbm_mu = _gbm_predict(stat_key, player_id, str(game_pk))
+            if gbm_mu is not None:
+                dist_with_override = {**dist, "_override_mu": gbm_mu}
+        samples = _sample(obs, dist_with_override, n_sims, rng)
         # Sort once so prob_over / prob_under are O(log N).
         out[stat_key] = np.sort(samples)
     return out

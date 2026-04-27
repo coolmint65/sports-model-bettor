@@ -247,12 +247,19 @@ def generate_picks(date: str | None = None,
                 counts["skipped_no_player"] += 1
                 continue
 
-            if player_id not in mc_cache:
-                mc_cache[player_id] = build_player_mc(
+            # Cache key is (player_id, game_pk) so the GBM-injected μ
+            # for THIS game's matchup doesn't get reused for the next
+            # day's slate. Without game_pk in the key, a player who
+            # appears across multiple slates would lock in their first
+            # game's GBM prediction.
+            cache_key = (player_id, str(game_pk))
+            if cache_key not in mc_cache:
+                mc_cache[cache_key] = build_player_mc(
                     player_id, n_sims=n_sims,
                     lookback_days=lookback_days,
+                    game_pk=str(game_pk),
                 )
-            samples = mc_cache[player_id]
+            samples = mc_cache[cache_key]
             best = score_player_prop(samples, prop)
             if best is None:
                 if not samples:

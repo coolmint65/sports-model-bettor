@@ -1,0 +1,17 @@
+{
+  "stat": "rbi",
+  "feature_cols": [
+    "rolling_30d",
+    "rolling_l5",
+    "rest_days",
+    "is_home",
+    "weather_temp_f",
+    "opp_sp_era",
+    "park_run_factor"
+  ],
+  "n_rows": 9679,
+  "cv_baseline_mae": 0.5953052787237185,
+  "cv_gbm_mae": 0.4363397327525728,
+  "reduction_pct": 26.711271926129626,
+  "trained_at": "2026-04-27T01:41:43Z"
+}

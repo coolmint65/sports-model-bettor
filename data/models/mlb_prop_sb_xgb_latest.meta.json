@@ -1,0 +1,15 @@
+{
+  "stat": "sb",
+  "feature_cols": [
+    "rolling_30d",
+    "rolling_l5",
+    "rest_days",
+    "is_home",
+    "weather_temp_f"
+  ],
+  "n_rows": 9679,
+  "cv_baseline_mae": 0.11811219752215427,
+  "cv_gbm_mae": 0.0713482905293837,
+  "reduction_pct": 39.71596634111156,
+  "trained_at": "2026-04-27T01:41:53Z"
+}

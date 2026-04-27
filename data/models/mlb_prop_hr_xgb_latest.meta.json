@@ -1,0 +1,17 @@
+{
+  "stat": "hr",
+  "feature_cols": [
+    "rolling_30d",
+    "rolling_l5",
+    "rest_days",
+    "is_home",
+    "weather_temp_f",
+    "opp_sp_hr_per_9",
+    "park_hr_factor"
+  ],
+  "n_rows": 9679,
+  "cv_baseline_mae": 0.18365637594199474,
+  "cv_gbm_mae": 0.10599152696297982,
+  "reduction_pct": 42.64093582371928,
+  "trained_at": "2026-04-27T01:41:28Z"
+}
