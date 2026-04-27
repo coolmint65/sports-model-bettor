@@ -378,6 +378,13 @@ def get_or_create_potd(sport: str, games_with_bets: list[dict],
         # ESPN event id for NBA, the NHL gamePk for NHL) -- no
         # translation needed.
         game_id = raw_game_id
+    # Commit the pick_of_day INSERT FIRST so the mirror's failure
+    # (if any) doesn't drag it down with it. Earlier this rolled into
+    # one commit at the end and a silent mirror exception caused the
+    # mirrored row to vanish — the user's MIA@LAD POTD case from
+    # 2026-04-27 04:01 surfaced as "POTD card different to its actual
+    # card" because the mirror INSERT was never committed.
+    conn.commit()
     try:
         existing = conn.execute(
             f"SELECT id FROM {picks_table} "
@@ -385,7 +392,7 @@ def get_or_create_potd(sport: str, games_with_bets: list[dict],
             (target_date, game_id, bet_type),
         ).fetchone()
         if not existing:
-            conn.execute(
+            cur = conn.execute(
                 f"INSERT INTO {picks_table} ("
                 "  date, game_id, matchup, bet_type, pick,"
                 "  model_prob, edge, odds"
@@ -399,12 +406,19 @@ def get_or_create_potd(sport: str, games_with_bets: list[dict],
                     selected.get("odds"),
                 ),
             )
+            conn.commit()
+            logger.info("POTD mirror %s: inserted pick id=%s for %s/%s/%s",
+                        sport, cur.lastrowid, target_date, bet_type, pick_text)
+        else:
+            logger.info("POTD mirror %s: existing pick %s already covers "
+                        "(%s, %s) — skipped", sport, existing["id"],
+                        target_date, bet_type)
     except Exception as e:
-        # Don't let a tracker-mirror failure block POTD creation — the
-        # POTD itself is committed above.
-        logger.warning("POTD mirror to %s failed for %s: %s",
-                       picks_table, sport, e)
-    conn.commit()
+        # Loud warning so a future failure is visible in logs instead
+        # of silently dropping the mirrored row.
+        logger.warning("POTD mirror to %s FAILED for %s/%s/%s: %s",
+                       picks_table, sport, target_date, bet_type, e,
+                       exc_info=True)
 
     logger.info("Created %s POTD for %s: %s %s (%s edge %+.1f%%)",
                 sport.upper(), target_date, selected.get("matchup"),

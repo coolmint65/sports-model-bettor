@@ -28,6 +28,11 @@ export default function PropsPanel({ sport }) {
   const [summary, setSummary] = useState(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState(null)
+  // Settle feedback: shows the count of newly-settled picks (or
+  // explicit "nothing to settle" so the button isn't silent).
+  // Auto-clears after 4s.
+  const [settleMsg, setSettleMsg] = useState(null)
+  const [settling, setSettling] = useState(false)
 
   const fetchAll = () => {
     setLoading(true)
@@ -45,11 +50,22 @@ export default function PropsPanel({ sport }) {
   useEffect(fetchAll, [sport])
 
   const settleNow = async () => {
+    setSettling(true)
+    setSettleMsg(null)
     try {
-      await axios.post(`/api/${sport}/props-tracker/settle`)
+      const r = await axios.post(`/api/${sport}/props-tracker/settle`)
+      const d = r.data || {}
+      const n = d.settled || 0
+      const msg = n === 0
+        ? 'Nothing to settle — no new game logs since last run.'
+        : `Settled ${n} pick${n === 1 ? '' : 's'} · ${d.wins || 0}W / ${d.losses || 0}L / ${d.pushes || 0}P`
+      setSettleMsg({ text: msg, ok: true })
       fetchAll()
     } catch (e) {
-      console.warn('settle failed', e)
+      setSettleMsg({ text: `Settle failed: ${e.message || 'request error'}`, ok: false })
+    } finally {
+      setSettling(false)
+      setTimeout(() => setSettleMsg(null), 5000)
     }
   }
 
@@ -121,12 +137,30 @@ export default function PropsPanel({ sport }) {
             Per-player paper-bet log · {pending.length} pending · {total} settled
           </p>
         </div>
-        <button
-          onClick={settleNow}
-          className="rounded-md bg-positive-strong px-3 py-1.5 text-xs font-semibold text-background hover:opacity-90 transition-opacity"
-        >
-          Settle completed
-        </button>
+        <div className="flex items-center gap-3">
+          {settleMsg && (
+            <span className={cn(
+              'rounded-md px-2.5 py-1 text-[11px] font-semibold transition-opacity',
+              settleMsg.ok
+                ? 'bg-positive/15 text-positive'
+                : 'bg-negative/15 text-negative',
+            )}>
+              {settleMsg.text}
+            </span>
+          )}
+          <button
+            onClick={settleNow}
+            disabled={settling}
+            className={cn(
+              'rounded-md px-3 py-1.5 text-xs font-semibold transition-opacity',
+              settling
+                ? 'bg-muted text-muted-foreground cursor-wait'
+                : 'bg-positive-strong text-background hover:opacity-90',
+            )}
+          >
+            {settling ? 'Settling…' : 'Settle completed'}
+          </button>
+        </div>
       </div>
 
       {potd && (
