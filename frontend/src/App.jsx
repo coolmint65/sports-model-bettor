@@ -5,35 +5,26 @@ import GameDetail from './components/GameDetail'
 import Standings from './components/Standings'
 import Backtest from './components/Backtest'
 import PickHistory from './components/PickHistory'
-import NHLScoreboard from './components/NHLScoreboard'
 import NHLStandings from './components/NHLStandings'
 import NHLGameDetail from './components/NHLGameDetail'
-import NBAScoreboard from './components/NBAScoreboard'
-import NBABetsView from './components/NBABetsView'
 import NBAStandings from './components/NBAStandings'
 import NBAGameDetail from './components/NBAGameDetail'
-import PickOfDayHero from './components/PickOfDayHero'
-import FirstInningPicks from './components/FirstInningPicks'
-import DerivativeTracker from './components/DerivativeTracker'
-import FirstInningTracker from './components/FirstInningTracker'
+import BetsView from './components/BetsView'
 import Sidebar from './components/Sidebar'
 import SubNav from './components/SubNav'
 import RootDashboard from './components/RootDashboard'
-import PropsPanel from './components/PropsPanel'
 
 const api = axios.create({ baseURL: '/api' })
 
-// Per-sport sub-nav. Standings dropped from the new shell — accessible
-// via Tracker drill-downs in 2d. Props is locked until 2g+.
-// Sport-aware sub-nav. ``firstinning`` is MLB-only — filtered out
-// for NHL/NBA below in the SubNav render.
+// Per-sport sub-nav. Phase-2 polish 2026-04-28: Props / Derivatives /
+// 1st Inn collapsed under Bets via the in-tab MarketToggle. Bets is
+// the single "what should I bet today" surface; Tracker is the single
+// "how have my bets done" surface; Standings is league context. Live
+// reserves a slot for Phase 3.
 const SPORT_TABS = [
-  { id: 'bets',         label: 'Bets' },
-  { id: 'props',        label: 'Props' },
-  { id: 'derivatives',  label: 'Derivatives' },
-  { id: 'firstinning',  label: '1st Inn', mlbOnly: true },
-  { id: 'history',      label: 'History' },
-  { id: 'standings',    label: 'Standings' },
+  { id: 'bets',      label: 'Bets' },
+  { id: 'history',   label: 'Tracker' },
+  { id: 'standings', label: 'Standings' },
 ]
 
 export default function App() {
@@ -501,28 +492,31 @@ export default function App() {
         </div>
 
       <SubNav
-        tabs={SPORT_TABS.filter(t => !t.mlbOnly || isMLB)}
+        tabs={SPORT_TABS}
         active={view}
         onChange={selectView}
       />
 
       {/* ── MLB Views ── */}
       {isMLB && view === 'bets' && !selectedGame && (
-        <>
-          <PickOfDayHero sport="mlb" />
-          <FirstInningPicks bestBets={bestBets} />
-          <Scoreboard games={games} loading={gamesLoading} progress={bbProgress} onSelectGame={selectGame} bestBets={bestBets} />
-        </>
+        <BetsView
+          sport="mlb"
+          api={api}
+          data={{
+            games,
+            loading: gamesLoading,
+            progress: bbProgress,
+            onSelectGame: selectGame,
+            bestBets,
+          }}
+        />
       )}
 
       {isMLB && selectedGame && (
         <GameDetail game={selectedGame} prediction={prediction} loading={predLoading} onBack={goBack} />
       )}
 
-      {isMLB && view === 'props' && <PropsPanel sport="mlb" />}
       {isMLB && view === 'standings' && <Standings divisions={standings} />}
-      {isMLB && view === 'derivatives' && <DerivativeTracker sport="mlb" api={api} />}
-      {isMLB && view === 'firstinning' && <FirstInningTracker />}
 
       {isMLB && view === 'history' && (
         <PickHistory
@@ -537,19 +531,24 @@ export default function App() {
 
       {/* ── NHL Views ── */}
       {isNHL && view === 'bets' && !nhlSelectedGame && (
-        <>
-          <PickOfDayHero sport="nhl" />
-          <NHLScoreboard games={nhlGames} loading={nhlLoading} progress={nhlBbProgress} onSelectGame={selectNhlGame} bestBets={nhlBestBets} />
-        </>
+        <BetsView
+          sport="nhl"
+          api={api}
+          data={{
+            games: nhlGames,
+            loading: nhlLoading,
+            progress: nhlBbProgress,
+            onSelectGame: selectNhlGame,
+            bestBets: nhlBestBets,
+          }}
+        />
       )}
 
       {isNHL && nhlSelectedGame && (
         <NHLGameDetail game={nhlSelectedGame} prediction={nhlPrediction} loading={nhlPredLoading} onBack={goBack} />
       )}
 
-      {isNHL && view === 'props' && <PropsPanel sport="nhl" />}
       {isNHL && view === 'standings' && <NHLStandings divisions={nhlStandings} loading={nhlStandingsLoading} />}
-      {isNHL && view === 'derivatives' && <DerivativeTracker sport="nhl" api={api} />}
 
       {isNHL && view === 'history' && (
         <PickHistory
@@ -564,12 +563,16 @@ export default function App() {
 
       {/* ── NBA Views ── */}
       {isNBA && view === 'bets' && !nbaSelectedGame && (
-        <NBABetsView
-          games={nbaGames}
-          loading={nbaLoading}
-          progress={nbaBbProgress}
-          onSelectGame={selectNbaGame}
-          bestBets={nbaBestBets}
+        <BetsView
+          sport="nba"
+          api={api}
+          data={{
+            games: nbaGames,
+            loading: nbaLoading,
+            progress: nbaBbProgress,
+            onSelectGame: selectNbaGame,
+            bestBets: nbaBestBets,
+          }}
         />
       )}
 
@@ -577,9 +580,7 @@ export default function App() {
         <NBAGameDetail game={nbaSelectedGame} prediction={nbaPrediction} loading={nbaPredLoading} onBack={goBack} />
       )}
 
-      {isNBA && view === 'props' && <PropsPanel sport="nba" />}
       {isNBA && view === 'standings' && <NBAStandings divisions={nbaStandings} loading={nbaStandingsLoading} />}
-      {isNBA && view === 'derivatives' && <DerivativeTracker sport="nba" api={api} />}
 
       {isNBA && view === 'history' && (
         <PickHistory
