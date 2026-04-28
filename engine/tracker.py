@@ -749,7 +749,15 @@ def settle_picks() -> dict:
     try:
         from .picks import fetch_real_odds_for_games, match_odds
         all_closing_odds = fetch_real_odds_for_games()
-    except Exception:
+    except Exception as e:
+        # Settle proceeds with whatever closing_odds we already
+        # snapshotted via capture_closing_odds(); CLV columns just
+        # won't get a fresh value. Log so we can see if HR is down for
+        # extended periods (CLV history goes stale silently otherwise).
+        logger.warning(
+            "settle_picks: failed to fetch live odds for CLV refresh "
+            "(%s) — using whatever closing_odds was previously captured", e,
+        )
         all_closing_odds = {}
 
     settled = 0

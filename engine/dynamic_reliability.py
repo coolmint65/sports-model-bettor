@@ -132,7 +132,13 @@ def _calibration_bonus(sport: str, bet_type: str) -> float:
     if not _TABLE_LOADED.get(sport):
         try:
             refresh_calibration(sport)
-        except Exception:
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(
+                "calibration refresh for %s failed (%s); reliability "
+                "lookup falling back to floor — picks will weight by "
+                "static dict only until next refresh", sport, e,
+            )
             return CALIBRATION_BONUS_FLOOR
 
     sport_table = _TABLE.get(sport, {})

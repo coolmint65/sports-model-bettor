@@ -317,7 +317,14 @@ def _settle_mlb_derivatives() -> dict:
             try:
                 pick_dt = datetime.strptime(p["date"], "%Y-%m-%d")
                 age_days = (datetime.now() - pick_dt).days
-            except Exception:
+            except Exception as e:
+                # Malformed date string in tracker — shouldn't happen
+                # but treat as fresh (age=0) so we don't auto-push.
+                logger.warning(
+                    "derivative settle: pick id=%s has unparseable date "
+                    "%r (%s); treating as age=0 to avoid auto-push",
+                    p.get("id"), p.get("date"), e,
+                )
                 age_days = 0
             if age_days >= 1:
                 conn.execute(

@@ -58,7 +58,16 @@ def _load_mlb_odds_map(conn) -> dict:
     """
     try:
         rows = conn.execute("SELECT * FROM odds").fetchall()
-    except Exception:
+    except Exception as e:
+        # Empty odds table or schema drift — backtests downstream will
+        # produce no picks, which surfaces as "0 picks across N games"
+        # rather than crashing. Log so the user sees WHY their backtest
+        # came back empty instead of guessing it's a date-range issue.
+        import logging
+        logging.getLogger(__name__).warning(
+            "backtest odds preload failed (%s) — backtest will run "
+            "without historical odds and emit zero picks", e,
+        )
         return {}
 
     odds_map = {}

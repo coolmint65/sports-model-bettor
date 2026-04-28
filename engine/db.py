@@ -27,11 +27,22 @@ def get_conn() -> sqlite3.Connection:
         try:
             conn.execute("SELECT 1")
             return conn
-        except Exception:
+        except Exception as ping_err:
+            # Stale handle (e.g. DB locked by another writer that
+            # disconnected, or sqlite3 OperationalError after a long
+            # idle). Surface so we can see if this is a recurring
+            # symptom of contention vs a one-off.
+            import logging
+            logging.getLogger(__name__).warning(
+                "MLB DB connection ping failed (%s); reconnecting",
+                ping_err,
+            )
             try:
                 conn.close()
-            except Exception:
-                pass
+            except Exception as close_err:
+                logging.getLogger(__name__).debug(
+                    "MLB DB stale-connection close failed: %s", close_err,
+                )
             _local.conn = None
 
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)

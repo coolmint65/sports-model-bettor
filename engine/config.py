@@ -307,9 +307,16 @@ def get_flag(name: str, default=None, sport: str = "mlb"):
         ov = get_override(sport, name)
         if ov is not None:
             return ov
-    except Exception:
-        # Override layer must never crash the prediction path.
-        pass
+    except Exception as e:
+        # Override layer must never crash the prediction path. Log
+        # so a silent miscalibration doesn't ride forever — production
+        # picks against the wrong threshold are exactly the kind of
+        # bug the user flagged in the bulletproofing audit.
+        import logging
+        logging.getLogger(__name__).warning(
+            "model override lookup failed for sport=%s name=%s: %s — "
+            "falling back to module-level default", sport, name, e,
+        )
     return globals().get(name, default)
 
 

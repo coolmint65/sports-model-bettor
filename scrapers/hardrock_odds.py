@@ -1356,8 +1356,23 @@ def _parse_response(sport: str, data: Any) -> dict[str, dict]:
                         if outcomes_peek:
                             sample_line = _extract_line_from_name(
                                 str(_pick(outcomes_peek[0], "name") or ""))
-                            if sample_line is not None and sample_line == int(sample_line):
-                                continue
+                            # Guard the int() cast: sample_line should be
+                            # float|None per _extract_line_from_name's
+                            # contract, but a NaN or unexpected type would
+                            # crash the whole scrape loop here. Catch and
+                            # skip so one bad market doesn't take down the
+                            # rest of the slate.
+                            try:
+                                if (sample_line is not None
+                                        and not (sample_line != sample_line)  # NaN guard
+                                        and sample_line == int(sample_line)):
+                                    continue
+                            except (TypeError, ValueError, OverflowError) as e:
+                                logger.debug(
+                                    "HR scraper: skipping Asian-line check "
+                                    "for kind=%s sample_line=%r (%s)",
+                                    kind, sample_line, e,
+                                )
                     # Hard Rock betSync uses "selection"; other shapes
                     # use "outcomes" / "selections" / "runners".
                     outcomes = (_pick(mkt, "selection", "outcomes",

@@ -132,7 +132,13 @@ def _fetch_espn_json(url: str) -> dict | None:
             })
             with urllib.request.urlopen(req, timeout=10) as resp:
                 return json.loads(resp.read().decode())
-        except Exception:
+        except Exception as e:
+            # Both attempts log so an ESPN outage is visible. Without
+            # this the only symptom is empty scoreboards / fallbacks
+            # that look like "the model thinks no games tonight".
+            level = logging.DEBUG if attempt == 0 else logging.WARNING
+            logger.log(level, "ESPN fetch failed (attempt %d) for %s: %s",
+                       attempt + 1, url, e)
             if attempt == 0:
                 time.sleep(1)
     return None
@@ -327,8 +333,13 @@ def _get_scoreboard(date: str = "") -> list[dict]:
                 first_comp = events[0].get("competitions", [{}])[0]
                 first_team = first_comp.get("competitors", [{}])[0].get("team", {})
                 logger.info("ESPN team keys: %s", list(first_team.keys()))
-            except Exception:
-                pass
+            except Exception as e:
+                # Logging-only debug; never block scoreboard. But if the
+                # ESPN payload shape changes (key rename, missing
+                # competitors), log it so the next on-call eye knows
+                # which side broke. Without this the only symptom would
+                # be quietly-wrong team logos.
+                logger.debug("ESPN team-keys debug log failed: %s", e)
         games = _parse_espn_scoreboard(espn_data)
     else:
         logger.warning("ESPN returned no data for %s", url)
