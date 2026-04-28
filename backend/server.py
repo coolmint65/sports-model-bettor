@@ -16,7 +16,7 @@ import urllib.request
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -145,6 +145,39 @@ def _fetch_espn_json(url: str) -> dict | None:
 
 
 # ── Endpoints ───────────────────────────────────────────────
+
+@app.post("/api/_client_error")
+async def api_client_error(req: Request):
+    """Receiver for the frontend ErrorBoundary's fire-and-forget report.
+    Logs the error to the backend so client crashes end up in server
+    logs without depending on the user opening devtools. Always returns
+    204 — never blocks the boundary's recovery path."""
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    logger.warning(
+        "frontend ErrorBoundary: %s :: %s",
+        body.get("message", "<no-message>"),
+        (body.get("componentStack") or "").splitlines()[0:1],
+    )
+    return Response(status_code=204)
+
+
+@app.get("/api/_health")
+def api_health():
+    """Deep-check health endpoint — exercises every dependency the
+    prediction pipeline needs (per-sport DBs, today's schedule rows,
+    calibration tables, picks_cache, GBM artifacts, stale POTD locks)
+    and returns a structured payload. Always HTTP 200; the `status`
+    field (ok/warn/fail) is the alerting signal so monitors don't
+    flap on degraded-but-online states.
+
+    See backend/health.py for the per-check details.
+    """
+    from .health import run_health_checks
+    return run_health_checks()
+
 
 @app.get("/api/model-overrides/{sport}")
 def api_model_overrides(sport: str, include_expired: bool = False):
