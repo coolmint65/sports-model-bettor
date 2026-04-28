@@ -19,14 +19,22 @@ import PotdHero from './PotdHero'
 import PropPickCard from './PropPickCard'
 import { humanizeBetType } from '../lib/betType'
 import { cn } from '../lib/utils'
+import { cachedGet, peek, invalidate } from '../lib/apiCache'
 
 const fmtMoney = n => `${n > 0 ? '+' : ''}$${(n || 0).toFixed(2)}`
 
 
 export default function PropsPanel({ sport }) {
-  const [potd, setPotd] = useState(null)
-  const [summary, setSummary] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const potdUrl = `/${sport}/player-props/potd`
+  const summaryUrl = `/${sport}/props-tracker/summary`
+
+  // Hydrate from cache so a remount on tab-switch shows yesterday's
+  // POTD + history immediately rather than flashing a spinner.
+  const initialPotd = peek(potdUrl)
+  const initialSummary = peek(summaryUrl)
+  const [potd, setPotd] = useState(initialPotd && !initialPotd.message ? initialPotd : null)
+  const [summary, setSummary] = useState(initialSummary ?? null)
+  const [loading, setLoading] = useState(initialSummary === undefined)
   const [err, setErr] = useState(null)
   // Settle feedback: shows the count of newly-settled picks (or
   // explicit "nothing to settle" so the button isn't silent).
@@ -36,10 +44,9 @@ export default function PropsPanel({ sport }) {
 
   const fetchAll = () => {
     setLoading(true)
-    const a = axios.create({ baseURL: '/api' })
     Promise.all([
-      a.get(`/${sport}/player-props/potd`).then(r => r.data).catch(() => null),
-      a.get(`/${sport}/props-tracker/summary`).then(r => r.data).catch(() => null),
+      cachedGet(potdUrl).catch(() => null),
+      cachedGet(summaryUrl).catch(() => null),
     ]).then(([p, s]) => {
       setPotd(p && !p.message ? p : null)
       setSummary(s)
@@ -60,6 +67,11 @@ export default function PropsPanel({ sport }) {
         ? 'Nothing to settle — no new game logs since last run.'
         : `Settled ${n} pick${n === 1 ? '' : 's'} · ${d.wins || 0}W / ${d.losses || 0}L / ${d.pushes || 0}P`
       setSettleMsg({ text: msg, ok: true })
+      // Mutation: drop cached props endpoints for this sport so the
+      // refetch sees the new state. Also evict the heavier props
+      // tracker URLs in case the settle moved a row to history.
+      invalidate(potdUrl)
+      invalidate(summaryUrl)
       fetchAll()
     } catch (e) {
       setSettleMsg({ text: `Settle failed: ${e.message || 'request error'}`, ok: false })

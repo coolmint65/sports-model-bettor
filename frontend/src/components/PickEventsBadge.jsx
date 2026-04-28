@@ -1,8 +1,8 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import { ScrollText } from 'lucide-react'
-import axios from 'axios'
 import { cn } from '../lib/utils'
 import { humanizeBetType } from '../lib/betType'
+import { cachedGet, peek } from '../lib/apiCache'
 
 /**
  * PickEventsBadge — 📜 popover showing the breadcrumb of model pick
@@ -20,7 +20,6 @@ import { humanizeBetType } from '../lib/betType'
  *   sport    - 'mlb' | 'nhl' | 'nba'
  *   gameId   - the bet.game_id for this card
  */
-const api = axios.create({ baseURL: '/api' })
 
 const EVENT_LABELS = {
   appeared:   'Picked',
@@ -37,7 +36,14 @@ const EVENT_TONES = {
 }
 
 function PickEventsBadgeImpl({ sport, gameId }) {
-  const [events, setEvents] = useState(null) // null = unfetched
+  // Hydrate from the cross-instance cache so re-renders (and the second
+  // mount after a tab-switch) don't trigger a duplicate fetch.
+  const url = `/${sport}/pick-events`
+  const params = { game_id: gameId, hours: 24 }
+  const initialEvents = peek(url, params)
+  const [events, setEvents] = useState(
+    Array.isArray(initialEvents) ? initialEvents : (initialEvents !== undefined ? [] : null)
+  )
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const popRef = useRef(null)
@@ -46,8 +52,8 @@ function PickEventsBadgeImpl({ sport, gameId }) {
   const ensureLoaded = () => {
     if (events !== null || loading) return
     setLoading(true)
-    api.get(`/${sport}/pick-events`, { params: { game_id: gameId, hours: 24 } })
-      .then(r => setEvents(Array.isArray(r.data) ? r.data : []))
+    cachedGet(url, { params, ttlMs: 30_000 })
+      .then(d => setEvents(Array.isArray(d) ? d : []))
       .catch(() => setEvents([]))
       .finally(() => setLoading(false))
   }

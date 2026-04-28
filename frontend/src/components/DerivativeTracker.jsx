@@ -3,6 +3,7 @@ import { humanizeBetType } from '../lib/betType'
 import { cn } from '../lib/utils'
 import PicksTable from './primitives/PicksTable'
 import PotdHero from './PotdHero'
+import { cachedGet, peek, invalidate } from '../lib/apiCache'
 
 // Derivative ROI breaks down to cents on small-edge alt markets, so
 // the table needs 2-decimal precision on the P/L column. PickHistory
@@ -23,30 +24,45 @@ const derivProfitFmt = n => `$${n.toFixed(2)}`
  *   api   — axios-shaped client with .get() / .post()
  */
 export default function DerivativeTracker({ sport, api }) {
-  const [summary, setSummary] = useState(null)
-  const [history, setHistory] = useState([])
-  const [potd, setPotd] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const summaryUrl = `/${sport}/derivative-tracker/summary`
+  const historyUrl = `/${sport}/derivative-tracker/history`
+  const potdUrl    = `/${sport}/derivative-pick-of-day`
+
+  // Hydrate from cache so a tab-switch back doesn't flash a spinner.
+  const [summary, setSummary] = useState(() => peek(summaryUrl) ?? null)
+  const [history, setHistory] = useState(() => peek(historyUrl) ?? [])
+  const [potd, setPotd] = useState(() => {
+    const p = peek(potdUrl)
+    return p && !p.message && !p.error ? p : null
+  })
+  const [loading, setLoading] = useState(peek(summaryUrl) === undefined)
 
   const refresh = () => {
     setLoading(true)
     Promise.all([
-      api.get(`/${sport}/derivative-tracker/summary`).then(r => setSummary(r.data)),
-      api.get(`/${sport}/derivative-tracker/history`).then(r => setHistory(r.data)),
-      api.get(`/${sport}/derivative-pick-of-day`)
-        .then(r => setPotd(r.data && !r.data.message && !r.data.error ? r.data : null))
+      cachedGet(summaryUrl).then(d => setSummary(d)).catch(() => {}),
+      cachedGet(historyUrl).then(d => setHistory(d)).catch(() => {}),
+      cachedGet(potdUrl)
+        .then(d => setPotd(d && !d.message && !d.error ? d : null))
         .catch(() => setPotd(null)),
     ])
       .catch(() => {})
       .finally(() => setLoading(false))
   }
 
-  useEffect(() => { refresh() }, [sport])
+  useEffect(() => { refresh() }, [sport])  // eslint-disable-line react-hooks/exhaustive-deps
 
   const settleNow = () => {
     setLoading(true)
     api.post(`/${sport}/derivative-tracker/settle`)
-      .then(() => refresh())
+      .then(() => {
+        // Settle moves rows pending → settled; drop cached views so
+        // the refetch reflects the new state instead of the stale one.
+        invalidate(summaryUrl)
+        invalidate(historyUrl)
+        invalidate(potdUrl)
+        refresh()
+      })
       .catch(() => setLoading(false))
   }
 

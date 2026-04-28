@@ -4,36 +4,40 @@
  * headline, model-vs-market bar, team logos) lives in PotdHero so
  * the derivative POTD card and the props PotdHero share the same
  * shell.
+ *
+ * Reads through `apiCache` so the response survives tab-unmount.
+ * Without that, every Bets-tab visit kicked off two fresh /pick-of-day
+ * requests and the card "flashed empty" each time the user came back
+ * from Props or History.
  */
 
 import { useEffect, useState } from 'react'
-import axios from 'axios'
+import { cachedGet, peek } from '../lib/apiCache'
 import PotdHero from './PotdHero'
 
 export default function PickOfDayHero({ sport, view }) {
-  // For NBA the dashboard ships a Q1/Full toggle; everything else is
-  // single-view. When view is supplied (NBA), we hit ?view=both once
-  // and pluck the right sub-block based on the prop. That avoids a
-  // re-fetch every time the user flips the toggle.
-  const [data, setData] = useState(null)        // {q1: ..., full: ...} for NBA, single POTD otherwise
-  const [summary, setSummary] = useState(null)
-  const [loaded, setLoaded] = useState(false)
+  const potdUrl = sport === 'nba'
+    ? `/pick-of-day/${sport}?view=both`
+    : `/pick-of-day/${sport}`
+  const summaryUrl = `/pick-of-day/${sport}/summary`
+
+  // Initial state hydrates synchronously from the cache when warm,
+  // so a remount on tab-switch shows the POTD immediately rather than
+  // flashing null. Cold mounts still resolve via the async effect.
+  const [data, setData] = useState(() => peek(potdUrl) ?? null)
+  const [summary, setSummary] = useState(() => peek(summaryUrl) ?? null)
 
   useEffect(() => {
-    if (loaded) return
-    setLoaded(true)
-    const a = axios.create({ baseURL: '/api' })
-    const potdUrl = sport === 'nba'
-      ? `/pick-of-day/${sport}?view=both`
-      : `/pick-of-day/${sport}`
-    Promise.all([
-      a.get(potdUrl),
-      a.get(`/pick-of-day/${sport}/summary`),
-    ]).then(([p, s]) => {
-      setData(p.data)
-      setSummary(s.data)
-    }).catch(() => {})
-  }, [sport, loaded])
+    let cancelled = false
+    Promise.all([cachedGet(potdUrl), cachedGet(summaryUrl)])
+      .then(([p, s]) => {
+        if (cancelled) return
+        setData(p)
+        setSummary(s)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [potdUrl, summaryUrl])
 
   if (!data) return null
 

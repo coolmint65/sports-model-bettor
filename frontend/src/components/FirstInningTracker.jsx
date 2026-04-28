@@ -12,21 +12,28 @@ import axios from 'axios'
 import PotdHero from './PotdHero'
 import PicksTable from './primitives/PicksTable'
 import { cn } from '../lib/utils'
+import { cachedGet, peek, invalidate } from '../lib/apiCache'
 
 const fiProfitFmt = n => `${n != null ? `$${n.toFixed(2)}` : '-'}`
 
+const SUMMARY_URL = '/mlb/first-inning-tracker/summary'
+const POTD_URL = '/mlb/first-inning-pick-of-day'
+
 
 export default function FirstInningTracker() {
-  const [summary, setSummary] = useState(null)
-  const [potd, setPotd] = useState(null)
-  const [loading, setLoading] = useState(true)
+  // Hydrate from cache to avoid the loading flash on tab return.
+  const [summary, setSummary] = useState(() => peek(SUMMARY_URL) ?? null)
+  const [potd, setPotd] = useState(() => {
+    const p = peek(POTD_URL)
+    return p && !p.message ? p : null
+  })
+  const [loading, setLoading] = useState(peek(SUMMARY_URL) === undefined)
 
   const fetchAll = () => {
     setLoading(true)
-    const a = axios.create({ baseURL: '/api' })
     Promise.all([
-      a.get('/mlb/first-inning-tracker/summary').then(r => r.data).catch(() => null),
-      a.get('/mlb/first-inning-pick-of-day').then(r => r.data).catch(() => null),
+      cachedGet(SUMMARY_URL).catch(() => null),
+      cachedGet(POTD_URL).catch(() => null),
     ]).then(([s, p]) => {
       setSummary(s)
       setPotd(p && !p.message ? p : null)
@@ -40,6 +47,12 @@ export default function FirstInningTracker() {
     // since picks live in the picks table with bet_type='1st INN'.
     try {
       await axios.post('/api/mlb/tracker/settle')
+      // Drop the cached 1st INN views + the main MLB tracker views
+      // since the settler updates rows in the picks table that both
+      // surfaces read from.
+      invalidate(SUMMARY_URL)
+      invalidate(POTD_URL)
+      invalidate('/tracker/')
       fetchAll()
     } catch (e) {
       console.warn('settle failed', e)
