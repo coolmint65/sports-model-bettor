@@ -15,7 +15,38 @@ import json
 import logging
 import time
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+try:
+    from zoneinfo import ZoneInfo
+    _US_EASTERN = ZoneInfo("America/New_York")
+except Exception:  # py<3.9 or tzdata missing
+    _US_EASTERN = None
+
+
+def _us_eastern_date(iso_utc: str) -> str:
+    """Convert an ESPN ISO-8601 UTC timestamp ("2026-04-28T02:00Z") to
+    its US-Eastern calendar date ("2026-04-27"). NBA / MLB / NHL all
+    schedule by US-Eastern game-night, so a 10pm ET tipoff that crosses
+    midnight UTC must still be stamped as the night it was played to
+    the user — otherwise tonight's slate splits across two DB dates
+    and the props tab loses track of which games are "tonight."
+    """
+    if not iso_utc:
+        return ""
+    s = iso_utc.replace("Z", "+00:00") if iso_utc.endswith("Z") else iso_utc
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return iso_utc[:10]
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    if _US_EASTERN is not None:
+        return dt.astimezone(_US_EASTERN).strftime("%Y-%m-%d")
+    # Fallback: fixed UTC-5 (EST) when zoneinfo isn't available. Off
+    # by an hour during DST but still pulls late-night games back to
+    # the right calendar date.
+    return (dt - timedelta(hours=5)).strftime("%Y-%m-%d")
 
 logger = logging.getLogger(__name__)
 
@@ -171,11 +202,12 @@ def fetch_scoreboard(date: str = "") -> list[dict]:
         if not game_id:
             continue
 
-        # Parse date
+        # Parse date — convert ESPN's UTC timestamp to US-Eastern so a
+        # 10pm ET tipoff stays on the night it was played, not the next
+        # UTC calendar date. See _us_eastern_date for full rationale.
         game_date_raw = event.get("date", "")
         if game_date_raw:
-            # ESPN dates are ISO format: "2025-01-15T00:00Z"
-            game_date = game_date_raw[:10]
+            game_date = _us_eastern_date(game_date_raw)
         else:
             game_date = date[:4] + "-" + date[4:6] + "-" + date[6:8] if len(date) == 8 else ""
 
@@ -905,8 +937,13 @@ def compute_all_q1_stats(season: int) -> int:
 
 
 def _backfill_stale_games(today_yyyymmdd: str, lookback_days: int = 14) -> int:
-    """Refresh rows still status=scheduled/live whose date is in the past.
+    """Refresh rows still status=scheduled/live whose date is recent.
     Returns the count of stale dates touched.
+
+    Includes TODAY in the query — late-night games that crossed midnight
+    UTC stamp today's date but ESPN already marks them final, so the
+    earlier ``date < today`` guard left them perpetually 'live'. The
+    user's stuck NBA HOU@LAL props came from this gap.
 
     ESPN's scoreboard takes a YYYYMMDD date arg; ``upsert_nba_game`` only
     overwrites fields the upstream returns, so a refetch that comes back
@@ -921,21 +958,34 @@ def _backfill_stale_games(today_yyyymmdd: str, lookback_days: int = 14) -> int:
     rows = conn.execute(
         "SELECT DISTINCT date FROM nba_games "
         "WHERE status IN ('scheduled', 'live') "
-        "  AND date < ? AND date >= ? "
+        "  AND date <= ? AND date >= ? "
         "ORDER BY date",
         (today_iso, cutoff),
     ).fetchall()
     if not rows:
         return 0
     dates = [r["date"] if hasattr(r, "keys") else r[0] for r in rows]
-    touched = 0
+    # Walk date AND date-1 — late tipoffs (10pm PT / 01am ET) stamp
+    # tomorrow's date in our DB but live on yesterday's ESPN scoreboard
+    # because event.date arrives in UTC. Without the -1 sweep the game
+    # never re-fetches and pending picks stay 'live' forever (user's
+    # HOU@LAL stuck props on 2026-04-27 came from this).
+    targets: set[str] = set()
     for d in dates:
+        targets.add(d.replace("-", ""))
         try:
-            yyyymmdd = d.replace("-", "")
-            fetch_scoreboard(yyyymmdd)
+            prev = (datetime.strptime(d, "%Y-%m-%d") - timedelta(days=1)
+                    ).strftime("%Y%m%d")
+            targets.add(prev)
+        except ValueError:
+            continue
+    touched = 0
+    for ymd in sorted(targets):
+        try:
+            fetch_scoreboard(ymd)
             touched += 1
         except Exception as e:
-            logger.warning("NBA backfill %s failed: %s", d, e)
+            logger.warning("NBA backfill %s failed: %s", ymd, e)
     return touched
 
 
@@ -1002,16 +1052,27 @@ def sync_nba(full: bool = False) -> None:
         games = fetch_scoreboard(today)
         _progress(f"       {len(games)} games today")
 
-        _progress("[3] Fetching yesterday's results...")
-        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
-        yesterday_games = fetch_scoreboard(yesterday)
-        _progress(f"       {len(yesterday_games)} games yesterday")
+        _progress("[3] Fetching last 7 days for any missed games...")
+        # Walk the past 7 days so any date that never made it into the
+        # DB (sync skipped, scraper crashed, ESPN was down) gets caught.
+        # `_backfill_stale_games` only refreshes rows already in the DB
+        # — it can't recover days where ZERO games landed. The
+        # OKC@PHX 04-22 / ORL@DET 04-22 misses surfaced as "series
+        # Game 3 instead of Game 4" because those rows never existed
+        # to backfill. fetch_scoreboard is idempotent so days already
+        # synced are no-op writes.
+        recent_total = 0
+        for d_offset in range(1, 8):
+            d = (datetime.now() - timedelta(days=d_offset)).strftime("%Y%m%d")
+            try:
+                day_games = fetch_scoreboard(d)
+                recent_total += len(day_games or [])
+            except Exception as e:
+                logger.warning("NBA recent-days fetch %s failed: %s", d, e)
+        _progress(f"       {recent_total} games over last 7 days")
 
-        # Backfill any games still status=scheduled/live but in the past.
-        # Quick sync only refetches today + yesterday, so games from 2-7
-        # days ago whose final never landed stay stale forever — surfaces
-        # in series_context as "Game 4 · Tied 1-1" because game_number
-        # counts played games but win tally only counts games with scores.
+        # Backfill any rows that ARE in the DB but still scheduled/live
+        # past their date (quick recheck for status updates).
         _progress("[3.5] Backfilling stale game rows...")
         n_stale = _backfill_stale_games(today)
         if n_stale:

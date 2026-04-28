@@ -272,13 +272,17 @@ MLB_ALLOW_NRFI = True           # NRFI has real edge (3-1 in tracker)
 # Re-enable when forward backtest with materially better data
 # (lineup-aware top-3 OPS, pitch-mix feeds) shows positive ROI.
 MLB_ALLOW_YRFI = False
-# NRFI stays at the lowered 2% floor — its tracker is positive
-# (3-1) so a more permissive gate accumulates evidence faster
-# without the per-pick downside YRFI showed.
-MLB_NRFI_MIN_EDGE = 2.0
-MLB_YRFI_MIN_EDGE = 2.0
-MLB_ALLOW_OU_OVER = True        # hold while sample is tiny
-MLB_ALLOW_OU_UNDER = False      # Unders hit 14% over 7 picks
+# NRFI/YRFI floor lowered to 0.5% per user directive: first inning is
+# effectively a coin flip, so we surface even razor-thin edges to
+# accumulate sample size and validate the model on this market.
+MLB_NRFI_MIN_EDGE = 0.5
+MLB_YRFI_MIN_EDGE = 0.5
+MLB_ALLOW_OU_OVER = True
+MLB_ALLOW_OU_UNDER = True       # re-enabled 2026-04-28 per user;
+                                # bias addressed via direction-aware
+                                # empirical calibration (see
+                                # engine.empirical_calibration —
+                                # OU_DIRECTION shrinkage).
 
 # ── Bet-type reliability weights ──
 # Based on live tracker results + retrospective sweep against current model.
@@ -400,6 +404,64 @@ DERIVATIVE_EDGE_FLOOR = {
         "Team Total": 8.0,
     },
     "nba": {},
+}
+
+
+# ── Main-market overrides ──
+# Same shape as DERIVATIVE_EDGE_FLOOR but applies to ML/SPREAD/TOTAL.
+# Per-bet-type floors are required when a backtest shows certain
+# markets bleed at the standard 4% floor. Picks below the override
+# get marked confidence='skip' and don't surface on the dashboard.
+MAIN_EDGE_FLOOR = {
+    "mlb": {},
+    "nhl": {},
+    "nba": {
+        # NBA full-game backtest 2026-04-27 (n=1305 games):
+        #   ML at 4%+   →  +33.6% ROI (synthetic -110)  → ship
+        #   TOTAL at 4-12%  →  losing -16% to -34% ROI
+        #   TOTAL at 12+%   →  near-break-even (-2.5%)
+        # Floor TOTAL at 12% so we only surface the bucket that wasn't
+        # actively losing at synthetic juice. Re-evaluate after a month
+        # of live picks.
+        "TOTAL":      12.0,
+        # ALT lines couldn't be backtested (no historical posted alts).
+        # Player props at high alt-line prices have lost money live —
+        # same calibration risk applies here. Gate hard at 12% until
+        # tracker data validates a lower floor.
+        "ALT SPREAD": 12.0,
+        "ALT TOTAL":  12.0,
+        # SPREAD on the standard line: 4% floor, paper-track until ROI.
+    },
+}
+
+
+# Per-bet-type max American odds. Picks at extreme prices (longshots,
+# heavy chalks) carry calibration risk that backtest data can't always
+# catch. Capping caps the damage from any one mispricing.
+MAIN_ODDS_CAP = {
+    "mlb": {
+        # MLB heavy-underdog ML (e.g. CHC +2250 over SD's ace) — same
+        # longshot calibration trap as NBA. Model says +45% edge but
+        # the underdog wins ~5% of the time, and one bad break makes
+        # the line move farther rather than closer to true. Cap at
+        # +400 until live tracker data validates a higher cap.
+        "ML": 400,
+    },
+    "nhl": {
+        # NHL ML rarely goes higher than +200 in non-playoff games but
+        # playoffs can stretch to +300+. Cap at +400 for symmetry with
+        # MLB/NBA — same longshot risk in elimination spots.
+        "ML": 400,
+    },
+    "nba": {
+        # ML at +1000+ is a longshot trap — even a calibrated 12% prob
+        # is one bad Q1 away from a -100 loss, and 12% mispriced as 18%
+        # creates a fictional +18% edge that costs more than it gains.
+        # Cap at +400 (~20% implied) so the picker won't surface
+        # heavy-underdog ML picks until the model's longshot tail is
+        # validated live.
+        "ML": 400,
+    },
 }
 
 # ── Weak markets - disabled by default ──

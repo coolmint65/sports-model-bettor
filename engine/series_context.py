@@ -162,20 +162,25 @@ def infer_series(sport: str, home_abbr: str, away_abbr: str,
         conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
 
-        # Resolve team IDs from abbreviations — try both the raw and
-        # aliased abbreviation
-        home_row = conn.execute(
+        # Resolve team IDs from abbreviations. NHL UTA was rebranded
+        # from Arizona Coyotes mid-2024 and the league re-issued the
+        # team_id from 53 to 68 — both can appear in nhl_teams. Pull
+        # ALL ids that match the abbreviation so the games-table JOIN
+        # below catches both old- and new-id rows for the same team.
+        home_rows = conn.execute(
             f"SELECT id FROM {teams_table} WHERE abbreviation IN (?, ?)",
-            (home_abbr, home_db_abbr)).fetchone()
-        away_row = conn.execute(
+            (home_abbr, home_db_abbr)).fetchall()
+        away_rows = conn.execute(
             f"SELECT id FROM {teams_table} WHERE abbreviation IN (?, ?)",
-            (away_abbr, away_db_abbr)).fetchone()
-        if not home_row or not away_row:
+            (away_abbr, away_db_abbr)).fetchall()
+        if not home_rows or not away_rows:
             conn.close()
             return result
 
-        home_id = home_row["id"]
-        away_id = away_row["id"]
+        home_ids = [r["id"] for r in home_rows]
+        away_ids = [r["id"] for r in away_rows]
+        home_id = home_ids[0]  # canonical (used for win-tally home/away comparisons)
+        away_id = away_ids[0]
 
         # Find recent PLAYOFF games between these two teams.
         # Use game_type=3 for NHL (playoff). For NBA the DB may not
@@ -208,20 +213,21 @@ def infer_series(sport: str, home_abbr: str, away_abbr: str,
         # than it actually is. The win tally is computed below from
         # whichever subset DOES have scores; the game_number itself
         # reflects how many games have been *played*.
+        # Build IN-list placeholders so a team with multiple ids (UTA
+        # 53/68) catches games stamped with either ID.
+        h_ph = ",".join("?" * len(home_ids))
+        a_ph = ",".join("?" * len(away_ids))
         query = f"""
             SELECT date, home_team_id, away_team_id, home_score, away_score, status
             FROM {games_table}
             WHERE date >= ? AND date < ?
-              AND ((home_team_id = ? AND away_team_id = ?)
-                OR (home_team_id = ? AND away_team_id = ?))
+              AND ((home_team_id IN ({h_ph}) AND away_team_id IN ({a_ph}))
+                OR (home_team_id IN ({a_ph}) AND away_team_id IN ({h_ph})))
               {game_type_filter}
             ORDER BY date ASC
         """
-        rows = conn.execute(query, (
-            cutoff, today_str,
-            home_id, away_id,
-            away_id, home_id,
-        )).fetchall()
+        params = [cutoff, today_str] + home_ids + away_ids + away_ids + home_ids
+        rows = conn.execute(query, params).fetchall()
         conn.close()
 
         if not rows:
@@ -254,7 +260,9 @@ def infer_series(sport: str, home_abbr: str, away_abbr: str,
             if h_score is None or a_score is None or h_score == a_score:
                 continue
 
-            if game_home_id == home_id:
+            # Compare against the SET of home_ids (handles UTA 53/68
+            # and any other multi-id team).
+            if game_home_id in home_ids:
                 # Today's home team was home in this game
                 if h_score > a_score:
                     home_team_wins += 1

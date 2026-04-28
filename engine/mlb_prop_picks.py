@@ -54,6 +54,14 @@ PROP_MIN_EDGE_PCT = 4.0
 # at +400 (~20% implied) so we don't ship Yes-on-longshot picks.
 PROP_MAX_ODDS = 400
 
+# Juice wall — minimum acceptable American odds for a prop pick.
+# Mirrors the game-line MLB_JUICE_WALL (-200): below this the price
+# eats too much of the variance for a model edge to be real. Surfaced
+# 2026-04-28 when the user reported seeing -250s in the prop slate
+# (e.g. Over 4.5 K with a heavy fav price). At -250 you risk $250 to
+# win $100 — a 2pp model edge needs to be near-perfect to be +EV.
+PROP_JUICE_WALL = -200
+
 
 def _normalize_name(name: str) -> str:
     """Lowercase, strip accents and punctuation. Handles HR's
@@ -166,6 +174,8 @@ def score_player_prop(samples: dict, prop: dict) -> dict | None:
             })
     # Drop longshot lines before ranking — see PROP_MAX_ODDS comment.
     candidates = [c for c in candidates if c["odds"] <= PROP_MAX_ODDS]
+    # Drop heavy-juice lines — see PROP_JUICE_WALL comment.
+    candidates = [c for c in candidates if c["odds"] >= PROP_JUICE_WALL]
     if not candidates:
         return None
 
@@ -185,6 +195,84 @@ def _confidence_for(edge: float) -> str:
     if edge >= PROP_MIN_EDGE_PCT:
         return "lean"
     return "skip"
+
+
+# Volume cap per game. The user explicitly asked: "instead of having
+# a prop for basically every player, we have one or two per game that
+# are the highest conviction." Two picks per game × ~10 games/night
+# yields ~20 picks/night vs the previous ~200, which made the slate
+# unscannable. Headline-only.
+TOP_N_PER_GAME = 2
+
+
+def _collapse_and_cap(best_per_pair: dict[tuple, dict]) -> list[dict]:
+    """Reduce the per-game candidate set to the top-N highest-conviction
+    picks, with at most one pick per player. Used by every prop picker
+    (mlb / nhl / nba) so the volume cap is consistent.
+
+    Selection order:
+      1. Per player, keep the (bet_type) with the largest edge.
+      2. Across the remaining players, sort by edge descending.
+      3. Take the first TOP_N_PER_GAME.
+    """
+    best_per_player: dict[int, dict] = {}
+    for entry in best_per_pair.values():
+        pid = int(entry["player_id"])
+        if (pid not in best_per_player
+                or entry["scored"]["edge"] > best_per_player[pid]["scored"]["edge"]):
+            best_per_player[pid] = entry
+    ranked = sorted(best_per_player.values(),
+                    key=lambda e: e["scored"]["edge"], reverse=True)
+    return ranked[:TOP_N_PER_GAME]
+
+
+def _void_stale_pending(sport: str, game_id: str, target_date: str,
+                        keep: list[tuple]) -> int:
+    """Delete pending prop rows for this (game_id, date) that aren't in
+    the current top-N keep set. Mirrors the void-on-line-move pattern
+    in derivative_tracker — without it, yesterday's picker run leaves
+    stale low-edge / off-line picks pending forever (e.g. Julius Randle
+    Player Points Under 21.5 lingering after today's run swapped to
+    Under 24.5). Only touches result IS NULL so settled history stays.
+
+    ``keep`` is a list of ``(player_id, bet_type, pick)`` tuples we want
+    to retain. Anything else for the same game/date that's still
+    pending gets dropped.
+
+    Picks referenced by a locked prop POTD are also retained, so a line
+    swap on the POTD's bet doesn't leave the POTD dangling. The POTD's
+    own line refresh repoints to the new line afterward.
+    """
+    from .player_props_db import _conn_for
+    conn = _conn_for(sport)
+    rows = conn.execute(
+        "SELECT id, player_id, bet_type, pick FROM player_props_picks "
+        "WHERE game_id = ? AND date = ? AND result IS NULL",
+        (str(game_id), target_date),
+    ).fetchall()
+    keep_set = {(int(p), str(bt), str(pk)) for p, bt, pk in keep}
+    # Pick IDs currently referenced by any prop POTD lock — never void
+    # these even if they fell out of the top-N keep set.
+    locked_potd_ids = {
+        int(r["pick_id"]) for r in conn.execute(
+            "SELECT pick_id FROM player_props_picks_pot_day"
+        ).fetchall() if r["pick_id"] is not None
+    }
+    drop_ids: list[int] = []
+    for r in rows:
+        if int(r["id"]) in locked_potd_ids:
+            continue
+        key = (int(r["player_id"]), str(r["bet_type"]), str(r["pick"]))
+        if key not in keep_set:
+            drop_ids.append(int(r["id"]))
+    if drop_ids:
+        placeholders = ",".join("?" * len(drop_ids))
+        conn.execute(
+            f"DELETE FROM player_props_picks WHERE id IN ({placeholders})",
+            drop_ids,
+        )
+        conn.commit()
+    return len(drop_ids)
 
 
 def generate_picks(date: str | None = None,
@@ -280,10 +368,15 @@ def generate_picks(date: str | None = None,
                 "scored": scored,
             }
 
-        for entry in best_per_pair.values():
+        top = _collapse_and_cap(best_per_pair)
+        keep = []
+        for entry in top:
             best = entry["scored"]
             confidence = _confidence_for(best["edge"])
             pick_text = f"{best['side']} {best['line']:g}"
+            keep.append((entry["player_id"],
+                         entry["prop"].get("bet_type", ""),
+                         pick_text))
             insert_pick(
                 "mlb",
                 game_id=str(game_pk),
@@ -301,6 +394,10 @@ def generate_picks(date: str | None = None,
                 confidence=confidence,
             )
             counts["picked"] += 1
+        voided = _void_stale_pending("mlb", str(game_pk), target_date, keep)
+        if voided:
+            counts.setdefault("voided_stale", 0)
+            counts["voided_stale"] += voided
 
     logger.info("mlb_prop_picks: %s", counts)
     return counts
@@ -339,5 +436,5 @@ def _resolve_game_pk(games_conn: sqlite3.Connection,
 
 __all__ = [
     "generate_picks", "score_player_prop",
-    "PROP_MIN_EDGE_PCT",
+    "PROP_MIN_EDGE_PCT", "PROP_MAX_ODDS", "PROP_JUICE_WALL",
 ]

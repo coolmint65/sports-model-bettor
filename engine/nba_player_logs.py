@@ -46,15 +46,40 @@ _REQUEST_INTERVAL_S = 0.25
 
 
 def _fetch_json(url: str, timeout: int = 20) -> dict | None:
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as r:
-            return json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        logger.warning("ESPN NBA HTTP %s for %s", e.code, url)
-    except (urllib.error.URLError, TimeoutError) as e:
-        logger.warning("ESPN NBA network error: %s", e)
-    except (json.JSONDecodeError, ValueError) as e:
-        logger.warning("ESPN NBA bad JSON: %s", e)
+    """Fetch JSON with one retry on transient network failures.
+
+    ESPN occasionally truncates chunked responses mid-stream
+    (http.client.IncompleteRead), and during a multi-thousand-game
+    backfill that surfaces every few minutes. Retrying once handles
+    the transient case without spamming the API.
+    """
+    import http.client
+    last_err: Exception | None = None
+    for attempt in (1, 2):
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            if 500 <= e.code < 600 and attempt == 1:
+                last_err = e
+                time.sleep(1.0)
+                continue
+            logger.warning("ESPN NBA HTTP %s for %s", e.code, url)
+            return None
+        except (urllib.error.URLError, TimeoutError,
+                http.client.HTTPException, OSError) as e:
+            last_err = e
+            if attempt == 1:
+                time.sleep(1.0)
+                continue
+            logger.warning("ESPN NBA network error after retry (%s): %s",
+                           type(e).__name__, e)
+            return None
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.warning("ESPN NBA bad JSON: %s", e)
+            return None
+    if last_err is not None:
+        logger.warning("ESPN NBA giving up on %s: %s", url, last_err)
     return None
 
 

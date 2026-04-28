@@ -38,6 +38,98 @@ def _compute_clv(bet_odds, closing_odds):
     return round((close_implied - bet_implied) * 100, 2)  # positive = we got a better price
 
 
+def _extract_nba_closing_for_pick(bet_type: str, pick_text: str,
+                                  home_abbr: str, game_odds: dict) -> int | None:
+    """Pure helper: pick the right Q1 closing-odds field for an NBA pick.
+
+    Mirrors engine.tracker._extract_closing_for_pick but for the Q1
+    markets that nba_tracker records (Q1_ML / Q1_SPREAD / Q1_TOTAL).
+    Hard Rock exposes q1_home_ml / q1_away_ml / q1_spread_*_odds /
+    q1_over_odds / q1_under_odds on the per-matchup bucket.
+    """
+    if not game_odds:
+        return None
+    pk = pick_text or ""
+    parts = pk.split()
+    if bet_type == "Q1_ML":
+        # "LAL Q1 ML" → first token is team abbr
+        if not parts:
+            return None
+        pick_team = parts[0]
+        is_home = pick_team == home_abbr or pick_team == _ALT_ABBRS.get(home_abbr, "")
+        return game_odds.get("q1_home_ml") if is_home else game_odds.get("q1_away_ml")
+    if bet_type == "Q1_SPREAD":
+        # "LAL -2.5 Q1"
+        if len(parts) < 2:
+            return None
+        pick_team = parts[0]
+        is_home = pick_team == home_abbr or pick_team == _ALT_ABBRS.get(home_abbr, "")
+        return (game_odds.get("q1_spread_home_odds") if is_home
+                else game_odds.get("q1_spread_away_odds"))
+    if bet_type == "Q1_TOTAL":
+        # "Over 55.5 Q1" / "Under 55.5 Q1"
+        if not parts:
+            return None
+        return (game_odds.get("q1_over_odds") if parts[0].lower() == "over"
+                else game_odds.get("q1_under_odds"))
+    return None
+
+
+def capture_closing_odds() -> int:
+    """Snapshot current Hard Rock NBA Q1 odds for all pending picks.
+
+    Call before games tip off (sync script ~10 min pre-tip) so the
+    CLV computed at settle time reflects the true closing line. The
+    inline capture inside settle_picks() can't see Q1 lines because
+    HR drops the Q1 markets the moment Q1 ends, leaving CLV null.
+
+    Returns number of picks updated.
+    """
+    from .nba_db import get_conn
+    conn = get_conn()
+    pending = conn.execute(
+        "SELECT id, matchup, bet_type, pick FROM nba_picks "
+        "WHERE result IS NULL AND closing_odds IS NULL"
+    ).fetchall()
+    if not pending:
+        return 0
+
+    try:
+        from scrapers.hardrock_odds import fetch_nba as _hr_nba
+        all_odds = _hr_nba() or {}
+    except Exception as e:
+        logger.warning("NBA closing capture: HR fetch failed: %s", e)
+        return 0
+    if not all_odds:
+        return 0
+
+    from .picks import match_odds as _match_odds
+    updated = 0
+    for pick in pending:
+        matchup = pick["matchup"]
+        sep = " @ " if " @ " in matchup else "@"
+        parts = matchup.split(sep)
+        if len(parts) != 2:
+            continue
+        away, home = parts[0].strip(), parts[1].strip()
+        game_odds = _match_odds(home, away, all_odds)
+        if not game_odds:
+            continue
+        closing = _extract_nba_closing_for_pick(
+            pick["bet_type"], pick["pick"], home, game_odds,
+        )
+        if closing is not None:
+            conn.execute(
+                "UPDATE nba_picks SET closing_odds = ? WHERE id = ?",
+                (int(closing), pick["id"]),
+            )
+            updated += 1
+
+    conn.commit()
+    logger.info("NBA closing capture: %d/%d pending picks updated", updated, len(pending))
+    return updated
+
+
 # ESPN alternate abbreviation map (ESPN sometimes uses different abbrs)
 _ALT_ABBRS = {
     "GS": "GSW", "GSW": "GS",
@@ -100,7 +192,11 @@ def _parse_q1_scores(event: dict) -> dict | None:
     if not q1_locked:
         return None
 
-    result = {"game_id": event.get("id", "")}
+    # Distinguish "Q1 locked but game still going" from "game final".
+    # Full-game pickers settle only when state == "post"; Q1 settles
+    # the moment Q1 ends.
+    is_completed = (state == "post")
+    result = {"game_id": event.get("id", ""), "is_completed": is_completed}
 
     for team_entry in comp.get("competitors", []):
         team = team_entry.get("team", {})
@@ -187,13 +283,38 @@ def refresh_pending_for_today(bets: list[dict],
         except (ValueError, TypeError):
             return False
 
+    # Phase 2k: track current pick PER (matchup, bet_type family). Q1
+    # and Full are distinct bets; the legacy single-best_pick channel
+    # was morphing Q1_TOTAL rows into TOTAL rows on every refresh.
+    # current_by_key[(matchup, family)] = pick_dict
+    current_by_key: dict[tuple, dict] = {}
+    Q1_TYPES = {"Q1_ML", "Q1_SPREAD", "Q1_TOTAL"}
+    FULL_TYPES = {"ML", "SPREAD", "TOTAL", "ALT SPREAD", "ALT TOTAL"}
+    def _family(bt: str) -> str:
+        if bt in Q1_TYPES:   return "q1"
+        if bt in FULL_TYPES: return "full"
+        return "other"
+
     for b in bets:
         if _bet_started(b):
             locked_matchups.add(b["matchup"])
             continue  # locked: tracker entry stays frozen
-        bp = b.get("best_pick")
-        if bp:
-            current_by_matchup[b["matchup"]] = bp
+        bq = b.get("best_pick_q1")
+        bf = b.get("best_pick_full")
+        if bq:
+            current_by_key[(b["matchup"], "q1")] = bq
+            current_by_matchup[b["matchup"]] = bq  # legacy fallback
+        if bf:
+            current_by_key[(b["matchup"], "full")] = bf
+            if not bq:
+                current_by_matchup[b["matchup"]] = bf
+        # Pre-2k bets without per-view picks fall back to legacy best_pick.
+        if not bq and not bf:
+            bp = b.get("best_pick")
+            if bp:
+                fam = _family(bp.get("type") or "")
+                current_by_key[(b["matchup"], fam)] = bp
+                current_by_matchup[b["matchup"]] = bp
 
     pending = conn.execute(
         "SELECT id, matchup, bet_type, pick, game_id FROM nba_picks "
@@ -225,8 +346,13 @@ def refresh_pending_for_today(bets: list[dict],
             continue  # frozen at lock time
         if _pick_game_started(p.get("game_id")):
             continue  # game underway per DB; freeze regardless of bets dict
-        current = current_by_matchup.get(p["matchup"])
+        # Match this pending row to the SAME family's current best pick.
+        # Q1_TOTAL never gets morphed into TOTAL — they're distinct bets.
+        fam = _family(p["bet_type"] or "")
+        current = current_by_key.get((p["matchup"], fam))
         if not current:
+            # Family no longer has a pick (e.g. Q1 fell below floor).
+            # Void the row so the tracker doesn't carry a phantom bet.
             matchup_in_response = any(b["matchup"] == p["matchup"] for b in bets)
             if matchup_in_response:
                 conn.execute("DELETE FROM nba_picks WHERE id = ?", (p["id"],))
@@ -367,27 +493,63 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
         core = _core_picks(picks)
         if not core:
             continue
-        best = core[0]
-        if best["edge"] < min_edge:
-            continue
         from .nba_picks import _valid_odds as _nba_valid
-        if not _nba_valid(best.get("odds")):
-            logger.warning("Skipping NBA pick with invalid odds=%s for %s",
-                           best.get("odds"), matchup)
-            continue
 
-        conn.execute("""
-            INSERT INTO nba_picks (game_id, date, matchup, bet_type, pick,
-                                   model_prob, edge, odds)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (game_id, target_date, matchup, best["type"], best["pick"],
-              best["prob"], best["edge"], best["odds"]))
+        # Split into Q1 markets (existing) and full-game markets (Phase 2k).
+        # Record the highest-edge pick per market family per game so the
+        # tracker captures both layers of betting opportunity. Full
+        # uses primary-market preference: ML/SPREAD/TOTAL clearing 6%
+        # wins over an ALT line, even if the ALT has a bigger edge —
+        # ALT lines at +60% edge are the calibration trap player props
+        # got burned by, and we shouldn't seed them into the tracker
+        # without backtest validation.
+        Q1_TYPES = {"Q1_ML", "Q1_SPREAD", "Q1_TOTAL"}
+        FULL_PRIMARY = {"ML", "SPREAD", "TOTAL"}
+        FULL_ALT = {"ALT SPREAD", "ALT TOTAL"}
 
-        recorded.append({
-            "matchup": matchup, "type": best["type"],
-            "pick": best["pick"], "prob": round(best["prob"], 3),
-            "edge": round(best["edge"], 1), "odds": best["odds"],
-        })
+        q1_picks = [p for p in core if p.get("type") in Q1_TYPES]
+        full_primary = [p for p in core if p.get("type") in FULL_PRIMARY]
+        full_alt = [p for p in core if p.get("type") in FULL_ALT]
+
+        # Primary-only on the tracker. ALT lines stay generated for
+        # the picks list (visible inside the bets payload) but don't
+        # become recorded picks until backtest validates them — same
+        # caution that pulled player-prop ALT bets after they bled
+        # money live.
+        full_picks = full_primary
+
+        for family_picks, label in ((q1_picks, "Q1"), (full_picks, "Full")):
+            if not family_picks:
+                continue
+            best = max(family_picks, key=lambda p: p.get("edge", 0))
+            if best["edge"] < min_edge:
+                continue
+            if not _nba_valid(best.get("odds")):
+                logger.warning("Skipping NBA %s pick with invalid odds=%s for %s",
+                               label, best.get("odds"), matchup)
+                continue
+            # INSERT OR IGNORE against the unique index on
+            # (date, game_id, bet_type) for pending rows, so re-runs
+            # don't pile up duplicate rows. If the bet_type is already
+            # tracked for this game today, refresh_pending_for_today
+            # keeps it fresh.
+            try:
+                conn.execute("""
+                    INSERT OR IGNORE INTO nba_picks (
+                        game_id, date, matchup, bet_type, pick,
+                        model_prob, edge, odds
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (game_id, target_date, matchup, best["type"], best["pick"],
+                      best["prob"], best["edge"], best["odds"]))
+            except Exception as e:
+                logger.warning("nba_picks insert failed for %s/%s: %s",
+                               matchup, best["type"], e)
+                continue
+            recorded.append({
+                "matchup": matchup, "type": best["type"],
+                "pick": best["pick"], "prob": round(best["prob"], 3),
+                "edge": round(best["edge"], 1), "odds": best["odds"],
+            })
 
     conn.commit()
     return recorded
@@ -424,57 +586,16 @@ def settle_picks() -> dict:
             if q1_data:
                 final_q1[q1_data["game_id"]] = q1_data
 
-    # Fetch current NBA odds for closing line capture
-    closing_odds_map = {}
+    # Best-effort capture for any picks that didn't get closing odds
+    # stamped pre-game by capture_closing_odds(). HR Q1 markets often
+    # vanish post-game, so this rarely fires — the pre-game capture is
+    # the real source. Done as a no-op if HR returns nothing.
     try:
-        import os
-        from pathlib import Path as _Path
-        key_file = _Path(__file__).resolve().parent.parent / "data" / "odds_api_key.txt"
-        api_key = os.environ.get("ODDS_API_KEY") or (key_file.read_text().strip() if key_file.exists() else None)
-        if api_key:
-            _url = (f"https://api.the-odds-api.com/v4/sports/basketball_nba/odds/"
-                    f"?apiKey={api_key}&regions=us&markets=h2h"
-                    f"&oddsFormat=american&bookmakers=draftkings")
-            req = urllib.request.Request(_url, headers={"User-Agent": "NBATracker/1.0"})
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                _odds_data = json.loads(resp.read().decode())
-
-            _NBA_ABBR = {
-                "Atlanta Hawks": "ATL", "Boston Celtics": "BOS",
-                "Brooklyn Nets": "BKN", "Charlotte Hornets": "CHA",
-                "Chicago Bulls": "CHI", "Cleveland Cavaliers": "CLE",
-                "Dallas Mavericks": "DAL", "Denver Nuggets": "DEN",
-                "Detroit Pistons": "DET", "Golden State Warriors": "GSW",
-                "Houston Rockets": "HOU", "Indiana Pacers": "IND",
-                "Los Angeles Clippers": "LAC", "Los Angeles Lakers": "LAL",
-                "Memphis Grizzlies": "MEM", "Miami Heat": "MIA",
-                "Milwaukee Bucks": "MIL", "Minnesota Timberwolves": "MIN",
-                "New Orleans Pelicans": "NOP", "New York Knicks": "NYK",
-                "Oklahoma City Thunder": "OKC", "Orlando Magic": "ORL",
-                "Philadelphia 76ers": "PHI", "Phoenix Suns": "PHX",
-                "Portland Trail Blazers": "POR", "Sacramento Kings": "SAC",
-                "San Antonio Spurs": "SAS", "Toronto Raptors": "TOR",
-                "Utah Jazz": "UTA", "Washington Wizards": "WAS",
-            }
-            for _g in (_odds_data or []):
-                _home = _g.get("home_team", "")
-                _away = _g.get("away_team", "")
-                _h_ab = _NBA_ABBR.get(_home, _home[:3].upper())
-                _a_ab = _NBA_ABBR.get(_away, _away[:3].upper())
-                _key = f"{_a_ab}@{_h_ab}"
-                _res = {}
-                for _bk in _g.get("bookmakers", [])[:1]:
-                    for _mkt in _bk.get("markets", []):
-                        if _mkt.get("key") == "h2h":
-                            for _o in _mkt.get("outcomes", []):
-                                if _o.get("name") == _home:
-                                    _res["home_ml"] = _o.get("price")
-                                elif _o.get("name") == _away:
-                                    _res["away_ml"] = _o.get("price")
-                if _res:
-                    closing_odds_map[_key] = _res
+        from scrapers.hardrock_odds import fetch_nba as _hr_nba
+        hr_nba_now = _hr_nba() or {}
     except Exception as e:
-        logger.debug("Could not fetch NBA closing odds: %s", e)
+        logger.debug("NBA settle-time HR fetch failed: %s", e)
+        hr_nba_now = {}
 
     settled = 0
     wins = 0
@@ -495,33 +616,20 @@ def settle_picks() -> dict:
         h = game["home_abbr"]
         a = game["away_abbr"]
 
-        # Capture closing odds if not already stored
-        if not pick.get("closing_odds") and h and a:
-            # Try direct and alternate abbreviations
-            game_cl_odds = None
-            for a_try in [a, _ALT_ABBRS.get(a, "")]:
-                for h_try in [h, _ALT_ABBRS.get(h, "")]:
-                    if a_try and h_try:
-                        game_cl_odds = closing_odds_map.get(f"{a_try}@{h_try}")
-                        if game_cl_odds:
-                            break
-                if game_cl_odds:
-                    break
+        # Settle-time fallback capture — only fires if pre-game
+        # capture_closing_odds() didn't get a chance to run.
+        if not pick.get("closing_odds") and h and a and hr_nba_now:
+            from .picks import match_odds as _match_odds
+            game_cl_odds = _match_odds(h, a, hr_nba_now)
             if game_cl_odds:
-                bt_tmp = pick["bet_type"]
-                pk_tmp = pick["pick"]
-                closing = None
-                if bt_tmp == "Q1_ML":
-                    pick_team = pk_tmp.split()[0]
-                    is_home = (pick_team == h or pick_team == _ALT_ABBRS.get(h, ""))
-                    closing = game_cl_odds.get("home_ml") if is_home else game_cl_odds.get("away_ml")
-                elif bt_tmp in ("Q1_SPREAD", "Q1_TOTAL"):
-                    # Q1-specific lines aren't typically in the odds API h2h market;
-                    # use full-game ML as a proxy if Q1_ML, skip for spread/total
-                    closing = None
+                closing = _extract_nba_closing_for_pick(
+                    pick["bet_type"], pick["pick"], h, game_cl_odds,
+                )
                 if closing is not None:
-                    conn.execute("UPDATE nba_picks SET closing_odds = ? WHERE id = ?",
-                                 (int(closing), pick["id"]))
+                    conn.execute(
+                        "UPDATE nba_picks SET closing_odds = ? WHERE id = ?",
+                        (int(closing), pick["id"]),
+                    )
                     pick["closing_odds"] = int(closing)
 
         bt = pick["bet_type"]
@@ -628,6 +736,62 @@ def settle_picks() -> dict:
                 else:
                     result = "W" if not is_odd else "L"
 
+        # ── Phase 2k: full-game markets ──
+        # Only settle when the game is fully complete; partial scores
+        # mid-Q2/Q3/Q4 would mis-settle Over/Under and ML.
+        elif bt in ("ML", "SPREAD", "TOTAL", "ALT SPREAD", "ALT TOTAL"):
+            if not game.get("is_completed"):
+                continue  # game not final yet, leave PEND
+
+            home_score = game["home_score"]
+            away_score = game["away_score"]
+            full_margin = home_score - away_score
+            full_total = home_score + away_score
+
+            if bt == "ML":
+                # "LAL ML" — first token is team abbr
+                pick_team = pk.split()[0]
+                home_won = full_margin > 0
+                is_home_pick = (pick_team == h or pick_team == _ALT_ABBRS.get(h, ""))
+                is_away_pick = (pick_team == a or pick_team == _ALT_ABBRS.get(a, ""))
+                if is_home_pick:
+                    result = "W" if home_won else ("P" if full_margin == 0 else "L")
+                elif is_away_pick:
+                    result = "W" if (not home_won and full_margin != 0) else ("P" if full_margin == 0 else "L")
+
+            elif bt in ("SPREAD", "ALT SPREAD"):
+                # "LAL -2.5" or "BOS +5.5"
+                parts = pk.split()
+                if len(parts) >= 2:
+                    pick_team = parts[0]
+                    try:
+                        spread = float(parts[1])
+                    except ValueError:
+                        continue
+                    is_home_pick = (pick_team == h or pick_team == _ALT_ABBRS.get(h, ""))
+                    actual = full_margin if is_home_pick else -full_margin
+                    covered = actual + spread
+                    if covered > 0:
+                        result = "W"
+                    elif covered == 0:
+                        result = "P"
+                    else:
+                        result = "L"
+
+            elif bt in ("TOTAL", "ALT TOTAL"):
+                # "Over 224.5" or "Under 224.5"
+                parts = pk.split()
+                if len(parts) >= 2:
+                    direction = parts[0].lower()
+                    try:
+                        line = float(parts[1])
+                    except ValueError:
+                        continue
+                    if direction == "over":
+                        result = "W" if full_total > line else ("P" if full_total == line else "L")
+                    else:
+                        result = "W" if full_total < line else ("P" if full_total == line else "L")
+
         if result is None:
             continue
 
@@ -669,7 +833,8 @@ def get_pick_summary() -> dict:
     conn = get_conn()
 
     summary = {}
-    for bt in ["Q1_SPREAD", "Q1_TOTAL", "Q1_ML"]:
+    for bt in ["Q1_SPREAD", "Q1_TOTAL", "Q1_ML",
+               "ML", "SPREAD", "TOTAL", "ALT SPREAD", "ALT TOTAL"]:
         row = conn.execute("""
             SELECT
                 COUNT(*) as total,
@@ -785,6 +950,11 @@ if __name__ == "__main__":
         for p in picks:
             print(f"  {p['matchup']} | {p['type']:12s} | {p['pick']:20s} | "
                   f"{p['prob']:.1%} | edge: {p['edge']:+.1f}%")
+
+    elif "--capture-closing" in args:
+        print("Capturing NBA Q1 closing odds...", flush=True)
+        n = capture_closing_odds()
+        print(f"Updated {n} pending picks with closing odds.")
 
     elif "--settle" in args:
         print("Settling completed NBA Q1 picks...", flush=True)

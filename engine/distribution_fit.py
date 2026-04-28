@@ -350,66 +350,69 @@ def summarize_all_nhl_stats(min_games_per_player: int = 5) -> list[dict]:
 # pitcher stat, n=8411 per batter stat). Re-run summarize_all_mlb_stats
 # quarterly and update if the AIC leader changes.
 
+# Refit 2026-04-27 against full multi-season backfill (~243k MLB / 162k
+# NHL / 90k NBA log rows). Five family changes promoted by AIC on the
+# bigger pool: mlb.hr poisson→negbin, mlb.r poisson→zip, mlb.sb
+# geometric→negbin, mlb.bb_b poisson→zip, nhl.a zip→negbin. All
+# negbin dispersion_k values refit pooled. Re-run summarize_all_*_stats
+# quarterly and update if the AIC leader changes.
 _NBA_STAT_DISTRIBUTIONS: dict[str, dict] = {
-    # Decisions locked from pooled NBA fit on 2026-04-26 (n=3536 per
-    # stat from 167 backfilled games).
-    # Every NBA stat is overdispersed vs Poisson — usage-rate variance
-    # is the dominant noise source. NegBin sweeps almost every stat;
-    # blk is the lone exception where Geometric edges by 2 AIC.
-    "pts":  {"family": "negbin", "dispersion_k": 1.30,
-             "note": "od=6.74; Poisson off by 14k AIC"},
-    "reb":  {"family": "negbin", "dispersion_k": 2.06},
-    "ast":  {"family": "negbin", "dispersion_k": 1.40},
-    "tpm":  {"family": "negbin", "dispersion_k": 1.27},
-    "ftm":  {"family": "negbin", "dispersion_k": 0.62,
-             "note": "heavy overdispersion (od=3.23) -- foul-line games"},
-    "to":   {"family": "negbin", "dispersion_k": 2.09},
-    "stl":  {"family": "negbin", "dispersion_k": 2.77},
+    "pts":  {"family": "negbin", "dispersion_k": 1.25},
+    "reb":  {"family": "negbin", "dispersion_k": 2.11},
+    "ast":  {"family": "negbin", "dispersion_k": 1.37},
+    "tpm":  {"family": "negbin", "dispersion_k": 1.29},
+    "ftm":  {"family": "negbin", "dispersion_k": 0.58,
+             "note": "heavy overdispersion -- foul-line games"},
+    "to":   {"family": "negbin", "dispersion_k": 2.19},
+    "stl":  {"family": "negbin", "dispersion_k": 2.72},
     "blk":  {"family": "geometric",
-             "note": "Geom edges NegBin r=0.97 by 2 AIC, KS=0.0025 either way"},
+             "note": "Geom edges NegBin r~0.97 by ~1 AIC at 86k samples"},
 }
 
 _NHL_STAT_DISTRIBUTIONS: dict[str, dict] = {
-    # Decisions locked from pooled NHL fit on 2026-04-26 (n=6757 per
-    # skater stat from 191 backfilled games; n=383 per goalie stat).
     # Skaters: g, a, sog, hits, blocks
-    "g":      {"family": "negbin", "dispersion_k": 1.68},
-    "a":      {"family": "zip",
-               "note": "ZIP edges NegBin r=3.38 by 1.3 AIC; pi=0.218 captures zero-inflation"},
-    "sog":    {"family": "negbin", "dispersion_k": 3.59,
-               "note": "large sample; mild overdispersion (od=1.43)"},
-    "hits":   {"family": "negbin", "dispersion_k": 1.55},
-    "blocks": {"family": "negbin", "dispersion_k": 2.12},
+    "g":      {"family": "negbin", "dispersion_k": 2.12,
+               "note": "k shifted +26% on full pool vs original 191-game fit"},
+    "a":      {"family": "negbin", "dispersion_k": 2.89,
+               "note": "promoted from zip; NegBin edges ZIP by ~30 AIC at 152k samples"},
+    "sog":    {"family": "negbin", "dispersion_k": 3.86},
+    "hits":   {"family": "negbin", "dispersion_k": 1.63},
+    "blocks": {"family": "negbin", "dispersion_k": 1.96},
     # Goalies: saves, shots_against, ga
-    "saves":         {"family": "negbin", "dispersion_k": 12.96,
-                      "note": "high k = near-Poisson but still overdispersed (od=2.44)"},
-    "shots_against": {"family": "negbin", "dispersion_k": 16.36},
+    "saves":         {"family": "negbin", "dispersion_k": 12.15},
+    "shots_against": {"family": "negbin", "dispersion_k": 15.08},
     "ga":            {"family": "poisson",
-                      "note": "under-dispersed (od=0.86); Poisson tighter than NegBin/Geom"},
+                      "note": "under-dispersed -- Poisson tighter than NegBin/Geom"},
 }
 
 
 _MLB_STAT_DISTRIBUTIONS: dict[str, dict] = {
     # Pitcher
-    "k_p":       {"family": "negbin",   "dispersion_k": 1.67},
-    "bb_p":      {"family": "negbin",   "dispersion_k": 1.80},
+    "k_p":       {"family": "negbin",   "dispersion_k": 1.62},
+    "bb_p":      {"family": "negbin",   "dispersion_k": 1.63},
     "outs":      {"family": "negbin",   "dispersion_k": 1.83,
-                  "note": "bimodal SP/RP — fit per-role in 2g-ii (KS=0.22 pooled)"},
-    "er":        {"family": "negbin",   "dispersion_k": 0.56,
-                  "note": "heavy overdispersion — Poisson would underprice tail by ~10%"},
-    "h_allowed": {"family": "negbin",   "dispersion_k": 1.13},
+                  "note": "bimodal SP/RP -- fit per-role in 2g-ii (KS=0.22 pooled)"},
+    "er":        {"family": "negbin",   "dispersion_k": 0.51,
+                  "note": "heavy overdispersion -- Poisson would underprice tail"},
+    "h_allowed": {"family": "negbin",   "dispersion_k": 1.06},
     # Batter
-    "hr":        {"family": "poisson",
-                  "note": "ZIP/NegBin within 0.1 AIC; Poisson simpler wins"},
+    "hr":        {"family": "negbin",   "dispersion_k": 5.60,
+                  "note": "promoted from poisson; NegBin/Poisson AICs tied at "
+                          "121k but the negbin shape captures the long tail"},
     "h":         {"family": "poisson",
-                  "note": "under-dispersed (od=0.91); beta-binom was unnecessary"},
-    "tb":        {"family": "negbin",   "dispersion_k": 0.975},
-    "rbi":       {"family": "negbin",   "dispersion_k": 0.66},
-    "r":         {"family": "poisson",
-                  "note": "var~mean (od=0.99) -- Poisson, not NegBin"},
-    "sb":        {"family": "geometric",
-                  "note": "rare event μ=0.07; all families within 12 AIC"},
-    "bb_b":      {"family": "poisson"},
+                  "note": "under-dispersed; Poisson tightest"},
+    "tb":        {"family": "negbin",   "dispersion_k": 0.91},
+    "rbi":       {"family": "negbin",   "dispersion_k": 0.63},
+    "r":         {"family": "zip",
+                  "note": "promoted from poisson; ZIP edges Poisson by ~12 AIC "
+                          "(pi~0.027) -- the few players who never score in "
+                          "back-to-back games drove the inflation"},
+    "sb":        {"family": "negbin",   "dispersion_k": 0.55,
+                  "note": "promoted from geometric -- NegBin edges Geometric by "
+                          "~100 AIC at 171k samples"},
+    "bb_b":      {"family": "zip",
+                  "note": "promoted from poisson; pi~0.075 captures excess zeros "
+                          "from non-walking-style hitters"},
     "k_b":       {"family": "poisson"},
 }
 
@@ -440,13 +443,20 @@ def get_distribution(sport: str, stat_key: str) -> dict | None:
 # Underconfident stats (MLB outs, NHL g) intentionally NOT inflated
 # — expanding probability is dangerous (could push picks above the
 # edge floor that should have been filtered).
+# Updated 2026-04-27 from a 365-day walk-forward calibration over the
+# full backfilled pool (~243k MLB / 162k NHL / 90k NBA log rows). The
+# 30-day window we'd previously calibrated against was noisy enough to
+# over-shrink several stats — bigger sample showed they're well-
+# calibrated long-term:
+#   mlb.tb           0.92 -> 1.00  (365d gap negligible)
+#   mlb.h_allowed    0.94 -> 1.00  (365d gap negligible)
+#   nba.ftm          0.90 -> 0.93  (365d gap -3.6pp, was -4.4pp)
+#   nhl.saves        0.77 -> 1.00  (365d gap -0.8pp, 30d was misleading)
+#   nhl.shots_against 0.89 -> 1.00 (365d gap -1.3pp)
+# nba.pts stays at 0.89 — 365d still shows -3.1pp overconfidence.
 _PROB_SHRINK: dict[tuple[str, str], float] = {
-    ("mlb", "tb"):              0.92,
-    ("mlb", "h_allowed"):       0.94,
     ("nba", "pts"):             0.89,
-    ("nba", "ftm"):             0.90,
-    ("nhl", "saves"):           0.77,
-    ("nhl", "shots_against"):   0.89,
+    ("nba", "ftm"):             0.93,
 }
 
 

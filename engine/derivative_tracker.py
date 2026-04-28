@@ -628,6 +628,35 @@ def select_derivative_potd(sport: str, bets: list[dict],
     return best
 
 
+def _mirror_derivative_potd_to_tracker(sport: str, conn, sel: dict, today: str) -> None:
+    """Insert the locked derivative POTD into the per-sport derivative
+    tracker if it isn't already there. Idempotent."""
+    try:
+        deriv_table = _DERIV_TABLE[sport]
+        existing_mirror = conn.execute(
+            f"SELECT id FROM {deriv_table} "
+            f"WHERE date=? AND game_id=? AND bet_type=? AND pick=? LIMIT 1",
+            (today, sel["game_id"], sel["bet_type"], sel["pick"]),
+        ).fetchone()
+        if existing_mirror:
+            return
+        conn.execute(
+            f"INSERT INTO {deriv_table} ("
+            "  date, game_id, matchup, bet_type, pick,"
+            "  model_prob, edge, odds"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (today, sel["game_id"], sel["matchup"], sel["bet_type"],
+             sel["pick"], sel["model_prob"], sel["edge"], sel["odds"]),
+        )
+        conn.commit()
+        logger.info("Derivative POTD mirror %s: inserted %s/%s",
+                    sport, sel["bet_type"], sel["pick"])
+    except Exception as e:
+        logger.warning("Derivative POTD mirror %s FAILED for %s/%s: %s",
+                       sport, sel.get("bet_type"), sel.get("pick"), e,
+                       exc_info=True)
+
+
 def get_or_create_derivative_potd(sport: str, bets: list[dict] | None = None) -> dict | None:
     """Return today's locked derivative POTD or compute + lock one
     from the supplied bets list."""
@@ -637,6 +666,10 @@ def get_or_create_derivative_potd(sport: str, bets: list[dict] | None = None) ->
     today = datetime.now().strftime("%Y-%m-%d")
     row = conn.execute(f"SELECT * FROM {table} WHERE date = ?", (today,)).fetchone()
     if row:
+        # Backfill mirror — if today's POTD was locked before the
+        # mirror code shipped, this catches it on the next read so the
+        # user sees it in the tracker without waiting for tomorrow's lock.
+        _mirror_derivative_potd_to_tracker(sport, conn, dict(row), today)
         return dict(row)
     if not bets:
         return None
@@ -651,6 +684,7 @@ def get_or_create_derivative_potd(sport: str, bets: list[dict] | None = None) ->
          sel["model_prob"], sel["edge"], sel["odds"], sel.get("kelly_pct", 0)),
     )
     conn.commit()
+    _mirror_derivative_potd_to_tracker(sport, conn, sel, today)
     out = dict(sel)
     out["date"] = today
     return out

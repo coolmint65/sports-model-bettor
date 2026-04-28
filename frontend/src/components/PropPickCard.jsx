@@ -20,6 +20,15 @@ const CONF_ACCENT = {
   lean:     'border-l-border',
 }
 
+// Once a pick settles, the card communicates outcome instead of
+// confidence — the conviction tier no longer matters and the result
+// (W / L / Push) becomes the dominant signal.
+const RESULT_ACCENT = {
+  W: 'border-l-positive bg-positive/[0.10] ring-1 ring-positive/30',
+  L: 'border-l-negative bg-negative/[0.08] ring-1 ring-negative/25',
+  P: 'border-l-muted-foreground bg-muted/40',
+}
+
 
 export default function PropPickCard({ pick, sport }) {
   const [photoErr, setPhotoErr] = useState(false)
@@ -30,6 +39,11 @@ export default function PropPickCard({ pick, sport }) {
   const conf = (pick.confidence || 'lean').toString().toLowerCase()
   const edgePct = Number(pick.edge || 0)
   const modelPct = Math.round((Number(pick.model_prob) || 0) * 100)
+  const result = pick.result // 'W' | 'L' | 'P' | null
+  const settled = !!result
+  const accent = settled
+    ? (RESULT_ACCENT[result] || CONF_ACCENT.lean)
+    : (CONF_ACCENT[conf] || CONF_ACCENT.lean)
 
   return (
     <div
@@ -37,7 +51,7 @@ export default function PropPickCard({ pick, sport }) {
         'group relative flex flex-col gap-3 rounded-xl border border-border border-l-4 bg-card p-4',
         'transition-all duration-150',
         'hover:border-border hover:bg-accent/40 hover:-translate-y-px hover:shadow-lg',
-        CONF_ACCENT[conf] || CONF_ACCENT.lean,
+        accent,
       )}
     >
       <div className="flex items-start gap-3">
@@ -68,7 +82,9 @@ export default function PropPickCard({ pick, sport }) {
                 {humanizeBetType(pick.bet_type)} · {pick.matchup}
               </div>
             </div>
-            <EdgeBadge edge={edgePct} confidence={conf} />
+            {settled
+              ? <ResultBadge result={result} profit={pick.profit} />
+              : <EdgeBadge edge={edgePct} confidence={conf} />}
           </div>
 
           <div className="mt-2 flex items-baseline gap-2 flex-wrap">
@@ -103,6 +119,30 @@ function EdgeBadge({ edge, confidence }) {
     )}>
       +{edge.toFixed(1)}%
     </span>
+  )
+}
+
+
+function ResultBadge({ result, profit }) {
+  const cfg = result === 'W' ? { label: 'WIN',  cls: 'bg-positive text-background' }
+    : result === 'L'         ? { label: 'LOSS', cls: 'bg-negative text-background' }
+    : result === 'P'         ? { label: 'PUSH', cls: 'bg-muted text-muted-foreground' }
+    :                          { label: '—',    cls: 'bg-muted text-muted-foreground' }
+  const profitTone = profit > 0 ? 'text-positive' : profit < 0 ? 'text-negative' : 'text-muted-foreground'
+  return (
+    <div className="flex flex-shrink-0 flex-col items-end gap-1">
+      <span className={cn(
+        'rounded-md px-2 py-1 text-[10px] font-bold tracking-wider whitespace-nowrap',
+        cfg.cls,
+      )}>
+        {cfg.label}
+      </span>
+      {profit != null && (
+        <span className={cn('text-xs font-semibold tabular-nums', profitTone)}>
+          {profit > 0 ? '+' : ''}${Number(profit).toFixed(0)}
+        </span>
+      )}
+    </div>
   )
 }
 

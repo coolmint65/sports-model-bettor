@@ -16,7 +16,8 @@ from .player_props_tracker import _NBA_STAT_KEY
 from .nba_player_mc import build_player_mc
 from .mlb_prop_picks import (
     score_player_prop, _normalize_name, _confidence_for,
-    PROP_MIN_EDGE_PCT, PROP_MAX_ODDS,
+    PROP_MIN_EDGE_PCT, PROP_MAX_ODDS, PROP_JUICE_WALL,
+    _collapse_and_cap, _void_stale_pending,
 )
 from .player_props_db import _conn_for
 
@@ -39,20 +40,38 @@ def _build_name_index() -> dict[str, int]:
 
 def _resolve_game_id(games_conn: sqlite3.Connection,
                      away_abbr: str, home_abbr: str,
-                     date: str) -> str | None:
-    """Resolve to the NBA games table game_id (ESPN event id) for
-    today's matchup. Direction-agnostic — HR sometimes flips
-    away/home vs ESPN."""
+                     date: str) -> tuple[str | None, str | None]:
+    """Resolve a (away, home) abbr pair to the next upcoming game's
+    (game_id, actual_date). Skips already-played games (status in
+    live/final/postponed) so HR props for last night's late tipoff
+    can't generate today.
+
+    Returns (None, None) when no upcoming game matches in the
+    yesterday→date+2 window.
+    """
     abbrs = {away_abbr.strip(), home_abbr.strip()}
+    if not abbrs:
+        return None, None
     placeholders = ",".join("?" * len(abbrs))
+    from datetime import datetime as _dt, timedelta as _td
+    try:
+        anchor = _dt.strptime(date, "%Y-%m-%d")
+    except ValueError:
+        anchor = _dt.now()
+    lo = (anchor - _td(days=1)).strftime("%Y-%m-%d")
+    hi = (anchor + _td(days=2)).strftime("%Y-%m-%d")
     row = games_conn.execute(
-        f"SELECT g.game_id FROM nba_games g "
+        f"SELECT g.game_id, g.date FROM nba_games g "
         f"JOIN nba_teams ht ON ht.id = g.home_team_id AND ht.abbreviation IN ({placeholders}) "
         f"JOIN nba_teams at ON at.id = g.away_team_id AND at.abbreviation IN ({placeholders}) "
-        f"WHERE g.date = ? LIMIT 1",
-        (*abbrs, *abbrs, date),
+        f"WHERE g.date BETWEEN ? AND ? "
+        f"  AND COALESCE(g.status, '') NOT IN ('live', 'final', 'postponed') "
+        f"ORDER BY g.date ASC LIMIT 1",
+        (*abbrs, *abbrs, lo, hi),
     ).fetchone()
-    return str(row["game_id"]) if row else None
+    if not row:
+        return None, None
+    return str(row["game_id"]), str(row["date"])
 
 
 def generate_picks(date: str | None = None,
@@ -84,11 +103,15 @@ def generate_picks(date: str | None = None,
         if "@" not in matchup_key:
             continue
         away_abbr, home_abbr = matchup_key.split("@", 1)
-        game_id = _resolve_game_id(games_conn, away_abbr, home_abbr,
-                                    target_date)
+        game_id, game_date = _resolve_game_id(games_conn, away_abbr, home_abbr,
+                                               target_date)
         if not game_id:
             counts["skipped_no_player"] += len(prop_rows)
             continue
+        # Stamp the resolved game's actual date on the pick so settling
+        # later finds the right boxscore (HR's matchup may be 1 day
+        # off from target_date).
+        pick_date = game_date or target_date
 
         # Dedup at (player_id, bet_type) — see mlb_prop_picks for the
         # full rationale. HR ships ~8 alt lines per stat per player;
@@ -128,13 +151,18 @@ def generate_picks(date: str | None = None,
                 "prop": prop, "scored": scored,
             }
 
-        for entry in best_per_pair.values():
+        top = _collapse_and_cap(best_per_pair)
+        keep = []
+        for entry in top:
             best = entry["scored"]
             confidence = _confidence_for(best["edge"])
             pick_text = f"{best['side']} {best['line']:g}"
+            keep.append((entry["player_id"],
+                         entry["prop"].get("bet_type", ""),
+                         pick_text))
             insert_pick(
                 "nba",
-                game_id=game_id, date=target_date,
+                game_id=game_id, date=pick_date,
                 matchup=f"{away_abbr} @ {home_abbr}",
                 player_id=entry["player_id"],
                 player_name=entry["player_name"],
@@ -146,6 +174,10 @@ def generate_picks(date: str | None = None,
                 confidence=confidence,
             )
             counts["picked"] += 1
+        voided = _void_stale_pending("nba", game_id, pick_date, keep)
+        if voided:
+            counts.setdefault("voided_stale", 0)
+            counts["voided_stale"] += voided
 
     logger.info("nba_prop_picks: %s", counts)
     return counts
@@ -184,6 +216,8 @@ def _score(samples: dict, prop: dict) -> dict | None:
         if odds is None:
             continue
         if odds > PROP_MAX_ODDS:
+            continue
+        if odds < PROP_JUICE_WALL:
             continue
         n = float(odds)
         implied = 100.0/(n+100.0) if n > 0 else abs(n)/(abs(n)+100.0)

@@ -128,6 +128,30 @@ def _juice_tier(odds: int | float | None) -> str | None:
     # opening a fourth bucket that would rarely accumulate samples.
     return "heavy"
 
+
+def _direction_label(bet_type: str, pick_text: str | None) -> str | None:
+    """Derive a direction key from the pick text — 'over' / 'under' for
+    totals (O/U, ALT O/U, F5 O/U, Inning Total, Q1_TOTAL, ...), 'nrfi'
+    / 'yrfi' for first-inning, None for everything else.
+
+    Used as a sub-bucket in calibration so Over and Under (or NRFI and
+    YRFI) develop separate empirical curves rather than smearing
+    together — the May-2026 tracker showed MLB Unders 3-8 / -$523 at
+    avg 24% edge while Overs went 5-2 / +$249, a directional bias the
+    coarse (bet_type, prob_bucket) view cannot expose.
+    """
+    if not pick_text:
+        return None
+    pk = pick_text.strip().lower()
+    if pk.startswith("over"):
+        return "over"
+    if pk.startswith("under"):
+        return "under"
+    bt = (bet_type or "").strip().lower()
+    if bt in ("1st inn", "1stinn", "nrfi"):
+        return "nrfi" if "nrfi" in pk else ("yrfi" if "yrfi" in pk else None)
+    return None
+
 # Per-sport calibration tables: {sport: {bet_type: [(lo, hi, real_wr)]}}
 _TABLE: dict[str, dict[str, list[tuple[float, float, float]]]] = {}
 _TABLE_LOCK = threading.Lock()
@@ -154,22 +178,28 @@ def _normalize_bet_type(bt: str) -> str:
 
 
 def calibrate(bet_type: str, raw_prob: float, sport: str = "mlb",
-              edge: float | None = None, odds: int | float | None = None) -> float:
+              edge: float | None = None, odds: int | float | None = None,
+              pick_text: str | None = None) -> float:
     """Map a raw model probability to the empirical win-rate bucket
     for `sport`.
 
     Consults progressively coarser keys: the fully granular
     (bet_type, edge_tier, fav/dog, juice_tier, prob_bucket) key first,
-    then (bet_type, fav/dog, prob_bucket), finally the legacy
+    then (bet_type, direction, prob_bucket), then
+    (bet_type, fav/dog, prob_bucket), finally the legacy
     (bet_type, prob_bucket). A bucket is "used" only when it has at
     least MIN_BUCKET_N samples; below that the next coarser key is
     tried. This lets granular buckets surface real per-quadrant biases
     once volume accumulates without starving cold-start picks of any
     calibration signal.
 
-    edge / odds are optional — when omitted (old callers), the function
-    skips the granular keys and behaves exactly like the previous
-    bet_type-only version.
+    edge / odds / pick_text are optional — when omitted (old callers),
+    the function skips the granular keys and behaves exactly like the
+    previous bet_type-only version. When `pick_text` is supplied for
+    a totals or first-inning market, the direction (Over / Under /
+    NRFI / YRFI) is derived from it and used to look up the
+    direction-specific bucket — this is what corrects the MLB Under
+    over-confidence bias the coarse bet_type-only key smeared.
 
     Falls back to raw passthrough when:
       - The sport's calibration table hasn't been built yet (cold start)
@@ -203,8 +233,14 @@ def calibrate(bet_type: str, raw_prob: float, sport: str = "mlb",
     etier = _edge_tier(edge)
     fav = _fav_flag(odds)
     jtier = _juice_tier(odds)
+    direction = _direction_label(bet_type, pick_text)
     if etier and fav and jtier:
         keys.append((bt, etier, fav, jtier, b))
+    if direction:
+        # 'dir:' tag keeps the direction-bucket key disjoint from the
+        # fav/dog key (which uses 'fav'/'dog') so the two sub-views
+        # never alias inside the flat dict.
+        keys.append((bt, f"dir:{direction}", b))
     if fav:
         keys.append((bt, fav, b))
     keys.append((bt, b))
@@ -231,13 +267,16 @@ def calibrate(bet_type: str, raw_prob: float, sport: str = "mlb",
 
 
 def calibrated_edge(bet_type: str, raw_prob: float, odds: int,
-                    sport: str = "mlb") -> float:
+                    sport: str = "mlb",
+                    pick_text: str | None = None) -> float:
     """Edge = calibrated_prob - implied_prob, in percentage points.
 
     Use this everywhere the picks pipeline currently does
     `(prob - implied(odds)) * 100`. The edge value computed against
     the raw prob is also used to route the granular calibration lookup,
-    so the per-quadrant buckets apply automatically."""
+    so the per-quadrant buckets apply automatically. When `pick_text`
+    is supplied for a totals/first-inning market, the direction-specific
+    bucket is consulted too."""
     if odds is None or raw_prob is None:
         return 0.0
     if odds < 0:
@@ -246,7 +285,7 @@ def calibrated_edge(bet_type: str, raw_prob: float, odds: int,
         implied = 100.0 / (odds + 100)
     raw_edge = (raw_prob - implied) * 100.0
     cal = calibrate(bet_type, raw_prob, sport=sport,
-                    edge=raw_edge, odds=odds)
+                    edge=raw_edge, odds=odds, pick_text=pick_text)
     return (cal - implied) * 100.0
 
 
@@ -256,7 +295,7 @@ def refresh_calibration(sport: str = "mlb") -> dict:
     fav/dog-only, and legacy bet-type-only — so calibrate() can walk
     the ladder and pick the first one with enough samples."""
     summary = {"sport": sport, "granular_filled": 0, "fav_filled": 0,
-               "coarse_filled": 0, "total_rows": 0}
+               "direction_filled": 0, "coarse_filled": 0, "total_rows": 0}
     src = _SPORT_SOURCES.get(sport)
     if not src:
         logger.warning("calibration: unknown sport %r", sport)
@@ -279,20 +318,28 @@ def refresh_calibration(sport: str = "mlb") -> dict:
         # those rows land in the coarse (bet_type, bucket) view only.
         conn = get_conn()
         live = conn.execute(
-            f"SELECT bet_type, model_prob, result, edge, odds "
+            f"SELECT bet_type, model_prob, result, edge, odds, pick "
             f"FROM {table_name} "
             "WHERE result IN ('W', 'L') AND model_prob IS NOT NULL"
         ).fetchall()
         synth = []
         try:
             synth = conn.execute(
-                "SELECT bet_type, model_prob, result "
+                "SELECT bet_type, model_prob, result, pick "
                 "FROM calibration_samples "
                 "WHERE result IN ('W', 'L') AND model_prob IS NOT NULL"
             ).fetchall()
         except Exception:
             # Table not present in this DB yet -- fine, just use real picks.
-            pass
+            try:
+                synth = conn.execute(
+                    "SELECT bet_type, model_prob, result "
+                    "FROM calibration_samples "
+                    "WHERE result IN ('W', 'L') AND model_prob IS NOT NULL"
+                ).fetchall()
+                synth = [{**dict(r), "pick": None} for r in synth]
+            except Exception:
+                synth = []
     except Exception as e:
         logger.warning("calibration: query on %s failed: %s",
                        table_name, e)
@@ -311,7 +358,8 @@ def refresh_calibration(sport: str = "mlb") -> dict:
     counts: dict[tuple, dict] = defaultdict(lambda: {"n": 0, "w": 0})
 
     def _add(sample_bt: str, prob: float, won: bool,
-             sample_edge: float | None, sample_odds: int | float | None) -> None:
+             sample_edge: float | None, sample_odds: int | float | None,
+             sample_pick: str | None) -> None:
         bt = _normalize_bet_type(sample_bt)
         b = _bucket_for(prob or 0.0)
         if not b:
@@ -321,6 +369,14 @@ def refresh_calibration(sport: str = "mlb") -> dict:
         c["n"] += 1
         if won:
             c["w"] += 1
+        # Direction-split: (bet_type, dir:over|under|nrfi|yrfi, bucket).
+        # Captures the OU direction bias that the coarse view smears.
+        direction = _direction_label(sample_bt, sample_pick)
+        if direction:
+            cd = counts[(bt, f"dir:{direction}", b)]
+            cd["n"] += 1
+            if won:
+                cd["w"] += 1
         # Fav-split: (bet_type, fav/dog, bucket)
         fav = _fav_flag(sample_odds)
         if fav:
@@ -341,12 +397,12 @@ def refresh_calibration(sport: str = "mlb") -> dict:
         r = dict(r)
         _add(r.get("bet_type"), r.get("model_prob") or 0.0,
              r["result"] == "W",
-             r.get("edge"), r.get("odds"))
+             r.get("edge"), r.get("odds"), r.get("pick"))
     for r in synth:
-        r = dict(r)
+        r = dict(r) if not isinstance(r, dict) else r
         _add(r.get("bet_type"), r.get("model_prob") or 0.0,
              r["result"] == "W",
-             None, None)
+             None, None, r.get("pick"))
 
     # Flatten counts into the lookup table. calibrate() only consults
     # buckets that cleared MIN_BUCKET_N, but we still surface thinner
@@ -358,12 +414,17 @@ def refresh_calibration(sport: str = "mlb") -> dict:
         real_wr = c["w"] / c["n"]
         new_table[key] = {"n": c["n"], "w": c["w"], "real_wr": real_wr}
         if c["n"] >= MIN_BUCKET_N:
-            # Categorize by key length for the summary.
+            # Categorize by key length / shape for the summary.
             klen = len(key)
             if klen == 5:
                 summary["granular_filled"] += 1
             elif klen == 3:
-                summary["fav_filled"] += 1
+                # Could be (bt, fav/dog, b) or (bt, dir:..., b).
+                middle = key[1] if isinstance(key[1], str) else ""
+                if middle.startswith("dir:"):
+                    summary["direction_filled"] += 1
+                else:
+                    summary["fav_filled"] += 1
             else:
                 summary["coarse_filled"] += 1
 
@@ -372,9 +433,11 @@ def refresh_calibration(sport: str = "mlb") -> dict:
         _TABLE_LOADED[sport] = True
 
     logger.info("calibration[%s]: built from %d rows — %d granular / "
-                "%d fav-split / %d coarse buckets cleared MIN_BUCKET_N",
+                "%d direction-split / %d fav-split / %d coarse buckets "
+                "cleared MIN_BUCKET_N",
                 sport, total_rows, summary["granular_filled"],
-                summary["fav_filled"], summary["coarse_filled"])
+                summary["direction_filled"], summary["fav_filled"],
+                summary["coarse_filled"])
     return summary
 
 

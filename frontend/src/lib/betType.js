@@ -15,6 +15,8 @@ const BET_TYPE_LABELS = {
   RL: 'Run Line',
   PL: 'Puck Line',
   'O/U': 'Over/Under',
+  SPREAD: 'Spread',
+  TOTAL: 'Total',
 
   Q1_ML: 'Q1 ML',
   Q1_SPREAD: 'Q1 Spread',
@@ -32,6 +34,8 @@ const BET_TYPE_LABELS = {
   'ALT RL': 'Alt Run Line',
   'ALT O/U': 'Alt Over/Under',
   'ALT PL': 'Alt Puck Line',
+  'ALT SPREAD': 'Alt Spread',
+  'ALT TOTAL': 'Alt Total',
 
   // Phase 1 derivatives. Labels mirror the engine keys closely so the
   // empirical-calibration tracker output and the UI use identical

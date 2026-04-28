@@ -9,6 +9,7 @@ import NHLScoreboard from './components/NHLScoreboard'
 import NHLStandings from './components/NHLStandings'
 import NHLGameDetail from './components/NHLGameDetail'
 import NBAScoreboard from './components/NBAScoreboard'
+import NBABetsView from './components/NBABetsView'
 import NBAStandings from './components/NBAStandings'
 import NBAGameDetail from './components/NBAGameDetail'
 import PickOfDayHero from './components/PickOfDayHero'
@@ -129,7 +130,7 @@ export default function App() {
     const interval = setInterval(() => {
       fetchGames()
       runBestBets()
-    }, 5 * 60 * 1000)
+    }, 2 * 60 * 1000)
     return () => clearInterval(interval)
   }, [])
 
@@ -159,7 +160,7 @@ export default function App() {
     const interval = setInterval(() => {
       api.get('/nhl/scoreboard').then(r => setNhlGames(r.data)).catch(() => {})
       runBestBets()
-    }, 5 * 60 * 1000)
+    }, 2 * 60 * 1000)
     return () => clearInterval(interval)
   }, [])
 
@@ -189,7 +190,7 @@ export default function App() {
     const interval = setInterval(() => {
       api.get('/nba/scoreboard').then(r => setNbaGames(Array.isArray(r.data) ? r.data : [])).catch(() => {})
       runBestBets()
-    }, 5 * 60 * 1000)
+    }, 2 * 60 * 1000)
     return () => clearInterval(interval)
   }, [])
 
@@ -563,10 +564,13 @@ export default function App() {
 
       {/* ── NBA Views ── */}
       {isNBA && view === 'bets' && !nbaSelectedGame && (
-        <>
-          <PickOfDayHero sport="nba" />
-          <NBAScoreboard games={nbaGames} loading={nbaLoading} progress={nbaBbProgress} onSelectGame={selectNbaGame} bestBets={nbaBestBets} />
-        </>
+        <NBABetsView
+          games={nbaGames}
+          loading={nbaLoading}
+          progress={nbaBbProgress}
+          onSelectGame={selectNbaGame}
+          bestBets={nbaBestBets}
+        />
       )}
 
       {isNBA && nbaSelectedGame && (

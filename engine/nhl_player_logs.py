@@ -44,16 +44,38 @@ _REQUEST_INTERVAL_S = 0.25
 
 
 def _fetch_json(url: str, timeout: int = 20) -> dict | None:
-    try:
-        req = urllib.request.Request(url, headers=_HEADERS)
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        logger.warning("NHL HTTP %s for %s", e.code, url)
-    except (urllib.error.URLError, TimeoutError) as e:
-        logger.warning("NHL network error: %s", e)
-    except (json.JSONDecodeError, ValueError) as e:
-        logger.warning("NHL bad JSON: %s", e)
+    """Fetch JSON with one retry on transient network failures (mid-stream
+    chunk drops, socket resets, 5xx). Multi-thousand-game backfills
+    surface these every few minutes — retry-once tolerates them without
+    failing the run."""
+    import http.client
+    last_err: Exception | None = None
+    for attempt in (1, 2):
+        try:
+            req = urllib.request.Request(url, headers=_HEADERS)
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            if 500 <= e.code < 600 and attempt == 1:
+                last_err = e
+                time.sleep(1.0)
+                continue
+            logger.warning("NHL HTTP %s for %s", e.code, url)
+            return None
+        except (urllib.error.URLError, TimeoutError,
+                http.client.HTTPException, OSError) as e:
+            last_err = e
+            if attempt == 1:
+                time.sleep(1.0)
+                continue
+            logger.warning("NHL network error after retry (%s): %s",
+                           type(e).__name__, e)
+            return None
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.warning("NHL bad JSON: %s", e)
+            return None
+    if last_err is not None:
+        logger.warning("NHL giving up on %s: %s", url, last_err)
     return None
 
 

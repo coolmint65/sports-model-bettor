@@ -74,7 +74,7 @@ function BettingPicks({ data }) {
       title="Model Picks"
       rightSlot={total != null && (
         <span className="text-[11px] text-muted-foreground tabular-nums">
-          Total: <strong>{total.toFixed(1)}</strong>
+          Total: <strong>{Math.round(total)}</strong>
         </span>
       )}
     >

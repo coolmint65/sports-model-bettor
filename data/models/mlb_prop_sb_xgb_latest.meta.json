@@ -7,9 +7,9 @@
     "is_home",
     "weather_temp_f"
   ],
-  "n_rows": 9679,
-  "cv_baseline_mae": 0.11811219752215427,
-  "cv_gbm_mae": 0.0713482905293837,
-  "reduction_pct": 39.71596634111156,
-  "trained_at": "2026-04-27T01:41:53Z"
+  "n_rows": 161136,
+  "cv_baseline_mae": 0.12143295309539112,
+  "cv_gbm_mae": 0.06969373063925376,
+  "reduction_pct": 42.6240700442262,
+  "trained_at": "2026-04-28T00:19:23Z"
 }

@@ -17,7 +17,8 @@ from .player_props_tracker import _NHL_STAT_KEY
 from .nhl_player_mc import build_player_mc
 from .mlb_prop_picks import (
     _normalize_name, _confidence_for,
-    PROP_MIN_EDGE_PCT, PROP_MAX_ODDS,
+    PROP_MIN_EDGE_PCT, PROP_MAX_ODDS, PROP_JUICE_WALL,
+    _collapse_and_cap, _void_stale_pending,
 )
 from .mlb_player_mc import prob_over, prob_under
 
@@ -116,9 +117,20 @@ def _resolve_player_id(name: str, idx: dict[str, list[dict]],
 
 def _resolve_game_id(games_conn: sqlite3.Connection,
                      away_abbr: str, home_abbr: str,
-                     date: str) -> str | None:
-    """Resolve to NHL games table game_id (NHL API gamePk). HR
-    sometimes flips away/home vs the API — match either ordering."""
+                     date: str) -> tuple[str | None, str | None]:
+    """Resolve a (away, home) abbr pair to (game_id, actual_date).
+
+    Hard Rock offers props for whichever games are next bookable —
+    that's not always our ``target_date``. A series sitting on a 1-day
+    rest day will surface tomorrow's props today; a postponed game
+    crosses calendar boundaries. Searching strictly on ``date`` makes
+    every such matchup fail at the resolver step.
+
+    So search the upcoming-games window (yesterday→date+2) and return
+    the earliest non-final match. Caller uses ``actual_date`` as the
+    ``date`` field on the inserted pick so settling later finds the
+    right game.
+    """
     try:
         from .abbr import aliases_for
         a_alts = aliases_for(away_abbr.strip(), sport="nhl") or [away_abbr.strip()]
@@ -127,15 +139,28 @@ def _resolve_game_id(games_conn: sqlite3.Connection,
         a_alts = [away_abbr.strip()]
         h_alts = [home_abbr.strip()]
     abbrs = set(a_alts) | set(h_alts)
+    if not abbrs:
+        return None, None
     placeholders = ",".join("?" * len(abbrs))
+    from datetime import datetime as _dt, timedelta as _td
+    try:
+        anchor = _dt.strptime(date, "%Y-%m-%d")
+    except ValueError:
+        anchor = _dt.now()
+    lo = (anchor - _td(days=1)).strftime("%Y-%m-%d")
+    hi = (anchor + _td(days=2)).strftime("%Y-%m-%d")
     row = games_conn.execute(
-        f"SELECT g.game_id FROM nhl_games g "
+        f"SELECT g.game_id, g.date FROM nhl_games g "
         f"JOIN nhl_teams ht ON ht.id = g.home_team_id AND ht.abbreviation IN ({placeholders}) "
         f"JOIN nhl_teams at ON at.id = g.away_team_id AND at.abbreviation IN ({placeholders}) "
-        f"WHERE g.date = ? LIMIT 1",
-        (*abbrs, *abbrs, date),
+        f"WHERE g.date BETWEEN ? AND ? "
+        f"  AND COALESCE(g.status, '') NOT IN ('final', 'postponed') "
+        f"ORDER BY g.date ASC LIMIT 1",
+        (*abbrs, *abbrs, lo, hi),
     ).fetchone()
-    return str(row["game_id"]) if row else None
+    if not row:
+        return None, None
+    return str(row["game_id"]), str(row["date"])
 
 
 def _score(samples: dict, prop: dict) -> dict | None:
@@ -163,6 +188,8 @@ def _score(samples: dict, prop: dict) -> dict | None:
         if odds is None:
             continue
         if odds > PROP_MAX_ODDS:
+            continue
+        if odds < PROP_JUICE_WALL:
             continue
         n = float(odds)
         implied = 100.0/(n+100.0) if n > 0 else abs(n)/(abs(n)+100.0)
@@ -206,11 +233,14 @@ def generate_picks(date: str | None = None,
         if "@" not in matchup_key:
             continue
         away_abbr, home_abbr = matchup_key.split("@", 1)
-        game_id = _resolve_game_id(games_conn, away_abbr, home_abbr,
-                                    target_date)
+        game_id, game_date = _resolve_game_id(games_conn, away_abbr, home_abbr,
+                                               target_date)
         if not game_id:
             counts["skipped_no_player"] += len(prop_rows)
             continue
+        # Use the resolved game's actual date so settling can locate
+        # the boxscore (HR's matchup may be 1 day off from target_date).
+        pick_date = game_date or target_date
 
         # Resolve game's team_ids once for use in name disambiguation.
         gt_row = games_conn.execute(
@@ -260,13 +290,18 @@ def generate_picks(date: str | None = None,
                 "prop": prop, "scored": scored,
             }
 
-        for entry in best_per_pair.values():
+        top = _collapse_and_cap(best_per_pair)
+        keep = []
+        for entry in top:
             best = entry["scored"]
             confidence = _confidence_for(best["edge"])
             pick_text = f"{best['side']} {best['line']:g}"
+            keep.append((entry["player_id"],
+                         entry["prop"].get("bet_type", ""),
+                         pick_text))
             insert_pick(
                 "nhl",
-                game_id=game_id, date=target_date,
+                game_id=game_id, date=pick_date,
                 matchup=f"{away_abbr} @ {home_abbr}",
                 player_id=entry["player_id"],
                 player_name=entry["player_name"],
@@ -278,6 +313,10 @@ def generate_picks(date: str | None = None,
                 confidence=confidence,
             )
             counts["picked"] += 1
+        voided = _void_stale_pending("nhl", game_id, pick_date, keep)
+        if voided:
+            counts.setdefault("voided_stale", 0)
+            counts["voided_stale"] += voided
 
     logger.info("nhl_prop_picks: %s", counts)
     return counts

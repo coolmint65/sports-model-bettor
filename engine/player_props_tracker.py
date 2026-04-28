@@ -175,10 +175,57 @@ def _lookup_actual(sport: str, player_id: int, game_id: str,
         return None
 
 
+def _game_is_final(sport: str, game_id: str) -> bool:
+    """Return True when the per-sport games table marks this game final.
+    Used to detect DNP props — if the game is final but no log exists
+    for the player, the prop should void rather than sit pending."""
+    table_col = {
+        "mlb": ("games", "mlb_game_id"),  # picks store espn_event_id; mlb games keyed on mlb_game_id
+        "nhl": ("nhl_games", "game_id"),
+        "nba": ("nba_games", "game_id"),
+    }.get(sport)
+    if not table_col:
+        return False
+    table, col = table_col
+    try:
+        if sport == "mlb":
+            from .db import get_conn
+        elif sport == "nhl":
+            from .nhl_db import get_conn
+        else:
+            from .nba_db import get_conn
+        conn = get_conn()
+        if sport == "mlb":
+            # MLB props store the MLB Stats game_pk (matches games.mlb_game_id).
+            # The games table doesn't carry a separate espn_event_id column —
+            # earlier code referenced one that doesn't exist and silently
+            # returned False, suppressing every DNP-void.
+            row = conn.execute(
+                f"SELECT status FROM {table} WHERE mlb_game_id = ? LIMIT 1",
+                (str(game_id),),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                f"SELECT status FROM {table} WHERE {col} = ? LIMIT 1",
+                (str(game_id),),
+            ).fetchone()
+        return bool(row and (row["status"] or "").lower() == "final")
+    except Exception as e:
+        logger.debug("_game_is_final lookup failed for %s/%s: %s",
+                     sport, game_id, e)
+        return False
+
+
 def settle_player_props(sport: str) -> dict:
     """Settle pending prop picks for ``sport``. Idempotent — re-runs
     only touch rows still pending at call time. Returns a per-call
-    counter dict mirroring ``settle_derivative_picks``."""
+    counter dict mirroring ``settle_derivative_picks``.
+
+    DNP handling: a pending pick whose game is marked ``final`` but
+    has no player_game_logs row settles as Push (profit=0). Most books
+    void DNP props — encoding as Push matches that behaviour and stops
+    the row sitting pending forever after a player scratch / late-OUT.
+    """
     if sport not in ("mlb", "nhl", "nba"):
         raise ValueError(f"unknown sport: {sport}")
 
@@ -186,7 +233,41 @@ def settle_player_props(sport: str) -> dict:
     if not pending:
         return {"settled": 0, "wins": 0, "losses": 0, "pushes": 0}
 
-    settled = wins = losses = pushes = 0
+    # Self-heal: if any pending pick points at a finalized game with
+    # no log row, pull recent finalized box scores so DNP-void only
+    # fires when the player genuinely didn't appear, not when our
+    # ingest just missed the night. Throttled per process (5 min) so
+    # the API endpoint doesn't trigger an MLB-Stats fan-out on every
+    # poll.
+    import time as _t
+    if not hasattr(settle_player_props, "_last_ingest"):
+        settle_player_props._last_ingest = {}
+    last = settle_player_props._last_ingest.get(sport, 0)
+    needs_ingest = False
+    if (_t.time() - last) > 300:
+        for pick in pending[:25]:  # cheap sample; full check happens below
+            stat_key = _stat_key_for(sport, pick.get("bet_type") or "")
+            if not stat_key:
+                continue
+            actual = _lookup_actual(sport, int(pick["player_id"]),
+                                    str(pick["game_id"]), stat_key)
+            if actual is None and _game_is_final(sport, str(pick["game_id"])):
+                needs_ingest = True
+                break
+    if needs_ingest:
+        try:
+            if sport == "mlb":
+                from .mlb_player_logs import ingest_recent_finals as _ingest
+            elif sport == "nhl":
+                from .nhl_player_logs import ingest_recent_finals as _ingest
+            else:
+                from .nba_player_logs import ingest_recent_finals as _ingest
+            _ingest(lookback_days=3)
+            settle_player_props._last_ingest[sport] = _t.time()
+        except Exception as e:
+            logger.warning("Pre-settle log refresh failed for %s: %s", sport, e)
+
+    settled = wins = losses = pushes = voided = 0
     for pick in pending:
         bet_type = pick.get("bet_type") or ""
         stat_key = _stat_key_for(sport, bet_type)
@@ -198,9 +279,16 @@ def settle_player_props(sport: str) -> dict:
         actual = _lookup_actual(sport, int(pick["player_id"]),
                                 str(pick["game_id"]), stat_key)
         if actual is None:
-            # Game log not in DB yet — happens during the window
-            # between game completion and the post-game ingest. Leave
-            # pending; the next settler tick picks it up.
+            # Game log not in DB yet. If the game itself is final the
+            # player didn't play — void as Push so the row leaves the
+            # pending queue. Otherwise leave pending; next tick gets it.
+            if _game_is_final(sport, str(pick["game_id"])):
+                ok = settle_pick(sport, int(pick["id"]),
+                                 actual_value=None, result="P", profit=0.0)
+                if ok:
+                    settled += 1
+                    pushes += 1
+                    voided += 1
             continue
         result = _determine_outcome(pick.get("line"), pick.get("side"), actual)
         if result is None:
@@ -216,9 +304,10 @@ def settle_player_props(sport: str) -> dict:
         else:               pushes += 1
 
     if settled:
-        logger.info("player_props %s: settled=%d W=%d L=%d P=%d",
-                    sport, settled, wins, losses, pushes)
-    return {"settled": settled, "wins": wins, "losses": losses, "pushes": pushes}
+        logger.info("player_props %s: settled=%d W=%d L=%d P=%d (DNP voids=%d)",
+                    sport, settled, wins, losses, pushes, voided)
+    return {"settled": settled, "wins": wins, "losses": losses,
+            "pushes": pushes, "voided_dnp": voided}
 
 
 __all__ = [

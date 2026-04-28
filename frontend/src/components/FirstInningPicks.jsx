@@ -13,7 +13,11 @@ function FirstInningPicksImpl({ bestBets }) {
     const out = []
     for (const bet of bestBets) {
       const picks = bet.all_picks || []
-      const fi = picks.find(p => p.type === '1st INN')
+      // Skip 'skip'-tier picks (sub-floor edge, picker tagged but
+      // didn't recommend) so the panel doesn't surface +0.8% NRFI
+      // bets that the tracker explicitly rejects.
+      const fi = picks.find(p => p.type === '1st INN'
+                                  && (p.confidence || 'lean') !== 'skip')
       if (!fi) continue
       out.push({
         game_id: bet.game_id,

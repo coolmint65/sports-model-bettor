@@ -333,6 +333,27 @@ def _get_scoreboard(date: str = "") -> list[dict]:
     else:
         logger.warning("ESPN returned no data for %s", url)
 
+    # Yesterday-still-live carryover (default-today path only).
+    # Late MLB games (West Coast 10:30pm PT first pitch) cross midnight
+    # UTC and drop off today's slate while still in the 5th-6th inning.
+    if date == "":
+        from datetime import timedelta as _td
+        yest = (datetime.now() - _td(days=1)).strftime("%Y%m%d")
+        try:
+            yest_data = _fetch_espn_json(
+                f"{ESPN_BASE}/baseball/mlb/scoreboard?dates={yest}")
+            if yest_data:
+                yest_games = _parse_espn_scoreboard(yest_data)
+                seen_ids = {g.get("id") for g in games}
+                for g in yest_games:
+                    state = (g.get("status") or {}).get("state", "")
+                    if state == "in" and g.get("id") not in seen_ids:
+                        games.append(g)
+                        logger.info("MLB: carried over live game from "
+                                    "yesterday: %s", g.get("id"))
+        except Exception as e:
+            logger.debug("MLB yesterday-live carryover failed: %s", e)
+
     # ESPN fallback: try without date param
     if not games and date == "":
         fallback_url = f"{ESPN_BASE}/baseball/mlb/scoreboard"
@@ -1935,11 +1956,26 @@ def api_best_bets():
         # (or fall back to current best if nothing recorded). Live
         # in-game odds/score swings can't keep flipping the headline —
         # what the user saw at lock time is what they bet.
+        #
+        # Pre-game line drift: if HR moved the line enough for the live
+        # picker to fall below EDGE_SKIP, fall back to the recorded
+        # tracker pick instead of showing "NO PICK" — the card should
+        # never disagree with the tracker on whether a game has a play.
         locked = _is_game_locked(game.get("date"))
+        live_best = get_best_pick(core_picks) if core_picks else None
         if locked and recorded:
             best = recorded
+        elif live_best and (live_best.get("confidence") or "lean") != "skip":
+            best = live_best
+        elif recorded:
+            from engine.config import EDGE_STRONG, EDGE_MODERATE, EDGE_LEAN
+            r_edge = float(recorded.get("edge") or 0)
+            r_conf = ("strong" if r_edge >= EDGE_STRONG else
+                      "moderate" if r_edge >= EDGE_MODERATE else
+                      "lean")
+            best = {**recorded, "confidence": r_conf}
         else:
-            best = get_best_pick(core_picks) if core_picks else None
+            best = live_best
         if not best:
             continue
 
@@ -2327,20 +2363,33 @@ def api_props_today(sport: str):
 @app.get("/api/{sport}/props-tracker/summary")
 def api_props_summary(sport: str):
     """Settled prop-pick history + pending list. Mirrors the derivative
-    summary endpoint shape so the same PicksTable shell renders both."""
+    summary endpoint shape so the same PicksTable shell renders both.
+
+    Pending and settled are queried separately so a heavy pending slate
+    (250+ props on a busy night) can't crowd out the settled history
+    that powers the P/L banner totals.
+    """
     if sport not in ("mlb", "nhl", "nba"):
         raise HTTPException(status_code=400, detail="Unknown sport")
     from engine.player_props_tracker import settle_player_props
-    from engine.player_props_db import list_picks
+    from engine.player_props_db import list_picks, _conn_for
     # Auto-settle any pending whose game logs have landed before
     # returning the summary — same pattern as /derivative-tracker/summary.
     try:
         settle_player_props(sport)
     except Exception as e:
         logger.warning("player_props auto-settle (%s) failed: %s", sport, e)
-    settled = list_picks(sport, limit=200)
-    pending = [p for p in settled if p.get("result") is None]
-    finished = [p for p in settled if p.get("result") is not None]
+
+    pending = list_picks(sport, pending_only=True, limit=10_000)
+    # Settled: pull a generous window so the banner P/L reflects the
+    # full history, not just the newest 200 rows. Use a direct query
+    # rather than list_picks(limit=200) which bundles pending in.
+    conn = _conn_for(sport)
+    settled_rows = conn.execute(
+        "SELECT * FROM player_props_picks WHERE result IS NOT NULL "
+        "ORDER BY date DESC, id DESC LIMIT 1000"
+    ).fetchall()
+    finished = [dict(r) for r in settled_rows]
     wins   = sum(1 for p in finished if p["result"] == "W")
     losses = sum(1 for p in finished if p["result"] == "L")
     pushes = sum(1 for p in finished if p["result"] == "P")
@@ -2435,7 +2484,16 @@ def api_player_props_potd(sport: str):
     or {message} when no qualifying pick exists today."""
     if sport not in ("mlb", "nhl", "nba"):
         raise HTTPException(status_code=400, detail="Unknown sport")
-    from engine.player_props_potd import get_or_create_potd
+    from engine.player_props_potd import (
+        get_or_create_potd, refresh_potd_for_line_movement,
+    )
+    # Refresh-on-read: tracks HR line drift on the locked POTD's bet
+    # so the displayed line / price matches what the user can place.
+    # Same player + bet_type + side stays frozen — only line/odds move.
+    try:
+        refresh_potd_for_line_movement(sport)
+    except Exception as e:
+        logger.warning("prop POTD line refresh failed for %s: %s", sport, e)
     potd = get_or_create_potd(sport)
     if not potd:
         return {"message": "No qualifying prop POTD today."}
@@ -2865,6 +2923,27 @@ def _get_nhl_scoreboard(date: str = "") -> list[dict]:
         events = espn_data.get("events", [])
         logger.info("ESPN NHL returned %d events", len(events))
         games = _parse_nhl_scoreboard(espn_data)
+
+    # Yesterday-still-live carryover. Same rationale as NBA: late
+    # games that cross midnight UTC drop off today's slate while
+    # they're still in progress.
+    if date == "":
+        from datetime import timedelta as _td
+        yest = (datetime.now() - _td(days=1)).strftime("%Y%m%d")
+        try:
+            yest_data = _fetch_espn_json(
+                f"{ESPN_BASE}/hockey/nhl/scoreboard?dates={yest}")
+            if yest_data:
+                yest_games = _parse_nhl_scoreboard(yest_data)
+                seen_ids = {g.get("id") for g in games}
+                for g in yest_games:
+                    state = (g.get("status") or {}).get("state", "")
+                    if state == "in" and g.get("id") not in seen_ids:
+                        games.append(g)
+                        logger.info("NHL: carried over live game from "
+                                    "yesterday: %s", g.get("id"))
+        except Exception as e:
+            logger.debug("NHL yesterday-live carryover failed: %s", e)
 
     # Fallback without date
     if not games and date == "":
@@ -4032,16 +4111,24 @@ def api_debug_nhl_raw_stats():
 
 
 @app.get("/api/pick-of-day/{sport}")
-def api_pick_of_day(sport: str):
-    """Get today's Pick of the Day for a sport."""
-    from engine.pick_of_day import get_or_create_potd, get_today_potd
+def api_pick_of_day(sport: str, view: str = Query(default="q1")):
+    """Get today's Pick of the Day for a sport.
 
-    # First try to get an existing POTD
-    potd = get_today_potd(sport)
-    if potd:
-        return potd
+    NBA-only ``view`` query param: 'q1' (default) selects from Q1
+    markets only, 'full' selects from full-game ML/SPREAD/TOTAL.
+    'both' returns ``{q1: ..., full: ...}`` so the dashboard can
+    flip between views without a second fetch. MLB/NHL ignore view.
+    """
+    from engine.pick_of_day import (
+        get_or_create_potd, get_today_potd,
+        refresh_potd_for_line_movement,
+    )
 
-    # No POTD yet - need to generate one from today's best bets
+    # Resolve today's bets up front so the line-movement refresh can
+    # also invalidate locks where the GameCard's headline has drifted
+    # away from the locked bet_type. Without this, the refresh only
+    # covers price drift on the same bet_type — the
+    # "card says ML, POTD says +1.5 RL" misalignment slips through.
     if sport == "nhl":
         bets = api_nhl_best_bets()
     elif sport == "mlb":
@@ -4050,9 +4137,33 @@ def api_pick_of_day(sport: str):
         bets = api_nba_best_bets()
     else:
         return {"error": f"Unknown sport: {sport}"}
+    bets_list = bets if isinstance(bets, list) else None
 
-    if isinstance(bets, list):
-        potd = get_or_create_potd(sport, bets)
+    if sport == "nba" and view == "both":
+        out = {}
+        for v in ("q1", "full"):
+            try:
+                refresh_potd_for_line_movement(sport, bets_list, view=v)
+            except Exception as e:
+                logger.warning("POTD line refresh failed for %s/%s: %s", sport, v, e)
+            potd = get_today_potd(sport, view=v)
+            if not potd and bets_list is not None:
+                potd = get_or_create_potd(sport, bets_list, view=v)
+            out[v] = potd or None
+        return out
+
+    try:
+        refresh_potd_for_line_movement(sport, bets_list, view=view)
+    except Exception as e:
+        logger.warning("POTD line refresh failed for %s: %s", sport, e)
+
+    # Single-view path
+    potd = get_today_potd(sport, view=view)
+    if potd:
+        return potd
+
+    if bets_list is not None:
+        potd = get_or_create_potd(sport, bets_list, view=view)
         return potd or {"message": "No qualifying picks today", "sport": sport}
     return {"error": "Could not generate bets"}
 
@@ -4129,7 +4240,14 @@ _nba_scoreboard_cache: dict[str, tuple[float, list]] = {}
 
 
 def _get_nba_scoreboard(date: str = "") -> list[dict]:
-    """Fetch NBA scoreboard from ESPN, enriched with Q1 scores and odds."""
+    """Fetch NBA scoreboard from ESPN, enriched with Q1 scores and odds.
+
+    When called with no date (default-today path), also pulls
+    yesterday's scoreboard and keeps any live games. Late-night games
+    that cross midnight UTC otherwise drop off the dashboard while
+    they're still in progress — surfaces as "DEN @ MIN disappeared
+    in the 4th quarter at midnight" on the user side.
+    """
     target_date = date or datetime.now().strftime("%Y-%m-%d")
     espn_date = target_date.replace("-", "")
 
@@ -4149,6 +4267,26 @@ def _get_nba_scoreboard(date: str = "") -> list[dict]:
         events = espn_data.get("events", [])
         logger.info("ESPN NBA returned %d events", len(events))
         games = _parse_nba_scoreboard(espn_data)
+
+    # Yesterday-still-live carryover. Only on the default-today path —
+    # explicit ?date=YYYY-MM-DD lookups stay strict.
+    if date == "":
+        from datetime import timedelta as _td
+        yest = (datetime.now() - _td(days=1)).strftime("%Y%m%d")
+        try:
+            yest_data = _fetch_espn_json(
+                f"{ESPN_BASE}/basketball/nba/scoreboard?dates={yest}")
+            if yest_data:
+                yest_games = _parse_nba_scoreboard(yest_data)
+                seen_ids = {g.get("id") for g in games}
+                for g in yest_games:
+                    state = (g.get("status") or {}).get("state", "")
+                    if state == "in" and g.get("id") not in seen_ids:
+                        games.append(g)
+                        logger.info("NBA: carried over live game from "
+                                    "yesterday: %s", g.get("id"))
+        except Exception as e:
+            logger.debug("NBA yesterday-live carryover failed: %s", e)
 
     # If no games today, try tomorrow
     if not games and date == "":
@@ -4594,6 +4732,38 @@ def api_nba_predict(home: str = Query(...), away: str = Query(...)):
                 logger.warning("NBA GBM shadow failed for %s/%s: %s", home, away, e)
                 result["gbm"] = {"error": str(e)}
 
+        # Phase 2k: full-game prediction + picks alongside Q1.
+        try:
+            from engine.nba_predict import predict_full as _predict_full
+            from engine.mc_nba_run import run_nba_full_mc as _run_full_mc
+            from engine.nba_picks import generate_full_picks as _gen_full_picks
+            full_factor = _predict_full(
+                home, away,
+                spread=odds.get("home_spread_point"),
+                total=odds.get("over_under"),
+            )
+            try:
+                full_mc = _run_full_mc(home, away, n_sims=20_000)
+            except Exception:
+                full_mc = None
+            full_picks = _gen_full_picks(
+                home, away, odds=odds,
+                pred={**result, "full": full_factor, "mc_full": full_mc or {}},
+            )
+            from engine.config import EDGE_STRONG, EDGE_MODERATE, EDGE_LEAN, EDGE_SKIP
+            for p in full_picks:
+                e = p.get("edge", 0)
+                if e >= EDGE_STRONG:    p["confidence"] = "strong"
+                elif e >= EDGE_MODERATE: p["confidence"] = "moderate"
+                elif e >= EDGE_LEAN:     p["confidence"] = "lean"
+                else:                    p["confidence"] = "skip"
+                if e < EDGE_SKIP:        p["confidence"] = "skip"
+            result["full"] = full_factor
+            result["full_picks"] = full_picks
+        except Exception as e:
+            logger.warning("NBA full-game prediction in /predict failed for %s/%s: %s",
+                           home, away, e)
+
         try:
             from engine.ensemble import ensemble_nba
             result["ensemble"] = ensemble_nba(result)
@@ -4617,6 +4787,17 @@ def api_nba_predict(home: str = Query(...), away: str = Query(...)):
             else:
                 from engine.nba_picks import generate_q1_picks
                 picks = generate_q1_picks(home, away, odds=odds, pred=result)
+            # Merge full-game picks into the unified picks list so the
+            # detail page sees both Q1 + full picks under result["picks"].
+            full_picks_local = result.get("full_picks") or []
+            if full_picks_local:
+                # De-dupe by (type, pick) so any overlap with cached picks
+                # doesn't double-list.
+                seen = {(p.get("type"), p.get("pick")) for p in picks}
+                for fp in full_picks_local:
+                    if (fp.get("type"), fp.get("pick")) not in seen:
+                        picks.append(fp)
+                picks = sorted(picks, key=lambda p: -(p.get("edge") or 0))
             result["picks"] = picks
             result["best_pick"] = picks[0] if picks else None
             result["odds"] = odds
@@ -4735,6 +4916,53 @@ def api_nba_best_bets():
         if not picks:
             continue
 
+        # ── Phase 2k: full-game predictions + picks ──
+        # Run the full-game factor model + MC alongside Q1 so the
+        # ensemble blender has all three signals. Append full-game
+        # picks to the same list; the picks_store + GameCard layers
+        # consume them transparently.
+        full_picks: list = []
+        try:
+            from engine.nba_predict import predict_full
+            from engine.mc_nba_run import run_nba_full_mc
+            from engine.nba_picks import generate_full_picks
+            full_factor = predict_full(
+                h_abbr, a_abbr,
+                spread=odds.get("home_spread_point"),
+                total=odds.get("over_under"),
+            )
+            try:
+                full_mc = run_nba_full_mc(h_abbr, a_abbr, n_sims=20_000)
+            except Exception as mc_err:
+                logger.debug("NBA full-game MC failed for %s/%s: %s",
+                             h_abbr, a_abbr, mc_err)
+                full_mc = None
+            # Compose pred with full-game side-block so ensemble_nba
+            # blends factor + MC + GBM for ML/total/margin.
+            ensemble_input = {
+                **pred,
+                "full": full_factor,
+                "mc_full": full_mc or {},
+            }
+            full_picks = generate_full_picks(
+                h_abbr, a_abbr, odds=odds, pred=ensemble_input)
+            # Tag confidence on full-game picks the same way Q1 does so
+            # the GameCard "skip" gating works consistently.
+            from engine.config import EDGE_STRONG, EDGE_MODERATE, EDGE_LEAN, EDGE_SKIP
+            for p in full_picks:
+                e = p.get("edge", 0)
+                if e >= EDGE_STRONG:    p["confidence"] = "strong"
+                elif e >= EDGE_MODERATE: p["confidence"] = "moderate"
+                elif e >= EDGE_LEAN:     p["confidence"] = "lean"
+                else:                    p["confidence"] = "skip"
+                if e < EDGE_SKIP:        p["confidence"] = "skip"
+            picks = picks + full_picks
+            pred["full"] = full_factor
+            pred["full_picks"] = full_picks
+        except Exception as e:
+            logger.warning("NBA full-game prediction failed for %s/%s: %s",
+                           h_abbr, a_abbr, e)
+
         # Cache picks on prediction for predict endpoint consistency
         pred_full["_cached_picks"] = picks
         pred_full["_cached_odds"] = odds
@@ -4742,8 +4970,28 @@ def api_nba_best_bets():
 
         # Card + POTD agree by construction: both built from CORE
         # picks only. Derivatives flow through `derivative_picks` /
-        # the dedicated tracker.
-        core_picks = [p for p in picks if p.get("type") not in _NBA_DERIV_TYPES]
+        # the dedicated tracker. Re-sort here because the merged list
+        # contains both Q1 and full-game picks (each sub-picker sorts
+        # internally, but the union doesn't carry the order through).
+        # Headline selection prefers primary markets; ALT picks only
+        # surface as the headline when no primary clears 6%+ edge.
+        # Without that gate the GameCard would routinely headline a
+        # +60% alt-line bet that's exactly the longshot calibration
+        # trap player props got burned by.
+        core_picks_all = sorted(
+            (p for p in picks if p.get("type") not in _NBA_DERIV_TYPES),
+            key=lambda p: -(p.get("edge") or 0),
+        )
+        _ALT_TYPES = {"ALT SPREAD", "ALT TOTAL"}
+        _primary_picks = [p for p in core_picks_all
+                           if p.get("type") not in _ALT_TYPES
+                           and (p.get("edge") or 0) >= 6.0]
+        # core_picks order: primary picks first (>=6% edge), then
+        # everything else by edge. The card's best_pick = core_picks[0]
+        # so primary-market picks always win the headline when they
+        # exist, ALT only surfaces when no primary cleared 6%+.
+        _alt_or_low = [p for p in core_picks_all if p not in _primary_picks]
+        core_picks = _primary_picks + _alt_or_low
         nba_matchup = f"{a_abbr} @ {h_abbr}"
         nba_target = datetime.now().strftime("%Y-%m-%d")
         recorded = _get_recorded_pick("nba", nba_matchup, nba_target)
@@ -4784,6 +5032,32 @@ def api_nba_best_bets():
             key=lambda p: -(p.get("edge") or 0),
         )
 
+        # Phase 2k: per-view best picks so the GameCard toggle can swap
+        # between Q1 and Full headlines without re-fetching. Each view
+        # picks its highest-edge non-skip representative from the
+        # respective category set, with primary-market preference for
+        # Full (alt lines only headline if no primary clears 6%).
+        Q1_TYPES = {"Q1_ML", "Q1_SPREAD", "Q1_TOTAL"}
+        FULL_PRIMARY = {"ML", "SPREAD", "TOTAL"}
+        FULL_ALT = {"ALT SPREAD", "ALT TOTAL"}
+        def _top(types_set):
+            cands = [p for p in core_picks
+                     if p.get("type") in types_set
+                     and (p.get("confidence") or "lean") != "skip"]
+            return cands[0] if cands else None
+        best_q1 = _top(Q1_TYPES)
+        best_full_primary = _top(FULL_PRIMARY)
+        best_full_alt = _top(FULL_ALT)
+        # Headline rule: primary if it cleared 6%; otherwise alt; else
+        # the highest-edge primary even at 4-6% so the user still sees
+        # a pick rather than nothing.
+        if best_full_primary and (best_full_primary.get("edge") or 0) >= 6.0:
+            best_full = best_full_primary
+        elif best_full_alt:
+            best_full = best_full_alt
+        else:
+            best_full = best_full_primary
+
         bets.append({
             "game_id": game["id"],
             "matchup": f"{a_abbr} @ {h_abbr}",
@@ -4792,6 +5066,8 @@ def api_nba_best_bets():
             "time": game["date"],
             "venue": game.get("venue", ""),
             "best_pick": best,
+            "best_pick_q1": best_q1,
+            "best_pick_full": best_full,
             "all_picks": all_picks,
             "derivative_picks": derivative_picks,
             "confidence": best.get("confidence", "lean"),
@@ -4804,6 +5080,8 @@ def api_nba_best_bets():
             "generated_at": datetime.now().isoformat(timespec="seconds"),
             "recorded_pick": recorded,
             "is_locked": locked,
+            "full": pred.get("full"),
+            "full_picks": pred.get("full_picks") or [],
         })
 
     bets.sort(key=lambda b: b["best_pick"].get("edge", 0), reverse=True)

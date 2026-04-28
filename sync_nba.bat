@@ -43,6 +43,13 @@ echo Recording today's NBA picks...
 python -m engine.nba_tracker --record
 
 echo.
+echo Capturing NBA Q1 closing odds (CLV pre-game snapshot)...
+REM Stamps current Hard Rock Q1 odds as closing_odds for any pending
+REM pick that doesn't have one yet. Must run before tip-off because
+REM HR drops Q1 markets the instant Q1 ends.
+python -m engine.nba_tracker --capture-closing
+
+echo.
 echo Settling completed NBA picks...
 python -m engine.nba_tracker --settle
 
@@ -59,6 +66,12 @@ REM regime shifts (playoff pace slowdowns etc.) without source edits.
 python -c "from engine.adaptive_baselines import update_all; import json; print(json.dumps(update_all(), indent=2, default=str))" 2>nul
 
 echo.
+echo Refreshing POTD live line (track HR line movement)...
+REM Re-stamps a pending POTD if HR has moved the line/price since lock.
+REM Same selection (game / bet_type / direction) — just current numbers.
+python -c "from engine.pick_of_day import refresh_potd_for_line_movement; print(refresh_potd_for_line_movement('nba'))" 2>nul
+
+echo.
 echo Updating POTD closing odds (CLV capture)...
 python -c "from engine.pick_of_day import update_potd_closing_odds; print(update_potd_closing_odds('nba'))" 2>nul
 
@@ -67,8 +80,9 @@ echo Settling POTD...
 python -c "from engine.pick_of_day import settle_potd; print(settle_potd('nba'))" 2>nul
 
 echo.
-echo Ingesting today's player game logs (Phase 2h-i)...
-python -c "from engine.nba_player_logs import ingest_today; print(ingest_today())" 2>nul
+echo Ingesting recent finalized player game logs (Phase 2h-i)...
+REM 3-day lookback to backfill missed syncs / UTC-rollover games.
+python -c "from engine.nba_player_logs import ingest_recent_finals; print(ingest_recent_finals(lookback_days=3))" 2>nul
 
 echo.
 echo Settling player props...
@@ -77,6 +91,10 @@ python -c "from engine.player_props_tracker import settle_player_props; print(se
 echo.
 echo Generating NBA player-prop picks (Phase 2h-iii)...
 python -c "from engine.nba_prop_picks import generate_picks; from datetime import datetime, timedelta; print(generate_picks(date=(datetime.now()+timedelta(days=1)).strftime('%%Y-%%m-%%d')))" 2>nul
+
+echo.
+echo Refreshing prop POTD live line (track HR line movement)...
+python -c "from engine.player_props_potd import refresh_potd_for_line_movement; print(refresh_potd_for_line_movement('nba'))" 2>nul
 
 echo.
 echo ============================================

@@ -94,6 +94,33 @@ def _ensure_potd_table(sport: str) -> None:
     if "closing_odds_updated_at" not in cols:
         conn.execute("ALTER TABLE pick_of_day ADD COLUMN closing_odds_updated_at TEXT")
     conn.commit()
+    # Phase 2k (NBA only): full-game POTDs land in a sibling table so
+    # they coexist with the existing Q1 POTD on the same date. MLB/NHL
+    # don't use this — single view only.
+    if sport == "nba":
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS pick_of_day_full (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                date        TEXT NOT NULL UNIQUE,
+                game_id     TEXT,
+                matchup     TEXT NOT NULL,
+                bet_type    TEXT NOT NULL,
+                pick        TEXT NOT NULL,
+                model_prob  REAL,
+                edge        REAL,
+                odds        INTEGER,
+                kelly_pct   REAL,
+                reasoning   TEXT,
+                result      TEXT,
+                profit      REAL,
+                closing_odds INTEGER,
+                closing_odds_updated_at TEXT,
+                created_at  TEXT DEFAULT (datetime('now')),
+                settled_at  TEXT
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_potd_full_date ON pick_of_day_full(date)")
+        conn.commit()
 
 
 def _kelly_fraction(prob: float, odds: int) -> float:
@@ -136,44 +163,174 @@ def _get_market_win_rate(sport: str, bet_type: str, days: int = 30) -> float:
     return 0.5  # neutral when no data
 
 
+_PRIMARY_MARKET_TYPES = {
+    "mlb": {"ML", "RL", "O/U", "F5 ML", "F5 O/U", "F5 RL"},
+    "nhl": {"ML", "PL", "O/U"},
+    "nba": {"Q1_ML", "Q1_SPREAD", "Q1_TOTAL"},
+}
+_ALT_MARKET_TYPES = {
+    "mlb": {"ALT RL", "ALT O/U", "ALT ML"},
+    "nhl": {"ALT PL", "ALT O/U"},
+    "nba": set(),
+}
+
+
+def _market_class_factor(sport: str, bet_type: str) -> float:
+    """Primary > alt > derivative weighting. The discount for alts and
+    derivatives is intentionally aggressive — a POTD on an alt-line
+    longshot doesn't read as 'THE bet of the day', regardless of edge.
+    Tuned so a primary market clearing 8–10% edge with prob>=0.55
+    reliably outranks a 15%+ alt edge."""
+    primary = _PRIMARY_MARKET_TYPES.get(sport, set())
+    alt = _ALT_MARKET_TYPES.get(sport, set())
+    if bet_type in primary:
+        return 1.00
+    if bet_type in alt:
+        return 0.65
+    return 0.55  # derivatives (Period Total, Q1 Team Total, BTS, etc.)
+
+
+# Break-even hit rate at -110 (the standard juice). Used as the
+# baseline that a market's recent win rate is divided against to get
+# a reliability multiplier.
+_BREAK_EVEN_HIT_RATE = 0.5238
+
+
 def _score_pick(pick: dict, sport: str = "mlb") -> float:
-    """Score a pick candidate for POTD selection.
+    """Conviction-weighted POTD score. Replaces raw-edge selection.
 
-    Switched 2026-04-27 to raw edge — the previous formula
-    (edge × CI × market_reliability × longshot_penalty) chose
-    different headlines than the GameCard's best_pick (which uses
-    raw edge), causing visible "POTD card different to its actual
-    card" disagreement on shared matchups (today's MIA@LAD: GameCard
-    showed ML MIA +250 / 20.8% edge, POTD showed ALT RL Marlins +1.5
-    / 18.2% edge because the +250 longshot penalty cut ML's score).
+    The user's POTD philosophy: "THE bet, no matter what." Raw edge is
+    too brittle (any noisy +12% alt-line longshot wins) and Kelly is
+    explicitly rejected (user finds it counterintuitive and over-rewards
+    longshots — see feedback_no_kelly.md). The right answer is a single
+    score that combines:
 
-    Headline picks should agree. POTD = highest raw edge among
-    today's eligible picks, period. Longshot calibration risk is
-    handled upstream by the per-bet-type edge floors and the
-    odds-based MAX_PICK_ODDS guards in the pickers.
+      score = capped_edge
+              × confidence_factor   (model prob clamped, used directly)
+              × reliability_factor  (markets we historically hit better get a nudge)
+              × market_class_factor (primary > alt > derivative)
+
+    Why each piece:
+      - capped_edge: edge is clipped at 12 because anything above is
+        usually a model-calibration artifact (alt-line longshots
+        attracting +250 mispricings). A 20.8% edge MIA ML and a 12%
+        edge MIA ML count the same here — the cap stops the headline
+        landing on a coinflip outcome with a calibration spike.
+      - confidence_factor: the model's own probability, bounded [0.45,
+        0.85]. A 0.55 prob bet scores ~12% better than a 0.50 prob bet
+        at the same edge. Bigger swings would dominate edge entirely.
+      - reliability_factor: tracker win rate / break-even, clamped to
+        [0.85, 1.15]. Cold-start markets stay neutral.
+      - market_class_factor: primary 1.00, alt 0.65, derivative 0.55.
+        Stops the POTD landing on alt lines unless overwhelming.
     """
-    return float(pick.get("edge", 0) or 0)
+    edge = float(pick.get("edge", 0) or 0)
+    if edge <= 0:
+        return 0.0
+
+    # Cap raw edge at 12% — see docstring. The picker's own per-market
+    # edge floors keep noise out of the bottom; the cap keeps noise out
+    # of the top (calibration spikes on alt longshots).
+    capped_edge = min(edge, 12.0)
+
+    # Confidence: model probability used directly, clamped so a coinflip
+    # pick can't score zero (we'd lose every alt market) and so a 95%
+    # super-chalk can't dominate (those are usually -800 -- bad EV).
+    prob = float(pick.get("prob", 0) or 0)
+    confidence_factor = max(0.45, min(0.85, prob))
+
+    # Market reliability: tracker win rate ÷ break-even. Cold-start
+    # markets stay neutral. Bounded so a single hot streak can't
+    # dominate selection.
+    bet_type = pick.get("type", "") or ""
+    try:
+        wr = _get_market_win_rate(sport, bet_type, days=30)
+    except Exception:
+        wr = 0.5
+    reliability_factor = max(0.85, min(1.15, wr / _BREAK_EVEN_HIT_RATE))
+
+    # Market class: primary markets headline, alts and derivatives
+    # discount.
+    class_factor = _market_class_factor(sport, bet_type)
+
+    return capped_edge * confidence_factor * reliability_factor * class_factor
 
 
-def select_potd(sport: str, games_with_bets: list[dict]) -> dict | None:
+_NBA_Q1_TYPES = {"Q1_ML", "Q1_SPREAD", "Q1_TOTAL"}
+_NBA_FULL_PRIMARY = {"ML", "SPREAD", "TOTAL"}
+_NBA_FULL_ALT = {"ALT SPREAD", "ALT TOTAL"}
+_NBA_FULL_TYPES = _NBA_FULL_PRIMARY | _NBA_FULL_ALT
+
+
+def _filter_picks_for_view(picks: list, sport: str, view: str) -> list:
+    """For NBA, restrict pick candidates to the right category set.
+    ALT TOTAL/SPREAD picks at +60%+ edges are the calibration trap —
+    POTD only surfaces primary-market picks. A game whose primary
+    picks don't qualify gets EXCLUDED from POTD candidacy entirely
+    rather than falling back to its ALT lines.
+    """
+    if sport != "nba" or view not in ("q1", "full"):
+        return picks
+    if view == "q1":
+        return [p for p in picks if p.get("type") in _NBA_Q1_TYPES]
+    # Full view: primary only. No ALT fallback — the headline POTD
+    # should be a clean ML/SPREAD/TOTAL pick or no pick from this
+    # game at all (some other game will headline instead).
+    return [p for p in picks if p.get("type") in _NBA_FULL_PRIMARY]
+
+
+def select_potd(sport: str, games_with_bets: list[dict],
+                view: str = "q1") -> dict | None:
     """
     Select the Pick of the Day from a list of games with bets.
 
     Args:
-        sport: "mlb" or "nhl"
-        games_with_bets: list of bet dicts from /api/best-bets or /api/nhl/best-bets
+        sport: "mlb" / "nhl" / "nba"
+        games_with_bets: list of bet dicts from /api/best-bets endpoints
+        view: NBA-only — 'q1' (Q1 markets) or 'full' (full-game ML/SPREAD/TOTAL).
+              Ignored for MLB/NHL.
 
     Returns:
         POTD dict or None if no qualifying picks
     """
     candidates = []
     for game in games_with_bets:
-        # Check all picks from this game, not just the "best_pick"
-        all_picks = game.get("all_picks", [])
-        if not all_picks and game.get("best_pick"):
-            all_picks = [game["best_pick"]]
+        # POTD per-game candidate is the bet's already-chosen headline —
+        # `best_pick` for the card. The picker (engine.picks /
+        # engine.nba_picks / engine.nhl_picks) sorts intra-game by
+        # adjusted_ev (edge × reliability × CLV × line_move), and
+        # `best_pick` is the top non-skip pick from that order. Using
+        # the same source of truth here guarantees the POTD headline
+        # always matches what the user sees on that game's card —
+        # there is no longer a "card says ML, POTD says +1.5 RL"
+        # divergence because the POTD's per-game candidate IS the card
+        # pick. Cross-game ranking still happens via _score_pick below.
+        candidate_picks: list[dict] = []
+        if sport == "nba" and view == "full":
+            # Full view uses `best_pick_full` (primary-only ML/SPREAD/TOTAL)
+            # if the API attached one; otherwise pull from the full_picks
+            # list (the picker's full-game ranking). Q1 best_pick is
+            # ignored entirely in this view.
+            full_best = game.get("best_pick_full")
+            if full_best:
+                candidate_picks.append(full_best)
+            else:
+                for fp in game.get("full_picks") or []:
+                    if fp.get("type") in _NBA_FULL_PRIMARY:
+                        candidate_picks.append(fp)
+                        break
+        elif sport == "nba" and view == "q1":
+            q1_best = game.get("best_pick_q1") or game.get("best_pick")
+            if q1_best:
+                candidate_picks.append(q1_best)
+        else:
+            best = game.get("best_pick")
+            if best:
+                candidate_picks.append(best)
 
-        for pick in all_picks:
+        candidate_picks = _filter_picks_for_view(candidate_picks, sport, view)
+
+        for pick in candidate_picks:
             pick_type = pick.get("type", "")
             # No bet-type whitelist — every pick that clears MIN_EDGE +
             # has valid odds + matches the matchup is a candidate. The
@@ -213,7 +370,8 @@ def select_potd(sport: str, games_with_bets: list[dict]) -> dict | None:
     if not candidates:
         return None
 
-    # Rank by edge × CI confidence × market reliability
+    # Rank by conviction-weighted score — see _score_pick docstring
+    # for the full formula. Headline play, not maximum-EV play.
     candidates.sort(key=lambda c: _score_pick(c, sport), reverse=True)
     best = candidates[0]
 
@@ -280,35 +438,48 @@ def _implied_from_odds(odds: int) -> float:
     return 100 / (odds + 100)
 
 
+def _potd_table(sport: str, view: str = "q1") -> str:
+    """NBA Full-game POTD lives in pick_of_day_full; everything else
+    in pick_of_day."""
+    if sport == "nba" and view == "full":
+        return "pick_of_day_full"
+    return "pick_of_day"
+
+
 def get_or_create_potd(sport: str, games_with_bets: list[dict],
-                      date: str | None = None) -> dict | None:
+                      date: str | None = None,
+                      view: str = "q1") -> dict | None:
     """
     Get today's POTD, creating it if it doesn't exist.
 
     Once created, POTD is locked for the day - subsequent calls return
     the same pick regardless of updated predictions.
+
+    ``view`` only matters for NBA. 'q1' uses pick_of_day; 'full' uses
+    pick_of_day_full. Both can coexist for the same date.
     """
     _ensure_potd_table(sport)
     conn = _get_conn(sport)
     target_date = date or datetime.now().strftime("%Y-%m-%d")
+    table = _potd_table(sport, view)
 
     # Check for existing POTD for this date
     existing = conn.execute(
-        "SELECT * FROM pick_of_day WHERE date = ?", (target_date,)
+        f"SELECT * FROM {table} WHERE date = ?", (target_date,)
     ).fetchone()
 
     if existing:
         return dict(existing)
 
     # No POTD yet - select one
-    selected = select_potd(sport, games_with_bets)
+    selected = select_potd(sport, games_with_bets, view=view)
     if not selected:
         return None
 
     # Lock it in — store the canonical abbr matchup so settler/closing-odds
     # lookups never need to reverse-map full names back to team IDs.
-    conn.execute("""
-        INSERT OR IGNORE INTO pick_of_day (
+    conn.execute(f"""
+        INSERT OR IGNORE INTO {table} (
             date, game_id, matchup, bet_type, pick,
             model_prob, edge, odds, kelly_pct, reasoning
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -406,10 +577,198 @@ def get_or_create_potd(sport: str, games_with_bets: list[dict],
                 sport.upper(), target_date, selected.get("matchup"),
                 selected.get("pick"), selected.get("type"), selected.get("edge", 0))
 
-    # Return with additional display fields
+    # Return the canonical DB row shape (bet_type, model_prob, ...)
+    # so the API response matches what get_today_potd returns. The
+    # select_potd dict uses different field names (type, prob) which
+    # broke the dashboard's PotdHero bar render — model_prob came back
+    # None because the wire shape was the selected-dict not the row.
+    canonical = get_today_potd(sport, date=target_date, view=view)
+    if canonical:
+        return canonical
+    # Fallback if the round-trip read failed for some reason — shape
+    # the selected dict to match the row schema as best we can.
     result = dict(selected)
+    result.setdefault("bet_type", selected.get("type"))
+    result.setdefault("model_prob", selected.get("prob"))
     result["date"] = target_date
     return result
+
+
+def _pick_side(bet_type: str, pick_text: str, home_abbr: str = "",
+                away_abbr: str = "") -> str:
+    """Direction key used to match a POTD against a live pick at a
+    different line. ``Under 53.5`` and ``Under 54.5`` are the same
+    side; ``MIN +10.5`` and ``MIN +9.5`` likewise.
+
+    Returns 'over' / 'under' for total-style markets, the team abbr
+    for side-style markets, and '' when the pick doesn't fit either.
+    """
+    if not pick_text:
+        return ""
+    pk = pick_text.strip()
+    pk_lower = pk.lower()
+    if pk_lower.startswith("over"):
+        return "over"
+    if pk_lower.startswith("under"):
+        return "under"
+    # Team-side bets ("MIN +10.5 Q1", "Timberwolves -1.5", "DEN ML",
+    # "MIN Q1 ML"). First whitespace-separated token wins.
+    head = pk.split()[0] if pk.split() else ""
+    return head
+
+
+def refresh_potd_for_line_movement(sport: str,
+                                   games_with_bets: list[dict] | None = None,
+                                   view: str = "q1") -> dict:
+    """Re-stamp pending POTD rows with the current line/odds/edge if
+    the line has moved since the lock. Selection itself stays frozen
+    — same game, same bet_type, same direction (Over/Under or team)
+    — but Q1 totals / spreads / RLs / PLs that drifted on Hard Rock
+    will display the live line in the POTD card so the user can place
+    the bet at the price they're actually offered.
+
+    Sourced from the per-sport picks tracker (which ``record_picks``
+    keeps in sync with HR), so this piggy-backs on the existing live-
+    line refresh rather than re-fetching odds itself.
+
+    When ``games_with_bets`` is supplied, this also invalidates POTD
+    locks whose bet_type no longer matches the per-game ``best_pick``
+    on the dashboard. Same-game + bet_type drift is the
+    "POTD shows +1.5 RL but card shows ML" case the user reported on
+    2026-04-27 — the picker re-ranked but the locked POTD didn't
+    follow. Drop the lock so the next read uses select_potd's new
+    candidate (bet.best_pick) and the headline realigns.
+    """
+    if sport not in ("mlb", "nhl", "nba"):
+        return {"updated": 0, "reason": f"unsupported sport {sport!r}"}
+    _ensure_potd_table(sport)
+    conn = _get_conn(sport)
+
+    # NBA splits POTDs across two tables (Q1 in pick_of_day, Full in
+    # pick_of_day_full). Iterate both so neither view goes stale.
+    pot_tables = ["pick_of_day"]
+    if sport == "nba":
+        pot_tables.append("pick_of_day_full")
+
+    pending = []
+    for tbl in pot_tables:
+        rows = conn.execute(
+            f"SELECT id, game_id, matchup, bet_type, pick, odds, edge, model_prob, "
+            f"       '{tbl}' AS _table FROM {tbl} WHERE result IS NULL"
+        ).fetchall()
+        for r in rows:
+            pending.append(dict(r))
+    if not pending:
+        return {"updated": 0, "skipped": 0, "invalidated": 0}
+
+    # Build a (game_id -> headline_bet_type) map so we can invalidate
+    # POTDs whose lock has drifted away from the GameCard's best_pick.
+    # NBA Q1 reads bet.best_pick (or best_pick_q1); NBA Full reads
+    # bet.best_pick_full. MLB/NHL just use best_pick.
+    headline_for_game: dict[str, str] = {}
+    if games_with_bets:
+        for game in games_with_bets:
+            gid = str(game.get("game_id") or "")
+            if not gid:
+                continue
+            if sport == "nba" and view == "full":
+                bp = game.get("best_pick_full")
+            elif sport == "nba":
+                bp = game.get("best_pick_q1") or game.get("best_pick")
+            else:
+                bp = game.get("best_pick")
+            if bp and bp.get("type"):
+                headline_for_game[gid] = bp["type"]
+
+    picks_table = "picks" if sport == "mlb" else f"{sport}_picks"
+    updated = 0
+    skipped = 0
+    invalidated = 0
+    for row in pending:
+        pot_table = row.pop("_table", "pick_of_day")
+
+        # Drift check: if the GameCard's current best_pick for this
+        # game uses a different bet_type than the locked POTD,
+        # invalidate so the next select_potd re-aligns with the card.
+        # Matches the table the lock lives in to the right view (the
+        # NBA full-game table only invalidates against full headlines).
+        gid_key = str(row.get("game_id") or "")
+        if gid_key and gid_key in headline_for_game:
+            row_view = "full" if pot_table == "pick_of_day_full" else "q1"
+            if sport != "nba" or row_view == view:
+                live_bt = headline_for_game[gid_key]
+                if live_bt and live_bt != row["bet_type"]:
+                    conn.execute(f"DELETE FROM {pot_table} WHERE id = ?", (row["id"],))
+                    logger.info("POTD %s invalidated #%s (%s): bet_type %s "
+                                "no longer matches GameCard headline %s",
+                                sport, row["id"], pot_table,
+                                row["bet_type"], live_bt)
+                    invalidated += 1
+                    continue
+
+        # Match: same game, same bet type, same direction. We don't
+        # care if line changed — that's the whole point of the
+        # refresh. Pull every pending pick for the (game, bet_type)
+        # pair, then filter to same-side.
+        live_rows = conn.execute(
+            f"SELECT pick, odds, edge, model_prob FROM {picks_table} "
+            f"WHERE game_id = ? AND bet_type = ? AND result IS NULL "
+            f"ORDER BY id DESC LIMIT 10",
+            (row["game_id"], row["bet_type"]),
+        ).fetchall()
+        if not live_rows:
+            # Locked pick no longer in the live picks table — model
+            # state has fundamentally changed (edge dropped below floor,
+            # bet was voided by line drift). Invalidate the lock so the
+            # next POTD read re-selects from current candidates.
+            conn.execute(f"DELETE FROM {pot_table} WHERE id = ?", (row["id"],))
+            logger.info("POTD %s invalidated #%s (%s/%s/%s): no live pick "
+                        "still matches", sport, row["id"], pot_table,
+                        row["bet_type"], row["pick"])
+            invalidated += 1
+            continue
+        target_side = _pick_side(row["bet_type"], row["pick"])
+        match = None
+        for lr in live_rows:
+            lr_d = dict(lr)
+            if _pick_side(row["bet_type"], lr_d["pick"]) == target_side:
+                match = lr_d
+                break
+        if not match:
+            skipped += 1
+            continue
+        # Skip the no-op case so we don't churn the DB on every sync.
+        if (match["pick"] == row["pick"]
+                and match["odds"] == row["odds"]
+                and match["edge"] == row["edge"]):
+            continue
+        # Re-render reasoning so the displayed copy reflects the
+        # current line / edge, not the locked-at-creation snapshot.
+        refreshed = {
+            "type": row["bet_type"],
+            "pick": match["pick"],
+            "pick_full": match["pick"],
+            "prob": match["model_prob"],
+            "edge": match["edge"],
+            "odds": match["odds"],
+        }
+        new_reasoning = _build_reasoning(refreshed, sport)
+        conn.execute(
+            f"UPDATE {pot_table} SET pick = ?, odds = ?, edge = ?, "
+            f"                       model_prob = ?, reasoning = ? "
+            f"WHERE id = ?",
+            (match["pick"], match["odds"], match["edge"],
+             match["model_prob"], new_reasoning, row["id"]),
+        )
+        logger.info("POTD %s line-refresh #%s (%s): %r %+d edge=%.1f -> %r %+d edge=%.1f",
+                    sport, row["id"], pot_table, row["pick"], int(row["odds"] or 0),
+                    float(row["edge"] or 0), match["pick"],
+                    int(match["odds"] or 0), float(match["edge"] or 0))
+        updated += 1
+
+    if updated or invalidated:
+        conn.commit()
+    return {"updated": updated, "skipped": skipped, "invalidated": invalidated}
 
 
 def update_potd_closing_odds(sport: str) -> dict:
@@ -1126,18 +1485,23 @@ def get_potd_summary(sport: str, limit: int = 30) -> dict:
     }
 
 
-def get_today_potd(sport: str, date: str | None = None) -> dict | None:
+def get_today_potd(sport: str, date: str | None = None,
+                   view: str = "q1") -> dict | None:
     """Fetch just today's POTD (doesn't create one).
 
     Annotates the response with a computed `clv` field when both odds
     and closing_odds are present, so the UI doesn't have to redo the
     arithmetic. Positive CLV = we got a better price than the close.
+
+    ``view`` only matters for NBA. 'q1' reads pick_of_day, 'full' reads
+    pick_of_day_full.
     """
     _ensure_potd_table(sport)
     conn = _get_conn(sport)
     target_date = date or datetime.now().strftime("%Y-%m-%d")
+    table = _potd_table(sport, view)
     row = conn.execute(
-        "SELECT * FROM pick_of_day WHERE date = ?", (target_date,)
+        f"SELECT * FROM {table} WHERE date = ?", (target_date,)
     ).fetchone()
     if not row:
         return None

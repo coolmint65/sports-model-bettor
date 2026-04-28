@@ -61,6 +61,16 @@ echo Refreshing empirical NHL pick-prob calibration...
 python -c "from engine.empirical_calibration import refresh_calibration; print(refresh_calibration('nhl'))" 2>nul
 
 echo.
+echo Capturing per-pick closing odds (CLV pre-game snapshot)...
+REM Stamps current Hard Rock odds as closing_odds for any pending pick.
+REM Without this the per-row CLV column stays "-" forever.
+python -c "from engine.nhl_tracker import capture_closing_odds; print(capture_closing_odds())" 2>nul
+
+echo.
+echo Refreshing POTD live line (track HR line movement)...
+python -c "from engine.pick_of_day import refresh_potd_for_line_movement; print(refresh_potd_for_line_movement('nhl'))" 2>nul
+
+echo.
 echo Updating POTD closing odds (CLV capture)...
 python -c "from engine.pick_of_day import update_potd_closing_odds; print(update_potd_closing_odds('nhl'))" 2>nul
 
@@ -69,8 +79,9 @@ echo Settling POTD...
 python -c "from engine.pick_of_day import settle_potd; print(settle_potd('nhl'))" 2>nul
 
 echo.
-echo Ingesting today's player game logs (Phase 2i-i)...
-python -c "from engine.nhl_player_logs import ingest_today; print(ingest_today())" 2>nul
+echo Ingesting recent finalized player game logs (Phase 2i-i)...
+REM 3-day lookback to backfill missed syncs / UTC-rollover games.
+python -c "from engine.nhl_player_logs import ingest_recent_finals; print(ingest_recent_finals(lookback_days=3))" 2>nul
 
 echo.
 echo Settling player props...
@@ -79,6 +90,10 @@ python -c "from engine.player_props_tracker import settle_player_props; print(se
 echo.
 echo Generating NHL player-prop picks (Phase 2i-iii)...
 python -c "from engine.nhl_prop_picks import generate_picks; from datetime import datetime, timedelta; print(generate_picks(date=(datetime.now()+timedelta(days=1)).strftime('%%Y-%%m-%%d')))" 2>nul
+
+echo.
+echo Refreshing prop POTD live line (track HR line movement)...
+python -c "from engine.player_props_potd import refresh_potd_for_line_movement; print(refresh_potd_for_line_movement('nhl'))" 2>nul
 
 echo.
 echo ============================================

@@ -47,7 +47,13 @@ _DEFAULT_WEIGHTS = {
     ("nba", "q1_home_win"):    {"factor": 0.30, "mc": 0.40, "gbm": 0.30},
     ("nba", "q1_total"):       {"factor": 0.30, "mc": 0.40, "gbm": 0.30},
     ("nba", "q1_margin"):      {"factor": 0.30, "mc": 0.40, "gbm": 0.30},
-    ("nba", "home_win"):       {"factor": 0.40, "mc": 0.30, "gbm": 0.30},
+    # Full-game NBA (Phase 2k). All three signals are real now: factor
+    # via nba_predict, MC via mc_nba.simulate_full, GBM via the new
+    # total_points / margin / home_win artifacts. Equal three-way blend
+    # to start; backtest tunes from there.
+    ("nba", "home_win"):       {"factor": 0.34, "mc": 0.33, "gbm": 0.33},
+    ("nba", "total"):          {"factor": 0.34, "mc": 0.33, "gbm": 0.33},
+    ("nba", "margin"):         {"factor": 0.34, "mc": 0.33, "gbm": 0.33},
 }
 
 
@@ -295,13 +301,51 @@ def ensemble_nba(pred: dict) -> dict:
             out["q1_margin_expected"] = round(margin, 3)
             out["weights_used"]["q1_margin"] = w
 
-    # Full-game ML -- GBM-only for now; factor model is Q1-focused.
+    # ── Full-game NBA markets (Phase 2k) ──
+    # Factor signals come from a full-game predict pass — caller passes
+    # them under pred["full"] (mirrors how MLB/NHL keep separate sub-
+    # blocks for sub-markets). MC signals live on pred["mc_full"] when
+    # the full-game simulator was run alongside the Q1 one.
+    full_pred = pred.get("full") or {}
+    mc_full = pred.get("mc_full") or {}
+    if "error" in mc_full:
+        mc_full = {}
+
+    # Full-game ML.
+    factor_full_wp = full_pred.get("ml_home")
+    mc_full_wp = (mc_full.get("win_prob") or {}).get("home")
     gbm_full_wp = gbm.get("home_win")
-    if gbm_full_wp is not None:
-        w = weights_for("nba", "home_win")
-        full_wp = blend({"gbm": gbm_full_wp}, w)
-        if full_wp is not None:
-            out["home_win"] = round(full_wp, 4)
-            out["weights_used"]["home_win"] = w
+    w = weights_for("nba", "home_win")
+    full_wp = blend({"factor": factor_full_wp, "mc": mc_full_wp,
+                     "gbm": gbm_full_wp}, w)
+    if full_wp is not None:
+        out["home_win"] = round(full_wp, 4)
+        out["weights_used"]["home_win"] = w
+
+    # Full-game total (regression).
+    factor_full_total = full_pred.get("predicted_total")
+    mc_full_total = (mc_full.get("expected_points") or {}).get("total")
+    gbm_full_total = gbm.get("total_points")
+    w = weights_for("nba", "total")
+    total_blend = blend({"factor": factor_full_total, "mc": mc_full_total,
+                         "gbm": gbm_full_total}, w)
+    if total_blend is not None:
+        out["total_expected"] = round(total_blend, 3)
+        out["weights_used"]["total"] = w
+
+    # Full-game margin (regression). MC margin signal comes from
+    # expected home_score - expected away_score.
+    factor_full_margin = full_pred.get("predicted_margin")
+    mc_full_margin = None
+    ep = mc_full.get("expected_points") or {}
+    if ep.get("home") is not None and ep.get("away") is not None:
+        mc_full_margin = ep["home"] - ep["away"]
+    gbm_full_margin = gbm.get("margin")
+    w = weights_for("nba", "margin")
+    margin_blend = blend({"factor": factor_full_margin, "mc": mc_full_margin,
+                          "gbm": gbm_full_margin}, w)
+    if margin_blend is not None:
+        out["margin_expected"] = round(margin_blend, 3)
+        out["weights_used"]["margin"] = w
 
     return out

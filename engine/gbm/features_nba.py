@@ -235,12 +235,16 @@ def _season_from_date(game_date: str | None) -> int | None:
 
 
 def extract_nba_target(game: dict) -> dict[str, Any]:
-    """Outcome targets: full-game win + Q1 splits."""
+    """Outcome targets: full-game win/total/margin + Q1 splits."""
     hs = game.get("home_score")
     as_ = game.get("away_score")
     if hs is None or as_ is None:
         return {}
-    out: dict[str, Any] = {"home_win": int(hs > as_)}
+    out: dict[str, Any] = {
+        "home_win":     int(hs > as_),
+        "total_points": int(hs + as_),
+        "margin":       int(hs - as_),
+    }
     hq1 = game.get("home_q1")
     aq1 = game.get("away_q1")
     if hq1 is not None and aq1 is not None:

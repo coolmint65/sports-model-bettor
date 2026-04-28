@@ -1,0 +1,18 @@
+{
+  "stat": "outs",
+  "feature_cols": [
+    "rolling_30d",
+    "rolling_l5",
+    "rest_days",
+    "is_home",
+    "weather_temp_f",
+    "opp_team_runs_pg",
+    "season_innings_per_start",
+    "park_run_factor"
+  ],
+  "n_rows": 64049,
+  "cv_baseline_mae": 1.6040666599881128,
+  "cv_gbm_mae": 1.3859290215860534,
+  "reduction_pct": 13.607838850143523,
+  "trained_at": "2026-04-28T00:07:54Z"
+}

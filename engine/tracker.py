@@ -493,7 +493,7 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
                 best = get_best_pick(_core_picks(picks))
                 if best and best["edge"] >= min_edge and _valid_odds(best.get("odds")):
                     conn.execute("""
-                        INSERT INTO picks (game_id, date, matchup, bet_type, pick,
+                        INSERT OR IGNORE INTO picks (game_id, date, matchup, bet_type, pick,
                                          model_prob, edge, odds)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """, (game_id, target_date, matchup, best["type"], best["pick"],
@@ -503,6 +503,24 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
                         "pick": best["pick"], "prob": round(best["prob"], 3),
                         "edge": round(best["edge"], 1), "odds": best["odds"],
                     })
+                # 1st INN side-track: NRFI/YRFI runs its own per-market
+                # edge floor (MLB_NRFI_MIN_EDGE / MLB_YRFI_MIN_EDGE,
+                # currently 0.5%), well below the global ``min_edge``
+                # the headline pick must clear. Log them separately so
+                # the 1st INN tracker collects evidence even when ML or
+                # RL is the dashboard headline. The bet_type unique
+                # index keeps multi-bet rows for the same game distinct.
+                fi = next((p for p in picks
+                           if p.get("type") == "1st INN"
+                           and (p.get("confidence") or "lean") != "skip"
+                           and _valid_odds(p.get("odds"))), None)
+                if fi:
+                    conn.execute("""
+                        INSERT OR IGNORE INTO picks (game_id, date, matchup, bet_type, pick,
+                                         model_prob, edge, odds)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (game_id, target_date, matchup, fi["type"], fi["pick"],
+                          fi["prob"], fi["edge"], fi["odds"]))
                 continue
         except Exception:
             pass
@@ -532,7 +550,7 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
             continue
 
         conn.execute("""
-            INSERT INTO picks (game_id, date, matchup, bet_type, pick,
+            INSERT OR IGNORE INTO picks (game_id, date, matchup, bet_type, pick,
                              model_prob, edge, odds)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (game_id, target_date, matchup, best["type"], best["pick"],
@@ -543,6 +561,19 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
             "pick": best["pick"], "prob": round(best["prob"], 3),
             "edge": round(best["edge"], 1), "odds": best["odds"],
         })
+
+        # 1st INN side-track (see picks_store branch above for rationale).
+        fi = next((p for p in picks
+                   if p.get("type") == "1st INN"
+                   and (p.get("confidence") or "lean") != "skip"
+                   and _valid_odds(p.get("odds"))), None)
+        if fi:
+            conn.execute("""
+                INSERT OR IGNORE INTO picks (game_id, date, matchup, bet_type, pick,
+                                 model_prob, edge, odds)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (game_id, target_date, matchup, fi["type"], fi["pick"],
+                  fi["prob"], fi["edge"], fi["odds"]))
 
     conn.commit()
     return recorded
@@ -613,7 +644,7 @@ def _record_from_scoreboard(conn, scoreboard: list, target_date: str,
             continue
 
         conn.execute("""
-            INSERT INTO picks (game_id, date, matchup, bet_type, pick,
+            INSERT OR IGNORE INTO picks (game_id, date, matchup, bet_type, pick,
                              model_prob, edge, odds)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (game_id, target_date, matchup, best["type"], best["pick"],
@@ -624,6 +655,19 @@ def _record_from_scoreboard(conn, scoreboard: list, target_date: str,
             "pick": best["pick"], "prob": round(best["prob"], 3),
             "edge": round(best["edge"], 1), "odds": best["odds"],
         })
+
+        # 1st INN side-track (see record_picks for rationale).
+        fi = next((p for p in picks
+                   if p.get("type") == "1st INN"
+                   and (p.get("confidence") or "lean") != "skip"
+                   and _valid_odds(p.get("odds"))), None)
+        if fi:
+            conn.execute("""
+                INSERT OR IGNORE INTO picks (game_id, date, matchup, bet_type, pick,
+                                 model_prob, edge, odds)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (game_id, target_date, matchup, fi["type"], fi["pick"],
+                  fi["prob"], fi["edge"], fi["odds"]))
 
     conn.commit()
     logger.info("Recorded %d picks from scoreboard", len(recorded))

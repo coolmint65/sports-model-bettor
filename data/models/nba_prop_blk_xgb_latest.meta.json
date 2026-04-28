@@ -9,9 +9,9 @@
     "season_mpg",
     "opp_pace"
   ],
-  "n_rows": 3119,
-  "cv_baseline_mae": 0.521685889576063,
-  "cv_gbm_mae": 0.4670099002443502,
-  "reduction_pct": 10.504302821546707,
-  "trained_at": "2026-04-27T02:09:58Z"
+  "n_rows": 87130,
+  "cv_baseline_mae": 0.5178048345668771,
+  "cv_gbm_mae": 0.42807957169287086,
+  "reduction_pct": 17.344943633029196,
+  "trained_at": "2026-04-28T00:12:14Z"
 }

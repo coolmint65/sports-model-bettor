@@ -49,10 +49,10 @@ export default function PredictionResults({ data, odds }) {
           <WinProbBar wp={wp} home={home} away={away} variant="detail" />
         </div>
         <div className="mt-4 space-y-2">
-          <StatRow label="Total" value={d.total.toFixed(1)} />
+          <StatRow label="Total" value={Math.round(d.total)} />
           <StatRow
             label="Spread"
-            value={`${homeWins ? home.abbreviation : away.abbreviation} ${Math.abs(d.spread).toFixed(1)}`}
+            value={`${homeWins ? home.abbreviation : away.abbreviation} ${Math.round(Math.abs(d.spread))}`}
           />
           {d.park_factor && d.park_factor !== 1.0 && (
             <StatRow

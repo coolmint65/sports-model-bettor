@@ -257,6 +257,7 @@ def generate_nhl_picks_with_context(home_key: str, away_key: str,
         cal = _calibrate(
             p["type"], float(prob), sport="nhl",
             edge=p.get("edge"), odds=odds,
+            pick_text=p.get("pick"),
         )
         p["prob_raw"] = round(float(prob), 4)
         p["prob"] = round(float(cal), 4)

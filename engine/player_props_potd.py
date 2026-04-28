@@ -43,31 +43,45 @@ def _selection_score(pick: dict) -> float:
 
 def select_potd(sport: str, date: str | None = None,
                 min_edge: float = 6.0) -> dict | None:
-    """Pick the top-scoring prop from today's picks. Returns the
-    selected pick dict (with selection_score added) or None when
-    no qualifying pick exists.
+    """Pick the top-scoring prop from the upcoming slate. Returns the
+    selected pick dict (with selection_score added) or None when no
+    qualifying pick exists.
 
     ``min_edge`` floor avoids POTDs we don't actually believe in --
     a thin slate shouldn't force a marginal pick into the headline.
 
-    Filters out picks for games already in 'live' or 'final' state.
-    Without this, late-night UTC date drift (NBA games starting at
-    8pm EDT crossing midnight UTC) lets yesterday's already-played
-    games bleed into today's POTD pool — surfaced as "POTD is for a
-    game from yesterday" by the user.
+    Search window: ``target_date`` first, falling back to the next
+    two days. NBA games end before midnight EDT and tomorrow's slate
+    is dated +1 day before today's calendar even rolls; without the
+    fallback the NBA tab silently lost its POTD between the last game
+    of one playoff night and midnight local time.
+
+    Filters out picks for games already in 'live' / 'final' /
+    'postponed' status — POTD shouldn't surface a pick the user can
+    no longer place.
     """
-    target_date = date or datetime.now().strftime("%Y-%m-%d")
-    candidates = list_picks(sport, date=target_date, limit=1000)
-    eligible = [p for p in candidates
-                if (p.get("edge") or 0.0) >= min_edge
-                and p.get("result") is None
-                and not _game_already_started(sport, p.get("game_id"))]
-    if not eligible:
-        return None
-    eligible.sort(key=_selection_score, reverse=True)
-    top = eligible[0]
-    top["selection_score"] = _selection_score(top)
-    return top
+    from datetime import timedelta as _td
+    anchor_str = date or datetime.now().strftime("%Y-%m-%d")
+    try:
+        anchor = datetime.strptime(anchor_str, "%Y-%m-%d")
+    except ValueError:
+        anchor = datetime.now()
+    # Walk today, today+1, today+2 in order — first day with eligible
+    # picks wins. Stops as soon as we have a viable pool, so a thin
+    # tomorrow only surfaces when today is genuinely empty.
+    for offset in (0, 1, 2):
+        d = (anchor + _td(days=offset)).strftime("%Y-%m-%d")
+        candidates = list_picks(sport, date=d, limit=1000)
+        eligible = [p for p in candidates
+                    if (p.get("edge") or 0.0) >= min_edge
+                    and p.get("result") is None
+                    and not _game_already_started(sport, p.get("game_id"))]
+        if eligible:
+            eligible.sort(key=_selection_score, reverse=True)
+            top = eligible[0]
+            top["selection_score"] = _selection_score(top)
+            return top
+    return None
 
 
 def _game_already_started(sport: str, game_id) -> bool:
@@ -143,4 +157,98 @@ def _implied(odds: int | None) -> float | None:
     return 100.0 / (n + 100.0) if n > 0 else abs(n) / (abs(n) + 100.0)
 
 
-__all__ = ["select_potd", "get_or_create_potd"]
+def refresh_potd_for_line_movement(sport: str,
+                                   date: str | None = None) -> dict:
+    """Repoint a locked prop POTD at the current pending pick for the
+    same player + bet_type + side, when HR has moved the line since
+    the lock.
+
+    Selection itself stays frozen (same player, same stat, same Over/
+    Under direction) — only the line / odds / edge update. The
+    underlying pick row that the POTD points at gets swapped to the
+    fresher line; the now-orphaned old row is deleted in the same
+    pass so the picker's keep-set logic stays clean.
+
+    Returns ``{updated, reason}`` per call.
+    """
+    if sport not in ("mlb", "nhl", "nba"):
+        return {"updated": 0, "reason": f"unsupported sport {sport!r}"}
+    target = date or datetime.now().strftime("%Y-%m-%d")
+    conn = _conn_for(sport)
+
+    pot = conn.execute(
+        "SELECT pot.id AS pot_id, pot.pick_id, pot.reasoning, "
+        "       p.game_id, p.player_id, p.player_name, p.bet_type, "
+        "       p.side, p.pick, p.line, p.odds, p.edge, p.model_prob "
+        "FROM player_props_picks_pot_day pot "
+        "JOIN player_props_picks p ON p.id = pot.pick_id "
+        "WHERE pot.date = ? AND p.result IS NULL",
+        (target,),
+    ).fetchone()
+    if not pot:
+        return {"updated": 0, "reason": "no live POTD"}
+    pot = dict(pot)
+
+    # Find a sibling pending pick for the same (game, player, bet_type,
+    # side) at a different line/odds. Order DESC so the most recent
+    # insert wins on ties — that's the picker's current top.
+    sibling = conn.execute(
+        "SELECT id, pick, line, odds, edge, model_prob "
+        "FROM player_props_picks "
+        "WHERE game_id = ? AND player_id = ? AND bet_type = ? "
+        "  AND side = ? AND id != ? AND result IS NULL "
+        "ORDER BY id DESC LIMIT 1",
+        (pot["game_id"], int(pot["player_id"]), pot["bet_type"],
+         pot["side"], int(pot["pick_id"])),
+    ).fetchone()
+    if not sibling:
+        return {"updated": 0, "reason": "no sibling line"}
+    sibling = dict(sibling)
+
+    # No-op if line + price match (common case — picker just re-ran
+    # without HR moving anything).
+    if (sibling["pick"] == pot["pick"]
+            and sibling["odds"] == pot["odds"]
+            and sibling["edge"] == pot["edge"]):
+        return {"updated": 0, "reason": "no change"}
+
+    # Repoint POTD at the new pick row, drop the old (now orphaned).
+    new_reasoning = (
+        f"{pot['player_name']} {sibling['pick']}"
+        f" — model gives {(sibling['model_prob'] or 0) * 100:.0f}%"
+        f" vs market {(_implied(sibling['odds']) or 0) * 100:.0f}%."
+        f" Edge +{sibling['edge']:.1f}%."
+    )
+    # Re-score using the same helper as selection so the badge stays
+    # consistent. Confidence pulled from the new line's pick row.
+    sibling_for_score = conn.execute(
+        "SELECT edge, confidence FROM player_props_picks WHERE id = ?",
+        (int(sibling["id"]),),
+    ).fetchone()
+    new_score = _selection_score(dict(sibling_for_score) if sibling_for_score
+                                 else {"edge": sibling["edge"]})
+    conn.execute(
+        "UPDATE player_props_picks_pot_day "
+        "SET pick_id = ?, reasoning = ?, selection_score = ? "
+        "WHERE id = ?",
+        (int(sibling["id"]), new_reasoning, new_score,
+         int(pot["pot_id"])),
+    )
+    conn.execute(
+        "DELETE FROM player_props_picks WHERE id = ?",
+        (int(pot["pick_id"]),),
+    )
+    conn.commit()
+    logger.info(
+        "prop POTD %s line-refresh: %r %+d edge=%.1f -> %r %+d edge=%.1f",
+        sport, pot["pick"], int(pot["odds"] or 0), float(pot["edge"] or 0),
+        sibling["pick"], int(sibling["odds"] or 0),
+        float(sibling["edge"] or 0),
+    )
+    return {"updated": 1,
+            "old_pick": pot["pick"], "old_odds": pot["odds"],
+            "new_pick": sibling["pick"], "new_odds": sibling["odds"]}
+
+
+__all__ = ["select_potd", "get_or_create_potd",
+           "refresh_potd_for_line_movement"]

@@ -11,9 +11,9 @@
     "park_run_factor",
     "ump_run_factor"
   ],
-  "n_rows": 3547,
-  "cv_baseline_mae": 0.9549633915623762,
-  "cv_gbm_mae": 0.827405313698373,
-  "reduction_pct": 13.350995893305674,
-  "trained_at": "2026-04-27T01:41:21Z"
+  "n_rows": 64049,
+  "cv_baseline_mae": 0.9290507126944485,
+  "cv_gbm_mae": 0.7538055237972154,
+  "reduction_pct": 18.871234653760084,
+  "trained_at": "2026-04-28T00:08:32Z"
 }

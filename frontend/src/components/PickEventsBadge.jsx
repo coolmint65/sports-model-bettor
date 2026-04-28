@@ -2,6 +2,7 @@ import { memo, useEffect, useRef, useState } from 'react'
 import { ScrollText } from 'lucide-react'
 import axios from 'axios'
 import { cn } from '../lib/utils'
+import { humanizeBetType } from '../lib/betType'
 
 /**
  * PickEventsBadge — 📜 popover showing the breadcrumb of model pick
@@ -119,19 +120,7 @@ function PickEventsBadgeImpl({ sport, gameId }) {
                       {formatTs(ev.ts)}
                     </span>
                   </div>
-                  {ev.reason && (
-                    <div className="mt-0.5 text-muted-foreground">{ev.reason}</div>
-                  )}
-                  {ev.event_type === 'appeared' && ev.curr_pick && (
-                    <div className="mt-0.5 text-foreground">
-                      {ev.curr_bet_type} · {ev.curr_pick}
-                      {ev.curr_odds != null && (
-                        <span className="ml-1 tabular-nums text-muted-foreground">
-                          {ev.curr_odds > 0 ? '+' : ''}{ev.curr_odds}
-                        </span>
-                      )}
-                    </div>
-                  )}
+                  {renderEventBody(ev)}
                 </li>
               ))}
             </ul>
@@ -148,6 +137,58 @@ function formatTs(ts) {
   const d = new Date(ts.includes('T') ? ts : ts.replace(' ', 'T') + 'Z')
   if (Number.isNaN(d.getTime())) return ts
   return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+}
+
+
+// Render the event body. Build the reason text from structured prev_*
+// / curr_* fields so the popover never leaks engine enum keys
+// (Q1_SPREAD, ALT TOTAL, etc) — humanizeBetType maps them to the
+// presentable form used elsewhere on the dashboard.
+function renderEventBody(ev) {
+  const fmtPick = (bt, pick) => {
+    if (!bt && !pick) return ''
+    const label = bt ? humanizeBetType(bt) : ''
+    return [label, pick].filter(Boolean).join(' · ')
+  }
+  if (ev.event_type === 'appeared' && ev.curr_pick) {
+    return (
+      <div className="mt-0.5 text-foreground">
+        {fmtPick(ev.curr_bet_type, ev.curr_pick)}
+        {ev.curr_odds != null && (
+          <span className="ml-1 tabular-nums text-muted-foreground">
+            {ev.curr_odds > 0 ? '+' : ''}{ev.curr_odds}
+          </span>
+        )}
+      </div>
+    )
+  }
+  if (ev.event_type === 'swapped') {
+    return (
+      <div className="mt-0.5 text-muted-foreground">
+        {fmtPick(ev.prev_bet_type, ev.prev_pick)} → {fmtPick(ev.curr_bet_type, ev.curr_pick)}
+      </div>
+    )
+  }
+  if (ev.event_type === 'pulled' && ev.prev_pick) {
+    return (
+      <div className="mt-0.5 text-muted-foreground">
+        Was {fmtPick(ev.prev_bet_type, ev.prev_pick)}
+        {ev.reason && <> · {ev.reason}</>}
+      </div>
+    )
+  }
+  if (ev.event_type === 'line_shift') {
+    return (
+      <div className="mt-0.5 text-muted-foreground">
+        {fmtPick(ev.curr_bet_type, ev.curr_pick)}
+        {ev.reason && <> · {ev.reason}</>}
+      </div>
+    )
+  }
+  // Fallback: show the raw reason if present.
+  return ev.reason
+    ? <div className="mt-0.5 text-muted-foreground">{ev.reason}</div>
+    : null
 }
 
 const PickEventsBadge = memo(PickEventsBadgeImpl)

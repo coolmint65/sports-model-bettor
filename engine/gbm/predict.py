@@ -125,6 +125,8 @@ _NHL_TARGETS = [
 
 _NBA_TARGETS = [
     ("home_win",         "classification"),
+    ("total_points",     "regression"),
+    ("margin",           "regression"),
     ("q1_home_win",      "classification"),
     ("q1_total_points",  "regression"),
     ("q1_margin",        "regression"),

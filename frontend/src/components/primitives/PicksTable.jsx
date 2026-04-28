@@ -28,6 +28,13 @@ function PicksTableImpl({
 }) {
   const pct = n => n != null ? `${(n * 100).toFixed(1)}%` : '-'
 
+  // American odds → implied prob → CLV % swing.
+  const clvFor = (p) => {
+    if (p.odds == null || p.closing_odds == null) return null
+    const imp = (o) => o < 0 ? Math.abs(o) / (Math.abs(o) + 100) : 100 / (o + 100)
+    return Math.round((imp(p.closing_odds) - imp(p.odds)) * 1000) / 10
+  }
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
@@ -40,6 +47,7 @@ function PicksTableImpl({
             <Th align="right">Odds</Th>
             <Th align="right">Prob</Th>
             <Th align="right">Edge</Th>
+            <Th align="right">CLV</Th>
             <Th align="center">Result</Th>
             <Th align="right">P/L</Th>
           </tr>
@@ -54,6 +62,10 @@ function PicksTableImpl({
               ? 'text-positive'
               : p.profit < 0 ? 'text-negative' : 'text-foreground'
             const edgeTone = (p.edge || 0) > 4 ? 'text-positive' : 'text-foreground'
+            const clv = clvFor(p)
+            const clvTone = clv == null ? 'text-muted-foreground'
+              : clv > 0 ? 'text-positive'
+              : clv < 0 ? 'text-negative' : 'text-foreground'
             return (
               <tr
                 key={p.id || i}
@@ -80,6 +92,10 @@ function PicksTableImpl({
                 </Td>
                 <Td align="right" className={cn('tabular-nums font-semibold', edgeTone)}>
                   {p.edge ? `+${p.edge.toFixed(1)}%` : '-'}
+                </Td>
+                <Td align="right" className={cn('tabular-nums', clvTone)}
+                    title={clv == null ? 'No closing line captured' : `Closing odds: ${p.closing_odds > 0 ? '+' : ''}${p.closing_odds}`}>
+                  {clv == null ? '-' : `${clv > 0 ? '+' : ''}${clv}%`}
                 </Td>
                 <Td align="center">
                   <ResultPill result={p.result} />

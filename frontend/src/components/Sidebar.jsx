@@ -143,22 +143,7 @@ function SidebarImpl({ sports, selected, onSelect, gameCounts = {} }) {
         </div>
 
         <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-          {/* Dashboard pinned above the sport list — cross-sport root view */}
-          <button
-            onClick={() => handleSelect('dashboard')}
-            className={cn(
-              'flex w-full items-center gap-2.5 rounded-md px-3 py-2.5 text-sm font-medium transition-colors',
-              'focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-              selected === 'dashboard'
-                ? 'bg-primary text-primary-foreground'
-                : 'text-foreground hover:bg-accent hover:text-accent-foreground',
-            )}
-          >
-            <LayoutDashboard className="h-4 w-4" aria-hidden="true" />
-            <span>Dashboard</span>
-          </button>
-
-          <div className="my-2 px-3">
+          <div className="mb-2 px-3">
             <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
               Sports
             </div>

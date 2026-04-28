@@ -153,7 +153,7 @@ function NHLPredictionResults({ data, odds, home, away }) {
         )}
 
         <div className="mt-2 text-center text-xs text-muted-foreground tabular-nums">
-          ~{(es.home + es.away).toFixed(1)} regulation goals expected
+          ~{Math.round(es.home + es.away)} regulation goals expected
           {regDrawPct > 0.10 && ` (${pct(regDrawPct)} chance of OT)`}
         </div>
 
@@ -162,10 +162,10 @@ function NHLPredictionResults({ data, odds, home, away }) {
         </div>
 
         <div className="mt-4 space-y-2">
-          <StatRow label="Total" value={d.total.toFixed(1)} />
+          <StatRow label="Total" value={Math.round(d.total)} />
           <StatRow
             label="Spread"
-            value={`${homeWins ? home.abbreviation : away.abbreviation} ${Math.abs(d.spread).toFixed(1)}`}
+            value={`${homeWins ? home.abbreviation : away.abbreviation} ${Math.round(Math.abs(d.spread))}`}
           />
         </div>
 
@@ -490,89 +490,149 @@ function NHLBettingPicks({ data, odds, home, away }) {
   const es = d.expected_score
   const homeWins = es.home > es.away
   const pct = n => `${(n * 100).toFixed(1)}%`
-
-  const mlPick = homeWins ? home : away
-  const mlProb = homeWins ? wp.home : wp.away
-  const mlOdds = homeWins ? odds?.home_ml : odds?.away_ml
-
-  const vegasTotal = odds?.over_under
-  let ouPick = null, ouConf = null, ouOdds = null
-  if (vegasTotal && d.over_under) {
-    const vt = parseFloat(vegasTotal)
-    let entry = d.over_under[String(vt)] || d.over_under[vt.toFixed(1)]
-    if (!entry) {
-      const lines = Object.keys(d.over_under).map(Number).sort((a, b) => a - b)
-      let closest = lines[0]
-      for (const l of lines) {
-        if (Math.abs(l - vt) < Math.abs(closest - vt)) closest = l
-      }
-      entry = d.over_under[String(closest)] || d.over_under[closest.toFixed(1)]
-    }
-    if (entry) {
-      const isOver = entry.over > entry.under
-      ouPick = isOver ? 'Over' : 'Under'
-      ouConf = Math.max(entry.over, entry.under)
-      ouOdds = isOver ? odds?.over_odds : odds?.under_odds
-    }
-  }
-
-  const pl = d.puck_line
-  let plPick = null, plProb = null, plOdds = null
-  if (pl) {
-    const hPt = odds?.home_spread_point
-    const aPt = odds?.away_spread_point
-    const homeIsFav = (hPt != null && hPt < 0) || (pl.home_minus_1_5 > pl.away_minus_1_5)
-
-    if (homeIsFav) {
-      if (pl.home_minus_1_5 > 0.50) {
-        plPick = `${home.abbreviation} ${hPt != null ? hPt : '-1.5'}`
-        plProb = pl.home_minus_1_5
-        plOdds = odds?.home_spread_odds
-      } else {
-        plPick = `${away.abbreviation} ${aPt != null ? (aPt > 0 ? '+' + aPt : aPt) : '+1.5'}`
-        plProb = pl.away_plus_1_5
-        plOdds = odds?.away_spread_odds
-      }
-    } else {
-      if (pl.away_minus_1_5 > 0.50) {
-        plPick = `${away.abbreviation} ${aPt != null ? aPt : '-1.5'}`
-        plProb = pl.away_minus_1_5
-        plOdds = odds?.away_spread_odds
-      } else {
-        plPick = `${home.abbreviation} ${hPt != null ? (hPt > 0 ? '+' + hPt : hPt) : '+1.5'}`
-        plProb = pl.home_plus_1_5 || (1 - pl.away_minus_1_5)
-        plOdds = odds?.home_spread_odds
-      }
-    }
-  }
-
-  const p1 = d.first_period
-  const p1Pick = p1 ? (p1.over_15 > 0.50 ? 'Over 1.5' : 'Under 1.5') : null
-  const p1Prob = p1 ? Math.max(p1.over_15, p1.under_15) : null
-
   const ciHw = d.confidence?.ci_half_width ?? null
+
+  // Always render all four categories so the panel layout is stable.
+  // Each row uses the backend's HR-line-aware pick when present; falls
+  // back to model-projection-based synth (no edge badge) otherwise so
+  // the histogram + prob row still render.
+  const backendPicks = Array.isArray(d.picks) ? d.picks : []
+  const bestByType = new Map()
+  for (const p of backendPicks) {
+    const t = p.type || ''
+    const existing = bestByType.get(t)
+    if (!existing || (p.edge || 0) > (existing.edge || 0)) {
+      bestByType.set(t, p)
+    }
+  }
+
+  const rows = []
+
+  // ── Moneyline ──
+  {
+    const p = bestByType.get('ML')
+    if (p) {
+      rows.push({ label: 'Moneyline', pick: p.pick, prob: p.prob,
+                  odds: p.odds, edge: p.edge })
+    } else {
+      const mlPick = homeWins ? home : away
+      rows.push({
+        label: 'Moneyline',
+        pick: mlPick.abbreviation,
+        prob: homeWins ? wp.home : wp.away,
+        odds: homeWins ? odds?.home_ml : odds?.away_ml,
+      })
+    }
+  }
+
+  // ── O/U ──
+  {
+    const p = bestByType.get('O/U')
+    if (p) {
+      rows.push({ label: 'O/U', pick: p.pick, prob: p.prob,
+                  odds: p.odds, edge: p.edge })
+    } else {
+      const vegasTotal = odds?.over_under
+      if (vegasTotal && d.over_under) {
+        const vt = parseFloat(vegasTotal)
+        let entry = d.over_under[String(vt)] || d.over_under[vt.toFixed(1)]
+        if (!entry) {
+          const lines = Object.keys(d.over_under).map(Number).sort((a, b) => a - b)
+          let closest = lines[0]
+          for (const l of lines) {
+            if (Math.abs(l - vt) < Math.abs(closest - vt)) closest = l
+          }
+          entry = d.over_under[String(closest)] || d.over_under[closest.toFixed(1)]
+        }
+        if (entry) {
+          const isOver = entry.over > entry.under
+          rows.push({
+            label: `O/U ${vegasTotal}`,
+            pick: isOver ? 'Over' : 'Under',
+            prob: Math.max(entry.over, entry.under),
+            odds: isOver ? odds?.over_odds : odds?.under_odds,
+          })
+        }
+      }
+    }
+  }
+
+  // ── Puck Line ──
+  {
+    const p = bestByType.get('PL') || bestByType.get('ALT PL')
+    if (p) {
+      rows.push({ label: 'Puck Line', pick: p.pick, prob: p.prob,
+                  odds: p.odds, edge: p.edge })
+    } else {
+      const pl = d.puck_line
+      if (pl) {
+        const hPt = odds?.home_spread_point
+        const aPt = odds?.away_spread_point
+        const homeIsFav = (hPt != null && hPt < 0) || (pl.home_minus_1_5 > pl.away_minus_1_5)
+        let plPick, plProb, plOdds
+        if (homeIsFav) {
+          if (pl.home_minus_1_5 > 0.50) {
+            plPick = `${home.abbreviation} ${hPt != null ? hPt : '-1.5'}`
+            plProb = pl.home_minus_1_5
+            plOdds = odds?.home_spread_odds
+          } else {
+            plPick = `${away.abbreviation} ${aPt != null ? (aPt > 0 ? '+' + aPt : aPt) : '+1.5'}`
+            plProb = pl.away_plus_1_5
+            plOdds = odds?.away_spread_odds
+          }
+        } else {
+          if (pl.away_minus_1_5 > 0.50) {
+            plPick = `${away.abbreviation} ${aPt != null ? aPt : '-1.5'}`
+            plProb = pl.away_minus_1_5
+            plOdds = odds?.away_spread_odds
+          } else {
+            plPick = `${home.abbreviation} ${hPt != null ? (hPt > 0 ? '+' + hPt : hPt) : '+1.5'}`
+            plProb = pl.home_plus_1_5 || (1 - pl.away_minus_1_5)
+            plOdds = odds?.home_spread_odds
+          }
+        }
+        rows.push({ label: 'Puck Line', pick: plPick, prob: plProb, odds: plOdds })
+      }
+    }
+  }
+
+  // ── 1st Period ──
+  {
+    const p = bestByType.get('1st INN') || bestByType.get('1st Period')
+    if (p) {
+      rows.push({ label: '1st Period', pick: p.pick, prob: p.prob,
+                  odds: p.odds, edge: p.edge })
+    } else {
+      const p1 = d.first_period
+      if (p1) {
+        const p1Pick = p1.over_15 > 0.50 ? 'Over 1.5' : 'Under 1.5'
+        rows.push({
+          label: '1st Period',
+          pick: p1Pick,
+          prob: Math.max(p1.over_15, p1.under_15),
+        })
+      }
+    }
+  }
 
   return (
     <SectionCard
       title="Model Picks"
       rightSlot={
         <span className="text-[11px] text-muted-foreground tabular-nums">
-          Total: <strong>{d.total.toFixed(1)}</strong>
+          Total: <strong>{Math.round(d.total)}</strong>
         </span>
       }
     >
       <div className="space-y-3">
-        <PickRow label="Moneyline" pick={mlPick.abbreviation} prob={mlProb} odds={mlOdds} pct={pct} ciHw={ciHw} />
-        {ouPick && <PickRow label={`O/U ${vegasTotal}`} pick={ouPick} prob={ouConf} odds={ouOdds} pct={pct} ciHw={ciHw} />}
-        {plPick && <PickRow label="Puck Line" pick={plPick} prob={plProb} odds={plOdds} pct={pct} ciHw={ciHw} />}
-        {p1Pick && <PickRow label="1st Period" pick={p1Pick} prob={p1Prob} pct={pct} ciHw={ciHw} />}
+        {rows.map((r, i) => <PickRow key={i} {...r} pct={pct} ciHw={ciHw} />)}
       </div>
     </SectionCard>
   )
 }
 
 
-function PickRow({ label, pick, prob, odds, pct, ciHw }) {
+function PickRow({ label, pick, prob, odds, edge, pct, ciHw }) {
   const conf = prob > 0.60 ? 'high' : prob > 0.53 ? 'med' : 'low'
   const confTone =
     conf === 'high' ? 'text-positive' :
@@ -581,10 +641,14 @@ function PickRow({ label, pick, prob, odds, pct, ciHw }) {
   const probLow  = (prob != null && ciHw != null) ? Math.max(0, prob - ciHw) : null
   const probHigh = (prob != null && ciHw != null) ? Math.min(1, prob + ciHw) : null
 
-  let edge = null
-  if (odds && prob) {
+  // Backend supplies edge already evaluated against HR's offered price;
+  // recompute only when caller didn't pass one (legacy synth path).
+  let edgeStr = null
+  if (edge != null) {
+    edgeStr = Number(edge).toFixed(1)
+  } else if (odds && prob) {
     const implied = impliedFromOdds(odds)
-    edge = ((prob - implied) * 100).toFixed(1)
+    edgeStr = ((prob - implied) * 100).toFixed(1)
   }
 
   return (
@@ -593,8 +657,8 @@ function PickRow({ label, pick, prob, odds, pct, ciHw }) {
         <span className="font-semibold uppercase tracking-wider text-muted-foreground">
           {label}
         </span>
-        {edge && parseFloat(edge) > 0 && (
-          <span className="font-bold tabular-nums text-positive">+{edge}%</span>
+        {edgeStr && parseFloat(edgeStr) > 0 && (
+          <span className="font-bold tabular-nums text-positive">+{edgeStr}%</span>
         )}
       </div>
       <div className="mt-1 flex items-baseline gap-2">

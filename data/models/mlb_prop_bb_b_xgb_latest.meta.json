@@ -8,9 +8,9 @@
     "weather_temp_f",
     "opp_sp_bb_per_9"
   ],
-  "n_rows": 9679,
-  "cv_baseline_mae": 0.47359598155631416,
-  "cv_gbm_mae": 0.37690202348593516,
-  "reduction_pct": 20.489274888114778,
-  "trained_at": "2026-04-27T01:41:58Z"
+  "n_rows": 161136,
+  "cv_baseline_mae": 0.4372992164004409,
+  "cv_gbm_mae": 0.3132968388738372,
+  "reduction_pct": 28.361513426678776,
+  "trained_at": "2026-04-28T00:20:54Z"
 }

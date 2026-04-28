@@ -10,8 +10,12 @@ import { useEffect, useState } from 'react'
 import axios from 'axios'
 import PotdHero from './PotdHero'
 
-export default function PickOfDayHero({ sport }) {
-  const [potd, setPotd] = useState(null)
+export default function PickOfDayHero({ sport, view }) {
+  // For NBA the dashboard ships a Q1/Full toggle; everything else is
+  // single-view. When view is supplied (NBA), we hit ?view=both once
+  // and pluck the right sub-block based on the prop. That avoids a
+  // re-fetch every time the user flips the toggle.
+  const [data, setData] = useState(null)        // {q1: ..., full: ...} for NBA, single POTD otherwise
   const [summary, setSummary] = useState(null)
   const [loaded, setLoaded] = useState(false)
 
@@ -19,20 +23,37 @@ export default function PickOfDayHero({ sport }) {
     if (loaded) return
     setLoaded(true)
     const a = axios.create({ baseURL: '/api' })
+    const potdUrl = sport === 'nba'
+      ? `/pick-of-day/${sport}?view=both`
+      : `/pick-of-day/${sport}`
     Promise.all([
-      a.get(`/pick-of-day/${sport}`),
+      a.get(potdUrl),
       a.get(`/pick-of-day/${sport}/summary`),
     ]).then(([p, s]) => {
-      setPotd(p.data)
+      setData(p.data)
       setSummary(s.data)
     }).catch(() => {})
   }, [sport, loaded])
 
+  if (!data) return null
+
+  // NBA: pluck the right view; everything else: data IS the POTD.
+  let potd
+  if (sport === 'nba' && data && (data.q1 !== undefined || data.full !== undefined)) {
+    const v = view === 'q1' ? 'q1' : 'full'
+    potd = data[v] || data.q1 || data.full
+  } else {
+    potd = data
+  }
   if (!potd || potd.error || potd.message) return null
+
+  const labelSuffix = sport === 'nba' && view
+    ? ` · ${view === 'q1' ? 'Q1' : 'Full Game'} POTD`
+    : ' · Pick of the Day'
 
   return (
     <PotdHero
-      label={`${sport.toUpperCase()} · Pick of the Day`}
+      label={`${sport.toUpperCase()}${labelSuffix}`}
       sport={sport}
       pick={potd}
       summary={summary}

@@ -106,7 +106,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         UNIQUE(team_id, season)
     );
 
-    -- NBA picks (Q1 specific)
+    -- NBA picks (Q1 + Full markets, Phase 2k)
     CREATE TABLE IF NOT EXISTS nba_picks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         game_id TEXT,
@@ -123,6 +123,12 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         created_at TEXT DEFAULT (datetime('now')),
         settled_at TEXT
     );
+    -- Dedup index on (date, game_id, bet_type) so re-running record_picks
+    -- doesn't pile up duplicate rows for the same (game, market). The
+    -- (date, game_id, bet_type) tuple is the right granularity because
+    -- the picker generates exactly one pick per market per game per day.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_nba_picks_unique
+        ON nba_picks(date, game_id, bet_type) WHERE result IS NULL;
 
     -- NBA model config (calibration weights)
     CREATE TABLE IF NOT EXISTS nba_model_config (

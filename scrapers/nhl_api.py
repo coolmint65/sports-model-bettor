@@ -815,7 +815,7 @@ def _backfill_stale_games(today_str: str, lookback_days: int = 14) -> int:
     rows = conn.execute(
         "SELECT DISTINCT date FROM nhl_games "
         "WHERE status IN ('scheduled', 'live') "
-        "  AND date < ? AND date >= ? "
+        "  AND date <= ? AND date >= ? "
         "ORDER BY date",
         (today_str, cutoff),
     ).fetchall()
@@ -823,8 +823,20 @@ def _backfill_stale_games(today_str: str, lookback_days: int = 14) -> int:
         return 0
     dates = [r["date"] if isinstance(r, dict) or hasattr(r, "keys") else r[0]
              for r in rows]
-    touched = 0
+    # Walk date AND date-1 — UTC-stamped late tipoffs (e.g. PT/MT games)
+    # land on tomorrow's date in our DB but live on yesterday's NHL API
+    # schedule. Without the -1 sweep the row never re-fetches and the
+    # status sticks at 'live' / 'scheduled' indefinitely.
+    targets: set[str] = set(dates)
     for d in dates:
+        try:
+            prev = (datetime.strptime(d, "%Y-%m-%d") - timedelta(days=1)
+                    ).strftime("%Y-%m-%d")
+            targets.add(prev)
+        except ValueError:
+            continue
+    touched = 0
+    for d in sorted(targets):
         try:
             fetch_schedule(d, d)
             fetch_boxscores_for_date(d)
@@ -885,9 +897,13 @@ def sync_nhl(full: bool = False) -> None:
         p1_count = compute_all_p1_stats(yr)
         _progress(f"       P1 stats computed for {p1_count} teams")
     else:
-        _progress("[2] Fetching today's games...")
+        _progress("[2] Fetching today's + tomorrow's games...")
         today = datetime.now().strftime("%Y-%m-%d")
-        fetch_schedule(today, today)
+        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+        # Tomorrow's slate is needed by engine.nhl_prop_picks which runs
+        # for date+1 in sync_nhl.bat — without it _resolve_game_id whiffs
+        # on every matchup and the picker silently produces 0 props.
+        fetch_schedule(today, tomorrow)
 
         _progress("[3] Fetching yesterday's boxscores...")
         yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")

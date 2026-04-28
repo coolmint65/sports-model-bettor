@@ -48,6 +48,8 @@ SPORT_TARGETS = {
     ],
     "nba": [
         ("home_win",         "classification"),
+        ("total_points",     "regression"),
+        ("margin",           "regression"),
         ("q1_home_win",      "classification"),
         ("q1_total_points",  "regression"),
         ("q1_margin",        "regression"),

@@ -81,6 +81,17 @@ echo Auto-applying train recommendations (n>=30, p<0.01, disable-only)...
 python scripts\run.py engine.train mlb --apply 2>nul
 
 echo.
+echo Capturing per-pick closing odds (CLV pre-game snapshot)...
+REM Stamps current real odds as closing_odds for any pending pick.
+REM Without this the Pick Tracker per-row CLV column stays "-" because
+REM the settle-time path only fires for a fraction of picks.
+python -c "from engine.tracker import capture_closing_odds; print(capture_closing_odds())" 2>nul
+
+echo.
+echo Refreshing POTD live line (track HR line movement)...
+python -c "from engine.pick_of_day import refresh_potd_for_line_movement; print(refresh_potd_for_line_movement('mlb'))" 2>nul
+
+echo.
 echo Updating POTD closing odds (CLV capture)...
 python -c "from engine.pick_of_day import update_potd_closing_odds; print(update_potd_closing_odds('mlb'))" 2>nul
 
@@ -89,10 +100,11 @@ echo Settling POTD...
 python -c "from engine.pick_of_day import settle_potd; print(settle_potd('mlb'))" 2>nul
 
 echo.
-echo Ingesting today's player game logs (Phase 2g-i)...
-REM Drains finalized games into player_game_logs so the player-props
-REM settler has the actual stats it needs to mark prop picks W/L.
-python -c "from engine.mlb_player_logs import ingest_today; print(ingest_today())" 2>nul
+echo Ingesting recent finalized player game logs (Phase 2g-i)...
+REM 3-day lookback so a missed sync or a UTC-rollover game doesn't
+REM leave logs un-ingested for >24h (DNP-void would then wrongly mark
+REM real plays as Push). Idempotent — already-ingested games are no-op.
+python -c "from engine.mlb_player_logs import ingest_recent_finals; print(ingest_recent_finals(lookback_days=3))" 2>nul
 
 echo.
 echo Settling player props...
@@ -104,6 +116,10 @@ REM Picker runs after ingest+settle so today's just-finalized games
 REM contribute to per-player rolling means before tomorrow's slate
 REM is scored.
 python -c "from engine.mlb_prop_picks import generate_picks; from datetime import datetime, timedelta; print(generate_picks(date=(datetime.now()+timedelta(days=1)).strftime('%%Y-%%m-%%d')))" 2>nul
+
+echo.
+echo Refreshing prop POTD live line (track HR line movement)...
+python -c "from engine.player_props_potd import refresh_potd_for_line_movement; print(refresh_potd_for_line_movement('mlb'))" 2>nul
 
 echo.
 echo Auto-tuning ensemble weights (skipped when < 200 settled signals/market)...

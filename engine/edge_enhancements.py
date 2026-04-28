@@ -190,6 +190,22 @@ def shop_alt_totals(pred: dict, odds: dict,
 
     new_picks = []
 
+    # Direction gates: MLB_ALLOW_OU_OVER / MLB_ALLOW_OU_UNDER must
+    # also apply to ALT lines. The primary O/U gate alone left a
+    # leak the user surfaced on 2026-04-28 — with Unders disabled,
+    # the picker still emitted ALT O/U Under picks (9-12, -$585) for
+    # exactly the reason MLB_ALLOW_OU_UNDER was set to False. Honour
+    # the same flag here. shop_alt_totals is only wired into MLB's
+    # generate_picks (NHL/NBA have their own ALT line shoppers in
+    # nhl_picks.py / nba_picks.py), so the MLB-flag lookup is safe.
+    try:
+        from .config import get_flag
+        allow_over = bool(get_flag("MLB_ALLOW_OU_OVER", True))
+        allow_under = bool(get_flag("MLB_ALLOW_OU_UNDER", True))
+    except Exception:
+        allow_over = True
+        allow_under = True
+
     for alt in alt_totals:
         line = alt.get("line")
         over_odds = alt.get("over_odds")
@@ -222,7 +238,7 @@ def shop_alt_totals(pred: dict, odds: dict,
             under_prob = 1.0 - over_prob
 
         # Over side
-        if over_odds is not None and abs(over_odds) >= 100 and over_odds >= ALT_LINE_JUICE_WALL and over_prob > 0.5:
+        if allow_over and over_odds is not None and abs(over_odds) >= 100 and over_odds >= ALT_LINE_JUICE_WALL and over_prob > 0.5:
             edge = (over_prob - _implied(over_odds)) * 100
             if edge > 0 and edge > existing_ou_edge + ALT_LINE_MIN_EDGE_IMPROVEMENT:
                 new_picks.append({

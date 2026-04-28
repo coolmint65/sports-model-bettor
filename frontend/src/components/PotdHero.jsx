@@ -194,9 +194,13 @@ export default function PotdHero({
 function ModelMarketBar({ modelProb, impliedProb, barClass }) {
   const modelPct = Math.round(modelProb * 100)
   const impliedPct = Math.round(impliedProb * 100)
-  const denom = Math.max(modelPct, impliedPct, 50)
-  const modelW = `${(modelPct / denom) * 100}%`
-  const impliedW = `${(impliedPct / denom) * 100}%`
+  // Bars represent 0–100% probability against a fixed track. Earlier
+  // version normalized to max(model, market, 50) which made a 66%
+  // model fill the whole track — visually unreadable. Now 100% = the
+  // end of the bar, so a 66% model takes ~2/3 and a 99% model takes
+  // nearly the full track. User-requested across all sports 2026-04-28.
+  const modelW = `${Math.min(100, Math.max(0, modelPct))}%`
+  const impliedW = `${Math.min(100, Math.max(0, impliedPct))}%`
   return (
     <div className="space-y-1.5">
       <div className="flex items-center gap-3 text-[11px]">
@@ -291,7 +295,7 @@ const TEAM_NAMES = {
     NJ: 'Devils', NJD: 'Devils', NSH: 'Predators', NYI: 'Islanders',
     NYR: 'Rangers', OTT: 'Senators', PHI: 'Flyers', PIT: 'Penguins',
     SEA: 'Kraken', SJ: 'Sharks', SJS: 'Sharks', STL: 'Blues',
-    TB: 'Lightning', TBL: 'Lightning', TOR: 'Maple Leafs', UTA: 'Hockey Club',
+    TB: 'Lightning', TBL: 'Lightning', TOR: 'Maple Leafs', UTA: 'Mammoth',
     VAN: 'Canucks', VGK: 'Golden Knights', WPG: 'Jets', WSH: 'Capitals',
   },
   nba: {

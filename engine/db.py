@@ -353,6 +353,13 @@ def _init_schema(conn: sqlite3.Connection) -> None:
 
     CREATE INDEX IF NOT EXISTS idx_picks_date ON picks(date);
     CREATE INDEX IF NOT EXISTS idx_picks_result ON picks(result);
+    -- Dedup pending rows so re-running record_picks doesn't pile up
+    -- duplicates for the same (game, market, day). Same pattern as
+    -- nba_picks. Settled rows can have multiple of the same bet_type
+    -- (rare but possible across days), so the partial index is on
+    -- pending only.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_picks_unique
+        ON picks(date, game_id, bet_type) WHERE result IS NULL;
 
     -- Indexes for common queries
     CREATE INDEX IF NOT EXISTS idx_games_date ON games(date);

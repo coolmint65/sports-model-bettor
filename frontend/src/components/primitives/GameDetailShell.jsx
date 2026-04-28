@@ -24,10 +24,15 @@ export default function GameDetailShell({
   noPredictionCommand,
   renderMain,
   renderSidebar,
+  headerSlot,
 }) {
   return (
     <div className="space-y-5 py-4">
       <SharedGameHeader game={game} sport={sport} onBack={onBack} matchupExtras={matchupExtras} />
+
+      {headerSlot && (
+        <div className="flex justify-end">{headerSlot}</div>
+      )}
 
       {loading && (
         <div className="flex items-center justify-center gap-3 rounded-lg border border-border bg-card py-12 text-sm text-muted-foreground">

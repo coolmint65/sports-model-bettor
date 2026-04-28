@@ -326,6 +326,7 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
         cal = _calibrate(
             p["type"], float(prob), sport="nba",
             edge=p.get("edge"), odds=odds,
+            pick_text=p.get("pick"),
         )
         p["prob_raw"] = round(float(prob), 4)
         p["prob"] = round(float(cal), 4)
@@ -399,3 +400,226 @@ def generate_q1_picks_with_context(home_abbr: str, away_abbr: str,
     picks = generate_q1_picks(home_abbr, away_abbr, odds, season)
 
     return picks, pred
+
+
+# ── Full-game pickers (Phase 2k) ──────────────────────────────────
+
+def generate_full_picks(home_abbr: str, away_abbr: str,
+                        odds: dict | None = None,
+                        season: int | None = None,
+                        pred: dict | None = None) -> list[dict]:
+    """Generate full-game ML / SPREAD / TOTAL picks plus alt-line variants.
+
+    Mirrors generate_q1_picks but reads full-game probabilities and
+    odds. When `pred` is supplied (typically pred["full"] from the
+    backend after running factor + MC + GBM), routes home_win and
+    total/margin through ensemble_nba so all three signals contribute.
+    """
+    from .nba_predict import predict_full
+
+    odds = _sanitize_odds(odds)
+    posted_spread = odds.get("home_spread_point")
+    posted_total = odds.get("over_under")
+
+    if pred is None:
+        pred = predict_full(home_abbr, away_abbr,
+                            spread=posted_spread, total=posted_total,
+                            season=season)
+
+    # Apply ensemble blend to ml_home / total / margin if other signals
+    # were attached upstream. Caller passes the parent pred dict (with
+    # mc_full, gbm, full keys); for the standalone case we just call
+    # ensemble_nba on what we have so it collapses cleanly.
+    try:
+        from .ensemble import ensemble_nba
+        ens_input = pred if "full" in pred else {**pred, "full": pred}
+        ens = ensemble_nba(ens_input) or {}
+    except Exception as e:
+        logger.debug("NBA full-game ensemble blend failed: %s", e)
+        ens = {}
+
+    if ens.get("home_win") is not None:
+        pred["ml_home"] = float(ens["home_win"])
+        pred["ml_away"] = 1.0 - float(ens["home_win"])
+
+    picks = []
+    from .config import NBA_JUICE_WALL as JUICE_WALL, MAIN_EDGE_FLOOR, MAIN_ODDS_CAP
+
+    nba_floors = MAIN_EDGE_FLOOR.get("nba", {})
+    nba_caps = MAIN_ODDS_CAP.get("nba", {})
+    def _passes_floor(bt: str, edge: float) -> bool:
+        return edge >= nba_floors.get(bt, 0.0)
+    def _passes_odds_cap(bt: str, american_odds) -> bool:
+        cap = nba_caps.get(bt)
+        if cap is None or american_odds is None:
+            return True
+        try:
+            return int(american_odds) <= int(cap)
+        except (TypeError, ValueError):
+            return True
+
+    # ── Full-game Spread ──
+    if posted_spread is not None:
+        h_spread_odds = odds.get("home_spread_odds", -110)
+        a_spread_odds = odds.get("away_spread_odds", -110)
+        cover_prob = pred.get("spread_cover_prob")
+        if cover_prob is not None:
+            h_imp = _implied_prob(h_spread_odds)
+            h_edge = (cover_prob - h_imp) * 100
+            if h_edge > 0 and h_spread_odds >= JUICE_WALL:
+                picks.append({
+                    "type": "SPREAD",
+                    "pick": f"{home_abbr} {posted_spread:+.1f}",
+                    "prob": round(cover_prob, 4),
+                    "edge": round(h_edge, 1),
+                    "odds": h_spread_odds,
+                })
+            a_cover = 1 - cover_prob
+            a_imp = _implied_prob(a_spread_odds)
+            a_edge = (a_cover - a_imp) * 100
+            if a_edge > 0 and a_spread_odds >= JUICE_WALL:
+                picks.append({
+                    "type": "SPREAD",
+                    "pick": f"{away_abbr} {-posted_spread:+.1f}",
+                    "prob": round(a_cover, 4),
+                    "edge": round(a_edge, 1),
+                    "odds": a_spread_odds,
+                })
+
+    # ── Full-game Total ──
+    # Backtest 2026-04-27: NBA TOTAL bleeds at edges < 12%. Floor
+    # gated via MAIN_EDGE_FLOOR['nba']['TOTAL']=12.0 so only the
+    # near-break-even high-edge bucket surfaces.
+    if posted_total is not None:
+        over_odds = odds.get("over_odds", -110)
+        under_odds = odds.get("under_odds", -110)
+        over_prob = pred.get("over_prob")
+        if over_prob is not None:
+            o_imp = _implied_prob(over_odds)
+            o_edge = (over_prob - o_imp) * 100
+            if o_edge > 0 and over_odds >= JUICE_WALL and _passes_floor("TOTAL", o_edge):
+                picks.append({
+                    "type": "TOTAL",
+                    "pick": f"Over {posted_total}",
+                    "prob": round(over_prob, 4),
+                    "edge": round(o_edge, 1),
+                    "odds": over_odds,
+                })
+            u_prob = 1 - over_prob
+            u_imp = _implied_prob(under_odds)
+            u_edge = (u_prob - u_imp) * 100
+            if u_edge > 0 and under_odds >= JUICE_WALL and _passes_floor("TOTAL", u_edge):
+                picks.append({
+                    "type": "TOTAL",
+                    "pick": f"Under {posted_total}",
+                    "prob": round(u_prob, 4),
+                    "edge": round(u_edge, 1),
+                    "odds": under_odds,
+                })
+
+    # ── Full-game Moneyline ──
+    # Cap ML odds at MAIN_ODDS_CAP['nba']['ML'] (default +400). Live
+    # money on high-American-odds longshots correlates with calibration
+    # risk — cap blocks the trap.
+    home_ml = odds.get("home_ml")
+    away_ml = odds.get("away_ml")
+    if home_ml is not None and home_ml >= JUICE_WALL and _passes_odds_cap("ML", home_ml):
+        h_prob = pred.get("ml_home")
+        if h_prob is not None:
+            h_imp = _implied_prob(home_ml)
+            h_edge = (h_prob - h_imp) * 100
+            if h_edge > 0:
+                picks.append({
+                    "type": "ML",
+                    "pick": f"{home_abbr} ML",
+                    "prob": round(h_prob, 4),
+                    "edge": round(h_edge, 1),
+                    "odds": home_ml,
+                })
+    if away_ml is not None and away_ml >= JUICE_WALL and _passes_odds_cap("ML", away_ml):
+        a_prob = pred.get("ml_away")
+        if a_prob is not None:
+            a_imp = _implied_prob(away_ml)
+            a_edge = (a_prob - a_imp) * 100
+            if a_edge > 0:
+                picks.append({
+                    "type": "ML",
+                    "pick": f"{away_abbr} ML",
+                    "prob": round(a_prob, 4),
+                    "edge": round(a_edge, 1),
+                    "odds": away_ml,
+                })
+
+    # ── Alt-line shopping (spreads + totals) ──
+    # Mirror the Q1 alt-line pass: scan HR's alt_spreads / alt_totals
+    # arrays, compute edge against the model's discretized distribution,
+    # keep only the highest-edge variant per side that's not just a
+    # close cousin of the primary line.
+    margin_probs = pred.get("margin_probs") or {}
+    total_probs = pred.get("total_probs") or {}
+    if margin_probs:
+        for alt in odds.get("alt_spreads") or []:
+            point = alt.get("point")
+            if point is None:
+                continue
+            h_alt = alt.get("home_odds")
+            a_alt = alt.get("away_odds")
+            # cover prob = sum of margin prob > -point
+            cover_p = sum(p for m, p in margin_probs.items() if m > -point)
+            if h_alt is not None and h_alt >= JUICE_WALL:
+                imp = _implied_prob(h_alt)
+                e = (cover_p - imp) * 100
+                if e > 0:
+                    picks.append({
+                        "type": "ALT SPREAD",
+                        "pick": f"{home_abbr} {point:+.1f}",
+                        "prob": round(cover_p, 4),
+                        "edge": round(e, 1),
+                        "odds": h_alt,
+                    })
+            if a_alt is not None and a_alt >= JUICE_WALL:
+                a_cover = 1 - cover_p
+                imp = _implied_prob(a_alt)
+                e = (a_cover - imp) * 100
+                if e > 0:
+                    picks.append({
+                        "type": "ALT SPREAD",
+                        "pick": f"{away_abbr} {-point:+.1f}",
+                        "prob": round(a_cover, 4),
+                        "edge": round(e, 1),
+                        "odds": a_alt,
+                    })
+    if total_probs:
+        for alt in odds.get("alt_totals") or []:
+            line = alt.get("line")
+            if line is None:
+                continue
+            o_alt = alt.get("over_odds")
+            u_alt = alt.get("under_odds")
+            over_p = sum(p for t, p in total_probs.items() if t > line)
+            under_p = sum(p for t, p in total_probs.items() if t < line)
+            if o_alt is not None and o_alt >= JUICE_WALL:
+                imp = _implied_prob(o_alt)
+                e = (over_p - imp) * 100
+                if e > 0 and _passes_floor("ALT TOTAL", e):
+                    picks.append({
+                        "type": "ALT TOTAL",
+                        "pick": f"Over {line}",
+                        "prob": round(over_p, 4),
+                        "edge": round(e, 1),
+                        "odds": o_alt,
+                    })
+            if u_alt is not None and u_alt >= JUICE_WALL:
+                imp = _implied_prob(u_alt)
+                e = (under_p - imp) * 100
+                if e > 0 and _passes_floor("ALT TOTAL", e):
+                    picks.append({
+                        "type": "ALT TOTAL",
+                        "pick": f"Under {line}",
+                        "prob": round(under_p, 4),
+                        "edge": round(e, 1),
+                        "odds": u_alt,
+                    })
+
+    picks.sort(key=lambda p: -p.get("edge", 0))
+    return picks

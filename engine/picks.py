@@ -187,10 +187,23 @@ def generate_picks(home_team_id: int, away_team_id: int,
     picks = []
 
     # ── Moneyline ──
+    # Cap at MAIN_ODDS_CAP['mlb']['ML'] (default +400). Heavy-underdog
+    # ML picks at +1500+ surface fictional +30-50% edges from model
+    # overconfidence on longshots; capping blocks the trap.
+    from .config import MAIN_ODDS_CAP as _MAIN_ODDS_CAP
+    _ml_cap = (_MAIN_ODDS_CAP.get("mlb") or {}).get("ML")
+    def _ml_within_cap(o):
+        if _ml_cap is None or o is None:
+            return True
+        try:
+            return int(o) <= int(_ml_cap)
+        except (TypeError, ValueError):
+            return True
+
     home_ml = odds.get("home_ml")
     away_ml = odds.get("away_ml")
 
-    if home_ml and home_ml >= JUICE_WALL:
+    if home_ml and home_ml >= JUICE_WALL and _ml_within_cap(home_ml):
         edge = (home_wp - _implied(home_ml)) * 100
         if edge > 0:
             picks.append({
@@ -198,7 +211,7 @@ def generate_picks(home_team_id: int, away_team_id: int,
                 "edge": round(edge, 1), "odds": home_ml,
             })
 
-    if away_ml and away_ml >= JUICE_WALL:
+    if away_ml and away_ml >= JUICE_WALL and _ml_within_cap(away_ml):
         edge = (away_wp - _implied(away_ml)) * 100
         if edge > 0:
             picks.append({
@@ -394,6 +407,7 @@ def generate_picks(home_team_id: int, away_team_id: int,
         cal = _calibrate(
             p["type"], float(prob), sport="mlb",
             edge=p.get("edge"), odds=p_odds,
+            pick_text=p.get("pick"),
         )
         p["prob_raw"] = round(float(prob), 4)
         p["prob"] = round(float(cal), 4)
@@ -483,7 +497,12 @@ def generate_picks(home_team_id: int, away_team_id: int,
         p["adjusted_ev"] = round(p["edge"] * reliability * clv_mult * lm_mult, 2)
     picks.sort(key=lambda p: -p["adjusted_ev"])
 
-    # Add confidence rating (thresholds centralised in engine.config)
+    # Add confidence rating (thresholds centralised in engine.config).
+    # 1st INN is exempt from the global EDGE_SKIP cutoff: NRFI/YRFI run
+    # their own per-market floor (MLB_NRFI_MIN_EDGE / MLB_YRFI_MIN_EDGE)
+    # that gates inclusion in `picks`. The user wants 0.5-1% edge first-
+    # inning picks surfaced as coin-flip data collection — clamping
+    # them to 'skip' here would hide them from the dashboard.
     from .config import EDGE_STRONG, EDGE_MODERATE, EDGE_LEAN, EDGE_SKIP
     for p in picks:
         e = p["edge"]
@@ -495,8 +514,12 @@ def generate_picks(home_team_id: int, away_team_id: int,
             p["confidence"] = "lean"
         else:
             p["confidence"] = "skip"
-        if e < EDGE_SKIP:
+        if e < EDGE_SKIP and p.get("type") != "1st INN":
             p["confidence"] = "skip"
+        # 1st INN picks under EDGE_LEAN still need a non-skip label so
+        # the card filter keeps them visible.
+        if p.get("type") == "1st INN" and p["confidence"] == "skip":
+            p["confidence"] = "lean"
 
     # Cache picks on the prediction dict so any surface that shares
     # the same cached prediction gets identical picks. This is the
@@ -878,6 +901,36 @@ def _find_odds_by_team_pair(team_a: str, team_b: str,
 
     if not candidates:
         return None
+
+    # Filter out candidates whose start_time is in the past. HR's API
+    # ships stale "live odds" snapshots from already-played games on
+    # the same matchup — observed 2026-04-28 with SD@CHC: yesterday's
+    # blowout shipped with home_ml=2250 (CHC's late-game implied prob),
+    # which created a fictional +45% edge against the actual upcoming
+    # game's -120 line. Anything that already started belongs to the
+    # past — drop it before picking.
+    from datetime import datetime as _dt, timezone as _tz
+    now_utc = _dt.now(_tz.utc)
+    def _started(m: dict) -> bool:
+        s = str(m.get("start_time") or "")
+        if not s:
+            return False
+        try:
+            iso = s.replace("Z", "+00:00") if s.endswith("Z") else s
+            ts = _dt.fromisoformat(iso)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=_tz.utc)
+            return ts < now_utc
+        except (ValueError, TypeError):
+            return False
+    future_candidates = [c for c in candidates if not _started(c)]
+    if future_candidates:
+        candidates = future_candidates
+    # If every candidate is in the past, fall through to the original
+    # behavior so the caller still gets *something* — better than an
+    # empty bet card. The is_locked / refresh_pending flags downstream
+    # handle stale-odds suppression at the tracker level.
+
     if len(candidates) == 1 or not hhmm:
         return candidates[0]
 

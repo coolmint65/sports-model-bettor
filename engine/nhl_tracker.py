@@ -43,6 +43,99 @@ def _compute_clv(bet_odds, closing_odds):
     return round((close_implied - bet_implied) * 100, 2)  # positive = we got a better price
 
 
+def _extract_nhl_closing_for_pick(bet_type: str, pick_text: str,
+                                  home_abbr: str, game_odds: dict) -> int | None:
+    """Pure helper: pick the right closing-odds field for an NHL pick
+    out of a Hard Rock odds bucket. Mirrors
+    engine.tracker._extract_closing_for_pick for the NHL-specific
+    bet_types (ML / PL / O/U / ALT PL)."""
+    if not game_odds:
+        return None
+    pk = pick_text or ""
+    parts = pk.split()
+    if bet_type == "ML":
+        return (game_odds.get("home_ml") if pk == home_abbr
+                else game_odds.get("away_ml"))
+    if bet_type in ("O/U", "OU"):
+        return (game_odds.get("over_odds") if "Over" in pk
+                else game_odds.get("under_odds"))
+    if bet_type == "PL":
+        pick_team = parts[0] if parts else ""
+        return (game_odds.get("home_spread_odds") if pick_team == home_abbr
+                else game_odds.get("away_spread_odds"))
+    if bet_type == "ALT PL":
+        # Match the alt by line if possible — otherwise fall back to
+        # main spread odds (still better than skipping).
+        try:
+            line = float(parts[1]) if len(parts) >= 2 else None
+        except (ValueError, IndexError):
+            line = None
+        pick_team = parts[0] if parts else ""
+        is_home = pick_team == home_abbr
+        if line is not None:
+            for alt in game_odds.get("alt_spreads", []) or []:
+                if alt.get("point") == line or alt.get("point") == -line:
+                    return (alt.get("home_odds") if is_home
+                            else alt.get("away_odds"))
+        return (game_odds.get("home_spread_odds") if is_home
+                else game_odds.get("away_spread_odds"))
+    return None
+
+
+def capture_closing_odds() -> int:
+    """Snapshot current Hard Rock NHL odds for all pending picks.
+
+    Mirrors engine.nba_tracker.capture_closing_odds. Call before games
+    start (sync script ~30 min pre-puck) so the per-row CLV column
+    populates once games settle. Without it the tracker shows a "-"
+    in the CLV column on every row even though the summary widget has
+    enough data to show an aggregate."""
+    conn = _get_nhl_db()
+    pending = conn.execute(
+        "SELECT id, matchup, bet_type, pick FROM nhl_picks "
+        "WHERE result IS NULL AND closing_odds IS NULL"
+    ).fetchall()
+    if not pending:
+        return 0
+
+    try:
+        from scrapers.hardrock_odds import fetch_nhl as _hr_nhl
+        all_odds = _hr_nhl() or {}
+    except Exception as e:
+        logger.warning("NHL closing capture: HR fetch failed: %s", e)
+        return 0
+    if not all_odds:
+        return 0
+
+    from .picks import match_odds as _match_odds
+    updated = 0
+    for pick in pending:
+        pick = dict(pick)
+        matchup = pick["matchup"]
+        sep = " @ " if " @ " in matchup else "@"
+        parts = matchup.split(sep)
+        if len(parts) != 2:
+            continue
+        away, home = parts[0].strip(), parts[1].strip()
+        game_odds = _match_odds(home, away, all_odds)
+        if not game_odds:
+            continue
+        closing = _extract_nhl_closing_for_pick(
+            pick["bet_type"], pick["pick"], home, game_odds,
+        )
+        if closing is not None:
+            conn.execute(
+                "UPDATE nhl_picks SET closing_odds = ? WHERE id = ?",
+                (int(closing), pick["id"]),
+            )
+            updated += 1
+
+    conn.commit()
+    logger.info("NHL closing capture: %d/%d pending picks updated",
+                updated, len(pending))
+    return updated
+
+
 def _get_nhl_db():
     """Get NHL picks DB connection (SQLite, separate from MLB)."""
     db_path = Path(__file__).resolve().parent.parent / "data" / "nhl.db"
