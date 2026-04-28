@@ -4761,14 +4761,8 @@ def api_nba_predict(home: str = Query(...), away: str = Query(...)):
                 home, away, odds=odds,
                 pred={**result, "full": full_factor, "mc_full": full_mc or {}},
             )
-            from engine.config import EDGE_STRONG, EDGE_MODERATE, EDGE_LEAN, EDGE_SKIP
-            for p in full_picks:
-                e = p.get("edge", 0)
-                if e >= EDGE_STRONG:    p["confidence"] = "strong"
-                elif e >= EDGE_MODERATE: p["confidence"] = "moderate"
-                elif e >= EDGE_LEAN:     p["confidence"] = "lean"
-                else:                    p["confidence"] = "skip"
-                if e < EDGE_SKIP:        p["confidence"] = "skip"
+            from engine._pick_helpers import tag_confidence
+            tag_confidence(full_picks)
             result["full"] = full_factor
             result["full_picks"] = full_picks
         except Exception as e:
@@ -4959,14 +4953,8 @@ def api_nba_best_bets():
                 h_abbr, a_abbr, odds=odds, pred=ensemble_input)
             # Tag confidence on full-game picks the same way Q1 does so
             # the GameCard "skip" gating works consistently.
-            from engine.config import EDGE_STRONG, EDGE_MODERATE, EDGE_LEAN, EDGE_SKIP
-            for p in full_picks:
-                e = p.get("edge", 0)
-                if e >= EDGE_STRONG:    p["confidence"] = "strong"
-                elif e >= EDGE_MODERATE: p["confidence"] = "moderate"
-                elif e >= EDGE_LEAN:     p["confidence"] = "lean"
-                else:                    p["confidence"] = "skip"
-                if e < EDGE_SKIP:        p["confidence"] = "skip"
+            from engine._pick_helpers import tag_confidence
+            tag_confidence(full_picks)
             picks = picks + full_picks
             pred["full"] = full_factor
             pred["full_picks"] = full_picks

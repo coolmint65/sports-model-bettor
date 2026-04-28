@@ -497,29 +497,10 @@ def generate_picks(home_team_id: int, away_team_id: int,
         p["adjusted_ev"] = round(p["edge"] * reliability * clv_mult * lm_mult, 2)
     picks.sort(key=lambda p: -p["adjusted_ev"])
 
-    # Add confidence rating (thresholds centralised in engine.config).
-    # 1st INN is exempt from the global EDGE_SKIP cutoff: NRFI/YRFI run
-    # their own per-market floor (MLB_NRFI_MIN_EDGE / MLB_YRFI_MIN_EDGE)
-    # that gates inclusion in `picks`. The user wants 0.5-1% edge first-
-    # inning picks surfaced as coin-flip data collection — clamping
-    # them to 'skip' here would hide them from the dashboard.
-    from .config import EDGE_STRONG, EDGE_MODERATE, EDGE_LEAN, EDGE_SKIP
-    for p in picks:
-        e = p["edge"]
-        if e >= EDGE_STRONG:
-            p["confidence"] = "strong"
-        elif e >= EDGE_MODERATE:
-            p["confidence"] = "moderate"
-        elif e >= EDGE_LEAN:
-            p["confidence"] = "lean"
-        else:
-            p["confidence"] = "skip"
-        if e < EDGE_SKIP and p.get("type") != "1st INN":
-            p["confidence"] = "skip"
-        # 1st INN picks under EDGE_LEAN still need a non-skip label so
-        # the card filter keeps them visible.
-        if p.get("type") == "1st INN" and p["confidence"] == "skip":
-            p["confidence"] = "lean"
+    # Confidence tags + 1st INN exemption live in engine._pick_helpers
+    # so a future tweak lands in one place across all three sports.
+    from ._pick_helpers import tag_confidence
+    tag_confidence(picks)
 
     # Cache picks on the prediction dict so any surface that shares
     # the same cached prediction gets identical picks. This is the

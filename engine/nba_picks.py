@@ -365,19 +365,8 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
         p["adjusted_ev"] = round(p["edge"] * reliability, 2)
     picks.sort(key=lambda p: -p["adjusted_ev"])
 
-    # Confidence tiers (same thresholds as MLB)
-    from .config import EDGE_STRONG, EDGE_MODERATE, EDGE_LEAN, EDGE_SKIP
-    for p in picks:
-        e = p.get("edge", 0)
-        if e >= EDGE_STRONG:
-            p["confidence"] = "strong"
-        elif e >= EDGE_MODERATE:
-            p["confidence"] = "moderate"
-        elif e >= EDGE_LEAN:
-            p["confidence"] = "lean"
-        else:
-            p["confidence"] = "skip"
-
+    from ._pick_helpers import tag_confidence
+    tag_confidence(picks)
     # Filter out skips
     picks = [p for p in picks if p["confidence"] != "skip"]
 

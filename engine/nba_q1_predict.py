@@ -745,20 +745,8 @@ def predict_q1_matchup(home_abbr: str, away_abbr: str,
 
     picks = generate_q1_picks(home_abbr, away_abbr, odds, season, pred=pred)
 
-    # Tag confidence (thresholds centralised in engine.config)
-    from .config import EDGE_STRONG, EDGE_MODERATE, EDGE_LEAN, EDGE_SKIP
-    for p in picks:
-        e = p.get("edge", 0)
-        if e >= EDGE_STRONG:
-            p["confidence"] = "strong"
-        elif e >= EDGE_MODERATE:
-            p["confidence"] = "moderate"
-        elif e >= EDGE_LEAN:
-            p["confidence"] = "lean"
-        else:
-            p["confidence"] = "skip"
-        if e < EDGE_SKIP:
-            p["confidence"] = "skip"
+    from ._pick_helpers import tag_confidence
+    tag_confidence(picks)
 
     # CI band on the win-probability point estimate (data-quality
     # uncertainty). Derived from team games played so the band narrows
