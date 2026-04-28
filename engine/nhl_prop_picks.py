@@ -191,6 +191,12 @@ def _score(samples: dict, prop: dict) -> dict | None:
             continue
         if odds < PROP_JUICE_WALL:
             continue
+        # Hard Rock UI only exposes Over for Skater Goals; an Under
+        # pick has no actual market on the user's sportsbook even when
+        # the API ships under_odds. Skip them so we never recommend a
+        # play the user can't place.
+        if bet_type == "Skater Goals" and side == "Under":
+            continue
         n = float(odds)
         implied = 100.0/(n+100.0) if n > 0 else abs(n)/(abs(n)+100.0)
         edge = (p - implied) * 100.0
