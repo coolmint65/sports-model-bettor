@@ -19,17 +19,20 @@ export default function NBABetsView({ games, loading, progress, onSelectGame, be
   // GameCard primitive reads `bet.best_pick` and `bet.confidence`
   // unconditionally — we hand it a re-shaped bet rather than threading
   // a `view` prop through every GameCard child.
+  //
+  // No cross-view fallback: a Q1 pick must NEVER leak into Full view
+  // (or vice versa). The toggle is a market-type filter — when Full
+  // has no qualifying pick the card should render "No Pick" so the
+  // user knows the model didn't find an edge in that market for that
+  // game, not silently substitute a Q1 pick that looks like a Full
+  // pick to the eye. Surfaced 2026-04-28 after the elimination-boost
+  // halve dropped POR's Full picks below floor and Q1_SPREAD bled
+  // through the toggle.
   const viewBets = useMemo(() => {
     if (!Array.isArray(bestBets)) return bestBets
     const key = view === 'full' ? 'best_pick_full' : 'best_pick_q1'
     return bestBets.map(b => {
-      const swap = b[key]
-      // Fall back to the other view when the requested one has no pick
-      // (e.g. Full Game gated to nothing for a heavy underdog game).
-      // Without the fallback the card would render "no pick" purely
-      // because of the toggle position, which reads as a UI bug.
-      const fallback = view === 'full' ? b.best_pick_q1 : b.best_pick_full
-      const chosen = swap || fallback || b.best_pick || null
+      const chosen = b[key] || null
       return {
         ...b,
         best_pick: chosen,
