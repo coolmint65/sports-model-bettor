@@ -43,8 +43,18 @@ ENABLE_SERIES_CONTEXT = True
 # tune via the same factor-ablation pattern the model already uses.
 
 # Elimination game: team facing elimination gets a boost
-# (historically ~55% ATS in NHL/NBA elimination games)
-ELIMINATION_UNDERDOG_BOOST = 0.03     # +3% win prob for desperate team
+# (historically ~55% ATS in NHL/NBA elimination games).
+#
+# Halved 2026-04-28 from 0.03 -> 0.015 per user feedback: a single
+# +3% xG knob was the sole driver of multiple plus-money picks in one
+# day (POR +3.5 @ +275, PHI ML @ +375 — both teams down 1-3, both
+# edges ~9% from this boost alone) with zero settled live data to
+# validate the magnitude. Underdogs facing elimination DO play harder,
+# but they're losing for a reason — the team about to close them out
+# is usually the better team. Use 0.015 until ≥30 elimination games
+# settle in tracker; then re-tune empirically against the realised
+# ATS rate. Drives both NBA (full + Q1) and NHL series adjustments.
+ELIMINATION_UNDERDOG_BOOST = 0.015    # +1.5% win prob for desperate team
 ELIMINATION_TOTAL_BUMP = 1.02         # 2% higher scoring (adrenaline)
 
 # Closeout game: leading team sometimes coasts
