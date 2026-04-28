@@ -426,6 +426,19 @@ def generate_full_picks(home_abbr: str, away_abbr: str,
                             spread=posted_spread, total=posted_total,
                             season=season)
 
+    # CRITICAL: when the live pipeline calls us, `pred` is the parent
+    # ensemble_input dict whose TOP-LEVEL fields (spread_cover_prob,
+    # over_prob, total_probs, margin_probs, ml_home, ml_away) belong
+    # to the Q1 prediction — totals centred ~55, margins ~3. Reading
+    # them as full-game data produced calibration spikes (POR @ SA
+    # 2026-04-28: ALT TOTAL Under 204.5 @ 99.92% because Q1 totals
+    # all live below 70). The full-game distribution lives under
+    # pred["full"]; resolve the working pred to that block when present
+    # so every read below is full-game-correct. Standalone callers
+    # (no "full" sub-block) keep using pred itself.
+    full_block = pred.get("full") if isinstance(pred.get("full"), dict) else None
+    work_pred = full_block if full_block is not None else pred
+
     # Apply ensemble blend to ml_home / total / margin if other signals
     # were attached upstream. Caller passes the parent pred dict (with
     # mc_full, gbm, full keys); for the standalone case we just call
@@ -439,8 +452,8 @@ def generate_full_picks(home_abbr: str, away_abbr: str,
         ens = {}
 
     if ens.get("home_win") is not None:
-        pred["ml_home"] = float(ens["home_win"])
-        pred["ml_away"] = 1.0 - float(ens["home_win"])
+        work_pred["ml_home"] = float(ens["home_win"])
+        work_pred["ml_away"] = 1.0 - float(ens["home_win"])
 
     picks = []
     from .config import NBA_JUICE_WALL as JUICE_WALL, MAIN_EDGE_FLOOR, MAIN_ODDS_CAP
@@ -462,7 +475,7 @@ def generate_full_picks(home_abbr: str, away_abbr: str,
     if posted_spread is not None:
         h_spread_odds = odds.get("home_spread_odds", -110)
         a_spread_odds = odds.get("away_spread_odds", -110)
-        cover_prob = pred.get("spread_cover_prob")
+        cover_prob = work_pred.get("spread_cover_prob")
         if cover_prob is not None:
             h_imp = _implied_prob(h_spread_odds)
             h_edge = (cover_prob - h_imp) * 100
@@ -493,7 +506,7 @@ def generate_full_picks(home_abbr: str, away_abbr: str,
     if posted_total is not None:
         over_odds = odds.get("over_odds", -110)
         under_odds = odds.get("under_odds", -110)
-        over_prob = pred.get("over_prob")
+        over_prob = work_pred.get("over_prob")
         if over_prob is not None:
             o_imp = _implied_prob(over_odds)
             o_edge = (over_prob - o_imp) * 100
@@ -524,7 +537,7 @@ def generate_full_picks(home_abbr: str, away_abbr: str,
     home_ml = odds.get("home_ml")
     away_ml = odds.get("away_ml")
     if home_ml is not None and home_ml >= JUICE_WALL and _passes_odds_cap("ML", home_ml):
-        h_prob = pred.get("ml_home")
+        h_prob = work_pred.get("ml_home")
         if h_prob is not None:
             h_imp = _implied_prob(home_ml)
             h_edge = (h_prob - h_imp) * 100
@@ -537,7 +550,7 @@ def generate_full_picks(home_abbr: str, away_abbr: str,
                     "odds": home_ml,
                 })
     if away_ml is not None and away_ml >= JUICE_WALL and _passes_odds_cap("ML", away_ml):
-        a_prob = pred.get("ml_away")
+        a_prob = work_pred.get("ml_away")
         if a_prob is not None:
             a_imp = _implied_prob(away_ml)
             a_edge = (a_prob - a_imp) * 100
@@ -555,8 +568,19 @@ def generate_full_picks(home_abbr: str, away_abbr: str,
     # arrays, compute edge against the model's discretized distribution,
     # keep only the highest-edge variant per side that's not just a
     # close cousin of the primary line.
-    margin_probs = pred.get("margin_probs") or {}
-    total_probs = pred.get("total_probs") or {}
+    #
+    # Read from pred["full"] FIRST — when generate_full_picks runs in
+    # the live pipeline, `pred` is the parent ensemble_input whose
+    # top-level total_probs / margin_probs belong to the **Q1** model
+    # (totals centred ~55, margins ~3). Falling back to the parent
+    # caused the POR @ SA 2026-04-28 calibration spike: ALT TOTAL
+    # Under 204.5 came out at 99.92% because Q1's total distribution
+    # trivially puts everything > ~70 in the Under bucket. Use the
+    # full-game distribution attached under pred["full"] when present;
+    # only fall back to the parent dict for the standalone-pred case
+    # where generate_full_picks built `pred` itself.
+    margin_probs = work_pred.get("margin_probs") or {}
+    total_probs = work_pred.get("total_probs") or {}
     if margin_probs:
         for alt in odds.get("alt_spreads") or []:
             point = alt.get("point")
