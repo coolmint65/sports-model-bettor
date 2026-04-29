@@ -233,6 +233,40 @@ def settle_player_props(sport: str) -> dict:
     if not pending:
         return {"settled": 0, "wins": 0, "losses": 0, "pushes": 0}
 
+    # Self-heal: the settler depends on the games table reporting
+    # status='final' (via _game_is_final) before it can resolve a DNP
+    # or pull a player log. The morning sync fetches once and never
+    # re-runs as games progress — so a 4pm-tip game that finishes at
+    # 7pm stays as status='scheduled' in the games table all evening,
+    # blocking every prop on it from settling. User report 2026-04-28:
+    # 'Nothing to settle' even though BOS/PHI was final. Refresh
+    # today's games before settling so live → final transitions land.
+    # Throttled per process (3 min) so back-to-back settle clicks
+    # don't fan-out repeated ESPN fetches.
+    import time as _t
+    if not hasattr(settle_player_props, "_last_games_refresh"):
+        settle_player_props._last_games_refresh = {}
+    last_g = settle_player_props._last_games_refresh.get(sport, 0)
+    if (_t.time() - last_g) > 180:
+        try:
+            from datetime import datetime as _dt, timedelta as _td
+            today = _dt.now().strftime("%Y-%m-%d")
+            yesterday = (_dt.now() - _td(days=1)).strftime("%Y-%m-%d")
+            if sport == "mlb":
+                from scrapers.mlb_stats import fetch_schedule as _fs
+                _fs(yesterday, today)
+            elif sport == "nhl":
+                from scrapers.nhl_api import fetch_schedule as _fs
+                _fs(yesterday, today)
+            else:  # nba
+                from scrapers.nba_espn import fetch_schedule as _fs
+                _fs(yesterday, today)
+            settle_player_props._last_games_refresh[sport] = _t.time()
+            logger.debug("Pre-settle games refresh ran for %s", sport)
+        except Exception as e:
+            logger.warning("Pre-settle games-table refresh failed for %s: %s",
+                           sport, e)
+
     # Self-heal: if any pending pick points at a finalized game with
     # no log row, pull recent finalized box scores so DNP-void only
     # fires when the player genuinely didn't appear, not when our

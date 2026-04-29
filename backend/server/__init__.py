@@ -2424,7 +2424,13 @@ def api_props_summary(sport: str):
     except Exception as e:
         logger.warning("player_props auto-settle (%s) failed: %s", sport, e)
 
-    pending = list_picks(sport, pending_only=True, limit=10_000)
+    # Show only picks dated up to today (user's local). The picker
+    # writes tomorrow's slate ahead of time so the model has it ready
+    # at midnight, but the user doesn't want to see those picks in
+    # the tracker until the day actually flips. Surfaced 2026-04-28.
+    today_local = datetime.now().strftime("%Y-%m-%d")
+    pending_all = list_picks(sport, pending_only=True, limit=10_000)
+    pending = [p for p in pending_all if (p.get("date") or "") <= today_local]
     # Settled: pull a generous window so the banner P/L reflects the
     # full history, not just the newest 200 rows. Use a direct query
     # rather than list_picks(limit=200) which bundles pending in.
