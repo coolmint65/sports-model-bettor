@@ -73,6 +73,48 @@ def _extract_closing_for_pick(bet_type: str, pick_text: str,
         pick_team = pk.split()[0] if pk.split() else ""
         return (game_odds.get("f5_home_spread_odds") if pick_team == home_abbr
                 else game_odds.get("f5_away_spread_odds"))
+    # ALT O/U / ALT TOTAL — match by line value in alt_totals.
+    # User reported on 2026-04-28 that most settled picks lack CLV;
+    # root cause was this extractor skipping ALT lines entirely. ALT
+    # picks are stored with a pick label like "Over 8.5" or
+    # "Under 9.5" — same shape as primary O/U, just at a non-standard
+    # line. Find the alt_totals entry whose line matches and pull
+    # the right side's odds.
+    if bt in ("ALT O/U", "ALT TOTAL"):
+        parts = pk.split()
+        try:
+            line = float(parts[-1])
+        except (ValueError, IndexError):
+            return None
+        is_over = "Over" in pk or "over" in pk
+        for alt in game_odds.get("alt_totals") or []:
+            if alt.get("line") == line:
+                return alt.get("over_odds") if is_over else alt.get("under_odds")
+        # Fall back to primary O/U if the alt line isn't present —
+        # better stale CLV than missing CLV.
+        return (game_odds.get("over_odds") if is_over
+                else game_odds.get("under_odds"))
+    # ALT RL — pick label "MIL +1.5" or "BAL -2.5". Match by signed
+    # spread value in alt_spreads.
+    if bt in ("ALT RL", "ALT SPREAD"):
+        parts = pk.split()
+        if len(parts) < 2:
+            return None
+        pick_team = parts[0]
+        try:
+            spread = float(parts[1])
+        except ValueError:
+            return None
+        is_home = pick_team == home_abbr
+        # alt_spreads stores `point` from home's perspective. Home's
+        # spread is the literal point; away's spread is -point.
+        target_point = spread if is_home else -spread
+        for alt in game_odds.get("alt_spreads") or []:
+            if alt.get("point") == target_point:
+                return alt.get("home_odds") if is_home else alt.get("away_odds")
+        # Fall back to primary spread odds.
+        return (game_odds.get("home_spread_odds") if is_home
+                else game_odds.get("away_spread_odds"))
     return None
 
 

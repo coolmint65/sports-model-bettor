@@ -10,6 +10,7 @@ import NHLGameDetail from './components/NHLGameDetail'
 import NBAStandings from './components/NBAStandings'
 import NBAGameDetail from './components/NBAGameDetail'
 import BetsView from './components/BetsView'
+import TrackerView from './components/TrackerView'
 import Sidebar from './components/Sidebar'
 import SubNav from './components/SubNav'
 import RootDashboard from './components/RootDashboard'
@@ -519,12 +520,16 @@ export default function App() {
       {isMLB && view === 'standings' && <Standings divisions={standings} />}
 
       {isMLB && view === 'history' && (
-        <PickHistory
-          summary={pickSummary}
-          history={pickHistory}
-          loading={phLoading}
-          onRecord={recordPicks}
-          onSettle={settlePicks}
+        <TrackerView
+          sport="mlb"
+          api={api}
+          trackerProps={{
+            summary: pickSummary,
+            history: pickHistory,
+            loading: phLoading,
+            onRecord: recordPicks,
+            onSettle: settlePicks,
+          }}
         />
       )}
 
@@ -551,12 +556,16 @@ export default function App() {
       {isNHL && view === 'standings' && <NHLStandings divisions={nhlStandings} loading={nhlStandingsLoading} />}
 
       {isNHL && view === 'history' && (
-        <PickHistory
-          summary={nhlPickSummary}
-          history={nhlPickHistory}
-          loading={nhlPhLoading}
-          onRecord={recordPicks}
-          onSettle={settlePicks}
+        <TrackerView
+          sport="nhl"
+          api={api}
+          trackerProps={{
+            summary: nhlPickSummary,
+            history: nhlPickHistory,
+            loading: nhlPhLoading,
+            onRecord: recordPicks,
+            onSettle: settlePicks,
+          }}
         />
       )}
 
@@ -583,12 +592,16 @@ export default function App() {
       {isNBA && view === 'standings' && <NBAStandings divisions={nbaStandings} loading={nbaStandingsLoading} />}
 
       {isNBA && view === 'history' && (
-        <PickHistory
-          summary={nbaPickSummary}
-          history={nbaPickHistory}
-          loading={nbaPhLoading}
-          onRecord={recordPicks}
-          onSettle={settlePicks}
+        <TrackerView
+          sport="nba"
+          api={api}
+          trackerProps={{
+            summary: nbaPickSummary,
+            history: nbaPickHistory,
+            loading: nbaPhLoading,
+            onRecord: recordPicks,
+            onSettle: settlePicks,
+          }}
         />
       )}
 
