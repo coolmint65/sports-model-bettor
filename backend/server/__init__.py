@@ -164,6 +164,32 @@ async def api_client_error(req: Request):
     return Response(status_code=204)
 
 
+@app.get("/api/{sport}/live-state")
+def api_live_state(sport: str, game_id: str | None = Query(default=None)):
+    """Phase 3a debug endpoint — returns whatever the live worker has
+    written for the requested sport. Used during development to verify
+    the worker is healthy + the parsed state shape matches what the
+    predictor in 3b will read.
+
+    `?game_id=...` returns a single game's state; without it returns
+    every active row for the sport.
+    """
+    if sport not in ("nba", "nhl"):
+        raise HTTPException(status_code=400, detail="live engine only covers NBA + NHL")
+    from engine.live._store import get_state, list_active, worker_heartbeat
+    if game_id:
+        s = get_state(sport, game_id)
+        if not s:
+            return {"sport": sport, "game_id": game_id,
+                    "state": None, "reason": "stale or missing"}
+        return {"sport": sport, "game_id": game_id, "state": s}
+    return {
+        "sport": sport,
+        "active_games": list_active(sport),
+        "worker": worker_heartbeat(sport),
+    }
+
+
 @app.get("/api/_health")
 def api_health():
     """Deep-check health endpoint — exercises every dependency the

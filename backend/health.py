@@ -160,6 +160,56 @@ def _check_potd_locks() -> dict:
         return {"status": "fail", "detail": str(e)}
 
 
+def _check_live_worker() -> dict:
+    """Live worker (Phase 3a) liveness check.
+
+    The worker writes to `engine.live._store` every 15s (NBA) / 30s
+    (NHL). If a sport has had any active in-progress game today, we
+    expect a write within the last ~2 min. When the most recent write
+    is older than that, the worker is either down or there are simply
+    no live games right now — both cases are reported but only the
+    former should page someone.
+    """
+    try:
+        from engine.live._store import worker_heartbeat
+        from datetime import datetime, timezone
+        beats = worker_heartbeat()
+        if not beats:
+            # No rows ever — could be expected (off-hours) or worker
+            # never started. Report as warn so the user notices.
+            return {"status": "warn",
+                    "detail": "live_state empty — worker may not have run yet"}
+        # Worst sport's freshness drives the status.
+        worst_age = -1.0
+        worst_sport = None
+        now = datetime.now(timezone.utc)
+        for sport, info in beats.items():
+            ts = info.get("last_write")
+            if not ts:
+                continue
+            try:
+                dt = datetime.fromisoformat(ts)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                age = (now - dt).total_seconds()
+            except (ValueError, TypeError):
+                continue
+            if age > worst_age:
+                worst_age = age
+                worst_sport = sport
+        if worst_age < 0:
+            return {"status": "warn", "detail": "no parseable last_write"}
+        if worst_age > 120:
+            # >2 min stale — worker has missed several ticks.
+            return {"status": "warn",
+                    "detail": f"{worst_sport} last_write {worst_age:.0f}s ago (worker likely down or no live games)"}
+        return {"status": "ok",
+                "freshest_age_s": round(worst_age, 1),
+                "sports": list(beats.keys())}
+    except Exception as e:
+        return {"status": "fail", "detail": str(e)}
+
+
 def _check_gbm_models() -> dict:
     """At least one GBM model artifact loadable. Catches the case
     where data/models/ was wiped or the trainer crashed mid-write."""
@@ -196,6 +246,7 @@ def run_health_checks() -> dict:
         "cache.picks.nba":      _check_picks_cache("nba"),
         "locks.potd":           _check_potd_locks(),
         "models.gbm":           _check_gbm_models(),
+        "live.worker":          _check_live_worker(),
     }
     worst = max((severity.get(c.get("status"), 2) for c in checks.values()),
                 default=0)
