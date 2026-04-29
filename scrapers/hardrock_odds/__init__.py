@@ -157,12 +157,12 @@ def _load_headers() -> dict:
 # ── Team normalization ────────────────────────────────────
 
 try:
-    from .dk_odds import _normalize_team as _mlb_to_abbr  # type: ignore
+    from ..dk_odds import _normalize_team as _mlb_to_abbr  # type: ignore
 except Exception:
     _mlb_to_abbr = lambda n: (n or "").strip()  # noqa: E731
 
 try:
-    from .nba_dk_odds import _NBA_NAME_TO_ABBR as _NBA_MAP_FULL  # type: ignore
+    from ..nba_dk_odds import _NBA_NAME_TO_ABBR as _NBA_MAP_FULL  # type: ignore
 except Exception:
     _NBA_MAP_FULL = {}
 
