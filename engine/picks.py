@@ -948,14 +948,35 @@ def match_odds(home_abbr: str, away_abbr: str, all_odds: dict,
     if not raw:
         return {}
 
-    # Check if the sportsbook's home matches our home
+    # Check if the sportsbook's home matches our home.
     odds_home = raw.get("odds_home", "")
+    odds_away = raw.get("odds_away", "")
     sport = _detect_sport(all_odds)
     home_alts = set(aliases_for(home_abbr, sport))
+    away_alts = set(aliases_for(away_abbr, sport))
 
     if odds_home in home_alts:
-        # Same home — use as-is
-        return raw
+        return raw  # already aligned to our schedule
 
-    # Different home — swap so fields align with our schedule
-    return _swap_odds(raw)
+    # User report 2026-04-28: SA was shown as +10.5 dog when HR had
+    # SA -10.5 favorite. Root cause: when the HR scraper failed to
+    # tag odds_home / odds_away (left them None), the old code took
+    # the empty `odds_home` as "different home" and called _swap_odds
+    # unconditionally — flipping correctly-keyed data into the wrong
+    # perspective. Only swap when we can VERIFY a mismatch (the
+    # sportsbook's away == our home, ie. odds_away in home_alts, OR
+    # vice versa). When both identity tags are unknown, trust the raw
+    # values rather than flip them blind.
+    if odds_away in home_alts and odds_home in away_alts:
+        return _swap_odds(raw)
+    if odds_away in home_alts:
+        # One-sided mismatch: away tag matches our home → still a swap.
+        return _swap_odds(raw)
+    if odds_home in away_alts:
+        # Sportsbook's home is our away → swap.
+        return _swap_odds(raw)
+
+    # Neither identity tag matches; could be a None / empty identity
+    # or a brand-new abbreviation. Trust raw as-is — flipping blindly
+    # was the original bug.
+    return raw
