@@ -156,11 +156,17 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
                 })
 
     # ── Q1 Moneyline ──
-    # Use Q1-specific ML odds, not full-game ML. Full-game ML has
-    # much wider spreads that create phantom edge when compared
-    # against the Q1 model's tighter probabilities.
-    home_ml_odds = odds.get("q1_home_ml") or odds.get("home_ml")
-    away_ml_odds = odds.get("q1_away_ml") or odds.get("away_ml")
+    # Q1-specific ML odds ONLY. The previous code used
+    # `q1_home_ml or home_ml` — falling back to full-game ML when
+    # HR dropped the Q1 market (which it does as games approach
+    # tip-off). That fallback compares full-game implied prob
+    # against the Q1 model's tighter probability and produces
+    # phantom edges. User report 2026-04-28: POR Q1 ML appeared at
+    # +425 (POR's full-game underdog price) against the Q1 model's
+    # 24% — bogus 5% edge because the markets aren't comparable.
+    # When Q1 ML isn't on the board, don't generate Q1_ML at all.
+    home_ml_odds = odds.get("q1_home_ml")
+    away_ml_odds = odds.get("q1_away_ml")
 
     if home_ml_odds is not None and home_ml_odds >= JUICE_WALL:
         home_ml_prob = pred["q1_ml_home"]
