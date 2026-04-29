@@ -28,6 +28,12 @@ import FirstInningTracker from './FirstInningTracker'
 
 const Q1_TYPES = new Set(['Q1_ML', 'Q1_SPREAD', 'Q1_TOTAL'])
 const FULL_NBA_TYPES = new Set(['ML', 'SPREAD', 'TOTAL', 'ALT SPREAD', 'ALT TOTAL'])
+// MLB Full Game = everything except 1st INN. Without this filter,
+// 1st INN picks bleed into the Full toggle (user reported 2026-04-28)
+// because they share the same `picks` table and ride the unfiltered
+// PickHistory. 1st INN has its own toggle option that routes to the
+// dedicated FirstInningTracker view.
+const MLB_NON_FULL_TYPES = new Set(['1st INN'])
 
 export default function TrackerView({ sport, api, trackerProps }) {
   const options = buildOptions(sport)
@@ -76,17 +82,29 @@ function MarketContent({ sport, market, api, trackerProps }) {
 
 
 function FilteredPickHistory({ sport, market, summary, history, loading, onRecord, onSettle }) {
-  // For NBA, split history + summary by Q1 vs Full so the user can
-  // see per-view P/L without leaving the Tracker tab.
+  // Filter strategy by sport + market:
+  //   NBA + 'q1'         → only Q1_*
+  //   NBA + 'full'       → only ML/SPREAD/TOTAL/ALT*
+  //   MLB + 'full'       → exclude 1st INN (which has its own toggle option)
+  //   NHL + 'full'       → no filter (single market) — pass through
   const filtered = useMemo(() => {
-    if (sport !== 'nba') {
-      return { summary, history }
+    if (sport === 'nba') {
+      const target = market === 'q1' ? Q1_TYPES : FULL_NBA_TYPES
+      const filteredHistory = (history || []).filter(p => target.has(p.bet_type))
+      const subSummary = recomputeSummary(filteredHistory, summary?.by_type || {}, target)
+      return { summary: subSummary, history: filteredHistory }
     }
-    const target = market === 'q1' ? Q1_TYPES : FULL_NBA_TYPES
-    const filteredHistory = (history || []).filter(p => target.has(p.bet_type))
-    // Recompute hero + tiles from the filtered set so the P/L matches.
-    const subSummary = recomputeSummary(filteredHistory, summary?.by_type || {}, target)
-    return { summary: subSummary, history: filteredHistory }
+    if (sport === 'mlb' && market === 'full') {
+      const filteredHistory = (history || []).filter(p => !MLB_NON_FULL_TYPES.has(p.bet_type))
+      // Build a mirrored by_type dict that drops the excluded buckets so
+      // the per-tile P/L doesn't include 1st INN.
+      const trimmedByType = Object.fromEntries(
+        Object.entries(summary?.by_type || {}).filter(([k]) => !MLB_NON_FULL_TYPES.has(k))
+      )
+      const subSummary = recomputeSummary(filteredHistory, trimmedByType, null)
+      return { summary: subSummary, history: filteredHistory }
+    }
+    return { summary, history }
   }, [sport, market, summary, history])
 
   return (
@@ -110,7 +128,7 @@ function FilteredPickHistory({ sport, market, summary, history, loading, onRecor
  * so the per-tile numbers stay accurate; the overall hero recomputes
  * from the rows we kept.
  */
-function recomputeSummary(rows, byType, allowedTypes) {
+function recomputeSummary(rows, byType, allowedTypes /* Set | null */) {
   let wins = 0, losses = 0, pushes = 0, pending = 0, profit = 0
   let clvSum = 0, clvN = 0
   for (const r of rows) {
@@ -131,11 +149,14 @@ function recomputeSummary(rows, byType, allowedTypes) {
     }
   }
   const settled = wins + losses
-  // Keep only by_type entries for the allowed bet_types.
-  const filteredByType = {}
-  for (const [k, v] of Object.entries(byType)) {
-    if (allowedTypes.has(k)) filteredByType[k] = v
-  }
+  // Keep only by_type entries for the allowed bet_types. When
+  // allowedTypes is null the caller already pre-filtered byType, so
+  // we pass it through unchanged.
+  const filteredByType = allowedTypes
+    ? Object.fromEntries(
+        Object.entries(byType).filter(([k]) => allowedTypes.has(k))
+      )
+    : byType
   return {
     overall: {
       total: rows.length,

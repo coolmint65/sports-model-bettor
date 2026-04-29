@@ -146,15 +146,25 @@ def refresh_pending_for_today(bets: list[dict],
         except Exception:
             return False
 
-    updated = swapped = voided = 0
+    # Behaviour rule (set 2026-04-28 after the PHI@BOS swap incident):
+    # once a pending pick is recorded, its bet_type + pick are FROZEN.
+    # The model can change its mind during the day, but the historical
+    # tracker row stays as what the user could have placed at lock
+    # time. If the model re-ranks, that's tracked in pick_events for
+    # the breadcrumb popover — NOT by mutating the recorded row. Only
+    # odds / edge / model_prob update so the displayed line matches
+    # the live market on the same pick.
+    #
+    # The void path stays — if the matchup's whole family lost edge
+    # the row is dropped (no pick to display anymore). But cross-pick
+    # swaps are gone.
+    updated = voided = skipped = 0
     for p in pending:
         p = dict(p)
         if p["matchup"] in locked_matchups:
             continue
         if _pick_game_started(p.get("game_id")):
             continue
-        # Match this pending row to the SAME family's current best pick.
-        # Q1_TOTAL never gets morphed into TOTAL — they're distinct bets.
         fam = _family(p["bet_type"] or "")
         current = current_by_key.get((p["matchup"], fam))
         if not current:
@@ -164,26 +174,29 @@ def refresh_pending_for_today(bets: list[dict],
                 voided += 1
             continue
 
+        # If the model now likes a different bet_type/pick within the
+        # family, leave the recorded row alone. The new pick (if any)
+        # gets logged via pick_events and surfaces on next record_picks.
         if current.get("type") != p["bet_type"] or current.get("pick") != p["pick"]:
-            conn.execute(
-                "UPDATE nba_picks SET bet_type = ?, pick = ?, model_prob = ?, "
-                "edge = ?, odds = ? WHERE id = ?",
-                (current.get("type"), current.get("pick"),
-                 current.get("prob"), current.get("edge"),
-                 current.get("odds"), p["id"]),
-            )
-            swapped += 1
-        else:
-            conn.execute(
-                "UPDATE nba_picks SET model_prob = ?, edge = ?, odds = ? "
-                "WHERE id = ?",
-                (current.get("prob"), current.get("edge"),
-                 current.get("odds"), p["id"]),
-            )
-            updated += 1
+            skipped += 1
+            continue
+
+        # Same pick — refresh the live numbers so the card shows the
+        # current line / edge / prob.
+        conn.execute(
+            "UPDATE nba_picks SET model_prob = ?, edge = ?, odds = ? "
+            "WHERE id = ?",
+            (current.get("prob"), current.get("edge"),
+             current.get("odds"), p["id"]),
+        )
+        updated += 1
 
     conn.commit()
-    return {"updated": updated, "swapped": swapped, "voided": voided}
+    # Keep "swapped" key in the response shape for /api/best-bets
+    # consumers but always emit 0 — pick swapping is intentionally
+    # disabled now.
+    return {"updated": updated, "swapped": 0, "voided": voided,
+            "skipped_pick_change": skipped}
 
 
 def record_picks(date: str | None = None, min_edge: float = 1.5,

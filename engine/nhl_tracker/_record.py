@@ -119,7 +119,8 @@ def refresh_pending_for_today(bets: list[dict],
         except Exception:
             return False
 
-    updated = swapped = voided = 0
+    # Freeze rule (set 2026-04-28 — see engine.tracker for the design).
+    updated = voided = skipped = 0
     for p in pending:
         p = dict(p)
         if p["matchup"] in locked_matchups:
@@ -135,25 +136,20 @@ def refresh_pending_for_today(bets: list[dict],
             continue
 
         if current.get("type") != p["bet_type"] or current.get("pick") != p["pick"]:
-            conn.execute(
-                "UPDATE nhl_picks SET bet_type = ?, pick = ?, model_prob = ?, "
-                "edge = ?, odds = ? WHERE id = ?",
-                (current.get("type"), current.get("pick"),
-                 current.get("prob"), current.get("edge"),
-                 current.get("odds"), p["id"]),
-            )
-            swapped += 1
-        else:
-            conn.execute(
-                "UPDATE nhl_picks SET model_prob = ?, edge = ?, odds = ? "
-                "WHERE id = ?",
-                (current.get("prob"), current.get("edge"),
-                 current.get("odds"), p["id"]),
-            )
-            updated += 1
+            skipped += 1
+            continue
+
+        conn.execute(
+            "UPDATE nhl_picks SET model_prob = ?, edge = ?, odds = ? "
+            "WHERE id = ?",
+            (current.get("prob"), current.get("edge"),
+             current.get("odds"), p["id"]),
+        )
+        updated += 1
 
     conn.commit()
-    return {"updated": updated, "swapped": swapped, "voided": voided}
+    return {"updated": updated, "swapped": 0, "voided": voided,
+            "skipped_pick_change": skipped}
 
 
 def record_picks(date: str | None = None, min_edge: float = 1.5,
