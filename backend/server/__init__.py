@@ -175,7 +175,7 @@ def api_health():
 
     See backend/health.py for the per-check details.
     """
-    from .health import run_health_checks
+    from ..health import run_health_checks
     return run_health_checks()
 
 
