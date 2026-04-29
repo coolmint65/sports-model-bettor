@@ -42,24 +42,20 @@ ENABLE_SERIES_CONTEXT = True
 # These are conservative starting points. Track performance and
 # tune via the same factor-ablation pattern the model already uses.
 
-# Elimination game: team facing elimination "gets a boost".
+# Elimination game: team facing elimination gets a small boost.
 #
-# Disabled 2026-04-28 per user directive — set to 0 until empirical
-# data validates a non-zero magnitude. History:
-#   - Started at 0.03 (+3% xG) based on a comment citing "~55% ATS"
-#     in NHL/NBA elimination games — no actual NBA-specific evidence.
-#   - Halved to 0.015 the same day after the +3% knob was the sole
-#     driver of multiple plus-money picks (POR +3.5 @ +275, PHI ML
-#     @ +375, both down 1-3, both edges ~9% from this boost alone).
-#   - Removed entirely this commit. User: "they do play harder, but
-#     there's a reason they're about to get eliminated." Until ≥30
-#     elimination games settle in tracker and the realised ATS rate
-#     justifies a non-zero boost, run without the adjustment. Same
-#     for ELIMINATION_TOTAL_BUMP — 2% scoring lift was equally
-#     unvalidated and rode the same logic. Apply via empirical
-#     evidence, not vibes.
-ELIMINATION_UNDERDOG_BOOST = 0.0
-ELIMINATION_TOTAL_BUMP = 1.0
+# History:
+#   - Started 0.03 (+3% xG) based on a comment citing "~55% ATS"
+#     with no NBA-specific evidence
+#   - Halved to 0.015 (2026-04-28) after the +3% knob drove multiple
+#     correlated plus-money picks (POR +3.5 / PHI ML, both down 1-3)
+#   - Disabled entirely the same day per user
+#   - Re-enabled at 0.015 (2026-04-28) after PHI ML +375 hit. User:
+#     "the model actually got it right. Surprising for a +375 bet."
+#     Treat as paper-track until ≥30 elimination games settle —
+#     re-tune from realised ATS rate at that point.
+ELIMINATION_UNDERDOG_BOOST = 0.015    # +1.5% win prob for desperate team
+ELIMINATION_TOTAL_BUMP = 1.02         # 2% higher scoring (adrenaline)
 
 # Closeout game: leading team sometimes coasts
 CLOSEOUT_FAVORITE_FADE = 0.02         # -2% win prob for leading team

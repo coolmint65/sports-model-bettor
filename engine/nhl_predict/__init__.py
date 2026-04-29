@@ -12,7 +12,7 @@ faceoff dominance, form, and home/away splits.
 import math
 import logging
 from datetime import datetime, timedelta
-from .data import load_team, list_teams, get_league_averages
+from ..data import load_team, list_teams, get_league_averages
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +102,7 @@ def _recent_goalie_sv(goalie_id: int, as_of_date: str,
     starts with non-null shot data exist in the window.
     """
     try:
-        from .nhl_db import get_conn as _gc
+        from ..nhl_db import get_conn as _gc
         rows = _gc().execute(
             "SELECT home_goalie_id, away_goalie_id, "
             "       home_score, away_score, home_shots, away_shots "
@@ -256,7 +256,7 @@ def _compute_blowout_tendency(team_abbr: str) -> dict:
     """
     result = {"wins_by_2plus_pct": 0.0, "losses_by_2plus_pct": 0.0, "games": 0}
     try:
-        from .nhl_db import get_nhl_team_by_abbr, get_conn
+        from ..nhl_db import get_nhl_team_by_abbr, get_conn
         team = get_nhl_team_by_abbr(team_abbr)
         if not team:
             return result
@@ -364,7 +364,7 @@ def _compute_corsi_proxy(team_abbr: str) -> dict:
     result = {"corsi_for_pct": 0.50, "games": 0, "source": "none"}
     try:
         # First check if nhl_team_stats has corsi_pct populated
-        from .nhl_db import get_nhl_team_by_abbr, get_conn
+        from ..nhl_db import get_nhl_team_by_abbr, get_conn
         team = get_nhl_team_by_abbr(team_abbr)
         if not team:
             return result
@@ -1120,9 +1120,9 @@ def _predict_matchup_inner(home_key: str, away_key: str,
     home_goalie_info, away_goalie_info = None, None
 
     try:
-        from .nhl_db import (get_nhl_team_by_abbr, get_team_goalies,
+        from ..nhl_db import (get_nhl_team_by_abbr, get_team_goalies,
                              get_h2h_nhl, get_recent_nhl_games, get_goalie_stats)
-        from .nhl_calibration import get_calibrated_home_edge, get_total_adjustment
+        from ..nhl_calibration import get_calibrated_home_edge, get_total_adjustment
 
         h_abbr = home.get("abbreviation", "")
         a_abbr = away.get("abbreviation", "")
@@ -1243,7 +1243,7 @@ def _predict_matchup_inner(home_key: str, away_key: str,
     series_reasons: list[str] = []
     if in_playoffs and not backtest:
         try:
-            from .series_context import infer_series, apply_series_adjustments
+            from ..series_context import infer_series, apply_series_adjustments
             series = infer_series("nhl", home_key, away_key)
             if series.get("in_series"):
                 home_xg, away_xg, home_edge, series_reasons = (
@@ -1481,7 +1481,7 @@ def _predict_matchup_inner(home_key: str, away_key: str,
 
     # ── Calibrated total adjustment ──
     try:
-        from .nhl_calibration import get_total_adjustment
+        from ..nhl_calibration import get_total_adjustment
         total_adj = get_total_adjustment()
         if total_adj:
             home_xg += total_adj / 2
@@ -1496,7 +1496,7 @@ def _predict_matchup_inner(home_key: str, away_key: str,
     injury_data = {"home": [], "away": [], "home_impact": 1.0, "away_impact": 1.0}
     if not backtest:
         try:
-            from .injuries import fetch_nhl_injuries, compute_nhl_injury_impact
+            from ..injuries import fetch_nhl_injuries, compute_nhl_injury_impact
             nhl_injuries = fetch_nhl_injuries()
             h_abbr = home.get("abbreviation", "")
             a_abbr = away.get("abbreviation", "")
@@ -1564,7 +1564,7 @@ def _predict_matchup_inner(home_key: str, away_key: str,
     # pre-granular baseline. Toggle via config.NHL_ENABLE_GRANULAR_FACTORS.
     granular_data = {}
     try:
-        from .config import NHL_ENABLE_GRANULAR_FACTORS as _GRANULAR_ON
+        from ..config import NHL_ENABLE_GRANULAR_FACTORS as _GRANULAR_ON
     except Exception:
         _GRANULAR_ON = False
 
@@ -1577,7 +1577,7 @@ def _predict_matchup_inner(home_key: str, away_key: str,
     try:
         if not _GRANULAR_ON:
             raise RuntimeError("granular factors disabled in config")
-        from .nhl_granular import (
+        from ..nhl_granular import (
             compute_schedule_fatigue,
             get_recent_travel,
             compute_goalie_workload,
@@ -1841,8 +1841,8 @@ def _predict_matchup_inner(home_key: str, away_key: str,
     # shape MLB uses: preserves ordering (a 0.85 favorite still reads
     # stronger than 0.65) while pulling the tail toward the empirical
     # sweet spot instead of clipping it flat.
-    from .config import NHL_WIN_PROB_FLOOR, NHL_WIN_PROB_CAP
-    from .win_prob import compress_win_prob
+    from ..config import NHL_WIN_PROB_FLOOR, NHL_WIN_PROB_CAP
+    from ..win_prob import compress_win_prob
     p_home_ml = compress_win_prob(p_home_ml, NHL_WIN_PROB_FLOOR, NHL_WIN_PROB_CAP)
     p_away_ml = 1.0 - p_home_ml
 
@@ -1958,7 +1958,7 @@ def _predict_matchup_inner(home_key: str, away_key: str,
     a_p1_stats = None
 
     try:
-        from .nhl_db import get_p1_stats, get_nhl_team_by_abbr as _p1_team_lookup
+        from ..nhl_db import get_p1_stats, get_nhl_team_by_abbr as _p1_team_lookup
 
         h_abbr_p1 = home.get("abbreviation", "")
         a_abbr_p1 = away.get("abbreviation", "")
@@ -2170,7 +2170,7 @@ def _nhl_prediction_confidence(home_record: str, away_record: str,
     """Build a confidence dict matching MLB's shape (score, label,
     ci_half_width, samples) using games-played from the team records.
     """
-    from ._confidence import ci_half_width, ci_band, parse_record_games
+    from .._confidence import ci_half_width, ci_band, parse_record_games
     h_games = parse_record_games(home_record)
     a_games = parse_record_games(away_record)
     n_eff = min(h_games, a_games)
@@ -2199,4 +2199,4 @@ def _nhl_prediction_confidence(home_record: str, away_record: str,
 # Pick generation has been moved to engine/nhl_picks.py to separate
 # game prediction from bet selection. These re-exports keep existing
 # callers working without changes.
-from .nhl_picks import generate_nhl_picks, generate_nhl_picks_with_context  # noqa: F401, E402
+from ..nhl_picks import generate_nhl_picks, generate_nhl_picks_with_context  # noqa: F401, E402
