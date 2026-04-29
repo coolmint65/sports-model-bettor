@@ -35,6 +35,7 @@ import time
 from typing import Any
 
 from engine.live._state import fetch_states
+from engine.live._odds import fetch_live_odds
 from engine.live._store import upsert_state, purge_stale, ensure_table
 
 logging.basicConfig(
@@ -63,25 +64,56 @@ def _handle_signal(signum: int, _frame: Any) -> None:
 
 
 def _poll_sport(sport: str) -> int:
-    """Fetch and persist the live state for one sport. Returns the
-    number of games written. Per-sport try/except so an outage in one
-    sport's ESPN feed doesn't take down the other."""
+    """Fetch and persist the live state + live odds for one sport.
+    Returns the number of games written.
+
+    Two upstream calls per tick:
+      1. ESPN scoreboard → game state (score, period, clock)
+      2. HR live-markets → odds dict per matchup
+
+    They're correlated by AWAY@HOME matchup string. State is the
+    authoritative game list (ESPN is reliable, never empty during
+    games); odds is best-effort overlay (HR may be stale or empty
+    if session expired).
+
+    Per-sport try/except so one outage doesn't kill the loop.
+    """
     try:
         states = fetch_states(sport)
     except Exception as e:
         logger.warning("fetch_states(%s) crashed: %s", sport, e)
         return 0
+
+    if not states:
+        return 0
+
+    # HR live odds keyed by "AWAY@HOME" — best-effort, may be empty.
+    try:
+        odds_map = fetch_live_odds(sport)
+    except Exception as e:
+        logger.warning("fetch_live_odds(%s) crashed: %s", sport, e)
+        odds_map = {}
+
     written = 0
     for s in states:
         try:
+            # Attach odds onto state if HR shipped them. The store
+            # holds one blob per game; merging keeps the predictor
+            # in 3b reading from a single dict.
+            key = f"{s['away']['abbr']}@{s['home']['abbr']}"
+            game_odds = odds_map.get(key)
+            if game_odds:
+                s = {**s, "odds": game_odds}
             upsert_state(sport, s["game_id"], s)
             written += 1
         except Exception as e:
-            logger.warning("live_state upsert failed for %s/%s: %s",
+            logger.warning("live upsert failed for %s/%s: %s",
                            sport, s.get("game_id"), e)
     if written:
-        logger.info("polled %s — %d in-progress game(s) written",
-                    sport, written)
+        logger.info("polled %s — %d game(s) written, %d with HR odds",
+                    sport, written, sum(1 for s in states
+                                         if odds_map.get(
+                                             f"{s['away']['abbr']}@{s['home']['abbr']}")))
     return written
 
 
