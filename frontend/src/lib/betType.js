@@ -52,7 +52,12 @@ const BET_TYPE_LABELS = {
 
   'Period Total': 'Period Total',
   'Period BTS': 'Period Both Teams Score',
-  'Period DNB': 'Period Draw No Bet',
+  // "DNB" (Draw No Bet) was actively confusing — the user read it as
+  // "doesn't score" and questioned a correct W settle on a goal.
+  // Display as plain "Period Winner" since the push-on-tie behaviour
+  // is implicit (most readers interpret a period-winner bet that way
+  // anyway). 2026-04-28.
+  'Period DNB': 'Period Winner',
   'Overtime': 'Overtime',
   'BTS': 'Both Teams Score',
 

@@ -294,18 +294,25 @@ def settle_picks() -> dict:
             home_periods = game.get("home_periods") or []
             away_periods = game.get("away_periods") or []
             parts = pk.split()
-            if len(parts) >= 3 and parts[0].startswith("P"):
+            # Accept both old "P{n} DNB {team}" (3 tokens) and new
+            # "P{n} {team}" (2 tokens) formats. The "DNB" label was
+            # confusing the user; new picks drop it. Settler walks
+            # tokens to find the team rather than hard-indexing.
+            if len(parts) >= 2 and parts[0].startswith("P"):
                 try:
                     period_n = int(parts[0][1:])
                 except ValueError:
                     continue
-                pick_team = parts[2]
+                # Team is the last non-"DNB" token
+                pick_team = next((t for t in reversed(parts[1:]) if t != "DNB"), "")
+                if not pick_team:
+                    continue
                 if period_n < 1 or period_n > game.get("periods_locked", 0):
                     continue
                 hp = home_periods[period_n - 1]
                 ap = away_periods[period_n - 1]
                 if hp == ap:
-                    result = "P"  # DNB pushes on a tied period
+                    result = "P"  # tied period pushes
                 elif pick_team == h:
                     result = "W" if hp > ap else "L"
                 else:

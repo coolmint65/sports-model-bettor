@@ -374,6 +374,7 @@ function SettledTable({ rows }) {
             <th className="px-2 py-2 text-left">Player</th>
             <th className="px-2 py-2 text-left">Type</th>
             <th className="px-2 py-2 text-left">Pick</th>
+            <th className="px-2 py-2 text-right">Actual</th>
             <th className="px-2 py-2 text-right">Odds</th>
             <th className="px-2 py-2 text-right">Edge</th>
             <th className="px-2 py-2 text-right">Result</th>
@@ -387,6 +388,17 @@ function SettledTable({ rows }) {
             const profitTone = r.profit > 0 ? 'text-positive'
                               : r.profit < 0 ? 'text-negative'
                               : 'text-muted-foreground'
+            // Actual stat line vs pick line so the user can scan
+            // "where did the player land". Format: 7 / 9.5 (line)
+            // for an Under pick the user wanted to verify against.
+            // Tinted by result so the eye catches misses fast.
+            const actualTone = r.result === 'W' ? 'text-positive'
+                              : r.result === 'L' ? 'text-negative'
+                              : 'text-muted-foreground'
+            const actualVal = r.actual_value
+            const actualStr = actualVal != null
+              ? (Number.isInteger(Number(actualVal)) ? String(actualVal) : Number(actualVal).toFixed(1))
+              : '–'
             return (
               <tr key={r.id} className="hover:bg-accent/30">
                 <td className="px-4 py-2 text-xs text-muted-foreground tabular-nums whitespace-nowrap">
@@ -398,6 +410,7 @@ function SettledTable({ rows }) {
                 <td className="px-2 py-2 font-semibold text-foreground">{r.player_name}</td>
                 <td className="px-2 py-2 text-muted-foreground">{humanizeBetType(r.bet_type)}</td>
                 <td className="px-2 py-2 text-foreground">{r.pick}</td>
+                <td className={cn('px-2 py-2 text-right font-semibold tabular-nums', actualTone)}>{actualStr}</td>
                 <td className="px-2 py-2 text-right tabular-nums text-muted-foreground">{oddsStr}</td>
                 <td className="px-2 py-2 text-right tabular-nums text-positive">+{Number(r.edge).toFixed(1)}%</td>
                 <td className={cn('px-2 py-2 text-right font-bold',

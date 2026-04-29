@@ -105,14 +105,19 @@ def _settle_period_bts(pk: str, h_periods: list[int], a_periods: list[int]) -> t
 
 def _settle_period_dnb(pk: str, h_periods: list[int], a_periods: list[int],
                        h: str, a: str) -> tuple[str, bool]:
+    """Accepts both old "P{n} DNB {team}" and new "P{n} {team}" formats
+    so backtests run consistently after the 2026-04-28 pick-text rename.
+    """
     parts = pk.split()
-    if len(parts) < 4 or not parts[0].startswith("P"):
+    if len(parts) < 2 or not parts[0].startswith("P"):
         return "", False
     try:
         n = int(parts[0][1:])
     except ValueError:
         return "", False
-    pick_team = parts[3]
+    pick_team = next((t for t in reversed(parts[1:]) if t != "DNB"), "")
+    if not pick_team:
+        return "", False
     if n < 1 or n > min(len(h_periods), len(a_periods)):
         return "", False
     hp, ap = h_periods[n - 1], a_periods[n - 1]

@@ -296,8 +296,15 @@ def _append_period_dnb(picks: list, pred: dict, odds: dict,
             if edge is None or edge <= 0:
                 continue
             picks.append({
+                # bet_type stays "Period DNB" so settler + reliability
+                # tables don't churn. Pick text drops the "DNB" jargon
+                # because the user read it as "doesn't score" and
+                # questioned a correct W settle. Format is now
+                # "P{n} {TEAM}" — the period winner; pushes on a tied
+                # period are implicit and the humanized label
+                # "Period Winner" reinforces it.
                 "type": "Period DNB",
-                "pick": f"P{label} DNB {who}",
+                "pick": f"P{label} {who}",
                 "prob": round(prob, 4),
                 "edge": round(edge, 1),
                 "odds": int(ml),

@@ -513,7 +513,12 @@ ENABLE_MLB_INNING_TOTAL = True
 ENABLE_MLB_INNING_BTS = True
 ENABLE_MLB_INNING_WINNER = True
 ENABLE_MLB_F5_WINNER_3WAY = True
-ENABLE_MLB_TOTAL_OE = True
+# Disabled 2026-04-28 per user — Total O/E (odd vs even total runs)
+# is structurally close to a coin flip and the live tracker has been
+# bleeding on it. Re-enable only if a backtest sweep produces a
+# positive ROI band; until then the picker shouldn't ship picks the
+# user has already flagged as a money-loser.
+ENABLE_MLB_TOTAL_OE = False
 ENABLE_MLB_EXTRA_INNINGS = True
 
 # NHL Phase 1 derivative markets — pure probability extraction from the
