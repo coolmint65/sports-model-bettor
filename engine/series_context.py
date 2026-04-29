@@ -42,20 +42,24 @@ ENABLE_SERIES_CONTEXT = True
 # These are conservative starting points. Track performance and
 # tune via the same factor-ablation pattern the model already uses.
 
-# Elimination game: team facing elimination gets a boost
-# (historically ~55% ATS in NHL/NBA elimination games).
+# Elimination game: team facing elimination "gets a boost".
 #
-# Halved 2026-04-28 from 0.03 -> 0.015 per user feedback: a single
-# +3% xG knob was the sole driver of multiple plus-money picks in one
-# day (POR +3.5 @ +275, PHI ML @ +375 — both teams down 1-3, both
-# edges ~9% from this boost alone) with zero settled live data to
-# validate the magnitude. Underdogs facing elimination DO play harder,
-# but they're losing for a reason — the team about to close them out
-# is usually the better team. Use 0.015 until ≥30 elimination games
-# settle in tracker; then re-tune empirically against the realised
-# ATS rate. Drives both NBA (full + Q1) and NHL series adjustments.
-ELIMINATION_UNDERDOG_BOOST = 0.015    # +1.5% win prob for desperate team
-ELIMINATION_TOTAL_BUMP = 1.02         # 2% higher scoring (adrenaline)
+# Disabled 2026-04-28 per user directive — set to 0 until empirical
+# data validates a non-zero magnitude. History:
+#   - Started at 0.03 (+3% xG) based on a comment citing "~55% ATS"
+#     in NHL/NBA elimination games — no actual NBA-specific evidence.
+#   - Halved to 0.015 the same day after the +3% knob was the sole
+#     driver of multiple plus-money picks (POR +3.5 @ +275, PHI ML
+#     @ +375, both down 1-3, both edges ~9% from this boost alone).
+#   - Removed entirely this commit. User: "they do play harder, but
+#     there's a reason they're about to get eliminated." Until ≥30
+#     elimination games settle in tracker and the realised ATS rate
+#     justifies a non-zero boost, run without the adjustment. Same
+#     for ELIMINATION_TOTAL_BUMP — 2% scoring lift was equally
+#     unvalidated and rode the same logic. Apply via empirical
+#     evidence, not vibes.
+ELIMINATION_UNDERDOG_BOOST = 0.0
+ELIMINATION_TOTAL_BUMP = 1.0
 
 # Closeout game: leading team sometimes coasts
 CLOSEOUT_FAVORITE_FADE = 0.02         # -2% win prob for leading team
@@ -386,29 +390,33 @@ def apply_series_adjustments(
 
     # ── Elimination game ──
     if series["is_elimination"]:
+        # Boost is intentionally 0 (see ELIMINATION_UNDERDOG_BOOST
+        # comment). Math still runs so future tuning lights up
+        # automatically; reasoning lines suppressed when boost is 0
+        # so the user doesn't see "+0% xG boost" cruft on cards.
         if series["home_is_desperate"]:
-            # Home team facing elimination — desperate boost
             home_xg *= (1 + ELIMINATION_UNDERDOG_BOOST)
             away_xg *= (1 - ELIMINATION_UNDERDOG_BOOST * 0.5)
-            reasons.append(
-                f"Home facing elimination (down {hw}-{aw}): "
-                f"desperate team boost (+{ELIMINATION_UNDERDOG_BOOST:.0%} xG)"
-            )
+            if ELIMINATION_UNDERDOG_BOOST > 0:
+                reasons.append(
+                    f"Home facing elimination (down {hw}-{aw}): "
+                    f"desperate team boost (+{ELIMINATION_UNDERDOG_BOOST:.0%} xG)"
+                )
         if series["away_is_desperate"]:
-            # Away team facing elimination
             away_xg *= (1 + ELIMINATION_UNDERDOG_BOOST)
             home_xg *= (1 - ELIMINATION_UNDERDOG_BOOST * 0.5)
-            reasons.append(
-                f"Away facing elimination (down {aw}-{hw}): "
-                f"desperate team boost (+{ELIMINATION_UNDERDOG_BOOST:.0%} xG)"
-            )
-        # Elimination games tend to be slightly higher scoring
+            if ELIMINATION_UNDERDOG_BOOST > 0:
+                reasons.append(
+                    f"Away facing elimination (down {aw}-{hw}): "
+                    f"desperate team boost (+{ELIMINATION_UNDERDOG_BOOST:.0%} xG)"
+                )
         home_xg *= ELIMINATION_TOTAL_BUMP
         away_xg *= ELIMINATION_TOTAL_BUMP
-        reasons.append(
-            f"Elimination game scoring bump "
-            f"(x{ELIMINATION_TOTAL_BUMP:.2f})"
-        )
+        if ELIMINATION_TOTAL_BUMP != 1.0:
+            reasons.append(
+                f"Elimination game scoring bump "
+                f"(x{ELIMINATION_TOTAL_BUMP:.2f})"
+            )
 
     # ── Closeout game (not also elimination — that's Game 7) ──
     elif series["is_closeout"] and not series["is_elimination"]:

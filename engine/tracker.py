@@ -738,12 +738,43 @@ def settle_picks() -> dict:
     except Exception as e:
         logger.warning("Could not refresh recent games: %s", e)
 
+    # Self-heal: auto-push picks that have sat pending >7 days.
+    # The settler can fail to match a row (postponed game ID rewrite,
+    # late-rescheduled doubleheader, etc.) and without a sweep they
+    # rot in the tracker forever, polluting WR% calculations and the
+    # /api/_health "stale POTD" check. 7 days is generous — by then
+    # the underlying game has either been played or formally
+    # cancelled, so a push is the safe fallback. derivative_tracker
+    # uses the same pattern at age >= 1 day; we're more conservative
+    # here because primary picks have higher stakes.
+    from datetime import timedelta
+    stale_cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+    stale = conn.execute(
+        "SELECT id, date, matchup, bet_type, pick FROM picks "
+        "WHERE result IS NULL AND date < ?", (stale_cutoff,),
+    ).fetchall()
+    auto_pushed = 0
+    for row in stale:
+        conn.execute(
+            "UPDATE picks SET result='P', profit=0, settled_at=datetime('now') "
+            "WHERE id=?", (row["id"],),
+        )
+        logger.warning(
+            "settle_picks: auto-pushed stale pending pick id=%s date=%s "
+            "%s %s/%s — older than 7 days, settler never matched",
+            row["id"], row["date"], row["matchup"], row["bet_type"], row["pick"],
+        )
+        auto_pushed += 1
+    if auto_pushed:
+        conn.commit()
+
     pending = conn.execute(
         "SELECT * FROM picks WHERE result IS NULL"
     ).fetchall()
 
     if not pending:
-        return {"settled": 0, "message": "No pending picks"}
+        return {"settled": 0, "auto_pushed": auto_pushed,
+                "message": "No pending picks"}
 
     # Fetch current odds once for closing line capture
     try:

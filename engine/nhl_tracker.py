@@ -510,12 +510,37 @@ def settle_picks() -> dict:
     """Settle all pending NHL picks against final game results."""
     conn = _get_nhl_db()
 
+    # Self-heal: auto-push picks pending >7 days. See engine.tracker
+    # for rationale — settler can fail to match (postponed games,
+    # rescheduled events) and stale rows pollute WR%.
+    from datetime import datetime, timedelta
+    stale_cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+    stale = conn.execute(
+        "SELECT id, date, matchup, bet_type, pick FROM nhl_picks "
+        "WHERE result IS NULL AND date < ?", (stale_cutoff,),
+    ).fetchall()
+    auto_pushed = 0
+    for row in stale:
+        conn.execute(
+            "UPDATE nhl_picks SET result='P', profit=0, settled_at=datetime('now') "
+            "WHERE id=?", (row["id"],),
+        )
+        logger.warning(
+            "NHL settle: auto-pushed stale pending id=%s date=%s "
+            "%s %s/%s — older than 7 days",
+            row["id"], row["date"], row["matchup"], row["bet_type"], row["pick"],
+        )
+        auto_pushed += 1
+    if auto_pushed:
+        conn.commit()
+
     pending = conn.execute(
         "SELECT * FROM nhl_picks WHERE result IS NULL"
     ).fetchall()
 
     if not pending:
-        return {"settled": 0, "message": "No pending NHL picks"}
+        return {"settled": 0, "auto_pushed": auto_pushed,
+                "message": "No pending NHL picks"}
 
     # Group by date to fetch scoreboards
     dates = set()

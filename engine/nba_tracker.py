@@ -562,8 +562,29 @@ def settle_picks() -> dict:
     Handles Q1_SPREAD, Q1_TOTAL, and Q1_ML bet types.
     """
     from .nba_db import get_conn
+    from datetime import datetime, timedelta
 
     conn = get_conn()
+
+    # Self-heal: auto-push picks pending >7 days. Same rationale as
+    # MLB / NHL settlers.
+    stale_cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+    stale = conn.execute(
+        "SELECT id, date, matchup, bet_type, pick FROM nba_picks "
+        "WHERE result IS NULL AND date < ?", (stale_cutoff,),
+    ).fetchall()
+    for row in stale:
+        conn.execute(
+            "UPDATE nba_picks SET result='P', profit=0, settled_at=datetime('now') "
+            "WHERE id=?", (row["id"],),
+        )
+        logger.warning(
+            "NBA settle: auto-pushed stale pending id=%s date=%s "
+            "%s %s/%s — older than 7 days",
+            row["id"], row["date"], row["matchup"], row["bet_type"], row["pick"],
+        )
+    if stale:
+        conn.commit()
 
     pending = conn.execute(
         "SELECT * FROM nba_picks WHERE result IS NULL"
