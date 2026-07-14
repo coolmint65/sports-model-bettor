@@ -176,6 +176,17 @@ def api_place_poll() -> dict:
     return poll_pending_placements()
 
 
+@router.post("/api/bet-queue/placements/settle")
+def api_place_settle(sport: str | None = None) -> dict:
+    """Grade placed placements — walks rows with status='placed' AND
+    result IS NULL AND mode='live' and writes W/L/P/V + profit +
+    settled_at. Currently only tennis has a grader wired. Called by the
+    worker on a cadence; exposed here for manual triggers when
+    debugging."""
+    from engine.queue_placer import settle_placements
+    return settle_placements(sport=sport)
+
+
 @router.get("/api/bet-queue/relay/health")
 def api_relay_health() -> dict:
     """Probe the Beelink relay's /health endpoint. Returns whatever

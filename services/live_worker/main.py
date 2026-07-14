@@ -1557,6 +1557,7 @@ def main() -> None:
         from engine.queue_placer import (
             sweep_and_place as _placer_sweep,
             poll_pending_placements as _placer_poll,
+            settle_placements as _placer_settle,
             PLACER_INTERVAL_S as _PLACER_INTERVAL_S,
         )
         _placer_available = True
@@ -1565,6 +1566,12 @@ def main() -> None:
         _placer_available = False
         _PLACER_INTERVAL_S = 60
     next_placer_at = time.monotonic() + 30  # small startup delay
+    # Settler runs less often than the sweeper — matches take 1-3h to
+    # resolve and the tennis grader triggers a 5-call TennisExplorer
+    # fetch when any tennis rows are pending. Cheap when nothing is
+    # pending (single SELECT); expensive-ish otherwise, so 5 min cadence.
+    _PLACER_SETTLE_INTERVAL_S = 300
+    next_placer_settle_at = time.monotonic() + 60  # startup delay
     # Per-sport closing-odds capture timers. Worker fires capture only
     # when an imminent tip is detected (see _games_imminent), throttled
     # at _CLV_CAPTURE_INTERVAL_S so a long pre-tip window doesn't burn
@@ -1758,6 +1765,21 @@ def main() -> None:
             except Exception as _e:
                 logger.warning("queue placer sweep failed: %s", _e)
             next_placer_at = time.monotonic() + _PLACER_INTERVAL_S
+
+        # Placer settlement — grade placed live-fire rows once their
+        # underlying event resolves. Was a gap: bets placed successfully
+        # sat forever at result=NULL because nothing wrote settle state.
+        if _placer_available and now >= next_placer_settle_at:
+            try:
+                sr = _placer_settle()
+                total_settled = sum(int(b.get("settled", 0) or 0)
+                                     for b in sr.values())
+                if total_settled > 0:
+                    logger.info("queue placer settle: %s", sr)
+            except Exception as _e:
+                logger.warning("queue placer settle failed: %s", _e)
+            next_placer_settle_at = (time.monotonic()
+                                       + _PLACER_SETTLE_INTERVAL_S)
 
         # Closing-odds capture — fire per-sport every minute while any
         # uncaptured pending pick exists for today. The cron path also

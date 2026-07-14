@@ -19,6 +19,7 @@ Public API — everything else is private.
 """
 import logging as _logging
 from ._placer import sweep_and_place, poll_pending_placements
+from ._settler import settle_placements
 from ._config import (
     is_live_fire_enabled, set_live_fire, kill_flag_path,
     relay_url, relay_secret, relay_token,
@@ -54,6 +55,7 @@ del _log, _logging
 __all__ = [
     "sweep_and_place",
     "poll_pending_placements",
+    "settle_placements",
     "is_live_fire_enabled",
     "set_live_fire",
     "kill_flag_path",
