@@ -1,7 +1,15 @@
-fastapi>=0.115.0
+# fastapi + starlette are upper-bounded because 0.139 / starlette 1.x
+# regressed APIRouter.include_router — a fresh install on the Beelink
+# (fastapi 0.139.0 / starlette 1.3.1) registered 0 routes from every
+# included router, dropping the app from 181 → 47 routes. Known-good
+# floor is the 0.115 → 0.135 window with starlette 0.4x → 0.5x.
+# Revisit once a newer fastapi ships with the include_router fix.
+fastapi>=0.115.0,<0.136.0
+starlette>=0.40.0,<1.0.0
 uvicorn>=0.30.0
 pydantic>=2.9.0
 pybaseball>=2.2.7
 numpy>=1.26.0
 pandas>=2.0.0
 xgboost>=2.0.0
+curl_cffi>=0.7.0
