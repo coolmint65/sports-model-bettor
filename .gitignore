@@ -67,12 +67,12 @@ data/queue_placer/
 # copies would overwrite Beelink-fresh models on next `git pull`. Initial
 # Beelink deploy still robocopies data/ per docs/DEPLOY_TO_BEELINK.md.
 #
-# Note: data/models/*.json was tracked historically (700+ files) and stays
-# tracked for now — untracking is a separate operation that requires the
-# Beelink to back up its live copy first so `git pull` doesn't delete them.
-# In the meantime, if the dev box retrains and produces diffs under
-# data/models/, run `git checkout HEAD -- data/models/` to discard the
-# dev-side changes before committing anything else.
+# data/models/ was untracked with `git rm --cached` in the same commit
+# that added it here. On the Beelink's next `git pull`, that operation
+# will delete the tracked files from the working tree — back up
+# data/models/ first (robocopy data\models data\models.backup /E /Z) so
+# a scheduled retrain gap doesn't leave the picker model-less.
+data/models/
 *.pkl
 data/*/*_gbm/
 data/soccer/*/v31_brier.json

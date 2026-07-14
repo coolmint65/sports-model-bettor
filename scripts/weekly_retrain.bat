@@ -13,6 +13,22 @@ REM because sync_tennis.bat retrains tennis daily.
 REM
 REM On failure: each step is independent - a sport that errors out
 REM doesn't abort the rest. Output streams to data\logs\weekly_retrain.log.
+REM
+REM Scheduling: the Beelink is a co-tenant with the HR relay + Chrome +
+REM GeoComply, and training GBM/xgboost is CPU-heavy. Schedule this at
+REM 3 AM ET weekly (off-peak for HR live markets) via Task Scheduler,
+REM and this script self-relaunches at BelowNormal so it never fights
+REM a live placement for the CPU.
+
+REM Self-relaunch at BelowNormal priority so xgboost training doesn't
+REM steal CPU from Chrome/GeoComply during a placement window. The
+REM child process inherits the priority; all `python` calls below
+REM run at BelowNormal without needing per-line wrapping.
+if not "%_LOW_PRIO_%"=="1" (
+    set _LOW_PRIO_=1
+    start "" /belownormal /b /wait cmd /c "%~f0" %*
+    exit /b
+)
 
 cd /d "%~dp0\.."
 echo ============================================
