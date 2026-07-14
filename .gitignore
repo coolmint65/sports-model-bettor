@@ -61,3 +61,30 @@ node_modules/
 # Use arm.bat.example as the template; copy to arm.bat and fill in.
 arm.bat
 data/queue_placer/
+
+# ── Training/calibration outputs — Beelink is the source of truth ──
+# The Beelink retrains locally via weekly_retrain.bat. Committing dev-box
+# copies would overwrite Beelink-fresh models on next `git pull`. Initial
+# Beelink deploy still robocopies data/ per docs/DEPLOY_TO_BEELINK.md.
+#
+# Note: data/models/*.json was tracked historically (700+ files) and stays
+# tracked for now — untracking is a separate operation that requires the
+# Beelink to back up its live copy first so `git pull` doesn't delete them.
+# In the meantime, if the dev box retrains and produces diffs under
+# data/models/, run `git checkout HEAD -- data/models/` to discard the
+# dev-side changes before committing anything else.
+*.pkl
+data/*/*_gbm/
+data/soccer/*/v31_brier.json
+data/*_calibration.json
+data/*_constants.json
+data/*/*_calibration.json
+data/*/*_constants.json
+data/state_mc_*.json
+data/blend_calibration.json
+data/closing_line_weights.json
+data/edge_floors.json
+data/prop_shrinkage.json
+data/stacker_weights.json
+data/tennis_hr_cache.json
+data/hardrock_sports_query.json
