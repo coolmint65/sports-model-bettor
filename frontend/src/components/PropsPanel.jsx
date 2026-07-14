@@ -26,14 +26,19 @@ const fmtMoney = n => `${n > 0 ? '+' : ''}$${(n || 0).toFixed(2)}`
 
 export default function PropsPanel({ sport }) {
   const potdUrl = `/${sport}/player-props/potd`
-  const summaryUrl = `/${sport}/props-tracker/summary`
+  const summaryUrl     = `/${sport}/props-tracker/summary`
+  const potdSummaryUrl = `/${sport}/player-props/potd/summary`
 
   // Hydrate from cache so a remount on tab-switch shows yesterday's
   // POTD + history immediately rather than flashing a spinner.
   const initialPotd = peek(potdUrl)
   const initialSummary = peek(summaryUrl)
+  const initialPotdSummary = peek(potdSummaryUrl)
   const [potd, setPotd] = useState(initialPotd && !initialPotd.message ? initialPotd : null)
   const [summary, setSummary] = useState(initialSummary ?? null)
+  // POTD-specific record so the PotdHero card shows the same W-L block
+  // as the core POTD across the dashboard.
+  const [potdSummary, setPotdSummary] = useState(initialPotdSummary ?? null)
   const [loading, setLoading] = useState(initialSummary === undefined)
   const [err, setErr] = useState(null)
   // Settle feedback: shows the count of newly-settled picks (or
@@ -47,9 +52,11 @@ export default function PropsPanel({ sport }) {
     Promise.all([
       cachedGet(potdUrl).catch(() => null),
       cachedGet(summaryUrl).catch(() => null),
-    ]).then(([p, s]) => {
+      cachedGet(potdSummaryUrl).catch(() => null),
+    ]).then(([p, s, ps]) => {
       setPotd(p && !p.message ? p : null)
       setSummary(s)
+      setPotdSummary(ps || null)
       setErr(s ? null : 'Failed to load props')
     }).finally(() => setLoading(false))
   }
@@ -289,6 +296,7 @@ export default function PropsPanel({ sport }) {
           label={`${sport.toUpperCase()} · Prop Pick of the Day`}
           sport={sport}
           pick={potd}
+          summary={potdSummary}
           accent="primary"
         />
       )}

@@ -14,15 +14,17 @@
  *   sport — 'mlb' | 'nhl' | 'nba' — drives which markets are shown.
  *   home  — { abbreviation } (for ML market labelling)
  *   away  — { abbreviation }
+ *   view  — 'q1' | 'full' (NBA only; ignored elsewhere). Defaults
+ *           to 'q1' for back-compat with single-view callers.
  */
 
 import { cn } from '../../lib/utils'
 
-export default function ModelSignals({ pred, sport, home, away }) {
+export default function ModelSignals({ pred, sport, home, away, view = 'q1' }) {
   const ens = pred?.ensemble
   if (!ens || Object.keys(ens).length === 0) return null
 
-  const markets = marketsFor(sport, pred, home, away)
+  const markets = marketsFor(sport, pred, home, away, view)
   if (markets.length === 0) return null
 
   return (
@@ -118,12 +120,17 @@ function formatWeights(w) {
 }
 
 
-function marketsFor(sport, pred, home, away) {
+function marketsFor(sport, pred, home, away, view = 'q1') {
   const ens = pred?.ensemble || {}
   const mc  = (pred?.mc  && !pred.mc.error)  ? pred.mc  : {}
   const gbm = (pred?.gbm && !pred.gbm.error) ? pred.gbm : {}
-  const pct = n => `${(n * 100).toFixed(1)}%`
-  const num = n => n.toFixed(2)
+  const mcFull = (pred?.mc_full && !pred.mc_full.error) ? pred.mc_full : {}
+  const fullPred = pred?.full || {}
+  const pct = n => `${(Number(n) * 100).toFixed(1)}%`
+  const num = n => {
+    const v = Number(n)
+    return Number.isFinite(v) ? v.toFixed(2) : '—'
+  }
 
   const hAbbr = home?.abbreviation || 'HOME'
 
@@ -131,12 +138,11 @@ function marketsFor(sport, pred, home, away) {
     return [
       {
         label: `${hAbbr} ML (home win)`,
-        // factor_win_prob is the preserved pre-calibration value;
-        // engine.picks.generate_picks overwrites win_prob with the
-        // calibrated number so the Projected Outcome panel agrees
-        // with the pick card. Without this fallback the Factor column
-        // would display the calibrated value, not the raw factor.
-        factor: pred?.factor_win_prob?.home ?? pred?.win_prob?.home,
+        // win_prob IS the factor model's natural output now —
+        // calibration no longer stomps it (see picks.py 2026-05-02
+        // de-stomping). The factor_win_prob backup field has been
+        // retired. Display reads the canonical win_prob directly.
+        factor: pred?.win_prob?.home,
         mc:     mc?.win_prob?.home,
         gbm:    gbm?.home_win,
         blended: ens.home_win,
@@ -186,8 +192,8 @@ function marketsFor(sport, pred, home, away) {
     return [
       {
         label: `${hAbbr} ML (home win)`,
-        // See MLB comment above re: factor_win_prob vs win_prob.
-        factor: pred?.factor_win_prob?.home ?? pred?.win_prob?.home,
+        // win_prob is the canonical factor output; see MLB note above.
+        factor: pred?.win_prob?.home,
         mc:     mc?.win_prob?.home,
         gbm:    null,  // NHL GBM not trained yet
         blended: ens.home_win,
@@ -207,15 +213,57 @@ function marketsFor(sport, pred, home, away) {
   }
 
   if (sport === 'nba') {
+    if (view === 'full') {
+      // Full-game markets — fed by `pred.full` (factor) +
+      // `pred.mc_full` (MC) + `pred.gbm` (GBM has both Q1 and full
+      // targets in one payload). Ensemble keys: home_win,
+      // total_expected, margin_expected.
+      const mcFullMargin = (mcFull?.expected_points?.home != null
+                          && mcFull?.expected_points?.away != null)
+        ? mcFull.expected_points.home - mcFull.expected_points.away
+        : null
+      return [
+        {
+          label: `${hAbbr} ML (home win)`,
+          factor: fullPred?.ml_home,
+          mc:     mcFull?.win_prob?.home,
+          gbm:    gbm?.home_win,
+          blended: ens.home_win,
+          weights: ens.weights_used?.home_win,
+          fmt: pct,
+        },
+        {
+          label: 'Total points',
+          factor: fullPred?.predicted_total,
+          mc:     mcFull?.expected_points?.total,
+          gbm:    gbm?.total_points,
+          blended: ens.total_expected,
+          weights: ens.weights_used?.total,
+          fmt: num,
+        },
+        {
+          label: 'Spread (home margin)',
+          factor: fullPred?.predicted_margin,
+          mc:     mcFullMargin,
+          gbm:    gbm?.margin,
+          blended: ens.margin_expected,
+          weights: ens.weights_used?.margin,
+          fmt: num,
+        },
+      ].filter(m => m.blended != null || m.factor != null)
+    }
+
+    // Q1 view (default). MC + GBM Q1 fields stay shadow-only until
+    // ENABLE_NBA_MC / ENABLE_NBA_GBM flags flip.
     return [
       {
         label: `${hAbbr} Q1 ML (home Q1 win)`,
-        // factor_q1_ml_home is the pre-calibration factor value;
-        // nba_picks.generate_q1_picks overwrites q1_ml_home with the
-        // calibrated value so Projected Outcome agrees with the pick.
-        factor: pred?.factor_q1_ml_home ?? pred?.q1_ml_home,
+        // q1_ml_home IS the canonical factor output (calibration
+        // stomp removed 2026-05-02). The factor_q1_ml_home backup
+        // field has been retired.
+        factor: pred?.q1_ml_home,
         mc:     mc?.win_prob?.home,
-        gbm:    null,  // NBA GBM not trained yet
+        gbm:    gbm?.q1_home_win,
         blended: ens.q1_home_win,
         weights: ens.weights_used?.q1_home_win,
         fmt: pct,
@@ -224,12 +272,21 @@ function marketsFor(sport, pred, home, away) {
         label: 'Q1 total points',
         factor: pred?.predicted_total,
         mc:     mc?.expected_points?.total,
-        gbm:    null,
+        gbm:    gbm?.q1_total_points,
         blended: ens.q1_total_expected,
         weights: ens.weights_used?.q1_total,
         fmt: num,
       },
-    ].filter(m => m.blended != null || m.factor != null)
+      {
+        label: 'Q1 spread (home margin)',
+        factor: null,  // Q1 factor predicts margin via ml_home, not directly
+        mc:     null,
+        gbm:    gbm?.q1_margin,
+        blended: ens.q1_margin_expected,
+        weights: ens.weights_used?.q1_margin,
+        fmt: num,
+      },
+    ].filter(m => m.blended != null || m.factor != null || m.gbm != null)
   }
 
   return []

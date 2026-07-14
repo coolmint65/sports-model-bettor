@@ -8,7 +8,10 @@ import { cachedGet, peek, invalidate } from '../lib/apiCache'
 // Derivative ROI breaks down to cents on small-edge alt markets, so
 // the table needs 2-decimal precision on the P/L column. PickHistory
 // is whole-dollar; this overrides via the profitFormatter prop.
-const derivProfitFmt = n => `$${n.toFixed(2)}`
+const derivProfitFmt = n => {
+  const v = Number(n)
+  return `$${Number.isFinite(v) ? v.toFixed(2) : '0.00'}`
+}
 
 /**
  * DerivativeTracker — Tracker tab default content.
@@ -23,10 +26,11 @@ const derivProfitFmt = n => `$${n.toFixed(2)}`
  *   sport — 'mlb' | 'nhl' | 'nba'
  *   api   — axios-shaped client with .get() / .post()
  */
-export default function DerivativeTracker({ sport, api }) {
-  const summaryUrl = `/${sport}/derivative-tracker/summary`
-  const historyUrl = `/${sport}/derivative-tracker/history`
-  const potdUrl    = `/${sport}/derivative-pick-of-day`
+export default function DerivativeTracker({ sport, api, pickFilter, title }) {
+  const summaryUrl     = `/${sport}/derivative-tracker/summary`
+  const historyUrl     = `/${sport}/derivative-tracker/history`
+  const potdUrl        = `/${sport}/derivative-pick-of-day`
+  const potdSummaryUrl = `/${sport}/derivative-pick-of-day/summary`
 
   // Hydrate from cache so a tab-switch back doesn't flash a spinner.
   const [summary, setSummary] = useState(() => peek(summaryUrl) ?? null)
@@ -35,6 +39,9 @@ export default function DerivativeTracker({ sport, api }) {
     const p = peek(potdUrl)
     return p && !p.message && !p.error ? p : null
   })
+  // Separate POTD record (W-L/profit) so the PotdHero on this page
+  // shows the same record block as the core POTD card.
+  const [potdSummary, setPotdSummary] = useState(() => peek(potdSummaryUrl) ?? null)
   const [loading, setLoading] = useState(peek(summaryUrl) === undefined)
 
   const refresh = () => {
@@ -45,6 +52,9 @@ export default function DerivativeTracker({ sport, api }) {
       cachedGet(potdUrl)
         .then(d => setPotd(d && !d.message && !d.error ? d : null))
         .catch(() => setPotd(null)),
+      cachedGet(potdSummaryUrl)
+        .then(d => setPotdSummary(d || null))
+        .catch(() => {}),
     ])
       .catch(() => {})
       .finally(() => setLoading(false))
@@ -66,17 +76,64 @@ export default function DerivativeTracker({ sport, api }) {
       .catch(() => setLoading(false))
   }
 
+  // Apply caller's filter before the today/past split so per-period
+  // (P1) and per-market sub-views recompute the hero from the right
+  // rows. Identity passthrough when no filter is provided.
+  const filteredHistory = useMemo(
+    () => (pickFilter ? (history || []).filter(pickFilter) : (history || [])),
+    [history, pickFilter],
+  )
+
   const { todaysPicks, pastPicks } = useMemo(() => {
     const now = new Date()
     const today = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`
     const todays = []
     const past = []
-    for (const p of history || []) {
+    for (const p of filteredHistory) {
       if (p.date === today) todays.push(p)
       else past.push(p)
     }
     return { todaysPicks: todays, pastPicks: past }
-  }, [history])
+  }, [filteredHistory])
+
+  // Recompute the hero summary from the filtered rows when a filter
+  // is active. Without this the hero would show full-derivative P/L
+  // even on the P1 sub-tab.
+  const effectiveSummary = useMemo(() => {
+    if (!pickFilter) return summary
+    let wins = 0, losses = 0, pushes = 0, pending = 0, profit = 0
+    const byType = {}
+    for (const r of filteredHistory) {
+      if (r.result === 'W') wins++
+      else if (r.result === 'L') losses++
+      else if (r.result === 'P') pushes++
+      else if (r.result == null) pending++
+      profit += Number(r.profit || 0)
+      const k = r.bet_type || '?'
+      const b = byType[k] || (byType[k] = { total: 0, wins: 0, losses: 0, pending: 0, profit: 0 })
+      b.total += 1
+      if (r.result === 'W') b.wins++
+      else if (r.result === 'L') b.losses++
+      else if (r.result == null) b.pending++
+      b.profit += Number(r.profit || 0)
+    }
+    for (const b of Object.values(byType)) {
+      const settled = b.wins + b.losses
+      b.win_pct = settled ? Math.round(b.wins / settled * 1000) / 10 : 0
+      b.roi = settled ? Math.round(b.profit / settled * 10) / 10 : 0
+      b.profit = Math.round(b.profit * 100) / 100
+    }
+    const settled = wins + losses
+    return {
+      ...byType,
+      _grand: {
+        total: filteredHistory.length,
+        wins, losses, pushes, pending,
+        profit: Math.round(profit * 100) / 100,
+        win_pct: settled ? Math.round(wins / settled * 1000) / 10 : 0,
+      },
+    }
+  }, [summary, filteredHistory, pickFilter])
 
   if (loading && !summary) {
     return (
@@ -87,9 +144,9 @@ export default function DerivativeTracker({ sport, api }) {
     )
   }
 
-  const grand = summary?._grand || {}
-  const typesWithData = summary
-    ? Object.entries(summary)
+  const grand = effectiveSummary?._grand || {}
+  const typesWithData = effectiveSummary
+    ? Object.entries(effectiveSummary)
         .filter(([k, v]) => k !== '_grand' && (v?.total || 0) > 0)
         .sort(([, a], [, b]) => {
           if ((b.roi || 0) !== (a.roi || 0)) return (b.roi || 0) - (a.roi || 0)
@@ -106,10 +163,12 @@ export default function DerivativeTracker({ sport, api }) {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-semibold tracking-tight text-foreground">
-            {sport.toUpperCase()} Derivative Tracker
+            {title || `${sport.toUpperCase()} Derivative Tracker`}
           </h2>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Paper-bet log · top 1 per game above 4% edge
+            {pickFilter
+              ? 'Filtered view · pulls from derivative-tracker data'
+              : 'Paper-bet log · top 1 per game above 4% edge'}
           </p>
         </div>
         <button
@@ -120,15 +179,21 @@ export default function DerivativeTracker({ sport, api }) {
         </button>
       </div>
 
-      {/* Derivative POTD — same shell as the core POTD card so the
-          two read as siblings. Amber accent keeps them visually
-          distinct. */}
-      {potd && potd.matchup && (
+      {/* Derivative POTD — same shell + accent as core / 1st INN /
+          props POTD cards so all four read as visually identical
+          siblings. Earlier the derivative used an amber accent to
+          stand out, but the user wants the entire POTD family on
+          one universal style — the surrounding section header carries
+          enough sport/category context.
+          Hidden on filtered sub-views (P1) — that POTD is the full
+          derivative card, not a P1-specific one. */}
+      {!pickFilter && potd && potd.matchup && (
         <PotdHero
           label={`${sport.toUpperCase()} · Derivative Pick of the Day`}
           sport={sport}
           pick={potd}
-          accent="warning"
+          summary={potdSummary}
+          accent="primary"
         />
       )}
 

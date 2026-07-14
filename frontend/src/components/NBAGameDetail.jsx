@@ -1,5 +1,7 @@
 import { useState } from 'react'
+import { edgeFromBackendPick, findBestQ1Edge } from './nba/detailHelpers'
 import GameDetailShell from './primitives/GameDetailShell'
+import MarketToggle from './primitives/MarketToggle'
 import WinProbBar from './primitives/WinProbBar'
 import StatRow from './primitives/StatRow'
 import SectionCard from './primitives/SectionCard'
@@ -12,27 +14,42 @@ import ModelSignals from './gameDetail/ModelSignals'
 import { cn } from '../lib/utils'
 
 /**
- * NBA Game Detail — Q1 + Full Game side-by-side. The Q1/Full toggle
- * lives on the Bets-tab GameCard list view (NBAScoreboard); the
- * detail page renders BOTH the Full prediction (top) and the Q1
- * prediction (below) so users can see the depth without a tab.
+ * NBA Game Detail — Full Game (default) or Q1 view, switched via the
+ * header MarketToggle. Earlier behaviour stacked both panels which
+ * made it hard to read at a glance; user requested a toggle on
+ * 2026-04-29 so the detail mirrors the Bets-tab toggle pattern.
+ *
+ * The toggle defaults to 'full' even when prediction.full is missing
+ * — falls back to Q1 only if the backend didn't ship Full data
+ * (NBA preseason / partial sync).
  */
 export default function NBAGameDetail({ game, prediction, loading, onBack }) {
   const { home, away } = game
   const hasFull = !!(prediction && prediction.full)
+  const [view, setView] = useState(hasFull ? 'full' : 'q1')
+
+  // Defensive: if prediction lands without `full` we can't honour
+  // 'full', force back to Q1.
+  const activeView = (view === 'full' && !hasFull) ? 'q1' : view
+
+  const toggleOptions = hasFull
+    ? [{ id: 'full', label: 'Full Game' }, { id: 'q1', label: 'Q1' }]
+    : [{ id: 'q1', label: 'Q1' }]
+
+  const headerSlot = toggleOptions.length > 1
+    ? <MarketToggle options={toggleOptions} active={activeView} onChange={setView} />
+    : null
 
   const renderMain = (p) => (
-    <div className="space-y-6">
-      {hasFull && <FullPredictionResults data={p} odds={game.odds} home={home} away={away} />}
-      <Q1PredictionResults data={p} odds={game.odds} home={home} away={away} />
-    </div>
+    activeView === 'full'
+      ? <FullPredictionResults data={p} odds={game.odds} home={home} away={away} />
+      : <Q1PredictionResults data={p} odds={game.odds} home={home} away={away} />
   )
 
   const renderSidebar = (p) => (
-    <div className="space-y-4">
-      {hasFull && <FullBettingPicks data={p} odds={game.odds} home={home} away={away} />}
-      <Q1BettingPicks data={p} odds={game.odds} home={home} away={away} />
-    </div>
+    activeView === 'full'
+      ? <FullBettingPicks data={p} odds={game.odds} home={home} away={away} />
+      : <Q1BettingPicks data={p} odds={game.odds} home={home} away={away} />
   )
 
   return (
@@ -47,6 +64,7 @@ export default function NBAGameDetail({ game, prediction, loading, onBack }) {
       noPredictionCommand="sync_nba.bat --full"
       renderMain={renderMain}
       renderSidebar={renderSidebar}
+      headerSlot={headerSlot}
     />
   )
 }
@@ -208,31 +226,20 @@ function FullPredictionResults({ data, odds, home, away }) {
         </div>
       </SectionCard>
 
-      {full.factors && (
-        <SectionCard title="Key Factors">
-          <div className="space-y-2">
-            {full.factors.pace_factor && (
-              <StatRow label="Pace Factor"
-                       value={`${full.factors.pace_factor.toFixed(2)}x`} />
-            )}
-            {full.factors.home_court_boost != null && (
-              <StatRow label="Home Court Boost"
-                       value={`+${full.factors.home_court_boost} pts`}
-                       valueClassName="positive" />
-            )}
-            {(full.factors.home_b2b || full.factors.away_b2b) && (
-              <StatRow
-                label="Back-to-Back"
-                value={[
-                  full.factors.home_b2b && home.abbreviation,
-                  full.factors.away_b2b && away.abbreviation,
-                ].filter(Boolean).join(', ')}
-                valueClassName="negative"
-              />
-            )}
-          </div>
-        </SectionCard>
-      )}
+      <ModelSignals pred={data} sport="nba" home={home} away={away} view="full" />
+
+      <InjuriesCard
+        home={home}
+        away={away}
+        homeOut={full.factors?.home_roster?.out_players}
+        awayOut={full.factors?.away_roster?.out_players}
+        homeDelta={full.factors?.home_roster?.delta}
+        awayDelta={full.factors?.away_roster?.delta}
+        scopeLabel="pts"
+        impactKey="full_impact"
+      />
+
+      {full.factors && <FullFactorsCard factors={full.factors} home={home} away={away} />}
 
       <WhyThisPick
         pred={full}
@@ -383,7 +390,98 @@ function Q1FactorsCard({ factors: f, home, away }) {
 }
 
 
-function InjuriesCard({ home, away, homeOut, awayOut, homeDelta, awayDelta }) {
+function FullFactorsCard({ factors: f, home, away }) {
+  return (
+    <SectionCard title="Full Game Key Factors">
+      <div className="space-y-2">
+        {f.pace_factor != null && (
+          <StatRow
+            label={
+              <span title="Combined possessions per game vs the league baseline (1.00x = average). Above 1 means more shot attempts; below 1 = slower.">
+                Pace Factor
+              </span>
+            }
+            value={`${f.pace_factor.toFixed(2)}x`}
+          />
+        )}
+        {f.home_court_boost != null && (
+          <StatRow
+            label={
+              <span title="Empirically-calibrated home-team full-game advantage (~+2 pts vs road).">
+                Home Court Boost
+              </span>
+            }
+            value={`+${f.home_court_boost} pts`}
+            valueClassName="positive"
+          />
+        )}
+        {f.rest_adj?.home !== 0 && f.rest_adj?.home != null && (
+          <StatRow
+            label={`${home.abbreviation} on back-to-back`}
+            value={`${f.rest_adj.home > 0 ? '+' : ''}${f.rest_adj.home} pts`}
+            valueClassName={f.rest_adj.home < 0 ? 'negative' : 'positive'}
+          />
+        )}
+        {f.rest_adj?.away !== 0 && f.rest_adj?.away != null && (
+          <StatRow
+            label={`${away.abbreviation} on back-to-back`}
+            value={`${f.rest_adj.away > 0 ? '+' : ''}${f.rest_adj.away} pts`}
+            valueClassName={f.rest_adj.away < 0 ? 'negative' : 'positive'}
+          />
+        )}
+        {f.home_off != null && f.away_off != null && (
+          <StatRow
+            label="Full Game PPG scored"
+            value={`${away.abbreviation} ${f.away_off.toFixed(1)} / ${home.abbreviation} ${f.home_off.toFixed(1)}`}
+          />
+        )}
+        {f.home_def != null && f.away_def != null && (
+          <StatRow
+            label="Full Game PPG allowed"
+            value={`${away.abbreviation} ${f.away_def.toFixed(1)} / ${home.abbreviation} ${f.home_def.toFixed(1)}`}
+          />
+        )}
+        {f.home_off_rtg != null && f.away_off_rtg != null && (
+          <StatRow
+            label={
+              <span title="Points scored per 100 possessions. Pace-adjusted scoring efficiency.">
+                Off Rating
+              </span>
+            }
+            value={`${away.abbreviation} ${f.away_off_rtg.toFixed(1)} / ${home.abbreviation} ${f.home_off_rtg.toFixed(1)}`}
+          />
+        )}
+        {f.home_def_rtg != null && f.away_def_rtg != null && (
+          <StatRow
+            label={
+              <span title="Points allowed per 100 possessions. Lower = better defense.">
+                Def Rating
+              </span>
+            }
+            value={`${away.abbreviation} ${f.away_def_rtg.toFixed(1)} / ${home.abbreviation} ${f.home_def_rtg.toFixed(1)}`}
+          />
+        )}
+        {f.recent_form?.home && (
+          <StatRow
+            label={`${home.abbreviation} recent form`}
+            value={f.recent_form.home}
+          />
+        )}
+        {f.recent_form?.away && (
+          <StatRow
+            label={`${away.abbreviation} recent form`}
+            value={f.recent_form.away}
+          />
+        )}
+      </div>
+    </SectionCard>
+  )
+}
+
+
+function InjuriesCard({ home, away, homeOut, awayOut, homeDelta, awayDelta,
+                        scopeLabel = 'Q1 pts',
+                        impactKey = 'q1_impact' }) {
   const hOut = Array.isArray(homeOut) ? homeOut : []
   const aOut = Array.isArray(awayOut) ? awayOut : []
   if (hOut.length === 0 && aOut.length === 0) return null
@@ -397,6 +495,8 @@ function InjuriesCard({ home, away, homeOut, awayOut, homeDelta, awayDelta }) {
             count={hOut.length}
             delta={homeDelta}
             out={hOut}
+            scopeLabel={scopeLabel}
+            impactKey={impactKey}
           />
         )}
         {aOut.length > 0 && (
@@ -405,6 +505,8 @@ function InjuriesCard({ home, away, homeOut, awayOut, homeDelta, awayDelta }) {
             count={aOut.length}
             delta={awayDelta}
             out={aOut}
+            scopeLabel={scopeLabel}
+            impactKey={impactKey}
           />
         )}
       </div>
@@ -412,7 +514,8 @@ function InjuriesCard({ home, away, homeOut, awayOut, homeDelta, awayDelta }) {
   )
 }
 
-function InjurySide({ abbr, count, delta, out }) {
+function InjurySide({ abbr, count, delta, out, scopeLabel = 'Q1 pts',
+                     impactKey = 'q1_impact' }) {
   return (
     <div>
       <div className="mb-1.5 flex items-center gap-2 text-xs">
@@ -421,34 +524,37 @@ function InjurySide({ abbr, count, delta, out }) {
         </span>
         {typeof delta === 'number' && delta < 0 && (
           <span className="font-semibold tabular-nums text-negative">
-            ({delta.toFixed(1)} Q1 pts)
+            ({delta.toFixed(1)} {scopeLabel})
           </span>
         )}
       </div>
       <ul className="space-y-1">
-        {out.map(p => (
-          <li
-            key={`${abbr}-${p.player_id || p.name}`}
-            className="flex items-baseline justify-between gap-2 text-xs"
-          >
-            <span>
-              {p.starter
-                ? <strong className="text-foreground">{p.name}</strong>
-                : <span className="text-foreground">{p.name}</span>}
-              {p.position && (
-                <span className="ml-1 text-muted-foreground">({p.position})</span>
-              )}
-            </span>
-            <span className="text-negative font-semibold">
-              {(p.status || 'OUT').toUpperCase()}
-              {typeof p.q1_impact === 'number' && p.q1_impact > 0 && (
-                <span className="ml-2 text-muted-foreground tabular-nums">
-                  -{p.q1_impact.toFixed(1)} Q1 pts
-                </span>
-              )}
-            </span>
-          </li>
-        ))}
+        {out.map(p => {
+          const impact = p[impactKey]
+          return (
+            <li
+              key={`${abbr}-${p.player_id || p.name}`}
+              className="flex items-baseline justify-between gap-2 text-xs"
+            >
+              <span>
+                {p.starter
+                  ? <strong className="text-foreground">{p.name}</strong>
+                  : <span className="text-foreground">{p.name}</span>}
+                {p.position && (
+                  <span className="ml-1 text-muted-foreground">({p.position})</span>
+                )}
+              </span>
+              <span className="text-negative font-semibold">
+                {(p.status || 'OUT').toUpperCase()}
+                {typeof impact === 'number' && impact > 0 && (
+                  <span className="ml-2 text-muted-foreground tabular-nums">
+                    -{impact.toFixed(1)} {scopeLabel}
+                  </span>
+                )}
+              </span>
+            </li>
+          )
+        })}
       </ul>
     </div>
   )
@@ -615,40 +721,3 @@ function SeasonContextBanner({ ctx }) {
 }
 
 
-function edgeFromBackendPick(pick) {
-  if (!pick) return null
-  return {
-    label: pick.pick,
-    odds: pick.odds,
-    edge: pick.edge,
-    rating: pick.confidence || 'lean',
-  }
-}
-
-
-function findBestQ1Edge(data, odds, home, away) {
-  const candidates = []
-  if (data.spread_cover_prob != null && odds) {
-    const spreadOdds = odds.q1_spread_home_odds || -110
-    const implied = impliedFromOdds(spreadOdds)
-    const e = (data.spread_cover_prob - implied) * 100
-    if (e > 1.5) {
-      const m = data.predicted_margin || 0
-      const fav = m > 0 ? home.abbreviation : away.abbreviation
-      candidates.push({ label: `${fav} Q1 Spread`, odds: spreadOdds, edge: e })
-    }
-  }
-  if (data.over_prob != null && odds) {
-    const total = data.predicted_total || 0
-    const pickOver = data.over_prob > 0.5
-    const prob = pickOver ? data.over_prob : 1 - data.over_prob
-    const ouOdds = pickOver ? (odds.q1_over_odds || -110) : (odds.q1_under_odds || -110)
-    const implied = impliedFromOdds(ouOdds)
-    const e = (prob - implied) * 100
-    if (e > 1.5) candidates.push({ label: `${pickOver ? 'Over' : 'Under'} ${total.toFixed(1)} Q1`, odds: ouOdds, edge: e })
-  }
-  if (!candidates.length) return null
-  const best = candidates.sort((a, b) => b.edge - a.edge)[0]
-  best.rating = best.edge > 8 ? 'strong' : best.edge > 4 ? 'moderate' : 'lean'
-  return best
-}

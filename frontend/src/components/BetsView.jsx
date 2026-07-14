@@ -8,6 +8,7 @@ import NBAScoreboard from './NBAScoreboard'
 import PropsPanel from './PropsPanel'
 import DerivativeTracker from './DerivativeTracker'
 import FirstInningTracker from './FirstInningTracker'
+import LiveBetsPanel from './LiveBetsPanel'
 
 /**
  * BetsView — the consolidated Bets surface for a sport.
@@ -55,7 +56,12 @@ export default function BetsView({ sport, data, api }) {
 function buildOptions(sport, data) {
   const opts = [{ id: 'full', label: 'Full Game' }]
   if (sport === 'nba') opts.push({ id: 'q1', label: 'Q1' })
+  if (sport === 'nhl') opts.push({ id: 'p1', label: 'P1' })
   if (sport === 'mlb') opts.push({ id: 'firstinning', label: '1st Inn' })
+  // Live betting (Phase 3d) — NBA + NHL only per Phase 3 spec.
+  if (sport === 'nba' || sport === 'nhl') {
+    opts.push({ id: 'live', label: 'Live' })
+  }
   opts.push({ id: 'derivatives', label: 'Derivatives' })
   opts.push({ id: 'props',       label: 'Player Props' })
   return opts
@@ -71,6 +77,9 @@ function MarketContent({ sport, market, data, api }) {
   }
   if (market === 'firstinning' && sport === 'mlb') {
     return <FirstInningTracker />
+  }
+  if (market === 'live' && (sport === 'nba' || sport === 'nhl')) {
+    return <LiveBetsPanel sport={sport} />
   }
 
   // 'full' or NBA 'q1' — main slate scoreboard.
@@ -90,15 +99,27 @@ function MarketContent({ sport, market, data, api }) {
     )
   }
   if (sport === 'nhl') {
+    // NHL: market is 'full' or 'p1'. Re-key each bet's best_pick to
+    // the right view so the card surfaces the appropriate market
+    // (mirrors NBA's Full / Q1 split). Confidence falls back to
+    // 'lean' when the P1 surface has no pick for a game.
+    const view = market === 'p1' ? 'p1' : 'full'
+    const key = view === 'p1' ? 'best_pick_p1' : 'best_pick_full'
+    const bets = Array.isArray(data.bestBets)
+      ? data.bestBets.map(b => {
+          const chosen = b[key] || (key === 'best_pick_full' ? b.best_pick : null)
+          return { ...b, best_pick: chosen, confidence: chosen?.confidence || 'lean' }
+        })
+      : data.bestBets
     return (
       <>
-        <PickOfDayHero sport="nhl" />
+        <PickOfDayHero sport="nhl" view={view} />
         <NHLScoreboard
           games={data.games}
           loading={data.loading}
           progress={data.progress}
           onSelectGame={data.onSelectGame}
-          bestBets={data.bestBets}
+          bestBets={bets}
         />
       </>
     )
@@ -124,6 +145,7 @@ function MarketContent({ sport, market, data, api }) {
           progress={data.progress}
           onSelectGame={data.onSelectGame}
           bestBets={bets}
+          view={view}
         />
       </>
     )

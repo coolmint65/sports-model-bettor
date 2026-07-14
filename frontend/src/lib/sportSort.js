@@ -15,9 +15,16 @@
 
 /** [startMonth, endMonth] inclusive, 1-indexed. */
 export const SPORT_SEASON_WINDOWS = {
-  mlb: [3, 10],   // Spring training spillover -> end of regular season
-  nhl: [10, 6],   // Wraps year-end (Oct -> Jun)
-  nba: [10, 6],   // Wraps year-end (Oct -> Jun)
+  mlb:              [3, 10],   // Spring training spillover -> end of regular season
+  nhl:              [10, 6],   // Wraps year-end (Oct -> Jun)
+  nba:              [10, 6],   // Wraps year-end (Oct -> Jun)
+  f1:               [3, 12],   // Australian GP (Mar) through Abu Dhabi (Dec)
+  afl:              [3, 9],    // Aussie Rules: March -> September Grand Final
+  ufl:              [3, 6],    // Spring football: late March -> championship in June
+  college_baseball: [2, 6],    // NCAA baseball: mid-February -> College World Series in June
+  // Tennis / golf / soccer stay window-less — they run year-round across
+  // tours/tournaments/leagues so there's no meaningful "offseason" at
+  // the top-level sport granularity.
 }
 
 /**

@@ -19,6 +19,10 @@ import { cachedGet, peek } from '../lib/apiCache'
  * Props:
  *   sport    - 'mlb' | 'nhl' | 'nba'
  *   gameId   - the bet.game_id for this card
+ *   scope    - optional family filter ('q1' / 'full' for NBA). When
+ *              the card is showing best_pick_full we filter to
+ *              scope='full' so Q1 transitions don't bleed into the
+ *              Full card's popover. MLB / NHL omit this prop.
  */
 
 const EVENT_LABELS = {
@@ -35,11 +39,13 @@ const EVENT_TONES = {
   line_shift: 'text-foreground',
 }
 
-function PickEventsBadgeImpl({ sport, gameId }) {
+function PickEventsBadgeImpl({ sport, gameId, scope }) {
   // Hydrate from the cross-instance cache so re-renders (and the second
   // mount after a tab-switch) don't trigger a duplicate fetch.
   const url = `/${sport}/pick-events`
-  const params = { game_id: gameId, hours: 24 }
+  const params = scope
+    ? { game_id: gameId, hours: 24, scope }
+    : { game_id: gameId, hours: 24 }
   const initialEvents = peek(url, params)
   const [events, setEvents] = useState(
     Array.isArray(initialEvents) ? initialEvents : (initialEvents !== undefined ? [] : null)

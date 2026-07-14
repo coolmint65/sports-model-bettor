@@ -11,20 +11,39 @@ import PicksTable from './primitives/PicksTable'
  * keeps the legacy `.picks-table` styles for now (table-cell density
  * is its own redesign — Phase 2e polish).
  */
-export default function PickHistory({ summary, history, loading, onRecord, onSettle }) {
+export default function PickHistory({ summary, history, loading, onRecord, onSettle, sport }) {
   const overall = summary?.overall || {}
   const byType = summary?.by_type || {}
 
-  const { todaysPicks, pastPicks } = useMemo(() => {
+  // Partition by settle status, not date. Tomorrow's pending picks
+  // were landing in "Recent History" with the "settled" badge — wrong
+  // and invisible. Active = anything without a result (today, tomorrow,
+  // or older unsettled like postponed/canceled). Past = anything with
+  // W/L/P/V. Inside Active, sort today before tomorrow before later.
+  const { activePicks, pastPicks } = useMemo(() => {
     const now = new Date()
     const today = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`
-    const todays = []
+    const active = []
     const past = []
+    // Pending = no result yet. 'P' (push / refund) IS settled — same
+    // way W/L are. Earlier this incorrectly grouped pushes into Active
+    // because we used "no profit" as a proxy for pending.
+    const isPending = (p) => !p.result || p.result === ''
     for (const p of history || []) {
-      if (p.date === today) todays.push(p)
+      if (isPending(p)) active.push(p)
       else past.push(p)
     }
-    return { todaysPicks: todays, pastPicks: past }
+    // Active picks: today first (offset 0), then tomorrow (1), then
+    // future, then any past-dated stragglers. Stable inside each day.
+    const dayOffset = (p) => {
+      if (!p.date) return 99
+      const d = new Date(`${p.date}T00:00:00`)
+      const t = new Date(`${today}T00:00:00`)
+      const diff = Math.round((d - t) / 86400000)
+      return diff < 0 ? 99 + Math.abs(diff) : diff
+    }
+    active.sort((a, b) => dayOffset(a) - dayOffset(b))
+    return { activePicks: active, pastPicks: past }
   }, [history])
 
   if (loading) {
@@ -37,15 +56,29 @@ export default function PickHistory({ summary, history, loading, onRecord, onSet
   }
 
   const typesWithData = [
-    { key: 'ML',         label: 'Moneyline' },
-    { key: 'O/U',        label: 'Over/Under' },
-    { key: '1st INN',    label: '1st Inning' },
-    { key: 'F5',         label: 'First 5 Innings' },
-    { key: 'RL',         label: 'Run Line' },
-    { key: 'PL',         label: 'Puck Line' },
-    { key: 'Q1_ML',      label: 'Q1 Moneyline' },
-    { key: 'Q1_SPREAD',  label: 'Q1 Spread' },
-    { key: 'Q1_TOTAL',   label: 'Q1 Total' },
+    { key: 'ML',                   label: 'Moneyline' },
+    { key: 'O/U',                  label: 'Over/Under' },
+    { key: '1st INN',              label: '1st Inning' },
+    { key: 'F5',                   label: 'First 5 Innings' },
+    { key: 'RL',                   label: 'Run Line' },
+    { key: 'PL',                   label: 'Puck Line' },
+    { key: 'Q1_ML',                label: 'Q1 Moneyline' },
+    { key: 'Q1_SPREAD',            label: 'Q1 Spread' },
+    { key: 'Q1_TOTAL',             label: 'Q1 Total' },
+    // Basketball framework bet types (WNBA / NCAAM / Euroleague).
+    // The framework's _picks emits these as ML / SPREAD / TOTAL, so
+    // ML reuses the existing key above; SPREAD + TOTAL are basketball-
+    // specific labels.
+    { key: 'SPREAD',               label: 'Spread' },
+    { key: 'TOTAL',                label: 'Total' },
+    // Tennis bet types — same tile shape, separate keys.
+    { key: 'SET_BETTING',          label: 'Set Betting' },
+    { key: 'SET_SPREAD',           label: 'Set Spread' },
+    { key: 'TOTAL_GAMES',          label: 'Total Games' },
+    { key: 'TOTAL_SETS',           label: 'Total Sets' },
+    { key: 'WIN_AT_LEAST_ONE_SET', label: 'Win 1+ Set' },
+    { key: 'P1_TOTAL_GAMES',       label: 'P1 Total Games' },
+    { key: 'P2_TOTAL_GAMES',       label: 'P2 Total Games' },
   ].filter(({ key }) => byType[key] && byType[key].total > 0)
 
   const profitTone = overall.profit > 0
@@ -79,8 +112,11 @@ export default function PickHistory({ summary, history, loading, onRecord, onSet
         </div>
       </div>
 
-      {/* Hero summary */}
-      {overall.total > 0 && (
+      {/* Hero summary — show when there's any activity (pending or
+          settled). Earlier this gated on settled-only and the hero
+          disappeared entirely for fresh leagues that only had pending
+          picks; the user sees "0-0 · $0 · N pending" instead. */}
+      {(overall.total > 0 || overall.pending > 0) && (
         <section className="rounded-lg border border-border bg-card p-5">
           <div className="flex flex-col gap-1">
             <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
@@ -149,18 +185,18 @@ export default function PickHistory({ summary, history, loading, onRecord, onSet
         </section>
       )}
 
-      {/* Today's picks */}
-      {todaysPicks.length > 0 && (
+      {/* Active picks — pending across today + tomorrow + later */}
+      {activePicks.length > 0 && (
         <section className="rounded-lg border border-border bg-card overflow-hidden">
           <div className="flex items-center justify-between px-5 py-3 border-b border-border">
             <h3 className="text-sm font-semibold text-foreground">
-              Today's Picks
+              Active Picks
             </h3>
             <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              {todaysPicks.length} live
+              {activePicks.length} pending
             </span>
           </div>
-          <PicksTable picks={todaysPicks} />
+          <PicksTable picks={activePicks} sport={sport} />
         </section>
       )}
 
@@ -175,7 +211,7 @@ export default function PickHistory({ summary, history, loading, onRecord, onSet
               {pastPicks.length} settled
             </span>
           </div>
-          <PicksTable picks={pastPicks} />
+          <PicksTable picks={pastPicks} sport={sport} />
         </section>
       )}
 

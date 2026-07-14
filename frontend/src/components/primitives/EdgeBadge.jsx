@@ -12,7 +12,12 @@
  */
 
 import { cn } from '../../lib/utils'
+import { humanizeBetType } from '../../lib/betType'
 
+// EdgeBadge-specific overrides. Q1_ML reads as "Q1 WINNER" here (more
+// natural in basketball context) where the central humanizer ships
+// "Q1 ML". Anything not in this map falls through to humanizeBetType,
+// which already covers H1_*, DNB, BTTS, etc. across every sport.
 const TYPE_LABEL = {
   Q1_SPREAD: 'Q1 SPREAD',
   Q1_TOTAL:  'Q1 TOTAL',
@@ -26,6 +31,33 @@ const CONF_STYLE = {
 }
 
 const Q1_STYLE = 'bg-warning/10 text-warning border-warning/30'
+
+
+// Always round to 1 decimal. Prematch picks happen to ship pre-
+// rounded; live picks pass raw float edge_pct values like
+// 19.594585336399327. Without this the live cards rendered
+// "+19.594585336399327%". Defensive at the display layer.
+function formatEdge(edge) {
+  // Coerce to Number — string edges from upstream serializers would
+  // throw `n.toFixed is not a function` and kill the whole card.
+  const n = Number(edge)
+  if (edge == null || !Number.isFinite(n)) return ''
+  const rounded = Math.round(n * 10) / 10
+  const sign = rounded >= 0 ? '+' : ''
+  return `${sign}${rounded.toFixed(1)}%`
+}
+
+function formatStake(stake) {
+  const n = Number(stake)
+  // null/undefined/NaN → hide. 0 → show "0u" so the user knows the
+  // model evaluated the pick and recommends NO stake (overconfidence
+  // gates triggered). User asked for the tag on every card, even 0u.
+  if (stake == null || !Number.isFinite(n)) return null
+  if (n < 0) return null
+  // Trim trailing zero on whole-number stakes: 1.0 -> "1u", 0.5 -> "0.5u"
+  const s = n % 1 === 0 ? n.toFixed(0) : n.toString()
+  return `${s}u`
+}
 
 export default function EdgeBadge({ pick, confidence = 'lean', empty, accent, typeLabel }) {
   if (empty || !pick) {
@@ -42,9 +74,13 @@ export default function EdgeBadge({ pick, confidence = 'lean', empty, accent, ty
     )
   }
 
-  const type = typeLabel || TYPE_LABEL[pick.type] || pick.type
+  const type = typeLabel
+            || TYPE_LABEL[pick.type]
+            || humanizeBetType(pick.type)
+            || pick.type
   const tone = accent === 'q1' ? Q1_STYLE : CONF_STYLE[confidence] || CONF_STYLE.lean
 
+  const stakeLabel = formatStake(pick.stake_units)
   return (
     <div
       className={cn(
@@ -56,8 +92,16 @@ export default function EdgeBadge({ pick, confidence = 'lean', empty, accent, ty
         {type}
       </span>
       <span className="text-sm font-bold leading-none">{pick.pick}</span>
+      {stakeLabel && (
+        <span
+          className="rounded-sm border border-current/40 bg-background/30 px-1.5 py-0.5 text-[10px] font-bold tabular-nums leading-none"
+          title="Recommended stake (units). 1u = your standard wager size."
+        >
+          {stakeLabel}
+        </span>
+      )}
       <span className="ml-auto text-xs font-bold tabular-nums">
-        +{pick.edge}%
+        {formatEdge(pick.edge)}
       </span>
     </div>
   )

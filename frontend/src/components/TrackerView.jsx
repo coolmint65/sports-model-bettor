@@ -4,6 +4,7 @@ import PickHistory from './PickHistory'
 import DerivativeTracker from './DerivativeTracker'
 import PropsPanel from './PropsPanel'
 import FirstInningTracker from './FirstInningTracker'
+import LiveTrackerPanel from './LiveTrackerPanel'
 
 /**
  * TrackerView — sport's Tracker tab with a market-type toggle that
@@ -34,6 +35,10 @@ const FULL_NBA_TYPES = new Set(['ML', 'SPREAD', 'TOTAL', 'ALT SPREAD', 'ALT TOTA
 // PickHistory. 1st INN has its own toggle option that routes to the
 // dedicated FirstInningTracker view.
 const MLB_NON_FULL_TYPES = new Set(['1st INN'])
+// NHL P1 bet types — shared with P2/P3, period disambiguated by pick
+// prefix. The P1 toggle filters DerivativeTracker rows to those whose
+// pick text starts with "P1 " so per-period P/L is its own view.
+const NHL_PERIOD_TYPES = new Set(['Period Total', 'Period BTS', 'Period DNB'])
 
 export default function TrackerView({ sport, api, trackerProps }) {
   const options = buildOptions(sport)
@@ -53,7 +58,16 @@ export default function TrackerView({ sport, api, trackerProps }) {
 function buildOptions(sport) {
   const opts = [{ id: 'full', label: 'Full Game' }]
   if (sport === 'nba') opts.push({ id: 'q1', label: 'Q1' })
+  // NHL P1 — same shape as NBA Q1 but routed through the existing
+  // derivative-tracker data path (Period Total / DNB / BTS rows whose
+  // pick text begins "P1 "). Adds a per-period view without forking
+  // the picks pipeline.
+  if (sport === 'nhl') opts.push({ id: 'p1', label: 'P1' })
   if (sport === 'mlb') opts.push({ id: 'firstinning', label: '1st Inn' })
+  // Live tracker (Phase 3d) — NBA + NHL only.
+  if (sport === 'nba' || sport === 'nhl') {
+    opts.push({ id: 'live', label: 'Live' })
+  }
   opts.push({ id: 'derivatives', label: 'Derivatives' })
   opts.push({ id: 'props',       label: 'Player Props' })
   return opts
@@ -69,6 +83,27 @@ function MarketContent({ sport, market, api, trackerProps }) {
   }
   if (market === 'firstinning' && sport === 'mlb') {
     return <FirstInningTracker />
+  }
+  if (market === 'live' && (sport === 'nba' || sport === 'nhl')) {
+    return <LiveTrackerPanel sport={sport} />
+  }
+  // NHL 'p1' reuses the DerivativeTracker component but pre-filters
+  // its rows to Period* bet types whose pick text starts with "P1 ".
+  // Implemented inside DerivativeTracker via the `pickFilter` prop so
+  // the shared summary/POTD hero recompute from the filtered subset.
+  if (market === 'p1' && sport === 'nhl') {
+    return (
+      <DerivativeTracker
+        sport={sport}
+        api={api}
+        pickFilter={(row) => (
+          NHL_PERIOD_TYPES.has(row.bet_type)
+          && typeof row.pick === 'string'
+          && row.pick.trim().startsWith('P1 ')
+        )}
+        title="P1 Period Picks"
+      />
+    )
   }
   // 'full' or NBA 'q1' — both render PickHistory, possibly filtered.
   return (
@@ -114,6 +149,7 @@ function FilteredPickHistory({ sport, market, summary, history, loading, onRecor
       loading={loading}
       onRecord={onRecord}
       onSettle={onSettle}
+      sport={sport}
     />
   )
 }
@@ -129,14 +165,47 @@ function FilteredPickHistory({ sport, market, summary, history, loading, onRecor
  * from the rows we kept.
  */
 function recomputeSummary(rows, byType, allowedTypes /* Set | null */) {
-  let wins = 0, losses = 0, pushes = 0, pending = 0, profit = 0
+  // Hero + tiles both pull from the FULL cumulative `by_type` summary
+  // shipped by /api/tracker/summary, not the visible /api/tracker/history
+  // slice (LIMIT 50). Per the user's preference: P/L numbers should
+  // reflect every settled pick on file, not just what scrolled into view.
+  //
+  // Filter strategy: when `allowedTypes` is given (NBA q1/full split),
+  // restrict to those bet_types; otherwise keep every type in byType.
+  // For MLB the caller pre-filters byType (drops 1st INN), so allowedTypes
+  // is null here and we trust the caller's keys.
+  const filteredByType = allowedTypes
+    ? Object.fromEntries(
+        Object.entries(byType || {}).filter(([k]) => allowedTypes.has(k))
+      )
+    : (byType || {})
+
+  // Aggregate the kept by_type cells back into the overall hero. F5
+  // is a synthetic tile that already aggregates F5 ML/OU/RL on the
+  // backend (engine/tracker/_summary.py), so skip its component keys
+  // to avoid double-counting when both F5 and its parts are present.
+  let wins = 0, losses = 0, pushes = 0, pending = 0, profit = 0, total = 0
+  const hasAggF5 = Boolean(filteredByType['F5']
+                            && filteredByType['F5'].total > 0)
+  for (const [key, v] of Object.entries(filteredByType)) {
+    if (hasAggF5 && (key === 'F5 ML' || key === 'F5 O/U' || key === 'F5 RL')) {
+      continue
+    }
+    total += v.total || 0
+    wins += v.wins || 0
+    losses += v.losses || 0
+    pushes += v.pushes || 0
+    pending += v.pending || 0
+    profit += Number(v.profit || 0)
+  }
+  const settled = wins + losses
+
+  // CLV stays computed from the visible rows because /api/tracker/summary
+  // ships avg_clv across ALL settled picks — we still want a CLV figure
+  // for non-NBA paths that don't filter at all. Fall back to the
+  // upstream avg_clv when the visible slice is too thin.
   let clvSum = 0, clvN = 0
   for (const r of rows) {
-    if (r.result === 'W') wins++
-    else if (r.result === 'L') losses++
-    else if (r.result === 'P') pushes++
-    else if (r.result == null) pending++
-    profit += Number(r.profit || 0)
     if (r.odds != null && r.closing_odds != null) {
       const betImp = r.odds < 0
         ? Math.abs(r.odds) / (Math.abs(r.odds) + 100)
@@ -148,19 +217,10 @@ function recomputeSummary(rows, byType, allowedTypes /* Set | null */) {
       clvN += 1
     }
   }
-  const settled = wins + losses
-  // Keep only by_type entries for the allowed bet_types. When
-  // allowedTypes is null the caller already pre-filtered byType, so
-  // we pass it through unchanged.
-  const filteredByType = allowedTypes
-    ? Object.fromEntries(
-        Object.entries(byType).filter(([k]) => allowedTypes.has(k))
-      )
-    : byType
+
   return {
     overall: {
-      total: rows.length,
-      wins, losses, pushes, pending,
+      total, wins, losses, pushes, pending,
       profit: Math.round(profit * 100) / 100,
       win_pct: settled > 0 ? Math.round(wins / settled * 1000) / 10 : 0,
       avg_clv: clvN > 0 ? Math.round(clvSum / clvN * 100) / 100 : null,

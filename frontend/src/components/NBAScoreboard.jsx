@@ -5,6 +5,11 @@ import ScoreboardShell from './primitives/ScoreboardShell'
 import FinalRow from './primitives/FinalRow'
 
 function NBAScoreboardImpl(props) {
+  // Derive the family scope from the current view so each card's
+  // PickEventsBadge fetches only that family's transitions, and the
+  // header edge-count label reads correctly per view ("Q1 plays" vs
+  // plain "plays" instead of always saying "Q1").
+  const view = props.view === 'q1' ? 'q1' : 'full'
   return (
     <ScoreboardShell
       {...props}
@@ -12,9 +17,16 @@ function NBAScoreboardImpl(props) {
       loadingLabel="Loading NBA games..."
       emptyPrimary="No NBA games scheduled today."
       emptySub="Check back for the next slate."
-      edgeLabel="Q1 plays with edge"
+      edgeLabel={view === 'q1' ? 'Q1 plays with edge' : 'plays with edge'}
       renderCard={({ game, bet, onClick, key }) => (
-        <NBAGameCard key={key} game={game} bet={bet} onClick={onClick} sport="nba" />
+        <NBAGameCard
+          key={key}
+          game={game}
+          bet={bet}
+          onClick={onClick}
+          sport="nba"
+          pickEventsScope={view}
+        />
       )}
       renderFinal={({ game, onClick, key }) => {
         const q1 = game.q1 || {}
@@ -33,7 +45,7 @@ const NBAScoreboard = memo(NBAScoreboardImpl)
 export default NBAScoreboard
 
 
-function NBAGameCard({ game, bet, onClick, sport }) {
+function NBAGameCard({ game, bet, onClick, sport, pickEventsScope }) {
   const { home, away, status } = game
   const isLive = status.state === 'in'
   const isFinal = status.state === 'post'
@@ -69,6 +81,7 @@ function NBAGameCard({ game, bet, onClick, sport }) {
       liveExtras={liveExtras}
       odds={odds}
       sport={sport}
+      pickEventsScope={pickEventsScope}
     />
   )
 }

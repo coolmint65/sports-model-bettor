@@ -1,6 +1,38 @@
 import { memo } from 'react'
 import { humanizeBetType } from '../../lib/betType'
 import { cn } from '../../lib/utils'
+import MatchupCell from './MatchupCell'
+
+
+/**
+ * Derive stake-units when the row doesn't carry an explicit value.
+ * Mirror of engine._pick_helpers.stake_units_for so historical rows
+ * recorded before the field existed still render a sensible stake.
+ *
+ *   lean     prob 0.52-0.58, low edge          → 0.25u
+ *   moderate prob 0.58+ OR (prob 0.54+ AND edge ≥ 4)  → 0.5u
+ *   strong   prob 0.65+ OR (prob 0.58+ AND edge ≥ 7)   → 1.0u
+ *   premium  strong AND prob ≥ 0.65 AND edge ≥ 10      → 1.5u
+ *
+ * EDGE_STRONG / EDGE_MODERATE thresholds taken from the Python config
+ * defaults (engine/config.py) — keep in sync.
+ */
+function deriveStakeUnits(prob, edge) {
+  if (prob == null) return null
+  const p = Number(prob)
+  const e = Number(edge ?? 0)
+  if (p < 0.52) return 0
+  if (p >= 0.65 || (p >= 0.58 && e >= 7)) {
+    return p >= 0.65 && e >= 10 ? 1.5 : 1
+  }
+  if (p >= 0.58 || (p >= 0.54 && e >= 4)) return 0.5
+  return 0.25
+}
+
+function formatStakeUnits(u) {
+  if (u == null || u <= 0) return '-'
+  return u % 1 === 0 ? `${u}u` : `${u}u`
+}
 
 /**
  * PicksTable — shared table primitive for PickHistory + DerivativeTracker.
@@ -25,6 +57,7 @@ function PicksTableImpl({
   picks,
   typeColumnLabel = 'Type',
   profitFormatter = defaultProfit,
+  sport,
 }) {
   const pct = n => n != null ? `${(n * 100).toFixed(1)}%` : '-'
 
@@ -44,6 +77,7 @@ function PicksTableImpl({
             <Th>Matchup</Th>
             <Th>{typeColumnLabel}</Th>
             <Th>Pick</Th>
+            <Th align="right">Stake</Th>
             <Th align="right">Odds</Th>
             <Th align="right">Prob</Th>
             <Th align="right">Edge</Th>
@@ -77,13 +111,20 @@ function PicksTableImpl({
                 <Td className="text-xs text-muted-foreground whitespace-nowrap">
                   {p.date?.slice(5) || '-'}
                 </Td>
-                <Td className="font-medium text-foreground whitespace-nowrap">
-                  {p.matchup}
+                <Td className="font-medium text-foreground max-w-[14rem]">
+                  <MatchupCell matchup={p.matchup} sport={sport} />
                 </Td>
                 <Td>
                   <TypeBadge>{humanizeBetType(p.bet_type)}</TypeBadge>
                 </Td>
                 <Td className="font-semibold text-foreground">{p.pick}</Td>
+                <Td align="right" className="tabular-nums text-muted-foreground">
+                  {formatStakeUnits(
+                    p.stake_units != null
+                      ? p.stake_units
+                      : deriveStakeUnits(p.model_prob, p.edge)
+                  )}
+                </Td>
                 <Td align="right" className="tabular-nums text-muted-foreground">
                   {p.odds ? `${p.odds > 0 ? '+' : ''}${p.odds}` : '-'}
                 </Td>
@@ -161,6 +202,10 @@ function ResultPill({ result }) {
     W:    { label: 'W',    cls: 'bg-positive/15 text-positive' },
     L:    { label: 'L',    cls: 'bg-negative/15 text-negative' },
     P:    { label: 'P',    cls: 'bg-muted text-muted-foreground' },
+    // 'V' = voided (phantom-bracket pick that didn't actually play, or
+    // postponement past the settle window). Functionally a refund;
+    // distinct from push so the user can tell them apart at a glance.
+    V:    { label: 'VOID', cls: 'bg-muted text-muted-foreground/70' },
   }
   const c = config[result] ?? { label: 'PEND', cls: 'bg-warning/10 text-warning' }
   return (
@@ -176,6 +221,8 @@ function ResultPill({ result }) {
 }
 
 function defaultProfit(n) {
-  // PickHistory uses whole-dollar; DerivativeTracker overrides with .toFixed(2)
-  return `$${n}`
+  // PickHistory uses whole-dollar (rounded). Tennis was returning raw
+  // floats like 60.60606060606061 which overflowed the P/L cell and
+  // line-wrapped — the + ended up on its own line. Rounding fixes both.
+  return `$${Math.round(n)}`
 }

@@ -22,6 +22,24 @@ const BET_TYPE_LABELS = {
   Q1_SPREAD: 'Q1 Spread',
   Q1_TOTAL: 'Q1 Total',
 
+  // Soccer first-half markets — same shape as Q1_* but H1-keyed.
+  // DNB labels mirror Hard Rock exactly: HR ships SOCCER:FT:DNB as
+  // "Winner (Push if Tied)" and SOCCER:P:DNB as "1st Half Winner".
+  // Aligning here means the card label matches the slip the user sees
+  // when they click through to place the bet — no terminology drift.
+  H1_ML:    'H1 ML',
+  H1_DC:    'H1 Double Chance',
+  H1_DNB:   '1st Half Winner',
+  H1_BTTS:  'H1 BTTS',
+  H1_TOTAL: 'H1 Total',
+
+  // Soccer full-game extras — bare keys read as initialisms.
+  DC:   'Double Chance',
+  DNB:  'Winner (Push if Tied)',
+  BTTS: 'Both Teams Score',
+  AH:   'Asian Handicap',
+  OU:   'Over/Under',
+
   F5_ML: 'F5 ML',
   F5_OU: 'F5 O/U',
   F5_SPREAD: 'F5 Spread',
@@ -63,6 +81,19 @@ const BET_TYPE_LABELS = {
 
   'Q1 Team Total': 'Q1 Team Total',
   'Q1 Total O/E': 'Q1 Total Odd / Even',
+
+  // Tennis bet types — engine emits SCREAMING_SNAKE_CASE (matches the
+  // tennis_picks types table), UI surfaces the human form.
+  ML:                       'Moneyline',
+  SET_SPREAD:               'Set Spread',
+  GAME_SPREAD:              'Game Spread',
+  TOTAL_GAMES:              'Total Games',
+  TOTAL_SETS:               'Total Sets',
+  P1_TOTAL_GAMES:           'P1 Games',
+  P2_TOTAL_GAMES:           'P2 Games',
+  WIN_AT_LEAST_ONE_SET:     'Win 1+ Set',
+  SET_BETTING:              'Set Betting',
+  MOST_GAMES:               'Most Games',
 }
 
 export function humanizeBetType(t) {

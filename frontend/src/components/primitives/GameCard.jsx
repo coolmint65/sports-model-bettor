@@ -25,6 +25,7 @@ import RestChips from './RestChips'
 import LineMovedChip from './LineMovedChip'
 import PickEventsBadge from '../PickEventsBadge'
 import { cn } from '../../lib/utils'
+import { humanizeBetType } from '../../lib/betType'
 
 // Confidence accent applied as a left-border color so a slate of
 // cards reads like a heat map. Subtle background tint reinforces
@@ -47,6 +48,8 @@ function GameCardImpl({
   pickAccent,
   restTiredLabel = 'tired',
   sport,
+  pickEventsScope,
+  isPotd = false,
 }) {
   const { home, away, status } = game
   const isLive = status.state === 'in'
@@ -55,9 +58,20 @@ function GameCardImpl({
   const conf = bet?.confidence || 'skip'
   const hasPick = bet?.best_pick && conf !== 'skip'
   const gameTimeLabel = useMemo(
-    () => new Date(game.date).toLocaleTimeString(
-      [], { hour: 'numeric', minute: '2-digit' },
-    ),
+    () => {
+      const d = new Date(game.date)
+      const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+      // Prefix the local-day name (Tue, Wed, ...) when the card's date
+      // isn't TODAY in the viewer's timezone — otherwise tomorrow's
+      // games look like tonight's. Today stays just "8:30 PM".
+      const today = new Date()
+      const sameDay = d.getFullYear() === today.getFullYear()
+        && d.getMonth() === today.getMonth()
+        && d.getDate() === today.getDate()
+      if (sameDay) return time
+      const dow = d.toLocaleDateString([], { weekday: 'short' })
+      return `${dow} ${time}`
+    },
     [game.date],
   )
 
@@ -75,6 +89,19 @@ function GameCardImpl({
       role="button"
       tabIndex={0}
     >
+      {/* POTD star — top-right corner. Surfaces the active Pick of the
+          Day before the calendar rolls over (key for far-east leagues
+          whose POTD pick is on tomorrow ET). Mint-themed to match the
+          POTD hero's accent so users link the two visually. */}
+      {isPotd && (
+        <span
+          className="absolute -top-1.5 -right-1.5 z-10 inline-flex items-center gap-0.5 rounded-full bg-primary px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-primary-foreground shadow"
+          title="Pick of the Day"
+        >
+          ★ POTD
+        </span>
+      )}
+
       {/* Top status row — LIVE/FINAL inline so the team-row score on
           the right never collides with an absolute corner pill. Pre-game
           renders the EdgeBadge here instead; the slot is single-occupant. */}
@@ -101,10 +128,18 @@ function GameCardImpl({
           </div>
           {sport && bet?.game_id && (
             <div className="flex-shrink-0">
-              <PickEventsBadge sport={sport} gameId={bet.game_id} />
+              <PickEventsBadge sport={sport} gameId={bet.game_id} scope={pickEventsScope} />
             </div>
           )}
         </div>
+      )}
+
+      {/* Secondary derivative badge — only renders when the core has
+          no pick AND a non-skip derivative exists. Replaces (not
+          augments) the "NO PICK" empty badge: one bet per card always. */}
+      {isPre && !hasPick && bet?.best_derivative
+        && (bet.best_derivative.confidence || 'lean') !== 'skip' && (
+        <DerivativeBadge pick={bet.best_derivative} />
       )}
 
       {isPre && <RestChips rest={bet?.rest} home={home} away={away} tiredLabel={restTiredLabel} />}
@@ -153,6 +188,54 @@ function GameCardImpl({
     </div>
   )
 }
+
+/**
+ * DerivativeBadge — secondary EdgeBadge variant for the derivative
+ * pick attached to a card. Visually subordinate to the main EdgeBadge:
+ * smaller text, muted color, "DERIV" prefix so it's never confused
+ * with the core headline.
+ *
+ * Renders nothing when pick is null (parent already gates on
+ * confidence != 'skip').
+ */
+function DerivativeBadge({ pick }) {
+  if (!pick) return null
+  // Coerce to Number — backend serialization is reliable for picks_core
+  // output, but downstream (POTD, signal log, partial JSON merges) can
+  // occasionally hand us a stringified edge. Numeric.toFixed throws
+  // on strings; this kills the whole card render. Defensive.
+  const edge = Number(pick.edge ?? 0)
+  const odds = pick.odds
+  const oddsLabel = odds == null ? ''
+    : odds > 0 ? `+${odds}` : `${odds}`
+  const conf = pick.confidence || 'lean'
+  const tone = conf === 'strong'
+    ? 'border-positive/40 bg-positive/[0.06] text-positive'
+    : conf === 'moderate'
+      ? 'border-primary/40 bg-primary/[0.06] text-primary'
+      : 'border-border bg-muted/40 text-muted-foreground'
+  return (
+    <div className={cn(
+      'flex items-center gap-2 rounded-md border px-2.5 py-1 text-[11px]',
+      tone,
+    )}>
+      <span className="text-[9px] font-bold uppercase tracking-wider opacity-70">
+        Deriv
+      </span>
+      <span className="text-[10px] font-semibold uppercase tracking-wider">
+        {humanizeBetType(pick.type) || pick.type}
+      </span>
+      <span className="font-semibold text-foreground/90 truncate flex-1">
+        {pick.pick}
+      </span>
+      <span className="tabular-nums text-foreground/80">{oddsLabel}</span>
+      <span className="font-bold tabular-nums">
+        {edge >= 0 ? '+' : ''}{Number.isFinite(edge) ? edge.toFixed(1) : '0.0'}%
+      </span>
+    </div>
+  )
+}
+
 
 const GameCard = memo(GameCardImpl)
 export default GameCard

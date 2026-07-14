@@ -18,16 +18,33 @@ export default function TeamRow({ team, isLive, isFinal, sport }) {
   const logo = resolveTeamLogo(sport, team.abbreviation, team.logo)
   return (
     <div className="flex items-center gap-2.5 min-w-0">
-      {logo && (
+      {logo ? (
         <img
           src={logo}
           alt=""
           className="h-8 w-8 flex-shrink-0 rounded-full object-contain bg-foreground/[0.06] ring-1 ring-border p-0.5"
         />
+      ) : (
+        // Initials fallback for leagues without a logo CDN (Euroleague,
+        // RealGM-sourced international leagues). Keeps the row's visual
+        // rhythm consistent across sports — no jagged "logos sometimes,
+        // sometimes not" layout shift.
+        <div
+          className="h-8 w-8 flex-shrink-0 rounded-full bg-primary/15 ring-1 ring-border flex items-center justify-center text-[10px] font-bold text-primary"
+          aria-hidden="true"
+        >
+          {(team.abbreviation || '?').slice(0, 3)}
+        </div>
       )}
-      <span className="text-sm font-bold text-foreground tabular-nums">
-        {team.abbreviation}
-      </span>
+      {/* Skip the abbreviation text when the fallback badge already
+          shows it — otherwise the row reads "[MAD] MAD Real Madrid"
+          with the team code repeated twice. Logo path keeps the
+          abbreviation since the image isn't a text label. */}
+      {logo && (
+        <span className="text-sm font-bold text-foreground tabular-nums">
+          {team.abbreviation}
+        </span>
+      )}
       <span className="text-sm text-muted-foreground truncate hidden sm:inline">
         {team.name}
       </span>

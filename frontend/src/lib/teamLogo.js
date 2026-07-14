@@ -17,9 +17,6 @@
 // sportslogos.net both block hotlinking with 403s intermittently).
 const LOGO_OVERRIDE = {
   mlb: {
-    // Yellow throwback cap — 1974-1984 era. Brown SD letters on
-    // yellow reads cleanly against dark surfaces where the modern
-    // brown-on-brown swinging friar disappears.
     SD:  '/logos/mlb/sd-throwback.png',
     SDP: '/logos/mlb/sd-throwback.png',
     NYY: '/logos/mlb/nyy.svg',
@@ -27,6 +24,9 @@ const LOGO_OVERRIDE = {
   },
   nhl: {},
   nba: {},
+  wnba: {},
+  ncaam: {},
+  ncaaw: {},
 }
 
 // Abbr aliases for ESPN CDN slug fallback. The canonical model abbr
@@ -35,7 +35,28 @@ const ABBR_ALIAS = {
   mlb: { AZ: 'ari', SDP: 'sd', CWS: 'chw', WAS: 'wsh', TBR: 'tb', KCR: 'kc', SFG: 'sf' },
   nhl: { LAK: 'la', SJS: 'sj', NJD: 'nj', TBL: 'tb' },
   nba: { NOP: 'no', GSW: 'gs', UTAH: 'utah' },
+  wnba: {},
+  ncaam: {},
+  ncaaw: {},
 }
+
+// ESPN CDN sport slugs. Some basketball leagues (Euroleague, KBL etc)
+// aren't covered by ESPN at all — those fall through to no logo and
+// the TeamRow component handles the null cleanly.
+const ESPN_SPORT_SLUG = {
+  mlb: 'mlb',
+  nhl: 'nhl',
+  nba: 'nba',
+  // Summer League teams share NBA team IDs + logos exactly.
+  nba_summer_league: 'nba',
+  wnba: 'wnba',
+  ncaam: 'mens-college-basketball',
+  ncaaw: 'womens-college-basketball',
+}
+
+// WNBA + NCAA logos use the plain `{slug}.png` path, not the
+// `scoreboard/{slug}.png` variant NBA/NHL/MLB use.
+const _PLAIN_LOGO_LEAGUES = new Set(['wnba', 'ncaam', 'ncaaw'])
 
 export function resolveTeamLogo(sport, abbr, espnLogo) {
   const key = abbr ? String(abbr).toUpperCase() : ''
@@ -43,7 +64,11 @@ export function resolveTeamLogo(sport, abbr, espnLogo) {
   if (override) return override
   if (espnLogo) return espnLogo
   if (!key) return null
+  const sportSlug = ESPN_SPORT_SLUG[sport]
+  if (!sportSlug) return null  // league not on ESPN CDN (Euroleague etc.)
   const slug = ((ABBR_ALIAS[sport] || {})[key] || key.toLowerCase()).toLowerCase()
-  const sportSlug = sport === 'mlb' ? 'mlb' : sport === 'nhl' ? 'nhl' : 'nba'
+  if (_PLAIN_LOGO_LEAGUES.has(sport)) {
+    return `https://a.espncdn.com/i/teamlogos/${sportSlug}/500/${slug}.png`
+  }
   return `https://a.espncdn.com/i/teamlogos/${sportSlug}/500/scoreboard/${slug}.png`
 }
