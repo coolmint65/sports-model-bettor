@@ -57,3 +57,7 @@ data/hardrock_headers.json
 data/hr_discover/
 node_modules/
 .env
+# Auto-placer arm script — contains the HR relay token. Never commit.
+# Use arm.bat.example as the template; copy to arm.bat and fill in.
+arm.bat
+data/queue_placer/

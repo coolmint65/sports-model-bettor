@@ -1,0 +1,33 @@
+@echo off
+REM Auto-placer arm script — copy this file to `arm.bat` and fill in the
+REM values below. `arm.bat` is gitignored so the token never leaves your
+REM machine.
+REM
+REM Running arm.bat sets the three env vars, then calls start.bat.
+REM Every child process (Backend-API, Frontend, Live-Worker) inherits
+REM the env vars from this parent CMD session.
+REM
+REM Kill switch is the on-disk flag in the Placements tab — click
+REM "Turn Off" (or "Un-arm") to halt without needing to close windows.
+REM Closing this CMD window won't halt on its own, but on the next
+REM restart the env vars will be gone → automatic dry-run.
+REM
+REM To go back to dry-run mode: just run start.bat instead of arm.bat.
+
+cd /d "%~dp0"
+
+REM ─── Auto-placer env vars ─────────────────────────────────────
+
+REM Beelink relay URL (from the Table Tennis project's operator).
+set HR_RELAY_URL=http://100.80.245.68:7478
+
+REM Relay auth token (shared with the Table Tennis project). Paste the
+REM full token PiBot sent you. Do NOT commit this file.
+set HR_RELAY_TOKEN=PASTE_TOKEN_HERE
+
+REM Live-fire enable. Must equal "1" for real bets to fire. Combined
+REM with the on-disk flag from the Placements tab.
+set AUTO_BET_LIVE=1
+
+REM ─── Launch the app with those vars in the environment ────────
+call start.bat

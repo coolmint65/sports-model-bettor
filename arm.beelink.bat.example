@@ -1,0 +1,42 @@
+@echo off
+REM Beelink-side arm script. Copy to `arm.bat` on the Beelink itself.
+REM Tuned for colocation with PiBot's relay + Chrome bridge:
+REM   - HR_RELAY_URL uses 127.0.0.1 (relay is on THIS box, no
+REM     Tailscale hop needed).
+REM   - .venv (Python 3.12) is activated first — the Beelink's
+REM     system Python is 3.14+ and lacks scikit-learn/scipy wheels,
+REM     so start.bat's bare `python` command would crash on
+REM     ModuleNotFoundError without this.
+REM   - start.bat runs at BelowNormal priority so Chrome/GeoComply
+REM     always win the CPU during a placement.
+
+cd /d "%~dp0"
+
+REM ─── Auto-placer env vars ─────────────────────────────────────
+
+REM Relay is on this same Beelink — localhost. Never the Tailscale
+REM IP from here; that would add a hairpin hop for no reason.
+set HR_RELAY_URL=http://127.0.0.1:7478
+
+REM Relay auth token. Shared with the Table Tennis project.
+set HR_RELAY_TOKEN=PASTE_TOKEN_HERE
+
+REM Live-fire enable. Must equal "1" for real bets to fire.
+set AUTO_BET_LIVE=1
+
+REM ─── Activate the venv so 3.12 python wins over system 3.14 ──
+REM Beelink's system Python is 3.14, which has no wheels for
+REM scikit-learn/scipy on Windows. The venv was built on 3.12 with
+REM full wheel coverage. Without this line, start.bat's bare
+REM `python -m uvicorn ...` would fall back to system 3.14 and
+REM ModuleNotFoundError on the first fastapi import.
+call .venv\Scripts\activate.bat
+
+REM ─── Launch at BelowNormal so Chrome/GeoComply own the CPU ────
+REM start.beelink.bat is the slim variant — backend + worker + data
+REM sync, no frontend. Frontend runs on the dev box. The
+REM /belownormal flag propagates the priority hint to child windows
+REM so Chrome/GeoComply always win the CPU during a placement.
+REM `/wait` keeps this arm.bat window open until start.beelink.bat
+REM exits so you can see launcher output.
+start "" /belownormal /wait cmd /c start.beelink.bat
