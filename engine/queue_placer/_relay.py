@@ -336,6 +336,55 @@ def poll_result(dedup_key: str) -> dict:
     return _request("GET", "/place-result", params={"dedup_key": dedup_key})
 
 
+def history_closed(days_back: int = 30) -> list[dict]:
+    """Pull the HR-native settled-bets history via the relay.
+
+    The relay's POST /history forwards to api.hardrocksportsbook.com,
+    pulling sessionToken out of the body and resending it as a header.
+    Path /mybets/closed returns HR's authoritative settle state per
+    ticket — won/lost/void/cashout are all HR's own labels, so the
+    settler avoids re-deriving outcomes from ESPN scores (misses voids
+    on retirement, wrong on cash-outs, etc.).
+
+    Returns the parsed `bet[]` list from HR (empty on any error — the
+    settler falls back to per-sport match-result grading).
+    """
+    from datetime import datetime, timedelta, timezone
+    try:
+        session_token = session_pull()
+    except RelayError:
+        return []
+    now = datetime.now(timezone.utc)
+    body = {
+        "path": "/mybets/closed",
+        "body": {
+            "from": (now - timedelta(days=days_back)).isoformat()[:19],
+            "to":   (now + timedelta(days=1)).isoformat()[:19],
+            "locale": "enus-us-x-fl",
+            "sessionToken": session_token,
+        },
+    }
+    try:
+        raw = _request("POST", "/history", body=body)
+    except RelayError as e:
+        logger.warning("relay /history failed: %s", e)
+        return []
+    # Relay may wrap HR's response the same way /place does:
+    #   {status, body: "<HR JSON string>"} → unwrap once.
+    inner: Any = raw
+    if isinstance(inner, dict) and isinstance(inner.get("body"), str):
+        try:
+            inner = json.loads(inner["body"])
+        except json.JSONDecodeError as e:
+            logger.warning("relay /history body not JSON: %s", e)
+            return []
+    if isinstance(inner, dict):
+        bets = inner.get("bet") or inner.get("bets") or []
+    else:
+        bets = inner if isinstance(inner, list) else []
+    return [b for b in bets if isinstance(b, dict)]
+
+
 def verify_token() -> dict:
     """Probe /place with a deliberately-bogus payload to check whether
     the token is accepted. Distinguishes three outcomes so the caller
