@@ -62,6 +62,28 @@ def refresh_potd_for_line_movement(sport: str,
     if not pending:
         return {"updated": 0, "skipped": 0, "invalidated": 0}
 
+    # Lock POTDs whose game has tipped off / first-pitched / dropped
+    # the puck. Pre-game, the line / drift refresh can swap or invalidate
+    # the row freely; once the game is live, the user is committed to
+    # what they saw at lock time and we shouldn't change it under them.
+    # Build a (game_id -> game_status) map from the canonical games
+    # table so the loop below can short-circuit on live/final games.
+    games_table = {"mlb": "games", "nhl": "nhl_games", "nba": "nba_games"}[sport]
+    game_id_col = "mlb_game_id" if sport == "mlb" else "game_id"
+    pending_gids = {str(p.get("game_id") or "") for p in pending}
+    pending_gids.discard("")
+    locked_gids: set[str] = set()
+    if pending_gids:
+        placeholders = ",".join("?" * len(pending_gids))
+        rows = conn.execute(
+            f"SELECT {game_id_col} AS gid, status FROM {games_table} "
+            f"WHERE {game_id_col} IN ({placeholders})",
+            tuple(pending_gids),
+        ).fetchall()
+        for r in rows:
+            if (r["status"] or "").lower() in ("live", "final", "postponed"):
+                locked_gids.add(str(r["gid"]))
+
     # Build a (game_id -> headline_bet_type) map so we can invalidate
     # POTDs whose lock has drifted away from the GameCard's best_pick.
     headline_for_game: dict[str, str] = {}
@@ -79,17 +101,35 @@ def refresh_potd_for_line_movement(sport: str,
             if bp and bp.get("type"):
                 headline_for_game[gid] = bp["type"]
 
-    picks_table = "picks" if sport == "mlb" else f"{sport}_picks"
+    from ..hockey import HOCKEY_LEAGUE_REGISTRY as _HOCKEY
+    from ..basketball import LEAGUE_REGISTRY as _BB
+    if sport == "mlb" or (sport in _HOCKEY and sport != "nhl") or (
+        sport in _BB and sport != "nba"
+    ):
+        picks_table = "picks"
+    else:
+        picks_table = f"{sport}_picks"
     updated = 0
     skipped = 0
     invalidated = 0
+    locked_count = 0
     for row in pending:
         pot_table = row.pop("_table", "pick_of_day")
+
+        # Lock-on-live: once the game has tipped off, the POTD is
+        # frozen — no drift invalidation, no line refresh. The user
+        # locked in their POTD pre-game and the displayed pick
+        # shouldn't change mid-game just because the model now likes
+        # a different bet on the same matchup. Postponed games also
+        # land here; the settler auto-pushes them separately.
+        gid_key = str(row.get("game_id") or "")
+        if gid_key and gid_key in locked_gids:
+            locked_count += 1
+            continue
 
         # Drift check: if the GameCard's current best_pick for this
         # game uses a different bet_type than the locked POTD, drop
         # the lock so the next select_potd re-aligns with the card.
-        gid_key = str(row.get("game_id") or "")
         if gid_key and gid_key in headline_for_game:
             row_view = "full" if pot_table == "pick_of_day_full" else "q1"
             if sport != "nba" or row_view == view:
@@ -158,7 +198,8 @@ def refresh_potd_for_line_movement(sport: str,
 
     if updated or invalidated:
         conn.commit()
-    return {"updated": updated, "skipped": skipped, "invalidated": invalidated}
+    return {"updated": updated, "skipped": skipped,
+            "invalidated": invalidated, "locked_live": locked_count}
 
 
 def update_potd_closing_odds(sport: str) -> dict:
@@ -169,49 +210,76 @@ def update_potd_closing_odds(sport: str) -> dict:
     time. Since each call overwrites with the freshest available price,
     the LAST update before settle_potd() runs is effectively the closing
     line.
-    """
-    if sport not in ("mlb", "nhl", "nba"):
-        return {"updated": 0, "skipped": 0, "reason": f"unsupported sport {sport!r}"}
 
+    NBA full-game POTDs live in ``pick_of_day_full``; this walks both
+    tables for sport=="nba" so the full-game CLV pipeline doesn't go
+    permanently dark.
+    """
+    # Per-sport closing-odds resolver. mlb/nhl/nba have proper
+    # implementations that hit each sport's dedicated odds endpoint;
+    # framework leagues (basketball + hockey + tennis) fall through to
+    # the generic resolver which pulls the most recent HR odds we have
+    # cached for each pending POTD's matchup. Returns (id, None) pairs
+    # when there's no data — callers tolerate that gracefully.
     _ensure_potd_table(sport)
     conn = _get_conn(sport)
 
-    pending = conn.execute(
-        "SELECT id, game_id, matchup, bet_type, pick FROM pick_of_day "
-        "WHERE result IS NULL"
-    ).fetchall()
-    if not pending:
-        return {"updated": 0, "skipped": 0}
-
-    resolver = {
+    builtin_resolvers = {
         "mlb": _resolve_mlb_closing_for_pending,
         "nhl": _resolve_nhl_closing_for_pending,
         "nba": _resolve_nba_closing_for_pending,
-    }[sport]
+    }
+    resolver = builtin_resolvers.get(sport, _resolve_generic_closing_for_pending)
 
-    try:
-        pairs = resolver(pending)
-    except Exception as e:
-        logger.warning("%s POTD closing-odds resolver crashed: %s", sport, e)
-        return {"updated": 0, "skipped": len(pending), "reason": str(e)}
+    tables = ["pick_of_day"]
+    if sport == "nba":
+        tables.append("pick_of_day_full")
 
+    total_pending = 0
     updated = 0
-    for pid, closing in pairs:
-        if closing is None:
+    for table in tables:
+        pending = conn.execute(
+            f"SELECT id, game_id, matchup, bet_type, pick FROM {table} "
+            f"WHERE result IS NULL"
+        ).fetchall()
+        if not pending:
             continue
-        conn.execute(
-            "UPDATE pick_of_day SET closing_odds = ?, "
-            "       closing_odds_updated_at = datetime('now') "
-            "WHERE id = ?",
-            (int(closing), pid),
-        )
-        updated += 1
+        total_pending += len(pending)
 
-    skipped = len(pending) - updated
+        try:
+            pairs = resolver(pending)
+        except Exception as e:
+            logger.warning("%s POTD closing-odds resolver crashed (%s): %s",
+                           sport, table, e)
+            continue
+
+        for pid, closing in pairs:
+            if closing is None:
+                continue
+            conn.execute(
+                f"UPDATE {table} SET closing_odds = ?, "
+                f"       closing_odds_updated_at = datetime('now') "
+                f"WHERE id = ?",
+                (int(closing), pid),
+            )
+            updated += 1
+
+    skipped = total_pending - updated
     if updated:
         conn.commit()
         logger.info("POTD closing odds (%s): updated %d, skipped %d",
                     sport, updated, skipped)
+    elif total_pending > 0:
+        # Loud-but-not-catastrophic warning: the resolver didn't
+        # produce a single closing-odds match for any pending POTD.
+        # Usually means HR's odds feed was unreachable for the
+        # matchups we're holding. Without this log, the closing_odds
+        # column quietly stays NULL and CLV vanishes for the day.
+        logger.warning(
+            "POTD closing odds (%s): no resolvable pairs from %d "
+            "pending POTDs. CLV will be NULL until the next refresh.",
+            sport, total_pending,
+        )
     return {"updated": updated, "skipped": skipped}
 
 
@@ -292,77 +360,24 @@ def _resolve_nba_closing_for_pending(pending: list) -> list[tuple]:
     return out
 
 
-def _fetch_nhl_odds_map() -> dict:
-    """Pull current NHL h2h/spreads/totals from the-odds-api, keyed by AWAY@HOME."""
-    key_file = Path(__file__).resolve().parent.parent.parent / "data" / "odds_api_key.txt"
-    api_key = (os.environ.get("ODDS_API_KEY")
-               or (key_file.read_text().strip() if key_file.exists() else None))
-    if not api_key:
-        return {}
-    url = ("https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds/"
-           f"?apiKey={api_key}&regions=us&markets=h2h,spreads,totals"
-           "&oddsFormat=american&bookmakers=draftkings")
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "POTDClosing/1.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = _json.loads(resp.read().decode())
-    except Exception as e:
-        logger.warning("NHL odds fetch failed: %s", e)
-        return {}
+def _resolve_generic_closing_for_pending(pending: list) -> list[tuple]:
+    """Cold-start resolver for sports without a dedicated closing-odds
+    feed (basketball framework, hockey framework, tennis). Returns
+    (id, None) for every pending POTD so the caller logs the warning
+    and CLV stays NULL until a real resolver is wired up. Lives as a
+    stub so the dispatch table doesn't silently exclude these sports."""
+    return [(r["id"], None) for r in pending]
 
-    _NHL_TEAM_ABBR = {
-        "Anaheim Ducks": "ANA", "Utah Hockey Club": "UTA",
-        "Boston Bruins": "BOS", "Buffalo Sabres": "BUF",
-        "Calgary Flames": "CGY", "Carolina Hurricanes": "CAR",
-        "Chicago Blackhawks": "CHI", "Colorado Avalanche": "COL",
-        "Columbus Blue Jackets": "CBJ", "Dallas Stars": "DAL",
-        "Detroit Red Wings": "DET", "Edmonton Oilers": "EDM",
-        "Florida Panthers": "FLA", "Los Angeles Kings": "LAK",
-        "Minnesota Wild": "MIN", "Montreal Canadiens": "MTL",
-        "Nashville Predators": "NSH", "New Jersey Devils": "NJD",
-        "New York Islanders": "NYI", "New York Rangers": "NYR",
-        "Ottawa Senators": "OTT", "Philadelphia Flyers": "PHI",
-        "Pittsburgh Penguins": "PIT", "San Jose Sharks": "SJS",
-        "Seattle Kraken": "SEA", "St. Louis Blues": "STL",
-        "Tampa Bay Lightning": "TBL", "Toronto Maple Leafs": "TOR",
-        "Vancouver Canucks": "VAN", "Vegas Golden Knights": "VGK",
-        "Washington Capitals": "WSH", "Winnipeg Jets": "WPG",
-    }
-    out: dict = {}
-    for g in data or []:
-        home = g.get("home_team", "")
-        away = g.get("away_team", "")
-        h_ab = _NHL_TEAM_ABBR.get(home, home[:3].upper())
-        a_ab = _NHL_TEAM_ABBR.get(away, away[:3].upper())
-        parsed = {"provider": "DraftKings"}
-        for book in g.get("bookmakers", []):
-            for market in book.get("markets", []):
-                mkey = market.get("key")
-                for o in market.get("outcomes", []):
-                    price = o.get("price")
-                    point = o.get("point")
-                    name = o.get("name", "")
-                    if mkey == "h2h":
-                        if name == home:
-                            parsed["home_ml"] = price
-                        elif name == away:
-                            parsed["away_ml"] = price
-                    elif mkey == "spreads":
-                        if name == home:
-                            parsed["home_spread_odds"] = price
-                            parsed["home_spread_point"] = point
-                        elif name == away:
-                            parsed["away_spread_odds"] = price
-                            parsed["away_spread_point"] = point
-                    elif mkey == "totals":
-                        if "over" in name.lower():
-                            parsed["over_odds"] = price
-                            parsed["over_under"] = point
-                        elif "under" in name.lower():
-                            parsed["under_odds"] = price
-        if parsed.get("home_ml"):
-            out[f"{a_ab}@{h_ab}"] = parsed
-    return out
+
+def _fetch_nhl_odds_map() -> dict:
+    """Pull current NHL h2h/spreads/totals from Hard Rock, keyed by
+    AWAY@HOME. Was sourced from the-odds-api until 2026-05-11."""
+    try:
+        from scrapers.hardrock_odds import fetch_nhl as _hr_nhl
+        return _hr_nhl() or {}
+    except Exception as e:
+        logger.warning("NHL odds fetch (HR) failed: %s", e)
+        return {}
 
 
 def _lookup_by_abbr_with_aliases(h_abbr: str, a_abbr: str,

@@ -14,6 +14,7 @@ from datetime import datetime
 from .mlb_predict import predict_matchup, MLB_AVG_RPG
 from .config import MLB_JUICE_WALL as JUICE_WALL, MLB_BET_RELIABILITY, get_flag
 from .db import get_conn
+from ._tz import et_today_str
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +80,7 @@ def generate_picks(home_team_id: int, away_team_id: int,
         home/away_team_id: MLB team IDs
         home/away_pitcher_id: Starting pitcher IDs
         venue: Ballpark name
-        odds: Real DraftKings odds dict from Odds API:
+        odds: Real sportsbook odds dict (Hard Rock primary):
               {home_ml, away_ml, over_under, over_odds, under_odds,
                home_spread_odds, away_spread_odds,
                home_spread_point, away_spread_point}
@@ -203,107 +204,84 @@ def generate_picks(home_team_id: int, away_team_id: int,
     home_ml = odds.get("home_ml")
     away_ml = odds.get("away_ml")
 
-    if home_ml and home_ml >= JUICE_WALL and _ml_within_cap(home_ml):
-        edge = (home_wp - _implied(home_ml)) * 100
-        if edge > 0:
-            picks.append({
-                "type": "ML", "pick": h_abbr, "prob": round(home_wp, 4),
-                "edge": round(edge, 1), "odds": home_ml,
-            })
+    # Migrated 2026-05-02 to engine.picks_core.score_pick. Shared
+    # core handles juice wall + odds cap + belief gate + calibration
+    # + edge ceiling + edge floor in one place.
+    from .picks_core import score_pick as _score_pick
+    if home_ml is not None:
+        scored = _score_pick({
+            "type": "ML", "pick": h_abbr,
+            "raw_prob": home_wp, "odds": home_ml,
+        }, sport="mlb", juice_wall=JUICE_WALL)
+        if scored:
+            picks.append(scored)
+    if away_ml is not None:
+        scored = _score_pick({
+            "type": "ML", "pick": a_abbr,
+            "raw_prob": away_wp, "odds": away_ml,
+        }, sport="mlb", juice_wall=JUICE_WALL)
+        if scored:
+            picks.append(scored)
 
-    if away_ml and away_ml >= JUICE_WALL and _ml_within_cap(away_ml):
-        edge = (away_wp - _implied(away_ml)) * 100
-        if edge > 0:
-            picks.append({
-                "type": "ML", "pick": a_abbr, "prob": round(away_wp, 4),
-                "edge": round(edge, 1), "odds": away_ml,
-            })
-
-    # ── Over/Under ──
+    # ── Over/Under ──  Migrated 2026-05-02 to picks_core.score_pick.
+    # MLB-specific operator policy (MLB_ALLOW_OU_OVER/UNDER) and the
+    # NegBin-residual soft-compress (compress_win_prob) stay here as
+    # pre-pipeline shaping; everything past that goes through the
+    # shared core.
     vegas_total = odds.get("over_under")
     if vegas_total and pred.get("over_under"):
         ou_data = _find_ou(pred["over_under"], vegas_total)
         if ou_data:
             ou_pick_over = ou_data["over"] > ou_data["under"]
-            # Soft-compress the raw side probability the same way ML
-            # gets shaped (engine.win_prob.compress_win_prob). The 244-
-            # pick tracker showed O/U above the 60% bucket hit ~54%
-            # real WR — same overconfidence pattern as ML pre-cap. The
-            # NegBin matrix already widened the raw distribution; this
-            # catches any residual upper-tail bias before edge math
-            # runs against vegas's implied price.
-            from .win_prob import compress_win_prob
-            ou_prob_raw = max(ou_data["over"], ou_data["under"])
-            ou_prob = compress_win_prob(
-                ou_prob_raw,
-                get_flag("MLB_OU_PROB_FLOOR", 0.40),
-                get_flag("MLB_OU_PROB_CAP", 0.60),
-            )
-            ou_label = f"{'Over' if ou_pick_over else 'Under'} {vegas_total}"
-
-            real_ou_odds = odds.get("over_odds") if ou_pick_over else odds.get("under_odds")
-            if real_ou_odds:
-                ou_implied = _implied(real_ou_odds)
-            else:
-                ou_implied = 0.524
-                real_ou_odds = -110
-
-            edge = (ou_prob - ou_implied) * 100
-            # Direction filter: skip disabled sides (Overs or Unders).
-            # get_flag() consults the runtime overrides table first so
-            # an auto-applied "MLB_ALLOW_OU_UNDER=False" suppresses the
-            # pick without a source-code edit.
             ou_allowed = (ou_pick_over and get_flag("MLB_ALLOW_OU_OVER", True)) or \
                          ((not ou_pick_over) and get_flag("MLB_ALLOW_OU_UNDER", True))
-            if edge > 0 and real_ou_odds >= JUICE_WALL and ou_allowed:
-                picks.append({
-                    "type": "O/U", "pick": ou_label, "prob": round(ou_prob, 4),
-                    "edge": round(edge, 1), "odds": real_ou_odds,
-                })
+            if ou_allowed:
+                from .win_prob import compress_win_prob
+                ou_prob = compress_win_prob(
+                    max(ou_data["over"], ou_data["under"]),
+                    get_flag("MLB_OU_PROB_FLOOR", 0.40),
+                    get_flag("MLB_OU_PROB_CAP", 0.60),
+                )
+                real_ou_odds = (odds.get("over_odds") if ou_pick_over
+                                else odds.get("under_odds")) or -110
+                from .picks_core import score_pick as _score_pick
+                scored = _score_pick({
+                    "type": "O/U",
+                    "pick": f"{'Over' if ou_pick_over else 'Under'} {vegas_total}",
+                    "raw_prob": ou_prob,
+                    "odds": real_ou_odds,
+                }, sport="mlb", juice_wall=JUICE_WALL)
+                if scored:
+                    picks.append(scored)
 
-    # ── First Inning (NRFI/YRFI) ──
-    # Disabled by default (ENABLE_MLB_NRFI in config.py).
-    # Backtest shows 1st INN is a money loser (12-14, 46.2%, -$400).
-    # The pitcher first-inning scoreless % blending produces unrealistic probs
-    # (80%+) that don't calibrate to actual outcomes.
+    # ── First Inning (NRFI/YRFI) ──  Migrated to picks_core.score_pick.
+    # Operator policy (ENABLE_MLB_NRFI, MLB_ALLOW_NRFI/YRFI direction
+    # flags) and the side selection by max(nrfi, yrfi) stay here.
     if get_flag("ENABLE_MLB_NRFI", True):
         nrfi = fi.get("nrfi", 0.5)
         nrfi_pick = "NRFI" if nrfi > 0.5 else "YRFI"
         nrfi_prob = nrfi if nrfi > 0.5 else fi.get("yrfi", 0.5)
-        # NRFI = under 0.5 first-inning runs; YRFI = over.
-        # Resolution order:
-        #   1. HR's `inning_totals["I1"]` from the Phase 1 derivative
-        #      scrape — this is the actual per-event NRFI/YRFI line
-        #      (Over/Under 0.5 first-inning runs).
-        #   2. Legacy `nrfi_*_odds` keys from older odds APIs.
-        #   3. Rolling median fallback (more accurate than the -120
-        #      hardcode the legacy path used).
-        i1 = (odds.get("inning_totals") or {}).get("I1") or {}
-        if nrfi_pick == "NRFI":
-            nrfi_odds = (i1.get("under_odds")
-                         or odds.get("nrfi_under_odds")
-                         or _nrfi_fallback_odds("NRFI"))
-        else:
-            nrfi_odds = (i1.get("over_odds")
-                         or odds.get("nrfi_over_odds")
-                         or _nrfi_fallback_odds("YRFI"))
-        nrfi_edge = (nrfi_prob - _implied(nrfi_odds)) * 100
         allow = (nrfi_pick == "NRFI" and get_flag("MLB_ALLOW_NRFI", True)) or \
                 (nrfi_pick == "YRFI" and get_flag("MLB_ALLOW_YRFI", True))
-        # NRFI and YRFI both gated at the global 4% lean floor. Empirical
-        # calibration already corrects for historical WR drift before
-        # this check runs, so the previously asymmetric gate (NRFI 1%,
-        # YRFI 5%) was redundant. See config.MLB_*_MIN_EDGE.
-        min_edge_required = (
-            get_flag("MLB_YRFI_MIN_EDGE", 4.0)
-            if nrfi_pick == "YRFI"
-            else get_flag("MLB_NRFI_MIN_EDGE", 4.0)
-        )
-        if nrfi_edge > min_edge_required and allow:
-            picks.append({
-                "type": "1st INN", "pick": nrfi_pick, "prob": round(nrfi_prob, 4),
-                "edge": round(nrfi_edge, 1), "odds": nrfi_odds,
-            })
+        if allow:
+            i1 = (odds.get("inning_totals") or {}).get("I1") or {}
+            if nrfi_pick == "NRFI":
+                nrfi_odds = (i1.get("under_odds")
+                             or odds.get("nrfi_under_odds")
+                             or _nrfi_fallback_odds("NRFI"))
+            else:
+                nrfi_odds = (i1.get("over_odds")
+                             or odds.get("nrfi_over_odds")
+                             or _nrfi_fallback_odds("YRFI"))
+            from .picks_core import score_pick as _score_pick
+            scored = _score_pick({
+                "type": "1st INN",
+                "pick": nrfi_pick,
+                "raw_prob": nrfi_prob,
+                "odds": nrfi_odds,
+            }, sport="mlb", juice_wall=JUICE_WALL)
+            if scored:
+                picks.append(scored)
 
     # ── Run Line ──
     # Use real odds when available, otherwise derive from ML
@@ -334,48 +312,46 @@ def generate_picks(home_team_id: int, away_team_id: int,
     # Direction filter for RL: tracker data shows +1.5 dogs are profitable
     # (40-27, 59.7%) while -1.5 favorites are disastrous (3-9, 25%).
 
-    # Home side - use the correct probability based on spread direction
-    if home_rl_odds and home_rl_odds >= JUICE_WALL and home_rl_point is not None:
-        # home_rl_point < 0 = home is -1.5 favorite → use home_minus probability
-        # home_rl_point > 0 = home is +1.5 underdog → use home_plus probability
+    # Migrated 2026-05-02 to engine.picks_core.score_pick. The flag
+    # gate (MLB_ALLOW_RL_UNDERDOG / FAVORITE) stays here because it's
+    # MLB-specific operator policy, not a structural pipeline gate —
+    # operator can disable an entire RL direction independently.
+    from .picks_core import score_pick as _score_pick
+    if home_rl_point is not None:
         is_dog = home_rl_point > 0
         rl_allowed = (is_dog and get_flag("MLB_ALLOW_RL_UNDERDOG", True)) or \
                      ((not is_dog) and get_flag("MLB_ALLOW_RL_FAVORITE", True))
-        rl_prob = rl_home_minus if home_rl_point < 0 else rl_home_plus
-        edge = (rl_prob - _implied(home_rl_odds)) * 100
-        if edge > 0 and rl_allowed:
+        if rl_allowed and home_rl_odds is not None:
+            rl_prob = rl_home_minus if home_rl_point < 0 else rl_home_plus
             sign = "+" if home_rl_point > 0 else ""
-            picks.append({
+            scored = _score_pick({
                 "type": "RL",
                 "pick": f"{h_abbr} {sign}{home_rl_point}",
-                "prob": round(rl_prob, 4),
-                "edge": round(edge, 1),
+                "raw_prob": rl_prob,
                 "odds": home_rl_odds,
-            })
-
-    # Away side - same logic
-    if away_rl_odds and away_rl_odds >= JUICE_WALL and away_rl_point is not None:
-        # away_rl_point > 0 = away is +1.5 underdog → use away_plus probability
-        # away_rl_point < 0 = away is -1.5 favorite → use away_minus probability
+            }, sport="mlb", juice_wall=JUICE_WALL)
+            if scored:
+                picks.append(scored)
+    if away_rl_point is not None:
         is_dog = away_rl_point > 0
         rl_allowed = (is_dog and get_flag("MLB_ALLOW_RL_UNDERDOG", True)) or \
                      ((not is_dog) and get_flag("MLB_ALLOW_RL_FAVORITE", True))
-        rl_prob = rl_away_plus if away_rl_point > 0 else rl_away_minus
-        edge = (rl_prob - _implied(away_rl_odds)) * 100
-        if edge > 0 and rl_allowed:
+        if rl_allowed and away_rl_odds is not None:
+            rl_prob = rl_away_plus if away_rl_point > 0 else rl_away_minus
             sign = "+" if away_rl_point > 0 else ""
-            picks.append({
+            scored = _score_pick({
                 "type": "RL",
                 "pick": f"{a_abbr} {sign}{away_rl_point}",
-                "prob": round(rl_prob, 4),
-                "edge": round(edge, 1),
+                "raw_prob": rl_prob,
                 "odds": away_rl_odds,
-            })
+            }, sport="mlb", juice_wall=JUICE_WALL)
+            if scored:
+                picks.append(scored)
 
     # ── F5 (First 5 Innings) ──
-    # Disabled by default (ENABLE_MLB_F5 in config.py). Requires real DK
-    # F5 odds from the per-event Odds API markets -- synthetic pricing is
-    # not supported for F5 (implied probabilities vary too much by SP).
+    # Disabled by default (ENABLE_MLB_F5 in config.py). Requires real F5
+    # odds from a per-event market source -- synthetic pricing is not
+    # supported for F5 (implied probabilities vary too much by SP).
     if get_flag("ENABLE_MLB_F5", False):
         f5 = pred.get("f5") or {}
         _append_f5_picks(picks, f5, odds, h_abbr, a_abbr)
@@ -388,44 +364,21 @@ def generate_picks(home_team_id: int, away_team_id: int,
     from .mlb_derivative_picks import append_derivative_picks
     append_derivative_picks(picks, pred, odds, h_abbr, a_abbr)
 
-    # Empirical recalibration. The factor + MC + GBM blend is
-    # systemically over-confident at the upper tail (tracker showed the
-    # 80%+ predicted bucket only hit ~50% real WR). We replace each
-    # pick's `prob` with the bucket's empirical WR from the tracker
-    # data, then recompute `edge` against that calibrated probability.
-    # Buckets without enough samples pass the raw value through, so
-    # cold-start picks aren't penalised.
-    from .empirical_calibration import calibrate as _calibrate
-    for p in picks:
-        prob = p.get("prob")
-        p_odds = p.get("odds")
-        if prob is None:
-            continue
-        # Route the pick through granular calibration when we have
-        # both edge and odds — the calibrator will fall back to the
-        # coarse bucket automatically when per-quadrant data is thin.
-        cal = _calibrate(
-            p["type"], float(prob), sport="mlb",
-            edge=p.get("edge"), odds=p_odds,
-            pick_text=p.get("pick"),
-        )
-        p["prob_raw"] = round(float(prob), 4)
-        p["prob"] = round(float(cal), 4)
-        if p_odds is not None and _valid_odds(p_odds):
-            p["edge"] = round((cal - _implied(int(p_odds))) * 100, 1)
+    # Legacy per-pick calibration loop DELETED 2026-05-02. Every MLB
+    # pick (ML, RL, O/U, 1st INN, F5 ML/OU/RL, ALT RL via shop_alt_*)
+    # now flows through picks_core.score_pick which calibrates inline.
 
-    # Push the ML calibration back onto pred["win_prob"] so the
-    # "Projected Outcome" WP on the frontend matches the ML pick's
-    # calibrated probability.
-    wp = pred.get("win_prob") or {}
-    home_wp = wp.get("home")
-    if home_wp is not None:
-        pred.setdefault("factor_win_prob", dict(wp))
-        cal_home = float(_calibrate("ML", float(home_wp)))
-        pred["win_prob"] = {
-            "home": round(cal_home, 4),
-            "away": round(1.0 - cal_home, 4),
-        }
+    # NOTE: pred["win_prob"] used to get re-stomped with the
+    # calibrated ML prob to match the "Projected Outcome" panel to the
+    # pick card. Two problems with that:
+    #   (1) calibrators are trained on winning-side prob and inverted
+    #       the bar when home was the dog;
+    #   (2) blend_calibration on overconfident sports (NHL especially)
+    #       crushed favorites below 50%, flipping the perceived
+    #       favorite even when it shouldn't.
+    # Per-pick prob in the loop above is already calibrated for
+    # ranking. Leave pred["win_prob"] as the raw factor/MC/GBM blend
+    # output so the display bar reflects the model's natural belief.
 
     # Annotate each pick with a probability band so the UI can render a
     # confidence histogram around the calibrated point estimate. Clamp
@@ -438,9 +391,11 @@ def generate_picks(home_team_id: int, away_team_id: int,
         p["prob_high"] = round(min(1.0, prob + ci_hw), 4)
         p["ci_half_width"] = ci_hw
 
-    # Re-filter: edge may have flipped negative after calibration.
-    # Drop those rows so the UI never shows a "pick" that's actually
-    # negative-EV under our calibrated probability.
+    # Defense-in-depth edge recheck. picks_core.score_pick already
+    # rejects edge<=0 after calibration (line ~256 in picks_core.py),
+    # so this is theoretically redundant. Kept because the legacy
+    # paths above this point may add picks via direct append outside
+    # picks_core; the sweep ensures nothing leaks through.
     picks = [p for p in picks if (p.get("edge") or 0) > 0]
 
     # ── Edge Enhancements ──
@@ -458,30 +413,26 @@ def generate_picks(home_team_id: int, away_team_id: int,
         picks.extend(alt_ou)
 
         # 4. CLV Confidence: adjust reliability based on historical CLV
-        clv_cache: dict[str, float] = {}
+        # in the (bet_type x direction) cell. Direction-blind aggregates
+        # were averaging Over+Under, masking asymmetric markets.
+        clv_cache: dict[tuple[str, str], float] = {}
         for p in picks:
             bt = p.get("type", "")
-            if bt not in clv_cache:
-                clv_cache[bt] = get_clv_reliability("mlb", bt) or 1.0
-            p["clv_reliability"] = clv_cache[bt]
+            pk = p.get("pick", "")
+            cache_key = (bt, pk[:5].lower())  # cheap direction proxy
+            if cache_key not in clv_cache:
+                clv_cache[cache_key] = (
+                    get_clv_reliability("mlb", bt, pick_text=pk) or 1.0
+                )
+            p["clv_reliability"] = clv_cache[cache_key]
 
         # 5. Line Movement: annotate picks with sharp money signals
-        date_str = datetime.now().strftime("%Y-%m-%d")
+        date_str = et_today_str()
         matchup_key = f"{date_str}_{a_abbr}@{h_abbr}"
         annotate_line_movement(picks, "mlb", matchup_key, odds)
 
     except Exception as e:
         logger.warning("Edge enhancements error: %s", e)
-
-    # Conservatism ladder: for every pick whose primary probability is
-    # below the activation threshold, swap to the safest same-direction
-    # sibling that still clears our edge + juice guardrails. Runs after
-    # alt-line shopping so alt candidates are available as ladder rungs.
-    try:
-        from .conservatism import apply_ladder as _conservatism_ladder
-        picks = _conservatism_ladder(picks, pred, odds, "mlb", h_abbr, a_abbr)
-    except Exception as e:
-        logger.warning("MLB conservatism ladder error: %s", e)
 
     # Adjusted EV: edge * reliability weight * CLV modifier * line move modifier.
     # Reliability is auto-tuned from settled tracker history when there's
@@ -499,7 +450,11 @@ def generate_picks(home_team_id: int, away_team_id: int,
 
     # Confidence tags + 1st INN exemption live in engine._pick_helpers
     # so a future tweak lands in one place across all three sports.
-    from ._pick_helpers import tag_confidence
+    from ._pick_helpers import tag_confidence, filter_by_data_driven_floors
+    # Apply data-driven per-cell floor (engine.edge_floors) BEFORE
+    # confidence tagging so a NOPLAY-banned cell never surfaces with
+    # a "lean"/"moderate" badge.
+    picks = filter_by_data_driven_floors("mlb", picks)
     tag_confidence(picks)
 
     # Cache picks on the prediction dict so any surface that shares
@@ -514,16 +469,30 @@ def generate_picks(home_team_id: int, away_team_id: int,
 
 
 def get_best_pick(picks: list[dict]) -> dict | None:
-    """Return the single best pick (highest edge) from a picks list."""
+    """Return the single best pick (highest edge) from a picks list.
+
+    Prefers picks with a real stake recommendation (`stake_units > 0`)
+    so shadow picks (NOPLAY cells / below-floor edges that emit at 0u
+    for calibration learning) don't headline the user-facing card.
+    User flagged MLB CHC@STL 2026-05-29 showing 'MONEYLINE STL [0u]
+    +5.5%' as the card's main pick — shadow picks should be recorded
+    but not surfaced as the bet recommendation.
+
+    Falls through to a 0u pick only when every non-skip candidate is
+    shadow — keeps the card showing *something* over going blank.
+    """
     playable = [p for p in picks if p.get("confidence") != "skip"]
-    return playable[0] if playable else None
+    if not playable:
+        return None
+    staked = [p for p in playable if (p.get("stake_units") or 0) > 0]
+    return staked[0] if staked else playable[0]
 
 
 def _append_f5_picks(picks: list, f5: dict, odds: dict,
                       h_abbr: str, a_abbr: str) -> None:
-    """Generate F5 ML / O/U / RL picks from model + real DK F5 odds.
+    """Generate F5 ML / O/U / RL picks from model + real F5 odds.
 
-    Skips any sub-market when real DK odds are missing -- F5 pricing
+    Skips any sub-market when real F5 odds are missing -- F5 pricing
     varies too much with starting pitchers to use a synthetic baseline.
     """
     if not f5:
@@ -533,26 +502,27 @@ def _append_f5_picks(picks: list, f5: dict, odds: dict,
     f5_home_wp = wp.get("home", 0.5)
     f5_away_wp = wp.get("away", 0.5)
 
-    # ── F5 Moneyline ──
+    # ── F5 Moneyline ──  Migrated to picks_core.score_pick.
     if get_flag("MLB_ALLOW_F5_ML", True):
+        from .picks_core import score_pick as _score_pick
         f5_home_ml = odds.get("f5_home_ml")
         f5_away_ml = odds.get("f5_away_ml")
-        if f5_home_ml and f5_home_ml >= JUICE_WALL:
-            edge = (f5_home_wp - _implied(f5_home_ml)) * 100
-            if edge > 0:
-                picks.append({
-                    "type": "F5 ML", "pick": h_abbr, "prob": round(f5_home_wp, 4),
-                    "edge": round(edge, 1), "odds": f5_home_ml,
-                })
-        if f5_away_ml and f5_away_ml >= JUICE_WALL:
-            edge = (f5_away_wp - _implied(f5_away_ml)) * 100
-            if edge > 0:
-                picks.append({
-                    "type": "F5 ML", "pick": a_abbr, "prob": round(f5_away_wp, 4),
-                    "edge": round(edge, 1), "odds": f5_away_ml,
-                })
+        if f5_home_ml is not None:
+            scored = _score_pick({
+                "type": "F5 ML", "pick": h_abbr,
+                "raw_prob": f5_home_wp, "odds": f5_home_ml,
+            }, sport="mlb", juice_wall=JUICE_WALL)
+            if scored:
+                picks.append(scored)
+        if f5_away_ml is not None:
+            scored = _score_pick({
+                "type": "F5 ML", "pick": a_abbr,
+                "raw_prob": f5_away_wp, "odds": f5_away_ml,
+            }, sport="mlb", juice_wall=JUICE_WALL)
+            if scored:
+                picks.append(scored)
 
-    # ── F5 Over/Under ──
+    # ── F5 Over/Under ──  Migrated to picks_core.score_pick.
     f5_total_line = odds.get("f5_total")
     if f5_total_line and f5.get("over_under"):
         ou_data = _find_ou(f5["over_under"], f5_total_line)
@@ -562,17 +532,19 @@ def _append_f5_picks(picks: list, f5: dict, odds: dict,
             pick_over = f5_over > f5_under
             ou_allowed = (pick_over and get_flag("MLB_ALLOW_F5_OU_OVER", True)) or \
                          ((not pick_over) and get_flag("MLB_ALLOW_F5_OU_UNDER", True))
-            ou_prob = f5_over if pick_over else f5_under
-            ou_odds = odds.get("f5_over_odds") if pick_over else odds.get("f5_under_odds")
-            if ou_odds and ou_odds >= JUICE_WALL and ou_allowed:
-                edge = (ou_prob - _implied(ou_odds)) * 100
-                if edge > 0:
-                    label = f"F5 {'Over' if pick_over else 'Under'} {f5_total_line}"
-                    picks.append({
-                        "type": "F5 O/U", "pick": label,
-                        "prob": round(ou_prob, 4),
-                        "edge": round(edge, 1), "odds": ou_odds,
-                    })
+            if ou_allowed:
+                ou_prob = f5_over if pick_over else f5_under
+                ou_odds = (odds.get("f5_over_odds") if pick_over
+                           else odds.get("f5_under_odds")) or -110
+                from .picks_core import score_pick as _score_pick
+                scored = _score_pick({
+                    "type": "F5 O/U",
+                    "pick": f"F5 {'Over' if pick_over else 'Under'} {f5_total_line}",
+                    "raw_prob": ou_prob,
+                    "odds": ou_odds,
+                }, sport="mlb", juice_wall=JUICE_WALL)
+                if scored:
+                    picks.append(scored)
 
     # ── F5 Run Line (typically ±0.5) ──
     rl = f5.get("run_line") or {}
@@ -585,8 +557,8 @@ def _append_f5_picks(picks: list, f5: dict, odds: dict,
         """Return model prob for covering `point` on `side` (home/away)."""
         if point is None:
             return None
-        # DK typically offers ±0.5; support ±1.5 too by falling back to the
-        # closest magnitude we modeled.
+        # Books typically offer ±0.5 F5 RL; support ±1.5 too by falling
+        # back to the closest magnitude we modeled.
         if abs(point) == 0.5:
             if side == "home":
                 return rl.get("home_minus_0_5") if point < 0 else rl.get("home_plus_0_5")
@@ -594,43 +566,37 @@ def _append_f5_picks(picks: list, f5: dict, odds: dict,
                 return rl.get("away_minus_0_5") if point < 0 else rl.get("away_plus_0_5")
         return None
 
-    if home_f5_rl_odds and home_f5_rl_odds >= JUICE_WALL and home_f5_rl_point is not None:
-        is_dog = home_f5_rl_point > 0
+    # F5 RL — migrated to picks_core.score_pick.
+    from .picks_core import score_pick as _score_pick
+    for abbr, rl_pt, rl_odds, side in [
+        (h_abbr, home_f5_rl_point, home_f5_rl_odds, "home"),
+        (a_abbr, away_f5_rl_point, away_f5_rl_odds, "away"),
+    ]:
+        if rl_odds is None or rl_pt is None:
+            continue
+        is_dog = rl_pt > 0
         allowed = (is_dog and get_flag("MLB_ALLOW_F5_RL_UNDERDOG", True)) or \
                   ((not is_dog) and get_flag("MLB_ALLOW_F5_RL_FAVORITE", True))
-        prob = _f5_rl_prob(home_f5_rl_point, "home")
-        if prob is not None and allowed:
-            edge = (prob - _implied(home_f5_rl_odds)) * 100
-            if edge > 0:
-                sign = "+" if home_f5_rl_point > 0 else ""
-                picks.append({
-                    "type": "F5 RL",
-                    "pick": f"{h_abbr} {sign}{home_f5_rl_point}",
-                    "prob": round(prob, 4),
-                    "edge": round(edge, 1), "odds": home_f5_rl_odds,
-                })
-
-    if away_f5_rl_odds and away_f5_rl_odds >= JUICE_WALL and away_f5_rl_point is not None:
-        is_dog = away_f5_rl_point > 0
-        allowed = (is_dog and get_flag("MLB_ALLOW_F5_RL_UNDERDOG", True)) or \
-                  ((not is_dog) and get_flag("MLB_ALLOW_F5_RL_FAVORITE", True))
-        prob = _f5_rl_prob(away_f5_rl_point, "away")
-        if prob is not None and allowed:
-            edge = (prob - _implied(away_f5_rl_odds)) * 100
-            if edge > 0:
-                sign = "+" if away_f5_rl_point > 0 else ""
-                picks.append({
-                    "type": "F5 RL",
-                    "pick": f"{a_abbr} {sign}{away_f5_rl_point}",
-                    "prob": round(prob, 4),
-                    "edge": round(edge, 1), "odds": away_f5_rl_odds,
-                })
+        if not allowed:
+            continue
+        prob = _f5_rl_prob(rl_pt, side)
+        if prob is None:
+            continue
+        sign = "+" if rl_pt > 0 else ""
+        scored = _score_pick({
+            "type": "F5 RL",
+            "pick": f"{abbr} {sign}{rl_pt}",
+            "raw_prob": prob,
+            "odds": rl_odds,
+        }, sport="mlb", juice_wall=JUICE_WALL)
+        if scored:
+            picks.append(scored)
 
 
 # NRFI/YRFI rolling-median fallback. The original code hardcoded -120
 # regardless of how the market actually priced NRFI; that's roughly
-# accurate for an average matchup but biased on heavy-NRFI games (DK
-# often hits -140 to -160). Sample the real prices we've already
+# accurate for an average matchup but biased on heavy-NRFI games
+# (books often hit -140 to -160). Sample the real prices we've already
 # stored in the odds table and use the median when we have enough
 # data; fall back to -120 only when the table is too sparse.
 _NRFI_FALLBACK_CACHE: dict[str, tuple[float, int]] = {}
@@ -694,18 +660,9 @@ def _find_ou(ou_lines: dict, vegas_total: float) -> dict | None:
 
 
 def fetch_real_odds_for_games() -> dict:
-    """Fetch real MLB odds with multi-source fallback:
-
-        1. Hard Rock Bet (preferred primary; free, no quota)
-        2. The Odds API (monthly credit-gated)
-        3. DraftKings public sportsbook API (free fallback)
-
-    Merges non-empty sources, first-source-wins per matchup key.
-    Cached inside each scraper so repeated calls are cheap.
-    """
+    """Fetch real MLB odds from Hard Rock Bet (FL operator, full slate +
+    alts). Cached inside the scraper so repeated calls are cheap."""
     merged: dict = {}
-
-    # 1. Hard Rock
     try:
         from scrapers.hardrock_odds import fetch_mlb as _hr_mlb
         hr = _hr_mlb()
@@ -713,27 +670,6 @@ def fetch_real_odds_for_games() -> dict:
             merged.update(hr)
     except Exception:
         pass
-
-    # 2. The Odds API
-    if not merged:
-        try:
-            from scrapers.odds_api import fetch_odds
-            api = fetch_odds()
-            if api:
-                merged.update(api)
-        except Exception:
-            pass
-
-    # 3. DraftKings public API
-    if not merged:
-        try:
-            from scrapers.dk_odds import fetch_dk_odds
-            dk = fetch_dk_odds()
-            if dk:
-                merged.update(dk)
-        except Exception:
-            pass
-
     return merged
 
 
@@ -797,17 +733,37 @@ def _swap_odds(odds: dict) -> dict:
 
 
 def _detect_sport(all_odds: dict) -> str:
-    """Guess the sport from odds keys or content."""
+    """Guess the sport from odds keys or content.
+
+    Fielded signals first (unambiguous), numeric O/U as a fallback. The
+    prior over_under<12 heuristic misfired for MLB (~8.5 totals) and
+    routed everything to NHL, which quietly killed MLB alias expansion
+    inside ``_find_odds_by_team_pair`` — the root cause of the 0% MLB
+    CLV coverage the tracker showed in June+July 2026.
+    """
     for v in all_odds.values():
-        if isinstance(v, dict):
-            if v.get("q1_home_ml") is not None or v.get("q1_spread") is not None:
+        if not isinstance(v, dict):
+            continue
+        # Unambiguous fielded signals.
+        if v.get("q1_home_ml") is not None or v.get("q1_spread") is not None:
+            return "nba"
+        if v.get("home_pitcher") or v.get("away_pitcher") \
+                or v.get("nrfi_over_odds") is not None \
+                or v.get("inning_totals") is not None \
+                or v.get("f5_home_ml") is not None:
+            return "mlb"
+        if v.get("puck_line") is not None \
+                or v.get("pl_home_odds") is not None:
+            return "nhl"
+        # Numeric fallback — MLB (8-11), NHL (5-7), NBA (200+).
+        ou = v.get("over_under")
+        if isinstance(ou, (int, float)):
+            if ou > 100:
                 return "nba"
-            ou = v.get("over_under")
-            if isinstance(ou, (int, float)):
-                if ou > 100:
-                    return "nba"
-                elif ou < 12:
-                    return "nhl"
+            if ou < 7.5:
+                return "nhl"
+            # 7.5+ but < 100 → MLB (typical range).
+            return "mlb"
         break
     return "mlb"
 

@@ -26,6 +26,7 @@ if not exist "data\logs" mkdir "data\logs"
 
 if "%1"=="--mlb" goto :mlb_only
 if "%1"=="--nhl" goto :nhl_only
+if "%1"=="--tennis" goto :tennis_only
 if "%1"=="--full" goto :full
 if "%1"=="--daily" goto :daily
 if "%1"=="--history" goto :history
@@ -49,24 +50,51 @@ goto :calibrate
 
 :mlb_only
 echo Running MLB sync only...
-call sync_mlb.bat
+call "%~dp0sync_mlb.bat"
 goto :done
 
 :nhl_only
 echo Running NHL sync only...
-call sync_nhl.bat %2
+call "%~dp0sync_nhl.bat" %2
+goto :done
+
+:tennis_only
+echo Running Tennis sync only...
+call "%~dp0sync_tennis.bat" %2
 goto :done
 
 :quick
 echo.
-echo ── MLB Sync ──
-call sync_mlb.bat --scheduled
+echo -- MLB Sync --
+call "%~dp0sync_mlb.bat" --scheduled
 echo.
-echo ── NHL Sync ──
-call sync_nhl.bat --scheduled
+echo -- NHL Sync --
+call "%~dp0sync_nhl.bat" --scheduled
 echo.
-echo ── NBA Sync ──
-call sync_nba.bat --scheduled
+echo -- NBA Sync --
+call "%~dp0sync_nba.bat" --scheduled
+echo.
+echo -- Tennis Sync --
+call "%~dp0sync_tennis.bat" --scheduled
+
+REM Weekly GBM retrain - runs every 7 days from inside the existing
+REM scheduled sync, so we don't need to register a second Task
+REM Scheduler entry. Adds ~60-70 min to that day's sync once a week;
+REM skipped on the other 13 of 14 scheduled runs via the marker-file
+REM mtime gate (forfiles /D -7 returns errorlevel 0 only when the file
+REM is OLDER than 7 days, so we want errorlevel 0 -> run).
+set RETRAIN_MARKER=data\logs\weekly_retrain.lastrun
+if not exist "%RETRAIN_MARKER%" goto :do_weekly_retrain
+forfiles /P "data\logs" /M "weekly_retrain.lastrun" /D -7 >nul 2>&1
+if errorlevel 1 goto :skip_weekly_retrain
+
+:do_weekly_retrain
+echo.
+echo -- Weekly GBM Retrain (cadence: 7d) --
+call "%~dp0scripts\weekly_retrain.bat"
+echo %DATE% %TIME% > "%RETRAIN_MARKER%"
+
+:skip_weekly_retrain
 goto :done
 
 :calibrate

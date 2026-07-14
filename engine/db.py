@@ -366,11 +366,14 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     CREATE INDEX IF NOT EXISTS idx_picks_result ON picks(result);
     -- Dedup pending rows so re-running record_picks doesn't pile up
     -- duplicates for the same (game, market, day). Same pattern as
-    -- nba_picks. Settled rows can have multiple of the same bet_type
-    -- (rare but possible across days), so the partial index is on
-    -- pending only.
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_picks_unique
-        ON picks(date, game_id, bet_type) WHERE result IS NULL;
+    -- FULL UNIQUE on (date, game_id, bet_type, pick). Previous
+    -- partial-on-pending index released after settle and let the
+    -- recorder pile up dozens of duplicates per family. Date scopes
+    -- the constraint so legitimately distinct days with the same
+    -- bet_type still record cleanly. Including pick handles re-line
+    -- swaps (Under 8.5 vs Under 9 are different picks).
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_picks_family
+        ON picks(date, game_id, bet_type, pick);
 
     -- Indexes for common queries
     CREATE INDEX IF NOT EXISTS idx_games_date ON games(date);
@@ -575,6 +578,28 @@ def upsert_player(mlb_id: int, name: str, team_id: int | None = None,
 
 def upsert_game(mlb_game_id: int, **kwargs) -> None:
     conn = get_conn()
+    # Data-quality gate: refuse to write a stub row missing team_ids.
+    # The settler + recorder both join games to teams via these
+    # columns; a NULL value silently breaks every downstream path
+    # (record_picks skips, settler can't resolve, derivative tracker
+    # can't write). Caller must provide both, or supply enough info
+    # to resolve them via the existing record. Better to fail loud
+    # at insert time than rot picks pending for hours.
+    existing = conn.execute(
+        "SELECT home_team_id, away_team_id FROM games WHERE mlb_game_id = ?",
+        (mlb_game_id,),
+    ).fetchone()
+    incoming_h = kwargs.get("home_team_id")
+    incoming_a = kwargs.get("away_team_id")
+    if not existing and (incoming_h is None or incoming_a is None):
+        logger.warning(
+            "upsert_game refusing stub row: mlb_game_id=%s missing "
+            "team_ids (home=%s, away=%s) — upstream caller should "
+            "resolve these before insert",
+            mlb_game_id, incoming_h, incoming_a,
+        )
+        return
+
     fields = ["date", "home_team_id", "away_team_id", "home_score", "away_score",
               "status", "home_pitcher_id", "away_pitcher_id", "venue", "day_night",
               "weather_temp", "weather_wind", "umpire", "winning_pitcher",

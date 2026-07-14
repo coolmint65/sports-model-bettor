@@ -26,6 +26,7 @@ from datetime import datetime
 from ..db import get_conn, get_team_by_id
 from ._helpers import _core_picks, _extract_closing_for_pick
 from ._scoreboard import _fetch_espn_scoreboard
+from .._tz import et_today_str
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,7 @@ def refresh_pending_for_today(bets: list[dict],
 
     Returns ``{"updated": N, "swapped": N, "voided": N}``.
     """
-    target_date = target_date or datetime.now().strftime("%Y-%m-%d")
+    target_date = target_date or et_today_str()
     conn = get_conn()
 
     # Index current bests by matchup, ONLY for games still UNLOCKED.
@@ -102,12 +103,21 @@ def refresh_pending_for_today(bets: list[dict],
         except Exception:
             return False
 
-    # Freeze rule (set 2026-04-28 after PHI@BOS swap incident on NBA
-    # tracker — same behaviour applies here): once recorded, bet_type
-    # and pick stay frozen. Only odds / edge / prob update. Mid-day
-    # model mind-changes are tracked via pick_events, not by mutating
-    # the historical row.
-    updated = voided = skipped = 0
+    # Lock-at-game-start rule (revised 2026-04-29):
+    #   - Prematch (game still scheduled): swap freely. Model can
+    #     re-rank bet_type / pick within the matchup; the row updates
+    #     in place. closing_odds resets to NULL because it's a
+    #     different bet now.
+    #   - Live / final / postponed (game lock): freeze. The bet_started
+    #     guard above + _pick_game_started already short-circuit those
+    #     before we reach this loop.
+    #
+    # The earlier "freeze the moment the row is recorded" rule (set
+    # 2026-04-28 after the PHI@BOS swap incident) was too aggressive —
+    # it stopped the picker from refining mid-day in the cases the
+    # user wants tracked. pick_events still keeps the breadcrumb of
+    # every model decision regardless of whether the picks row mutates.
+    updated = swapped = voided = 0
     for p in pending:
         p = dict(p)
         if p["matchup"] in locked_matchups:
@@ -115,6 +125,11 @@ def refresh_pending_for_today(bets: list[dict],
         if _pick_game_started(p.get("game_id")):
             continue
         current = current_by_matchup.get(p["matchup"])
+        # 'skip'-tier picks are below the lean floor; the card filter
+        # already hides them. Void the tracker row to match — see
+        # nhl_tracker._record for the bug-trigger context.
+        if current and (current.get("confidence") or "lean") == "skip":
+            current = None
         if not current:
             matchup_in_response = any(b["matchup"] == p["matchup"] for b in bets)
             if matchup_in_response:
@@ -123,7 +138,18 @@ def refresh_pending_for_today(bets: list[dict],
             continue
 
         if current.get("type") != p["bet_type"] or current.get("pick") != p["pick"]:
-            skipped += 1
+            # Prematch swap — overwrite bet_type, pick, and price in
+            # place. closing_odds resets because the new pick has its
+            # own line.
+            conn.execute(
+                "UPDATE picks SET bet_type = ?, pick = ?, model_prob = ?, "
+                "  edge = ?, odds = ?, closing_odds = NULL "
+                "WHERE id = ?",
+                (current.get("type"), current.get("pick"),
+                 current.get("prob"), current.get("edge"),
+                 current.get("odds"), p["id"]),
+            )
+            swapped += 1
             continue
 
         conn.execute(
@@ -135,8 +161,54 @@ def refresh_pending_for_today(bets: list[dict],
         updated += 1
 
     conn.commit()
-    return {"updated": updated, "swapped": 0, "voided": voided,
-            "skipped_pick_change": skipped}
+    return {"updated": updated, "swapped": swapped, "voided": voided}
+
+
+def _live_or_done_game_ids(target_date: str) -> set[str]:
+    """Return the set of MLB game_ids for ``target_date`` that are
+    currently in live or final state per ESPN scoreboard. Used by
+    ``record_picks(force=True)`` to scope the destructive DELETE so
+    tracker rows for live games aren't wiped.
+
+    Maps ESPN abbreviations → games.mlb_game_id via the games table.
+    Empty set on any failure — callers must treat empty as "couldn't
+    determine" (not "no games are live")."""
+    try:
+        from ..abbr import aliases_for as _aliases
+    except Exception:
+        return set()
+    try:
+        scoreboard = _fetch_espn_scoreboard(target_date)
+    except Exception:
+        return set()
+    if not scoreboard:
+        return set()
+    abbr_set: set[str] = set()
+    for game_info in scoreboard:
+        state = (game_info.get("status") or {}).get("state", "pre")
+        if state not in ("in", "post"):
+            continue
+        h = (game_info.get("home") or {}).get("abbreviation", "")
+        a = (game_info.get("away") or {}).get("abbreviation", "")
+        if h:
+            abbr_set.update(_aliases(h, sport="mlb"))
+        if a:
+            abbr_set.update(_aliases(a, sport="mlb"))
+    if not abbr_set:
+        return set()
+    # Look up the actual game_ids for those abbr matchups today.
+    conn = get_conn()
+    placeholders = ",".join("?" * len(abbr_set))
+    rows = conn.execute(
+        f"SELECT g.mlb_game_id FROM games g "
+        f"LEFT JOIN teams ht ON g.home_team_id = ht.id "
+        f"LEFT JOIN teams at ON g.away_team_id = at.id "
+        f"WHERE g.date = ? AND ("
+        f"  ht.abbreviation IN ({placeholders}) "
+        f"  OR at.abbreviation IN ({placeholders}))",
+        (target_date, *abbr_set, *abbr_set),
+    ).fetchall()
+    return {str(r["mlb_game_id"]) for r in rows if r["mlb_game_id"] is not None}
 
 
 def record_picks(date: str | None = None, min_edge: float = 1.5,
@@ -152,15 +224,15 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
             recording so the latest model/odds take precedence.
     """
     conn = get_conn()
-    target_date = date or datetime.now().strftime("%Y-%m-%d")
+    target_date = date or et_today_str()
 
-    # Optional hard-reset for today's unsettled picks
-    if force:
-        conn.execute(
-            "DELETE FROM picks WHERE date = ? AND result IS NULL",
-            (target_date,),
-        )
-        conn.commit()
+    # Note: when ``force=True``, deletion happens PER-GAME inside the
+    # loop (not as a blanket pre-DELETE). This is intentional — the
+    # loop skips live/done games, so per-game delete naturally scopes
+    # the destructive op to games we're actually re-recording. Bug
+    # surfaced 2026-05-03 when blanket pre-DELETE wiped MLB picks for
+    # today's live games and the loop's live/done filter prevented
+    # re-insertion → tracker empty.
 
     games = conn.execute("""
         SELECT * FROM games WHERE date = ?
@@ -239,9 +311,37 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
         if h in _live_or_done or a in _live_or_done:
             continue
 
+        # Build matchup abbreviation alias set up-front — used by both
+        # the force-delete and the existence check below. Same MLB game
+        # surfaces as "AZ @ COL" from MLB stats and "ARI @ COL" from
+        # ESPN; without alias expansion the second variant creates a
+        # duplicate pending pick the settler can't match.
+        from ..abbr import aliases_for as _aliases_for
+        away_part, _, home_part = matchup.partition(" @ ")
+        matchup_variants = {matchup}
+        if away_part and home_part:
+            for a in _aliases_for(away_part) or [away_part]:
+                for h in _aliases_for(home_part) or [home_part]:
+                    matchup_variants.add(f"{a} @ {h}")
+        mv_list = list(matchup_variants)
+        mv_placeholders = ",".join("?" * len(mv_list))
+
+        # Per-game force-delete (replaces the old blanket pre-DELETE).
+        # Only fires for games we're about to re-record (i.e. pre-game),
+        # so live games' pending rows survive untouched. Matches across
+        # all abbreviation aliases so a stale ARI @ COL row gets cleared
+        # when the canonical AZ @ COL is re-recorded.
+        if force:
+            conn.execute(
+                f"DELETE FROM picks WHERE result IS NULL AND date = ? "
+                f"AND (game_id = ? OR matchup IN ({mv_placeholders}))",
+                (target_date, game_id, *mv_list),
+            )
         existing = conn.execute(
-            "SELECT COUNT(*) as c FROM picks WHERE game_id = ? OR (matchup = ? AND date = ?)",
-            (game_id, matchup, target_date)
+            f"SELECT COUNT(*) as c FROM picks "
+            f"WHERE game_id = ? "
+            f"   OR (date = ? AND matchup IN ({mv_placeholders}))",
+            (game_id, target_date, *mv_list),
         ).fetchone()["c"]
         if existing > 0:
             print(f"[RECORD]   {matchup}: already recorded, skipping", flush=True)
@@ -260,10 +360,11 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
                 if best and best["edge"] >= min_edge and _valid_odds(best.get("odds")):
                     conn.execute("""
                         INSERT OR IGNORE INTO picks (game_id, date, matchup, bet_type, pick,
-                                         model_prob, edge, odds)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                         model_prob, edge, odds, stake_units)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (game_id, target_date, matchup, best["type"], best["pick"],
-                          best["prob"], best["edge"], best["odds"]))
+                          best["prob"], best["edge"], best["odds"],
+                          best.get("stake_units")))
                     recorded.append({
                         "matchup": matchup, "type": best["type"],
                         "pick": best["pick"], "prob": round(best["prob"], 3),
@@ -280,10 +381,11 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
                 if fi:
                     conn.execute("""
                         INSERT OR IGNORE INTO picks (game_id, date, matchup, bet_type, pick,
-                                         model_prob, edge, odds)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                         model_prob, edge, odds, stake_units)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (game_id, target_date, matchup, fi["type"], fi["pick"],
-                          fi["prob"], fi["edge"], fi["odds"]))
+                          fi["prob"], fi["edge"], fi["odds"],
+                          fi.get("stake_units")))
                 continue
         except Exception as e:
             logger.debug("picks_store branch failed for %s: %s — regenerating", matchup, e)
@@ -310,10 +412,11 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
 
         conn.execute("""
             INSERT OR IGNORE INTO picks (game_id, date, matchup, bet_type, pick,
-                             model_prob, edge, odds)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                             model_prob, edge, odds, stake_units)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (game_id, target_date, matchup, best["type"], best["pick"],
-              best["prob"], best["edge"], best["odds"]))
+              best["prob"], best["edge"], best["odds"],
+              best.get("stake_units")))
 
         recorded.append({
             "matchup": matchup, "type": best["type"],
@@ -329,12 +432,54 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
         if fi:
             conn.execute("""
                 INSERT OR IGNORE INTO picks (game_id, date, matchup, bet_type, pick,
-                                 model_prob, edge, odds)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                 model_prob, edge, odds, stake_units)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (game_id, target_date, matchup, fi["type"], fi["pick"],
-                  fi["prob"], fi["edge"], fi["odds"]))
+                  fi["prob"], fi["edge"], fi["odds"],
+                  fi.get("stake_units")))
 
     conn.commit()
+
+    # Write-through to the legacy unified_tracker (predates picks_unified).
+    try:
+        from ..unified_tracker import sync_for_date
+        sync_for_date("mlb", target_date)
+    except Exception as e:
+        logger.debug("unified write-through (mlb) skipped: %s", e)
+
+    # Write-through to picks_unified (new canonical layer). Reads back
+    # the rows we just inserted and mirrors them — cleaner than
+    # touching each of the 4 INSERT sites above.
+    try:
+        from ..picks_unified._legacy_bridge import mirror_to_unified
+        recent = conn.execute(
+            "SELECT * FROM picks WHERE date=? "
+            "ORDER BY id DESC LIMIT 100",
+            (target_date,),
+        ).fetchall()
+        for row in recent:
+            mirror_to_unified(
+                sport="mlb", league="mlb",
+                native_game_id=row["game_id"],
+                pick_date=row["date"],
+                matchup=row["matchup"] or "",
+                bet_type=row["bet_type"] or "",
+                pick_text=row["pick"] or "",
+                odds=int(row["odds"] or 0),
+                prob=float(row["model_prob"] or 0.0),
+                edge_pct=float(row["edge"] or 0.0),
+                stake_units=float(row["stake_units"] or 0.0)
+                             if "stake_units" in row.keys() else 0.0,
+                closing_odds=row["closing_odds"]
+                              if "closing_odds" in row.keys() else None,
+                result=row["result"],
+                profit=row["profit"],
+                created_at=row["created_at"],
+                settled_at=row["settled_at"],
+            )
+    except Exception as e:
+        logger.debug("picks_unified mirror (mlb) skipped: %s", e)
+
     return recorded
 
 
@@ -400,10 +545,11 @@ def _record_from_scoreboard(conn, scoreboard: list, target_date: str,
 
         conn.execute("""
             INSERT OR IGNORE INTO picks (game_id, date, matchup, bet_type, pick,
-                             model_prob, edge, odds)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                             model_prob, edge, odds, stake_units)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (game_id, target_date, matchup, best["type"], best["pick"],
-              best["prob"], best["edge"], best["odds"]))
+              best["prob"], best["edge"], best["odds"],
+              best.get("stake_units")))
 
         recorded.append({
             "matchup": matchup, "type": best["type"],
@@ -419,58 +565,33 @@ def _record_from_scoreboard(conn, scoreboard: list, target_date: str,
         if fi:
             conn.execute("""
                 INSERT OR IGNORE INTO picks (game_id, date, matchup, bet_type, pick,
-                                 model_prob, edge, odds)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                 model_prob, edge, odds, stake_units)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (game_id, target_date, matchup, fi["type"], fi["pick"],
-                  fi["prob"], fi["edge"], fi["odds"]))
+                  fi["prob"], fi["edge"], fi["odds"],
+                  fi.get("stake_units")))
 
     conn.commit()
     logger.info("Recorded %d picks from scoreboard", len(recorded))
+    try:
+        from ..unified_tracker import sync_for_date
+        sync_for_date("mlb", target_date)
+    except Exception as e:
+        logger.debug("unified write-through (mlb scoreboard) skipped: %s", e)
     return recorded
 
 
 def capture_closing_odds() -> int:
     """Snapshot current Hard Rock odds for all pending picks.
-
-    Call this before games start (e.g. from sync script at 6pm ET)
-    to capture the closing line. The CLV computed at settle time
-    will then reflect the true closing odds, not post-game odds.
-
-    Returns number of picks updated.
-    """
-    conn = get_conn()
-    pending = conn.execute(
-        "SELECT id, matchup, bet_type, pick, closing_odds FROM picks "
-        "WHERE result IS NULL AND closing_odds IS NULL"
-    ).fetchall()
-
-    if not pending:
-        return 0
-
-    from ..picks import fetch_real_odds_for_games, match_odds
-    all_odds = fetch_real_odds_for_games()
-    updated = 0
-
-    for pick in pending:
-        matchup = pick["matchup"]
-        parts = matchup.split(" @ ")
-        if len(parts) != 2:
-            continue
-        away, home = parts[0].strip(), parts[1].strip()
-        game_odds = match_odds(home, away, all_odds)
-        if not game_odds:
-            continue
-
-        closing = _extract_closing_for_pick(
-            pick["bet_type"], pick["pick"], home, game_odds,
-        )
-        if closing is not None:
-            conn.execute(
-                "UPDATE picks SET closing_odds = ? WHERE id = ?",
-                (int(closing), pick["id"]),
-            )
-            updated += 1
-
-    conn.commit()
-    logger.info("Captured closing odds for %d/%d pending picks", updated, len(pending))
-    return updated
+    Thin wrapper around ``engine.tracker_core.core_capture_closing_odds``
+    with the MLB adapter — see that module for the refresh semantics."""
+    from ..picks import fetch_real_odds_for_games
+    from ..tracker_core import SportAdapter, core_capture_closing_odds
+    adapter = SportAdapter(
+        name="mlb",
+        get_conn=get_conn,
+        picks_table="picks",
+        hr_fetch=fetch_real_odds_for_games,
+        extract_closing=_extract_closing_for_pick,
+    )
+    return core_capture_closing_odds(adapter)

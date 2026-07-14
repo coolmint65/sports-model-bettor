@@ -68,6 +68,8 @@ def auto_tune_sport(sport: str, min_samples: int | None = None,
 
     ds = build_tuning_dataset(sport, days=days, markets=tunable)
 
+    from .ensemble_tune import brier as _brier_metric, rmse as _rmse_metric
+
     for market in tunable:
         m = ds.get(market)
         if not m:
@@ -80,13 +82,72 @@ def auto_tune_sport(sport: str, min_samples: int | None = None,
         names = sorted(comps.keys())
         arrays = [comps[n] for n in names]
         is_class = all(a in (0, 1) for a in actuals)
+        n_components = len(names)
         weights, score = best_weights(arrays, actuals, is_classification=is_class)
+
+        # ── Baselines for regression-gate + reporting ──
+        # Be-right philosophy: only persist when the tuned blend is
+        # demonstrably better than (a) uniform 1/N weights and
+        # (b) the currently-persisted blend if any. Without this gate
+        # a slate of unlucky settled picks could overwrite a healthy
+        # weight with a worse one purely from variance.
+        metric = _brier_metric if is_class else _rmse_metric
+        uniform_w = [1.0 / n_components] * n_components
+        uniform_blend = [
+            sum(uniform_w[i] * arrays[i][j] for i in range(n_components))
+            for j in range(len(actuals))
+        ]
+        uniform_score = round(metric(uniform_blend, actuals), 4)
+
+        # Read currently-persisted weights for a head-to-head check.
+        prior_score: float | None = None
+        try:
+            from .model_overrides import get_override
+            prior_payload = get_override(sport, f"ENSEMBLE_{market}")
+            if prior_payload:
+                prior_w_dict = json.loads(prior_payload)
+                prior_w = [float(prior_w_dict.get(n, 0.0)) for n in names]
+                prior_blend = [
+                    sum(prior_w[i] * arrays[i][j] for i in range(n_components))
+                    for j in range(len(actuals))
+                ]
+                prior_score = round(metric(prior_blend, actuals), 4)
+        except Exception as e:
+            logger.debug("prior weight read failed for %s: %s", market, e)
+
+        improvement_uniform = round(uniform_score - score, 4)
+        improvement_prior = (round(prior_score - score, 4)
+                             if prior_score is not None else None)
+
         summary["tuned"][market] = {
             "n_samples": len(actuals),
             "weights": dict(zip(names, weights)),
             "score": score,
+            "uniform_score": uniform_score,
+            "prior_score": prior_score,
+            "improvement_vs_uniform": improvement_uniform,
+            "improvement_vs_prior": improvement_prior,
             "components": names,
         }
+
+        # Regression gate. Skip persistence if:
+        #   - Tuned isn't meaningfully better than uniform (<= 0.001 Brier
+        #     difference is noise — ~10pp on a single rare pick)
+        #   - Tuned is worse than already-persisted weights
+        # Reasons recorded so operator can review in summary log.
+        skip_reason = None
+        if improvement_uniform <= 0.001:
+            skip_reason = (f"no improvement over uniform "
+                           f"(tuned {score} vs uniform {uniform_score})")
+        elif (improvement_prior is not None
+              and improvement_prior <= 0.0):
+            skip_reason = (f"worse than persisted prior "
+                           f"(tuned {score} vs prior {prior_score})")
+
+        if skip_reason:
+            summary["tuned"][market]["skipped_persist"] = skip_reason
+            continue
+
         if not dry_run:
             payload = dict(zip(names, weights))
             try:
@@ -94,7 +155,9 @@ def auto_tune_sport(sport: str, min_samples: int | None = None,
                     sport,
                     f"ENSEMBLE_{market}",
                     json.dumps(payload),
-                    reason=f"auto-tune: n={len(actuals)}, score={score}",
+                    reason=(f"auto-tune: n={len(actuals)}, brier={score}, "
+                            f"uniform={uniform_score}, "
+                            f"prior={prior_score if prior_score is not None else 'none'}"),
                     n_samples=len(actuals),
                     p_value=None,
                     expiry_days=14,
@@ -121,7 +184,7 @@ def auto_tune_all(min_samples: int | None = None, days: int = 365,
 
 
 def _print_summary(sport: str, summary: dict) -> None:
-    print(f"\n── {sport.upper()} ensemble auto-tune ──")
+    print(f"\n== {sport.upper()} ensemble auto-tune ==")
     if "error" in summary:
         print(f"  ERROR: {summary['error']}")
         return
@@ -129,15 +192,24 @@ def _print_summary(sport: str, summary: dict) -> None:
     if counts:
         print("  Settled samples per market:")
         for m, c in counts.items():
-            marker = "✓" if c >= summary["min_samples"] else " "
+            marker = "*" if c >= summary["min_samples"] else " "
             print(f"    [{marker}] {m:<16} n={c}")
     tuned = summary.get("tuned") or {}
     if tuned:
-        print("  Tuned:")
+        print("  Tuned (Brier-objective; gate refuses regressions):")
         for m, info in tuned.items():
             w_str = ", ".join(f"{k}={v:.2f}" for k, v in info["weights"].items())
-            print(f"    {m:<16} -> {w_str}  (score={info['score']}, "
-                  f"n={info['n_samples']})")
+            tuned_s = info.get("score")
+            uniform_s = info.get("uniform_score")
+            prior_s = info.get("prior_score")
+            improv_u = info.get("improvement_vs_uniform")
+            improv_p = info.get("improvement_vs_prior")
+            skipped = info.get("skipped_persist")
+            status = "PERSIST" if not skipped else f"SKIP ({skipped})"
+            print(f"    {m:<16} -> {w_str}")
+            print(f"      n={info['n_samples']:<4} "
+                  f"tuned={tuned_s} uniform={uniform_s} prior={prior_s} "
+                  f"improve_uni={improv_u} improve_prior={improv_p}  [{status}]")
     skipped = summary.get("skipped") or {}
     if skipped:
         print("  Skipped:")

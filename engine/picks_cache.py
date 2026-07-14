@@ -19,6 +19,7 @@ import json
 import logging
 from datetime import datetime
 from typing import Any
+from ._tz import et_today_str
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,7 @@ def put(sport: str, home: str, away: str, picks: list, odds: dict,
     any existing row so reruns of best-bets land the latest computation."""
     ensure_table(sport)
     conn = _conn_for(sport)
-    target_date = date or datetime.now().strftime("%Y-%m-%d")
+    target_date = date or et_today_str()
     try:
         conn.execute(
             "INSERT OR REPLACE INTO picks_cache "
@@ -90,7 +91,7 @@ def get(sport: str, home: str, away: str,
     try:
         ensure_table(sport)
         conn = _conn_for(sport)
-        target_date = date or datetime.now().strftime("%Y-%m-%d")
+        target_date = date or et_today_str()
         row = conn.execute(
             "SELECT picks_json, odds_json, best_json FROM picks_cache "
             "WHERE date = ? AND home = ? AND away = ?",
@@ -116,7 +117,7 @@ def load_today(sport: str, date: str | None = None) -> list[tuple[str, str, dict
     try:
         ensure_table(sport)
         conn = _conn_for(sport)
-        target_date = date or datetime.now().strftime("%Y-%m-%d")
+        target_date = date or et_today_str()
         rows = conn.execute(
             "SELECT home, away, picks_json, odds_json, best_json "
             "FROM picks_cache WHERE date = ?",

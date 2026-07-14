@@ -27,26 +27,37 @@ relative to the full game, so possession-level is the right granularity.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
+
+from . import mc_constants as _mc
 
 logger = logging.getLogger(__name__)
 
 
 # ── League baselines ───────────────────────────────────────────
-LEAGUE_Q1_PACE = 24.5          # Q1 possessions per team at pace 99
-LEAGUE_Q1_PPP_MEAN = 1.12      # points per possession in Q1 (offense-side)
-LEAGUE_Q1_PPP_STD = 0.28       # std dev across possessions
-LEAGUE_Q1_HOME_BOOST = 0.69    # extra points home gets in Q1 (calibrated)
+# Backed by engine.mc_constants — calibration writes fitted values to
+# nba_model_config and these accessors pick them up. Module-level
+# constants used to be hardcoded literals; they're kept as thin wrappers
+# (LEAGUE_*) so external callers (mc_nba_run, etc.) can still reference
+# the names without each having to import mc_constants directly.
+LEAGUE_Q1_PACE = _mc.nba_q1_pace
+LEAGUE_Q1_PPP_MEAN = _mc.nba_q1_ppp_mean
+LEAGUE_Q1_PPP_STD = _mc.nba_q1_ppp_std
+LEAGUE_Q1_HOME_BOOST = _mc.nba_q1_home_boost
+
+
+def _q1_default_ppg() -> float:
+    return _mc.nba_q1_ppp_mean() * _mc.nba_q1_pace()
 
 
 @dataclass
 class NBATeamProfile:
     """Per-team sim inputs for an NBA Q1."""
-    # Q1-specific rates
-    q1_ppg: float = LEAGUE_Q1_PPP_MEAN * LEAGUE_Q1_PACE
-    q1_opp_ppg: float = LEAGUE_Q1_PPP_MEAN * LEAGUE_Q1_PACE
+    # Q1-specific rates (default reads fitted values at instance creation).
+    q1_ppg: float = field(default_factory=_q1_default_ppg)
+    q1_opp_ppg: float = field(default_factory=_q1_default_ppg)
     pace: float = 99.0     # possessions per 48 min
     # Back-to-back / rest / injury adjustments applied upstream
     scoring_mult: float = 1.0
@@ -68,7 +79,11 @@ def simulate_q1(home: NBATeamProfile, away: NBATeamProfile,
     # Effective Q1 PPG for each team. Blend offense-vs-opponent-defense
     # via the standard opp-adjusted formula:
     #   team_expected = (team_off * opp_def) / league_avg_allowed
-    lg = LEAGUE_Q1_PPP_MEAN * LEAGUE_Q1_PACE
+    q1_ppp_mean = _mc.nba_q1_ppp_mean()
+    q1_pace = _mc.nba_q1_pace()
+    q1_ppp_std = _mc.nba_q1_ppp_std()
+    q1_home_boost = _mc.nba_q1_home_boost()
+    lg = q1_ppp_mean * q1_pace
     home_ppg = (home.q1_ppg * away.q1_opp_ppg) / lg * home.scoring_mult * away.defense_mult
     away_ppg = (away.q1_ppg * home.q1_opp_ppg) / lg * away.scoring_mult * home.defense_mult
 
@@ -84,8 +99,8 @@ def simulate_q1(home: NBATeamProfile, away: NBATeamProfile,
         away_ppg *= 0.97
 
     # Home Q1 boost
-    home_ppg += LEAGUE_Q1_HOME_BOOST / 2
-    away_ppg -= LEAGUE_Q1_HOME_BOOST / 2
+    home_ppg += q1_home_boost / 2
+    away_ppg -= q1_home_boost / 2
 
     # B2B penalty (already baked into scoring_mult typically but leave
     # a direct field for easy override)
@@ -96,8 +111,8 @@ def simulate_q1(home: NBATeamProfile, away: NBATeamProfile,
 
     # Sample: use a normal approximation per Q1 team total, scaled by
     # possession variance. Q1 std ~= std_per_poss * sqrt(n_possessions).
-    n_poss = LEAGUE_Q1_PACE * (matchup_pace / 99.0)
-    q1_std = LEAGUE_Q1_PPP_STD * np.sqrt(max(n_poss, 5))
+    n_poss = q1_pace * (matchup_pace / 99.0)
+    q1_std = q1_ppp_std * np.sqrt(max(n_poss, 5))
     # Small floor so we don't draw negatives
     home_q1 = np.maximum(0, rng.normal(home_ppg, q1_std, size=n_sims)).round().astype(np.int16)
     away_q1 = np.maximum(0, rng.normal(away_ppg, q1_std, size=n_sims)).round().astype(np.int16)
@@ -206,29 +221,30 @@ def aggregate_nba_q1(raw: dict) -> dict:
 # Used by ensemble_nba_full to blend with the factor and GBM models
 # for full-game ML / spread / total picks.
 
-LEAGUE_FULL_PACE = 99.0          # possessions per team per 48 min
-LEAGUE_FULL_PPP_MEAN = 1.151     # full-game PPP (113.95 / 99.0)
-# Per-team scoring std calibrated directly from 4130 games (margin std
-# 16.06, total std 21.25). Per-team std = √(margin_std² / 2) = 11.36
-# under independence assumption; reality is wider because possessions
-# aren't iid (runs, lineups, momentum). 11.36 reproduces both the
+LEAGUE_FULL_PACE = _mc.nba_full_pace
+LEAGUE_FULL_PPP_MEAN = _mc.nba_full_ppp_mean
+# Per-team scoring std calibrated from holdout games. Per-team std =
+# sqrt(margin_std^2 / 2) under independence; reality is wider because
+# possessions aren't iid. The fitted constant reproduces both the
 # margin_std and total_std on the calibration set.
-LEAGUE_FULL_TEAM_STD = 11.36
+LEAGUE_FULL_TEAM_STD = _mc.nba_full_team_std
 # Shared per-game pace/environment shock — added equally to both teams'
 # scores so it cancels out of the margin but compounds in the total.
-# Decomposing total_std² = 4·shared² + 2·team_std² with calibrated
-# (margin_std=16.06, total_std=21.25, team_std=11.36):
-#   shared² = (21.25² - 2·11.36²) / 4 = (451.6 - 258.1) / 4 = 48.4
-#   shared = 6.96
-LEAGUE_FULL_GAME_SHOCK_STD = 6.96
-LEAGUE_FULL_HOME_BOOST = 2.14    # full-game calibrated home edge
+# Decomposed from total_std^2 = 4*shared^2 + 2*team_std^2 once
+# (margin_std, total_std, team_std) are fitted.
+LEAGUE_FULL_GAME_SHOCK_STD = _mc.nba_full_game_shock_std
+LEAGUE_FULL_HOME_BOOST = _mc.nba_full_home_boost
+
+
+def _full_default_ppg() -> float:
+    return _mc.nba_full_ppp_mean() * _mc.nba_full_pace()
 
 
 @dataclass
 class NBAFullProfile:
     """Per-team sim inputs for a full-game NBA matchup."""
-    ppg: float = LEAGUE_FULL_PPP_MEAN * LEAGUE_FULL_PACE
-    opp_ppg: float = LEAGUE_FULL_PPP_MEAN * LEAGUE_FULL_PACE
+    ppg: float = field(default_factory=_full_default_ppg)
+    opp_ppg: float = field(default_factory=_full_default_ppg)
     pace: float = 99.0
     scoring_mult: float = 1.0
     defense_mult: float = 1.0
@@ -246,8 +262,12 @@ def simulate_full(home: NBAFullProfile, away: NBAFullProfile,
     """
     rng = np.random.default_rng(seed)
 
+    full_ppp_mean = _mc.nba_full_ppp_mean()
+    full_pace = _mc.nba_full_pace()
+    full_home_boost = _mc.nba_full_home_boost()
+
     # Opp-adjusted attack vs defense.
-    lg = LEAGUE_FULL_PPP_MEAN * LEAGUE_FULL_PACE
+    lg = full_ppp_mean * full_pace
     home_ppg = (home.ppg * away.opp_ppg) / lg * home.scoring_mult * away.defense_mult
     away_ppg = (away.ppg * home.opp_ppg) / lg * away.scoring_mult * home.defense_mult
 
@@ -263,8 +283,8 @@ def simulate_full(home: NBAFullProfile, away: NBAFullProfile,
         away_ppg *= 0.96
 
     # Home-court boost.
-    home_ppg += LEAGUE_FULL_HOME_BOOST / 2
-    away_ppg -= LEAGUE_FULL_HOME_BOOST / 2
+    home_ppg += full_home_boost / 2
+    away_ppg -= full_home_boost / 2
 
     # B2B penalty.
     if home.is_b2b:
@@ -273,8 +293,8 @@ def simulate_full(home: NBAFullProfile, away: NBAFullProfile,
         away_ppg -= 2.5
 
     # Per-team residual + shared per-game shock (see constant comment).
-    team_std = LEAGUE_FULL_TEAM_STD
-    shock_std = LEAGUE_FULL_GAME_SHOCK_STD
+    team_std = _mc.nba_full_team_std()
+    shock_std = _mc.nba_full_game_shock_std()
     game_shock = rng.normal(0, shock_std, size=n_sims)
     home_resid = rng.normal(0, team_std, size=n_sims)
     away_resid = rng.normal(0, team_std, size=n_sims)

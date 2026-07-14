@@ -59,10 +59,15 @@ def _extract_closing_for_pick(bet_type: str, pick_text: str,
         return (game_odds.get("home_spread_odds") if pick_team == home_abbr
                 else game_odds.get("away_spread_odds"))
     if bt in ("nrfi", "1st INN"):
-        # NRFI / YRFI close on the per-event totals_1st_1_innings market.
+        # NRFI = inning_totals.I1.under_odds; YRFI = .over_odds.
+        # HR returns the 1st-inning totals market under inning_totals,
+        # NOT under top-level nrfi_*_odds keys (which were never
+        # populated). Pre-fix, this branch returned None for every
+        # 1st INN pick → 0% closing-odds coverage on all NRFI/YRFI.
+        i1 = (game_odds.get("inning_totals") or {}).get("I1") or {}
         if pk == "NRFI":
-            return game_odds.get("nrfi_under_odds")
-        return game_odds.get("nrfi_over_odds")
+            return i1.get("under_odds")
+        return i1.get("over_odds")
     if bt == "F5 ML":
         return (game_odds.get("f5_home_ml") if pk == home_abbr
                 else game_odds.get("f5_away_ml"))
@@ -94,6 +99,23 @@ def _extract_closing_for_pick(bet_type: str, pick_text: str,
         # better stale CLV than missing CLV.
         return (game_odds.get("over_odds") if is_over
                 else game_odds.get("under_odds"))
+    # Team Total — pick label "BAL Over 4.5" or "MIL Under 3.5".
+    # HR exposes per-team total under team_total_{home,away}.
+    # Pre-fix this branch was missing → 0% closing-odds coverage on
+    # all MLB Team Total picks.
+    if bt == "Team Total":
+        parts = pk.split()
+        if len(parts) < 3:
+            return None
+        pick_team = parts[0]
+        side = parts[1].lower()  # 'over' or 'under'
+        is_home = pick_team == home_abbr
+        tt_block = (game_odds.get("team_total_home") if is_home
+                    else game_odds.get("team_total_away"))
+        if not isinstance(tt_block, dict):
+            return None
+        return (tt_block.get("over_odds") if side == "over"
+                else tt_block.get("under_odds"))
     # ALT RL — pick label "MIL +1.5" or "BAL -2.5". Match by signed
     # spread value in alt_spreads.
     if bt in ("ALT RL", "ALT SPREAD"):

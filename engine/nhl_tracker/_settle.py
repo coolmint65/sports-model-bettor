@@ -52,6 +52,18 @@ def settle_picks() -> dict:
     dates = set()
     for p in pending:
         dates.add(p["date"])
+    # UTC drift defense: NBA-equivalent fix. A pick recorded at ~9pm ET
+    # gets pick.date=D but the game's UTC date (and nhl_games row) is
+    # D+1 for any puck-drop after 8pm ET. Without fetching D+1 the
+    # settler can never match those picks. Cheap — one extra scoreboard
+    # HTTP per pending date.
+    for d in list(dates):
+        try:
+            d1 = (datetime.strptime(d, "%Y-%m-%d") + timedelta(days=1)
+                  ).strftime("%Y-%m-%d")
+            dates.add(d1)
+        except ValueError:
+            pass
 
     # Fetch scoreboard for each date. Include in-progress games so
     # period-specific picks (Period Total P1, Period BTS P1, Period
@@ -142,38 +154,9 @@ def settle_picks() -> dict:
         h = game["home_abbr"]
         a = game["away_abbr"]
 
-        # Capture closing odds if not already stored
-        if not pick.get("closing_odds") and h and a:
-            _ALT_CL = {
-                "TB": "TBL", "TBL": "TB", "NJ": "NJD", "NJD": "NJ",
-                "SJ": "SJS", "SJS": "SJ", "LA": "LAK", "LAK": "LA",
-                "WAS": "WSH", "WSH": "WAS", "CLB": "CBJ", "CBJ": "CLB",
-                "MON": "MTL", "MTL": "MON", "NAS": "NSH", "NSH": "NAS",
-            }
-            game_cl_odds = None
-            for a_try in [a, _ALT_CL.get(a, "")]:
-                for h_try in [h, _ALT_CL.get(h, "")]:
-                    if a_try and h_try:
-                        game_cl_odds = closing_odds_map.get(f"{a_try}@{h_try}")
-                        if game_cl_odds:
-                            break
-                if game_cl_odds:
-                    break
-            if game_cl_odds:
-                bt_tmp = pick["bet_type"]
-                pk_tmp = pick["pick"]
-                closing = None
-                if bt_tmp == "ML":
-                    closing = game_cl_odds.get("home_ml") if pk_tmp == h else game_cl_odds.get("away_ml")
-                elif bt_tmp == "O/U":
-                    closing = game_cl_odds.get("over_odds") if "Over" in pk_tmp else game_cl_odds.get("under_odds")
-                elif bt_tmp == "PL":
-                    pick_team = pk_tmp.split()[0] if pk_tmp.split() else ""
-                    closing = game_cl_odds.get("home_spread_odds") if pick_team == h else game_cl_odds.get("away_spread_odds")
-                if closing is not None:
-                    conn.execute("UPDATE nhl_picks SET closing_odds = ? WHERE id = ?",
-                                 (int(closing), pick["id"]))
-                    pick["closing_odds"] = int(closing)
+        # Settle-time closing-odds capture removed 2026-05-02 — see
+        # engine.tracker._settle for rationale. PRE-game stamps via
+        # capture_closing_odds() are the only canonical source.
 
         bt = pick["bet_type"]
         pk = pick["pick"]
@@ -379,71 +362,28 @@ def settle_picks() -> dict:
 
 
 def _fetch_closing_map_for_settle() -> dict:
-    """Pull the-odds-api NHL prices for closing-odds capture during
-    settle. Returns {f"{away}@{home}": {ml/spread/total dict}}."""
+    """Pull HR NHL closing prices for closing-line-value capture during
+    settle. Returns {f"{away}@{home}": {ml/spread/total dict}}. Was
+    sourced from the-odds-api until 2026-05-11 — now wraps HR's
+    snapshot, which is the live book most relevant to the user (FL
+    operator)."""
     closing_odds_map: dict = {}
     try:
-        import os
-        import urllib.request as _urlreq
-        from pathlib import Path as _Path
-        key_file = _Path(__file__).resolve().parent.parent.parent / "data" / "odds_api_key.txt"
-        api_key = os.environ.get("ODDS_API_KEY") or (key_file.read_text().strip() if key_file.exists() else None)
-        if not api_key:
-            return closing_odds_map
-        _url = (f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds/"
-                f"?apiKey={api_key}&regions=us&markets=h2h,spreads,totals"
-                f"&oddsFormat=american&bookmakers=draftkings")
-        _req = _urlreq.Request(_url, headers={"User-Agent": "NHLTracker/1.0"})
-        with _urlreq.urlopen(_req, timeout=15) as _resp:
-            _odds_data = json.loads(_resp.read().decode())
-
-        _NHL_ABBR = {
-            "Anaheim Ducks": "ANA", "Utah Hockey Club": "UTA",
-            "Boston Bruins": "BOS", "Buffalo Sabres": "BUF",
-            "Calgary Flames": "CGY", "Carolina Hurricanes": "CAR",
-            "Chicago Blackhawks": "CHI", "Colorado Avalanche": "COL",
-            "Columbus Blue Jackets": "CBJ", "Dallas Stars": "DAL",
-            "Detroit Red Wings": "DET", "Edmonton Oilers": "EDM",
-            "Florida Panthers": "FLA", "Los Angeles Kings": "LAK",
-            "Minnesota Wild": "MIN", "Montreal Canadiens": "MTL",
-            "Nashville Predators": "NSH", "New Jersey Devils": "NJD",
-            "New York Islanders": "NYI", "New York Rangers": "NYR",
-            "Ottawa Senators": "OTT", "Philadelphia Flyers": "PHI",
-            "Pittsburgh Penguins": "PIT", "San Jose Sharks": "SJS",
-            "Seattle Kraken": "SEA", "St. Louis Blues": "STL",
-            "Tampa Bay Lightning": "TBL", "Toronto Maple Leafs": "TOR",
-            "Vancouver Canucks": "VAN", "Vegas Golden Knights": "VGK",
-            "Washington Capitals": "WSH", "Winnipeg Jets": "WPG",
-        }
-        for _g in (_odds_data or []):
-            _home = _g.get("home_team", "")
-            _away = _g.get("away_team", "")
-            _h_ab = _NHL_ABBR.get(_home, _home[:3].upper())
-            _a_ab = _NHL_ABBR.get(_away, _away[:3].upper())
-            _key = f"{_a_ab}@{_h_ab}"
-            _res = {}
-            for _bk in _g.get("bookmakers", [])[:1]:
-                for _mkt in _bk.get("markets", []):
-                    _mk = _mkt.get("key", "")
-                    for _o in _mkt.get("outcomes", []):
-                        if _mk == "h2h":
-                            if _o.get("name") == _home:
-                                _res["home_ml"] = _o.get("price")
-                            elif _o.get("name") == _away:
-                                _res["away_ml"] = _o.get("price")
-                        elif _mk == "spreads":
-                            if _o.get("name") == _home:
-                                _res["home_spread_odds"] = _o.get("price")
-                            elif _o.get("name") == _away:
-                                _res["away_spread_odds"] = _o.get("price")
-                        elif _mk == "totals":
-                            _nm = _o.get("name", "").lower()
-                            if "over" in _nm:
-                                _res["over_odds"] = _o.get("price")
-                            elif "under" in _nm:
-                                _res["under_odds"] = _o.get("price")
-            if _res:
-                closing_odds_map[_key] = _res
+        from scrapers.hardrock_odds import fetch_nhl as _hr_nhl
+        hr = _hr_nhl() or {}
+        for key, v in hr.items():
+            res = {}
+            if v.get("home_ml") is not None:
+                res["home_ml"] = v["home_ml"]
+                res["away_ml"] = v.get("away_ml")
+            if v.get("home_spread_odds") is not None:
+                res["home_spread_odds"] = v["home_spread_odds"]
+                res["away_spread_odds"] = v.get("away_spread_odds")
+            if v.get("over_odds") is not None:
+                res["over_odds"] = v["over_odds"]
+                res["under_odds"] = v.get("under_odds")
+            if res:
+                closing_odds_map[key] = res
     except Exception as e:
-        logger.debug("Could not fetch NHL closing odds: %s", e)
+        logger.debug("Could not fetch NHL closing odds from HR: %s", e)
     return closing_odds_map

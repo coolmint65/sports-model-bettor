@@ -69,27 +69,56 @@ _cache: dict[tuple[str, str], tuple[float, float]] = {}  # (sport, bt) -> (ts, v
 def _conn(sport: str):
     if sport == "mlb":
         from .db import get_conn
+        return get_conn()
     elif sport == "nhl":
         from .nhl_db import get_conn
+        return get_conn()
     elif sport == "nba":
         from .nba_db import get_conn
-    else:
-        raise ValueError(f"unknown sport {sport}")
-    return get_conn()
+        return get_conn()
+    elif sport == "tennis":
+        from .tennis_db import get_conn
+        return get_conn()
+    # Framework leagues (basketball: wnba/euroleague/cba/etc., hockey:
+    # ahl/pwhl, AFL via basketball framework). Each has its own per-
+    # league SQLite at the framework path. Caller passes the league
+    # key directly as ``sport``.
+    try:
+        from .basketball._db import get_conn as _bb_conn
+        return _bb_conn(sport)
+    except Exception:
+        pass
+    try:
+        from .hockey import HOCKEY_LEAGUE_REGISTRY
+        if sport in HOCKEY_LEAGUE_REGISTRY:
+            from .hockey._db import get_conn as _hk_conn  # type: ignore
+            return _hk_conn(sport)
+    except Exception:
+        pass
+    raise ValueError(f"unknown sport {sport}")
 
 
 def _settled_stats(sport: str, bet_type: str) -> tuple[int, float]:
     """Return (n_settled, roi_per_pick) across both core picks + derivative
     picks tables for this (sport, bet_type)."""
     conn = _conn(sport)
-    main_table = {"mlb": "picks", "nhl": "nhl_picks", "nba": "nba_picks"}[sport]
-    deriv_table = {"mlb": "derivative_picks",
-                   "nhl": "nhl_derivative_picks",
-                   "nba": "nba_derivative_picks"}[sport]
+    # Per-sport pick table names. Framework leagues + tennis use
+    # generic ``picks`` / ``tennis_picks`` and don't have a separate
+    # derivative table; in that case deriv_table stays None.
+    main_tables = {"mlb": "picks", "nhl": "nhl_picks", "nba": "nba_picks",
+                    "tennis": "tennis_picks"}
+    deriv_tables = {"mlb": "derivative_picks",
+                     "nhl": "nhl_derivative_picks",
+                     "nba": "nba_derivative_picks"}
+    main_table = main_tables.get(sport, "picks")  # framework leagues
+    deriv_table = deriv_tables.get(sport)
 
     n = 0
     profit_sum = 0.0
-    for table in (main_table, deriv_table):
+    tables_to_query = [main_table]
+    if deriv_table:
+        tables_to_query.append(deriv_table)
+    for table in tables_to_query:
         try:
             row = conn.execute(
                 f"SELECT COUNT(*) AS n, COALESCE(SUM(profit), 0) AS p "

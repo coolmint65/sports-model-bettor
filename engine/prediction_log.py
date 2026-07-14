@@ -44,6 +44,14 @@ MARKETS = {
     "mlb": ("home_win", "total", "nrfi", "f5_home_win", "f5_total"),
     "nhl": ("home_win", "total"),
     "nba": ("q1_home_win", "q1_total"),
+    # Basketball framework leagues — same shape as NBA (home_win +
+    # total for full game; q1_* available where Q1 markets are fit).
+    # Adds the slug here so empirical_calibration's signal-log path
+    # accepts predictions and the floor-driven calibrator refits map
+    # rows correctly per (sport, market, bucket).
+    "wnba": ("home_win", "total", "q1_home_win", "q1_total"),
+    "ncaam": ("home_win", "total"),
+    "afl": ("home_win", "total", "q1_home_win", "q1_total"),
 }
 
 
@@ -169,17 +177,37 @@ def build_tuning_dataset(sport: str, days: int = 365,
 def _get_conn(sport: str):
     if sport == "mlb":
         from .db import get_conn
-    elif sport == "nhl":
+        try:
+            return get_conn()
+        except Exception as e:
+            logger.debug("get_conn failed for %s: %s", sport, e)
+            return None
+    if sport == "nhl":
         from .nhl_db import get_conn
-    elif sport == "nba":
+        try:
+            return get_conn()
+        except Exception as e:
+            logger.debug("get_conn failed for %s: %s", sport, e)
+            return None
+    if sport == "nba":
         from .nba_db import get_conn
-    else:
-        return None
+        try:
+            return get_conn()
+        except Exception as e:
+            logger.debug("get_conn failed for %s: %s", sport, e)
+            return None
+    # Basketball framework leagues (wnba/ncaam/afl + 28 minor leagues)
+    # share a generic per-league SQLite. Calibration empirical refit
+    # can then train on every framework league's signal log, not just
+    # the Big 3.
     try:
-        return get_conn()
+        from .basketball._db import get_conn as _bb_conn
+        from .basketball._config import LEAGUE_REGISTRY
+        if sport in LEAGUE_REGISTRY:
+            return _bb_conn(sport)
     except Exception as e:
-        logger.debug("get_conn failed for %s: %s", sport, e)
-        return None
+        logger.debug("basketball get_conn failed for %s: %s", sport, e)
+    return None
 
 
 def _load_joined_rows(sport: str, days: int) -> list[tuple[dict, dict]]:

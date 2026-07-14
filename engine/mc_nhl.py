@@ -27,31 +27,37 @@ compatible market probability dicts (swap per-inning for per-period).
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Sequence
 
 import numpy as np
 
+from . import mc_constants as _mc
+
 logger = logging.getLogger(__name__)
 
 
-# ── League baselines (2023-24 + 2024-25 NHL) ───────────────────
-LEAGUE_GF_PER_GAME = 3.10          # goals FOR per team per game
-LEAGUE_GA_PER_GAME = 3.10          # equal at league level
-LEAGUE_PP_GOALS_PER_GAME = 0.65    # PP goals added per team per game
-LEAGUE_SAVE_PCT = 0.905            # NHL save% regressed to mean
-LEAGUE_HOME_EDGE_GOALS = 0.20      # ~0.2 goals/game home advantage
+# ── League baselines ───────────────────────────────────────────
+# Backed by engine.mc_constants. NHL's calibration only persists
+# ``home_edge`` (goals) today; the others fall through to defaults
+# defined in mc_constants. Wrapping the names as callables keeps
+# downstream callers working when fitted values eventually land.
+LEAGUE_GF_PER_GAME = _mc.nhl_gf_per_game
+LEAGUE_GA_PER_GAME = _mc.nhl_ga_per_game
+LEAGUE_PP_GOALS_PER_GAME = _mc.nhl_pp_goals_per_game
+LEAGUE_SAVE_PCT = _mc.nhl_save_pct
+LEAGUE_HOME_EDGE_GOALS = _mc.nhl_home_edge_goals
 OT_MIN = 5
-OT_3V3_GF_RATE = 2.0               # 3v3 OT is more wide open
+OT_3V3_GF_RATE = _mc.nhl_ot_3v3_gf_rate
 
 
 @dataclass
 class NHLTeamProfile:
     """Per-team sim inputs."""
-    gf_per_game: float = LEAGUE_GF_PER_GAME
-    ga_per_game: float = LEAGUE_GA_PER_GAME
-    pp_goals_per_game: float = LEAGUE_PP_GOALS_PER_GAME
-    save_pct: float = LEAGUE_SAVE_PCT
+    gf_per_game: float = field(default_factory=_mc.nhl_gf_per_game)
+    ga_per_game: float = field(default_factory=_mc.nhl_ga_per_game)
+    pp_goals_per_game: float = field(default_factory=_mc.nhl_pp_goals_per_game)
+    save_pct: float = field(default_factory=_mc.nhl_save_pct)
     # Optional adjustments already applied upstream (injury / travel / rest)
     offense_mult: float = 1.0
     defense_mult: float = 1.0
@@ -65,7 +71,9 @@ def expected_goals(home: NHLTeamProfile, away: NHLTeamProfile,
     The standard sabermetric blend: home_xG = mean(home_off, away_def)
     normalized so that two average teams produce LEAGUE_GF_PER_GAME.
     """
-    lg = LEAGUE_GF_PER_GAME
+    lg = _mc.nhl_gf_per_game()
+    home_edge_goals = _mc.nhl_home_edge_goals()
+    league_save_pct = _mc.nhl_save_pct()
     home_off = home.gf_per_game * home.offense_mult
     away_off = away.gf_per_game * away.offense_mult
     home_def = home.ga_per_game * home.defense_mult
@@ -75,8 +83,8 @@ def expected_goals(home: NHLTeamProfile, away: NHLTeamProfile,
     home_xg = (home_off * away_def) / lg
     away_xg = (away_off * home_def) / lg
     # Home ice advantage (goals, split symmetrically)
-    home_xg += LEAGUE_HOME_EDGE_GOALS / 2
-    away_xg -= LEAGUE_HOME_EDGE_GOALS / 2
+    home_xg += home_edge_goals / 2
+    away_xg -= home_edge_goals / 2
     # Playoff scoring shrinkage -- matches engine.nhl_predict.
     # NHL_PLAYOFF_SCORING_FACTOR (0.93) applied symmetrically.
     if is_playoff:
@@ -90,10 +98,10 @@ def expected_goals(home: NHLTeamProfile, away: NHLTeamProfile,
     home_xg += pp_gap
     away_xg -= pp_gap
     # Apply the opposing goalie's save-pct differential as a multiplier.
-    # LEAGUE save% of 0.905 -> 0.095 save-miss rate. A 0.920 goalie has
+    # League save% ~0.905 -> ~0.095 save-miss rate. A 0.920 goalie has
     # 0.080 save-miss rate, so shots-become-goals is scaled by 0.080/0.095.
-    home_xg *= (1.0 - away.save_pct) / (1.0 - LEAGUE_SAVE_PCT)
-    away_xg *= (1.0 - home.save_pct) / (1.0 - LEAGUE_SAVE_PCT)
+    home_xg *= (1.0 - away.save_pct) / (1.0 - league_save_pct)
+    away_xg *= (1.0 - home.save_pct) / (1.0 - league_save_pct)
     return max(0.5, home_xg), max(0.5, away_xg)
 
 
@@ -121,7 +129,7 @@ def simulate_games(home: NHLTeamProfile, away: NHLTeamProfile,
     reg_tie = home_reg == away_reg
 
     # OT: scaled Poisson, 5/60 of an hour at 3v3 rate
-    ot_lambda = OT_3V3_GF_RATE * (OT_MIN / 60.0)
+    ot_lambda = _mc.nhl_ot_3v3_gf_rate() * (OT_MIN / 60.0)
     ot_home = rng.poisson(ot_lambda, size=n_sims).astype(np.int16)
     ot_away = rng.poisson(ot_lambda, size=n_sims).astype(np.int16)
     # Sudden death: the first team to score more wins. Simplification:

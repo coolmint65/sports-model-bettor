@@ -32,6 +32,7 @@ import json
 import logging
 from datetime import datetime
 from typing import Any
+from ._tz import et_today_str
 
 logger = logging.getLogger(__name__)
 
@@ -211,7 +212,7 @@ def refresh_for_date(date: str | None = None,
     recorded pick for today reflects the confirmed lineup.
 
     Returns a summary dict suitable for logging or a status endpoint."""
-    target_date = date or datetime.now().strftime("%Y-%m-%d")
+    target_date = date or et_today_str()
     summary: dict[str, Any] = {
         "date": target_date,
         "games_checked": 0,

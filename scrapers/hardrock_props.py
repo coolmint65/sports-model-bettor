@@ -73,6 +73,7 @@ from scrapers.hardrock_odds import (  # noqa: E402
     _parse_odds_string,
     _extract_teams,
     _team_abbr,
+    _graphql_post,
 )
 
 
@@ -120,8 +121,18 @@ query betSync(
 # we use the larger event-count one.
 _COMP_ID = {
     "mlb": "2899138833758814469",
-    "nba": "691033199537586178",
+    # NBA — refreshed 2026-05-29. Old comp 691033199537586178 returned
+    # just game-line markets (51); HR's live NBA player-prop board is
+    # under the main NBA comp 7594438161586061565 (~900 markets per
+    # event including PTS / REB / AST / 3PM lines + alts). The two-
+    # comp split was a 2026-04-26 transition that's since collapsed
+    # back to one comp.
+    "nba": "7594438161586061565",
     "nhl": "691036012789334019",
+    # WNBA — discovered from basketball framework's LEAGUE_REGISTRY,
+    # 2026-05-13. HR ships full player-prop boards (PTS / REB / AST /
+    # 3PM / STL / BLK lines + alts) for in-season games.
+    "wnba": "691031701106622466",
 }
 
 
@@ -210,8 +221,10 @@ _NHL_ALT: list[tuple[re.Pattern, str]] = [
 ]
 
 
-_MAIN_BY_SPORT = {"mlb": _MLB_MAIN, "nba": _NBA_MAIN, "nhl": _NHL_MAIN}
-_ALT_BY_SPORT  = {"mlb": _MLB_ALT,  "nba": _NBA_ALT,  "nhl": _NHL_ALT}
+_MAIN_BY_SPORT = {"mlb": _MLB_MAIN, "nba": _NBA_MAIN, "nhl": _NHL_MAIN,
+                  "wnba": _NBA_MAIN}
+_ALT_BY_SPORT  = {"mlb": _MLB_ALT,  "nba": _NBA_ALT,  "nhl": _NHL_ALT,
+                  "wnba": _NBA_ALT}
 
 
 def _classify_market(market_type: str, sport: str = "mlb") -> tuple[str, bool, float | None]:
@@ -325,25 +338,22 @@ def _matchup_key(event_name: str, away_abbr: str, home_abbr: str) -> str:
 
 def _fetch_raw(comp_id: str) -> dict:
     """POST the betSync query and return the parsed JSON, or {} on
-    any error. Decompresses gzip responses."""
+    any error.
+
+    Routed through the shared ``_graphql_post`` helper from
+    hardrock_odds — it carries the curl_cffi/Firefox TLS impersonation
+    needed to clear Cloudflare's JA3 fingerprint check. Without it
+    Cloudflare 403s every request (observed 2026-05-09: props silently
+    flatlined across MLB/NBA/NHL while game-line scraping kept working
+    because game-line had already migrated to curl_cffi)."""
     body = _build_request_body(comp_id)
     headers = _load_headers()
-    req = urllib.request.Request(
-        EVENT_TREE_URL,
-        data=json.dumps(body).encode(),
-        headers=headers,
-        method="POST",
-    )
+    status, raw, err = _graphql_post(EVENT_TREE_URL, body, headers, timeout=20.0)
+    if err or status != 200 or not raw:
+        logger.warning("HR props HTTP %s err=%s", status, err)
+        return {}
     try:
-        with urllib.request.urlopen(req, timeout=20) as r:
-            raw = r.read()
-            if r.headers.get("Content-Encoding", "").lower() == "gzip":
-                raw = gzip.decompress(raw)
-            return json.loads(raw)
-    except urllib.error.HTTPError as e:
-        logger.warning("HR props HTTP %s %s", e.code, e.reason)
-    except (urllib.error.URLError, TimeoutError) as e:
-        logger.warning("HR props network error: %s", e)
+        return json.loads(raw)
     except (json.JSONDecodeError, ValueError) as e:
         logger.warning("HR props bad JSON: %s", e)
     return {}

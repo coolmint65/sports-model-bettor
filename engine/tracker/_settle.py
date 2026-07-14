@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 
 from ..db import get_conn, get_team_by_id
 from ._helpers import _extract_closing_for_pick
+from .._tz import et_today_str
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ def settle_picks() -> dict:
     # Re-fetch recent game results so completed games are marked 'final'
     try:
         from scrapers.mlb_stats import fetch_schedule
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = et_today_str()
         three_days_ago = (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%d")
         fetch_schedule(three_days_ago, today)
     except Exception as e:
@@ -99,8 +100,13 @@ def settle_picks() -> dict:
                 (game_id,),
             ).fetchone()
         else:
+            # Pull regardless of status so the postponed handler below
+            # can fire. Filtering on `status='final'` here masked the
+            # postponed branch and stranded picks (e.g. NYM @ COL
+            # 2026-05-05 game 824362, postponed to 5-7) as pending.
             game = conn.execute(
-                "SELECT * FROM games WHERE mlb_game_id = ? AND status = 'final'",
+                "SELECT * FROM games WHERE mlb_game_id = ? "
+                "  AND status IN ('final', 'postponed')",
                 (game_id,),
             ).fetchone()
 
@@ -109,8 +115,21 @@ def settle_picks() -> dict:
 
         game = dict(game)
 
-        # Postponed/cancelled games: skip until a real result is recorded.
+        # Postponed/cancelled games: mark the pick as a Push so it
+        # clears out of pending and doesn't sit there forever. The 7-day
+        # auto-push elsewhere catches truly stale rows; this catches
+        # postponed games immediately so the dashboard isn't dragging
+        # phantom rows behind it. Convention matches sportsbook behaviour
+        # (postponed = no action / refund).
         if game.get("status") == "postponed":
+            from datetime import datetime as _dt, timezone as _tz
+            now_utc = _dt.now(_tz.utc).isoformat()
+            conn.execute(
+                "UPDATE picks SET result = 'P', profit = 0, settled_at = ? "
+                "WHERE id = ?",
+                (now_utc, pick["id"]),
+            )
+            settled += 1
             continue
         if game.get("home_score") is None or game.get("away_score") is None:
             continue
@@ -124,24 +143,13 @@ def settle_picks() -> dict:
         h = home_team["abbreviation"] if home_team else ""
         a = away_team["abbreviation"] if away_team else ""
 
-        # Capture closing odds if not already stored.
-        if not pick.get("closing_odds") and h and a:
-            try:
-                from ..picks import match_odds as _match_odds
-                game_odds = _match_odds(h, a, all_closing_odds)
-                if game_odds:
-                    bt_tmp = pick["bet_type"]
-                    pk_tmp = pick["pick"]
-                    closing = _extract_closing_for_pick(
-                        bt_tmp, pk_tmp, h, game_odds,
-                    )
-                    if closing is not None:
-                        conn.execute("UPDATE picks SET closing_odds = ? WHERE id = ?",
-                                     (int(closing), pick["id"]))
-                        pick["closing_odds"] = int(closing)
-            except Exception as e:
-                logger.debug("closing-odds capture failed for pick %s: %s",
-                             pick.get("id"), e)
+        # Settle-time closing-odds capture removed 2026-05-02. The
+        # game has already ended by the time we settle — HR returns
+        # no market or stale post-game prices, both of which poison
+        # the CLV signal. closing_odds is now stamped exclusively by
+        # the dedicated capture_closing_odds() path (sync + every
+        # games-endpoint hit, see #119), which fires PRE-game and
+        # uses the most-recent-pre-start price as canonical.
 
         result = None
         profit = 0
@@ -212,14 +220,49 @@ def settle_picks() -> dict:
 
         elif bt in ("rl", "RL", "ALT RL"):
             # ALT RL settles identically to primary RL.
+            #
+            # Pick text shape: "<team> <signed-spread>" where <team>
+            # may be either a 2-3 letter abbreviation OR a full team
+            # name with internal spaces ("Washington Nationals +1.5").
+            # Find the trailing signed-number token and treat
+            # everything before it as the team identifier.
             parts = pk.split()
-            pick_team = parts[0] if parts else ""
-            spread = float(parts[1]) if len(parts) > 1 else 1.5
+            spread = 1.5
+            pick_team = pk
+            if parts:
+                # Last token should look like +1.5 / -1.5 / 1.5 / -2.5
+                try:
+                    spread = float(parts[-1])
+                    pick_team = " ".join(parts[:-1]) or parts[0]
+                except (ValueError, IndexError):
+                    pick_team = parts[0]
+                    spread = 1.5
 
-            if pick_team == h:
+            # Resolve pick_team -> home/away. Accept both abbreviation
+            # and full name; full names go through the team-aliases
+            # resolver so "Washington Nationals" matches WSH.
+            from ..abbr import aliases_for
+            pick_aliases = set()
+            for token in (pick_team, pick_team.split()[-1] if pick_team else ""):
+                if not token:
+                    continue
+                pick_aliases.add(token.upper())
+                try:
+                    pick_aliases.update(a.upper() for a in aliases_for(token))
+                except Exception:
+                    pass
+            if home_team and (home_team.get("name", "").upper() in pick_aliases
+                              or home_team.get("abbreviation", "").upper() in pick_aliases):
                 team_margin = hs - as_
-            else:
+            elif away_team and (away_team.get("name", "").upper() in pick_aliases
+                                or away_team.get("abbreviation", "").upper() in pick_aliases):
                 team_margin = as_ - hs
+            elif pick_team == h:
+                team_margin = hs - as_
+            elif pick_team == a:
+                team_margin = as_ - hs
+            else:
+                team_margin = as_ - hs  # fallback: assume away
 
             if team_margin + spread > 0:
                 result = "W"

@@ -32,6 +32,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from typing import Any
+from ._tz import et_today_str
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,14 @@ CREATE TABLE IF NOT EXISTS pick_events (
     curr_pick     TEXT,
     curr_odds     INTEGER,
     curr_edge     REAL,
-    reason       TEXT
+    reason       TEXT,
+    -- Optional family scope. NBA splits its headline pick into Q1
+    -- and Full families that swap independently; without a scope
+    -- column the popover on the Full card would surface Q1
+    -- transitions (and vice versa) since both families log into the
+    -- same table. NULL = unscoped (sport-wide best_pick), used by
+    -- MLB / NHL where there's only one headline.
+    scope        TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_pick_events_game ON pick_events(date, game_id);
 CREATE INDEX IF NOT EXISTS idx_pick_events_ts ON pick_events(ts);
@@ -73,31 +81,85 @@ def _conn_for(sport: str):
         from .nhl_db import get_conn
     elif sport == "nba":
         from .nba_db import get_conn
+    elif sport == "tennis":
+        from .tennis_db import get_conn
     else:
         raise ValueError(f"unknown sport: {sport}")
     return get_conn()
 
 
 def ensure_table(sport: str) -> None:
-    """Idempotent DDL. Safe to call on every put."""
+    """Idempotent DDL. Safe to call on every put. Runs the additive
+    scope-column migration BEFORE the indexes that reference it so
+    existing DBs that pre-date scope can upgrade in-place."""
     conn = _conn_for(sport)
-    conn.executescript(_DDL)
+    # 1) Base table (no-op when it exists).
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS pick_events (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            date         TEXT NOT NULL,
+            game_id      TEXT NOT NULL,
+            matchup      TEXT NOT NULL,
+            ts           TEXT NOT NULL,
+            event_type   TEXT NOT NULL,
+            prev_bet_type TEXT,
+            prev_pick     TEXT,
+            prev_odds     INTEGER,
+            prev_edge     REAL,
+            curr_bet_type TEXT,
+            curr_pick     TEXT,
+            curr_odds     INTEGER,
+            curr_edge     REAL,
+            reason       TEXT,
+            scope        TEXT
+        )
+    """)
+    # 2) Migration: add scope column on legacy DBs that pre-date it.
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(pick_events)").fetchall()]
+        if "scope" not in cols:
+            conn.execute("ALTER TABLE pick_events ADD COLUMN scope TEXT")
+    except Exception as e:
+        logger.debug("pick_events scope migration skipped: %s", e)
+    # 3) Indexes (scope index referenced AFTER migration).
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_pick_events_game "
+                  "ON pick_events(date, game_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_pick_events_ts "
+                  "ON pick_events(ts)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_pick_events_scope "
+                  "ON pick_events(date, game_id, scope)")
     conn.commit()
 
 
-def _last_state(sport: str, game_id: str, date: str) -> dict | None:
-    """Return the most recent pick-state for ``game_id`` today, or
-    None when no event has been recorded yet."""
+def _last_state(sport: str, game_id: str, date: str,
+                 scope: str | None = None) -> dict | None:
+    """Return the most recent pick-state for ``game_id`` today within
+    the given ``scope``, or None when no event has been recorded.
+
+    When ``scope`` is None the lookup is unscoped (matches rows where
+    scope IS NULL). When provided, only rows tagged with the same
+    scope contribute — so Full-family transitions don't poison the
+    Q1-family detector and vice versa.
+    """
     try:
         ensure_table(sport)
         conn = _conn_for(sport)
-        row = conn.execute(
-            "SELECT event_type, curr_bet_type, curr_pick, curr_odds, curr_edge "
-            "FROM pick_events "
-            "WHERE date = ? AND game_id = ? "
-            "ORDER BY id DESC LIMIT 1",
-            (date, str(game_id)),
-        ).fetchone()
+        if scope is None:
+            row = conn.execute(
+                "SELECT event_type, curr_bet_type, curr_pick, curr_odds, curr_edge "
+                "FROM pick_events "
+                "WHERE date = ? AND game_id = ? AND scope IS NULL "
+                "ORDER BY id DESC LIMIT 1",
+                (date, str(game_id)),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT event_type, curr_bet_type, curr_pick, curr_odds, curr_edge "
+                "FROM pick_events "
+                "WHERE date = ? AND game_id = ? AND scope = ? "
+                "ORDER BY id DESC LIMIT 1",
+                (date, str(game_id), scope),
+            ).fetchone()
         if not row:
             return None
         # A "pulled" event has NULL curr_*; treat it as "no current pick"
@@ -120,7 +182,8 @@ def _last_state(sport: str, game_id: str, date: str) -> dict | None:
 
 def _insert(sport: str, date: str, game_id: str, matchup: str,
             event_type: str, prev: dict | None, curr: dict | None,
-            reason: str | None = None) -> None:
+            reason: str | None = None,
+            scope: str | None = None) -> None:
     ensure_table(sport)
     conn = _conn_for(sport)
     try:
@@ -128,8 +191,8 @@ def _insert(sport: str, date: str, game_id: str, matchup: str,
             "INSERT INTO pick_events "
             "(date, game_id, matchup, ts, event_type, "
             " prev_bet_type, prev_pick, prev_odds, prev_edge, "
-            " curr_bet_type, curr_pick, curr_odds, curr_edge, reason) "
-            "VALUES (?, ?, ?, datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " curr_bet_type, curr_pick, curr_odds, curr_edge, reason, scope) "
+            "VALUES (?, ?, ?, datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 date, str(game_id), matchup, event_type,
                 (prev or {}).get("bet_type"),
@@ -141,6 +204,7 @@ def _insert(sport: str, date: str, game_id: str, matchup: str,
                 (curr or {}).get("odds"),
                 (curr or {}).get("edge"),
                 reason,
+                scope,
             ),
         )
         conn.commit()
@@ -150,7 +214,8 @@ def _insert(sport: str, date: str, game_id: str, matchup: str,
 
 
 def detect_transitions(sport: str, current_picks: list[dict],
-                        date: str | None = None) -> dict:
+                        date: str | None = None,
+                        scope: str | None = None) -> dict:
     """Compare current best-bets snapshot to the last logged state and
     emit events for every meaningful change.
 
@@ -161,11 +226,15 @@ def detect_transitions(sport: str, current_picks: list[dict],
             slate but model lost edge). best_pick when present
             carries {type, pick, odds, edge}.
         date: defaults to today (YYYY-MM-DD).
+        scope: optional family tag ("q1" / "full" for NBA) so each
+            family's transitions form an independent stream. Compare
+            and emit only against rows in the same scope. None preserves
+            the unscoped behaviour for MLB / NHL.
 
     Returns:
         Counts dict {appeared, swapped, pulled, line_shift}.
     """
-    target_date = date or datetime.now().strftime("%Y-%m-%d")
+    target_date = date or et_today_str()
     counts = {"appeared": 0, "swapped": 0, "pulled": 0, "line_shift": 0}
 
     for entry in current_picks:
@@ -175,7 +244,7 @@ def detect_transitions(sport: str, current_picks: list[dict],
         if not game_id:
             continue
 
-        prev = _last_state(sport, game_id, target_date)
+        prev = _last_state(sport, game_id, target_date, scope=scope)
         curr = None
         if bp:
             curr = {
@@ -192,7 +261,7 @@ def detect_transitions(sport: str, current_picks: list[dict],
         # Appeared: first time we've seen a pick for this game today.
         if (prev is None or not prev.get("present")) and curr is not None:
             _insert(sport, target_date, game_id, matchup,
-                    "appeared", None, curr)
+                    "appeared", None, curr, scope=scope)
             counts["appeared"] += 1
             continue
 
@@ -205,7 +274,8 @@ def detect_transitions(sport: str, current_picks: list[dict],
                      "odds":     prev.get("odds"),
                      "edge":     prev.get("edge")},
                     None,
-                    reason="Model no longer sees qualifying edge")
+                    reason="Model no longer sees qualifying edge",
+                    scope=scope)
             counts["pulled"] += 1
             continue
 
@@ -222,7 +292,8 @@ def detect_transitions(sport: str, current_picks: list[dict],
                          "edge":     prev.get("edge")},
                         curr,
                         reason=(f"{prev.get('bet_type')} {prev.get('pick')} "
-                                f"→ {curr['bet_type']} {curr['pick']}"))
+                                f"→ {curr['bet_type']} {curr['pick']}"),
+                        scope=scope)
                 counts["swapped"] += 1
                 continue
 
@@ -239,39 +310,42 @@ def detect_transitions(sport: str, current_picks: list[dict],
                          "edge":     prev.get("edge")},
                         curr,
                         reason=(f"Edge {direction} "
-                                f"{prev_edge:.1f}% → {curr_edge:.1f}%"))
+                                f"{prev_edge:.1f}% → {curr_edge:.1f}%"),
+                        scope=scope)
                 counts["line_shift"] += 1
 
     return counts
 
 
 def list_events(sport: str, game_id: str | None = None,
-                hours: int = 24, date: str | None = None) -> list[dict]:
+                hours: int = 24, date: str | None = None,
+                scope: str | None = None) -> list[dict]:
     """Return recent events. When ``game_id`` is provided, scope to
     that game; otherwise return all events for the date.
+
+    ``scope`` filters by family tag ("q1" / "full" for NBA). Pass
+    "*" or None to return all scopes (default — preserves the legacy
+    sport-wide behaviour for MLB / NHL).
 
     The dashboard 📜 popover reads this with game_id set so each card
     only loads its own thread.
     """
-    target_date = date or datetime.now().strftime("%Y-%m-%d")
+    target_date = date or et_today_str()
     try:
         ensure_table(sport)
         conn = _conn_for(sport)
+        clauses = ["date = ?", "ts >= datetime('now', ?)"]
+        params: list = [target_date, f"-{int(hours)} hours"]
         if game_id:
-            rows = conn.execute(
-                "SELECT * FROM pick_events "
-                "WHERE date = ? AND game_id = ? "
-                "  AND ts >= datetime('now', ?) "
-                "ORDER BY id DESC",
-                (target_date, str(game_id), f"-{int(hours)} hours"),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM pick_events "
-                "WHERE date = ? AND ts >= datetime('now', ?) "
-                "ORDER BY id DESC",
-                (target_date, f"-{int(hours)} hours"),
-            ).fetchall()
+            clauses.append("game_id = ?")
+            params.append(str(game_id))
+        if scope is not None and scope != "*":
+            clauses.append("scope = ?")
+            params.append(scope)
+        sql = ("SELECT * FROM pick_events WHERE "
+               + " AND ".join(clauses)
+               + " ORDER BY id DESC")
+        rows = conn.execute(sql, tuple(params)).fetchall()
         return [dict(r) for r in rows]
     except Exception as e:
         logger.warning("pick_events.list_events failed for %s: %s", sport, e)

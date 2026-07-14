@@ -36,12 +36,15 @@ _DEFAULT_WEIGHTS = {
     ("mlb", "nrfi"):        {"factor": 0.10, "mc": 0.55, "gbm": 0.35},
     ("mlb", "f5_home_win"): {"factor": 0.10, "mc": 0.55, "gbm": 0.35},
     ("mlb", "f5_total"):    {"factor": 0.10, "mc": 0.55, "gbm": 0.35},
-    # NHL: three-way blend once GBM artifacts ship. When GBM is missing,
-    # blend() redistributes its weight across the remaining signals.
-    ("nhl", "home_win"):       {"factor": 0.40, "mc": 0.30, "gbm": 0.30},
-    ("nhl", "total"):          {"factor": 0.40, "mc": 0.30, "gbm": 0.30},
-    ("nhl", "p1_home_win"):    {"factor": 0.30, "mc": 0.40, "gbm": 0.30},
-    ("nhl", "p1_total"):       {"factor": 0.30, "mc": 0.40, "gbm": 0.30},
+    # NHL: three-way blend. MC weight dropped from 0.30→0.10 (full-game)
+    # and 0.40→0.10 (P1) on 2026-05-20 — Brier audit showed MC was the
+    # weakest leg (it samples Poisson once per game vs the closed-form
+    # factor grid + the trained GBM). Factor + GBM split the freed
+    # weight so the calibrated signals carry more of the blend.
+    ("nhl", "home_win"):       {"factor": 0.50, "mc": 0.10, "gbm": 0.40},
+    ("nhl", "total"):          {"factor": 0.50, "mc": 0.10, "gbm": 0.40},
+    ("nhl", "p1_home_win"):    {"factor": 0.45, "mc": 0.10, "gbm": 0.45},
+    ("nhl", "p1_total"):       {"factor": 0.45, "mc": 0.10, "gbm": 0.45},
     # NBA: same three-way default for each market; Q1 markets lean a
     # bit more on MC because the factor model is Q1-specific.
     ("nba", "q1_home_win"):    {"factor": 0.30, "mc": 0.40, "gbm": 0.30},
@@ -118,15 +121,68 @@ def blend(values: dict[str, float], weights: dict[str, float]) -> float | None:
     return sum(v * (w / total_w) for v, w in available.values())
 
 
+def _resolve(sport: str, market: str,
+             values: dict[str, float | None],
+             weights: dict[str, float],
+             log_meta: dict | None = None) -> float | None:
+    """Stack-aware blend with auto-logging.
+
+    Decision tree per (sport, market):
+      1. If a fitted stacker exists AND all 3 components present →
+         use the stacker's prediction.
+      2. Else fall back to the existing weighted blend (no behavior
+         change vs the pre-stacker world).
+
+    Side effect: logs (factor, mc, gbm, blended) to ensemble_log so a
+    future fit has training data, when ``log_meta`` carries
+    {date, game_id}. Logging is best-effort and never raises.
+    """
+    blended = blend(values, weights)
+
+    # Try stacker if model exists.
+    final: float | None = blended
+    try:
+        from .ensemble_stacker import has_model, stacker_predict
+        if has_model(sport, market):
+            stacked = stacker_predict(sport, market, values)
+            if stacked is not None:
+                final = stacked
+    except Exception:
+        pass
+
+    # Log per-component values for the next fit cycle.
+    if log_meta:
+        try:
+            from .ensemble_log import record
+            record(
+                sport=sport,
+                date=str(log_meta.get("date") or ""),
+                game_id=log_meta.get("game_id") or "",
+                market=market,
+                factor_val=values.get("factor"),
+                mc_val=values.get("mc"),
+                gbm_val=values.get("gbm"),
+                blended=blended,
+            )
+        except Exception:
+            pass
+
+    return final
+
+
 # ── Sport-specific glue ────────────────────────────────────────
 
-def ensemble_mlb(pred: dict) -> dict:
+def ensemble_mlb(pred: dict, log_meta: dict | None = None) -> dict:
     """Produce ensemble probabilities for the MLB markets we trade.
 
     Reads the factor-model output already on pred, pred["mc"], and
     pred["gbm"] if present. Leaves pred untouched and returns a new
     "ensemble" dict with fields:
       home_win, total_expected, nrfi, f5_home_win, f5_total, weights_used
+
+    ``log_meta``: optional ``{date, game_id}`` so per-component values
+    get logged for the stacker fit pipeline. Caller has to pass it —
+    pred doesn't carry it.
     """
     mc = (pred.get("mc") or {})
     gbm = (pred.get("gbm") or {})
@@ -140,9 +196,10 @@ def ensemble_mlb(pred: dict) -> dict:
     mc_home_wp = (mc.get("win_prob") or {}).get("home")
     gbm_home_wp = gbm.get("home_win")
     w = weights_for("mlb", "home_win")
-    home_wp = blend(
+    home_wp = _resolve(
+        "mlb", "home_win",
         {"factor": factor_home_wp, "mc": mc_home_wp, "gbm": gbm_home_wp},
-        w,
+        w, log_meta,
     )
     if home_wp is not None:
         out["home_win"] = round(home_wp, 4)
@@ -153,9 +210,10 @@ def ensemble_mlb(pred: dict) -> dict:
     mc_total = (mc.get("expected_runs") or {}).get("total")
     gbm_total = gbm.get("total_runs")
     w = weights_for("mlb", "total")
-    total = blend(
+    total = _resolve(
+        "mlb", "total",
         {"factor": factor_total, "mc": mc_total, "gbm": gbm_total},
-        w,
+        w, log_meta,
     )
     if total is not None:
         out["total_expected"] = round(total, 3)
@@ -203,7 +261,7 @@ def ensemble_mlb(pred: dict) -> dict:
     return out
 
 
-def ensemble_nhl(pred: dict) -> dict:
+def ensemble_nhl(pred: dict, log_meta: dict | None = None) -> dict:
     """NHL ensemble: factor + MC + GBM. Missing components (e.g. GBM not
     yet trained) have their weight redistributed by blend()."""
     mc = (pred.get("mc") or {})
@@ -216,7 +274,9 @@ def ensemble_nhl(pred: dict) -> dict:
     mc_wp = (mc.get("win_prob") or {}).get("home")
     gbm_wp = gbm.get("home_win")
     w = weights_for("nhl", "home_win")
-    wp = blend({"factor": factor_wp, "mc": mc_wp, "gbm": gbm_wp}, w)
+    wp = _resolve("nhl", "home_win",
+                  {"factor": factor_wp, "mc": mc_wp, "gbm": gbm_wp},
+                  w, log_meta)
     if wp is not None:
         out["home_win"] = round(wp, 4)
         out["weights_used"]["home_win"] = w
@@ -225,7 +285,9 @@ def ensemble_nhl(pred: dict) -> dict:
     mc_total = (mc.get("expected_goals") or {}).get("total")
     gbm_total = gbm.get("total_goals")
     w = weights_for("nhl", "total")
-    tot = blend({"factor": factor_total, "mc": mc_total, "gbm": gbm_total}, w)
+    tot = _resolve("nhl", "total",
+                   {"factor": factor_total, "mc": mc_total, "gbm": gbm_total},
+                   w, log_meta)
     if tot is not None:
         out["total_expected"] = round(tot, 3)
         out["weights_used"]["total"] = w
@@ -262,7 +324,7 @@ def ensemble_nhl(pred: dict) -> dict:
     return out
 
 
-def ensemble_nba(pred: dict) -> dict:
+def ensemble_nba(pred: dict, log_meta: dict | None = None) -> dict:
     """NBA Q1 ensemble: factor + MC + GBM."""
     mc = (pred.get("mc") or {})
     gbm = (pred.get("gbm") or {})
@@ -275,7 +337,9 @@ def ensemble_nba(pred: dict) -> dict:
     mc_wp = (mc.get("win_prob") or {}).get("home")
     gbm_wp = gbm.get("q1_home_win")
     w = weights_for("nba", "q1_home_win")
-    wp = blend({"factor": factor_wp, "mc": mc_wp, "gbm": gbm_wp}, w)
+    wp = _resolve("nba", "q1_home_win",
+                  {"factor": factor_wp, "mc": mc_wp, "gbm": gbm_wp},
+                  w, log_meta)
     if wp is not None:
         out["q1_home_win"] = round(wp, 4)
         out["weights_used"]["q1_home_win"] = w

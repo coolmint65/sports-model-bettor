@@ -7,68 +7,32 @@ from datetime import datetime
 
 from ._helpers import _core_picks, _get_nhl_db, _extract_nhl_closing_for_pick
 from ._scoreboard import _fetch_nhl_scoreboard
+from .._tz import et_today_str
 
 logger = logging.getLogger(__name__)
 
 
 def capture_closing_odds() -> int:
     """Snapshot current Hard Rock NHL odds for all pending picks.
-
-    Mirrors engine.nba_tracker.capture_closing_odds. Call before games
-    start (sync script ~30 min pre-puck) so the per-row CLV column
-    populates once games settle.
-    """
-    conn = _get_nhl_db()
-    pending = conn.execute(
-        "SELECT id, matchup, bet_type, pick FROM nhl_picks "
-        "WHERE result IS NULL AND closing_odds IS NULL"
-    ).fetchall()
-    if not pending:
-        return 0
-
-    try:
-        from scrapers.hardrock_odds import fetch_nhl as _hr_nhl
-        all_odds = _hr_nhl() or {}
-    except Exception as e:
-        logger.warning("NHL closing capture: HR fetch failed: %s", e)
-        return 0
-    if not all_odds:
-        return 0
-
-    from ..picks import match_odds as _match_odds
-    updated = 0
-    for pick in pending:
-        pick = dict(pick)
-        matchup = pick["matchup"]
-        sep = " @ " if " @ " in matchup else "@"
-        parts = matchup.split(sep)
-        if len(parts) != 2:
-            continue
-        away, home = parts[0].strip(), parts[1].strip()
-        game_odds = _match_odds(home, away, all_odds)
-        if not game_odds:
-            continue
-        closing = _extract_nhl_closing_for_pick(
-            pick["bet_type"], pick["pick"], home, game_odds,
-        )
-        if closing is not None:
-            conn.execute(
-                "UPDATE nhl_picks SET closing_odds = ? WHERE id = ?",
-                (int(closing), pick["id"]),
-            )
-            updated += 1
-
-    conn.commit()
-    logger.info("NHL closing capture: %d/%d pending picks updated",
-                updated, len(pending))
-    return updated
+    Thin wrapper around ``engine.tracker_core.core_capture_closing_odds``
+    with the NHL adapter — see that module for the refresh semantics."""
+    from scrapers.hardrock_odds import fetch_nhl as _hr_nhl
+    from ..tracker_core import SportAdapter, core_capture_closing_odds
+    adapter = SportAdapter(
+        name="nhl",
+        get_conn=_get_nhl_db,
+        picks_table="nhl_picks",
+        hr_fetch=_hr_nhl,
+        extract_closing=_extract_nhl_closing_for_pick,
+    )
+    return core_capture_closing_odds(adapter)
 
 
 def refresh_pending_for_today(bets: list[dict],
                                target_date: str | None = None) -> dict:
     """NHL twin of engine.tracker.refresh_pending_for_today. See that
     docstring for the design rationale."""
-    target_date = target_date or datetime.now().strftime("%Y-%m-%d")
+    target_date = target_date or et_today_str()
     conn = _get_nhl_db()
     current_by_matchup: dict[str, dict] = {}
     locked_matchups: set[str] = set()
@@ -119,8 +83,10 @@ def refresh_pending_for_today(bets: list[dict],
         except Exception:
             return False
 
-    # Freeze rule (set 2026-04-28 — see engine.tracker for the design).
-    updated = voided = skipped = 0
+    # Lock-at-game-start rule (revised 2026-04-29 — see engine.tracker
+    # for the design): prematch picks may swap freely; live/final
+    # stays frozen via the gates above.
+    updated = swapped = voided = 0
     for p in pending:
         p = dict(p)
         if p["matchup"] in locked_matchups:
@@ -128,6 +94,13 @@ def refresh_pending_for_today(bets: list[dict],
         if _pick_game_started(p.get("game_id")):
             continue
         current = current_by_matchup.get(p["matchup"])
+        # 'skip'-tier picks are below the lean floor — the card filter
+        # already hides them. Treat them the same as "no current best"
+        # so the tracker row gets voided too. Without this the tracker
+        # ends up with phantom rows for picks the user can't see on
+        # the card (UTA ML edge=3.4% bug, 2026-04-30).
+        if current and (current.get("confidence") or "lean") == "skip":
+            current = None
         if not current:
             matchup_in_response = any(b["matchup"] == p["matchup"] for b in bets)
             if matchup_in_response:
@@ -136,7 +109,17 @@ def refresh_pending_for_today(bets: list[dict],
             continue
 
         if current.get("type") != p["bet_type"] or current.get("pick") != p["pick"]:
-            skipped += 1
+            # Prematch swap — overwrite bet_type, pick, and price.
+            # closing_odds resets because the new pick has its own line.
+            conn.execute(
+                "UPDATE nhl_picks SET bet_type = ?, pick = ?, "
+                "  model_prob = ?, edge = ?, odds = ?, closing_odds = NULL "
+                "WHERE id = ?",
+                (current.get("type"), current.get("pick"),
+                 current.get("prob"), current.get("edge"),
+                 current.get("odds"), p["id"]),
+            )
+            swapped += 1
             continue
 
         conn.execute(
@@ -148,22 +131,22 @@ def refresh_pending_for_today(bets: list[dict],
         updated += 1
 
     conn.commit()
-    return {"updated": updated, "swapped": 0, "voided": voided,
-            "skipped_pick_change": skipped}
+    return {"updated": updated, "swapped": swapped, "voided": voided}
 
 
 def record_picks(date: str | None = None, min_edge: float = 1.5,
                  force: bool = False) -> list[dict]:
     """Run NHL model on today's games and record the best pick per game."""
     conn = _get_nhl_db()
-    target_date = date or datetime.now().strftime("%Y-%m-%d")
+    target_date = date or et_today_str()
 
-    if force:
-        conn.execute(
-            "DELETE FROM nhl_picks WHERE date = ? AND result IS NULL",
-            (target_date,),
-        )
-        conn.commit()
+    # Note: when ``force=True``, deletion happens PER-GAME inside the
+    # event loop (not as a blanket pre-DELETE here). This is intentional —
+    # the loop skips completed games via ``status.completed`` and the
+    # "match HR slate" filter, so per-game delete naturally scopes the
+    # destructive op to games we're actually re-recording. Bug surfaced
+    # on the MLB twin 2026-05-03 when blanket pre-DELETE wiped picks
+    # for live games and the loop's filter prevented re-insertion.
 
     from engine.nhl_predict import generate_nhl_picks
     from engine.data import list_teams, load_team
@@ -201,56 +184,6 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
     except Exception as e:
         logger.warning("NHL tracker Hard Rock failed: %s", e)
 
-    if not odds_map:
-        try:
-            import os
-            from pathlib import Path
-            key_file = Path(__file__).resolve().parent.parent.parent / "data" / "odds_api_key.txt"
-            api_key = os.environ.get("ODDS_API_KEY") or (
-                key_file.read_text().strip() if key_file.exists() else None)
-            if api_key:
-                import urllib.request
-                url = (f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds/"
-                       f"?apiKey={api_key}&regions=us&markets=h2h,spreads,totals"
-                       f"&oddsFormat=american&bookmakers=draftkings")
-                req = urllib.request.Request(url, headers={"User-Agent": "NHLTracker/1.0"})
-                with urllib.request.urlopen(req, timeout=15) as resp:
-                    odds_data = json.loads(resp.read().decode())
-                for game in (odds_data or []):
-                    home = game.get("home_team", "")
-                    away = game.get("away_team", "")
-                    h = home[:3].upper()
-                    a = away[:3].upper()
-                    key = f"{a}@{h}"
-                    result = {"provider": "DraftKings"}
-                    for book in game.get("bookmakers", [])[:1]:
-                        for market in book.get("markets", []):
-                            mkey = market.get("key", "")
-                            for o in market.get("outcomes", []):
-                                if mkey == "h2h":
-                                    if o.get("name") == home:
-                                        result["home_ml"] = o.get("price")
-                                    elif o.get("name") == away:
-                                        result["away_ml"] = o.get("price")
-                                elif mkey == "spreads":
-                                    if o.get("name") == home:
-                                        result["home_spread_odds"] = o.get("price")
-                                        result["home_spread_point"] = o.get("point")
-                                    elif o.get("name") == away:
-                                        result["away_spread_odds"] = o.get("price")
-                                        result["away_spread_point"] = o.get("point")
-                                elif mkey == "totals":
-                                    name = o.get("name", "").lower()
-                                    if "over" in name:
-                                        result["over_odds"] = o.get("price")
-                                        result["over_under"] = o.get("point")
-                                    elif "under" in name:
-                                        result["under_odds"] = o.get("price")
-                    if result.get("home_ml"):
-                        odds_map[key] = result
-        except Exception as e:
-            logger.warning("Could not fetch NHL odds (fallback): %s", e)
-
     recorded = []
     for event in events:
         game_id = event.get("id", "")
@@ -278,12 +211,6 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
             continue
 
         matchup = f"{a_abbr} @ {h_abbr}"
-
-        existing = conn.execute(
-            "SELECT COUNT(*) as c FROM nhl_picks WHERE game_id = ?", (game_id,)
-        ).fetchone()["c"]
-        if existing > 0:
-            continue
 
         _ALT = {
             "TB": "TBL", "TBL": "TB", "NJ": "NJD", "NJD": "NJ",
@@ -319,27 +246,96 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
         core = _core_picks(picks)
         if not core:
             continue
-        best = core[0]
-        if best["edge"] < min_edge:
-            continue
         from ..nhl_picks import _valid_odds as _nhl_valid
-        if not _nhl_valid(best.get("odds")):
-            logger.warning("Skipping NHL pick with invalid odds=%s for %s",
-                           best.get("odds"), matchup)
-            continue
 
-        conn.execute("""
-            INSERT INTO nhl_picks (game_id, date, matchup, bet_type, pick,
-                                   model_prob, edge, odds)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (game_id, target_date, matchup, best["type"], best["pick"],
-              best["prob"], best["edge"], best["odds"]))
+        # Per-game force-delete (replaces the old blanket pre-DELETE).
+        # Only fires for games we're about to re-record (i.e. pre-game
+        # AND on HR's slate), so completed/live games' pending rows
+        # survive untouched.
+        if force:
+            conn.execute(
+                "DELETE FROM nhl_picks WHERE result IS NULL AND date = ? "
+                "AND (game_id = ? OR matchup = ?)",
+                (target_date, game_id, matchup),
+            )
 
-        recorded.append({
-            "matchup": matchup, "type": best["type"],
-            "pick": best["pick"], "prob": round(best["prob"], 3),
-            "edge": round(best["edge"], 1), "odds": best["odds"],
-        })
+        # Postponement cleanup: when an NHL game gets rescheduled to a
+        # later date, the original date's pending pick stays orphaned
+        # (settle never finds the game on the original date's
+        # scoreboard). The recorder now sees a new pick for the SAME
+        # game_id on a LATER date, so void any pending rows with the
+        # same game_id from prior dates — they're stale duplicates.
+        # Marks as 'V' rather than DELETEs so the audit log preserves
+        # what was originally chosen vs the rescheduled rerun.
+        conn.execute(
+            "UPDATE nhl_picks SET result='V', "
+            "  profit=0, settled_at=datetime('now') "
+            "WHERE result IS NULL AND game_id = ? AND date < ?",
+            (game_id, target_date),
+        )
+
+        # Record every core pick above min_edge — not just the top
+        # one. NHL surfaces ML + O/U + PL on the same card commonly;
+        # pre-fix only the highest-edge survived (cards showed picks
+        # the tracker silently dropped). INSERT OR IGNORE dedupes
+        # against the (date, game_id, bet_type, pick) unique index
+        # so re-runs don't pile up.
+        for pick in core:
+            if pick.get("edge", 0) < min_edge:
+                continue
+            if not _nhl_valid(pick.get("odds")):
+                logger.warning("Skipping NHL pick with invalid odds=%s for %s",
+                               pick.get("odds"), matchup)
+                continue
+            conn.execute("""
+                INSERT OR IGNORE INTO nhl_picks (
+                    game_id, date, matchup, bet_type, pick,
+                    model_prob, edge, odds, stake_units
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (game_id, target_date, matchup, pick["type"], pick["pick"],
+                  pick["prob"], pick["edge"], pick["odds"],
+                  pick.get("stake_units")))
+            recorded.append({
+                "matchup": matchup, "type": pick["type"],
+                "pick": pick["pick"], "prob": round(pick["prob"], 3),
+                "edge": round(pick["edge"], 1), "odds": pick["odds"],
+            })
 
     conn.commit()
+
+    # Write-through to unified picks store (#160 / #163).
+    try:
+        from ..unified_tracker import sync_for_date
+        sync_for_date("nhl", target_date)
+    except Exception as e:
+        logger.debug("unified write-through (nhl) skipped: %s", e)
+
+    # Phase-2 cutover: dual-write into picks_unified (canonical store).
+    try:
+        from ..picks_unified._legacy_bridge import mirror_to_unified
+        rows = conn.execute(
+            "SELECT * FROM nhl_picks WHERE date=? ORDER BY id DESC LIMIT 200",
+            (target_date,),
+        ).fetchall()
+        for r in rows:
+            d = dict(r)
+            mirror_to_unified(
+                sport="nhl", league="nhl",
+                native_game_id=d.get("game_id"),
+                pick_date=d.get("date") or target_date,
+                matchup=d.get("matchup") or "",
+                bet_type=d.get("bet_type") or "",
+                pick_text=d.get("pick") or "",
+                odds=int(d.get("odds") or 0),
+                prob=float(d.get("model_prob") or 0.0),
+                edge_pct=float(d.get("edge") or 0.0),
+                stake_units=float(d.get("stake_units") or 0.0),
+                closing_odds=d.get("closing_odds"),
+                result=d.get("result"),
+                profit=d.get("profit"),
+                settled_at=d.get("settled_at"),
+            )
+    except Exception as e:
+        logger.debug("picks_unified mirror (nhl) skipped: %s", e)
+
     return recorded

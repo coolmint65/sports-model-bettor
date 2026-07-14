@@ -39,8 +39,10 @@ import argparse
 import sys
 
 from .player_props_db import _conn_for
-from .player_props_calibration import calibrate_sport, shrinkage_recommendation
-from .distribution_fit import get_prob_shrink
+from .player_props_calibration import (
+    calibrate_sport, shrinkage_recommendation,
+)
+from .distribution_fit import get_prob_shrink, save_learned_shrinkage
 
 
 _SPORTS = ("mlb", "nba", "nhl")
@@ -133,6 +135,11 @@ def main(argv: list[str] | None = None) -> int:
                     help="Calibration window in days (default 30).")
     ap.add_argument("--n-sims", type=int, default=3000,
                     help="MC simulations per (player, game) replay.")
+    ap.add_argument("--persist", action="store_true",
+                    help="Write the recommended shrinkage values to "
+                         "data/prop_shrinkage.json so the live picker "
+                         "uses them. Default off — the report is "
+                         "diagnostic-only unless explicitly persisted.")
     args = ap.parse_args(argv)
     sports = (args.sport,) if args.sport else _SPORTS
 
@@ -147,6 +154,10 @@ def main(argv: list[str] | None = None) -> int:
     for sport in sports:
         cal = _calibration_report(sport, args.days, args.n_sims)
         _shrinkage_report(sport, cal)
+        if args.persist:
+            recs = shrinkage_recommendation(cal)
+            path = save_learned_shrinkage(sport, recs)
+            print(f"\n  [persisted shrinkage for {sport.upper()} → {path}]")
         _live_roi_report(sport)
     print()
     return 0

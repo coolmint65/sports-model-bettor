@@ -164,6 +164,90 @@ def _safe_get(d: Any, *keys: str, default: Any = None) -> Any:
     return current
 
 
+# Phrases in ESPN's editorial comment that contradict an "Out"
+# structured-status field. Discovered 2026-04-29 with Austin Reaves —
+# `status: 'Out'` but `shortComment: "Reaves (oblique) is questionable
+# for Wednesday's Game 5..."`. ESPN's editorial team updates the
+# comment text faster than they update the structured status field,
+# so trusting the structured field alone leaves the model penalizing
+# rosters whose star is actually expected to play.
+#
+# These phrases are conservative — they don't include "doubtful"
+# (still mostly Out) or "limited" (still partial Out). Match is
+# substring on lowercased comment text.
+_OUT_TO_QUESTIONABLE_PHRASES = (
+    "is questionable",
+    "questionable for",
+    "is probable",
+    "probable for",
+    "expected to play",
+    "expected to return",
+    "expected back",
+    "game-time decision",
+    "game time decision",
+    "could play",
+    "may play",
+    "available to play",
+    "cleared to play",
+    "upgraded to questionable",
+    "upgraded to probable",
+)
+
+# Phrases that re-confirm an Out status — if any of these appear, we
+# trust the structured field even when a downgrade phrase also appears
+# (e.g. "is not expected to play" hits the soft "expected to play"
+# but the negated form is hard-Out; the negation phrases below keep
+# a player like Anthony Davis from being mis-downgraded).
+_HARD_OUT_PHRASES = (
+    "ruled out",
+    "officially out",
+    "will not play",
+    "will miss",
+    "won't play",
+    "downgraded to out",
+    "out for the game",
+    "out for tonight",
+    "out for wednesday",
+    "out for thursday",
+    "out for friday",
+    "out for saturday",
+    "out for sunday",
+    "out for monday",
+    "out for tuesday",
+    # Negated forms of the soft phrases. Order matters — checked
+    # before _OUT_TO_QUESTIONABLE_PHRASES.
+    "not expected to play",
+    "not expected to return",
+    "isn't expected to play",
+    "isn't expected to return",
+    "isn't expected back",
+    "is not expected back",
+    "out for the season",
+    "out for the year",
+    "season-ending",
+    "season ending",
+)
+
+
+def _maybe_downgrade_status(status: str, comment: str) -> str:
+    """If structured status says Out but the editorial comment says
+    something softer (questionable / expected to play / GTD), downgrade
+    to Questionable so the roster-delta math doesn't count this player
+    as definitively unavailable. Hard-out phrases override the downgrade.
+    """
+    if not status or not comment:
+        return status
+    s = str(status).strip().lower()
+    if "out" not in s:  # only fires for Out / IL / etc.
+        return status
+    c = comment.lower()
+    if any(p in c for p in _HARD_OUT_PHRASES):
+        return status
+    if any(p in c for p in _OUT_TO_QUESTIONABLE_PHRASES):
+        return "Questionable"
+    return status
+
+
 def _parse_injury_entry(entry: dict) -> dict:
     """Parse a single injury entry from ESPN's response into our format."""
     # ESPN structures vary; try common key paths
@@ -203,12 +287,32 @@ def _parse_injury_entry(entry: dict) -> dict:
     if not detail:
         detail = entry.get("longComment") or entry.get("shortComment") or ""
 
+    # Editorial comment for the comment-vs-status guard. Always read
+    # both shortComment and longComment so the downgrade logic has the
+    # most context regardless of which ESPN populates.
+    comment = " ".join(filter(None, (
+        entry.get("shortComment") or "",
+        entry.get("longComment") or "",
+    ))).strip()
+
+    # Cross-check: ESPN's structured status sometimes lags the editorial
+    # comment by a news cycle. Downgrade Out -> Questionable when the
+    # comment contradicts.
+    raw_status = status
+    status = _maybe_downgrade_status(status, comment)
+    if status != raw_status:
+        logger.info(
+            "injury status downgrade: %s '%s' -> '%s' (comment: %s)",
+            name, raw_status, status, comment[:120],
+        )
+
     return {
         "name": name,
         "position": position,
         "status": status,
         "type": inj_type,
         "detail": detail,
+        "comment": comment,
     }
 
 

@@ -20,6 +20,14 @@ logger = logging.getLogger(__name__)
 
 MIN_EDGE = 5.0  # Minimum edge % to qualify as POTD candidate
 
+# Minimum model probability to qualify as POTD candidate. User
+# directive 2026-04-30: POTD should be the bet that wins ~80% of the
+# time. A 12%-edge longshot at 0.45 prob doesn't fit that — it's a
+# +EV play, not a "lock". The 0.65 floor pushes POTD onto medium-to-
+# heavy favorites. Combined with the new prob-weighted scoring
+# (below), POTD lands on the highest-conviction qualifying pick.
+MIN_PROB = 0.65
+
 # Deprecated 2026-04-24 — POTD now considers every pick from
 # `all_picks`, ranked by `_score_pick`. Kept here as documentation of
 # the historical whitelist so the intent isn't lost.
@@ -100,41 +108,45 @@ def _market_class_factor(sport: str, bet_type: str) -> float:
 
 
 def _score_pick(pick: dict, sport: str = "mlb") -> float:
-    """Conviction-weighted POTD score. Replaces raw-edge selection.
+    """Confidence-led POTD score. Edge term dropped 2026-05-01.
 
-    The user's POTD philosophy: "THE bet, no matter what." Raw edge is
-    too brittle (any noisy +12% alt-line longshot wins) and Kelly is
-    explicitly rejected (user finds it counterintuitive and over-rewards
-    longshots — see feedback_no_kelly.md). The right answer is a single
-    score that combines:
+    Per "be right, not edge-first" directive (memory:
+    feedback_be_right_first): the model's purpose is accurate
+    prediction of reality. POTD ranks by confidence in being right.
+    Edge stays as a FILTER (MIN_EDGE = 5.0 at selection time) but
+    not as a RANKER — a thicker edge does not promote a pick over
+    a higher-confidence one. A 80%-prob pick at +5% edge ranks above
+    a 70%-prob pick at +12% edge, full stop.
 
-      score = capped_edge
-              × confidence_factor   (model prob clamped, used directly)
-              × reliability_factor  (markets we historically hit better get a nudge)
-              × market_class_factor (primary > alt > derivative)
+    Formula::
+
+        score = prob ^ 2                  (squared confidence)
+                × reliability_factor      (per-market historical WR)
+                × class_factor            (primary > alt > derivative)
 
     Why each piece:
-      - capped_edge: edge is clipped at 12 because anything above is
-        usually a model-calibration artifact (alt-line longshots
-        attracting +250 mispricings). A 20.8% edge MIA ML and a 12%
-        edge MIA ML count the same here — the cap stops the headline
-        landing on a coinflip outcome with a calibration spike.
-      - confidence_factor: the model's own probability, bounded [0.45,
-        0.85]. A 0.55 prob bet scores ~12% better than a 0.50 prob bet
-        at the same edge. Bigger swings would dominate edge entirely.
-      - reliability_factor: tracker win rate / break-even, clamped to
-        [0.85, 1.15]. Cold-start markets stay neutral.
-      - market_class_factor: primary 1.00, alt 0.65, derivative 0.55.
-        Stops the POTD landing on alt lines unless overwhelming.
+      - prob ^ 2: squaring amplifies the gap between 0.65 and 0.85.
+        Drives the "lock pick" semantics — POTD goes to the bet we're
+        most confident about, not the one with the biggest market
+        disagreement.
+      - reliability_factor [0.85, 1.15]: bet-type with historical WR
+        well above break-even gets a small boost; a market we
+        consistently misprice gets shrunk. Calibration-derived, not
+        edge-derived.
+      - class_factor: primary 1.00, alt 0.65, derivative 0.55.
+
+    Candidates below MIN_EDGE / MIN_PROB are rejected at selection
+    time, not via the score — caller filters before sorting.
     """
     edge = float(pick.get("edge", 0) or 0)
     if edge <= 0:
         return 0.0
 
-    capped_edge = min(edge, 12.0)
-
     prob = float(pick.get("prob", 0) or 0)
-    confidence_factor = max(0.45, min(0.85, prob))
+    if prob <= 0:
+        return 0.0
+
+    confidence_factor = prob * prob
 
     bet_type = pick.get("type", "") or ""
     try:
@@ -146,4 +158,4 @@ def _score_pick(pick: dict, sport: str = "mlb") -> float:
 
     class_factor = _market_class_factor(sport, bet_type)
 
-    return capped_edge * confidence_factor * reliability_factor * class_factor
+    return confidence_factor * reliability_factor * class_factor

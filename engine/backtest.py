@@ -126,7 +126,7 @@ def run_backtest(season: int | None = None, days: int | None = None,
         "over_under": _empty_cat(),
         "nrfi": _empty_cat(),
         "run_line": _empty_cat(),
-        # F5 markets - need real DK F5 odds + first-five-innings linescore
+        # F5 markets - need real F5 odds + first-five-innings linescore
         # to score; categories may be empty until enough stored data exists
         "f5_ml": _empty_cat(),
         "f5_ou": _empty_cat(),
@@ -302,7 +302,7 @@ def run_backtest(season: int | None = None, days: int | None = None,
                     nrfi_pick = model_nrfi > 0.50
                     nrfi_prob = model_nrfi if nrfi_pick else (1 - model_nrfi)
 
-                    # Prefer stored historical DK NRFI odds; fall back to
+                    # Prefer stored historical NRFI odds; fall back to
                     # synthetic -120 when nothing is stored for this game.
                     if real_odds and nrfi_pick and real_odds.get("nrfi_under_odds") is not None:
                         nrfi_odds = real_odds["nrfi_under_odds"]
@@ -451,7 +451,7 @@ def _eval_f5(results: dict, game: dict, real_odds: dict | None,
     if real_odds and real_odds.get("f5_total") is not None:
         f5_line = real_odds["f5_total"]
         ou_table = f5.get("over_under") or {}
-        # Find the closest modeled line to what DK posted.
+        # Find the closest modeled line to what the book posted.
         best_key = min(
             ou_table.keys(),
             key=lambda k: abs(float(k) - f5_line),

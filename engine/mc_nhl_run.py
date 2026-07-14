@@ -11,9 +11,8 @@ from datetime import datetime
 
 from .mc_nhl import (
     NHLTeamProfile, simulate_games, aggregate_nhl,
-    LEAGUE_GF_PER_GAME, LEAGUE_GA_PER_GAME, LEAGUE_SAVE_PCT,
-    LEAGUE_PP_GOALS_PER_GAME,
 )
+from . import mc_constants as _mc
 
 logger = logging.getLogger(__name__)
 
@@ -86,14 +85,14 @@ def _load_team_profile(team_key: str,
         return NHLTeamProfile(name=team.get("abbreviation", team_key))
 
     r = dict(row)
-    gf = _safe(r.get("goals_for_avg"), LEAGUE_GF_PER_GAME, lo=1.5, hi=5.0)
-    ga = _safe(r.get("goals_against_avg"), LEAGUE_GA_PER_GAME, lo=1.5, hi=5.0)
+    gf = _safe(r.get("goals_for_avg"), _mc.nhl_gf_per_game(), lo=1.5, hi=5.0)
+    ga = _safe(r.get("goals_against_avg"), _mc.nhl_ga_per_game(), lo=1.5, hi=5.0)
     # Save % from goalies; if caller gave us a confirmed starter, use that.
     if goalie_save_pct and 0.80 < goalie_save_pct < 0.96:
         save_pct = goalie_save_pct
     else:
-        save_pct = _safe(r.get("save_pct"), LEAGUE_SAVE_PCT, lo=0.850, hi=0.940)
-    pp_goals = _safe(r.get("pp_goals_per_game"), LEAGUE_PP_GOALS_PER_GAME,
+        save_pct = _safe(r.get("save_pct"), _mc.nhl_save_pct(), lo=0.850, hi=0.940)
+    pp_goals = _safe(r.get("pp_goals_per_game"), _mc.nhl_pp_goals_per_game(),
                      lo=0.1, hi=1.5)
 
     return NHLTeamProfile(

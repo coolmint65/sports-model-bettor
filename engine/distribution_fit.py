@@ -424,6 +424,12 @@ def get_distribution(sport: str, stat_key: str) -> dict | None:
         return _MLB_STAT_DISTRIBUTIONS.get(stat_key)
     if sport == "nba":
         return _NBA_STAT_DISTRIBUTIONS.get(stat_key)
+    if sport == "wnba":
+        # Reuse NBA's locked dispersion shapes as priors — WNBA box-stat
+        # families look identical (counting stats, NegBin-leaning) but
+        # the dispersion_k may shift modestly. TODO: refit pooled k from
+        # WNBA player_game_logs once the backfill seeds ~50k stat-rows.
+        return _NBA_STAT_DISTRIBUTIONS.get(stat_key)
     if sport == "nhl":
         return _NHL_STAT_DISTRIBUTIONS.get(stat_key)
     return None
@@ -460,9 +466,131 @@ _PROB_SHRINK: dict[tuple[str, str], float] = {
 }
 
 
+# Learned shrinkage table — populated from the calibration replay tool
+# (engine.player_props_calibration.refresh_shrinkage). Lives on disk at
+# ``data/prop_shrinkage.json`` so retrains and the props_backtest CLI
+# can persist updates that survive process restarts.
+#
+# Layered with _PROB_SHRINK so the hardcoded entries remain the floor
+# of last resort: learned values win when present, hardcoded values
+# fill any stat the learner hasn't yet covered (typically because
+# sample size hasn't crossed min_samples_per_stat for that sport).
+import os as _os
+_LEARNED_SHRINK: dict[tuple[str, str], float] = {}
+_LEARNED_LOADED = False
+_SHRINKAGE_PATH = _os.path.join(
+    _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+    "data", "prop_shrinkage.json",
+)
+
+
+def _load_learned_shrinkage() -> None:
+    """Hydrate ``_LEARNED_SHRINK`` from the JSON file. Idempotent — only
+    reads on the first call (subsequent calls no-op until ``reload=True``
+    is forced via ``reload_learned_shrinkage()``).
+
+    File format::
+
+        {
+          "mlb": {"k_p": {"shrink": 0.92, "n": 1234, "avg_delta": -0.04, ...},
+                  ...},
+          "nba": {...},
+          "nhl": {...}
+        }
+    """
+    global _LEARNED_LOADED
+    if _LEARNED_LOADED:
+        return
+    _LEARNED_LOADED = True  # Mark even on miss so we don't retry every call.
+    try:
+        if not _os.path.exists(_SHRINKAGE_PATH):
+            return
+        with open(_SHRINKAGE_PATH, "r", encoding="utf-8") as f:
+            blob = json.load(f) or {}
+    except Exception as e:
+        logger.warning("learned shrinkage load failed (%s): %s",
+                       _SHRINKAGE_PATH, e)
+        return
+    for sport, stats in blob.items():
+        if not isinstance(stats, dict):
+            continue
+        for stat_key, info in stats.items():
+            try:
+                shrink = float(info.get("shrink", 1.0)) if isinstance(info, dict) \
+                          else float(info)
+            except (TypeError, ValueError):
+                continue
+            # Clamp to (0, 1]: shrink > 1 would inflate confidence and
+            # push picks above the edge floor that the picker filtered.
+            if shrink <= 0.0:
+                continue
+            shrink = min(1.0, shrink)
+            _LEARNED_SHRINK[(sport, stat_key)] = shrink
+
+
+def reload_learned_shrinkage() -> None:
+    """Clear and re-read the learned-shrinkage cache. Call after any
+    refresh that rewrites prop_shrinkage.json so the live picker picks
+    the new values up without a process restart."""
+    global _LEARNED_LOADED
+    _LEARNED_SHRINK.clear()
+    _LEARNED_LOADED = False
+    _load_learned_shrinkage()
+
+
+def save_learned_shrinkage(sport: str, recs: dict) -> str:
+    """Merge ``recs`` (the dict returned by
+    ``player_props_calibration.shrinkage_recommendation``) into the
+    persisted ``data/prop_shrinkage.json`` for ``sport``. Returns the
+    path that was written.
+
+    Each entry is stored with its diagnostic fields (n, avg_delta,
+    note) so a later inspection can tell why a stat was shrunk
+    without re-running the replay.
+    """
+    _os.makedirs(_os.path.dirname(_SHRINKAGE_PATH), exist_ok=True)
+    blob: dict[str, dict] = {}
+    if _os.path.exists(_SHRINKAGE_PATH):
+        try:
+            with open(_SHRINKAGE_PATH, "r", encoding="utf-8") as f:
+                blob = json.load(f) or {}
+        except Exception as e:
+            logger.warning("read existing shrinkage file failed: %s "
+                           "— overwriting", e)
+            blob = {}
+    sport_block = blob.setdefault(sport, {})
+    from datetime import datetime as _dt
+    stamp = _dt.utcnow().isoformat(timespec="seconds") + "Z"
+    for stat_key, info in (recs or {}).items():
+        if not isinstance(info, dict):
+            continue
+        sport_block[stat_key] = {
+            "shrink": round(float(info.get("shrink", 1.0)), 3),
+            "avg_delta": info.get("avg_delta"),
+            "note": info.get("note"),
+            "updated_at": stamp,
+        }
+    with open(_SHRINKAGE_PATH, "w", encoding="utf-8") as f:
+        json.dump(blob, f, indent=2, sort_keys=True)
+    reload_learned_shrinkage()
+    return _SHRINKAGE_PATH
+
+
 def get_prob_shrink(sport: str, stat_key: str) -> float:
     """Returns the per-stat shrinkage multiplier in (0, 1]. Defaults
-    to 1.0 (no shrinkage) when the stat isn't in the calibrated list."""
+    to 1.0 (no shrinkage) when the stat isn't in the calibrated list.
+
+    Lookup order:
+      1. learned table (data/prop_shrinkage.json — refreshed by the
+         calibration replay tool)
+      2. hardcoded ``_PROB_SHRINK`` (fallback for stats the learner
+         hasn't covered yet)
+      3. 1.0 (passthrough)
+    """
+    _load_learned_shrinkage()
+    learned = _LEARNED_SHRINK.get((sport, stat_key))
+    if learned is not None:
+        return learned
     return _PROB_SHRINK.get((sport, stat_key), 1.0)
 
 
@@ -471,6 +599,7 @@ __all__ = [
     "summarize_all_mlb_stats", "summarize_all_nba_stats", "summarize_all_nhl_stats",
     "fit_all", "pull_observations",
     "get_distribution", "get_prob_shrink",
+    "save_learned_shrinkage", "reload_learned_shrinkage",
     "_MLB_STAT_DISTRIBUTIONS", "_NBA_STAT_DISTRIBUTIONS", "_NHL_STAT_DISTRIBUTIONS",
     "_PROB_SHRINK",
 ]

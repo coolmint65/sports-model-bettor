@@ -31,7 +31,11 @@ def main() -> None:
     elif "--settle" in args:
         print("Settling completed picks...", flush=True)
         result = settle_picks()
-        print(f"Settled: {result['settled']} ({result['wins']}W-{result['losses']}L)")
+        # settle_picks short-circuits when no pending rows exist and
+        # returns a no-wins/losses dict — use .get() so the empty case
+        # doesn't KeyError.
+        print(f"Settled: {result.get('settled', 0)} "
+              f"({result.get('wins', 0)}W-{result.get('losses', 0)}L)")
         print(f"Pending: {result.get('pending_remaining', '?')}")
 
     elif "--summary" in args:

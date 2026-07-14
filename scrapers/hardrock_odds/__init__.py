@@ -1,22 +1,29 @@
 """
 Hard Rock Bet odds scraper (MLB / NHL / NBA).
 
-Hostname + shape discovered from the user's browser Network tab:
-- Host: ``api.hardrocksportsbook.com``
-- Primary odds endpoint: ``POST /graphql?type=event_tree``
-  (41 kB response -- full sports tree with events + markets + outcomes)
-- Supporting endpoints (not used yet): ``/getRootLadder``,
-  ``/sbk.home?language=en-us``, ``/searchLayout?route=...``
-- Brand/segment context visible in the URLs: ``brand=hrd_online``,
-  ``segment=fl`` (Florida online)
+Two-phase fetch (post-2026-04-28 schema migration):
 
-The GraphQL query body isn't public -- the Hard Rock JS bundle
-constructs it client-side. We ship with a reasonable default query
-shape + the ability to override it via ``data/hardrock_query.json``
-for when the user pastes the exact request body from DevTools.
-Same for headers via ``data/hardrock_headers.json`` -- Hard Rock's
-bot check needs specific ``X-*`` tokens + cookies that vary per
-session, so the scraper reads them from that file when present.
+  1. **Sports-tree query** at ``POST /java-graphql/graphql`` returns a
+     skeleton listing every sport / category / competition with event
+     counts but no markets. Tiny payload (~25 KB).
+  2. **Per-competition events query** (same URL, different filter)
+     returns events with embedded ``markets { selection { ... } }``.
+     One round-trip per competition (one per sport for our purposes —
+     NBA / NHL / MLB).
+
+Why two phases: HR's new web client subscribes to a WebSocket for live
+odds updates and only requests event metadata via GraphQL. But the
+schema still supports asking for markets/selections in the same call,
+so we get a full odds snapshot in one REST round-trip per comp without
+needing a WebSocket implementation. The legacy single-call ``?type=
+event_tree`` no longer returns markets — this scraper rebuild is what
+unblocks both prematch picks and the live worker.
+
+Override files:
+  - ``data/hardrock_query.json``        per-comp events query body
+  - ``data/hardrock_sports_query.json`` sports-tree discovery body
+  - ``data/hardrock_headers.json``      headers (Origin must be
+                                        ``https://app.hardrock.bet``)
 
 Returns the same dict shape every other odds scraper in this repo
 does, keyed by "AWAY@HOME":
@@ -46,19 +53,33 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+try:
+    from curl_cffi import requests as _cc_requests  # type: ignore
+    _HAS_CURL_CFFI = True
+except ImportError:
+    _cc_requests = None  # type: ignore
+    _HAS_CURL_CFFI = False
+
 logger = logging.getLogger(__name__)
 
 # ── Config ─────────────────────────────────────────────────
 HARDROCK_HOST = "https://api.hardrocksportsbook.com"
-# Real path (confirmed from user's DevTools cURL) -- note the
-# /java-graphql/ prefix. Without it the server returns 404.
-EVENT_TREE_URL = f"{HARDROCK_HOST}/java-graphql/graphql?type=event_tree"
+# Plain GraphQL endpoint — used for both sports-tree discovery and
+# per-competition event fetches. The new HR web client (2026-04-28)
+# stopped sending the legacy `?type=event_tree` suffix; both URLs still
+# resolve to the same backend, but matching what the live client uses
+# avoids any future server-side routing change biting us.
+GRAPHQL_URL = f"{HARDROCK_HOST}/java-graphql/graphql"
+# Back-compat alias — engine.live._odds imports this name.
+EVENT_TREE_URL = GRAPHQL_URL
 
 # Files the user can drop to override the default request body + headers.
-# data/hardrock_query.json   - the GraphQL JSON body (from DevTools cURL)
-# data/hardrock_headers.json - request header map (from DevTools cURL)
+# data/hardrock_query.json        - per-comp events query body (with markets)
+# data/hardrock_sports_query.json - lightweight sports-tree discovery query
+# data/hardrock_headers.json      - request header map
 _REPO_DATA = Path(__file__).resolve().parent.parent / "data"
 QUERY_FILE = _REPO_DATA / "hardrock_query.json"
+SPORTS_QUERY_FILE = _REPO_DATA / "hardrock_sports_query.json"
 HEADERS_FILE = _REPO_DATA / "hardrock_headers.json"
 
 # Caching
@@ -76,66 +97,133 @@ EMPTY_CACHE_TTL = 120  # short TTL when we got nothing -- Hard Rock may
 # sportsbook GraphQL schemas expose. Overriden by hardrock_query.json
 # once the user pastes a real request body.
 
-_DEFAULT_LOCALE = "en-us"
-_DEFAULT_CHANNEL = "web"
-_DEFAULT_REGION = "fl"
+# ── Default request bodies ─────────────────────────────────
+#
+# As of 2026-04-28 HR's GraphQL split into two phases:
+#   1. Sports-tree query → discover competition IDs
+#   2. Per-comp events query → fetch events + markets for one comp
+#
+# The web client subscribes to a WebSocket for live price updates, but
+# the GraphQL schema still exposes `events.data[].markets{...}` as
+# initial-state, so a single REST round-trip per comp gives us a full
+# odds snapshot — same shape we always parsed.
+
+_DEFAULT_CHANNEL = "FLORIDA_ONLINE"
+_DEFAULT_LANGUAGE = "enus"
+_DEFAULT_REGION = "us"
 _DEFAULT_CMS_SEGMENT = "fl"
 
-_DEFAULT_QUERY_TEMPLATE = {
-    "operationName": "BetSync",
+_DEFAULT_SPORTS_TREE_QUERY = {
+    "operationName": "betSync",
     "query": (
-        "query BetSync($locale: String!, $channel: String!, "
-        "$language: String!, $region: String!, $cmsSegment: String!) { "
-        "  betSync(locale: $locale, channel: $channel, language: $language, "
-        "          region: $region, cmsSegment: $cmsSegment) { "
-        "    numEvents "
-        "    sports { id name code "
-        "      competitions { id name "
-        "        events { data { "
-        "          id name sport startTime "
-        "          participants { id name shortName position } "
-        "          markets { id name type line spread period "
-        "            selection { id name type odds rootIdx } "
-        "          } "
-        "        } } "
+        "query betSync($locale: String, $region: String, $segment: String, "
+        "$language: String, $nonTradingFilters: [NodeFilterType], "
+        "$channel: String) { "
+        "  betSync(locale: $locale, channel: $channel, cmsSegment: $segment, "
+        "          region: $region, language: $language) { "
+        "    sports(filters: $nonTradingFilters) { "
+        "      id code numEvents numEventsInplay "
+        "      categories(filters: $nonTradingFilters) { "
+        "        id name "
+        "        competitions(filters: $nonTradingFilters) { "
+        "          id name numEvents numEventsInplay "
+        "        } "
         "      } "
         "    } "
         "  } "
         "}"
     ),
     "variables": {
-        "locale": _DEFAULT_LOCALE,
         "channel": _DEFAULT_CHANNEL,
-        "language": _DEFAULT_LOCALE,
+        "segment": _DEFAULT_CMS_SEGMENT,
         "region": _DEFAULT_REGION,
-        "cmsSegment": _DEFAULT_CMS_SEGMENT,
+        "language": _DEFAULT_LANGUAGE,
+        "nonTradingFilters": ["DISPLAYED"],
+    },
+}
+
+# Per-competition events fetch. The `markets { ... selection { ... } }`
+# field set is identical to what the legacy "kitchen-sink" query asked
+# for, so the existing parser still walks it without modification.
+_DEFAULT_QUERY_TEMPLATE = {
+    "operationName": "betSync",
+    "query": (
+        "query betSync($filters: [Filter], $segment: String, $region: String, "
+        "$language: String, $channel: String, $sort: Sort) { "
+        "  betSync(cmsSegment: $segment, region: $region, language: $language, "
+        "          channel: $channel) { "
+        "    events(filters: $filters, sort: $sort) { "
+        "      data { "
+        "        id name eventTime sport inplay outright numMarkets "
+        "        compName compId "
+        # eventNames.name is the only authoritative home/away signal HR
+        # exposes. It always uses "<Away Full Name> @ <Home Full Name>"
+        # (delimiter: "@"). The plain `name` field uses the HR UI's
+        # "Home vs. Away" order (bottom team = home), which inverts
+        # home/away when parsed naively.
+        "        eventNames { name shortName delimiter } "
+        "        participants { id name shortName position } "
+        "        markets { id name type line spread period "
+        "          selection { id name type odds rootIdx } "
+        "        } "
+        "      } "
+        "      count "
+        "    } "
+        "  } "
+        "}"
+    ),
+    "variables": {
+        "channel": _DEFAULT_CHANNEL,
+        "segment": _DEFAULT_CMS_SEGMENT,
+        "region": _DEFAULT_REGION,
+        "language": _DEFAULT_LANGUAGE,
+        "sort": {"field": "compEventWeightingV2", "descending": True},
     },
 }
 
 _DEFAULT_HEADERS = {
     "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/121.0.0.0 Safari/537.36"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) "
+        "Gecko/20100101 Firefox/150.0"
     ),
     "Accept": "application/json",
     "Accept-Language": "en-US,en;q=0.9",
     "Content-Type": "application/json",
-    "Origin": "https://app.hardrocksportsbook.com",
-    "Referer": "https://app.hardrocksportsbook.com/",
+    # New web origin (2026-04-28 migration). The legacy
+    # app.hardrocksportsbook.com still resolves but their CORS check
+    # rejects requests from it.
+    "Origin": "https://app.hardrock.bet",
+    "Referer": "https://app.hardrock.bet/",
 }
 
 
 def _load_query() -> dict:
-    """Prefer user-pasted query body if present, else fall back to
-    our best-effort default."""
+    """Prefer user-pasted per-comp query body if present, else fall
+    back to our default. Returns a deep copy so callers can mutate
+    `variables.filters` without poisoning the cache."""
+    raw = _DEFAULT_QUERY_TEMPLATE
     if QUERY_FILE.exists():
         try:
-            return json.loads(QUERY_FILE.read_text())
+            raw = json.loads(QUERY_FILE.read_text())
         except Exception as e:
             logger.warning("Hard Rock query file %s is not valid JSON: %s",
                            QUERY_FILE, e)
-    return _DEFAULT_QUERY_TEMPLATE
+    import copy
+    return copy.deepcopy(raw)
+
+
+def _load_sports_query() -> dict:
+    """Lightweight sports-tree discovery query. Used to map
+    sport→comp_id without paying the per-comp markets payload cost."""
+    raw = _DEFAULT_SPORTS_TREE_QUERY
+    if SPORTS_QUERY_FILE.exists():
+        try:
+            raw = json.loads(SPORTS_QUERY_FILE.read_text())
+        except Exception as e:
+            logger.warning("Hard Rock sports query %s is not valid JSON: %s",
+                           SPORTS_QUERY_FILE, e)
+    import copy
+    return copy.deepcopy(raw)
 
 
 def _load_headers() -> dict:
@@ -161,10 +249,30 @@ try:
 except Exception:
     _mlb_to_abbr = lambda n: (n or "").strip()  # noqa: E731
 
-try:
-    from ..nba_dk_odds import _NBA_NAME_TO_ABBR as _NBA_MAP_FULL  # type: ignore
-except Exception:
-    _NBA_MAP_FULL = {}
+# Full-name → abbreviation mapping. Used when HR's payload carries
+# the canonical team name ("New York Knicks") rather than the short
+# form ("Knicks") the short-name map handles. Previously imported from
+# scrapers.nba_dk_odds; inlined here when the DK scrapers were removed
+# 2026-05-29 so HR's NBA endpoint keeps resolving names regardless of
+# which casing it returns.
+_NBA_MAP_FULL: dict[str, str] = {
+    "Atlanta Hawks": "ATL", "Boston Celtics": "BOS",
+    "Brooklyn Nets": "BKN", "Charlotte Hornets": "CHA",
+    "Chicago Bulls": "CHI", "Cleveland Cavaliers": "CLE",
+    "Dallas Mavericks": "DAL", "Denver Nuggets": "DEN",
+    "Detroit Pistons": "DET", "Golden State Warriors": "GS",
+    "Houston Rockets": "HOU", "Indiana Pacers": "IND",
+    "Los Angeles Clippers": "LAC", "LA Clippers": "LAC",
+    "Los Angeles Lakers": "LAL",
+    "Memphis Grizzlies": "MEM", "Miami Heat": "MIA",
+    "Milwaukee Bucks": "MIL", "Minnesota Timberwolves": "MIN",
+    "New Orleans Pelicans": "NO", "New York Knicks": "NYK",
+    "Oklahoma City Thunder": "OKC", "Orlando Magic": "ORL",
+    "Philadelphia 76ers": "PHI", "Phoenix Suns": "PHX",
+    "Portland Trail Blazers": "POR", "Sacramento Kings": "SAC",
+    "San Antonio Spurs": "SA", "Toronto Raptors": "TOR",
+    "Utah Jazz": "UTA", "Washington Wizards": "WAS",
+}
 
 # NBA short-name map (Hard Rock uses nicknames only, no city)
 _NBA_SHORT_TO_ABBR: dict[str, str] = {
@@ -179,7 +287,7 @@ _NBA_SHORT_TO_ABBR: dict[str, str] = {
     "Trail Blazers": "POR", "Kings": "SAC", "Spurs": "SA",
     "Raptors": "TOR", "Jazz": "UTA", "Wizards": "WAS",
 }
-# Merge full names from DK map
+# Merge full-name and short-name maps so both formats resolve.
 _NBA_MAP: dict[str, str] = {**_NBA_MAP_FULL, **_NBA_SHORT_TO_ABBR}
 
 _NHL_NAME_TO_ABBR: dict[str, str] = {
@@ -211,6 +319,33 @@ _NHL_NAME_TO_ABBR: dict[str, str] = {
     "Capitals": "WSH", "Jets": "WPG",
 }
 
+# WNBA team-name map — aligns HR's full-name participants with the
+# basketball framework's wnba.db abbreviations (confirmed 2026-05-13).
+# HR ships full names like "Chicago Sky", "Las Vegas Aces" for WNBA
+# (vs nickname-only for NBA), so the map carries the long form.
+_WNBA_NAME_TO_ABBR: dict[str, str] = {
+    "Atlanta Dream": "ATL",
+    "Chicago Sky": "CHI",
+    "Connecticut Sun": "CON",
+    "Dallas Wings": "DAL",
+    "Golden State Valkyries": "GS",
+    "Indiana Fever": "IND",
+    "Las Vegas Aces": "LV",
+    "Los Angeles Sparks": "LA",
+    "Minnesota Lynx": "MIN",
+    "New York Liberty": "NY",
+    "Phoenix Mercury": "PHX",
+    "Portland Fire": "POR",
+    "Seattle Storm": "SEA",
+    "Toronto Tempo": "TOR",
+    "Washington Mystics": "WSH",
+    # Short variants (in case HR ships just the nickname mid-season)
+    "Dream": "ATL", "Sky": "CHI", "Sun": "CON", "Wings": "DAL",
+    "Valkyries": "GS", "Fever": "IND", "Aces": "LV", "Sparks": "LA",
+    "Lynx": "MIN", "Liberty": "NY", "Mercury": "PHX", "Fire": "POR",
+    "Storm": "SEA", "Tempo": "TOR", "Mystics": "WSH",
+}
+
 # MLB short-name map (Hard Rock uses nicknames only, no city)
 _MLB_SHORT_TO_ABBR: dict[str, str] = {
     "Diamondbacks": "ARI", "D-backs": "ARI", "Braves": "ATL",
@@ -234,6 +369,19 @@ _SPORT_HINTS = {
     "mlb": ("mlb", "baseball"),
     "nhl": ("nhl", "hockey", "ice_hockey", "icehockey"),
     "nba": ("nba", "basketball"),
+    # Basketball framework leagues share HR's BASKETBALL sport_code —
+    # the per-league filter in _resolve_comp_ids' name match handles
+    # the WNBA / NCAAM / NCAAW / etc. split.
+    "wnba": ("basketball",),
+    "ncaam": ("basketball",),
+    # AFL ships under AUSSIE_RULES with comp_name "AFL" (or "Australian
+    # Football League").
+    "afl": ("aussie_rules", "afl", "australian"),
+    # Tennis Phase 6 — both tours land in the same scraper bucket;
+    # the engine picker dispatches by tour at lookup time.
+    "atp": ("atp", "tennis_men", "men's tennis", "tennis - atp"),
+    "wta": ("wta", "tennis_women", "women's tennis", "tennis - wta"),
+    "tennis": ("tennis",),
 }
 
 
@@ -247,7 +395,7 @@ def _team_abbr(sport: str, name: str) -> str:
         return ""
     name = name.strip()
     if sport == "mlb":
-        # Try short-name map first (Hard Rock), then full-name normalizer (DK)
+        # Try short-name map first (Hard Rock), then full-name normalizer
         if name in _MLB_SHORT_TO_ABBR:
             return _MLB_SHORT_TO_ABBR[name]
         return _mlb_to_abbr(name)
@@ -255,6 +403,8 @@ def _team_abbr(sport: str, name: str) -> str:
         return _NHL_NAME_TO_ABBR.get(name, name)
     if sport == "nba":
         return _NBA_MAP.get(name, name)
+    if sport == "wnba":
+        return _WNBA_NAME_TO_ABBR.get(name, name)
     return name
 
 
@@ -295,10 +445,58 @@ def _decompress_body(body: bytes, encoding: str) -> bytes:
     return body
 
 
+# curl_cffi browser profiles in fallback order. Cloudflare in front of
+# HR rotates which JA3/JA4 fingerprints it accepts; firefox133 worked
+# through 2026-05-26 then started 403ing 2026-05-27. We probe each
+# profile in order and remember the last successful one so subsequent
+# calls don't pay the trial-and-error cost. When the active profile
+# starts failing, the next call resets and re-probes.
+_IMPERSONATE_PROFILES = (
+    "chrome131", "chrome124", "chrome120", "safari17_0", "firefox133",
+)
+_active_profile: str | None = None
+
+
 def _graphql_post(url: str, body: dict, headers: dict,
                   timeout: float = 15.0) -> tuple[int, bytes | None, str | None]:
+    """POST a GraphQL body. Uses curl_cffi with browser TLS impersonation
+    when available — required because Cloudflare in front of HR
+    fingerprints the TLS ClientHello (JA3/JA4) and 403s any handshake
+    that doesn't match a real browser. We try a chain of impersonation
+    profiles so a single profile being blocked doesn't take the whole
+    scraper offline. urllib path remains as a last-ditch fallback so
+    dev boxes without curl_cffi still try (and fail loudly with 403)."""
+    global _active_profile
+    data = json.dumps(body).encode()
+    if _HAS_CURL_CFFI:
+        # Prefer the last working profile when known.
+        order = (
+            (_active_profile,) + tuple(p for p in _IMPERSONATE_PROFILES
+                                         if p != _active_profile)
+        ) if _active_profile else _IMPERSONATE_PROFILES
+        last_err: str | None = None
+        last_status = 0
+        last_raw: bytes | None = None
+        for profile in order:
+            if profile is None:
+                continue
+            try:
+                r = _cc_requests.post(
+                    url, data=data, headers=headers,
+                    impersonate=profile, timeout=timeout,
+                )
+                if r.status_code == 200:
+                    _active_profile = profile
+                    return r.status_code, r.content, None
+                last_status = r.status_code
+                last_raw = r.content
+                last_err = f"HTTP {r.status_code} ({profile})"
+            except Exception as e:
+                last_err = f"curl_cffi {profile}: {e}"
+        # Cache miss — reset so next call starts fresh from the top.
+        _active_profile = None
+        return last_status, last_raw, last_err
     try:
-        data = json.dumps(body).encode()
         req = urllib.request.Request(url, data=data, headers=headers, method="POST")
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read()
@@ -406,50 +604,121 @@ def _walk_events_flat(root: Any) -> list[dict]:
 
 
 def _event_already_started(event: dict) -> bool:
-    """True iff this HR event's startTime is in the past.
+    """True iff this HR event has tipped off / first pitch / puck drop.
 
-    HR's BetSync ships in-game events alongside prematch ones — same
-    teams, same {away}@{home} key. The in-game alt-RL line (e.g. +4.5
-    on a 7-run blowout) was overwriting today's prematch -1.5 line
-    because the dedup logic only sorted by market count and live games
-    happen to have fewer active markets.
+    Three signals, in priority order:
+      1. ``inplay`` (bool) — present in the new (2026-04-28+) schema.
+         Authoritative; HR flips this the moment the game goes live.
+      2. ``trackerStatus`` — string like "LIVE" / "NOT_STARTED" / "FT".
+         Secondary signal when ``inplay`` is missing.
+      3. ``eventTime`` / ``startTime`` — epoch-millis (numeric) or
+         ISO-8601 string. Past timestamp == game has at least nominally
+         started. Fallback for legacy schema and futures-style events
+         where neither ``inplay`` nor ``trackerStatus`` is set.
 
-    `startTime` is ISO-8601 (e.g. "2026-04-25T02:10:00Z"). We treat
-    parse failures as "not started" so a malformed-time event still
-    flows through — better to keep a noisy line than silently drop
-    legitimate prematch entries.
+    The prematch path uses this to drop in-progress events so live
+    alt-lines don't overwrite the prematch primary. The live path
+    (``engine.live._odds``) inverts the same logic.
     """
-    # Intentionally only fires for the legacy string-shaped startTime.
-    # HR's current schema keeps prematch entries listed with their
-    # ORIGINAL (now-past) start time even while the game is in progress,
-    # so a tighter "started?" check would drop every in-progress game's
-    # only odds entry. The filter exists for the older case where HR
-    # shipped a separate live-state entry that overwrote the prematch
-    # one in the dedupe loop — that codepath only ships the legacy
-    # ISO-string field, so checking only that shape preserves the
-    # filter's original intent without nuking today's active slate.
-    raw = event.get("startTime")
-    if not isinstance(raw, str) or not raw:
-        return False
-    try:
-        s = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
-        from datetime import datetime as _dt, timezone as _tz
-        ts = _dt.fromisoformat(s)
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=_tz.utc)
-        return ts <= _dt.now(_tz.utc)
-    except (ValueError, TypeError):
-        return False
+    inplay = event.get("inplay")
+    if isinstance(inplay, bool):
+        return inplay
+
+    tracker = event.get("trackerStatus")
+    if isinstance(tracker, str) and tracker:
+        t = tracker.strip().upper()
+        if t in ("LIVE", "IN_PLAY", "INPLAY", "STARTED"):
+            return True
+        if t in ("NOT_STARTED", "NOT STARTED", "PRE", "PREMATCH"):
+            return False
+        # FT / FINAL / POSTPONED / CANCELLED → treat as "started"
+        # so the prematch dedup drops them from the active slate.
+        return True
+
+    from datetime import datetime as _dt, timezone as _tz
+    now = _dt.now(_tz.utc)
+    for field in ("startTime", "eventTime"):
+        raw = event.get(field)
+        if isinstance(raw, str) and raw:
+            try:
+                s = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
+                ts = _dt.fromisoformat(s)
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=_tz.utc)
+                return ts <= now
+            except (ValueError, TypeError):
+                continue
+        if isinstance(raw, (int, float)) and raw > 0:
+            try:
+                ts = _dt.fromtimestamp(float(raw) / 1000.0, tz=_tz.utc)
+                return ts <= now
+            except (ValueError, TypeError, OSError):
+                continue
+    return False
 
 
 def _extract_teams(event: dict) -> tuple[str, str]:
     """Return (away_name, home_name) best-effort.
 
-    Hard Rock's betSync schema puts teams in ``participants`` with a
-    ``position`` field (typically 1 = away, 2 = home in US sports) and
-    the event ``name`` as "Away @ Home" or "Away at Home".
+    HR's home/away convention is non-obvious. Three name fields exist
+    on every event and they DON'T agree:
+
+      - ``eventNames.name``  — full names, ``delimiter == "@"``,
+        ALWAYS ordered "<Away> @ <Home>". This is HR's only canonical
+        away/home signal — confirmed against the live UI (the bottom
+        team on every game card is the home team, and ``eventNames.name``
+        always lists the bottom team second).
+      - ``name``             — short names ordered "<Home> vs. <Away>"
+        (HR UI's display order: bottom team first). Inverting; do NOT
+        use this for home/away mapping.
+      - ``participants[]``   — ``position == 0`` is the team listed
+        first in ``name`` (HR's HOME), ``position == 1`` is second
+        (HR's AWAY). Same trap as ``name``.
+
+    Order of preference: eventNames.name → participants(position) →
+    legacy explicit home/away dict fields → name parse with HR's
+    home-first convention.
     """
-    # ── Direct home/away fields (legacy / user-pasted query shapes) ──
+    # ── 1. eventNames.name — the canonical "<Away> @ <Home>" format ──
+    enames = event.get("eventNames")
+    if isinstance(enames, dict):
+        full = str(_pick(enames, "name", "shortName") or "")
+        delim = str(enames.get("delimiter") or "@")
+        # HR always sets delimiter='@' for two-team events. Splitting
+        # on " @ " covers full names with embedded "@" being unlikely.
+        sep = f" {delim} " if delim else " @ "
+        if sep in full:
+            a, h = full.split(sep, 1)
+            return a.strip(), h.strip()
+        # delimiter could also surface bare ("@" without spaces)
+        if delim and delim in full and " " not in delim:
+            a, h = full.split(delim, 1)
+            return a.strip(), h.strip()
+
+    # ── 2. Participants — position 0 = HR's home (first in ``name``),
+    #       position 1 = HR's away. CONFIRMED against eventNames in
+    #       2026-04-28 schema, contrary to the US standard "pos 1=away,
+    #       pos 2=home" convention some books use. ──
+    parts = _pick(event, "participants", "competitors", "teams")
+    if isinstance(parts, list) and len(parts) >= 2:
+        pos_map: dict[int, str] = {}
+        for p in parts:
+            if not isinstance(p, dict):
+                continue
+            name = str(_pick(p, "name", "displayName", "fullName",
+                             "label", "teamName") or "")
+            pos = _pick(p, "position")
+            if isinstance(pos, int) and name:
+                pos_map[pos] = name
+        # HR's position 0 = first in name (= home), position 1 = away.
+        if 0 in pos_map and 1 in pos_map:
+            return pos_map[1], pos_map[0]
+        # Fallback to legacy 1/2 convention if a different schema slips
+        # through (e.g. user-pasted older query shape).
+        if 1 in pos_map and 2 in pos_map:
+            return pos_map[1], pos_map[2]
+
+    # ── 3. Legacy explicit home/away dict fields (user-pasted shapes) ──
     home = _pick(event, "homeTeam", "home", "homeTeamName", "homeName")
     away = _pick(event, "awayTeam", "away", "awayTeamName", "awayName")
     if isinstance(home, dict):
@@ -459,8 +728,9 @@ def _extract_teams(event: dict) -> tuple[str, str]:
     if home and away:
         return str(away), str(home)
 
-    # ── Parse event name first — it's the most reliable signal ──
-    # Hard Rock formats: "Away vs Home", "Away vs. Home", "Away @ Home"
+    # ── 4. Last-ditch: parse the ``name`` field. HR's ``name`` is
+    #       "<Home> vs. <Away>" — invert when splitting on "vs."/"v";
+    #       "@"/"at" still imply the standard "<Away> @ <Home>". ──
     title = str(_pick(event, "name", "title", "displayName") or "")
     if " @ " in title:
         a, h = title.split(" @ ", 1)
@@ -469,39 +739,13 @@ def _extract_teams(event: dict) -> tuple[str, str]:
         low = title.lower()
         idx = low.find(" at ")
         return title[:idx].strip(), title[idx + 4:].strip()
-    # "vs." before "vs" to avoid partial match
     for sep in (" vs. ", " vs ", " v "):
-        if sep in title.lower():
-            idx = title.lower().find(sep)
-            return title[:idx].strip(), title[idx + len(sep):].strip()
-
-    # ── Participants list ──
-    parts = _pick(event, "participants", "competitors", "teams")
-    if isinstance(parts, list) and len(parts) >= 2:
-        # Hard Rock uses position: 1 and 2. Try role/homeAway first.
-        role_map: dict[str, str] = {}
-        pos_map: dict[int, str] = {}
-        for p in parts:
-            if not isinstance(p, dict):
-                continue
-            name = str(_pick(p, "name", "displayName", "fullName",
-                             "label", "teamName") or "")
-            role = (_pick(p, "role", "homeAway", "side", "type") or "").lower()
-            pos = _pick(p, "position")
-            if role in ("home", "away") and name:
-                role_map[role] = name
-            if isinstance(pos, int) and name:
-                pos_map[pos] = name
-        if "home" in role_map and "away" in role_map:
-            return role_map["away"], role_map["home"]
-        # position convention: 1 = away, 2 = home (US sportsbook standard)
-        if 1 in pos_map and 2 in pos_map:
-            return pos_map[1], pos_map[2]
-        names = [str(_pick(p, "name", "displayName", "fullName",
-                           "label", "teamName") or "")
-                 for p in parts if isinstance(p, dict)]
-        if len(names) >= 2:
-            return names[0], names[1]
+        low = title.lower()
+        if sep in low:
+            idx = low.find(sep)
+            home_part = title[:idx].strip()
+            away_part = title[idx + len(sep):].strip()
+            return away_part, home_part
     return "", ""
 
 
@@ -564,14 +808,21 @@ _DERIVATIVE_MARKET_TYPES: dict[str, str] = {
     "ICE_HOCKEY:P:BTS": "period_bts",
     "ICE_HOCKEY:P:NEXTTEAMSCORE": "next_team_score",
     # ── NBA (Phase 1d) — quarter-level extensions ──
-    "BASKETBALL:FTOT:A:OU": "team_total_away",
-    "BASKETBALL:FTOT:B:OU": "team_total_home",
+    # HR convention for NBA (verified 2026-05-05 on LAL @ OKC): selection
+    # type "A"/"AH" tracks participant position 0 = HOME team. Spread
+    # selections confirmed it directly: "Thunder -12.5" carried type=AH
+    # (Thunder = home -850 ML). The earlier registry inverted A↔home for
+    # OU markets, which silently fed home_q1_expected against the away
+    # team's posted line — every NBA team-total pick was computing edge
+    # against the wrong side. Aligned with the ML/SPRD convention now.
+    "BASKETBALL:FTOT:A:OU": "team_total_home",
+    "BASKETBALL:FTOT:B:OU": "team_total_away",
     # Q1-specific derivatives. The same :P:A:OU / :P:B:OU / :P:OE codes
     # are also used for 1st-half markets we can't price without a half-
     # game model, so the apply_market handlers below gate storage on
     # period.startswith("Q1") — H1/Q2/Q3/Q4/H2 are dropped silently.
-    "BASKETBALL:P:A:OU": "q1_team_total_away",
-    "BASKETBALL:P:B:OU": "q1_team_total_home",
+    "BASKETBALL:P:A:OU": "q1_team_total_home",
+    "BASKETBALL:P:B:OU": "q1_team_total_away",
     "BASKETBALL:P:OE":   "q1_total_oe",
     # NBA :P:OU / :P:SPRD / :P:DNB are already partially handled by
     # the Q1 codepath when period=Q1; we'll re-route through the
@@ -581,15 +832,56 @@ _DERIVATIVE_MARKET_TYPES: dict[str, str] = {
 
 def _is_q1_market(label: str, period: str = "") -> bool:
     """Check if a period market is specifically Q1."""
-    lower = label.lower()
-    p = period.upper()
-    # Period field: Q1, P1, 1Q, etc.
-    if p in ("Q1", "1Q", "P1", "1"):
-        return True
-    # Label: "1st Quarter ..."
-    if "1st quarter" in lower or "first quarter" in lower:
-        return True
-    return False
+    return _period_code(label, period) == "Q1"
+
+
+# NBA period markers — HR encodes period in two ways:
+#   1. event.markets[].period field: "Q1"/"Q2"/"Q3"/"Q4"/"H1"/"H2"/"M"
+#      ("M" = match / full game). New (2026-04-28+) schema uses these
+#      letter codes consistently.
+#   2. label substrings: "1st Quarter", "1st Half", etc. Used as a
+#      fallback for non-betSync schemas.
+_NBA_PERIOD_LABEL_HINTS: dict[str, tuple[str, ...]] = {
+    "Q1": ("1st quarter", "first quarter", "q1 ", " q1"),
+    "Q2": ("2nd quarter", "second quarter", "q2 ", " q2"),
+    "Q3": ("3rd quarter", "third quarter", "q3 ", " q3"),
+    "Q4": ("4th quarter", "fourth quarter", "q4 ", " q4"),
+    "H1": ("1st half", "first half", "1h ", " 1h", "h1 ", " h1"),
+    "H2": ("2nd half", "second half", "2h ", " 2h", "h2 ", " h2"),
+}
+
+# Equivalence between HR's internal period code (Q1/H1/etc.) and the
+# raw values its `period` field can carry. Some legacy schemas use
+# "P1"/"1" for Q1; the live betSync uses Q1 directly.
+_NBA_PERIOD_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
+    "Q1": ("Q1", "1Q", "P1", "1"),
+    "Q2": ("Q2", "2Q", "P2", "2"),
+    "Q3": ("Q3", "3Q", "P3", "3"),
+    "Q4": ("Q4", "4Q", "P4", "4"),
+    "H1": ("H1", "1H"),
+    "H2": ("H2", "2H"),
+}
+
+
+def _period_code(label: str, period: str = "") -> str | None:
+    """Return the canonical NBA period code (Q1/Q2/Q3/Q4/H1/H2) for a
+    market, or ``None`` if it isn't a period market.
+
+    Period field check first (most reliable on the new schema), then
+    fall back to label substring hints.
+    """
+    p = (period or "").upper().strip()
+    if p:
+        for code, aliases in _NBA_PERIOD_FIELD_ALIASES.items():
+            if p in aliases:
+                return code
+    lower = (label or "").lower()
+    if not lower:
+        return None
+    for code, hints in _NBA_PERIOD_LABEL_HINTS.items():
+        if any(h in lower for h in hints):
+            return code
+    return None
 
 
 def _market_kind(label: str, market_type: str = "",
@@ -617,11 +909,31 @@ def _market_kind(label: str, market_type: str = "",
         if mtu == full_code or mtu.endswith(":" + full_code):
             return kind
 
-    # ── Q1 period markets (NBA only) ──
-    if _is_q1_market(label, period):
-        for suffix, kind in _Q1_MARKET_TYPES.items():
-            if mtu.endswith(suffix):
-                return kind
+    # ── NBA period markets (Q1/Q2/Q3/Q4/H1/H2) ──
+    # Q1 keeps its legacy flat-key kinds (q1_ml/q1_spread/q1_total) for
+    # back-compat with the prematch picker. Q2-Q4 + H1/H2 use new
+    # `period_*` kinds that route to bucket['periods'][code] in
+    # _apply_market — read by engine.live for stage-2 live picks.
+    #
+    # Sport-gated: NHL period=P1 lives in our Q1-alias set (because NBA
+    # used to ship "P1" for first-quarter on a few dialects). Without
+    # this BASKETBALL gate, NHL P1 SPREAD markets would file as
+    # q1_spread on the NHL bucket — observed 2026-04-29 with MTL@TB
+    # showing q1_spread keys in the live state when only NBA should
+    # populate those.
+    if mtu.startswith("BASKETBALL:"):
+        code = _period_code(label, period)
+        if code == "Q1":
+            for suffix, kind in _Q1_MARKET_TYPES.items():
+                if mtu.endswith(suffix):
+                    return kind
+        elif code in ("Q2", "Q3", "Q4", "H1", "H2"):
+            for suffix, kind in _Q1_MARKET_TYPES.items():
+                if mtu.endswith(suffix):
+                    # q1_ml/q1_spread/q1_total → period_ml/period_spread/period_total.
+                    # The period_code is recovered downstream via the same
+                    # label/period fields when _apply_market writes the bucket.
+                    return "period_" + kind.replace("q1_", "")
 
     # ── Fallback: label-based heuristics (for non-betSync schemas) ──
     if not market_type:
@@ -732,12 +1044,18 @@ def _classify_outcome(outcome: dict, away_abbr: str, home_abbr: str,
         return "over", american, line
     if sel_lower == "under":
         return "under", american, line
-    # "A" = position 0 (away), "B" = position 1 (home)
-    # "AH"/"BH" = spread for A/B
+    # HR convention (confirmed 2026-04-28): selection type "A"/"AH"
+    # tracks participant position 0 — the team listed FIRST in the
+    # event ``name`` field — which is the HOME team. Type "B"/"BH"
+    # tracks position 1 (away). Verified by cross-referencing
+    # eventNames.name (canonical "<Away> @ <Home>") against the
+    # selection labels: e.g. "Spurs vs. Trail Blazers" had "Spurs -11.5"
+    # carrying type "AH"; eventNames.name = "Portland Trail Blazers @
+    # San Antonio Spurs" → Spurs is home → AH = home.
     if sel_type in ("A", "AH"):
-        return "away", american, line
-    if sel_type in ("B", "BH"):
         return "home", american, line
+    if sel_type in ("B", "BH"):
+        return "away", american, line
 
     # ── 1b. Yes / No / Odd / Even / Tie (derivative markets) ──
     # Hard Rock uses these literal labels for BTS, OT Y/N, extra-innings
@@ -789,7 +1107,96 @@ def _classify_outcome(outcome: dict, away_abbr: str, home_abbr: str,
     return None, american, line
 
 
-def _apply_market(bucket: dict, kind: str, sides: dict, q1: bool) -> None:
+def _apply_period_market(bucket: dict, kind: str, sides: dict,
+                         period_code: str) -> None:
+    """Write a Q2/Q3/Q4/H1/H2 NBA period market into the per-period
+    sub-dict at ``bucket['periods'][code]``. Q1 stays on the legacy
+    flat-key path in ``_apply_market`` for back-compat with the
+    prematch picker.
+
+    Per-period dict shape mirrors the top-level full-game shape so
+    ``engine.live._picks`` can read it the same way::
+
+        bucket['periods']['Q4'] = {
+            'home_ml':            -130, 'away_ml':            105,
+            'home_spread_point':  -2.5, 'home_spread_odds':  -110,
+            'away_spread_point':   2.5, 'away_spread_odds':  -110,
+            'over_under':         54.5, 'over_odds':         -110,
+                                        'under_odds':        -110,
+            'alt_spreads': [...], 'alt_totals': [...],
+        }
+    """
+    target = bucket.setdefault("periods", {}).setdefault(period_code, {})
+
+    if kind == "ml":
+        if sides.get("home", {}).get("price") is not None:
+            target["home_ml"] = sides["home"]["price"]
+        if sides.get("away", {}).get("price") is not None:
+            target["away_ml"] = sides["away"]["price"]
+        return
+
+    if kind == "spread":
+        home_line = sides.get("home", {}).get("line")
+        home_price = sides.get("home", {}).get("price")
+        away_line = sides.get("away", {}).get("line")
+        away_price = sides.get("away", {}).get("price")
+        if home_line is None and away_line is None:
+            return
+        cur = target.get("home_spread_point")
+        if cur is None:
+            if home_line is not None:
+                target["home_spread_point"] = home_line
+                target["home_spread_odds"] = home_price
+            if away_line is not None:
+                target["away_spread_point"] = away_line
+                target["away_spread_odds"] = away_price
+        elif home_line == cur or (away_line is not None and -away_line == cur):
+            if home_line is not None:
+                target["home_spread_point"] = home_line
+                target["home_spread_odds"] = home_price
+            if away_line is not None:
+                target["away_spread_point"] = away_line
+                target["away_spread_odds"] = away_price
+        else:
+            point = home_line if home_line is not None else (
+                -away_line if away_line is not None else None)
+            if point is not None:
+                target.setdefault("alt_spreads", []).append({
+                    "point": point,
+                    "home_odds": home_price,
+                    "away_odds": away_price,
+                })
+        return
+
+    if kind == "total":
+        line = (sides.get("over", {}).get("line")
+                or sides.get("under", {}).get("line"))
+        over_price = sides.get("over", {}).get("price")
+        under_price = sides.get("under", {}).get("price")
+        cur = target.get("over_under")
+        if cur is None:
+            if line is not None:
+                target["over_under"] = line
+            if over_price is not None:
+                target["over_odds"] = over_price
+            if under_price is not None:
+                target["under_odds"] = under_price
+        elif line == cur:
+            if over_price is not None:
+                target["over_odds"] = over_price
+            if under_price is not None:
+                target["under_odds"] = under_price
+        else:
+            if line is not None:
+                target.setdefault("alt_totals", []).append({
+                    "line": line,
+                    "over_odds": over_price,
+                    "under_odds": under_price,
+                })
+
+
+def _apply_market(bucket: dict, kind: str, sides: dict, q1: bool,
+                  period_code: str | None = None) -> None:
     """Apply parsed market sides to the event bucket.
 
     For spread and total markets, the first market seen becomes the
@@ -800,7 +1207,14 @@ def _apply_market(bucket: dict, kind: str, sides: dict, q1: bool) -> None:
     Each alt entry is a dict:
         alt_spreads: [{"point": -2.5, "home_odds": 150, "away_odds": -180}, ...]
         alt_totals:  [{"line": 5.5, "over_odds": -110, "under_odds": -110}, ...]
+
+    period_code routes Q2/Q3/Q4/H1/H2 to the per-period sub-dict.
     """
+    # Per-period markets (NBA quarters/halves) — route to nested dict.
+    if period_code in ("Q2", "Q3", "Q4", "H1", "H2"):
+        _apply_period_market(bucket, kind, sides, period_code)
+        return
+
     if kind == "ml":
         if q1:
             if sides.get("home", {}).get("price") is not None:
@@ -914,7 +1328,16 @@ def _apply_market(bucket: dict, kind: str, sides: dict, q1: bool) -> None:
         odd_price = sides.get("odd", {}).get("price")
         even_price = sides.get("even", {}).get("price")
         if odd_price is not None or even_price is not None:
-            bucket["total_oe"] = {"odd_odds": odd_price, "even_odds": even_price}
+            # NBA `BASKETBALL:P:OE` arrives here as `total_oe` after the
+            # q1_ strip — same period-collision shape as the team_total
+            # fix above. Route Q1 to its own bucket; drop other periods.
+            period_key = str(sides.get("_period") or "")
+            target_kind = "total_oe"
+            if q1:
+                if not period_key.startswith("Q1"):
+                    return
+                target_kind = "q1_total_oe"
+            bucket[target_kind] = {"odd_odds": odd_price, "even_odds": even_price}
     elif kind == "extra_innings":
         yes_price = sides.get("yes", {}).get("price")
         no_price = sides.get("no", {}).get("price")
@@ -947,12 +1370,25 @@ def _apply_market(bucket: dict, kind: str, sides: dict, q1: bool) -> None:
         over_price = sides.get("over", {}).get("price")
         under_price = sides.get("under", {}).get("price")
         if line is not None and (over_price is not None or under_price is not None):
+            # NBA `BASKETBALL:P:A:OU` / `:B:OU` route here as
+            # team_total_{home,away} after the "q1_" prefix is stripped at
+            # dispatch. Same code is shipped for Q1 / Q2 / Q3 / Q4 / H1 /
+            # H2; without period scoping, the full-game value clobbered
+            # the Q1 store and `q1_team_total_home` always returned None.
+            # Route Q1 markets to the q1_-prefixed key; drop everything
+            # else (we don't price half / non-Q1 quarter team totals).
+            period_key = str(sides.get("_period") or "")
+            target_kind = kind
+            if q1 and kind.startswith("team_total_"):
+                if not period_key.startswith("Q1"):
+                    return
+                target_kind = "q1_" + kind
             new_score = _juice_score(over_price, under_price, line)
-            cur = bucket.get(kind)
+            cur = bucket.get(target_kind)
             if cur is None or _juice_score(
                 cur.get("over_odds"), cur.get("under_odds"), cur.get("line"),
             ) > new_score:
-                bucket[kind] = {
+                bucket[target_kind] = {
                     "line": line,
                     "over_odds": over_price,
                     "under_odds": under_price,
@@ -1095,6 +1531,11 @@ _COMP_FILTERS: dict[str, tuple[str, ...]] = {
     "mlb": ("mlb",),
     "nhl": ("nhl",),
     "nba": ("nba",),
+    # Tennis comps are per-tournament ("ATP Madrid", "WTA Rome"); we
+    # accept any comp whose name has "atp" or "wta" as a word. Drops
+    # ITF / Challenger / UTR Pro tiers that aren't in Sackmann's
+    # main-tour roster.
+    "tennis": ("atp", "wta"),
 }
 
 
@@ -1388,6 +1829,12 @@ def _parse_response(sport: str, data: Any) -> dict[str, dict]:
                     # starts with "q1_" (from whitelist) or the legacy
                     # label check matches.
                     q1 = kind.startswith("q1_")
+                    # Period code for non-Q1 NBA quarter/half markets.
+                    # period_* kinds (period_ml/spread/total) route into
+                    # bucket['periods'][code] instead of flat top-level
+                    # fields. None for full-game / non-NBA markets.
+                    period_code = (_period_code(label, mkt_period)
+                                   if kind.startswith("period_") else None)
 
                     sides: dict[str, dict] = {}
                     for o in outcomes:
@@ -1411,9 +1858,25 @@ def _parse_response(sport: str, data: Any) -> dict[str, dict]:
                     if mkt_period:
                         sides["_period"] = mkt_period
 
-                    # Normalize q1_* kinds to base kind for _apply_market
-                    base_kind = kind.replace("q1_", "") if q1 else kind
-                    _apply_market(bucket, base_kind, sides, q1)
+                    # Normalize q1_* / period_* kinds to base kind.
+                    # Only strip the "period_" prefix when period_code
+                    # is one of the NBA quarter/half codes — NHL derivatives
+                    # use kinds like `period_total` / `period_dnb` / `period_bts`
+                    # (no period_code) and must keep their full kind so the
+                    # NHL handlers in _apply_market route them into
+                    # bucket["period_totals"] / ["period_dnb"] / ["period_bts"].
+                    # Stripping unconditionally would file an NHL P1 total
+                    # under bucket["over_under"] and overwrite the full-game
+                    # total — observed 2026-04-29 with MTL@TB.
+                    if q1:
+                        base_kind = kind.replace("q1_", "")
+                    elif period_code in ("Q2", "Q3", "Q4", "H1", "H2") \
+                            and kind.startswith("period_"):
+                        base_kind = kind.replace("period_", "")
+                    else:
+                        base_kind = kind
+                    _apply_market(bucket, base_kind, sides, q1,
+                                  period_code=period_code)
 
     # Post-process: pick the best primary spread/total from all
     # collected lines. The "primary" should be the one closest to
@@ -1533,12 +1996,114 @@ def _promote_best_primary(bucket: dict) -> None:
 
 # ── Fetch / probe ─────────────────────────────────────────
 
-def _fetch_event_tree() -> tuple[dict, str | None]:
-    """Do one POST to /graphql?type=event_tree. Returns (parsed_json,
-    error_string). error_string is None on 200."""
-    body = _load_query()
+# League-name hints used to pick the right competition out of a sport
+# tree. HR's tree contains many comps per sport (NBA + WNBA + Euroleague +
+# eBasketball + …); we want exactly one US-major comp per sport for the
+# canonical odds feed. Substring match on `cat.name` + `comp.name`,
+# case-insensitive.
+_TARGET_COMP: dict[str, tuple[str, ...]] = {
+    "mlb": ("MLB",),
+    "nhl": ("NHL",),
+    "nba": ("NBA",),
+    "wnba": ("WNBA",),
+    # NCAAM ships under several aliases on HR — match the most common.
+    "ncaam": ("NCAAM", "NCAA Men", "Men's College Basketball",
+               "College Basketball"),
+    "afl": ("AFL", "Australian Football League"),
+    # Tennis tournament names are prefixed "ATP <City>" or "WTA <City>";
+    # the prefix-matcher in _resolve_comp_ids picks them up via these
+    # tokens.
+    "tennis": ("ATP", "WTA"),
+}
+
+
+def _resolve_comp_ids(sport: str, sports_tree: dict) -> list[str]:
+    """Pick the comp_id(s) we should fetch for `sport` from the
+    sports-tree response. Returns one comp_id per matching league —
+    typically a single entry, but the list shape leaves room for
+    multi-comp sports later (NCAAB + NBA, etc.).
+
+    The tree shape is::
+
+        data.betSync.sports[].code            ("BASKETBALL")
+                              categories[].name           ("USA")
+                                          competitions[].id, .name  ("NBA")
+
+    Tennis special-case: HR splits singles into multiple categories
+    (ATP, WTA, WTA125, Challenger, ITF Men, ITF Women) that the
+    plain prefix matcher misses. Pull every singles category under
+    the TENNIS sport, skipping doubles.
+    """
+    if not isinstance(sports_tree, dict):
+        return []
+    bet = sports_tree.get("data", {}).get("betSync", {})
+    sports = bet.get("sports") or []
+    out: list[str] = []
+
+    if sport == "tennis":
+        # Deny-list match: pull every category under the TENNIS sport
+        # except doubles/mixed (we don't price doubles markets).
+        # The previous whitelist silently dropped legitimate categories
+        # whenever HR introduced a new one (e.g. "ATP Qual.", "Grand
+        # Slam", "WTA125 Qual.", "UTR Pro Tennis Series"). Inverting to
+        # a deny-list keeps coverage current as HR's category taxonomy
+        # evolves; downstream normalisation discards events that lack
+        # player participants anyway.
+        # Sport-code guard: ``_matches_sport`` is a substring match so
+        # ``TABLE_TENNIS`` would otherwise leak in (Setka Cup, TT Elite,
+        # Czech Liga Pro etc). Require the code to start with ``TENNIS``
+        # so table tennis stays in its own bucket.
+        for sp in sports:
+            if not isinstance(sp, dict):
+                continue
+            code = (sp.get("code") or "").upper()
+            if not code.startswith("TENNIS"):
+                continue
+            for cat in sp.get("categories") or []:
+                cat_name = (cat.get("name") or "").strip().lower()
+                if "doubles" in cat_name or "mixed" in cat_name:
+                    continue
+                for comp in cat.get("competitions") or []:
+                    cid = comp.get("id") if isinstance(comp, dict) else None
+                    if cid:
+                        out.append(str(cid))
+        return out
+
+    targets = tuple(t.lower() for t in _TARGET_COMP.get(sport, ()))
+    if not targets:
+        return []
+    for sp in sports:
+        if not isinstance(sp, dict):
+            continue
+        if not _matches_sport(sp.get("code", ""), sport):
+            continue
+        for cat in sp.get("categories") or []:
+            if not isinstance(cat, dict):
+                continue
+            for comp in cat.get("competitions") or []:
+                if not isinstance(comp, dict):
+                    continue
+                comp_name = (comp.get("name") or "").strip().lower()
+                cid = comp.get("id")
+                if not cid:
+                    continue
+                # Exact-or-prefix match on league name. "NBA" must not
+                # pull "NBA Draft" / "WNBA" — restrict to comps whose
+                # name starts with the target token followed by end /
+                # space / hyphen.
+                for t in targets:
+                    if comp_name == t or comp_name.startswith(f"{t} ") \
+                            or comp_name.startswith(f"{t}-"):
+                        out.append(str(cid))
+                        break
+    return out
+
+
+def _fetch_sports_tree() -> tuple[dict, str | None]:
+    """One round-trip to discover comp IDs across all sports."""
+    body = _load_sports_query()
     headers = _load_headers()
-    status, raw, err = _graphql_post(EVENT_TREE_URL, body, headers)
+    status, raw, err = _graphql_post(GRAPHQL_URL, body, headers)
     if status != 200 or not raw:
         return {}, err or f"HTTP {status}"
     try:
@@ -1547,12 +2112,147 @@ def _fetch_event_tree() -> tuple[dict, str | None]:
         return {}, f"json parse: {e}"
 
 
+# Per-comp event cache. CLV capture, prematch picks, soccer halftime
+# drain, and the basketball/hockey framework refresh all call this
+# helper at independent cadences — without a cache they each fire
+# their own HR request per comp per tick. With 17 soccer + 28
+# basketball + 4 hockey leagues all polling on ~60s cycles, that's
+# 50+ duplicated HR hits per minute. A 30s TTL dedupes everything
+# within a single cycle while keeping odds fresh for live emit.
+_COMP_CACHE_TTL = 30
+_COMP_CACHE_TTL_EMPTY = 60
+_comp_cache: dict[str, tuple[float, list[dict], str | None]] = {}
+
+
+def _fetch_events_for_comp(comp_id: str) -> tuple[list[dict], str | None]:
+    """Fetch the events list (with markets/selections) for one comp.
+
+    The per-comp filter excludes outright/futures markets — we only
+    care about regular game-level markets for the odds engine.
+
+    Cached at ``_COMP_CACHE_TTL`` (30s) so concurrent consumers within
+    one tick window share a single HR request. Empty results get a
+    longer TTL so a transient comp outage doesn't hammer HR.
+    """
+    cache_key = str(comp_id)
+    now = time.time()
+    cached = _comp_cache.get(cache_key)
+    if cached:
+        ts, events, err = cached
+        ttl = _COMP_CACHE_TTL if events else _COMP_CACHE_TTL_EMPTY
+        if (now - ts) < ttl:
+            return events, err
+
+    body = _load_query()
+    body.setdefault("variables", {})["filters"] = [
+        {"field": "compId", "values": str(comp_id)},
+        {"field": "outright", "value": "false"},
+    ]
+    headers = _load_headers()
+    status, raw, err = _graphql_post(GRAPHQL_URL, body, headers)
+    if status != 200 or not raw:
+        _comp_cache[cache_key] = (now, [], err or f"HTTP {status}")
+        return [], err or f"HTTP {status}"
+    try:
+        data = json.loads(raw)
+    except Exception as e:
+        _comp_cache[cache_key] = (now, [], f"json parse: {e}")
+        return [], f"json parse: {e}"
+    events = (data.get("data", {})
+                  .get("betSync", {})
+                  .get("events", {})
+                  .get("data") or [])
+    _comp_cache[cache_key] = (now, events, None)
+    return events, None
+
+
+def _fetch_event_tree() -> tuple[dict, str | None]:
+    """Back-compat shim. Returns the same {data: {betSync: {sports: ...}}}
+    shape that `_parse_response` walks — but now built up from a chain
+    of (sports tree → per-comp events) calls. The wrapping makes the
+    rest of the code path identical to the legacy single-call flow."""
+    sports_tree, err = _fetch_sports_tree()
+    if err:
+        return {}, err
+    return sports_tree, None
+
+
+def _fetch_with_markets(sport: str) -> tuple[dict, str | None]:
+    """Build a synthetic kitchen-sink response for `sport` so the
+    existing `_parse_response` walker can handle it unchanged.
+
+    Steps:
+      1. Pull the sports tree → resolve comp_ids for `sport`.
+      2. For each comp_id, pull the per-comp events (with full markets).
+      3. Wrap into the legacy {data: {betSync: {sports: [{
+         code: <SPORT>, competitions: [{id, name, events: {data: [...]}}]
+         }]}}} shape.
+
+    Any single-comp fetch failure is logged but doesn't tank the others
+    — the parser already merges multi-comp results.
+    """
+    tree, err = _fetch_sports_tree()
+    if err:
+        return {}, f"sports tree: {err}"
+    comp_ids = _resolve_comp_ids(sport, tree)
+    if not comp_ids:
+        return {}, f"no comp matched for sport={sport!r}"
+
+    competitions: list[dict] = []
+    for cid in comp_ids:
+        events, e_err = _fetch_events_for_comp(cid)
+        if e_err:
+            logger.warning("Hard Rock %s comp=%s fetch failed: %s",
+                           sport, cid, e_err)
+            continue
+        # Find the comp's name from the tree for nicer logs.
+        comp_name = ""
+        for sp in tree.get("data", {}).get("betSync", {}).get("sports") or []:
+            for cat in sp.get("categories") or []:
+                for comp in cat.get("competitions") or []:
+                    if str(comp.get("id")) == cid:
+                        comp_name = comp.get("name") or ""
+                        break
+        competitions.append({
+            "id": cid,
+            "name": comp_name,
+            "events": {"data": events, "count": len(events)},
+        })
+
+    if not competitions:
+        return {}, f"no events fetched for sport={sport!r}"
+
+    sport_code = {
+        "mlb": "BASEBALL", "nhl": "ICE_HOCKEY", "nba": "BASKETBALL",
+    }.get(sport, sport.upper())
+
+    synthetic = {
+        "data": {
+            "betSync": {
+                "sports": [{
+                    "id": "synthetic",
+                    "code": sport_code,
+                    "name": sport_code,
+                    "competitions": competitions,
+                }]
+            }
+        }
+    }
+    return synthetic, None
+
+
 def fetch_hardrock_odds(sport: str) -> dict:
     """Fetch Hard Rock odds for one sport.
 
-    Sport in {"mlb", "nhl", "nba"}. Empty dict on failure (which is
-    common right now until the user supplies a working query body +
-    headers via data/hardrock_query.json and data/hardrock_headers.json).
+    Sport in {"mlb", "nhl", "nba"}. Empty dict on failure — all callers
+    fall through to the next source in their chain.
+
+    Two-phase fetch (post-2026-04-28 schema migration):
+      1. Sports-tree query → resolve comp_id for the sport
+      2. Per-comp events query → events with markets/selections embedded
+
+    Result is wrapped in the legacy "kitchen-sink" tree shape so the
+    parser stays unchanged.
     """
     now = time.time()
     cached = _cache.get(sport)
@@ -1562,7 +2262,7 @@ def fetch_hardrock_odds(sport: str) -> dict:
         if age < ttl:
             return cached[1]
 
-    data, err = _fetch_event_tree()
+    data, err = _fetch_with_markets(sport)
     if err:
         logger.debug("Hard Rock %s: %s", sport, err)
         _cache[sport] = (now, {})

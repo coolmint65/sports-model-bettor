@@ -35,8 +35,7 @@ import logging
 from datetime import datetime, timezone
 
 from scrapers.hardrock_odds import (
-    EVENT_TREE_URL, _load_query, _load_headers, _graphql_post,
-    _walk_events_flat, _extract_teams, _team_abbr,
+    _fetch_with_markets, _walk_events_flat, _extract_teams, _team_abbr,
     _parse_response,  # full parse shared with prematch
 )
 
@@ -51,43 +50,79 @@ _HR_SPORT_NAMES = {
 
 
 def _event_started(event: dict) -> bool:
-    """True iff this HR event's startTime is in the past — i.e. the
-    game has already begun. Inverts engine.scrapers.hardrock_odds.
-    _event_already_started's intent: prematch wants pre-tip events,
-    live wants post-tip ones.
+    """True iff this HR event has tipped off / dropped the puck.
 
-    A missing or unparseable startTime returns False so we don't
-    accidentally treat a malformed prematch entry as live.
+    Mirrors `scrapers.hardrock_odds._event_already_started`. Priority:
+      1. ``inplay`` boolean (new schema) — authoritative.
+      2. ``trackerStatus`` string ("LIVE" vs "NOT_STARTED") — secondary.
+      3. ``eventTime`` / ``startTime`` — numeric epoch-ms or ISO string;
+         past timestamp == game has nominally started.
+
+    The prematch path drops these; the live path *only* keeps these.
     """
-    raw = event.get("startTime")
-    if not isinstance(raw, str) or not raw:
-        return False
-    try:
-        s = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
-        ts = datetime.fromisoformat(s)
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
-    except (ValueError, TypeError):
-        return False
-    return ts < datetime.now(timezone.utc)
+    inplay = event.get("inplay")
+    if isinstance(inplay, bool):
+        return inplay
+
+    tracker = event.get("trackerStatus")
+    if isinstance(tracker, str) and tracker:
+        t = tracker.strip().upper()
+        if t in ("LIVE", "IN_PLAY", "INPLAY", "STARTED"):
+            return True
+        if t in ("NOT_STARTED", "NOT STARTED", "PRE", "PREMATCH"):
+            return False
+
+    now = datetime.now(timezone.utc)
+    for field in ("startTime", "eventTime"):
+        raw = event.get(field)
+        if isinstance(raw, str) and raw:
+            try:
+                s = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
+                ts = datetime.fromisoformat(s)
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                return ts < now
+            except (ValueError, TypeError):
+                continue
+        if isinstance(raw, (int, float)) and raw > 0:
+            try:
+                ts = datetime.fromtimestamp(float(raw) / 1000.0, tz=timezone.utc)
+                return ts < now
+            except (ValueError, TypeError, OSError):
+                continue
+    return False
 
 
-def _fetch_raw_payload() -> dict | None:
-    """Single round-trip to HR with current session. Returns the raw
-    GraphQL response body or None on transport failure."""
-    body = _load_query()
-    headers = _load_headers()
-    status, raw_bytes, err = _graphql_post(EVENT_TREE_URL, body, headers,
-                                           timeout=30)
-    if status != 200 or not raw_bytes:
-        logger.warning("HR live fetch: status=%s err=%s", status, err)
+def _fetch_raw_payload(sport: str) -> dict | None:
+    """Two-phase fetch (sports tree → per-comp events). Returns the
+    synthetic legacy-shaped tree built by ``_fetch_with_markets``, or
+    None on transport failure. Sport is required to scope the comp
+    lookup — passing a non-NBA/NHL sport here is an error elsewhere
+    in the live stack."""
+    data, err = _fetch_with_markets(sport)
+    if err:
+        logger.warning("HR live fetch (%s): %s", sport, err)
         return None
-    try:
-        import json
-        return json.loads(raw_bytes.decode())
-    except (UnicodeDecodeError, ValueError) as e:
-        logger.warning("HR live fetch JSON decode failed: %s", e)
-        return None
+    return data
+
+
+def _iter_events_from_synthetic(tree: dict):
+    """Yield each event dict from the synthetic-tree shape that
+    ``_fetch_with_markets`` builds — ``data.betSync.sports[].
+    competitions[].events.data[]``."""
+    if not isinstance(tree, dict):
+        return
+    sports = tree.get("data", {}).get("betSync", {}).get("sports") or []
+    for sp in sports:
+        if not isinstance(sp, dict):
+            continue
+        for comp in sp.get("competitions") or []:
+            if not isinstance(comp, dict):
+                continue
+            data = (comp.get("events") or {}).get("data") or []
+            for ev in data:
+                if isinstance(ev, dict):
+                    yield ev
 
 
 def fetch_live_odds(sport: str) -> dict[str, dict]:
@@ -100,29 +135,30 @@ def fetch_live_odds(sport: str) -> dict[str, dict]:
 
     Filter applied:
       1. Sport name matches (NBA / NHL — others rejected by Phase 3 spec).
-      2. event has already started (`startTime` < now UTC).
+      2. event is in-play (HR ``inplay`` flag, with eventTime fallback).
       3. event has at least one market with active selections.
 
     The returned odds dict is identical in shape to what prematch
     produces, so downstream consumers (engine.live._predict) don't
     care about provenance.
     """
-    if sport not in ("nba", "nhl"):
-        raise ValueError(f"live odds only cover NBA + NHL; got {sport!r}")
+    if sport not in ("nba", "nhl", "wnba", "ncaam", "afl"):
+        raise ValueError(
+            f"live odds only cover NBA/NHL/WNBA/NCAAM/AFL; got {sport!r}")
 
-    raw = _fetch_raw_payload()
+    raw = _fetch_raw_payload(sport)
     if not raw:
         return {}
 
     # Re-use prematch's full-tree parser, then post-filter.
     # _parse_response keys results by AWAY@HOME (and HHMM-suffix
     # variants for doubleheaders, but NBA/NHL don't have those today).
-    full = _parse_response(sport, raw)
-
-    # Walk the raw event list once more so we can match started-events
-    # against the parsed dict (the parser dropped the startTime field).
+    # Note: _parse_response drops events where _event_already_started
+    # returns True — exactly the events we want here. Run a dedicated
+    # walk over the synthetic tree to capture the inplay set first.
     started_keys: set[str] = set()
-    for event in _walk_events_flat(raw):
+    inplay_events: list[dict] = []
+    for event in _iter_events_from_synthetic(raw):
         if not _event_started(event):
             continue
         away_name, home_name = _extract_teams(event)
@@ -133,18 +169,55 @@ def fetch_live_odds(sport: str) -> dict[str, dict]:
         if not (a and h):
             continue
         started_keys.add(f"{a}@{h}")
+        inplay_events.append(event)
 
-    if not started_keys:
+    if not inplay_events:
         return {}
 
+    # Synthesize a tree containing ONLY the inplay events so the parser
+    # (which drops started events for prematch) instead processes them.
+    # Easiest way: bypass _event_already_started by feeding events that
+    # report inplay=False to the parser — but we want the prematch
+    # filter intact. Cleaner: parse a copy of the tree where inplay is
+    # rewritten to False on the games we want kept. But mutating the
+    # cached HR response is risky.
+    #
+    # Simplest correct approach: build per-event odds dicts inline using
+    # the same parser, but feed each as a one-event tree with inplay
+    # cleared.
     out: dict[str, dict] = {}
-    for k, v in full.items():
-        # Drop HHMM suffix variants — NBA/NHL don't run doubleheaders.
-        # Keep only the plain "AWAY@HOME" form for live consumers.
-        if k.count("@") != 1:
-            continue
-        if k in started_keys:
-            out[k] = v
+    sport_code = {
+        "nba": "BASKETBALL",
+        "nhl": "ICE_HOCKEY",
+        "wnba": "BASKETBALL",
+        "ncaam": "BASKETBALL",
+        "afl": "AUSSIE_RULES",
+    }[sport]
+    for ev in inplay_events:
+        ev_copy = dict(ev)
+        ev_copy["inplay"] = False
+        ev_copy.pop("trackerStatus", None)
+        synthetic = {
+            "data": {
+                "betSync": {
+                    "sports": [{
+                        "id": "live",
+                        "code": sport_code,
+                        "competitions": [{
+                            "id": ev.get("compId") or "live",
+                            "name": ev.get("compName") or "",
+                            "events": {"data": [ev_copy], "count": 1},
+                        }],
+                    }]
+                }
+            }
+        }
+        parsed = _parse_response(sport, synthetic)
+        for k, v in parsed.items():
+            if k.count("@") != 1:
+                continue
+            if k in started_keys:
+                out[k] = v
     return out
 
 
@@ -162,11 +235,11 @@ def fetch_live_odds_for_event(sport: str, event_id: str) -> dict | None:
     """
     if not event_id:
         return None
-    raw = _fetch_raw_payload()
+    raw = _fetch_raw_payload(sport)
     if not raw:
         return None
     target = str(event_id)
-    for event in _walk_events_flat(raw):
+    for event in _iter_events_from_synthetic(raw):
         eid = str(event.get("id") or event.get("eventId") or "")
         if eid != target:
             continue

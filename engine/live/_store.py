@@ -71,6 +71,44 @@ def ensure_table() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_live_state_updated ON live_state(last_updated_at)"
         )
+        # Phase 5b play-by-play. Append-only; (sport, game_id, play_id)
+        # is the natural key — ESPN re-emits the full plays array on
+        # every summary call, so INSERT OR IGNORE makes re-fetches
+        # idempotent. Storing raw_json lets 5c-5f derive features
+        # (lineups, foul state, possession) without re-hitting ESPN.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS live_pbp (
+                sport             TEXT NOT NULL,
+                game_id           TEXT NOT NULL,
+                play_id           TEXT NOT NULL,
+                sequence          INTEGER,
+                period            INTEGER NOT NULL,
+                clock_secs        INTEGER,
+                clock_display     TEXT,
+                home_score        INTEGER,
+                away_score        INTEGER,
+                team_id           TEXT,
+                type_id           TEXT,
+                type_text         TEXT,
+                text              TEXT,
+                scoring_play      INTEGER DEFAULT 0,
+                score_value       INTEGER DEFAULT 0,
+                shooting_play     INTEGER DEFAULT 0,
+                wallclock         TEXT,
+                participants_json TEXT,
+                raw_json          TEXT,
+                fetched_at        TEXT NOT NULL,
+                PRIMARY KEY (sport, game_id, play_id)
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pbp_game_period "
+            "ON live_pbp(sport, game_id, period, sequence)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pbp_fetched_at "
+            "ON live_pbp(fetched_at)"
+        )
 
 
 def upsert_state(sport: str, game_id: str, state: dict) -> None:
@@ -159,6 +197,109 @@ def purge_stale(max_age_s: int = STALE_AFTER_S * 6) -> int:
     cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
     cur = conn.execute(
         "DELETE FROM live_state WHERE last_updated_at < ?", (cutoff_iso,),
+    )
+    return cur.rowcount
+
+
+# ── PBP storage ────────────────────────────────────────────────
+
+def upsert_pbp(sport: str, game_id: str, plays: list[dict]) -> int:
+    """Persist normalized plays. INSERT OR IGNORE on the natural key
+    so re-fetches of the full ESPN plays array don't re-write rows.
+    Returns the count of rows actually inserted (new plays this call)."""
+    if not plays:
+        return 0
+    ensure_table()
+    ts = datetime.now(timezone.utc).isoformat()
+    inserted = 0
+    with _STORE_LOCK:
+        conn = _conn()
+        for p in plays:
+            try:
+                participants = json.dumps(p.get("participants") or [])
+                raw = json.dumps(p.get("raw") or {}, default=str)
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO live_pbp ("
+                    "  sport, game_id, play_id, sequence, period, "
+                    "  clock_secs, clock_display, home_score, away_score, "
+                    "  team_id, type_id, type_text, text, "
+                    "  scoring_play, score_value, shooting_play, "
+                    "  wallclock, participants_json, raw_json, fetched_at"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (sport, str(game_id), str(p["play_id"]),
+                     p.get("sequence") or 0,
+                     p.get("period") or 0,
+                     p.get("clock_secs"),
+                     p.get("clock_display"),
+                     p.get("home_score"),
+                     p.get("away_score"),
+                     p.get("team_id"),
+                     p.get("type_id"),
+                     p.get("type_text"),
+                     p.get("text"),
+                     1 if p.get("scoring_play") else 0,
+                     p.get("score_value") or 0,
+                     1 if p.get("shooting_play") else 0,
+                     p.get("wallclock"),
+                     participants,
+                     raw,
+                     ts),
+                )
+                if cur.rowcount > 0:
+                    inserted += 1
+            except Exception as e:
+                logger.warning("upsert_pbp failed for %s/%s/%s: %s",
+                               sport, game_id, p.get("play_id"), e)
+    return inserted
+
+
+def get_pbp(sport: str, game_id: str,
+            period: int | None = None) -> list[dict]:
+    """Read all stored plays for a game, ordered by (period, sequence).
+    Optional ``period`` filter for "give me just Q1" lookups (the
+    intermission predictor consumes this)."""
+    ensure_table()
+    conn = _conn()
+    if period is not None:
+        rows = conn.execute(
+            "SELECT * FROM live_pbp "
+            "WHERE sport = ? AND game_id = ? AND period = ? "
+            "ORDER BY sequence",
+            (sport, str(game_id), int(period)),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM live_pbp "
+            "WHERE sport = ? AND game_id = ? "
+            "ORDER BY period, sequence",
+            (sport, str(game_id)),
+        ).fetchall()
+    out: list[dict] = []
+    for r in rows:
+        d = dict(r)
+        d["scoring_play"] = bool(d.get("scoring_play"))
+        d["shooting_play"] = bool(d.get("shooting_play"))
+        try:
+            d["participants"] = json.loads(d.pop("participants_json") or "[]")
+        except (TypeError, ValueError):
+            d["participants"] = []
+        # Drop raw_json from the default read shape — it's there for
+        # debugging / re-derivation but bloats the standard read.
+        d.pop("raw_json", None)
+        out.append(d)
+    return out
+
+
+def purge_old_pbp(max_age_s: int = STALE_AFTER_S * 6) -> int:
+    """Drop pbp rows older than ``max_age_s``. Default mirrors
+    ``purge_stale`` (30 min) so completed-game plays don't accumulate
+    indefinitely."""
+    ensure_table()
+    conn = _conn()
+    cutoff = datetime.now(timezone.utc).timestamp() - max_age_s
+    cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
+    cur = conn.execute(
+        "DELETE FROM live_pbp WHERE fetched_at < ?", (cutoff_iso,),
     )
     return cur.rowcount
 

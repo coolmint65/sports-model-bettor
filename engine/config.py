@@ -16,35 +16,50 @@ whether they stay losing or eventually recover.
 MLB_JUICE_WALL = -200
 NHL_JUICE_WALL = -200
 NBA_JUICE_WALL = -200
+TENNIS_JUICE_WALL = -200
+# Hockey framework (AHL / PWHL / AIHL / NZIHL) aligned with the major-
+# league wall at -200. The earlier -250 carve-out was a band-aid for
+# thin AHL/PWHL markets, but per-league calibration now correctly
+# shrinks favored-side probs (AHL ML 0.85 → 0.63 post-fit), so the
+# model no longer over-fires on chalk lines that need a wider wall.
+HOCKEY_FRAMEWORK_JUICE_WALL = -200
 
-# ── Conservatism ladder ──
-# Post-selection step that swaps a high-edge risky pick to the safest
-# same-direction sibling (alt spread/total, ML for favorites) that
-# still clears a reduced edge floor + the juice wall. Trades some
-# theoretical EV for higher hit-rate so bankroll survives cold streaks
-# while the empirical calibration tables build up. Lives in
-# engine/conservatism.py; each sport's generate_picks invokes it
-# after calibration and before confidence tiers.
-CONSERVATISM_ENABLED = False  # Disabled 2026-04-22. Shipped on a
-# hypothesis (trade EV for WR by swapping risky picks to safer
-# siblings) but we never instrumented the `safened` flag to the DB,
-# so there was no way to measure whether swapped picks actually
-# performed better. Live-feel after ~1 week running was that the
-# ladder wasn't helping — picks felt over-compressed into marginal
-# +2% edge territory. The ladder module + ML→underdog extension
-# stay in engine/conservatism.py as dormant infrastructure in case
-# we want to re-enable with proper per-pick instrumentation later.
-# Only consider a swap when the primary pick's probability is below
-# this threshold — there's no reason to "safen" a pick already north
-# of 55% that's also beating the market.
-CONSERVATISM_ACTIVATE_UNDER_PROB = 0.55
-# Candidate must still clear this edge AFTER the swap. Sits below
-# EDGE_LEAN (4%) by design — we're deliberately trading edge for WR.
-CONSERVATISM_MIN_EDGE_AFTER_SWAP = 2.0
-# Candidate must improve the probability by at least this much vs
-# the primary. Prevents swaps that barely move the needle but lose
-# meaningful edge in the process.
-CONSERVATISM_MIN_PROB_IMPROVEMENT = 0.05
+# Fail-safe edge ceiling for any (sport, bet_type) combination not
+# explicitly listed in MAIN_EDGE_CEILING / TENNIS_EDGE_CEILING. A
+# claimed edge above this is almost always a model artifact (missing
+# data, calibration cold-start, line-format misread). Set high enough
+# to allow legitimate value plays through but low enough to catch
+# obviously-broken outputs.
+DEFAULT_EDGE_CEILING_PCT = 60.0
+
+# Edge ceiling: if model edge exceeds this we treat the pick as a
+# miscalibration artifact rather than real value. Heaviest hitter
+# in tennis is the over-on-total-games at the highest line HR
+# offers — the model thinks games > 26.5 with 78% prob but HR caps
+# the line at 26.5 specifically because the over isn't generally
+# available. A 50%+ edge in that direction is the model not
+# understanding the structural ceiling, not a real bet.
+TENNIS_EDGE_CEILING = {
+    # ML ceiling at 15pp. Liquid markets don't make 30+pp errors on
+    # known players — when our model says a top-10 player is +400 vs
+    # a market-favorite at -600, the model is wrong, not the market.
+    # The Sinner-Zverev Madrid final 2026-05-03 was the canonical
+    # case: HR Sinner -600 / Zverev +400 (market 86/20), our model
+    # 38/62 → claimed +41pp Zverev ML edge. Surface Elo training
+    # weights all matches equally, so Zverev's 2017-2021 clay
+    # dominance still carries against Sinner's recent ascendance.
+    # 15pp is the threshold above which we trust the market over the
+    # model on ML. Time-decay Elo (queued) is the structural fix;
+    # this ceiling is the defensive backstop until then.
+    "ML":                 15.0,
+    "TOTAL_GAMES":        25.0,
+    "TOTAL_SETS":         25.0,
+    "P1_TOTAL_GAMES":     25.0,
+    "P2_TOTAL_GAMES":     25.0,
+    "WIN_AT_LEAST_ONE_SET": 30.0,  # Slightly higher; this market is
+    # a structural mismatch when one side is a huge dog and HR
+    # adjusts the +1.5-set price to compensate.
+}
 
 # Minimum edge (%) to consider a pick playable
 MIN_EDGE_PCT = 4.0
@@ -442,9 +457,65 @@ MAIN_EDGE_FLOOR = {
 }
 
 
+# Per-bet-type maximum edge. When the model produces an edge ABOVE
+# this threshold, the pick is suppressed. Counter-intuitive at first
+# glance — usually higher edge means more profit — but tracker
+# autopsies have shown calibration overshoot at the tail: the model's
+# probability becomes systematically wrong when it's most confident.
+# Picks beyond the ceiling are dropped pending re-calibration.
+#
+# MLB ALT O/U autopsy 2026-04-30 (n=111 since 2026-04-15):
+#   6-8%   bucket: 80% WR  (+37% ROI)  → keep
+#   10-15% bucket: 57% WR  (+17% ROI)  → keep
+#   15-20% bucket: 38% WR  (-37% ROI)  → BLOCK
+#   20+%   bucket: 20% WR  (-57% ROI)  → BLOCK
+# Ceiling at 15% drops the two bleed cells. ALT O/U Over picks at any
+# edge level are rare AND historically 0% WR (n=3 in recent set,
+# n=3 historical) — the ceiling captures those too.
+MAIN_EDGE_CEILING = {
+    "mlb": {
+        "ALT O/U": 15.0,
+    },
+    "nhl": {},
+    "nba": {},
+}
+
+
 # Per-bet-type max American odds. Picks at extreme prices (longshots,
 # heavy chalks) carry calibration risk that backtest data can't always
 # catch. Capping caps the damage from any one mispricing.
+# Calibration cutoff: per-sport date string (ISO YYYY-MM-DD). Empirical
+# calibration only learns from settled picks dated on/after this cutoff.
+# Use case: when the underlying model materially changes (new family
+# fit, retrained GBM with different features, scoring engine rebuild),
+# pre-change picks reflect a *different* model's miscalibration and
+# poison the current model's calibration map.
+#
+# 2026-04-28 (MLB): NegBin tail fix for run scoring. Pre-fix ALT O/U
+# bled -37% ROI; post-fix +31%. Without this cutoff the calibration
+# shrinks raw 70% O/U picks to 49% (because pre-fix bleeding picks
+# convinced the calibrator that high-conviction picks lose), which
+# kills every pick at the `edge > 0` gate after calibration. See
+# memory project_phase4_autopsy + watchlist_mlb_ou_negbin.
+#
+# Add an entry only when an actual model change warrants it. Default
+# (no entry for a sport) = no cutoff, calibration uses every settled
+# pick. Cutoff updates here also require clearing the cached table:
+# `python -c "from engine import empirical_calibration as ec;
+#             ec.refresh_calibration('mlb')"`
+CALIBRATION_CUTOFF: dict[str, str] = {
+    "mlb": "2026-04-28",
+    # Tennis: empirical calibration map was thin before 2026-05-08 →
+    # raw probabilities went into picks_core un-shrunk, recorded as
+    # `model_prob`. Week-over-week diagnostic 2026-05-15:
+    #   2026-05-01..07: n=106 Brier 0.2933 (catastrophic)
+    #   2026-05-08..14: n=59  Brier 0.2173 (below the 0.24 ceiling)
+    # The newer picks ARE calibrated. Cutoff excludes the pre-fix
+    # window from the probation check + future calibration refits.
+    "tennis": "2026-05-08",
+}
+
+
 MAIN_ODDS_CAP = {
     "mlb": {
         # MLB heavy-underdog ML (e.g. CHC +2250 over SD's ace) — same
@@ -469,6 +540,19 @@ MAIN_ODDS_CAP = {
         # validated live.
         "ML": 400,
     },
+    "tennis": {
+        # Tennis longshot cap applies to EVERY market, not just ML.
+        # SET_SPREAD +700, TOTAL_GAMES +500, WIN_AT_LEAST_ONE_SET +600
+        # are all the same trap shape — a small calibration miss on a
+        # 15% prob bucket inflates a fictional 5pp edge into bankroll
+        # damage when the longshot misses (which it does ~85% of the
+        # time). The 20-match cold-start gate filters opponent-quality
+        # noise; this caps payout-fueled noise.
+        # `_default` is the tennis-wide ceiling consulted when a more
+        # specific bet_type cap isn't set; per-bet-type overrides can
+        # be added if a market needs a tighter or looser ceiling.
+        "_default": 400,
+    },
 }
 
 # ── Weak markets - disabled by default ──
@@ -488,11 +572,11 @@ ENABLE_NHL_PL = True
 
 # F5 (First 5 innings) picks. Go-live decision (Apr 2026): historical
 # F5 odds coverage too thin to backtest (0 lined games 2023-2025, ~20
-# in early 2026 from the per-event Odds API capture), so we flip on
-# and let the live tracker build the track record. Picks only generate
-# for games where stored DK F5 odds exist, so volume ramps with odds-API
-# coverage. Per-direction allow flags below stay open until a market
-# shows clear EV-negative behavior in the tracker.
+# in early 2026), so we flip on and let the live tracker build the
+# track record. Picks only generate for games where stored F5 odds
+# exist, so volume ramps with capture coverage. Per-direction allow
+# flags below stay open until a market shows clear EV-negative behavior
+# in the tracker.
 ENABLE_MLB_F5 = True
 MLB_ALLOW_F5_ML = True
 MLB_ALLOW_F5_OU_OVER = True

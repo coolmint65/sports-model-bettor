@@ -41,11 +41,38 @@ uvicorn app. The user's directive: "want this done right." Trade-off:
 slightly more infra to manage; isolated from API server restarts.
 """
 
-# Public API placeholders — fill in as 3a / 3b ship.
-# from ._picks import get_live_picks
-# from ._state import get_live_state
+from ._picks import generate_live_picks
+from ._predict import predict_live_nba_full
+from ._store import get_state, list_active
+
+
+def get_live_picks(sport: str, game_id: str) -> list[dict]:
+    """Return live pick candidates for one in-progress game.
+
+    Reads the latest game state (with HR live odds attached, if the
+    worker fetched them) from the shared store, runs the live
+    predictor, scores edges, and returns the picks that clear the
+    edge floor + odds cap. Empty list when the game is not in the
+    store, the state is stale (>5 min since last worker write), or
+    the sport's live engine isn't implemented yet.
+    """
+    state = get_state(sport, game_id)
+    if not state:
+        return []
+    return generate_live_picks(state)
+
+
+def get_live_state(sport: str, game_id: str) -> dict | None:
+    """Debug accessor — returns the raw state blob the worker last
+    wrote, or None if the row is missing/stale. The /api/{sport}/
+    live-state endpoint surfaces this directly."""
+    return get_state(sport, game_id)
+
 
 __all__ = [
-    # "get_live_picks",
-    # "get_live_state",
+    "get_live_picks",
+    "get_live_state",
+    "list_active",
+    "generate_live_picks",
+    "predict_live_nba_full",
 ]

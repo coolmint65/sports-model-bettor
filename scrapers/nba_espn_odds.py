@@ -1,10 +1,9 @@
 """
 ESPN-backed NBA odds scraper with Q1-market support.
 
-Fallback when The Odds API plan doesn't expose Q1 markets AND DK
-geo-blocks the user's IP. ESPN's public summary endpoint reliably
-returns full-game odds and, for games where ESPN BET is the posted
-provider, period-split odds as well.
+Fallback when Hard Rock doesn't surface Q1 markets. ESPN's public
+summary endpoint reliably returns full-game odds and, for games where
+ESPN BET is the posted provider, period-split odds as well.
 
 Endpoints tried (in order):
 1. /apis/site/v2/sports/basketball/nba/summary?event={eventId}
@@ -324,14 +323,11 @@ def fetch_nba_espn_odds() -> dict:
         summary = _fetch(f"{SUMMARY_URL}?event={eid}")
         if summary:
             pc = summary.get("pickcenter") or []
-            # Prefer DraftKings / ESPN BET / any provider that has period odds
+            # Prefer any provider that has period odds (Q1 lines); fall
+            # back to the first provider otherwise.
             providers_ranked = sorted(
                 pc,
-                key=lambda p: (
-                    -1 if (p.get("periodOdds") or p.get("periods")) else 0,
-                    0 if "draftkings" in (p.get("provider", {}).get("name") or "").lower() else 1,
-                    1,
-                ),
+                key=lambda p: -1 if (p.get("periodOdds") or p.get("periods")) else 0,
             )
             for prov in providers_ranked:
                 _parse_provider_block(prov, home_abbr, away_abbr, result)

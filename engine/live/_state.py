@@ -51,6 +51,18 @@ _ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports"
 _SPORT_PATH = {
     "nba": "basketball/nba",
     "nhl": "hockey/nhl",
+    # WNBA matches NBA's scoreboard schema exactly (4 quarters, same
+    # linescore/status fields). Adding the path here unlocks live state
+    # polling without forking the parser.
+    "wnba": "basketball/wnba",
+    # NCAAM (Men's College Basketball) — same ESPN scoreboard schema as
+    # NBA but 2-period (20-min halves). The downstream predictor in
+    # _nba_intermission_predict.py handles the period count via
+    # _SPORT_CONSTANTS.
+    "ncaam": "basketball/mens-college-basketball",
+    # AFL (Aussie Rules) — ESPN ships scoreboard at this path with the
+    # standard competitions/status/linescores shape. 4 × 20-min quarters.
+    "afl": "australian-football/afl",
 }
 
 

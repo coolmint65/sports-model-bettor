@@ -38,9 +38,9 @@ _NBA_DEFAULTS = {
     "away_l10_q1_margin": 0.0,
     "home_l10_q1_over_pct": 0.50,   # Q1 total > 56 (rough league avg)
     "away_l10_q1_over_pct": 0.50,
-    # Pace (per-game, nba_games.home_pace / away_pace)
-    "home_l10_pace": 100.0,
-    "away_l10_pace": 100.0,
+    # NB: l10_pace dropped in #116 — zero-gain across all 6 NBA targets
+    # in the 2026-04-30 audit. nba_games.home_pace/away_pace are sparse
+    # and the rolling mean rarely diverges enough to drive a tree split.
     # Season-to-date full-game
     "home_season_win_pct": 0.500,
     "away_season_win_pct": 0.500,
@@ -55,14 +55,32 @@ _NBA_DEFAULTS = {
     # Schedule factors
     "home_rest_days": 1,
     "away_rest_days": 1,
-    "is_playoff": 0,
+    # ── #159: lift the factor model's multiplicative adjustments into
+    # the GBM feature set so the tree learns the magnitudes from data
+    # rather than inheriting our hand-tuned penalties.
+    "home_b2b": 0,                  # 1 = home played yesterday
+    "away_b2b": 0,                  # 1 = away played yesterday
+    "home_3in4": 0,                 # 1 = home played 3 games in last 4 days
+    "away_3in4": 0,                 # 1 = away played 3 games in last 4 days
+    "home_4in6": 0,                 # 1 = home played 4 games in last 6 days
+    "away_4in6": 0,                 # 1 = away played 4 games in last 6 days
     # Derived
     "q1_ppg_delta": 0.0,
     "q1_opp_ppg_delta": 0.0,
     "ppg_delta": 0.0,
     "win_pct_delta": 0.0,
-    "pace_delta": 0.0,
     "q1_margin_delta": 0.0,
+    "rest_delta": 0.0,
+    "b2b_delta": 0,                 # away_b2b - home_b2b (positive = home advantage)
+    # V3.1 — market-as-feature. Closing-line implied prob + line
+    # movement from the scoresandodds backfill. Defaults to 0 with
+    # has_market_data=0 for games predating coverage (pre-2024-07-15).
+    "has_market_data":     0.0,
+    "market_home_implied": 0.0,
+    "market_total_line":   0.0,
+    "market_spread_line":  0.0,
+    "market_spread_move":  0.0,
+    "market_total_move":   0.0,
 }
 
 
@@ -88,13 +106,18 @@ def extract_nba_features(conn, game: dict) -> dict[str, float] | None:
 
     features["home_rest_days"] = _rest_days(conn, home_id, game_date)
     features["away_rest_days"] = _rest_days(conn, away_id, game_date)
-    # nba_games doesn't carry a game_type flag, but we can approximate
-    # "playoff" from month: Apr-Jun = playoffs in a standard calendar.
-    try:
-        mo = int(game_date[5:7])
-        features["is_playoff"] = 1 if mo in (4, 5, 6) else 0
-    except (ValueError, TypeError):
-        features["is_playoff"] = 0
+
+    home_density = _schedule_density(conn, home_id, game_date)
+    away_density = _schedule_density(conn, away_id, game_date)
+    features["home_b2b"] = home_density["b2b"]
+    features["away_b2b"] = away_density["b2b"]
+    features["home_3in4"] = home_density["three_in_four"]
+    features["away_3in4"] = away_density["three_in_four"]
+    features["home_4in6"] = home_density["four_in_six"]
+    features["away_4in6"] = away_density["four_in_six"]
+
+    features["rest_delta"] = features["home_rest_days"] - features["away_rest_days"]
+    features["b2b_delta"] = features["away_b2b"] - features["home_b2b"]
 
     features["q1_ppg_delta"] = (
         features["home_l10_q1_ppg"] - features["away_l10_q1_ppg"]
@@ -106,10 +129,23 @@ def extract_nba_features(conn, game: dict) -> dict[str, float] | None:
     features["win_pct_delta"] = (
         features["home_season_win_pct"] - features["away_season_win_pct"]
     )
-    features["pace_delta"] = features["home_l10_pace"] - features["away_l10_pace"]
     features["q1_margin_delta"] = (
         features["home_l10_q1_margin"] - features["away_l10_q1_margin"]
     )
+
+    # V3.1 — market-as-feature. Closing-line implied probability + line
+    # movement from the scoresandodds historical backfill. The model
+    # learns to be a delta on top of the market rather than a parallel
+    # signal — biggest single accuracy win available in the literature.
+    # Falls back to 0 / has_market_data=0 for games predating the
+    # backfill window (2024-07-15 onward only).
+    try:
+        from .market_features_nba import extract_market_features
+        market = extract_market_features(home_id, away_id, game_date)
+        features.update(market)
+    except Exception as e:
+        logger.debug("market features skipped for game=%s: %s",
+                      game.get("game_id"), e)
 
     return features
 
@@ -118,7 +154,7 @@ def _rolling_team_stats(conn, team_id: int, cutoff_date: str,
                         season: int, last_n: int = 10) -> dict:
     l10 = conn.execute("""
         SELECT home_team_id, away_team_id, home_score, away_score,
-               home_q1, away_q1, home_pace, away_pace
+               home_q1, away_q1
         FROM nba_games
         WHERE (home_team_id = ? OR away_team_id = ?)
           AND date < ? AND season = ? AND status = 'final'
@@ -143,8 +179,6 @@ def _rolling_team_stats(conn, team_id: int, cutoff_date: str,
         q1_f = q1_a = 0.0
         q1_n = 0
         q1_over_n = 0
-        pace_sum = 0.0
-        pace_n = 0
         for r in l10:
             is_home = r["home_team_id"] == team_id
             tpts = r["home_score"] if is_home else r["away_score"]
@@ -161,11 +195,6 @@ def _rolling_team_stats(conn, team_id: int, cutoff_date: str,
                 q1_n += 1
                 if (r["home_q1"] + r["away_q1"]) > 56:
                     q1_over_n += 1
-            # home_pace / away_pace each refer to that side of the game.
-            pace_val = r["home_pace"] if is_home else r["away_pace"]
-            if pace_val is not None:
-                pace_sum += pace_val
-                pace_n += 1
 
         n = len(l10)
         stats["l10_win_pct"] = wins / n
@@ -176,8 +205,6 @@ def _rolling_team_stats(conn, team_id: int, cutoff_date: str,
             stats["l10_q1_opp_ppg"] = q1_a / q1_n
             stats["l10_q1_margin"] = (q1_f - q1_a) / q1_n
             stats["l10_q1_over_pct"] = q1_over_n / q1_n
-        if pace_n:
-            stats["l10_pace"] = pace_sum / pace_n
 
     if season_rows:
         wins = 0
@@ -220,6 +247,52 @@ def _rest_days(conn, team_id: int, cutoff_date: str) -> int:
         return max(1, (d1 - d2).days)
     except ValueError:
         return 3
+
+
+def _schedule_density(conn, team_id: int, cutoff_date: str) -> dict:
+    """Count prior finalized games inside short rolling windows.
+
+    Mirrors the multiplicative schedule-density adjustments the factor
+    model applies (B2B penalty, 4-in-6 fatigue). The GBM gets the raw
+    flags so the tree can learn the correct magnitude per market.
+    """
+    out = {"b2b": 0, "three_in_four": 0, "four_in_six": 0}
+    from datetime import date as _date, timedelta as _td
+    try:
+        cutoff = _date.fromisoformat(cutoff_date[:10])
+    except ValueError:
+        return out
+
+    rows = conn.execute("""
+        SELECT date FROM nba_games
+        WHERE (home_team_id = ? OR away_team_id = ?)
+          AND date < ? AND status = 'final'
+        ORDER BY date DESC
+        LIMIT 6
+    """, (team_id, team_id, cutoff_date)).fetchall()
+    if not rows:
+        return out
+
+    dates = []
+    for r in rows:
+        try:
+            dates.append(_date.fromisoformat(r["date"][:10]))
+        except (ValueError, TypeError, KeyError):
+            continue
+    if not dates:
+        return out
+
+    # B2B: prior game was within 1 day of cutoff.
+    if (cutoff - dates[0]).days <= 1:
+        out["b2b"] = 1
+    # 3-in-4: at least 2 prior games in the trailing 4-day window
+    # (counting cutoff makes it 3 games in 4 days inclusive).
+    if sum(1 for d in dates if (cutoff - d).days <= 3) >= 2:
+        out["three_in_four"] = 1
+    # 4-in-6: at least 3 prior games in trailing 6-day window.
+    if sum(1 for d in dates if (cutoff - d).days <= 5) >= 3:
+        out["four_in_six"] = 1
+    return out
 
 
 def _season_from_date(game_date: str | None) -> int | None:

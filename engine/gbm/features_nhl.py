@@ -26,8 +26,9 @@ logger = logging.getLogger(__name__)
 # games in the season (e.g. opening week) so the model sees a neutral
 # prior instead of a NaN or 0.
 _NHL_DEFAULTS = {
-    "home_l10_win_pct": 0.500,
-    "away_l10_win_pct": 0.500,
+    # L10 win pct, PP%, PK%, faceoff% all came back zero-gain across
+    # every NHL target in the 2026-04-30 feature audit (#108). Removed
+    # in #116 to drop training noise.
     "home_l10_goals_for_pg": 3.10,
     "away_l10_goals_for_pg": 3.10,
     "home_l10_goals_against_pg": 3.10,
@@ -36,12 +37,6 @@ _NHL_DEFAULTS = {
     "away_l10_shots_for_pg": 30.0,
     "home_l10_shots_against_pg": 30.0,
     "away_l10_shots_against_pg": 30.0,
-    "home_l10_pp_pct": 0.20,
-    "away_l10_pp_pct": 0.20,
-    "home_l10_pk_pct": 0.80,
-    "away_l10_pk_pct": 0.80,
-    "home_l10_faceoff_pct": 0.50,
-    "away_l10_faceoff_pct": 0.50,
     "home_l10_p1_gf_pg": 1.00,
     "away_l10_p1_gf_pg": 1.00,
     "home_l10_p1_ga_pg": 1.00,
@@ -57,14 +52,32 @@ _NHL_DEFAULTS = {
     "home_rest_days": 1,
     "away_rest_days": 1,
     "is_playoff": 0,
+    # ── #159: factor-model multiplicative adjustments lifted into the
+    # GBM feature set. Tree learns the magnitudes from data instead of
+    # inheriting the hand-tuned penalties the factor model applies.
+    "home_b2b": 0,                  # 1 = home played yesterday
+    "away_b2b": 0,                  # 1 = away played yesterday
+    "home_3in4": 0,
+    "away_3in4": 0,
+    "home_4in6": 0,
+    "away_4in6": 0,
     # Derived / interaction features.
     "goals_for_delta": 0.0,
     "goals_against_delta": 0.0,
     "win_pct_delta": 0.0,
     "shots_delta": 0.0,
-    "pp_minus_pk_home": 0.0,
-    "pp_minus_pk_away": 0.0,
     "p1_gf_delta": 0.0,
+    "rest_delta": 0.0,
+    "b2b_delta": 0,                 # away_b2b - home_b2b
+    # V3.1 — market-as-feature. Closing-line implied prob + line
+    # movement from the scoresandodds NHL backfill. Defaults to 0 with
+    # has_market_data=0 for games predating coverage (pre-2024-07-15).
+    "has_market_data":     0.0,
+    "market_home_implied": 0.0,
+    "market_total_line":   0.0,
+    "market_spread_line":  0.0,
+    "market_spread_move":  0.0,
+    "market_total_move":   0.0,
 }
 
 
@@ -98,6 +111,17 @@ def extract_nhl_features(conn, game: dict) -> dict[str, float] | None:
     features["away_rest_days"] = _rest_days(conn, away_id, game_date)
     features["is_playoff"] = 1 if (game.get("game_type") or 2) == 3 else 0
 
+    home_density = _schedule_density(conn, home_id, game_date)
+    away_density = _schedule_density(conn, away_id, game_date)
+    features["home_b2b"] = home_density["b2b"]
+    features["away_b2b"] = away_density["b2b"]
+    features["home_3in4"] = home_density["three_in_four"]
+    features["away_3in4"] = away_density["three_in_four"]
+    features["home_4in6"] = home_density["four_in_six"]
+    features["away_4in6"] = away_density["four_in_six"]
+    features["rest_delta"] = features["home_rest_days"] - features["away_rest_days"]
+    features["b2b_delta"] = features["away_b2b"] - features["home_b2b"]
+
     features["goals_for_delta"] = (
         features["home_l10_goals_for_pg"] - features["away_l10_goals_for_pg"]
     )
@@ -110,15 +134,20 @@ def extract_nhl_features(conn, game: dict) -> dict[str, float] | None:
     features["shots_delta"] = (
         features["home_l10_shots_for_pg"] - features["away_l10_shots_for_pg"]
     )
-    features["pp_minus_pk_home"] = (
-        features["home_l10_pp_pct"] - (1.0 - features["away_l10_pk_pct"])
-    )
-    features["pp_minus_pk_away"] = (
-        features["away_l10_pp_pct"] - (1.0 - features["home_l10_pk_pct"])
-    )
     features["p1_gf_delta"] = (
         features["home_l10_p1_gf_pg"] - features["away_l10_p1_gf_pg"]
     )
+
+    # V3.1 — market-as-feature. Same shape as NBA: closing-line
+    # implied prob + line movement; falls through to has_market_data=0
+    # for games predating the scoresandodds NHL backfill window.
+    try:
+        from .market_features_nhl import extract_market_features
+        market = extract_market_features(home_id, away_id, game_date)
+        features.update(market)
+    except Exception as e:
+        logger.debug("nhl market features skipped for %s: %s",
+                      game.get("game_id"), e)
 
     return features
 
@@ -134,8 +163,6 @@ def _rolling_team_stats(conn, team_id: int, cutoff_date: str,
     l10 = conn.execute("""
         SELECT home_team_id, away_team_id, home_score, away_score,
                home_shots, away_shots,
-               home_pp_goals, home_pp_opps, away_pp_goals, away_pp_opps,
-               home_faceoff_pct, away_faceoff_pct,
                home_p1, away_p1
         FROM nhl_games
         WHERE (home_team_id = ? OR away_team_id = ?)
@@ -158,8 +185,6 @@ def _rolling_team_stats(conn, team_id: int, cutoff_date: str,
 
     if l10:
         gf = ga = sf = sa = 0.0
-        pp_g = pp_o = pk_g = pk_o = 0  # pp = team's power play; pk = opp PP stopped
-        fo_sum = fo_n = 0
         p1_gf_sum = p1_ga_sum = p1_n = 0
         for r in l10:
             is_home = r["home_team_id"] == team_id
@@ -170,21 +195,6 @@ def _rolling_team_stats(conn, team_id: int, cutoff_date: str,
             if r["home_shots"] is not None and r["away_shots"] is not None:
                 sf += r["home_shots"] if is_home else r["away_shots"]
                 sa += r["away_shots"] if is_home else r["home_shots"]
-            if is_home and r["home_pp_opps"]:
-                pp_g += r["home_pp_goals"] or 0
-                pp_o += r["home_pp_opps"]
-            if not is_home and r["away_pp_opps"]:
-                pp_g += r["away_pp_goals"] or 0
-                pp_o += r["away_pp_opps"]
-            # PK: opponent PP opportunities we successfully killed.
-            opp_pp_o = (r["away_pp_opps"] if is_home else r["home_pp_opps"]) or 0
-            opp_pp_g = (r["away_pp_goals"] if is_home else r["home_pp_goals"]) or 0
-            pk_g += opp_pp_g
-            pk_o += opp_pp_o
-            fo = r["home_faceoff_pct"] if is_home else r["away_faceoff_pct"]
-            if fo is not None:
-                fo_sum += fo
-                fo_n += 1
             if r["home_p1"] is not None and r["away_p1"] is not None:
                 p1_gf_sum += r["home_p1"] if is_home else r["away_p1"]
                 p1_ga_sum += r["away_p1"] if is_home else r["home_p1"]
@@ -197,9 +207,6 @@ def _rolling_team_stats(conn, team_id: int, cutoff_date: str,
         shots_n = sum(1 for r in l10 if r["home_shots"] is not None)
         stats["l10_shots_for_pg"] = (sf / shots_n) if shots_n else _NHL_DEFAULTS["home_l10_shots_for_pg"]
         stats["l10_shots_against_pg"] = (sa / shots_n) if shots_n else _NHL_DEFAULTS["home_l10_shots_against_pg"]
-        stats["l10_pp_pct"] = (pp_g / pp_o) if pp_o else _NHL_DEFAULTS["home_l10_pp_pct"]
-        stats["l10_pk_pct"] = (1.0 - pk_g / pk_o) if pk_o else _NHL_DEFAULTS["home_l10_pk_pct"]
-        stats["l10_faceoff_pct"] = (fo_sum / fo_n / 100.0 if fo_sum > 5 else fo_sum / fo_n) if fo_n else _NHL_DEFAULTS["home_l10_faceoff_pct"]
         if p1_n:
             stats["l10_p1_gf_pg"] = p1_gf_sum / p1_n
             stats["l10_p1_ga_pg"] = p1_ga_sum / p1_n
@@ -243,6 +250,42 @@ def _rest_days(conn, team_id: int, cutoff_date: str) -> int:
         return 7
 
 
+def _schedule_density(conn, team_id: int, cutoff_date: str) -> dict:
+    """Mirror of features_nba._schedule_density on nhl_games. NHL
+    densities are typically lighter than NBA but B2B is still a known
+    fatigue signal — especially for the back end of a road back-to-back."""
+    out = {"b2b": 0, "three_in_four": 0, "four_in_six": 0}
+    from datetime import date as _date
+    try:
+        cutoff = _date.fromisoformat(cutoff_date[:10])
+    except ValueError:
+        return out
+    rows = conn.execute("""
+        SELECT date FROM nhl_games
+        WHERE (home_team_id = ? OR away_team_id = ?)
+          AND date < ? AND status = 'final'
+        ORDER BY date DESC
+        LIMIT 6
+    """, (team_id, team_id, cutoff_date)).fetchall()
+    if not rows:
+        return out
+    dates = []
+    for r in rows:
+        try:
+            dates.append(_date.fromisoformat(r["date"][:10]))
+        except (ValueError, TypeError, KeyError):
+            continue
+    if not dates:
+        return out
+    if (cutoff - dates[0]).days <= 1:
+        out["b2b"] = 1
+    if sum(1 for d in dates if (cutoff - d).days <= 3) >= 2:
+        out["three_in_four"] = 1
+    if sum(1 for d in dates if (cutoff - d).days <= 5) >= 3:
+        out["four_in_six"] = 1
+    return out
+
+
 def _season_from_date(game_date: str | None) -> int | None:
     """Extract season from YYYY-MM-DD. NHL seasons straddle two years,
     labeled by the ending year (2024-25 season = season 2025)."""
@@ -266,6 +309,10 @@ def extract_nhl_target(game: dict) -> dict[str, Any]:
     out: dict[str, Any] = {
         "home_win": int(hs > as_),
         "total_goals": int(hs + as_),
+        # Puck line — home covers -1.5 = wins by 2 or more goals.
+        # Settles at the final score, OT/SO included (consistent with
+        # how books grade NHL puck lines).
+        "home_pl_cover": int(hs - as_ >= 2),
     }
     h_p1 = game.get("home_p1")
     a_p1 = game.get("away_p1")

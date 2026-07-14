@@ -221,6 +221,19 @@ def fetch_scoreboard(date: str = "") -> list[dict]:
             status = "live"
         else:
             status = "scheduled"
+        cur_period = _safe_int(status_obj.get("period"))
+        # STATUS_END_PERIOD and STATUS_HALFTIME mean the current period
+        # has closed (clock 0:00 between periods); STATUS_IN_PROGRESS
+        # only closes periods strictly before cur_period. STATUS_FINAL
+        # closes all 4. Anything else (scheduled) closes none.
+        if status == "final":
+            closed_through = 4
+        elif status_type in ("STATUS_END_PERIOD", "STATUS_HALFTIME"):
+            closed_through = cur_period
+        elif status == "live":
+            closed_through = max(cur_period - 1, 0)
+        else:
+            closed_through = 0
 
         # Determine season from date
         if game_date:
@@ -262,10 +275,18 @@ def fetch_scoreboard(date: str = "") -> list[dict]:
                 except Exception as e:
                     logger.warning("upsert_nba_team failed for %s: %s", t_abbr, e)
 
-            # Extract quarter scores from linescores
+            # Extract quarter scores from linescores. ESPN's linescores
+            # includes the in-progress period's running total — writing
+            # that into home_q{N}/away_q{N} makes the live-pick scope
+            # resolver treat the period as closed (any non-null value
+            # reads as "final period score") and settles period markets
+            # mid-period against a partial score. Clip to closed periods
+            # only; the live overlay backfills as periods actually close.
             linescores = comp.get("linescores", [])
             q_scores = [None, None, None, None]
             for qi, ls in enumerate(linescores[:4]):
+                if qi >= closed_through:
+                    break
                 q_scores[qi] = _safe_int(ls.get("value")) if ls.get("value") is not None else None
 
             if is_home:
@@ -896,6 +917,28 @@ def fetch_nba_injuries() -> int:
                 detail = details
             if not detail:
                 detail = entry.get("longComment") or entry.get("shortComment") or ""
+
+            # Cross-check ESPN structured status against editorial comment
+            # (see engine/injuries.py:_maybe_downgrade_status). ESPN's
+            # `status` field can lag the comment text by a news cycle —
+            # without this guard, a player listed as Out but called
+            # "questionable" in the comment gets wrongly counted as
+            # unavailable in the roster delta.
+            try:
+                from engine.injuries import _maybe_downgrade_status
+                comment = " ".join(filter(None, (
+                    entry.get("shortComment") or "",
+                    entry.get("longComment") or "",
+                ))).strip()
+                raw_status = status
+                status = _maybe_downgrade_status(str(status), comment)
+                if status != raw_status:
+                    logger.info(
+                        "injury status downgrade: %s '%s' -> '%s'",
+                        name, raw_status, status,
+                    )
+            except Exception as e:
+                logger.debug("status downgrade check failed for %s: %s", name, e)
 
             try:
                 upsert_nba_injury(

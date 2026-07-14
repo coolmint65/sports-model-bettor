@@ -1,6 +1,6 @@
 """
-Historical odds storage -- saves DK odds for each game to enable
-honest backtesting against real market prices.
+Historical odds storage -- saves real sportsbook odds for each game
+to enable honest backtesting against real market prices.
 
 NHL odds → nhl.db / nhl_odds table.
 MLB odds → mlb.db / odds table (including NRFI + F5 markets).
@@ -101,7 +101,7 @@ def store_mlb_odds(games_with_odds: list[dict]) -> int:
                     updated_at = datetime('now')
             """, (
                 game_id,
-                odds.get("provider", "DraftKings"),
+                odds.get("provider", "HardRock"),
                 odds.get("home_ml"),
                 odds.get("away_ml"),
                 odds.get("spread"),
@@ -339,7 +339,7 @@ def store_nhl_odds(games_with_odds: list[dict]) -> int:
                 odds.get("home_spread_odds"),
                 odds.get("away_spread_point"),
                 odds.get("away_spread_odds"),
-                odds.get("provider", "DraftKings"),
+                odds.get("provider", "HardRock"),
             ))
             stored += 1
         except Exception as e:

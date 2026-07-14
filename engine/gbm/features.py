@@ -53,7 +53,6 @@ _DEFAULTS = {
     "away_bullpen_era": 4.20,
     "park_run_factor": 1.0,
     "days_into_season": 30,
-    "is_playoff": 0,
     "home_form_last_10_pct": 0.500,
     "away_form_last_10_pct": 0.500,
     # Games-table-derived features (always available for all backfilled
@@ -88,6 +87,15 @@ _DEFAULTS = {
     "offense_vs_pitching_home": 0.0,  # home offense quality - away SP quality
     "offense_vs_pitching_away": 0.0,  # away offense quality - home SP quality
     "park_adj_total_offense": 0.0,  # (home_runs_pg + away_runs_pg) * park_factor
+    # V3.1 — market-as-feature. Closing-line implied prob + line
+    # movement from the scoresandodds MLB backfill. Defaults to 0 with
+    # has_market_data=0 for games predating coverage (pre-2024-07-15).
+    "has_market_data":     0.0,
+    "market_home_implied": 0.0,
+    "market_total_line":   0.0,
+    "market_spread_line":  0.0,
+    "market_spread_move":  0.0,
+    "market_total_move":   0.0,
 }
 
 
@@ -146,13 +154,18 @@ def extract_mlb_features(conn, game: dict) -> dict[str, float] | None:
                 continue
             pit = compute_pitcher_stats_at_date(pid, date, season) or {}
             snap = _pitcher_snapshot(conn, pid, season)
-            features[f"{side}_sp_era"] = _num(pit.get("era"), snap.get("era", 4.10))
-            features[f"{side}_sp_fip"] = _num(pit.get("fip"), snap.get("fip", 4.10))
-            features[f"{side}_sp_k_pct"] = _num(pit.get("k_pct"), snap.get("k_pct", 0.225))
-            features[f"{side}_sp_bb_pct"] = _num(pit.get("bb_pct"), snap.get("bb_pct", 0.085))
-            features[f"{side}_sp_whip"] = _num(pit.get("whip"), snap.get("whip", 1.30))
+            # Nest _num so a None in the snap row (e.g. an unscraped
+            # bb_pct on a 3-start sample) doesn't propagate through
+            # dict.get's "default only when key missing" semantics. The
+            # outer _num falls back when pit.get is None; the inner
+            # _num falls back when snap.get is None.
+            features[f"{side}_sp_era"] = _num(pit.get("era"), _num(snap.get("era"), 4.10))
+            features[f"{side}_sp_fip"] = _num(pit.get("fip"), _num(snap.get("fip"), 4.10))
+            features[f"{side}_sp_k_pct"] = _num(pit.get("k_pct"), _num(snap.get("k_pct"), 0.225))
+            features[f"{side}_sp_bb_pct"] = _num(pit.get("bb_pct"), _num(snap.get("bb_pct"), 0.085))
+            features[f"{side}_sp_whip"] = _num(pit.get("whip"), _num(snap.get("whip"), 1.30))
             features[f"{side}_sp_games_started"] = _num(pit.get("games_started"),
-                                                         snap.get("games_started", 0))
+                                                         _num(snap.get("games_started"), 0))
     except Exception as e:
         logger.debug("pitcher stats failed for game %s: %s", game.get("mlb_game_id"), e)
 
@@ -166,7 +179,6 @@ def extract_mlb_features(conn, game: dict) -> dict[str, float] | None:
 
     # Season-phase features
     features["days_into_season"] = _days_into_season(date)
-    features["is_playoff"] = 1 if _is_postseason(date) else 0
 
     # Recent form -- query the games table directly so we always get a
     # PIT-correct answer (exclude games on or after the target date).
@@ -252,6 +264,17 @@ def extract_mlb_features(conn, game: dict) -> dict[str, float] | None:
         (features["home_runs_pg"] + features["away_runs_pg"])
         * features["park_run_factor"], 3,
     )
+
+    # V3.1 — market-as-feature. Closing-line implied prob + line
+    # movement from the scoresandodds MLB backfill. Falls back to
+    # has_market_data=0 for games predating coverage (pre-2024-07-15).
+    try:
+        from .market_features_mlb import extract_market_features
+        market = extract_market_features(home_id, away_id, game.get("date"))
+        features.update(market)
+    except Exception as e:
+        logger.debug("mlb market features skipped for %s: %s",
+                      game.get("id") or game.get("mlb_game_id"), e)
 
     return features
 
@@ -547,18 +570,6 @@ def _days_into_season(date_str: str) -> int:
         return 0
     opener = datetime(d.year, 3, 26)
     return max(0, (d - opener).days)
-
-
-def _is_postseason(date_str: str) -> bool:
-    try:
-        d = datetime.strptime(date_str[:10], "%Y-%m-%d")
-    except Exception:
-        return False
-    if d.month == 10:
-        return True
-    if d.month == 11 and d.day <= 7:
-        return True
-    return False
 
 
 def _team_season_stats(conn, team_id: int, season: int,

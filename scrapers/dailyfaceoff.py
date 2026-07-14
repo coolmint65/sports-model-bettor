@@ -205,7 +205,7 @@ def get_all_matchups(date: str | None = None) -> list[dict]:
     """
     Return full matchup data from DailyFaceoff including odds.
 
-    Returns list of game dicts with home/away goalie info, DK odds, etc.
+    Returns list of game dicts with home/away goalie info, odds, etc.
     """
     url = DF_URL
     if date:

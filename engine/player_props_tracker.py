@@ -82,6 +82,10 @@ def _stat_key_for(sport: str, bet_type: str) -> str | None:
         return _MLB_STAT_KEY.get(bet_type)
     if sport == "nba":
         return _NBA_STAT_KEY.get(bet_type)
+    if sport == "wnba":
+        # WNBA shares NBA's bet-type → stat-key mapping (same box-stats,
+        # same HR market labels).
+        return _NBA_STAT_KEY.get(bet_type)
     if sport == "nhl":
         return _NHL_STAT_KEY.get(bet_type)
     return None
@@ -180,9 +184,10 @@ def _game_is_final(sport: str, game_id: str) -> bool:
     Used to detect DNP props — if the game is final but no log exists
     for the player, the prop should void rather than sit pending."""
     table_col = {
-        "mlb": ("games", "mlb_game_id"),  # picks store espn_event_id; mlb games keyed on mlb_game_id
-        "nhl": ("nhl_games", "game_id"),
-        "nba": ("nba_games", "game_id"),
+        "mlb":  ("games", "mlb_game_id"),  # picks store espn_event_id; mlb games keyed on mlb_game_id
+        "nhl":  ("nhl_games", "game_id"),
+        "nba":  ("nba_games", "game_id"),
+        "wnba": ("games", "game_id"),      # basketball framework db
     }.get(sport)
     if not table_col:
         return False
@@ -190,11 +195,16 @@ def _game_is_final(sport: str, game_id: str) -> bool:
     try:
         if sport == "mlb":
             from .db import get_conn
+            conn = get_conn()
         elif sport == "nhl":
             from .nhl_db import get_conn
+            conn = get_conn()
+        elif sport == "wnba":
+            from .basketball._db import get_conn
+            conn = get_conn("wnba")
         else:
             from .nba_db import get_conn
-        conn = get_conn()
+            conn = get_conn()
         if sport == "mlb":
             # MLB props store the MLB Stats game_pk (matches games.mlb_game_id).
             # The games table doesn't carry a separate espn_event_id column —
@@ -226,7 +236,7 @@ def settle_player_props(sport: str) -> dict:
     void DNP props — encoding as Push matches that behaviour and stops
     the row sitting pending forever after a player scratch / late-OUT.
     """
-    if sport not in ("mlb", "nhl", "nba"):
+    if sport not in ("mlb", "nhl", "nba", "wnba"):
         raise ValueError(f"unknown sport: {sport}")
 
     pending = list_picks(sport, pending_only=True, limit=10_000)
@@ -258,6 +268,12 @@ def settle_player_props(sport: str) -> dict:
             elif sport == "nhl":
                 from scrapers.nhl_api import fetch_schedule as _fs
                 _fs(yesterday, today)
+            elif sport == "wnba":
+                # WNBA lives under the basketball framework — refresh
+                # both yesterday and today so any late finals land.
+                from engine.basketball._espn_ingest import ingest_today as _fs
+                _fs("wnba", date=yesterday)
+                _fs("wnba", date=today)
             else:  # nba
                 from scrapers.nba_espn import fetch_schedule as _fs
                 _fs(yesterday, today)
@@ -294,6 +310,10 @@ def settle_player_props(sport: str) -> dict:
                 from .mlb_player_logs import ingest_recent_finals as _ingest
             elif sport == "nhl":
                 from .nhl_player_logs import ingest_recent_finals as _ingest
+            elif sport == "wnba":
+                from .basketball._wnba_player_logs import (
+                    ingest_recent_finals as _ingest,
+                )
             else:
                 from .nba_player_logs import ingest_recent_finals as _ingest
             _ingest(lookback_days=3)

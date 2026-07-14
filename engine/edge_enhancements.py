@@ -117,45 +117,54 @@ def shop_alt_spreads(pred: dict, odds: dict, h_abbr: str, a_abbr: str,
         home_cover_prob = max(0.05, min(0.95, home_cover_prob))
         away_cover_prob = 1.0 - home_cover_prob
 
-        # Home side: home team at this spread
-        if home_odds is not None and abs(home_odds) >= 100 and home_odds >= ALT_LINE_JUICE_WALL:
-            # point < 0 = home favorite (needs to win by more)
-            # point > 0 = home underdog (can lose by less)
-            prob = home_cover_prob
-            edge = (prob - _implied(home_odds)) * 100
-            if edge > 0 and edge > existing_rl_edge + ALT_LINE_MIN_EDGE_IMPROVEMENT:
-                sign = "+" if point > 0 else ""
-                new_picks.append({
-                    "type": "ALT RL",
-                    "pick": f"{h_abbr} {sign}{point}",
-                    "prob": round(prob, 4),
-                    "edge": round(edge, 1),
-                    "odds": home_odds,
-                    "is_alt": True,
-                    "alt_vs_primary_improvement": round(edge - existing_rl_edge, 1),
-                })
-
-        # Away side: away team at opposite spread
-        if away_odds is not None and abs(away_odds) >= 100 and away_odds >= ALT_LINE_JUICE_WALL:
-            prob = away_cover_prob
-            edge = (prob - _implied(away_odds)) * 100
-            if edge > 0 and edge > existing_rl_edge + ALT_LINE_MIN_EDGE_IMPROVEMENT:
-                sign = "+" if -point > 0 else ""
-                new_picks.append({
-                    "type": "ALT RL",
-                    "pick": f"{a_abbr} {sign}{-point}",
-                    "prob": round(prob, 4),
-                    "edge": round(edge, 1),
-                    "odds": away_odds,
-                    "is_alt": True,
-                    "alt_vs_primary_improvement": round(edge - existing_rl_edge, 1),
-                })
+        # Migrated to picks_core.score_pick. The +X improvement floor
+        # vs the existing primary RL edge stays here as alt-vs-main
+        # comparison logic.
+        from .picks_core import score_pick as _score_pick
+        for abbr_lbl, prob, side_odds, side_point in [
+            (h_abbr, home_cover_prob, home_odds, point),
+            (a_abbr, away_cover_prob, away_odds, -point),
+        ]:
+            if side_odds is None or abs(side_odds) < 100:
+                continue
+            sign = "+" if side_point > 0 else ""
+            scored = _score_pick({
+                "type": "ALT RL",
+                "pick": f"{abbr_lbl} {sign}{side_point}",
+                "raw_prob": prob,
+                "odds": side_odds,
+            }, sport="mlb", juice_wall=ALT_LINE_JUICE_WALL)
+            if scored is None:
+                continue
+            if scored["edge"] <= existing_rl_edge + ALT_LINE_MIN_EDGE_IMPROVEMENT:
+                continue
+            scored["is_alt"] = True
+            scored["alt_vs_primary_improvement"] = round(
+                scored["edge"] - existing_rl_edge, 1)
+            new_picks.append(scored)
 
     # Return only the single best alt (highest edge)
     if new_picks:
         new_picks.sort(key=lambda p: -p["edge"])
         return [new_picks[0]]
     return []
+
+
+def _passes_alt_ou_ceiling(edge: float) -> bool:
+    """Drop ALT O/U picks above MAIN_EDGE_CEILING['mlb']['ALT O/U'].
+
+    Tracker autopsy 2026-04-30 showed direction-aware overshoot:
+    Under at 15-20%/20%+ edge buckets ROI'd -37%/-57%. The high-edge
+    tail is where the model's probability is most miscalibrated.
+    Higher edges => worse outcomes across both Over and Under.
+    Returns True when the pick should be kept.
+    """
+    try:
+        from .config import MAIN_EDGE_CEILING
+        ceiling = (MAIN_EDGE_CEILING.get("mlb") or {}).get("ALT O/U")
+    except Exception:
+        ceiling = None
+    return ceiling is None or float(edge) < float(ceiling)
 
 
 def shop_alt_totals(pred: dict, odds: dict,
@@ -237,33 +246,33 @@ def shop_alt_totals(pred: dict, odds: dict,
             over_prob = 1.0 / (1.0 + math.exp(-diff / std))
             under_prob = 1.0 - over_prob
 
-        # Over side
-        if allow_over and over_odds is not None and abs(over_odds) >= 100 and over_odds >= ALT_LINE_JUICE_WALL and over_prob > 0.5:
-            edge = (over_prob - _implied(over_odds)) * 100
-            if edge > 0 and edge > existing_ou_edge + ALT_LINE_MIN_EDGE_IMPROVEMENT:
-                new_picks.append({
-                    "type": "ALT O/U",
-                    "pick": f"Over {line}",
-                    "prob": round(over_prob, 4),
-                    "edge": round(edge, 1),
-                    "odds": over_odds,
-                    "is_alt": True,
-                    "alt_vs_primary_improvement": round(edge - existing_ou_edge, 1),
-                })
-
-        # Under side
-        if under_odds is not None and abs(under_odds) >= 100 and under_odds >= ALT_LINE_JUICE_WALL and under_prob > 0.5:
-            edge = (under_prob - _implied(under_odds)) * 100
-            if edge > 0 and edge > existing_ou_edge + ALT_LINE_MIN_EDGE_IMPROVEMENT:
-                new_picks.append({
-                    "type": "ALT O/U",
-                    "pick": f"Under {line}",
-                    "prob": round(under_prob, 4),
-                    "edge": round(edge, 1),
-                    "odds": under_odds,
-                    "is_alt": True,
-                    "alt_vs_primary_improvement": round(edge - existing_ou_edge, 1),
-                })
+        # Migrated to picks_core.score_pick. picks_core's edge ceiling
+        # check covers the MAIN_EDGE_CEILING['mlb']['ALT O/U'] guard;
+        # _passes_alt_ou_ceiling() local helper is now redundant but
+        # left in place for any external caller still importing it.
+        from .picks_core import score_pick as _score_pick
+        for label, prob, side_odds, allowed in [
+            (f"Over {line}",  over_prob,  over_odds,  allow_over),
+            (f"Under {line}", under_prob, under_odds, allow_under),
+        ]:
+            if not allowed:
+                continue
+            if side_odds is None or abs(side_odds) < 100:
+                continue
+            scored = _score_pick({
+                "type": "ALT O/U",
+                "pick": label,
+                "raw_prob": prob,
+                "odds": side_odds,
+            }, sport="mlb", juice_wall=ALT_LINE_JUICE_WALL)
+            if scored is None:
+                continue
+            if scored["edge"] <= existing_ou_edge + ALT_LINE_MIN_EDGE_IMPROVEMENT:
+                continue
+            scored["is_alt"] = True
+            scored["alt_vs_primary_improvement"] = round(
+                scored["edge"] - existing_ou_edge, 1)
+            new_picks.append(scored)
 
     if new_picks:
         new_picks.sort(key=lambda p: -p["edge"])
@@ -358,80 +367,124 @@ def get_dynamic_weights(sport: str, market: str,
 
 # ── CLV Confidence Signal ─────────────────────────────────────
 
-def get_clv_reliability(sport: str, market_type: str,
-                        min_samples: int = 15) -> float | None:
-    """Get average CLV for a market type from historical picks.
+def _direction_label_for_clv(bet_type: str, pick: str | None) -> str | None:
+    """Mirrors clv_diagnostics. Over/Under for totals, NRFI/YRFI for
+    first inning. Returned None means the bet type isn't direction-
+    splittable, so the caller falls back to a single-cell aggregate."""
+    if not pick:
+        return None
+    pk = pick.strip().lower()
+    if pk.startswith("over"):
+        return "over"
+    if pk.startswith("under"):
+        return "under"
+    bt = (bet_type or "").strip().lower()
+    if bt in ("1st inn", "1stinn", "nrfi"):
+        if "nrfi" in pk:
+            return "nrfi"
+        if "yrfi" in pk:
+            return "yrfi"
+    return None
 
-    Positive CLV = model consistently beats closing line = real edge.
+
+def get_clv_reliability(sport: str, market_type: str,
+                        pick_text: str | None = None,
+                        min_samples: int = 15) -> float | None:
+    """Get average CLV multiplier for the (sport, market_type, direction)
+    cell, where direction is derived from ``pick_text`` (Over/Under,
+    NRFI/YRFI). Direction-blind aggregates were averaging Over+Under,
+    masking the asymmetry that motivated edge_floors. Pick-level CLV
+    must use the same direction split.
+
     Returns a reliability multiplier:
       - avg_clv > 2.0 → 1.15 (strong CLV history, boost confidence)
       - avg_clv > 0.5 → 1.05 (mild positive CLV)
       - avg_clv < -1.0 → 0.90 (negative CLV, fade confidence)
       - else → 1.0 (neutral)
 
-    Returns None if not enough data.
+    Cutoff aware — only counts post-MC/GBM picks
+    (engine.model_cutoffs). None when sample is below ``min_samples``.
     """
     if not ENABLE_CLV_CONFIDENCE:
         return None
 
-    db_map = {"mlb": "mlb.db", "nhl": "nhl.db", "nba": "nba.db"}
-    db_path = _DATA_DIR / db_map.get(sport, "mlb.db")
-    if not db_path.exists():
+    # Canonical DB connection per sport (WAL-enabled, schema-correct).
+    try:
+        if sport == "mlb":
+            from .db import get_conn
+            table = "picks"
+        elif sport == "nhl":
+            from .nhl_db import get_conn
+            table = "nhl_picks"
+        elif sport == "nba":
+            from .nba_db import get_conn
+            table = "nba_picks"
+        else:
+            return None
+        conn = get_conn()
+    except Exception as e:
+        logger.debug("CLV reliability: cannot open %s db: %s", sport, e)
         return None
 
     try:
-        conn = sqlite3.connect(str(db_path))
-        table = f"{sport}_picks" if sport != "mlb" else "picks"
-
-        # Check if table exists
-        tables = [r[0] for r in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
-        if table not in tables:
-            table = "picks"  # fallback
-            if table not in tables:
-                conn.close()
-                return None
+        from .model_cutoffs import get_cutoff
+        cutoff = get_cutoff(sport)
+        params: list = [market_type]
+        date_clause = ""
+        if cutoff:
+            date_clause = " AND date >= ?"
+            params.append(cutoff)
 
         rows = conn.execute(f"""
-            SELECT odds, closing_odds FROM {table}
+            SELECT odds, closing_odds, pick FROM {table}
             WHERE result IS NOT NULL
               AND odds IS NOT NULL AND closing_odds IS NOT NULL
-              AND bet_type = ?
-        """, (market_type,)).fetchall()
-        conn.close()
-
-        if len(rows) < min_samples:
-            return None
-
-        clv_values = []
-        for odds_val, closing in rows:
-            if not odds_val or not closing:
-                continue
-            bet_imp = abs(odds_val) / (abs(odds_val) + 100) if odds_val < 0 else 100 / (odds_val + 100)
-            close_imp = abs(closing) / (abs(closing) + 100) if closing < 0 else 100 / (closing + 100)
-            clv_values.append((close_imp - bet_imp) * 100)
-
-        if len(clv_values) < min_samples:
-            return None
-
-        avg_clv = sum(clv_values) / len(clv_values)
-
-        if avg_clv > 2.0:
-            mult = 1.15
-        elif avg_clv > 0.5:
-            mult = 1.05
-        elif avg_clv < -1.0:
-            mult = 0.90
-        else:
-            mult = 1.0
-
-        logger.info("CLV for %s/%s: avg=%.2f%% (%d samples) → reliability x%.2f",
-                     sport, market_type, avg_clv, len(clv_values), mult)
-        return mult
-
+              AND bet_type = ?{date_clause}
+        """, tuple(params)).fetchall()
     except Exception as e:
-        logger.debug("CLV reliability error: %s", e)
+        logger.debug("CLV reliability query error: %s", e)
         return None
+
+    if len(rows) < min_samples:
+        return None
+
+    target_direction = _direction_label_for_clv(market_type, pick_text)
+    clv_values: list[float] = []
+    for r in rows:
+        odds_val = r["odds"] if hasattr(r, "keys") else r[0]
+        closing = r["closing_odds"] if hasattr(r, "keys") else r[1]
+        row_pick = r["pick"] if hasattr(r, "keys") else r[2]
+        if not odds_val or not closing:
+            continue
+        # If caller's pick has a direction, only pool same-direction
+        # historical rows. Direction-less markets (ML, RL, PL, spreads
+        # without home/away cue) collapse the filter.
+        if target_direction is not None:
+            row_dir = _direction_label_for_clv(market_type, row_pick)
+            if row_dir != target_direction:
+                continue
+        bet_imp = abs(odds_val) / (abs(odds_val) + 100) if odds_val < 0 else 100 / (odds_val + 100)
+        close_imp = abs(closing) / (abs(closing) + 100) if closing < 0 else 100 / (closing + 100)
+        clv_values.append((close_imp - bet_imp) * 100)
+
+    if len(clv_values) < min_samples:
+        return None
+
+    avg_clv = sum(clv_values) / len(clv_values)
+
+    if avg_clv > 2.0:
+        mult = 1.15
+    elif avg_clv > 0.5:
+        mult = 1.05
+    elif avg_clv < -1.0:
+        mult = 0.90
+    else:
+        mult = 1.0
+
+    cell = f"{market_type}/{target_direction}" if target_direction else market_type
+    logger.info("CLV for %s/%s: avg=%.2f%% (%d samples) -> reliability x%.2f",
+                 sport, cell, avg_clv, len(clv_values), mult)
+    return mult
 
 
 # ── Line Movement Signal ──────────────────────────────────────

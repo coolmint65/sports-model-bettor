@@ -58,6 +58,23 @@ echo Refreshing empirical NBA pick-prob calibration...
 python -c "from engine.empirical_calibration import refresh_calibration; print(refresh_calibration('nba'))" 2>nul
 
 echo.
+echo Refitting blend calibration (sport-wide isotonic/Platt over settled picks)...
+python -m engine.blend_calibration --sport nba 2>nul
+
+echo.
+echo Recomputing data-driven edge floors per (bet_type, direction)...
+python -m engine.edge_floors --sport nba 2>nul
+
+echo.
+echo Refreshing prop-shrinkage table (weekly cadence)...
+REM Mirrors sync_mlb.bat. Gate on prop_shrinkage.json mtime so the
+REM 1-2 min replay only fires once a week per sport.
+python -c "import os, time; p=r'data\prop_shrinkage.json'; exit(0 if (not os.path.exists(p)) or (time.time() - os.path.getmtime(p) > 7*86400) else 1)" >nul 2>&1
+if not errorlevel 1 (
+    python -m engine.player_props_calibration --sport nba 2>nul
+)
+
+echo.
 echo Refreshing adaptive baselines (LEAGUE_AVG_Q1_TOTAL etc.)...
 REM Computes long+short rolling baselines from completed games and
 REM writes overrides via engine.model_overrides when the trailing
@@ -95,6 +112,10 @@ python -c "from engine.nba_prop_picks import generate_picks; from datetime impor
 echo.
 echo Refreshing prop POTD live line (track HR line movement)...
 python -c "from engine.player_props_potd import refresh_potd_for_line_movement; print(refresh_potd_for_line_movement('nba'))" 2>nul
+
+echo.
+echo Auto-tuning ensemble weights (skipped when ^< 200 settled signals/market)...
+python scripts\run.py engine.ensemble_auto_tune nba -v 2>nul
 
 echo.
 echo ============================================

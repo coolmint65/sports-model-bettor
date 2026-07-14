@@ -23,6 +23,7 @@ from typing import Any
 from .player_props_db import (
     list_picks, set_potd, get_potd, _conn_for,
 )
+from ._tz import et_today_str
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ def select_potd(sport: str, date: str | None = None,
     no longer place.
     """
     from datetime import timedelta as _td
-    anchor_str = date or datetime.now().strftime("%Y-%m-%d")
+    anchor_str = date or et_today_str()
     try:
         anchor = datetime.strptime(anchor_str, "%Y-%m-%d")
     except ValueError:
@@ -125,7 +126,7 @@ def get_or_create_potd(sport: str, date: str | None = None,
     Once selected, the POTD stays frozen for the day -- the same
     semantics as ``engine.pick_of_day.get_or_create_potd``.
     """
-    target_date = date or datetime.now().strftime("%Y-%m-%d")
+    target_date = date or et_today_str()
     existing = get_potd(sport, target_date)
     if existing:
         return existing
@@ -173,7 +174,7 @@ def refresh_potd_for_line_movement(sport: str,
     """
     if sport not in ("mlb", "nhl", "nba"):
         return {"updated": 0, "reason": f"unsupported sport {sport!r}"}
-    target = date or datetime.now().strftime("%Y-%m-%d")
+    target = date or et_today_str()
     conn = _conn_for(sport)
 
     pot = conn.execute(
@@ -250,5 +251,45 @@ def refresh_potd_for_line_movement(sport: str,
             "new_pick": sibling["pick"], "new_odds": sibling["odds"]}
 
 
+def get_potd_summary(sport: str) -> dict:
+    """Aggregate W/L/profit across the prop POTD lock table joined to
+    the props picks table for results. Same shape as
+    `engine.pick_of_day._read.get_potd_summary` so the response can
+    pass straight to PotdHero's `summary` prop. Lets the prop POTD
+    card show its own running record consistent with core POTD."""
+    from .player_props_db import _conn_for, ensure_tables
+    ensure_tables(sport)
+    conn = _conn_for(sport)
+    # Stake-weighted profit + ROI (mirrors per-sport trackers).
+    row = conn.execute("""
+        SELECT
+            COUNT(p.id) AS total,
+            SUM(CASE WHEN p.result = 'W' THEN 1 ELSE 0 END) AS wins,
+            SUM(CASE WHEN p.result = 'L' THEN 1 ELSE 0 END) AS losses,
+            SUM(CASE WHEN p.result = 'P' THEN 1 ELSE 0 END) AS pushes,
+            COALESCE(SUM(p.profit * COALESCE(p.stake_units, 1.0)), 0) AS profit,
+            COALESCE(SUM(CASE WHEN p.result IN ('W','L')
+                                THEN COALESCE(p.stake_units, 1.0)
+                                ELSE 0 END), 0) AS stake_units_settled
+        FROM player_props_picks_pot_day pd
+        JOIN player_props_picks p ON p.id = pd.pick_id
+    """).fetchone()
+    overall = dict(row) if row else {}
+    w = overall.get("wins") or 0
+    l = overall.get("losses") or 0
+    settled = w + l
+    staked_u = overall.get("stake_units_settled") or 0
+    return {
+        "total": overall.get("total") or 0,
+        "wins": w,
+        "losses": l,
+        "pushes": overall.get("pushes") or 0,
+        "profit": round(overall.get("profit") or 0, 2),
+        "win_pct": round(w / settled * 100, 1) if settled > 0 else 0,
+        "roi": round((overall.get("profit") or 0) / staked_u, 1) if staked_u > 0 else 0,
+    }
+
+
 __all__ = ["select_potd", "get_or_create_potd",
-           "refresh_potd_for_line_movement"]
+           "refresh_potd_for_line_movement",
+           "get_potd_summary"]

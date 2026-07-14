@@ -36,6 +36,7 @@ import json
 import logging
 from datetime import datetime
 from typing import Any
+from ._tz import et_today_str
 
 logger = logging.getLogger(__name__)
 
@@ -43,13 +44,20 @@ logger = logging.getLogger(__name__)
 def _conn_for(sport: str):
     if sport == "mlb":
         from .db import get_conn
-    elif sport == "nhl":
+        return get_conn()
+    if sport == "nhl":
         from .nhl_db import get_conn
-    elif sport == "nba":
+        return get_conn()
+    if sport == "nba":
         from .nba_db import get_conn
-    else:
-        raise ValueError(f"unknown sport: {sport}")
-    return get_conn()
+        return get_conn()
+    if sport == "wnba":
+        # WNBA lives under the basketball framework, not its own engine
+        # module. Route to the framework's per-league DB so prop tables
+        # sit alongside games/teams/picks for the same league.
+        from .basketball._db import get_conn
+        return get_conn("wnba")
+    raise ValueError(f"unknown sport: {sport}")
 
 
 _DDL = """
@@ -88,6 +96,7 @@ CREATE TABLE IF NOT EXISTS player_props_picks (
     edge          REAL,
     odds          INTEGER,
     confidence    TEXT,             -- 'strong' / 'moderate' / 'lean'
+    stake_units   REAL,             -- Quarter-Kelly recommendation (1u = $100)
     -- Settlement
     actual_value  REAL,             -- actual Ks/HR/PRA/SOG observed
     result        TEXT,             -- 'W' / 'L' / 'P' / NULL
@@ -216,24 +225,35 @@ def insert_pick(sport: str, *,
                 model_prob: float | None,
                 edge: float | None,
                 odds: int | None,
-                confidence: str | None = None) -> int | None:
+                confidence: str | None = None,
+                stake_units: float | None = None) -> int | None:
     """Insert a fresh prop pick. UNIQUE constraint on (game, player,
     bet_type, pick) keeps re-runs of best-bets from duplicating rows
     — repeat calls quietly no-op when the same pick already exists.
     Returns the pick id (existing or new), or None on failure."""
     ensure_tables(sport)
+    # Compute stake_units when caller didn't pass one (every caller
+    # should now, but legacy paths still work).
+    if stake_units is None and model_prob is not None and odds is not None:
+        try:
+            from ._pick_helpers import stake_units_for
+            stake_units = stake_units_for(model_prob, edge or 0, odds=odds)
+        except Exception:
+            stake_units = None
     conn = _conn_for(sport)
     try:
         cur = conn.execute(
             "INSERT OR IGNORE INTO player_props_picks "
             "(game_id, date, matchup, player_id, player_name, "
-            " bet_type, pick, line, side, model_prob, edge, odds, confidence) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " bet_type, pick, line, side, model_prob, edge, odds, confidence, "
+            " stake_units) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 str(game_id), date, matchup,
                 int(player_id), player_name,
                 bet_type, pick, line, side,
                 model_prob, edge, odds, confidence,
+                stake_units,
             ),
         )
         conn.commit()
@@ -310,7 +330,7 @@ def set_potd(sport: str, pick_id: int, *,
     leaving stale POTD rows behind."""
     ensure_tables(sport)
     conn = _conn_for(sport)
-    target = date or datetime.now().strftime("%Y-%m-%d")
+    target = date or et_today_str()
     try:
         conn.execute(
             "INSERT INTO player_props_picks_pot_day "
@@ -335,7 +355,7 @@ def get_potd(sport: str, date: str | None = None) -> dict | None:
     or None when none has been selected yet."""
     ensure_tables(sport)
     conn = _conn_for(sport)
-    target = date or datetime.now().strftime("%Y-%m-%d")
+    target = date or et_today_str()
     row = conn.execute(
         "SELECT pot.date AS potd_date, pot.selected_at, pot.selection_score, "
         "       pot.reasoning, p.* "

@@ -28,6 +28,12 @@ def get_pick_summary() -> dict:
     }
     for bt, aliases in bt_aliases.items():
         placeholders = ",".join("?" for _ in aliases)
+        # Profit + ROI are stake-weighted: each row contributes
+        #   profit * stake_units to the numerator
+        #   stake_units to the unit-staked denominator
+        # so that 0.5u / 0.75u / 1.0u picks reflect their actual size.
+        # Legacy rows with NULL stake_units fall back to 1.0u so the
+        # arithmetic stays consistent with the historical 1u-basis.
         row = conn.execute(f"""
             SELECT
                 COUNT(*) as total,
@@ -35,7 +41,10 @@ def get_pick_summary() -> dict:
                 SUM(CASE WHEN result = 'L' THEN 1 ELSE 0 END) as losses,
                 SUM(CASE WHEN result = 'P' THEN 1 ELSE 0 END) as pushes,
                 SUM(CASE WHEN result IS NULL THEN 1 ELSE 0 END) as pending,
-                COALESCE(SUM(profit), 0) as profit
+                COALESCE(SUM(profit * COALESCE(stake_units, 1.0)), 0) as profit,
+                COALESCE(SUM(CASE WHEN result IN ('W','L')
+                                    THEN COALESCE(stake_units, 1.0)
+                                    ELSE 0 END), 0) as stake_units_settled
             FROM picks WHERE bet_type IN ({placeholders})
         """, aliases).fetchone()
 
@@ -43,6 +52,9 @@ def get_pick_summary() -> dict:
         w = row["wins"] or 0
         l = row["losses"] or 0
         settled = w + l
+        staked_u = row["stake_units_settled"] or 0
+        # ROI denom is staked $: stake_units × 100. So roi_pct =
+        # profit_$ / (stake_units × 100) × 100 = profit / stake_units.
         summary[bt] = {
             "total": total,
             "wins": w,
@@ -51,7 +63,7 @@ def get_pick_summary() -> dict:
             "pending": row["pending"],
             "profit": round(row["profit"], 2),
             "win_pct": round(w / settled * 100, 1) if settled > 0 else 0,
-            "roi": round(row["profit"] / settled, 1) if settled > 0 else 0,
+            "roi": round(row["profit"] / staked_u, 1) if staked_u > 0 else 0,
         }
 
     # Aggregate F5 tile -- the UI tile is a single "First 5 Innings" card
@@ -88,12 +100,16 @@ def get_pick_summary() -> dict:
             SUM(CASE WHEN result = 'W' THEN 1 ELSE 0 END) as wins,
             SUM(CASE WHEN result = 'L' THEN 1 ELSE 0 END) as losses,
             SUM(CASE WHEN result IS NULL THEN 1 ELSE 0 END) as pending,
-            COALESCE(SUM(profit), 0) as profit
+            COALESCE(SUM(profit * COALESCE(stake_units, 1.0)), 0) as profit,
+            COALESCE(SUM(CASE WHEN result IN ('W','L')
+                                THEN COALESCE(stake_units, 1.0)
+                                ELSE 0 END), 0) as stake_units_settled
         FROM picks
     """).fetchone()
 
     tw = totals["wins"] or 0
     tl = totals["losses"] or 0
+    tstaked = totals["stake_units_settled"] or 0
 
     # Compute CLV across all settled picks that have closing odds
     clv_rows = conn.execute("""
@@ -107,6 +123,15 @@ def get_pick_summary() -> dict:
             clv_values.append(clv)
     avg_clv = round(sum(clv_values) / len(clv_values), 2) if clv_values else None
 
+    # Recent rows: project stake-weighted profit onto each row so the
+    # per-row P/L column matches the summed totals.
+    recent_out = []
+    for r in recent:
+        d = dict(r)
+        stake_u = d["stake_units"] if d.get("stake_units") is not None else 1.0
+        if d.get("profit") is not None:
+            d["profit"] = round(d["profit"] * stake_u, 2)
+        recent_out.append(d)
     return {
         "by_type": summary,
         "overall": {
@@ -116,8 +141,9 @@ def get_pick_summary() -> dict:
             "pending": totals["pending"] or 0,
             "profit": round(totals["profit"] or 0, 2),
             "win_pct": round(tw / (tw + tl) * 100, 1) if (tw + tl) > 0 else 0,
+            "roi": round((totals["profit"] or 0) / tstaked, 1) if tstaked > 0 else 0,
             "avg_clv": avg_clv,
             "clv_sample": len(clv_values),
         },
-        "recent": [dict(r) for r in recent],
+        "recent": recent_out,
     }

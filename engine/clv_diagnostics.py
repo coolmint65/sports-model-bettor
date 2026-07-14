@@ -1,0 +1,308 @@
+"""
+Per-(sport × bet_type × direction) CLV diagnostic.
+
+Closing Line Value tells us whether the market's close moved toward
+our pick (positive CLV — we got a better price than close, i.e. our
+read carried information the book later agreed with) or away from it
+(negative CLV — we paid up, the close knew something we missed). It
+is the cleanest leading indicator we have for whether a market is
+genuinely +EV before bankroll variance asserts itself.
+
+The runtime path already uses CLV (engine.edge_enhancements.
+get_clv_reliability) to dampen confidence on losing-CLV markets, but
+there's no operator-facing diagnostic showing WHICH bet types are
+hemorrhaging closing value. This module fills that gap as a read-only
+report:
+
+    python -m engine.clv_diagnostics [--sport mlb|nhl|nba] [--days N]
+
+Each row reports n, avg_clv (in implied-prob percentage points), WR,
+ROI, and a flag (BEAT / NEUTRAL / BEATEN). Rows are grouped by
+(bet_type, direction) so Over/Under or NRFI/YRFI bias can't smear
+into a single mid-of-the-road CLV figure that papers over a one-sided
+problem.
+
+Conventions
+-----------
+- ``avg_clv`` is in implied-prob percentage points: positive means the
+  market's implied probability shifted *toward* our side, i.e. our
+  pick price implied a lower win prob than the closing price. With
+  US odds we prefer entry odds farther from 50% than close on the
+  side we took.
+- We exclude ``result = 'P'`` (push) rows from WR/ROI but include
+  them in CLV — pushes still measured a closing line we can compare
+  against.
+
+Why this matters
+----------------
+A market with positive avg_clv that's losing money short-term is
+likely variance, not a leak. A market with negative avg_clv and
+losing money is the model getting beaten on close — pause and
+investigate. The autopsy memory captures bet-type-level ROI; this
+diagnostic captures the CLV signal *underneath* that ROI.
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import sys
+from collections import defaultdict
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+
+_SPORTS = ("mlb", "nhl", "nba")
+
+_SOURCES: dict[str, tuple[str, str]] = {
+    "mlb": ("engine.db",     "picks"),
+    "nhl": ("engine.nhl_db", "nhl_picks"),
+    "nba": ("engine.nba_db", "nba_picks"),
+}
+
+
+def _implied(american: int | float | None) -> float | None:
+    """American odds → implied probability in [0, 1]."""
+    if american is None:
+        return None
+    try:
+        n = float(american)
+    except (TypeError, ValueError):
+        return None
+    if n == 0:
+        return None
+    if n < 0:
+        return abs(n) / (abs(n) + 100.0)
+    return 100.0 / (n + 100.0)
+
+
+def _direction_label(bet_type: str, pick: str | None) -> str | None:
+    """Same direction split used in empirical_calibration. Over/Under
+    for totals, NRFI/YRFI for first-inning markets, None otherwise.
+
+    Duplicating the labeller here rather than importing because
+    empirical_calibration's lives inside a function with locals; that
+    couples the two modules unnecessarily for a five-line helper."""
+    if not pick:
+        return None
+    pk = pick.strip().lower()
+    if pk.startswith("over"):
+        return "over"
+    if pk.startswith("under"):
+        return "under"
+    bt = (bet_type or "").strip().lower()
+    if bt in ("1st inn", "1stinn", "nrfi"):
+        if "nrfi" in pk:
+            return "nrfi"
+        if "yrfi" in pk:
+            return "yrfi"
+    return None
+
+
+def _profit_for(odds: int | float | None, result: str) -> float:
+    """Standard $100-stake unit profit. Same convention as the
+    tracker — wins return profit, losses lose stake, pushes break
+    even."""
+    if result == "P":
+        return 0.0
+    if result not in ("W", "L"):
+        return 0.0
+    if odds is None:
+        return 0.0
+    try:
+        n = float(odds)
+    except (TypeError, ValueError):
+        return 0.0
+    if result == "L":
+        return -100.0
+    if n < 0:
+        return 100.0 * (100.0 / abs(n))
+    return n
+
+
+def _flag_for(avg_clv: float, n: int) -> str:
+    """Conservative flag thresholds — we don't want to overcall a
+    bet_type as 'beaten' on a 20-row sample. Anything below the
+    sample floor returns 'low_n'."""
+    if n < 25:
+        return "low_n"
+    if avg_clv >= 1.5:
+        return "BEAT"
+    if avg_clv <= -1.5:
+        return "BEATEN"
+    return "neutral"
+
+
+def collect_clv(sport: str, days: int | None = None,
+                 since: str | None = None,
+                 all_time: bool = False) -> list[dict]:
+    """Pull every settled pick with both odds + closing_odds for
+    ``sport`` and aggregate by (bet_type, direction). Returns the
+    sorted list of rows ready for printing.
+
+    ``days`` is an inclusive lookback floor on ``settled_at``. None
+    pulls the full table.
+
+    ``since`` (YYYY-MM-DD) overrides the default per-sport model-stack
+    cutoff from ``engine.model_cutoffs``. Pre-cutoff picks were
+    generated by older models and would contaminate the CLV signal.
+    Pass ``all_time=True`` to disable cutoff filtering.
+    """
+    src = _SOURCES.get(sport)
+    if not src:
+        return []
+    db_module_name, table = src
+
+    try:
+        import importlib
+        db_module = importlib.import_module(db_module_name)
+        conn = db_module.get_conn()
+    except Exception as e:
+        logger.warning("clv_diagnostics: cannot open %s: %s",
+                       db_module_name, e)
+        return []
+
+    where = ["odds IS NOT NULL", "closing_odds IS NOT NULL",
+             "result IS NOT NULL"]
+    params: list[Any] = []
+    if days:
+        where.append("settled_at >= datetime('now', ?)")
+        params.append(f"-{int(days)} days")
+    # Cutoff applied via the picks.date column (CLV is a leading
+    # indicator of the model that produced the pick, not of when it
+    # settled, so date is the right anchor).
+    cutoff_used: str | None = None
+    if since is not None:
+        where.append("date >= ?")
+        params.append(since)
+    elif not all_time:
+        from .model_cutoffs import get_cutoff
+        cutoff_used = get_cutoff(sport)
+        if cutoff_used:
+            where.append("date >= ?")
+            params.append(cutoff_used)
+
+    sql = (f"SELECT bet_type, pick, odds, closing_odds, result "
+           f"FROM {table} WHERE " + " AND ".join(where))
+    try:
+        rows = conn.execute(sql, params).fetchall()
+    except Exception as e:
+        logger.warning("clv_diagnostics: query on %s failed: %s",
+                       table, e)
+        return []
+
+    buckets: dict[tuple[str, str | None], dict[str, Any]] = defaultdict(
+        lambda: {"n": 0, "w": 0, "l": 0, "p": 0, "clv_sum": 0.0,
+                 "profit_sum": 0.0})
+    for r in rows:
+        d = dict(r)
+        bt = (d.get("bet_type") or "").strip()
+        if not bt:
+            continue
+        odds = d.get("odds")
+        close = d.get("closing_odds")
+        result = d.get("result")
+        bet_imp = _implied(odds)
+        close_imp = _implied(close)
+        if bet_imp is None or close_imp is None:
+            continue
+        # CLV in implied-prob percentage points (close - bet, since
+        # close moving up implied prob means market converged toward
+        # the side we took).
+        clv = (close_imp - bet_imp) * 100.0
+        direction = _direction_label(bt, d.get("pick"))
+        key = (bt, direction)
+        b = buckets[key]
+        b["n"] += 1
+        b["clv_sum"] += clv
+        if result == "W":
+            b["w"] += 1
+        elif result == "L":
+            b["l"] += 1
+        elif result == "P":
+            b["p"] += 1
+        b["profit_sum"] += _profit_for(odds, result)
+
+    out: list[dict] = []
+    for (bt, direction), b in buckets.items():
+        if b["n"] == 0:
+            continue
+        decided = b["w"] + b["l"]
+        wr = (b["w"] / decided * 100.0) if decided else 0.0
+        avg_clv = b["clv_sum"] / b["n"]
+        roi = (b["profit_sum"] / b["n"]) if b["n"] else 0.0
+        out.append({
+            "bet_type": bt,
+            "direction": direction,
+            "n": b["n"],
+            "wins": b["w"],
+            "losses": b["l"],
+            "pushes": b["p"],
+            "wr": wr,
+            "avg_clv": avg_clv,
+            "roi": roi,
+            "flag": _flag_for(avg_clv, b["n"]),
+        })
+    out.sort(key=lambda r: (r["avg_clv"], -r["n"]))
+    return out
+
+
+def _print_report(sport: str, rows: list[dict]) -> None:
+    print(f"\n=== {sport.upper()} CLV ===")
+    if not rows:
+        print("  (no settled picks with closing_odds)")
+        return
+    print(f"  {'bet_type':22s}  {'dir':>5s}  {'n':>5s}  "
+          f"{'W-L-P':>10s}  {'WR':>6s}  "
+          f"{'avg_clv':>9s}  {'ROI':>7s}  flag")
+    for r in rows:
+        d = r["direction"] or "-"
+        print(f"  {r['bet_type']:22s}  {d:>5s}  {r['n']:>5d}  "
+              f"{r['wins']:>2d}-{r['losses']:>2d}-{r['pushes']:>2d}  "
+              f"{r['wr']:>5.1f}%  "
+              f"{r['avg_clv']:>+8.2f}pp  {r['roi']:>+6.2f}%  "
+              f"{r['flag']}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(prog="engine.clv_diagnostics")
+    ap.add_argument("--sport", choices=_SPORTS,
+                    help="Limit to one sport. Default: all three.")
+    ap.add_argument("--days", type=int, default=None,
+                    help="Lookback floor on settled_at (default: full "
+                         "table). Use a tight window to surface recent "
+                         "regressions instead of long-tail averages.")
+    ap.add_argument("--since", type=str, default=None,
+                    help="Explicit YYYY-MM-DD cutoff on pick date. "
+                         "Overrides the per-sport model-stack cutoff.")
+    ap.add_argument("--all-time", action="store_true",
+                    help="Disable the per-sport model-stack cutoff. "
+                         "Use sparingly — pre-cutoff CLV mixes signal "
+                         "from different model generations.")
+    args = ap.parse_args(argv)
+    sports = (args.sport,) if args.sport else _SPORTS
+
+    from .model_cutoffs import get_cutoff
+
+    print("=" * 78)
+    print("  CLV DIAGNOSTIC -- close-vs-entry implied prob, by bet_type x direction")
+    print("=" * 78)
+    print("  avg_clv > 0  -> market converged TOWARD our side (we got a better price)")
+    print("  avg_clv < 0  -> market moved AWAY from our side (paid up vs close)")
+    print("  ROI is unit-stake P/L per $100 risked, decided picks only.")
+
+    for sport in sports:
+        rows = collect_clv(sport, days=args.days,
+                            since=args.since, all_time=args.all_time)
+        cutoff = get_cutoff(sport) if not args.all_time and not args.since else None
+        scope = (f"post-cutoff (>= {cutoff})" if cutoff
+                 else (f"since={args.since}" if args.since else "all-time"))
+        print(f"\n  scope: {scope}")
+        _print_report(sport, rows)
+    print()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

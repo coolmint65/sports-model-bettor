@@ -1,11 +1,10 @@
 """
 ESPN odds scraper.
 
-Fetches DraftKings odds from ESPN's matchup pages for MLB games.
-ESPN displays odds powered by DraftKings with ML, O/U, and RL lines.
-
-The public scoreboard API doesn't include odds consistently, but
-each game's individual page has them in a separate API endpoint.
+Fetches ML, O/U, and RL lines from ESPN's per-event odds endpoints
+for MLB games. The public scoreboard API doesn't include odds
+consistently, but each game's individual page has them in a separate
+API endpoint.
 """
 
 import json
@@ -39,10 +38,10 @@ def _derive_rl_odds(ml: int, is_favorite: bool) -> int:
     """
     Derive approximate run line (±1.5) odds from moneyline.
 
-    Based on real DraftKings data, the RL shift from ML is large in
-    baseball (~250-320 points) because 1.5 runs is a huge spread.
+    The RL shift from ML is large in baseball (~250-320 points)
+    because 1.5 runs is a huge spread.
 
-    Calibrated from actual DK lines:
+    Calibration anchor points:
     -300 ML → -130 RL (-1.5)    |  +240 ML → +110 RL (+1.5)
     -210 ML → +110 RL (-1.5)    |  +175 ML → -130 RL (+1.5)
     -165 ML → +135 RL (-1.5)    |  +135 ML → -160 RL (+1.5)

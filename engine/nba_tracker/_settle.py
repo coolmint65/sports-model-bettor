@@ -51,6 +51,21 @@ def settle_picks() -> dict:
     dates = set()
     for p in pending:
         dates.add(p["date"])
+    # UTC drift defense: a pick recorded at ~9pm ET on date D will be
+    # stored as date=D, but the game's UTC date (and our games table
+    # entry) is D+1 for any tipoff after 8pm ET. Without fetching D+1
+    # the settler can never match those picks. SA @ OKC 2026-05-29
+    # 9:30pm ET tipoff went into nba_games as date=2026-05-30 and the
+    # pick sat pending until the user flagged it. Cheap — adds at most
+    # one scoreboard call per pending date.
+    from datetime import datetime as _dt, timedelta as _td
+    for d in list(dates):
+        try:
+            d1 = (_dt.strptime(d, "%Y-%m-%d") + _td(days=1)
+                  ).strftime("%Y-%m-%d")
+            dates.add(d1)
+        except ValueError:
+            pass
 
     final_q1: dict[str, dict] = {}
     for d in dates:
@@ -90,21 +105,9 @@ def settle_picks() -> dict:
         h = game["home_abbr"]
         a = game["away_abbr"]
 
-        # Settle-time fallback capture — only fires if pre-game
-        # capture_closing_odds() didn't get a chance to run.
-        if not pick.get("closing_odds") and h and a and hr_nba_now:
-            from ..picks import match_odds as _match_odds
-            game_cl_odds = _match_odds(h, a, hr_nba_now)
-            if game_cl_odds:
-                closing = _extract_nba_closing_for_pick(
-                    pick["bet_type"], pick["pick"], h, game_cl_odds,
-                )
-                if closing is not None:
-                    conn.execute(
-                        "UPDATE nba_picks SET closing_odds = ? WHERE id = ?",
-                        (int(closing), pick["id"]),
-                    )
-                    pick["closing_odds"] = int(closing)
+        # Settle-time closing-odds capture removed 2026-05-02 — see
+        # engine.tracker._settle for rationale. PRE-game stamps via
+        # capture_closing_odds() are the only canonical source.
 
         bt = pick["bet_type"]
         pk = pick["pick"]

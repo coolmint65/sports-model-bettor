@@ -15,9 +15,8 @@ from datetime import datetime
 from .mc_nba import (
     NBATeamProfile, simulate_q1, aggregate_nba_q1,
     NBAFullProfile, simulate_full, aggregate_nba_full,
-    LEAGUE_Q1_PPP_MEAN, LEAGUE_Q1_PACE,
-    LEAGUE_FULL_PPP_MEAN, LEAGUE_FULL_PACE,
 )
+from . import mc_constants as _mc
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +72,7 @@ def _load_q1_profile(abbr: str) -> NBATeamProfile:
         if row:
             break
 
-    lg = LEAGUE_Q1_PPP_MEAN * LEAGUE_Q1_PACE
+    lg = _mc.nba_q1_ppp_mean() * _mc.nba_q1_pace()
     if not row:
         return NBATeamProfile(name=team.get("abbreviation", abbr))
 
@@ -150,7 +149,7 @@ def _load_full_profile(abbr: str) -> NBAFullProfile:
     full = _compute_team_full_ppg(team["id"], season)
     q1 = get_team_q1_stats(team["id"], season) or {}
 
-    lg = LEAGUE_FULL_PPP_MEAN * LEAGUE_FULL_PACE  # 113.95
+    lg = _mc.nba_full_ppp_mean() * _mc.nba_full_pace()  # ~113.95 fitted
     return NBAFullProfile(
         ppg=_safe(full.get("ppg"), lg, 80, 140),
         opp_ppg=_safe(full.get("opp_ppg"), lg, 80, 140),

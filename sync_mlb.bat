@@ -77,6 +77,30 @@ REM converges toward observed reality as more picks settle.
 python -c "from engine.empirical_calibration import refresh_calibration; print(refresh_calibration())" 2>nul
 
 echo.
+echo Refitting blend calibration (sport-wide isotonic/Platt over settled picks)...
+REM Final-stage calibration that catches systemic over-confidence the
+REM bucketed empirical step missed. See engine.blend_calibration.
+python -m engine.blend_calibration --sport mlb 2>nul
+
+echo.
+echo Recomputing data-driven edge floors per (bet_type, direction)...
+REM Refuses NOPLAY cells (e.g. MLB Unders -40%% ROI) and raises the
+REM floor where realized ROI requires it. See engine.edge_floors.
+python -m engine.edge_floors --sport mlb 2>nul
+
+echo.
+echo Refreshing prop-shrinkage table (weekly cadence)...
+REM Walk-forward replay → per-stat shrinkage → data\prop_shrinkage.json.
+REM Heavy (~1-2 min per sport) so we gate on file mtime: only re-run
+REM when the JSON is missing or > 7 days old. The one-day cadence the
+REM rest of this script uses is overkill for a calibration that moves
+REM a few percentage points per month.
+python -c "import os, time; p=r'data\prop_shrinkage.json'; exit(0 if (not os.path.exists(p)) or (time.time() - os.path.getmtime(p) > 7*86400) else 1)" >nul 2>&1
+if not errorlevel 1 (
+    python -m engine.player_props_calibration --sport mlb 2>nul
+)
+
+echo.
 echo Auto-applying train recommendations (n>=30, p<0.01, disable-only)...
 python scripts\run.py engine.train mlb --apply 2>nul
 

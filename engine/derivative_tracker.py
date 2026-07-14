@@ -24,6 +24,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from typing import Any
+from ._tz import et_today_str
 
 logger = logging.getLogger(__name__)
 
@@ -108,12 +109,18 @@ def _ensure_table(sport: str) -> None:
 
 
 def record_top_derivatives(sport: str, bets: list[dict],
-                            n_per_game: int = 3,
+                            n_per_game: int = 1,
                             min_edge: float = 4.0,
                             target_date: str | None = None) -> dict:
     """Log the top N derivative picks per game from today's best-bets
-    payload. Idempotent via UNIQUE(game_id, date, bet_type, pick) — same
-    pick recorded again silently does nothing. Updates prob/edge/odds on
+    payload. Default ``n_per_game=1`` — one derivative pick (the
+    highest-edge non-skip play) per game, matching the user-facing
+    convention that each card / tracker row represents a single bet.
+    Earlier this defaulted to 3 and the tracker accumulated multiple
+    rows per game which read as duplicates.
+
+    Idempotent via UNIQUE(game_id, date, bet_type, pick) — same pick
+    recorded again silently does nothing. Updates prob/edge/odds on
     re-record so the row stays current as the line drifts (mirrors the
     main tracker's auto-refresh pattern from Phase 1f).
 
@@ -122,7 +129,7 @@ def record_top_derivatives(sport: str, bets: list[dict],
     _ensure_table(sport)
     conn = _conn(sport)
     table = _DERIV_TABLE[sport]
-    target_date = target_date or datetime.now().strftime("%Y-%m-%d")
+    target_date = target_date or et_today_str()
 
     from .config import DERIVATIVE_BLOCKED_MARKETS, DERIVATIVE_EDGE_FLOOR
     blocked = DERIVATIVE_BLOCKED_MARKETS.get(sport, frozenset())
@@ -137,10 +144,33 @@ def record_top_derivatives(sport: str, bets: list[dict],
     # phantom picks (NHL PHI/PIT today: no such game on 2026-04-26
     # but tomorrow's PIT@PHI was on the live feed).
     def _bet_date(bet: dict) -> str:
+        """Return the bet's game date in ET (matches target_date format).
+        ``bet.time`` is a UTC ISO string (e.g. '2026-05-26T00:00:00Z' for
+        an 8pm ET game) so naive `t[:10]` slicing gives the wrong day —
+        an NHL evening game in UTC is the NEXT calendar day, which made
+        the comparison `_bet_date(b) == target_date` always False and
+        silently dropped every NHL deriv pick from the recorder. ET-
+        converted slice fixes the off-by-one-day."""
         t = bet.get("time") or bet.get("date") or ""
-        if isinstance(t, str) and len(t) >= 10:
+        if not isinstance(t, str) or len(t) < 10:
+            return ""
+        # Plain date string already in ET (no T separator) — return as-is.
+        if "T" not in t:
             return t[:10]
-        return ""
+        try:
+            from datetime import datetime
+            try:
+                from zoneinfo import ZoneInfo
+                et = ZoneInfo("America/New_York")
+            except Exception:
+                et = None
+            iso = t.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(iso)
+            if et is not None and dt.tzinfo is not None:
+                dt = dt.astimezone(et)
+            return dt.strftime("%Y-%m-%d")
+        except Exception:
+            return t[:10]
     bets = [b for b in bets if _bet_date(b) == target_date or not _bet_date(b)]
 
     # Build an index of (game_id, bet_type, pick) → kept per game from
@@ -215,11 +245,12 @@ def record_top_derivatives(sport: str, bets: list[dict],
             try:
                 conn.execute(
                     f"INSERT INTO {table} (game_id, date, matchup, "
-                    f"bet_type, pick, model_prob, edge, odds) "
-                    f"VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    f"bet_type, pick, model_prob, edge, odds, stake_units) "
+                    f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (game_id, target_date, matchup,
                      p.get("type"), p.get("pick"),
-                     p.get("prob"), p.get("edge"), p.get("odds")),
+                     p.get("prob"), p.get("edge"), p.get("odds"),
+                     p.get("stake_units")),
                 )
                 inserted += 1
             except Exception as e:
@@ -240,12 +271,25 @@ def settle_derivative_picks(sport: str) -> dict:
     # For now, pragmatic approach: re-import settle_picks but tell it
     # to operate on the derivative table via a context shim.
     if sport == "mlb":
-        return _settle_mlb_derivatives()
+        result = _settle_mlb_derivatives()
     elif sport == "nhl":
-        return _settle_nhl_derivatives()
+        result = _settle_nhl_derivatives()
     elif sport == "nba":
-        return _settle_nba_derivatives()
-    raise ValueError(f"unknown sport: {sport}")
+        result = _settle_nba_derivatives()
+    else:
+        raise ValueError(f"unknown sport: {sport}")
+
+    # Propagate any newly-settled outcomes into the POTD lock table so
+    # `_pot_day.result/profit/settled_at` stay in sync with
+    # derivative_picks. The summary endpoint uses a JOIN and works
+    # without this, but ad-hoc analytics expect the columns populated
+    # on the lock table directly.
+    try:
+        backfill_derivative_potd_results(sport)
+    except Exception as e:
+        logger.debug("derivative POTD backfill skipped for %s: %s", sport, e)
+
+    return result
 
 
 def _resolve_mlb_game_pk(conn, espn_or_pk: str, date: str, matchup: str) -> int | None:
@@ -280,6 +324,25 @@ def _resolve_mlb_game_pk(conn, espn_or_pk: str, date: str, matchup: str) -> int 
         f"JOIN teams at ON at.mlb_id = g.away_team_id AND at.abbreviation IN ({a_placeholders}) "
         f"WHERE g.date = ? LIMIT 1",
         (*h_aliases, *a_aliases, date),
+    ).fetchone()
+    if row:
+        return row["mlb_game_id"]
+
+    # Postponement fallback — when a game is postponed and rescheduled
+    # to the next day, the games table holds the new date and the
+    # exact-date lookup misses. Without this, the derivative settler
+    # times out the pick via the age-based push, but only after a
+    # day's lag. Searching ±2 days for the same matchup catches the
+    # rescheduled row immediately so the settler can see status=
+    # 'postponed' and push the derivative cleanly.
+    row = conn.execute(
+        f"SELECT g.mlb_game_id, g.date, g.status FROM games g "
+        f"JOIN teams ht ON ht.mlb_id = g.home_team_id AND ht.abbreviation IN ({h_placeholders}) "
+        f"JOIN teams at ON at.mlb_id = g.away_team_id AND at.abbreviation IN ({a_placeholders}) "
+        f"WHERE g.date BETWEEN date(?, '-2 day') AND date(?, '+2 day') "
+        f"  AND g.status = 'postponed' "
+        f"ORDER BY g.date LIMIT 1",
+        (*h_aliases, *a_aliases, date, date),
     ).fetchone()
     return row["mlb_game_id"] if row else None
 
@@ -358,14 +421,31 @@ def _settle_mlb_derivatives() -> dict:
             pushes += 1
             continue
 
-        cur = conn.execute(
-            "INSERT INTO picks (game_id, date, matchup, bet_type, pick, "
-            "model_prob, edge, odds) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (resolved_pk, p["date"], p["matchup"],
-             p["bet_type"], p["pick"],
-             p["model_prob"], p["edge"], p["odds"]),
-        )
-        temp_id = cur.lastrowid
+        # The picks table has a UNIQUE(date, game_id, bet_type)
+        # constraint to prevent dupe inserts. When a derivative was
+        # already mirrored into picks during a previous settle attempt
+        # (or by an earlier write path), reuse the existing row instead
+        # of crashing the settler.
+        try:
+            cur = conn.execute(
+                "INSERT INTO picks (game_id, date, matchup, bet_type, pick, "
+                "model_prob, edge, odds) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (resolved_pk, p["date"], p["matchup"],
+                 p["bet_type"], p["pick"],
+                 p["model_prob"], p["edge"], p["odds"]),
+            )
+            temp_id = cur.lastrowid
+        except Exception as _e:
+            # UNIQUE collision — find the existing row id so we can
+            # still settle it and mirror the result back.
+            existing = conn.execute(
+                "SELECT id FROM picks WHERE date = ? AND game_id = ? "
+                "  AND bet_type = ? LIMIT 1",
+                (p["date"], resolved_pk, p["bet_type"]),
+            ).fetchone()
+            if not existing:
+                continue
+            temp_id = existing["id"]
         conn.commit()
         try:
             settle_picks()
@@ -492,6 +572,7 @@ def get_summary(sport: str) -> dict:
     _ensure_table(sport)
     conn = _conn(sport)
     table = _DERIV_TABLE[sport]
+    # Stake-weighted profit + ROI (matches per-sport trackers).
     rows = conn.execute(f"""
         SELECT bet_type,
                COUNT(*) as total,
@@ -499,32 +580,42 @@ def get_summary(sport: str) -> dict:
                SUM(CASE WHEN result = 'L' THEN 1 ELSE 0 END) as losses,
                SUM(CASE WHEN result = 'P' THEN 1 ELSE 0 END) as pushes,
                SUM(CASE WHEN result IS NULL THEN 1 ELSE 0 END) as pending,
-               COALESCE(SUM(profit), 0) as profit
+               COALESCE(SUM(profit * COALESCE(stake_units, 1.0)), 0) as profit,
+               COALESCE(SUM(CASE WHEN result IN ('W','L')
+                                   THEN COALESCE(stake_units, 1.0)
+                                   ELSE 0 END), 0) as stake_units_settled
         FROM {table}
         GROUP BY bet_type
     """).fetchall()
 
     summary: dict[str, dict] = {}
     grand = {"total": 0, "wins": 0, "losses": 0, "pushes": 0,
-             "pending": 0, "profit": 0.0}
+             "pending": 0, "profit": 0.0, "stake_units_settled": 0.0}
     for r in rows:
         d = dict(r)
         settled_n = (d["wins"] or 0) + (d["losses"] or 0)
+        staked_u = d["stake_units_settled"] or 0
         d["win_pct"] = round((d["wins"] / settled_n) * 100, 1) if settled_n else 0
-        d["roi"] = round((d["profit"] / settled_n), 1) if settled_n else 0
+        d["roi"] = round((d["profit"] / staked_u), 1) if staked_u else 0
+        d.pop("stake_units_settled", None)
         summary[d["bet_type"]] = d
         for k in ("total", "wins", "losses", "pushes", "pending"):
-            grand[k] += d.get(k) or 0
-        grand["profit"] += d.get("profit") or 0
+            grand[k] += r[k] or 0
+        grand["profit"] += r["profit"] or 0
+        grand["stake_units_settled"] += staked_u
     settled_n = grand["wins"] + grand["losses"]
+    g_staked = grand.pop("stake_units_settled", 0)
     grand["win_pct"] = round((grand["wins"] / settled_n) * 100, 1) if settled_n else 0
-    grand["roi"] = round((grand["profit"] / settled_n), 1) if settled_n else 0
+    grand["roi"] = round((grand["profit"] / g_staked), 1) if g_staked else 0
     summary["_grand"] = grand
     return summary
 
 
 def get_history(sport: str, limit: int = 200) -> list[dict]:
-    """Recent derivative picks (newest first), for the UI table."""
+    """Recent derivative picks (newest first), for the UI table.
+
+    Profit is projected stake-weighted so the table column matches the
+    summary totals from ``get_summary``."""
     _ensure_table(sport)
     conn = _conn(sport)
     table = _DERIV_TABLE[sport]
@@ -533,7 +624,14 @@ def get_history(sport: str, limit: int = 200) -> list[dict]:
         ORDER BY COALESCE(settled_at, created_at) DESC
         LIMIT ?
     """, (limit,)).fetchall()
-    return [dict(r) for r in rows]
+    out = []
+    for r in rows:
+        d = dict(r)
+        stake_u = d["stake_units"] if d.get("stake_units") is not None else 1.0
+        if d.get("profit") is not None:
+            d["profit"] = round(d["profit"] * stake_u, 2)
+        out.append(d)
+    return out
 
 
 # ── Derivative Pick of the Day (per sport) ──────────────────
@@ -670,7 +768,7 @@ def get_or_create_derivative_potd(sport: str, bets: list[dict] | None = None) ->
     _ensure_potd_table(sport)
     conn = _conn(sport)
     table = f"{_DERIV_TABLE[sport]}_pot_day"
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = et_today_str()
     row = conn.execute(f"SELECT * FROM {table} WHERE date = ?", (today,)).fetchone()
     if row:
         # Backfill mirror — if today's POTD was locked before the
@@ -702,6 +800,106 @@ def get_today_derivative_potd(sport: str) -> dict | None:
     _ensure_potd_table(sport)
     conn = _conn(sport)
     table = f"{_DERIV_TABLE[sport]}_pot_day"
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = et_today_str()
     row = conn.execute(f"SELECT * FROM {table} WHERE date = ?", (today,)).fetchone()
     return dict(row) if row else None
+
+
+def backfill_derivative_potd_results(sport: str) -> dict:
+    """Propagate settled `result`/`profit`/`settled_at` from
+    `derivative_picks` into the `_pot_day` lock table for matching
+    rows. The summary read uses a JOIN so display is always correct,
+    but direct queries against `_pot_day` (analytics, ad-hoc) need
+    the columns themselves to be populated.
+
+    Idempotent — only updates rows where the lock has a NULL result
+    AND the joined derivative_picks row has a non-NULL one. Safe to
+    run on every settle tick or call on startup.
+
+    Returns ``{"sport", "updated"}``.
+    """
+    _ensure_potd_table(sport)
+    conn = _conn(sport)
+    pot_table = f"{_DERIV_TABLE[sport]}_pot_day"
+    pick_table = _DERIV_TABLE[sport]
+    cur = conn.execute(f"""
+        UPDATE {pot_table} AS pot
+        SET result = (
+                SELECT dp.result FROM {pick_table} dp
+                WHERE dp.date = pot.date
+                  AND dp.bet_type = pot.bet_type
+                  AND dp.pick = pot.pick
+                  AND dp.game_id = pot.game_id
+                LIMIT 1
+            ),
+            profit = (
+                SELECT dp.profit FROM {pick_table} dp
+                WHERE dp.date = pot.date
+                  AND dp.bet_type = pot.bet_type
+                  AND dp.pick = pot.pick
+                  AND dp.game_id = pot.game_id
+                LIMIT 1
+            ),
+            settled_at = (
+                SELECT dp.settled_at FROM {pick_table} dp
+                WHERE dp.date = pot.date
+                  AND dp.bet_type = pot.bet_type
+                  AND dp.pick = pot.pick
+                  AND dp.game_id = pot.game_id
+                LIMIT 1
+            )
+        WHERE pot.result IS NULL
+          AND EXISTS (
+              SELECT 1 FROM {pick_table} dp
+              WHERE dp.date = pot.date
+                AND dp.bet_type = pot.bet_type
+                AND dp.pick = pot.pick
+                AND dp.game_id = pot.game_id
+                AND dp.result IS NOT NULL
+          )
+    """)
+    conn.commit()
+    return {"sport": sport, "updated": cur.rowcount or 0}
+
+
+def get_derivative_potd_summary(sport: str) -> dict:
+    """Aggregate W/L/profit across the derivative POTD lock table —
+    same shape as `engine.pick_of_day._read.get_potd_summary` so the
+    `summary` prop can be passed straight into PotdHero.
+
+    The `_pot_day` table doesn't get its `result`/`profit` columns
+    populated by the settler (it only updates `derivative_picks`).
+    So we JOIN _pot_day -> derivative_picks on (game_id, bet_type,
+    pick, date) to read the actual settled result. Self-healing:
+    even if the lock table's columns drift, the join surfaces the
+    canonical settled state from derivative_picks."""
+    _ensure_potd_table(sport)
+    conn = _conn(sport)
+    pot_table = f"{_DERIV_TABLE[sport]}_pot_day"
+    pick_table = _DERIV_TABLE[sport]
+    row = conn.execute(f"""
+        SELECT
+            COUNT(*) AS total,
+            SUM(CASE WHEN dp.result = 'W' THEN 1 ELSE 0 END) AS wins,
+            SUM(CASE WHEN dp.result = 'L' THEN 1 ELSE 0 END) AS losses,
+            SUM(CASE WHEN dp.result = 'P' THEN 1 ELSE 0 END) AS pushes,
+            COALESCE(SUM(dp.profit), 0) AS profit
+        FROM {pot_table} pot
+        LEFT JOIN {pick_table} dp
+            ON dp.date = pot.date
+           AND dp.bet_type = pot.bet_type
+           AND dp.pick = pot.pick
+           AND dp.game_id = pot.game_id
+    """).fetchone()
+    overall = dict(row) if row else {}
+    w = overall.get("wins") or 0
+    l = overall.get("losses") or 0
+    settled = w + l
+    return {
+        "total": overall.get("total") or 0,
+        "wins": w,
+        "losses": l,
+        "pushes": overall.get("pushes") or 0,
+        "profit": round(overall.get("profit") or 0, 2),
+        "win_pct": round(w / settled * 100, 1) if settled > 0 else 0,
+    }
