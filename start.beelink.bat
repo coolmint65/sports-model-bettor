@@ -45,8 +45,11 @@ echo [1/3] Syncing data (auto-closes when done)...
 start "Data-Sync" cmd /c "cd /d %~dp0 & call sync_mlb.bat --scheduled & call sync_nhl.bat --scheduled & call sync_nba.bat --scheduled & call sync_tennis.bat --scheduled & exit"
 
 REM ── Backend API server ──
-echo [2/3] Backend API server on :8000...
-start /min "Backend-API" cmd /c "cd /d %~dp0 && python -m uvicorn backend.server:app --host 0.0.0.0 --port 8000 --reload"
+REM run-backend.bat is a supervisor: it redirects uvicorn stdout+stderr
+REM to data\logs\backend.log and auto-restarts on exit so a crash doesn't
+REM take the API + dashboard down until the next logon-triggered arm.
+echo [2/3] Backend API server on :8000 (supervised)...
+start /min "Backend-API" cmd /c "cd /d %~dp0 && call run-backend.bat"
 
 REM Give backend a moment to boot
 timeout /t 3 /nobreak >nul
@@ -54,9 +57,10 @@ timeout /t 3 /nobreak >nul
 REM ── Live worker (Phase 3) ──
 REM Polls ESPN + HR odds for in-progress games + drives all the
 REM lazy-on-click cadences (framework refresh, prematch sync, queue
-REM placer sweep).
-echo [3/3] Live worker...
-start /min "Live-Worker" cmd /c "cd /d %~dp0 && python -m services.live_worker.main"
+REM placer sweep). run-worker.bat mirrors the backend supervisor —
+REM redirects to data\logs\worker.log and auto-restarts on exit.
+echo [3/3] Live worker (supervised)...
+start /min "Live-Worker" cmd /c "cd /d %~dp0 && call run-worker.bat"
 
 echo.
 echo ============================================

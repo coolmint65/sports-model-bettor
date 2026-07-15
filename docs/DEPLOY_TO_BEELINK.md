@@ -66,38 +66,37 @@ Everything below runs in a CMD or PowerShell on the Beelink itself
 
 ## Running
 
-Once daily manual: `arm.bat` (starts sync + backend + worker).
+Production setup on the Beelink is a Task Scheduler "run at logon"
+task named `SportsBettorArm` pointing at `arm.beelink.bat`. That
+launches `start.beelink.bat`, which in turn launches two supervised
+child processes:
 
-Better: register as a Windows service so it survives reboots. Two
-options:
+- **Backend-API** window runs `run-backend.bat` — an infinite loop
+  that starts uvicorn, redirects stdout+stderr to
+  `data\logs\backend.log`, and re-launches after any exit with a 5s
+  sleep. So an uncaught exception in a route no longer takes the API
+  + dashboard down; the traceback lands in the log and the process
+  is back within 5s.
+- **Live-Worker** window runs `run-worker.bat` — the same
+  supervisor pattern for `services.live_worker.main`, logging to
+  `data\logs\worker.log`. Same rationale: a transient ESPN 502 or
+  SQLite lock doesn't leave cadences frozen until the next logon.
 
-**Option A — NSSM (simplest)**
+Both supervisors export `HR_RELAY_URL` / `AUTO_BET_LIVE` fallbacks so
+a standalone run (bypassing `arm.beelink.bat`) still boots into a
+sane state.
 
-Grab NSSM (https://nssm.cc/), then:
+`weekly_retrain.bat` self-relaunches at BelowNormal priority, so the
+Task Scheduler entry for it doesn't need any extra wrapper — just
+schedule `weekly_retrain.bat` directly at 3 AM ET on Sundays and it
+takes care of not fighting Chrome/GeoComply during any accidental
+placement window.
 
-```
-nssm install SportsBackend "C:\Python311\python.exe" "-m uvicorn backend.server:app --host 0.0.0.0 --port 8000"
-nssm set SportsBackend AppDirectory "C:\sports-model-bettor"
-nssm set SportsBackend AppEnvironmentExtra "AUTO_BET_LIVE=1" "HR_RELAY_URL=http://127.0.0.1:7478" "HR_RELAY_TOKEN=<paste-token>"
-nssm set SportsBackend AppPriority BELOW_NORMAL_PRIORITY_CLASS
-nssm start SportsBackend
-
-nssm install SportsWorker "C:\Python311\python.exe" "-m services.live_worker.main"
-nssm set SportsWorker AppDirectory "C:\sports-model-bettor"
-nssm set SportsWorker AppEnvironmentExtra "AUTO_BET_LIVE=1" "HR_RELAY_URL=http://127.0.0.1:7478" "HR_RELAY_TOKEN=<paste-token>"
-nssm set SportsWorker AppPriority BELOW_NORMAL_PRIORITY_CLASS
-nssm start SportsWorker
-```
-
-Both auto-restart on crash and auto-start on Beelink reboot at
-BelowNormal priority.
-
-**Option B — Windows Task Scheduler**
-
-Schedule a "run at logon" task pointing at `arm.bat`. Less robust
-(no auto-restart on crash) but no third-party install. In the task's
-Action, wrap the launch with `cmd /c start "" /belownormal
-arm.bat` to keep the priority hint.
+**Historical note.** The initial spec called for NSSM as the process
+manager (auto-restart on crash + logon-start + BelowNormal priority
+in one tool). NSSM didn't ship on the Beelink; the Task Scheduler +
+supervisor-bats setup covers the same three responsibilities without
+a third-party install, so NSSM is off the table for this deployment.
 
 ## Point the frontend at Beelink
 
@@ -132,13 +131,17 @@ schedule + odds + settle picks. Two options:
 
 ## Rollback
 
-- Windows service: `nssm stop SportsBackend && nssm stop SportsWorker`
+- Halt both services: close the Backend-API and Live-Worker CMD
+  windows. The supervisors are in-process loops — closing the parent
+  window kills the loop and any running child. `taskkill /F /FI
+  "WINDOWTITLE eq Backend-API*"` / `... Live-Worker*` works too.
 - Auto-placer only: hit `/api/bet-queue/live-fire/off` from anywhere
   on the tailnet, or delete `data/queue_placer/live_fire.flag` on the
-  Beelink
-- Env-var un-arm: `nssm set SportsBackend AppEnvironmentExtra ""`
-  and restart the service — instant dry-run
-- Full revert to dev box: stop the Beelink services, delete
+  Beelink.
+- Env-var un-arm: disable the `SportsBettorArm` scheduled task and
+  close the two supervisor windows → next launch skips arm.bat →
+  `AUTO_BET_LIVE` isn't set → instant dry-run.
+- Full revert to dev box: stop the Beelink windows, delete
   `frontend/.env.local` on dev, run `arm.bat` on dev → back to the
   pre-migration state (the Beelink still has your data copy for
   when you decide to re-flip).

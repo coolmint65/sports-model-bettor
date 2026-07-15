@@ -50,10 +50,13 @@ export default defineConfig(({ mode }) => {
     // dev machine itself.
     host: true,
     port: 5173,
-    // Allow the Tailscale hostname + raw tailnet IP in case Vite's
+    // Allow the Tailscale hostname + raw tailnet IPs in case Vite's
     // Host-header check tightens in future versions. Explicit list
-    // keeps the dev server from 403'ing remote browsers.
-    allowedHosts: ['desktop-jscmnio', '.ts.net', 'localhost'],
+    // keeps the dev server from 403'ing remote browsers. Raw IPs are
+    // needed alongside `.ts.net` because Vite's suffix match doesn't
+    // cover IP hosts.
+    allowedHosts: ['desktop-jscmnio', '.ts.net', 'localhost',
+                    '100.80.245.68'],
     proxy: {
       '/api': API_TARGET,
     },
