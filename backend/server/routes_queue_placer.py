@@ -187,6 +187,16 @@ def api_place_settle(sport: str | None = None) -> dict:
     return settle_placements(sport=sport)
 
 
+@router.get("/api/bet-queue/hr-balance")
+def api_hr_balance() -> dict:
+    """HR account balance (cached on the relay, fed by the Pi)."""
+    from engine.queue_placer import _relay
+    try:
+        return _relay.hr_balance()
+    except Exception as e:  # pragma: no cover - defensive
+        return {"balance": None, "error": str(e)}
+
+
 @router.get("/api/bet-queue/relay/health")
 def api_relay_health() -> dict:
     """Probe the Beelink relay's /health endpoint. Returns whatever

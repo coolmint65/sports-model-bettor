@@ -11,6 +11,7 @@ import { cn } from '../../lib/utils'
 import LauncherCard from './placer/LauncherCard'
 import CapsCard from './placer/CapsCard'
 import BreakersCard from './placer/BreakersCard'
+import BalanceCard from './placer/BalanceCard'
 import RelayCard from './placer/RelayCard'
 import PlacementsTable from './placer/PlacementsTable'
 
@@ -44,7 +45,10 @@ export default function PlacementsView({ api }) {
         <div className="lg:col-span-2">
           <SummaryHero summary={summary} />
         </div>
-        <RelayCard api={api} />
+        <div className="space-y-4">
+          <RelayCard api={api} />
+          <BalanceCard api={api} />
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

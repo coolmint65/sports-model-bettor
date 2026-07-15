@@ -444,6 +444,19 @@ def verify_token() -> dict:
                 "note": f"Relay not configured: {e}"}
 
 
+def hr_balance() -> dict:
+    """Latest HR account balance, cached on the relay. The Pi fetches it
+    and POSTs to the relay /balance (getBalance CF-blocks direct from the
+    Beelink). Returns {balance, ts, ageSec} or {} on error / not-yet-pushed."""
+    try:
+        payload = _request("GET", "/balance")
+    except (RelayTransient, RelayOffline):
+        return {}
+    except RelayFatal:
+        return {}
+    return payload or {}
+
+
 def daily_stake() -> dict:
     """Shared-bankroll snapshot from the relay. When wired on the
     PiBot side, returns:

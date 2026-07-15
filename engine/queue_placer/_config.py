@@ -30,8 +30,8 @@ UNIT_DOLLARS = 1.0
 # shared HR account. Never subtract another app's stake from this
 # cap — that would let a chatty TT session starve us to zero.
 MAX_STAKE_PER_BET_DOLLARS = 1.0      # 1u
-MAX_STAKED_PER_DAY_DOLLARS = 10.0    # 10u
-MAX_STAKED_PER_WEEK_DOLLARS = 50.0   # ~5 days worth at the daily cap
+MAX_STAKED_PER_DAY_DOLLARS = 25.0    # 10u
+MAX_STAKED_PER_WEEK_DOLLARS = 125.0   # ~5 days worth at the daily cap
 
 # Optional shared-account ceiling. Only enforced when set to a positive
 # number. Meant for the case where sports-app + TT combined stake could
@@ -41,8 +41,8 @@ MAX_STAKED_PER_WEEK_DOLLARS = 50.0   # ~5 days worth at the daily cap
 TOTAL_ACCOUNT_DAILY_CEILING_DOLLARS: float | None = None
 
 # ── Circuit breakers ────────────────────────────────────────
-CONSECUTIVE_LOSS_HALT = 4
-DAILY_DRAWDOWN_HALT_DOLLARS = -3.0
+CONSECUTIVE_LOSS_HALT = 6
+DAILY_DRAWDOWN_HALT_DOLLARS = -7.5
 
 # ── Line-drift tolerance ────────────────────────────────────
 # When HR's live line differs from the queue's captured line, accept
@@ -50,7 +50,7 @@ DAILY_DRAWDOWN_HALT_DOLLARS = -3.0
 # this tolerance. Anything beyond bails ("line moved"). At 3pp: ~15¢
 # at pick'em, ~20¢ at ±150, ~25¢ at ±200. Catches modest steam without
 # chasing genuine line moves.
-LINE_DRIFT_TOLERANCE_PP = 3.0
+LINE_DRIFT_TOLERANCE_PP = 2.0
 
 # ── Kill switch ─────────────────────────────────────────────
 # On-disk flag PLUS env var — either being off blocks placement.
