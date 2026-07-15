@@ -355,14 +355,19 @@ def history_closed(days_back: int = 30) -> list[dict]:
     except RelayError:
         return []
     now = datetime.now(timezone.utc)
+    # Relay expects `body` to be a JSON STRING, not a dict — it does
+    # JSON.parse(apiBody) before forwarding to HR (same contract as
+    # PiBot's getBetHistory: body: JSON.stringify(...)). Passing a dict
+    # here returns HTTP 500 from the relay; json.dumps fixes it and HR
+    # replies with the closed-bets array.
     body = {
         "path": "/mybets/closed",
-        "body": {
+        "body": json.dumps({
             "from": (now - timedelta(days=days_back)).isoformat()[:19],
             "to":   (now + timedelta(days=1)).isoformat()[:19],
             "locale": "enus-us-x-fl",
             "sessionToken": session_token,
-        },
+        }),
     }
     try:
         raw = _request("POST", "/history", body=body)

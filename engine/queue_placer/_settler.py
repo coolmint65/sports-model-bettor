@@ -31,102 +31,97 @@ def _american_profit(result: str, stake_dollars: float,
     return 0.0
 
 
-# HR's own settle vocabulary → our W/L/P/V. The value list is broader
-# than what HR normally emits so a rename on their side doesn't break
-# grading — anything unrecognized falls through to None and the row
-# stays pending for the next sweep.
-_HR_STATUS_MAP: dict[str, str] = {
-    "WON":            "W",
-    "WIN":            "W",
-    "WINNER":         "W",
-    "HALF_WON":       "W",   # HR uses this for pushed halves; net still +
-    "LOST":           "L",
-    "LOSS":           "L",
-    "LOSER":          "L",
-    "HALF_LOST":      "L",
-    "VOID":           "V",
-    "VOIDED":         "V",
-    "CANCELLED":      "V",
-    "CANCELED":       "V",
-    "REFUNDED":       "V",
-    "PUSH":           "P",
-    "PUSHED":         "P",
-    "CASHED_OUT":     "W",   # treated as W; profit derived from payout
-    "CASHOUT":        "W",
-    "PARTIAL_CASHOUT": "W",
+# HR splits settle state across two fields:
+#   betStatus       — coarse state: SETTLED (win or loss), VOID, PENDING.
+#   displayStatus   — fine-grained outcome for settled bets: WIN, LOSE,
+#                     PUSH, HALF_WIN, HALF_LOSE.
+#
+# Grading rule (from live payload inspection 2026-07-14):
+#   betStatus=VOID     → V   (ignore displayStatus; refund is on the bet)
+#   betStatus=SETTLED  → look at displayStatus → W/L/P
+#   anything else      → None (pending / unknown → row stays open)
+_HR_DISPLAY_MAP: dict[str, str] = {
+    "WIN":         "W",
+    "WON":         "W",
+    "HALF_WIN":    "W",
+    "LOSE":        "L",
+    "LOST":        "L",
+    "LOSS":        "L",
+    "HALF_LOSE":   "L",
+    "PUSH":        "P",
+    "PUSHED":      "P",
+    "CASHED_OUT":  "W",
+    "CASHOUT":     "W",
 }
+
+
+def _read_status(bet: dict, *keys: str) -> str:
+    """Case-insensitive fetch — returns UPPER + '_'-normalized string."""
+    for k in keys:
+        v = bet.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip().upper().replace(" ", "_")
+    return ""
+
+
+def _read_float(bet: dict, *keys: str) -> float:
+    """Fetch the first numeric-coercible field; supports both top-level
+    numbers and {amount: N} nested shapes."""
+    for k in keys:
+        v = bet.get(k)
+        if v is None:
+            continue
+        if isinstance(v, dict):
+            v = v.get("amount")
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            continue
+    return 0.0
 
 
 def _hr_extract_settle(bet: dict) -> tuple[str, float] | None:
     """From an HR bet object, extract (result, profit_dollars).
 
-    HR schema known probing points (log the raw bet on first miss so we
-    can tighten the mapping when a real payload arrives):
-      - Status:  betStatus | status | state | result
-      - Stake:   stake.amount | stakeAmount | risk
-      - Payout:  winnings | returnAmount | payout.amount | netPayout
+    Live payload shape observed 2026-07-14:
+      WIN     — betStatus=SETTLED, displayStatus=WIN,   payout=<total>
+      LOSS    — betStatus=SETTLED, displayStatus=LOSE
+      VOID    — betStatus=VOID,    refund=<stake>
     """
     if not isinstance(bet, dict):
         return None
 
-    status_raw = ""
-    for k in ("betStatus", "status", "state", "result", "outcome"):
-        v = bet.get(k)
-        if isinstance(v, str) and v.strip():
-            status_raw = v.strip().upper().replace(" ", "_")
-            break
-    result = _HR_STATUS_MAP.get(status_raw)
-    if result is None:
-        return None  # pending, unknown, or a status we don't recognize yet
+    bet_status = _read_status(bet, "betStatus", "status")
+    if bet_status == "VOID":
+        result = "V"
+    elif bet_status == "SETTLED":
+        display = _read_status(bet, "displayStatus", "outcome", "result")
+        result = _HR_DISPLAY_MAP.get(display)
+        if result is None:
+            return None  # SETTLED with unrecognized displayStatus
+    else:
+        return None  # PENDING / unknown → leave row open
 
-    # Stake — needed to compute profit when only payout is present.
-    stake = 0.0
-    stake_field = bet.get("stake")
-    if isinstance(stake_field, dict):
-        try:
-            stake = float(stake_field.get("amount") or 0.0)
-        except (TypeError, ValueError):
-            stake = 0.0
-    if not stake:
-        for k in ("stakeAmount", "risk", "wagerAmount"):
-            v = bet.get(k)
-            try:
-                if v is not None:
-                    stake = float(v)
-                    break
-            except (TypeError, ValueError):
-                pass
-
-    # Payout — HR returns total returned (stake + profit) for winners,
-    # 0 for losers, stake for voids/pushes/cashout.
-    payout = 0.0
-    for k in ("winnings", "returnAmount", "netPayout", "payoutAmount"):
-        v = bet.get(k)
-        try:
-            if v is not None:
-                payout = float(v)
-                break
-        except (TypeError, ValueError):
-            pass
-    if not payout:
-        payout_field = bet.get("payout")
-        if isinstance(payout_field, dict):
-            try:
-                payout = float(payout_field.get("amount") or 0.0)
-            except (TypeError, ValueError):
-                payout = 0.0
+    stake = _read_float(bet, "stake", "stakeAmount", "risk", "wagerAmount")
+    # HR ships payout as a top-level number (payout / totalPayout), not
+    # a {amount} dict — _read_float handles both.
+    payout = _read_float(bet, "payout", "totalPayout",
+                          "winnings", "returnAmount", "netPayout",
+                          "payoutAmount")
+    refund = _read_float(bet, "refund", "refundAmount")
 
     if result == "W":
-        # Prefer HR's payout math (handles cashouts, HR fee adjustments).
-        # Fall back to -stake logic if we couldn't read payout.
-        if payout > 0:
-            profit = payout - stake
-        else:
-            profit = 0.0  # unknown payout; caller will fill via odds fallback
+        # payout = stake + profit for winners. Fall through to 0 if HR
+        # didn't ship a payout; the caller then uses the odds fallback.
+        profit = (payout - stake) if payout > 0 else 0.0
     elif result == "L":
         profit = -stake
-    else:
-        profit = 0.0  # push / void
+    elif result == "V":
+        # HR refunds stake on voids — net profit is 0. If refund<stake
+        # (partial void), signal by returning the actual delta.
+        profit = (refund - stake) if refund > 0 else 0.0
+    else:  # P (push)
+        profit = 0.0
     return result, profit
 
 
