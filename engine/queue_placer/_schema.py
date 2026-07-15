@@ -83,22 +83,25 @@ STATUS_VALUES = frozenset({
 })
 
 
-_LOCK = threading.Lock()
-_conn: sqlite3.Connection | None = None
+# Per-thread connection cache. A module-global cached connection + the
+# FastAPI threadpool = intermittent cursor collisions where fetchone()
+# returns None on a `SELECT COALESCE(SUM(...), 0)` query that logically
+# can't be empty. Same class of bug the sport framework _db.py modules
+# had to solve; see feedback memory "thread-local sqlite connections".
+_TLS = threading.local()
 
 
 def get_conn() -> sqlite3.Connection:
-    """Return a shared connection to the placements DB. Initializes the
-    schema on first call. Thread-safe via a module-level lock."""
-    global _conn
-    with _LOCK:
-        if _conn is None:
-            _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-            c = sqlite3.connect(str(_DB_PATH),
-                                 check_same_thread=False,
-                                 isolation_level=None)
-            c.row_factory = sqlite3.Row
-            c.execute("PRAGMA journal_mode=WAL")
-            c.executescript(_DDL)
-            _conn = c
-        return _conn
+    """Return a thread-local connection to the placements DB. First
+    call in each thread initializes the schema."""
+    c = getattr(_TLS, "conn", None)
+    if c is None:
+        _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        c = sqlite3.connect(str(_DB_PATH),
+                             check_same_thread=False,
+                             isolation_level=None)
+        c.row_factory = sqlite3.Row
+        c.execute("PRAGMA journal_mode=WAL")
+        c.executescript(_DDL)
+        _TLS.conn = c
+    return c

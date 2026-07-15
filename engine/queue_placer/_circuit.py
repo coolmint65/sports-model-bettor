@@ -49,6 +49,11 @@ def _sum_staked_since(cutoff_iso: str) -> float:
         "  AND DATE(queued_at) >= ?",
         (cutoff_iso,),
     ).fetchone()
+    # r should always be a Row since COALESCE(SUM(...), 0) returns one
+    # row on any table state — belt-and-suspenders after the thread-local
+    # connection fix eliminated the root cause.
+    if r is None:
+        return 0.0
     return float(r[0] or 0.0)
 
 
@@ -62,6 +67,8 @@ def _daily_realized_pnl() -> float:
         "  AND result IN ('W', 'L', 'P')",
         (_today_iso(),),
     ).fetchone()
+    if r is None:
+        return 0.0
     return float(r[0] or 0.0)
 
 
