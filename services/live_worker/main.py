@@ -1155,6 +1155,30 @@ def _run_framework_results_refresh() -> None:
                                 key, n_pick)
             except Exception as e:
                 logger.warning("framework slate soccer:%s failed: %s", key, e)
+            # Warm tomorrow's slate too. ingest_today above only pulls the
+            # current ET day (plus a backward finals sweep), so a league that
+            # plays tomorrow isn't in the DB yet and the bet-queue can't see it
+            # until match day. Pull + record tomorrow explicitly. Idempotent:
+            # record_picks dedups on the open-pick unique index.
+            try:
+                from backend.server.routes_soccer import _today_et as _tet2
+                from datetime import datetime as _dt2, timedelta as _td2
+                _tmrw = (_dt2.strptime(_tet2(), "%Y-%m-%d")
+                         + _td2(days=1)).strftime("%Y-%m-%d")
+                from engine.soccer._espn_ingest import ingest_today as _ing2
+                _ing2(key, date=_tmrw)
+                from engine.soccer._picks import generate_picks_for_slate as _gps2
+                from engine.soccer._tracker import record_picks as _rec2
+                _n2 = 0
+                for _m2 in (_gps2(key, _tmrw).get("matches") or []):
+                    if _m2.get("picks"):
+                        _rec2(key, _m2["match_id"], _m2["picks"])
+                        _n2 += len(_m2["picks"])
+                if _n2:
+                    logger.info("soccer tomorrow-warm %s: %d pick(s) %s",
+                                key, _n2, _tmrw)
+            except Exception as e:
+                logger.debug("soccer tomorrow-warm %s failed: %s", key, e)
             # Settle soccer-framework picks after the slate ingest —
             # same gap as basketball/hockey: settle only fired when
             # the user opened the tracker tab; quiet leagues' pending

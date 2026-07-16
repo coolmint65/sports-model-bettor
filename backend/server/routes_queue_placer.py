@@ -89,7 +89,8 @@ def api_live_fire_off() -> dict:
 def api_placements(limit: int = Query(50, ge=1, le=500),
                     offset: int = Query(0, ge=0),
                     mode: str | None = None,
-                    status: str | None = None) -> dict:
+                    status: str | None = None,
+                    include_rejected: bool = False) -> dict:
     """Placement log, most recent first. Filter by mode ('live' /
     'dry_run') or specific status ('placed', 'rejected_cap', etc.)."""
     from engine.queue_placer._schema import get_conn
@@ -102,6 +103,12 @@ def api_placements(limit: int = Query(50, ge=1, le=500),
     if status:
         where.append("status = ?")
         args.append(status)
+    elif not include_rejected:
+        # Default view hides terminal-rejected + expired attempts (no bet
+        # placed, nothing to settle) so the log shows live/settled activity
+        # instead of a wall of blocked rows. Pass include_rejected=true (or
+        # an explicit status=) to see them.
+        where.append("status NOT LIKE 'rejected%' AND status != 'expired'")
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
     rows = conn.execute(
         f"SELECT id, dedup_key, sport, event_id, matchup, bet_type, pick, "

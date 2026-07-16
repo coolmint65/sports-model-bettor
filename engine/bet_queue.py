@@ -280,6 +280,75 @@ def _card_context(sport: str, extra: dict, matchup: str) -> dict:
     return ctx
 
 
+# Schedule statuses (per data source) that mean a match is no longer a
+# clean prematch bet: already underway, finished, or pulled. The queue
+# only ever fires prematch, so a pick whose game carries one of these is
+# skipped instead of sent to the relay -- a live line is either stale or
+# a different market than the model priced.
+_STARTED_TENNIS = {"in", "post", "retired", "walkover", "canceled",
+                   "cancelled"}
+_STARTED_SOCCER = {"final", "live", "post", "ft", "ht", "inprogress",
+                   "in_progress", "canceled", "cancelled", "abandoned"}
+
+
+def _start_time_passed(start_time) -> bool:
+    """True when an ISO start_time (UTC; trailing Z optional) is at or past
+    now. Feed status can lag -- a live match often still reads 'pre' /
+    'scheduled' -- so the clock is the authoritative 'has it started'
+    signal. Parse miss -> False (fall back to status only)."""
+    if not start_time:
+        return False
+    try:
+        from datetime import datetime, timezone
+        txt = str(start_time).strip()
+        if txt[-1:] in ("Z", "z"):
+            txt = txt[:-1]
+        dt = datetime.fromisoformat(txt)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt <= datetime.utcnow()
+    except Exception:
+        return False
+
+
+def _match_started(sport: str, match_id) -> bool:
+    """True when the schedule CONFIRMS the match has started, ended, or was
+    pulled -- by status OR by a start_time that has already passed. Status
+    lags (a live match often still reads 'pre'), so start_time is checked
+    too. Defaults to False (keep the pick) on any lookup miss or error:
+    dropping a valid prematch edge on a data hiccup is worse than the
+    occasional live attempt the relay line-drift guard already catches."""
+    if match_id in (None, ""):
+        return False
+    try:
+        if sport == "tennis":
+            import engine.tennis_db as _tdb
+            row = _tdb.get_conn().execute(
+                "SELECT status, start_time FROM tennis_scheduled_matches "
+                "WHERE match_id = ? LIMIT 1", (match_id,)).fetchone()
+            if not row:
+                return False
+            if (row[0] or "").strip().lower() in _STARTED_TENNIS:
+                return True
+            return _start_time_passed(row[1])
+        src = _SOURCES.get(sport)
+        if src and src[0] == "engine.soccer._db":
+            import importlib
+            conn = importlib.import_module(
+                "engine.soccer._db").get_conn(src[2])
+            row = conn.execute(
+                "SELECT status, start_time FROM matches WHERE id = ? LIMIT 1",
+                (match_id,)).fetchone()
+            if not row:
+                return False
+            if (row[0] or "").strip().lower() in _STARTED_SOCCER:
+                return True
+            return _start_time_passed(row[1])
+    except Exception:
+        return False
+    return False
+
+
 def _iter_todays_picks() -> list[dict]:
     """Walk every sport's picks table for open (result IS NULL) picks
     dated today or tomorrow. Returns a flat list with sport tagged +
@@ -324,6 +393,12 @@ def _iter_todays_picks() -> list[dict]:
             # which id column each sport uses.
             if id_col and d.get(id_col) is not None:
                 d["event_id"] = str(d[id_col])
+            # Prematch-only: drop picks whose game is already underway,
+            # finished, or pulled (see _match_started). Stops the queue
+            # firing stale-line bets on live games -- the symptom behind
+            # live/ended matches lingering in the placement log.
+            if id_col and _match_started(sport, d.get(id_col)):
+                continue
             out.append(d)
     return out
 
