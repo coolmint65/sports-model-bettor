@@ -38,7 +38,7 @@ def _week_start_iso() -> str:
     return (now - timedelta(days=now.weekday())).strftime("%Y-%m-%d")
 
 
-def _sum_staked_since(cutoff_iso: str) -> float:
+def _sum_staked_since(cutoff_iso: str, book: str = "hr") -> float:
     """Sum of stake_dollars actually placed since cutoff (excluding
     dry-run rows). Rejected placements don't count against the cap —
     only bets that actually left our account."""
@@ -46,8 +46,8 @@ def _sum_staked_since(cutoff_iso: str) -> float:
     r = conn.execute(
         "SELECT COALESCE(SUM(placed_stake_d), 0) FROM placements "
         "WHERE mode = 'live' AND status IN ('placed', 'submitted') "
-        "  AND DATE(queued_at) >= ?",
-        (cutoff_iso,),
+        "  AND book = ? AND DATE(queued_at) >= ?",
+        (book, cutoff_iso),
     ).fetchone()
     # r should always be a Row since COALESCE(SUM(...), 0) returns one
     # row on any table state — belt-and-suspenders after the thread-local
@@ -57,30 +57,30 @@ def _sum_staked_since(cutoff_iso: str) -> float:
     return float(r[0] or 0.0)
 
 
-def _daily_realized_pnl() -> float:
+def _daily_realized_pnl(book: str = "hr") -> float:
     """Realized P/L for today's placed bets. Sum of profit_dollars for
     settled placements; pending placements count as unrealized zero."""
     conn = get_conn()
     r = conn.execute(
         "SELECT COALESCE(SUM(profit_dollars), 0) FROM placements "
-        "WHERE mode = 'live' AND DATE(queued_at) = ? "
+        "WHERE mode = 'live' AND book = ? AND DATE(queued_at) = ? "
         "  AND result IN ('W', 'L', 'P')",
-        (_today_iso(),),
+        (book, _today_iso()),
     ).fetchone()
     if r is None:
         return 0.0
     return float(r[0] or 0.0)
 
 
-def _consecutive_recent_losses() -> int:
+def _consecutive_recent_losses(book: str = "hr", limit: int = 11) -> int:
     """Count how many of the most-recent settled placements are L in
     a row, walking backward from the newest. Stops at first non-L."""
     conn = get_conn()
     rows = conn.execute(
         "SELECT result FROM placements "
-        "WHERE mode = 'live' AND result IN ('W', 'L', 'P') "
+        "WHERE mode = 'live' AND book = ? AND result IN ('W', 'L', 'P') "
         "ORDER BY settled_at DESC LIMIT ?",
-        (_config.CONSECUTIVE_LOSS_HALT + 5,),
+        (book, limit),
     ).fetchall()
     n = 0
     for r in rows:
@@ -129,23 +129,27 @@ def check_can_place(pick: dict, *, mode: str) -> tuple[bool, str]:
     if mode == "live" and not _config.relay_url():
         return False, "offline"
 
+    # Per-book envelope: HR and DK caps are independent.
+    book = (pick.get("book") or "hr").lower()
+    caps = _config.caps_for(book)
+
     # Per-bet cap.
     stake_d = float(pick.get("stake_dollars") or 0.0)
-    if stake_d > _config.MAX_STAKE_PER_BET_DOLLARS + 1e-9:
+    if stake_d > caps["max_stake_per_bet"] + 1e-9:
         return False, "per_bet_cap"
 
     # Daily / weekly caps — count only what's live-placed, and only
     # what would push us past the cap AFTER this bet.
     if mode == "live":
-        today_staked = _sum_staked_since(_today_iso())
+        today_staked = _sum_staked_since(_today_iso(), book)
         # Sports-app's own envelope — DO NOT subtract TT's daily stake
         # from it. That's a separate concern (see the total-account
         # ceiling below). Subtracting a co-tenant's stake here would
         # let a chatty TT session starve us to zero.
-        if today_staked + stake_d > _config.MAX_STAKED_PER_DAY_DOLLARS + 1e-9:
+        if today_staked + stake_d > caps["max_staked_per_day"] + 1e-9:
             return False, "daily_cap"
-        week_staked = _sum_staked_since(_week_start_iso())
-        if week_staked + stake_d > _config.MAX_STAKED_PER_WEEK_DOLLARS + 1e-9:
+        week_staked = _sum_staked_since(_week_start_iso(), book)
+        if week_staked + stake_d > caps["max_staked_per_week"] + 1e-9:
             return False, "weekly_cap"
 
         # Optional shared-account ceiling (opt-in via config). This
@@ -165,13 +169,13 @@ def check_can_place(pick: dict, *, mode: str) -> tuple[bool, str]:
                 return False, "shared_account_ceiling"
 
         # Daily drawdown.
-        pnl = _daily_realized_pnl()
-        if pnl <= _config.DAILY_DRAWDOWN_HALT_DOLLARS:
+        pnl = _daily_realized_pnl(book)
+        if pnl <= caps["daily_drawdown_halt"]:
             return False, "daily_drawdown"
 
         # Consecutive-loss halt.
-        losses = _consecutive_recent_losses()
-        if losses >= _config.CONSECUTIVE_LOSS_HALT:
+        losses = _consecutive_recent_losses(book, caps["consecutive_loss_halt"] + 5)
+        if losses >= caps["consecutive_loss_halt"]:
             return False, "consecutive_loss"
 
     # Dedup — always checked regardless of mode so the log stays clean.

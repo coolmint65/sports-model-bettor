@@ -10,18 +10,18 @@ import { useEffect, useState } from 'react'
 import { cn } from '../../../lib/utils'
 
 
-export default function CapsCard({ api }) {
+export default function CapsCard({ api, book = 'hr' }) {
   const [breakers, setBreakers] = useState(null)
 
   useEffect(() => {
     let cancelled = false
-    const fetch = () => api.get('/bet-queue/place/breakers')
+    const fetch = () => api.get('/bet-queue/place/breakers', { params: { book } })
       .then(r => { if (!cancelled) setBreakers(r.data) })
       .catch(() => {})
     fetch()
     const id = setInterval(fetch, 30 * 1000)
     return () => { cancelled = true; clearInterval(id) }
-  }, [api])
+  }, [api, book])
 
   if (!breakers) {
     return (
@@ -38,7 +38,7 @@ export default function CapsCard({ api }) {
   return (
     <section className="rounded-xl border border-border bg-card p-5">
       <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground mb-3">
-        Today's Spending
+        {book.toUpperCase()} Today's Spending
       </div>
       <div className="space-y-4">
         <UsageBar

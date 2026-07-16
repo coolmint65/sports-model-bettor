@@ -323,7 +323,7 @@ def api_place_resolve_preview() -> dict:
 
 
 @router.get("/api/bet-queue/place/breakers")
-def api_place_breakers() -> dict:
+def api_place_breakers(book: str = "hr") -> dict:
     """Snapshot each circuit breaker's current state so the UI can
     show 'would fire? yes/no' without having to read the placer's
     internal query logic. Each entry ships {ok, current, threshold,
@@ -335,10 +335,11 @@ def api_place_breakers() -> dict:
         _consecutive_recent_losses,
         _today_iso, _week_start_iso,
     )
-    today_staked = _sum_staked_since(_today_iso())
-    week_staked = _sum_staked_since(_week_start_iso())
-    pnl = _daily_realized_pnl()
-    losses = _consecutive_recent_losses()
+    caps = _config.caps_for(book)
+    today_staked = _sum_staked_since(_today_iso(), book)
+    week_staked = _sum_staked_since(_week_start_iso(), book)
+    pnl = _daily_realized_pnl(book)
+    losses = _consecutive_recent_losses(book, caps['consecutive_loss_halt'] + 5)
 
     # TT's daily stake — for display only (contention info). Never
     # subtracted from our own daily cap.
@@ -350,31 +351,32 @@ def api_place_breakers() -> dict:
         pass
 
     out = {
+        "book": book,
         "daily_cap": {
-            "ok": today_staked < _config.MAX_STAKED_PER_DAY_DOLLARS - 1e-9,
+            "ok": today_staked < caps['max_staked_per_day'] - 1e-9,
             "current": round(today_staked, 2),
-            "threshold": _config.MAX_STAKED_PER_DAY_DOLLARS,
-            "hint": f"Today we've staked ${today_staked:.2f} of a ${_config.MAX_STAKED_PER_DAY_DOLLARS:.2f} daily budget.",
+            "threshold": caps['max_staked_per_day'],
+            "hint": f"Today we've staked ${today_staked:.2f} of a ${caps['max_staked_per_day']:.2f} daily budget.",
         },
         "weekly_cap": {
-            "ok": week_staked < _config.MAX_STAKED_PER_WEEK_DOLLARS - 1e-9,
+            "ok": week_staked < caps['max_staked_per_week'] - 1e-9,
             "current": round(week_staked, 2),
-            "threshold": _config.MAX_STAKED_PER_WEEK_DOLLARS,
-            "hint": f"This week: ${week_staked:.2f} of a ${_config.MAX_STAKED_PER_WEEK_DOLLARS:.2f} weekly budget.",
+            "threshold": caps['max_staked_per_week'],
+            "hint": f"This week: ${week_staked:.2f} of a ${caps['max_staked_per_week']:.2f} weekly budget.",
         },
         "daily_drawdown": {
-            "ok": pnl > _config.DAILY_DRAWDOWN_HALT_DOLLARS + 1e-9,
+            "ok": pnl > caps['daily_drawdown_halt'] + 1e-9,
             "current": round(pnl, 2),
-            "threshold": _config.DAILY_DRAWDOWN_HALT_DOLLARS,
+            "threshold": caps['daily_drawdown_halt'],
             "hint": (f"Today's P/L is ${pnl:.2f}. Auto-betting pauses "
-                      f"if it drops to ${_config.DAILY_DRAWDOWN_HALT_DOLLARS:.2f}."),
+                      f"if it drops to ${caps['daily_drawdown_halt']:.2f}."),
         },
         "consecutive_loss": {
-            "ok": losses < _config.CONSECUTIVE_LOSS_HALT,
+            "ok": losses < caps['consecutive_loss_halt'],
             "current": losses,
-            "threshold": _config.CONSECUTIVE_LOSS_HALT,
+            "threshold": caps['consecutive_loss_halt'],
             "hint": (f"{losses} losing bet(s) in a row. Auto-betting "
-                      f"pauses after {_config.CONSECUTIVE_LOSS_HALT} straight losses."),
+                      f"pauses after {caps['consecutive_loss_halt']} straight losses."),
         },
         # Sibling app info — display-only. Not a breaker on its own.
         "tt_today_staked": tt_today,

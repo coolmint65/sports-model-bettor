@@ -54,7 +54,8 @@ export default function PlacementsView({ api }) {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <CapsCard api={api} />
+        <CapsCard api={api} book="hr" />
+          <CapsCard api={api} book="dk" />
         <BreakersCard api={api} />
       </div>
 

@@ -103,5 +103,11 @@ def get_conn() -> sqlite3.Connection:
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA journal_mode=WAL")
         c.executescript(_DDL)
+        # migration: per-book caps need a `book` column; pre-existing
+        # HR-only rows default to 'hr'. Idempotent - ignore if present.
+        try:
+            c.execute("ALTER TABLE placements ADD COLUMN book TEXT NOT NULL DEFAULT 'hr'")
+        except Exception:
+            pass
         _TLS.conn = c
     return c

@@ -96,9 +96,9 @@ def _record(pick: dict, *, mode: str, status: str,
             "  placed_odds, placed_stake_d, line_drift_pp, "
             "  mode, status, reject_reason, "
             "  hr_ticket_id, hr_response_json, "
-            "  submitted_at, completed_at"
+            "  submitted_at, completed_at, book"
             ") VALUES (?, ?, ?, ?, ?, ?,  ?, ?, ?,  ?, ?, ?, "
-            "          ?, ?, ?,  ?, ?,  ?, ?)",
+            "          ?, ?, ?,  ?, ?,  ?, ?, ?)",
             (
                 key,
                 pick.get("sport"),
@@ -121,6 +121,7 @@ def _record(pick: dict, *, mode: str, status: str,
                     if status in ("submitted", "placed") else None,
                 _utc_now_iso()
                     if status not in ("queued", "submitted") else None,
+                (pick.get("book") or "hr"),
             ),
         )
         return cur.lastrowid

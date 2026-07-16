@@ -22,14 +22,14 @@ from pathlib import Path
 
 
 # ── Unit sizing ─────────────────────────────────────────────
-UNIT_DOLLARS = 1.0
+UNIT_DOLLARS = 2.0
 
 # ── Stake caps ──────────────────────────────────────────────
 # These are OUR OWN envelope — the sports app's per-day / per-week
 # budget. Independent of what the Table Tennis project stakes on the
 # shared HR account. Never subtract another app's stake from this
 # cap — that would let a chatty TT session starve us to zero.
-MAX_STAKE_PER_BET_DOLLARS = 1.0      # 1u
+MAX_STAKE_PER_BET_DOLLARS = 4.0      # 1u
 MAX_STAKED_PER_DAY_DOLLARS = 25.0    # 10u
 MAX_STAKED_PER_WEEK_DOLLARS = 125.0   # ~5 days worth at the daily cap
 
@@ -42,7 +42,36 @@ TOTAL_ACCOUNT_DAILY_CEILING_DOLLARS: float | None = None
 
 # ── Circuit breakers ────────────────────────────────────────
 CONSECUTIVE_LOSS_HALT = 6
-DAILY_DRAWDOWN_HALT_DOLLARS = -7.5
+DAILY_DRAWDOWN_HALT_DOLLARS = -15.0
+
+# Per-book cap sets. Each book (hr, dk) tracks its OWN daily/weekly staked
+# total, drawdown, and loss streak INDEPENDENTLY -- an HR bet never counts
+# against DK's caps and vice-versa. Values default to the module constants
+# above; edit a single book here to give it a different envelope. Units were
+# bumped to $2 and caps made per-book on 2026-07-16 as DK came online.
+BOOK_CAPS: dict = {
+    "hr": {
+        "max_stake_per_bet": MAX_STAKE_PER_BET_DOLLARS,
+        "max_staked_per_day": MAX_STAKED_PER_DAY_DOLLARS,
+        "max_staked_per_week": MAX_STAKED_PER_WEEK_DOLLARS,
+        "daily_drawdown_halt": DAILY_DRAWDOWN_HALT_DOLLARS,
+        "consecutive_loss_halt": CONSECUTIVE_LOSS_HALT,
+    },
+    "dk": {
+        "max_stake_per_bet": MAX_STAKE_PER_BET_DOLLARS,
+        "max_staked_per_day": MAX_STAKED_PER_DAY_DOLLARS,
+        "max_staked_per_week": MAX_STAKED_PER_WEEK_DOLLARS,
+        "daily_drawdown_halt": DAILY_DRAWDOWN_HALT_DOLLARS,
+        "consecutive_loss_halt": CONSECUTIVE_LOSS_HALT,
+    },
+}
+
+_ALL_BOOKS = tuple(BOOK_CAPS.keys())
+
+
+def caps_for(book) -> dict:
+    """Per-book cap set. Unknown / None book falls back to hr's envelope."""
+    return BOOK_CAPS.get((book or "hr").lower(), BOOK_CAPS["hr"])
 
 # ── Line-drift tolerance ────────────────────────────────────
 # When HR's live line differs from the queue's captured line, accept
