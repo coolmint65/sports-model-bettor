@@ -12,6 +12,7 @@ import LauncherCard from './placer/LauncherCard'
 import CapsCard from './placer/CapsCard'
 import BreakersCard from './placer/BreakersCard'
 import BalanceCard from './placer/BalanceCard'
+import DkBalanceCard from './placer/DkBalanceCard'
 import RelayCard from './placer/RelayCard'
 import PlacementsTable from './placer/PlacementsTable'
 
@@ -48,6 +49,7 @@ export default function PlacementsView({ api }) {
         <div className="space-y-4">
           <RelayCard api={api} />
           <BalanceCard api={api} />
+          <DkBalanceCard api={api} />
         </div>
       </div>
 

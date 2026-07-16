@@ -204,6 +204,28 @@ def api_hr_balance() -> dict:
         return {"balance": None, "error": str(e)}
 
 
+@router.get("/api/bet-queue/dk-balance")
+def api_dk_balance() -> dict:
+    """DK (KY-box DraftKings) balance for the frontend. dkkbd posts the live balance to the
+    Pi's dkserve; read it back over Tailscale (Pi 100.118.96.46:9098)."""
+    import json
+    from urllib import request as _rq
+    try:
+        with _rq.urlopen("http://100.118.96.46:9098/dk-balance", timeout=6) as r:
+            data = json.loads((r.read().decode() or "{}"))
+        amt = data.get("amount"); at = data.get("at"); age = None
+        if at:
+            try:
+                from datetime import datetime, timezone
+                t = datetime.fromisoformat(str(at).replace("Z", "+00:00"))
+                age = (datetime.now(timezone.utc) - t).total_seconds()
+            except Exception:
+                pass
+        return {"balance": amt, "at": at, "ageSec": age}
+    except Exception as e:  # pragma: no cover
+        return {"balance": None, "error": str(e)[:120]}
+
+
 @router.get("/api/bet-queue/relay/health")
 def api_relay_health() -> dict:
     """Probe the Beelink relay's /health endpoint. Returns whatever
