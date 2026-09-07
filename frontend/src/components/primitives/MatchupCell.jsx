@@ -22,7 +22,7 @@ const _TEAM_SPORTS = new Set([
   'ger_bundesliga', 'fra_ligue1', 'mls', 'us_nwsl', 'usl_championship',
   'us_open_cup', 'uefa_champions', 'uefa_europa', 'uefa_conference',
   'conmebol_libertadores', 'bra_seriea', 'arg_lpf', 'fifa_internationals',
-  'ufl', 'nfl', 'ncaaf', 'college_baseball',
+  'ufl', 'nfl', 'cfb', 'college_baseball',
   // basketball framework overseas leagues
   'china_cba', 'bulgaria_nbl', 'czech_nbl', 'germany_bbl',
   'denmark_basketligaen', 'finland_korisliiga', 'france_pro_b',
@@ -35,7 +35,7 @@ const _TEAM_SPORTS = new Set([
 ])
 
 
-export default function MatchupCell({ matchup, sport }) {
+export default function MatchupCell({ matchup, sport, homeLogo, awayLogo }) {
   if (!matchup) return <span className="text-muted-foreground">-</span>
   if (!sport || !_TEAM_SPORTS.has(sport)) {
     return <span className="truncate" title={matchup}>{matchup}</span>
@@ -47,17 +47,17 @@ export default function MatchupCell({ matchup, sport }) {
   const home = m[2].trim()
   return (
     <span className="inline-flex items-center gap-1.5 min-w-0" title={matchup}>
-      <TeamMini sport={sport} abbr={away} />
+      <TeamMini sport={sport} abbr={away} logoUrl={awayLogo} />
       <span className="text-muted-foreground/50 text-xs">@</span>
-      <TeamMini sport={sport} abbr={home} />
+      <TeamMini sport={sport} abbr={home} logoUrl={homeLogo} />
     </span>
   )
 }
 
 
-function TeamMini({ sport, abbr }) {
+function TeamMini({ sport, abbr, logoUrl }) {
   const [err, setErr] = useState(false)
-  const logo = resolveTeamLogo(sport, abbr, null)
+  const logo = resolveTeamLogo(sport, abbr, logoUrl || null)
   return (
     <span className="inline-flex items-center gap-1">
       {logo && !err ? (

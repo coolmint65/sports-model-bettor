@@ -66,6 +66,22 @@ def record_picks(league: str, game_id: str, picks: Iterable[dict]) -> dict:
         conn, table="picks", game_id=str(game_id), date=pick_date,
         picks=picks_list,
     )
+    # 2026-09-07: reschedule/postponement supersede. ESPN assigns a NEW
+    # game_id when a game is postponed to another day, so the game_id-
+    # scoped dedup above cannot see the prior day's pending pick for the
+    # SAME matchup. Void any still-pending pick on a DIFFERENT game_id for
+    # this matchup within a 10-day window (WCU@CAM 2026-09-05 Under 68.5
+    # orphaned when the game moved to 09-06 under a new id). The 10-day
+    # window avoids collapsing a genuine later-season rematch.
+    _matchup = next((p.get("matchup") for p in picks_list if p.get("matchup")), "")
+    if _matchup:
+        conn.execute(
+            "UPDATE picks SET result='V', profit=0, settled_at=? "
+            "WHERE result IS NULL AND matchup=? AND game_id!=? "
+            "  AND date >= date(?, '-10 day')",
+            (now_iso, _matchup, str(game_id), pick_date),
+        )
+        conn.commit()
     out = {"recorded": 0, "duplicate": 0, "errors": 0, "blocked_settled": 0}
     for p in picks_list:
         if is_settled_dup(conn, table="picks", game_id=str(game_id),
@@ -218,7 +234,19 @@ def settle_picks(league: str) -> dict:
     out = {"checked": len(pending), "settled": 0,
             "wins": 0, "losses": 0, "pushes": 0}
     for r in pending:
-        if (r["status"] or "").lower() != "final":
+        _st = (r["status"] or "").lower()
+        # 2026-09-07: postponed/canceled games get a fresh ESPN game_id on
+        # reschedule, so the old id never flips to 'final' and its pick would
+        # sit pending until the 7-day stale-push. Void these terminal-but-not-
+        # played statuses now (functionally a refund; hidden from history).
+        if _st in ("postponed", "canceled", "cancelled", "suspended"):
+            conn.execute(
+                "UPDATE picks SET result='V', profit=0, settled_at=? WHERE id=?",
+                (datetime.utcnow().isoformat(), r["id"]),
+            )
+            out["voided"] = out.get("voided", 0) + 1
+            continue
+        if _st != "final":
             continue
         if r["home_score"] is None or r["away_score"] is None:
             continue
@@ -250,6 +278,51 @@ def settle_picks(league: str) -> dict:
     return out
 
 
+def capture_closing_odds(league: str) -> int:
+    """2026-09-04 (Austin: CFB CLV was blank): snapshot HR's CURRENT American odds for each of
+    today's still-SCHEDULED, ungraded picks into picks.closing_odds. Overwrites every call while
+    the game is pre-kickoff, so the last value before status flips live/final == the closing line.
+    The frontend (PicksTable.clvFor) computes CLV% = impliedProb(closing_odds) - impliedProb(odds),
+    so populating closing_odds is all the CLV column needs. Uses the cached HR odds fetch (the
+    /today route already fetched them this request) — no extra HR hit."""
+    from ._odds import fetch_league_odds
+    conn = get_conn(league)
+    rows = conn.execute(
+        "SELECT p.id, p.bet_type, p.pick, ht.abbreviation AS h, at.abbreviation AS a "
+        "FROM picks p JOIN games g ON g.game_id = p.game_id "
+        "LEFT JOIN teams ht ON ht.id = g.home_team_id "
+        "LEFT JOIN teams at ON at.id = g.away_team_id "
+        "WHERE p.result IS NULL AND g.status = 'scheduled'"
+    ).fetchall()
+    if not rows:
+        return 0
+    try:
+        odds = fetch_league_odds(league)     # cached; no forced HR hit
+    except Exception:
+        return 0
+    n = 0
+    for r in rows:
+        o = odds.get(f"{r['a']}@{r['h']}")
+        if not o:
+            continue
+        bt = (r["bet_type"] or "").upper()
+        pick = (r["pick"] or "").strip()
+        am = None
+        if bt == "ML":
+            am = o.get("home_ml") if pick == r["h"] else o.get("away_ml") if pick == r["a"] else None
+        elif bt == "SPREAD":
+            tok = pick.split()[0] if pick else ""
+            am = o.get("home_spread_odds") if tok == r["h"] else o.get("away_spread_odds") if tok == r["a"] else None
+        elif bt == "TOTAL":
+            pl = pick.lower()
+            am = o.get("over_odds") if pl.startswith("over") else o.get("under_odds") if pl.startswith("under") else None
+        if am is not None:
+            conn.execute("UPDATE picks SET closing_odds = ? WHERE id = ?", (int(am), r["id"]))
+            n += 1
+    conn.commit()
+    return n
+
+
 def list_history(league: str, limit: int = 200) -> list[dict]:
     """Pending + settled picks, most-recent first."""
     conn = get_conn(league)
@@ -260,11 +333,13 @@ def list_history(league: str, limit: int = 200) -> list[dict]:
         "       p.closing_odds, p.created_at, p.settled_at, "
         "       p.matchup, "
         "       g.home_score, g.away_score, g.status, "
-        "       ht.abbreviation AS h_abbr, at.abbreviation AS a_abbr "
+        "       ht.abbreviation AS h_abbr, at.abbreviation AS a_abbr, "
+        "       ht.logo_url AS home_logo, at.logo_url AS away_logo "
         "FROM picks p "
         "LEFT JOIN games g ON g.game_id = p.game_id "
         "LEFT JOIN teams ht ON ht.id = g.home_team_id "
         "LEFT JOIN teams at ON at.id = g.away_team_id "
+        "WHERE (p.result IS NULL OR p.result != 'V') "  # Austin 2026-09-05: hide superseded/void picks from the records (one-best-bet-per-game re-picks void the prior; those clutter history)
         "ORDER BY p.created_at DESC LIMIT ?",
         (int(limit),),
     ).fetchall()

@@ -112,7 +112,7 @@ function PicksTableImpl({
                   {p.date?.slice(5) || '-'}
                 </Td>
                 <Td className="font-medium text-foreground max-w-[14rem]">
-                  <MatchupCell matchup={p.matchup} sport={sport} />
+                  <MatchupCell matchup={p.matchup} sport={sport} homeLogo={p.home_logo} awayLogo={p.away_logo} />
                 </Td>
                 <Td>
                   <TypeBadge>{humanizeBetType(p.bet_type)}</TypeBadge>

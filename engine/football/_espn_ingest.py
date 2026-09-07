@@ -26,7 +26,7 @@ from ._db import get_conn
 logger = logging.getLogger(__name__)
 
 
-_USER_AGENT = "sports-model-bettor/football"
+_USER_AGENT = "curl/8.4.0"
 _HEADERS = {"User-Agent": _USER_AGENT}
 
 
@@ -83,7 +83,7 @@ def ingest_teams(league: str) -> int:
     cfg = get_league_config(league)
     espn_path = cfg.get("espn_league_path") or f"football/{league}"
     url = (f"https://site.api.espn.com/apis/site/v2/sports/"
-            f"{espn_path}/teams")
+            f"{espn_path}/teams" + cfg.get("espn_teams_suffix", ""))
     data = _fetch(url)
     if not data:
         return 0
@@ -101,11 +101,21 @@ def ingest_teams(league: str) -> int:
         logos = team.get("logos") or []
         if logos:
             logo = logos[0].get("href", "")
+        # 2026-09-07: UPSERT (was INSERT OR REPLACE) so ESPN's blank /teams
+        # logos never clobber a good logo the scoreboard path already healed.
         conn.execute(
-            "INSERT OR REPLACE INTO teams "
+            "INSERT INTO teams "
             "(id, name, abbreviation, short_name, location, logo_url, "
             " updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
+            "VALUES (?, ?, ?, ?, ?, ?, datetime('now')) "
+            "ON CONFLICT(id) DO UPDATE SET "
+            "  name=excluded.name, "
+            "  abbreviation=excluded.abbreviation, "
+            "  short_name=excluded.short_name, "
+            "  location=excluded.location, "
+            "  logo_url=CASE WHEN excluded.logo_url != '' "
+            "                THEN excluded.logo_url ELSE teams.logo_url END, "
+            "  updated_at=datetime('now')",
             (
                 int(tid),
                 team.get("displayName") or "",
@@ -135,32 +145,74 @@ def _parse_status(event: dict) -> str:
     return "scheduled"
 
 
-def ingest_today(league: str, *, date: str | None = None) -> dict:
+def ingest_today(league: str, *, date: str | None = None,
+                 extra_query: str = "") -> dict:
     """Pull one day's scoreboard. ``date`` is YYYY-MM-DD in ET; when
     omitted, today's ET date."""
     cfg = get_league_config(league)
     espn_path = cfg.get("espn_league_path") or f"football/{league}"
     target = date or _today_et()
     yyyymmdd = target.replace("-", "")
-    url = (f"https://site.api.espn.com/apis/site/v2/sports/"
+    # 2026-09-03: ESPN's CFB scoreboard defaults to the featured/Top-25 slate
+    # (~10-20 games/day). The registry's ``espn_scoreboard_suffix`` opts a
+    # league into the full board (CFB: ``&groups=80&limit=400`` = all FBS,
+    # incl. FBS-vs-FCS) so backfill/Elo see every game HR prices.
+    # 2026-09-03: a league may span several ESPN "groups" boards (CFB: 80=FBS, 81=FCS — HR
+    # prices FCS-vs-FCS games that the default FBS board omits; Austin noticed the gap on
+    # 9/3). Fetch each board and merge the events. An explicit extra_query replaces the
+    # registry's boards (ESPN honours the first `groups=`).
+    base = (f"https://site.api.espn.com/apis/site/v2/sports/"
             f"{espn_path}/scoreboard?dates={yyyymmdd}")
-    data = _fetch(url)
+    if extra_query:
+        suffixes = [extra_query]
+    else:
+        groups = cfg.get("espn_scoreboard_groups")
+        suffixes = ([f"&groups={g}&limit=400" for g in groups] if groups
+                    else [cfg.get("espn_scoreboard_suffix") or ""])
+    data = None
+    merged: list = []
+    seen: set = set()
+    for sfx in suffixes:
+        d = _fetch(base + sfx)
+        if not d:
+            continue
+        if data is None:
+            data = d
+        for ev in (d.get("events") or []):
+            eid = str(ev.get("id") or "")
+            if eid and eid not in seen:
+                seen.add(eid); merged.append(ev)
     if not data:
         return {"ingested": 0, "skipped": 0}
+    data["events"] = merged
 
     conn = get_conn(league)
-    # Make sure teams are present — first-time ingest with empty teams
-    # table would FK-fail without this.
-    if not conn.execute("SELECT 1 FROM teams LIMIT 1").fetchone():
+    # Make sure teams are present + logos fresh. The old gate ran only when
+    # the table was EMPTY, so NFL (seeded logo-less on first ingest) never
+    # got its logos and the tracker showed initials. Refresh on a ~daily TTL
+    # (also covers the empty case: "" < stale). Day-bounded so a team
+    # permanently absent from the /teams roster cannot cause a refetch loop.
+    _last_team_sync = conn.execute(
+        "SELECT MAX(updated_at) FROM teams"
+    ).fetchone()[0] or ""
+    _team_stale = (datetime.utcnow() - timedelta(hours=20)).strftime(
+        "%Y-%m-%d %H:%M:%S")
+    if _last_team_sync < _team_stale:
         ingest_teams(league)
 
     events = data.get("events") or []
     ingested = 0
     skipped = 0
     season = (data.get("season") or {}).get("year")
+    skip_pre = bool(cfg.get("skip_preseason"))
     for ev in events:
         eid = str(ev.get("id") or "").strip()
         if not eid:
+            skipped += 1
+            continue
+        # 2026-09-03: NFL preseason results are noise for Elo (starters sit) — skip them
+        # for leagues flagged skip_preseason. ESPN: event.season.type 1=pre, 2=reg, 3=post.
+        if skip_pre and ((ev.get("season") or {}).get("type") == 1):
             skipped += 1
             continue
         comp = (ev.get("competitions") or [{}])[0]
@@ -184,17 +236,28 @@ def ingest_today(league: str, *, date: str | None = None) -> dict:
             tid = int(t.get("id") or 0)
             if not tid:
                 continue
-            existing = conn.execute(
-                "SELECT 1 FROM teams WHERE id = ? LIMIT 1", (tid,)
-            ).fetchone()
-            if existing:
-                continue
             logos = t.get("logos") or []
             logo = logos[0].get("href", "") if logos else (t.get("logo") or "")
+            existing = conn.execute(
+                "SELECT logo_url FROM teams WHERE id = ? LIMIT 1", (tid,)
+            ).fetchone()
+            if existing:
+                # 2026-09-07: heal a previously logo-less stub (FCS team or
+                # relocation first seen via the scoreboard, which enters
+                # blank) when this event carries a logo. Never overwrite a
+                # good logo with a blank.
+                if logo and not (existing[0] or ""):
+                    conn.execute(
+                        "UPDATE teams SET logo_url = ?, "
+                        "  updated_at = datetime('now') WHERE id = ?",
+                        (logo, tid),
+                    )
+                continue
             conn.execute(
                 "INSERT OR IGNORE INTO teams "
-                "(id, name, abbreviation, short_name, location, logo_url) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "(id, name, abbreviation, short_name, location, logo_url, "
+                " updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
                 (tid,
                   t.get("displayName") or t.get("name") or f"team-{tid}",
                   t.get("abbreviation") or "",
@@ -228,7 +291,7 @@ def ingest_today(league: str, *, date: str | None = None) -> dict:
 
 
 def backfill(league: str, start_date: str, end_date: str,
-              *, throttle: float = 0.2) -> dict:
+              *, throttle: float = 0.2, extra_query: str = "") -> dict:
     try:
         cur = datetime.strptime(start_date, "%Y-%m-%d")
         end = datetime.strptime(end_date, "%Y-%m-%d")
@@ -239,7 +302,7 @@ def backfill(league: str, start_date: str, end_date: str,
     totals = {"days": 0, "ingested": 0, "skipped": 0}
     while cur <= end:
         d = cur.strftime("%Y-%m-%d")
-        res = ingest_today(league, date=d)
+        res = ingest_today(league, date=d, extra_query=extra_query)
         totals["days"] += 1
         totals["ingested"] += res.get("ingested", 0)
         totals["skipped"] += res.get("skipped", 0)
@@ -272,6 +335,8 @@ def _cli() -> int:
     p_back.add_argument("start")
     p_back.add_argument("end")
     p_back.add_argument("--throttle", type=float, default=0.2)
+    # e.g. "&groups=81&limit=400" = ESPN's FCS board (default = FBS) — 2026-09-03
+    p_back.add_argument("--extra", default="")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO,
                          format="%(asctime)s %(levelname)s %(message)s")
@@ -281,7 +346,7 @@ def _cli() -> int:
         print(ingest_today(args.league, date=args.date))
     elif args.cmd == "backfill":
         print(backfill(args.league, args.start, args.end,
-                        throttle=args.throttle))
+                        throttle=args.throttle, extra_query=args.extra))
     return 0
 
 

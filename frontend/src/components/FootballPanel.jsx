@@ -503,7 +503,7 @@ function CalibrationView({ api, leagueKey }) {
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-px bg-border">
           <Stat label="Avg total points" value={fmt(c.league_avg_total)} />
-          <Stat label="Home edge (points)" value={fmt(c.home_advantage, '+')} />
+          <Stat label="Home edge (points)" value={fmt(c.home_advantage_pts, '+')} />
           <Stat label="Margin σ" value={fmt(c.margin_sigma)} />
           <Stat label="Total σ" value={fmt(c.total_sigma)} />
           <Stat label="Fitted games" value={c.fitted_n ?? '—'} />

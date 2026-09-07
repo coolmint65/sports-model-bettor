@@ -124,7 +124,7 @@ def api_football_leagues() -> dict:
 
 
 @router.get("/api/football/{league}/today")
-def api_football_today(league: str) -> dict:
+def api_football_today(league: str, days: int | None = None) -> dict:
     """Slate for ``league``. Fall-forward to the nearest upcoming day
     when today has no scheduled or finalized games."""
     from engine.football import LEAGUE_REGISTRY, get_league_config
@@ -151,6 +151,16 @@ def api_football_today(league: str) -> dict:
                 except Exception as e:
                     logger.debug("[football:%s] backsweep %s failed: %s",
                                   league, d, e)
+            # 2026-09-03 (Austin: lookahead): also ingest the upcoming window so the
+            # slate can show next week's games (HR prices them days out). The old
+            # fall-forward could only find games already in the DB = game day only.
+            for fwd in range(1, int(cfg.get("lookahead_days") or 0) + 1):
+                d = (today_dt + _td(days=fwd)).strftime("%Y-%m-%d")
+                try:
+                    ingest_today(league, date=d)
+                except Exception as e:
+                    logger.debug("[football:%s] lookahead %s failed: %s",
+                                  league, d, e)
             _INGEST_TS[league] = now
         except Exception as e:
             logger.warning("[football:%s] ingest failed: %s", league, e)
@@ -159,34 +169,51 @@ def api_football_today(league: str) -> dict:
     from engine.football._predict import predict_match
     from engine.football._odds import fetch_league_odds
     from engine.football._picks import generate_picks
-    from engine.football._tracker import record_picks, settle_picks
+    from engine.football._tracker import record_picks, settle_picks, capture_closing_odds
     from engine.football._elo import replay
     conn = get_conn(league)
 
     today = _today_et()
-    # Try today first; fall forward up to 7 days if empty.
-    target = today
-    rows = []
-    for delta in range(0, 8):
-        from datetime import datetime as _dt, timedelta as _td
-        cand = (_dt.strptime(today, "%Y-%m-%d") + _td(days=delta)
-                 ).strftime("%Y-%m-%d")
-        rows = conn.execute(
-            "SELECT g.*, ht.abbreviation AS home_abbr, "
+    from datetime import datetime as _dt, timedelta as _td
+    _SEL = ("SELECT g.*, ht.abbreviation AS home_abbr, "
             "       ht.name AS home_name, ht.logo_url AS home_logo, "
             "       at.abbreviation AS away_abbr, "
             "       at.name AS away_name, at.logo_url AS away_logo "
             "FROM games g "
             "JOIN teams ht ON ht.id = g.home_team_id "
-            "JOIN teams at ON at.id = g.away_team_id "
-            "WHERE g.date = ? "
-            "  AND g.status IN ('scheduled', 'live', 'final') "
-            "ORDER BY g.start_time ASC",
-            (cand,),
+            "JOIN teams at ON at.id = g.away_team_id ")
+    # 2026-09-03 lookahead window (Austin): `days` query param, else the registry's
+    # lookahead_days (nfl/ufl 7 = the coming week; cfb 0 = today only — Saturday
+    # slates are 70+ games). Window mode returns every game from today through
+    # today+days, each row carrying its own date; `date` becomes the range label.
+    win = int(days) if days is not None else int(cfg.get("lookahead_days") or 0)
+    target = today
+    rows = []
+    if win > 0:
+        end = (_dt.strptime(today, "%Y-%m-%d") + _td(days=win)).strftime("%Y-%m-%d")
+        rows = conn.execute(
+            _SEL + "WHERE g.date BETWEEN ? AND ? "
+                   "  AND g.status IN ('scheduled', 'live', 'final') "
+                   "ORDER BY g.date ASC, g.start_time ASC",
+            (today, end),
         ).fetchall()
         if rows:
-            target = cand
-            break
+            dates = sorted({r["date"] for r in rows})
+            target = dates[0] if len(dates) == 1 else f"{dates[0]} → {dates[-1]}"
+    if not rows:
+        # Try today first; fall forward up to 7 days if empty.
+        for delta in range(0, 8):
+            cand = (_dt.strptime(today, "%Y-%m-%d") + _td(days=delta)
+                     ).strftime("%Y-%m-%d")
+            rows = conn.execute(
+                _SEL + "WHERE g.date = ? "
+                       "  AND g.status IN ('scheduled', 'live', 'final') "
+                       "ORDER BY g.start_time ASC",
+                (cand,),
+            ).fetchall()
+            if rows:
+                target = cand
+                break
 
     odds_by_key = fetch_league_odds(league)
     ratings = replay(league)
@@ -246,6 +273,11 @@ def api_football_today(league: str) -> dict:
     except Exception as e:
         logger.warning("[football:%s] record/settle piggyback failed: %s",
                         league, e)
+    # 2026-09-04: snapshot HR's closing line per pick so the CLV column populates (was blank).
+    try:
+        capture_closing_odds(league)
+    except Exception as e:
+        logger.debug("[football:%s] closing-odds capture failed: %s", league, e)
 
     return {
         "league":       league,
@@ -370,6 +402,7 @@ def api_football_calibration(league: str) -> dict:
 
     constants = {
         "home_advantage":   cfg.get("home_advantage"),
+        "home_advantage_pts": cfg.get("home_advantage_pts"),
         "league_avg_total": cfg.get("league_avg_total"),
         "margin_sigma":     cfg.get("margin_sigma"),
         "total_sigma":      cfg.get("total_sigma"),

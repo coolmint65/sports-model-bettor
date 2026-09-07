@@ -52,11 +52,17 @@ const ESPN_SPORT_SLUG = {
   wnba: 'wnba',
   ncaam: 'mens-college-basketball',
   ncaaw: 'womens-college-basketball',
+  // Football: backend supplies logo_url in the payload, but keep an
+  // abbr-based fallback for NFL/UFL (their ESPN logos are keyed by abbr).
+  // CFB is intentionally omitted — ESPN CFB logos are keyed by numeric
+  // team id, so an abbr URL 404s; CFB relies on the payload.
+  nfl: 'nfl',
+  ufl: 'ufl',
 }
 
 // WNBA + NCAA logos use the plain `{slug}.png` path, not the
 // `scoreboard/{slug}.png` variant NBA/NHL/MLB use.
-const _PLAIN_LOGO_LEAGUES = new Set(['wnba', 'ncaam', 'ncaaw'])
+const _PLAIN_LOGO_LEAGUES = new Set(['wnba', 'ncaam', 'ncaaw', 'nfl', 'ufl'])
 
 export function resolveTeamLogo(sport, abbr, espnLogo) {
   const key = abbr ? String(abbr).toUpperCase() : ''
