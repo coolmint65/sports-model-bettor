@@ -117,6 +117,29 @@ function CardGateNote({ gate }) {
 }
 
 
+function EvalGateNote({ sport, gate }) {
+  // NBA / NFL card gate (MintyBot 2026-11-02): the card only takes a stat x side whose shadow record -- every graded
+  // HR main line the model would have picked -- beats break-even by a real margin. Until then: no card picks.
+  if (!gate || gate.error) return null
+  const proven = gate.proven || []
+  const cells = Object.entries(gate.cells || {}).sort((a, b) => b[1].n - a[1].n).slice(0, 4)
+  const minN = gate.min_n ?? 100
+  const minSe = gate.min_se ?? 1.5
+  return (
+    <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-xs text-muted-foreground space-y-1">
+      <div className="font-semibold text-amber-400">
+        {proven.length ? `Card gated: picks only from proven cells (${proven.join(', ')})` : `Card paused: no proven cell yet, so no ${sport.toUpperCase()} prop picks to bet`}
+      </div>
+      <div>Rule: a stat and side needs {minN}+ graded lines the model would have picked{gate.since ? ` since ${fmtShortDate(gate.since)}` : ''}, winning {minSe} standard errors above break-even. Every line is still priced and graded.</div>
+      {cells.length > 0 && (
+        <div className="tabular-nums">
+          {cells.map(([k, c]) => `${k.replace('Player ', '')} ${c.wins}-${c.n - c.wins} (${c.roi > 0 ? '+' : ''}${c.roi}%)`).join(' \u00b7 ')}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function PropsPanel({ sport }) {
   const potdUrl = `/${sport}/player-props/potd`
   const summaryUrl     = `/${sport}/props-tracker/summary`
@@ -428,6 +451,7 @@ export default function PropsPanel({ sport }) {
       )}
 
       {sport === 'nhl' && summary?.card_gate && <CardGateNote gate={summary.card_gate} />}
+      {(sport === 'nba' || sport === 'nfl') && summary?.card_gate && <EvalGateNote sport={sport} gate={summary.card_gate} />}
 
       {/* Today's Slate — single card grid that contains both pending
           and settled-today picks. PropPickCard transitions W/L/Push

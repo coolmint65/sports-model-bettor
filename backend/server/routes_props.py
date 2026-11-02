@@ -328,6 +328,12 @@ def api_props_summary(sport: str):
             card_gate = _gate_summary()
         except Exception as e:
             card_gate = {"error": str(e)}
+    elif sport in ("nba", "nfl"):   # eval-log gate (MintyBot 2026-11-02): shadow record of every graded main line
+        try:
+            from importlib import import_module as _imp_mod
+            card_gate = dict(_imp_mod(f"engine.sports.{sport}.prop_picks").card_gate(), kind="eval_log")
+        except Exception as e:
+            card_gate = {"error": str(e)}
     return {
         "card_gate": card_gate,
         "wins": wins, "losses": losses, "pushes": pushes,

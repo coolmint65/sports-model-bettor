@@ -29,6 +29,8 @@ v2 mirrors engine.sports.nfl.prop_picks / engine.sports.nhl.prop_picks:
   * Every main line priced, every run, goes to prop_eval_log with DraftKings' line for the
     same player-stat, so "does the model -- or HR's softness vs DK -- carry an edge?" is
     graded on hundreds of lines a night, not only the picks.
+  * CARD GATE (2026-11-02, the NFL gate -- see shadow_cells): a pick reaches the real card only
+    from a (stat, side) cell whose shadow record clears n >= 100 and beats break-even by 1.5 SE.
 """
 from __future__ import annotations
 
@@ -190,6 +192,80 @@ def _score(prop: dict, p_over: float, p_under: float) -> dict | None:
     return best if best["edge"] >= PROP_MIN_EDGE_PCT else None
 
 
+# CARD GATE (MintyBot 2026-11-02, Austin "Add the gate" -- the NFL gate, engine.sports.nfl.prop_picks). Since v2
+# went live (10-26) the real card went 8-10 (Assists Under 7-10), and replaying the rule over every graded main line
+# in prop_eval_log (raw band + _score at the pick-time snapshot, else first seen) gives Assists Under 52-55, 48.6% vs
+# a 51.0% break-even (-2.5% ROI, n=107) -- the rule picks almost nothing else. So a (bet_type, side) cell reaches the
+# card only once that shadow record clears n >= _CELL_MIN_N and win% - break-even > _CELL_MIN_SE x SE (the NFL bar;
+# the looser POTD bar opened on noise there and lost). Until then NBA props record NO card picks; every line is still
+# priced, logged and graded, so the shadow record keeps growing. _CELL_SINCE = the live model's start (move it when
+# the model changes, so a retired model can't vouch for the new one).
+_CELL_MIN_N = 100
+_CELL_MIN_SE = 1.5
+_CELL_SINCE = "2026-10-26"   # v2 (prop_model minutes x rate x opponent) went live
+_CELL_TTL_S = 1800
+_CELL_CACHE: dict = {"ts": 0.0, "cells": None}
+
+
+def shadow_cells(force: bool = False) -> dict:
+    """{"<bet_type> <side>": {n, wins, win_pct, be_pct, margin_pp, se_pp, roi, proven}}: every graded main line in
+    prop_eval_log since _CELL_SINCE the live rule would have picked, flat 1u at that price. Pushes skipped. Cached
+    30 min."""
+    if not force and _CELL_CACHE["cells"] is not None and time.time() - _CELL_CACHE["ts"] < _CELL_TTL_S:
+        return _CELL_CACHE["cells"]
+    acc: dict = {}
+    rows = _conn_for("nba").execute(
+        "SELECT bet_type, actual, "
+        "CASE WHEN pick_seen IS NOT NULL THEN pick_line ELSE first_line END AS l, "
+        "CASE WHEN pick_seen IS NOT NULL THEN pick_over ELSE first_over END AS oo, "
+        "CASE WHEN pick_seen IS NOT NULL THEN pick_under ELSE first_under END AS uo, "
+        "CASE WHEN pick_seen IS NOT NULL THEN pick_p_over ELSE first_p_over END AS q "
+        "FROM prop_eval_log WHERE actual IS NOT NULL AND game_date >= ?", (_CELL_SINCE,)).fetchall()
+    for r in rows:
+        if None in (r["l"], r["oo"], r["uo"], r["q"]) or r["actual"] == r["l"]:
+            continue
+        q = float(r["q"])
+        if not (_RAW_BAND[0] <= q <= _RAW_BAND[1]):
+            continue
+        sc = _score({"over_odds": r["oo"], "under_odds": r["uo"], "line": r["l"], "bet_type": r["bet_type"]},
+                    q, 1.0 - q)
+        if not sc:
+            continue
+        won = (r["actual"] > r["l"]) if sc["side"] == "Over" else (r["actual"] < r["l"])
+        o = float(sc["odds"])
+        a = acc.setdefault(f"{r['bet_type']} {sc['side']}", [0, 0, 0.0, 0.0])
+        a[0] += 1
+        a[1] += 1 if won else 0
+        a[2] += _imp(o)
+        a[3] += ((o / 100.0) if o > 0 else (100.0 / -o)) if won else -1.0
+    cells = {}
+    for k, (n, w, be_sum, pl) in acc.items():
+        be = be_sum / n
+        se = (be * (1 - be) / n) ** 0.5
+        margin = w / n - be
+        cells[k] = {"n": n, "wins": w, "win_pct": round(100 * w / n, 1), "be_pct": round(100 * be, 1),
+                    "margin_pp": round(100 * margin, 1), "se_pp": round(100 * se, 1), "roi": round(100 * pl / n, 1),
+                    "proven": n >= _CELL_MIN_N and margin > _CELL_MIN_SE * se}
+    _CELL_CACHE.update(ts=time.time(), cells=cells)
+    return cells
+
+
+def _cell_proven(bet_type: str, side: str) -> bool:
+    try:
+        return bool((shadow_cells().get(f"{bet_type} {side}") or {}).get("proven"))
+    except Exception as e:
+        logger.warning("nba prop_picks: shadow cell read failed (gate stays closed): %s", e)
+        return False
+
+
+def card_gate() -> dict:
+    cells = shadow_cells()
+    return {"rule": f"card pick only from a cell whose shadow record (graded HR main lines the rule would pick, since "
+                    f"{_CELL_SINCE}) has n>={_CELL_MIN_N} and win% - break-even > {_CELL_MIN_SE} SE",
+            "since": _CELL_SINCE, "min_n": _CELL_MIN_N, "min_se": _CELL_MIN_SE,
+            "proven": sorted(k for k, v in cells.items() if v["proven"]), "cells": cells}
+
+
 def _rank(entry: dict) -> float:
     try:
         from ...dynamic_reliability import get_reliability
@@ -289,7 +365,8 @@ def project_slate(target_date: str | None = None) -> dict:
             cands.setdefault(entry["game_id"], []).append(entry)
             display.append(dict(entry, side=scored["side"], model_prob=scored["model_prob"],
                                 odds=scored["odds"], implied_prob=scored["implied_prob"],
-                                edge=scored["edge"], plus_ev=True))
+                                edge=scored["edge"], plus_ev=True,
+                                card_eligible=_cell_proven(prop["bet_type"], scored["side"])))
     try:   # the card can lock any day HR prices (NHL standard), so every date's first sight is its pick snapshot
         by_day: dict = {}
         for e in eval_rows:
@@ -335,11 +412,17 @@ def _record_date(conn, day: str, games: dict) -> int:
     slots = TOP_N_PER_SPORT - sum(per_game.values())
     if slots <= 0:
         return 0
-    winners = []
+    winners, gated = [], 0
     for gid, cl in games.items():
         if per_game.get(gid, 0) >= TOP_N_PER_GAME:
             continue
-        winners.append(max(cl, key=_rank))
+        ok = [e for e in cl if _cell_proven(e["bet_type"], e["scored"]["side"])]   # card gate (see shadow_cells)
+        gated += len(cl) - len(ok)
+        if ok:
+            winners.append(max(ok, key=_rank))
+    if gated:
+        logger.info("nba prop_picks: card gate held back %d candidate(s) on %s (proven cells: %s)",
+                    gated, day, card_gate()["proven"] or "none")
     winners.sort(key=_rank, reverse=True)
     rec = 0
     for e in winners[:slots]:
@@ -390,4 +473,4 @@ def generate_picks(date: str | None = None, props=None, *, target_date: str | No
         return out
 
 
-__all__ = ["project_slate", "generate_picks"]
+__all__ = ["project_slate", "generate_picks", "shadow_cells", "card_gate"]
