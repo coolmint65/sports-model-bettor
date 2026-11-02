@@ -567,7 +567,7 @@ def _record_game_day(slate_winners: list) -> int:
         for entry, game_id, pick_date, matchup in entries[:slots]:
             best = entry["scored"]
             _bt = entry["prop"].get("bet_type", "")
-            if not _gate.is_proven(_bt, best["side"], gate_recs):
+            if not _gate.on_card(_bt, best["side"], gate_recs):     # proven or on trial (card_gate.TRIAL)
                 try:
                     if _gate.record_shadow(game_id, pick_date, matchup, entry["player_id"],
                                            entry["player_name"], _bt, best):

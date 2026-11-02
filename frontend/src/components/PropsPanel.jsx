@@ -93,13 +93,17 @@ function CardGateNote({ gate }) {
   // everything else the model picks is tracked as shadow (NOT bets). Say so plainly.
   if (!gate || gate.error) return null
   const proven = gate.proven_cells || []
+  const trial = gate.trial_cells || []
+  const sinceBy = gate.since_by_bt || {}
   const cells = (gate.cells || []).slice(0, 4)
   return (
     <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-xs text-muted-foreground space-y-1">
       <div className="font-semibold text-amber-400">
-        {proven.length ? `Card gated: picks only from proven cells (${proven.join(', ')})` : 'Card paused: no proven cell yet, so no NHL prop picks to bet'}
+        {trial.length
+          ? `On the card, on trial (not proven yet): ${trial.join(', ')}${proven.length ? ` · proven: ${proven.join(', ')}` : ''}. Other stats stay shadow until proven.`
+          : proven.length ? `Card gated: picks only from proven cells (${proven.join(', ')})` : 'Card paused: no proven cell yet, so no NHL prop picks to bet'}
       </div>
-      <div>Rule: a stat and side needs {gate.min_n}+ graded picks since {fmtShortDate(gate.since)} and ROI above 1 standard error. Calibration review 11-01: the model's 62% claims hit about 48%.</div>
+      <div>Rule: a stat and side needs {gate.min_n}+ graded picks since its model start ({Object.entries(sinceBy).map(([bt, d]) => `${bt.replace('Skater ', '')} v2: ${fmtShortDate(d)}`).concat([`others: ${fmtShortDate(gate.since)}`]).join(', ')}) and ROI above 1 standard error. Calibration review 11-01: the old model's 62% claims hit about 48%.</div>
       {cells.length > 0 && (
         <div className="tabular-nums">
           {cells.map(c => `${c.cell} ${c.wins}-${c.losses} (${c.roi_pct > 0 ? '+' : ''}${c.roi_pct}%${c.se_pct != null ? ` \u00b1${c.se_pct}` : ''})`).join(' \u00b7 ')}

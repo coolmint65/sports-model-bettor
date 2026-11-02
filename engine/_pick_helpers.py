@@ -108,7 +108,10 @@ def stake_units_for(prob: float, edge: float,
         e = float(edge or 0)
     except (TypeError, ValueError):
         return 0.0
-    if p < 0.52:
+    # The 0.52 floor only makes sense at an unknown (assumed -110) price. With the real odds the Kelly
+    # fraction below already returns 0 when there's no edge; the floor was zeroing every plus-money pick
+    # (SOG Under 1.5 at +140, p .478, edge +6pp -> 0u -> "$0 stake" on the card). MintyBot 2026-11-02.
+    if p < 0.52 and odds is None:
         return 0.0
     if e < 1.5:  # below break-even after juice, don't size up regardless of prob
         return 0.0

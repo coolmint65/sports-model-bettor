@@ -31,8 +31,20 @@ logger = logging.getLogger(__name__)
 MIN_N = 30
 SE_MULT = 1.0
 SINCE = "2026-10-27"          # = engine.player_props_potd.MODEL_SINCE["nhl"] (current model)
-RULE = (f"card shows a pick only from a proven stat x side: n>={MIN_N} graded rule picks since "
-        f"{SINCE} (real + shadow) and ROI > {SE_MULT:g} SE")
+# Per-stat evidence start. SOG v2 (sog_v2.py) took over with the 11-02 slate, so the SOG cells count
+# ONLY v2 picks (Austin 2026-11-01 "switch the gate"; the old model's 7-10 SOG record no longer counts).
+SINCE_BY_BT = {"Skater SOG": "2026-11-02"}
+# TRIAL cells go on the REAL card before they're proven (Austin 2026-11-01 on SOG v2: "I do want them
+# turned on, I want to bet them. Bit of a trial by fire"). Their record keeps building in
+# cell_records() like any other cell. Take a cell out of here to put it back behind the gate.
+TRIAL = {("Skater SOG", "Over"), ("Skater SOG", "Under")}
+RULE = (f"card shows a pick only from a proven stat x side: n>={MIN_N} graded rule picks since the stat's "
+        f"model start (real + shadow) and ROI > {SE_MULT:g} SE; trial cells "
+        f"({', '.join(sorted(f'{b} {s}' for b, s in TRIAL))}) are on the card while they prove it")
+
+
+def since_for(bet_type: str) -> str:
+    return SINCE_BY_BT.get(bet_type, SINCE)
 
 
 def _conn():
@@ -115,15 +127,16 @@ def cell_records() -> dict:
     (the rule ran ungated until 2026-11-01) + shadow picks. W/L only; pushes / DNPs ignored."""
     c = _conn()
     _ensure(c)
+    lo = min([SINCE, *SINCE_BY_BT.values()])
     rows = [("real",) + tuple(r) for r in c.execute(
-        "SELECT bet_type, side, odds, result FROM player_props_picks WHERE date >= ? "
-        "AND result IN ('W','L')", (SINCE,))]
+        "SELECT bet_type, side, odds, result, date FROM player_props_picks WHERE date >= ? "
+        "AND result IN ('W','L')", (lo,))]
     rows += [("shadow",) + tuple(r) for r in c.execute(
-        "SELECT bet_type, side, odds, result FROM prop_card_shadow WHERE date >= ? "
-        "AND result IN ('W','L')", (SINCE,))]
+        "SELECT bet_type, side, odds, result, date FROM prop_card_shadow WHERE date >= ? "
+        "AND result IN ('W','L')", (lo,))]
     by: dict = {}
-    for src, bt, side, odds, res in rows:
-        if odds is None or not side:
+    for src, bt, side, odds, res, d in rows:
+        if odds is None or not side or str(d) < since_for(bt):
             continue
         by.setdefault((bt, str(side).title()), []).append((src, _dec(odds) - 1.0 if res == "W" else -1.0,
                                                           1.0 / _dec(odds), res == "W"))
@@ -138,7 +151,8 @@ def cell_records() -> dict:
                   "real": sum(1 for x in v if x[0] == "real"), "shadow": sum(1 for x in v if x[0] == "shadow"),
                   "win_pct": round(100.0 * w / n, 1), "be_pct": round(100.0 * sum(x[2] for x in v) / n, 1),
                   "roi_pct": round(100.0 * m, 1), "se_pct": round(100.0 * se, 1) if n > 1 else None,
-                  "proven": bool(n >= MIN_N and m > SE_MULT * se)}
+                  "proven": bool(n >= MIN_N and m > SE_MULT * se),
+                  "since": since_for(k[0]), "trial": k in TRIAL}
     return out
 
 
@@ -151,6 +165,13 @@ def is_proven(bet_type: str, side: str, recs: dict | None = None) -> bool:
         return False
 
 
+def on_card(bet_type: str, side: str, recs: dict | None = None) -> bool:
+    """The real card takes proven cells AND trial cells (see TRIAL). Fail-closed like is_proven."""
+    if (bet_type, str(side).title()) in TRIAL:
+        return True
+    return is_proven(bet_type, side, recs)
+
+
 def summary() -> dict:
     """For /api/nhl/props-tracker/summary: the rule, every cell's record and the shadow slate."""
     c = _conn()
@@ -159,11 +180,12 @@ def summary() -> dict:
     pend = [dict(r) for r in c.execute(
         "SELECT date, matchup, player_name, bet_type, side, line, odds, model_prob, edge "
         "FROM prop_card_shadow WHERE result IS NULL ORDER BY date, id")]
-    return {"rule": RULE, "min_n": MIN_N, "se_mult": SE_MULT, "since": SINCE,
+    return {"rule": RULE, "min_n": MIN_N, "se_mult": SE_MULT, "since": SINCE, "since_by_bt": SINCE_BY_BT,
             "proven_cells": [r["cell"] for r in recs.values() if r["proven"]],
+            "trial_cells": sorted(f"{b} {s}" for b, s in TRIAL),
             "cells": sorted(recs.values(), key=lambda r: -r["n"]),
             "shadow_pending": len(pend), "shadow_pending_picks": pend}
 
 
-__all__ = ["MIN_N", "SE_MULT", "SINCE", "RULE", "shadow_counts", "record_shadow", "grade_shadow",
-           "cell_records", "is_proven", "summary"]
+__all__ = ["MIN_N", "SE_MULT", "SINCE", "SINCE_BY_BT", "TRIAL", "RULE", "since_for", "shadow_counts",
+           "record_shadow", "grade_shadow", "cell_records", "is_proven", "on_card", "summary"]
