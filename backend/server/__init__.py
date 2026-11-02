@@ -2314,6 +2314,10 @@ app.include_router(_public_betting_router)
 # Horses tab -- proxies the Pi's Horses v2 place/show PAPER tracker (/api/horses-v2), display-only (2026-11-01)
 from .routes_horses import router as _horses_router  # noqa: E402
 app.include_router(_horses_router)
+# Model Health tab -- every model's record vs break-even + data-integrity checks, served from a cache that
+# engine.model_health rebuilds in a background thread (started at the bottom of this file) (2026-11-01)
+from .routes_model_health import router as _model_health_router  # noqa: E402
+app.include_router(_model_health_router)
 from .routes_nhl_extra import (  # noqa: E402,F401  re-export for routes_nhl.py lazy proxies
     _NHL_TEAM_ABBR, _NHL_ABBR_ALTS, _NHL_ESPN_TO_KEY, _nhl_espn_to_key, _nhl_alt_abbr,
     _get_nhl_scoreboard, _parse_nhl_scoreboard, NHL_EMPTY_CACHE_TTL, _fetch_nhl_odds,
@@ -2514,3 +2518,17 @@ try:
         _prewarm_th.Thread(target=_startup_prewarm_all, name="startup-prewarm", daemon=True).start()
 except Exception as _e:
     logger.warning("[prewarm] failed to start: %s", _e)
+
+
+# ---------------------------------------------------------------------------
+# Model Health builder (MintyBot 2026-11-01, PickMint V3). MODULE-LEVEL like the warmers above (the
+# @app.on_event hooks never fire here) and guarded by _is_backend_server() so the live_worker never runs it.
+# engine.model_health rebuilds the /api/model-health payload every 10 min (first build ~240 s after boot,
+# after the prewarm burst) into data/model_health.json; the endpoint only serves that cache.
+# ---------------------------------------------------------------------------
+try:
+    if _is_backend_server():
+        from engine.model_health import start_background as _model_health_start
+        _model_health_start()
+except Exception as _e:
+    logger.warning("[model-health] failed to start: %s", _e)

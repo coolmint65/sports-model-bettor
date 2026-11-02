@@ -26,6 +26,7 @@ import PanelErrorBoundary from './components/PanelErrorBoundary'
 import ArbPanel from './components/ArbPanel'
 import PublicBettingPanel from './components/PublicBettingPanel'
 import HorsesPanel from './components/HorsesPanel'
+import ModelHealthPanel from './components/ModelHealthPanel'
 
 const api = axios.create({ baseURL: '/api' })
 
@@ -339,6 +340,10 @@ export default function App() {
       setSurface('potd')
       return
     }
+    if (id === 'health') {
+      setSurface('health')
+      return
+    }
     if (id === 'arb') {
       setSurface('arb')
       return
@@ -486,6 +491,7 @@ export default function App() {
           surface === 'dashboard' ? 'dashboard'
           : surface === 'portfolio' ? 'portfolio'
           : surface === 'potd' ? 'potd'
+          : surface === 'health' ? 'health'
           : surface === 'arb' ? 'arb'
           : surface === 'public' ? 'public'
           : surface === 'horses' ? 'horses'
@@ -519,6 +525,12 @@ export default function App() {
          <PanelErrorBoundary>
            <PotdPanel api={api} />
          </PanelErrorBoundary>
+              ) : surface === 'health' ? (
+         <div className="app">
+           <PanelErrorBoundary>
+             <ModelHealthPanel api={api} />
+           </PanelErrorBoundary>
+         </div>
               ) : surface === 'arb' ? (
          <div className="app">
            <PanelErrorBoundary>

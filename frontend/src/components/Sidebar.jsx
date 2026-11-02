@@ -215,6 +215,22 @@ function SidebarImpl({
           </div>
 
           <button
+            onClick={() => handleSelect('health')}
+            className={cn(
+              'flex w-full items-center justify-between rounded-md px-3 py-2.5 text-sm font-medium transition-colors',
+              'focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+              selected === 'health'
+                ? 'bg-primary text-primary-foreground'
+                : 'text-foreground hover:bg-accent hover:text-accent-foreground',
+            )}
+          >
+            <span className="flex items-center gap-2.5">
+              <span className="text-base leading-none" aria-hidden="true">🩺</span>
+              <span>Model Health</span>
+            </span>
+          </button>
+
+          <button
             onClick={() => handleSelect('arb')}
             className={cn(
               'flex w-full items-center justify-between rounded-md px-3 py-2.5 text-sm font-medium transition-colors',
