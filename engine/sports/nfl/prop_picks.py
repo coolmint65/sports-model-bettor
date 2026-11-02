@@ -1,4 +1,14 @@
-"""NFL player-props PAPER picker v2 -- the NHL playbook (MintyBot 2026-10-26).
+"""NFL player-props PAPER picker -- v3 projections since 2026-11-02 (Austin "Switch NFL"), v2 machinery.
+
+v3 (engine.sports.nfl.prop_v3, MintyBot 2026-11-02): the projection + distribution come from the walk-forward
+LightGBM research model (as-of player / team / opponent / QB / vacated-volume / game-line features; P(over) from
+the neighbour pool of out-of-sample projections), anchored at a flat w=.35 (its research setting -- the weekly v2
+refit stays off v3). Its research edge was an OPEN-price edge (+21.9% +/-7 on every candidate at the open, +11% at
+the close, ~0 on the capped card), so: the card gate replays v3's FIRST-SEEN price per line, counts only lines first
+seen after v3 went live (_V3_SINCE), and the card lock records the first time HR prices a game (no game-day hour).
+_MODEL = "v2" reverts to engine.sports.nfl.prop_model in one line.
+
+v2 notes (2026-10-26) follow.
 
 Austin 2026-10-25: "Lets work on NFL player props now. We revitalised NHL player props
 and they've been doing great ... We need to follow in the footsteps of that."
@@ -40,6 +50,7 @@ from datetime import datetime, timedelta, timezone
 
 from . import prop_model as _pm
 from . import prop_refit as _refit
+from . import prop_v3 as _v3
 from .player_props import _conn, _ensure, _norm, _initial_keys, _ESPN_HEAD
 from ...player_props_db import insert_pick, _conn_for
 from ..mlb.prop_picks import (PROP_MIN_EDGE_PCT, PROP_MAX_ODDS, PROP_JUICE_WALL,
@@ -53,8 +64,11 @@ _PROP_MIN_PROB = 0.40        # never headline a side more likely to lose than wi
 _RAW_BAND = (0.20, 0.80)     # raw model prob vs a near-coin-flip main line; outside = skip
 _MIN_SEASON_GAMES = 2        # games this season before a player is priced
 _LIKELY_OUT = 0.50           # injury-layer miss probability that removes a player
-_PICK_FROM_HOUR_ET = 9       # card lock: record on game day from 09:00 ET
+_PICK_FROM_HOUR_ET = 9       # eval-log pick snapshot: game day from 09:00 ET (v2's gate price; v3 gates on first seen)
 _SEASON = 2026
+_MODEL = "v3"                # projections: "v3" = engine.sports.nfl.prop_v3, "v2" = engine.sports.nfl.prop_model
+_V3_W = 0.35                 # v3 anchor weight (research V0); the v2 refit's per-stat weights were fit on v2 probs
+_V3_SINCE = "2026-11-02T13:25:00Z"   # v3 live: the gate counts lines FIRST SEEN from here (v2-priced lines don't vouch)
 _LEGACY_ID = "____-__-__"    # v1 rows: game_id = slate date (LIKE pattern)
 
 _last_gen = {"ts": 0.0, "date": None, "result": None}
@@ -174,10 +188,11 @@ def _main_lines(rows: list) -> list:
     return [v[1] for v in best.values()]
 
 
-def _score(prop: dict, p_over: float, p_under: float) -> dict | None:
+def _score(prop: dict, p_over: float, p_under: float, w: float | None = None) -> dict | None:
     from ...market_blend import anchor_to_market as _anchor
     oo, uo = prop["over_odds"], prop["under_odds"]
-    w = _refit.weight_for(prop["bet_type"])
+    if w is None:
+        w = _V3_W if _MODEL == "v3" else _refit.weight_for(prop["bet_type"])
     po = _anchor(p_over, oo, uo, w=w)
     pu = _anchor(p_under, uo, oo, w=w)
     cands = []
@@ -357,13 +372,18 @@ def shadow_cells(force: bool = False) -> dict:
     c = _conn()
     try:
         _ensure_eval_log(c)
-        rows = c.execute(
-            "SELECT bet_type, actual, "
-            "CASE WHEN pick_seen IS NOT NULL THEN pick_line ELSE first_line END AS l, "
-            "CASE WHEN pick_seen IS NOT NULL THEN pick_over ELSE first_over END AS oo, "
-            "CASE WHEN pick_seen IS NOT NULL THEN pick_under ELSE first_under END AS uo, "
-            "CASE WHEN pick_seen IS NOT NULL THEN pick_p_over ELSE first_p_over END AS q "
-            "FROM prop_eval_log WHERE actual IS NOT NULL").fetchall()
+        if _MODEL == "v3":    # v3's edge is at the open: its first-seen price, v3-priced lines only
+            rows = c.execute(
+                "SELECT bet_type, actual, first_line AS l, first_over AS oo, first_under AS uo, first_p_over AS q "
+                "FROM prop_eval_log WHERE actual IS NOT NULL AND first_seen >= ?", (_V3_SINCE,)).fetchall()
+        else:
+            rows = c.execute(
+                "SELECT bet_type, actual, "
+                "CASE WHEN pick_seen IS NOT NULL THEN pick_line ELSE first_line END AS l, "
+                "CASE WHEN pick_seen IS NOT NULL THEN pick_over ELSE first_over END AS oo, "
+                "CASE WHEN pick_seen IS NOT NULL THEN pick_under ELSE first_under END AS uo, "
+                "CASE WHEN pick_seen IS NOT NULL THEN pick_p_over ELSE first_p_over END AS q "
+                "FROM prop_eval_log WHERE actual IS NOT NULL").fetchall()
     finally:
         c.close()
     for r in rows:
@@ -405,8 +425,11 @@ def _cell_proven(bet_type: str, side: str) -> bool:
 
 def card_gate() -> dict:
     cells = shadow_cells()
-    return {"rule": f"card pick only from a cell whose shadow record (graded HR main lines the rule would pick) has "
-                    f"n>={_CELL_MIN_N} and win% - break-even > {_CELL_MIN_SE} SE",
+    v3 = _MODEL == "v3"
+    return {"rule": f"card pick only from a cell whose shadow record (graded HR main lines the rule would pick"
+                    f"{', v3 at its first-seen price' if v3 else ''}) has n>={_CELL_MIN_N} and win% - break-even > "
+                    f"{_CELL_MIN_SE} SE",
+            "model": _MODEL, "since": _V3_SINCE[:10] if v3 else None, "min_n": _CELL_MIN_N, "min_se": _CELL_MIN_SE,
             "proven": sorted(k for k, v in cells.items() if v["proven"]), "cells": cells}
 
 
@@ -459,12 +482,15 @@ def project_slate(target_date: str | None = None) -> dict:
                 continue
             stat = _pm.MARKETS[prop["bet_type"]][0]
             opp = away if cand["team"] == home else home
-            pj = _pm.project(cand["espn_id"], stat, opp, g["et_date"], _SEASON)
-            if not pj:
-                skipped["no_projection"] += 1
-                continue
-            pr = _pm.probs(stat, pj["pg"], pj["proj"], float(prop["line"]), _SEASON)
-            if not pr:
+            if _MODEL == "v3":
+                v = _v3.prediction(g["game_id"], cand["espn_id"], stat)
+                pj = v and {"pg": v["pgp"], "proj": round(float(v["pred"]), 2), "matchup": None,
+                            "games": v["games"], "games_season": v["games_season"]}
+                pr = v and _v3.probs(stat, v["pgp"], float(v["pred"]), float(prop["line"]), v["date"], v["season"])
+            else:
+                pj = _pm.project(cand["espn_id"], stat, opp, g["et_date"], _SEASON)
+                pr = pj and _pm.probs(stat, pj["pg"], pj["proj"], float(prop["line"]), _SEASON)
+            if not pj or not pr:
                 skipped["no_projection"] += 1
                 continue
             p_over, p_under, pool_n = pr
@@ -520,11 +546,19 @@ def _record_game_day(cands: dict, now_et: datetime) -> int:
     most TOP_N_PER_GAME per game, best edge x reliability first. Existing picks for the
     date count against the caps and are never voided or swapped."""
     today = now_et.strftime("%Y-%m-%d")
+    if _MODEL == "v3":      # first time HR prices the game, any upcoming date (v3's edge is the early-week price)
+        dates = sorted({cl[0]["date"] for cl in cands.values() if cl and cl[0]["date"] >= today})
+        return sum(_record_date(cands, d) for d in dates)
     if now_et.hour < _PICK_FROM_HOUR_ET:
         return 0
-    todays = {gid: cl for gid, cl in cands.items() if cl and cl[0]["date"] == today}
+    return _record_date(cands, today)
+
+
+def _record_date(cands: dict, day: str) -> int:
+    todays = {gid: cl for gid, cl in cands.items() if cl and cl[0]["date"] == day}
     if not todays:
         return 0
+    today = day
     conn = _conn_for("nfl")
     have = conn.execute(
         "SELECT game_id, COUNT(*) AS n FROM player_props_picks WHERE date = ? "
@@ -584,8 +618,8 @@ def generate_picks(target_date: str | None = None, force: bool = False) -> dict:
         except Exception as e:
             logger.warning("nfl prop_picks: record failed: %s", e)
             out["recorded"] = 0
-        logger.info("nfl prop_picks v2: %d main lines, %d priced, %d candidates, %d recorded, skipped %s",
-                    out.get("evaluated", 0), out.get("priced", 0),
+        logger.info("nfl prop_picks (%s): %d main lines, %d priced, %d candidates, %d recorded, skipped %s",
+                    _MODEL, out.get("evaluated", 0), out.get("priced", 0),
                     sum(len(v) for v in cands.values()), out["recorded"], out.get("skipped"))
         _last_gen.update({"ts": now, "date": today, "result": out})
         return out
