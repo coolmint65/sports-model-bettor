@@ -197,6 +197,10 @@ def _resolve_outcome(pick: Pick, state: dict) -> tuple[Result, float] | None:
     # on the first five innings of the games.*_linescore JSON the state row already
     # carries (SELECT g.*). No team token / no 5-inning linescore -> None (stays pending),
     # never mis-graded against the wrong span.
+    # Native rows carry spaced labels ("Team Total", "F5 Team Total"). They matched no branch, sat
+    # pending and were stale-pushed to P after 7 days (32 MLB team totals). MintyBot 2026-11-02.
+    if bt in ("TEAM TOTAL", "F5 TEAM TOTAL"):
+        bt = bt.replace(" ", "_")
     if bt in ("TEAM_TOTAL", "F5_TEAM_TOTAL", "F5_TOTAL"):
         import json as _json
         toks = pick_text.strip().upper().split()

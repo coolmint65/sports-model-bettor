@@ -41,7 +41,11 @@ def _profit_for(result: Result, odds: int) -> float:
 
 def _extract_line(text: str) -> float | None:
     import re
-    m = re.findall(r'-?\d+\.?\d*', text or "")
+    # Strip a trailing period token first ("Over 58.5 Q1", "DAL +3.5 1H"): the last-number parse grabbed the
+    # scope digit, so every NBA Q1/1H/2H total and spread graded at line 1 or 2 (Overs always won, Unders always
+    # lost) and fed fake records to the Pick Authority. Same fix _basketball_adapter already had. MintyBot 2026-11-02.
+    t = re.sub(r'\s+(Q[1-4]|[12]H|H[12])\s*$', '', text or "", flags=re.I)
+    m = re.findall(r'-?\d+\.?\d*', t)
     if not m:
         return None
     try:
@@ -102,10 +106,19 @@ def _resolve_outcome(pick: Pick, state: dict) -> tuple[Result, float] | None:
             return None
         return result, _profit_for(result, odds)
 
-    if bt in ("TEAM_TOTAL", "TEAM TOTAL"):
-        # Full-game per-team total: the TEAM's own final score vs the line
-        # (scope=FULL -> hs/as_ are the final scores). Must precede the game-
-        # TOTAL branch below ("TOTAL" in "TEAM_TOTAL").
+    import re
+    _ttm = re.match(r"^(?:(Q[1-4]|H[12])[ _])?TEAM[ _]TOTAL$", bt)
+    if _ttm:
+        # Per-team total: the TEAM's own points vs the line, full game or one
+        # period ("Q1 Team Total"). Must precede the game-TOTAL branch below
+        # ("TOTAL" in "TEAM_TOTAL"). Until 2026-11-02 "Q1 Team Total" missed the
+        # old exact match and was graded on BOTH teams' Q1 points (17 of 32 wrong).
+        # The period comes from the label, not pick.scope (lean_lock can pass "full").
+        if _ttm.group(1):
+            score = _scope_score(Scope(_ttm.group(1).lower()), state)
+            if score is None:
+                return None
+            hs, as_ = score
         line = _extract_line(pick_text)
         if line is None:
             return None

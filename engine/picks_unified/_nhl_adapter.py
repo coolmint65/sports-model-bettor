@@ -255,6 +255,33 @@ def _resolve_outcome(pick: Pick, state: dict) -> tuple[Result, float] | None:
         return result, _profit_for(result, odds)
 
     # ── O/U / Period Total / ALT O/U ──────────────────────
+    # Team Total = ONE side's goals vs the line. Must precede the game-total branch below: "TOTAL" in
+    # "TEAM TOTAL" sent it there and it graded on BOTH teams' goals (OTT Under 3.5 with OTT on 3 in a
+    # 9-goal game came back LOST). MintyBot 2026-11-02, Austin "this wasn't a loss".
+    if "TEAM TOTAL" in bt or "TEAM_TOTAL" in bt:
+        m = re.match(r"^\s*(.+?)\s+(over|under)(?:\s+(-?\d+\.?\d*))?\s*$", pick_text, re.I)
+        if not m:
+            return None
+        line = float(m.group(3)) if m.group(3) else pick.line
+        if line is None:
+            return None
+        tok = m.group(1).strip().upper()
+        forms = lambda k: {str(f).strip().upper() for f in (state.get(k) or [])}
+        if _canon(tok) == home_abbr or tok in forms("home_forms"):
+            goals = hs
+        elif _canon(tok) == away_abbr or tok in forms("away_forms"):
+            goals = as_
+        else:
+            return None
+        is_over = m.group(2).lower() == "over"
+        if goals > line:
+            result = Result.WIN if is_over else Result.LOSS
+        elif goals < line:
+            result = Result.LOSS if is_over else Result.WIN
+        else:
+            result = Result.PUSH
+        return result, _profit_for(result, odds)
+
     if "TOTAL" in bt or bt in ("O/U", "ALT O/U"):
         line = _extract_line(pick_text)
         if line is None:

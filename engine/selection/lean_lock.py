@@ -95,7 +95,21 @@ def hold(sport, game_id, lean):
             d[k] = {"lean": dict(lean), "at": time.time()}
             _save(d)
             return lean
-        return dict(cur) if cur is not None else lean
+        if cur is None:
+            return lean
+    # The PICK is held, its graduation is not (Austin 10-29: "graduation stays live"). The frozen tag kept
+    # NBA Q1-total / Q1-team-total Overs "graduated" after their records were corrected (11-02 line-parse and
+    # team-total regrades: +96% / +87% were really -20% / -16%). Re-stamp the tag and the cell record now.
+    sp, _, lg = str(sport).partition(":")
+    return _refresh_cell(sp, lg or sp, flag_graduation(sp, lg or sp, dict(cur)))
+
+
+def _refresh_cell(sport, league, p):
+    try:
+        import importlib
+        return importlib.import_module('engine.selection.select_pick')._with_cell(sport, league, p)   # the package exports a select_pick FUNCTION
+    except Exception:
+        return p
 
 
 def held(sport, game_id):
