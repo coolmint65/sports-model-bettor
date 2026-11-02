@@ -108,6 +108,55 @@ def _ensure_table(sport: str) -> None:
     conn.commit()
 
 
+# ── NHL P1 (period-1) PAPER tracker ─────────────────────────────────
+# Isolated from nhl_derivative_picks on purpose (Austin 2026-10-01 P1
+# tab/tracker consistency pass). nhl_derivative_picks is shared by the
+# generic Derivatives tab and is floor-gated at 4.0% edge, with
+# record_top_derivatives keeping only the SINGLE top-edge derivative
+# per game across EVERY period + Team Total -- so a strong P1 pick can
+# lose the per-game slot to a same-night Team Total or P2/P3 pick, or
+# simply fall under the 4.0 floor while the P1 CARD (best_pick_p1,
+# which only requires edge > 0) still shows it. Recording every
+# card-shown P1 lean into the shared table would either keep dropping
+# some of them (the per-game-not-per-type contest) or leak sub-4% P1
+# rows into the Derivatives tab's edge-gated view -- both unacceptable.
+# A dedicated table sidesteps both: one row per game, any positive
+# edge, zero effect on nhl_derivative_picks or the Derivatives tab.
+NHL_P1_PAPER_TABLE = "nhl_p1_paper_picks"
+
+
+def _ensure_nhl_p1_paper_table() -> None:
+    """Create the NHL P1 paper-pick table if missing. Same column
+    shape as nhl_derivative_picks (including stake_units / closing_odds
+    / closing_odds_captured_at, added to that table after _ensure_table
+    was originally written) so get_summary / get_history / the settle
+    trampoline all work against it unmodified via their `table=`
+    override -- see record_p1_paper_picks."""
+    conn = _conn("nhl")
+    conn.execute(f"""
+        CREATE TABLE IF NOT EXISTS {NHL_P1_PAPER_TABLE} (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_id     TEXT NOT NULL,
+            date        TEXT NOT NULL,
+            matchup     TEXT NOT NULL,
+            bet_type    TEXT NOT NULL,
+            pick        TEXT NOT NULL,
+            model_prob  REAL,
+            edge        REAL,
+            odds        INTEGER,
+            result      TEXT,
+            profit      REAL,
+            created_at  TEXT DEFAULT (datetime('now')),
+            settled_at  TEXT,
+            closing_odds INTEGER,
+            stake_units REAL,
+            closing_odds_captured_at TEXT,
+            UNIQUE(game_id, date, bet_type, pick)
+        )
+    """)
+    conn.commit()
+
+
 def record_top_derivatives(sport: str, bets: list[dict],
                             n_per_game: int = 1,
                             min_edge: float = 4.0,
@@ -260,10 +309,156 @@ def record_top_derivatives(sport: str, bets: list[dict],
             "skipped": skipped, "voided": voided}
 
 
-def settle_derivative_picks(sport: str) -> dict:
+def _p1_lean_for_bet(bet: dict) -> dict | None:
+    """The single P1 lean to record for one game -- mirrors the TWO-TIER
+    fallback BetsView.jsx uses to pick what the P1 card actually shows:
+
+      1. ``best_pick_p1`` -- the gated, derivative-pipeline pick (requires
+         edge > 0; see p1_candidates in api_nhl_best_bets). This is the
+         EdgeBadge tier.
+      2. else the single entry in ``paper_picks_p1`` (_nhl_p1_paper_picks)
+         -- the ungated calibrated lean (model's favored side of the P1
+         total, regardless of edge sign). This is the PaperBadge tier;
+         GameCard renders it whenever best_pick_p1 is absent, with NO
+         edge-sign gate (PaperBadge explicitly styles negative edges).
+
+    As of 2026-10-01 (early regular season) best_pick_p1 is empty for
+    EVERY NHL game -- HR isn't yet populating the period-market odds the
+    derivative pipeline needs, so derivative_picks is empty slate-wide
+    and every card is currently running on the paper_picks_p1 fallback.
+    Sourcing ONLY tier 1 (the original cut of this function) would leave
+    the P1 tracker empty while the P1 cards show real leans -- not
+    actually consistent. So both tiers are read here.
+
+    Edge > 0 is still required from EITHER tier before recording,
+    though -- per Austin's "don't flood with junk/negative-edge picks."
+    This is a deliberate, acknowledged divergence from tier 2's own
+    display (PaperBadge shows negative-edge leans on the card); the
+    tracker is a running log, not a single-game badge, and a 4.0-floor
+    style guard is exactly why the general Derivatives tab has one too.
+    """
+    p = bet.get("best_pick_p1")
+    if not p:
+        pp1 = bet.get("paper_picks_p1") or []
+        p = pp1[0] if pp1 else None
+    if not p or (p.get("edge") or 0) <= 0:
+        return None
+    return p
+
+
+def record_p1_paper_picks(bets: list[dict],
+                           target_date: str | None = None) -> dict:
+    """Record each game's single P1 (period-1) lean into the isolated
+    nhl_p1_paper_picks table -- one row per game, via _p1_lean_for_bet
+    (best_pick_p1, falling back to paper_picks_p1 -- see its docstring
+    for why both tiers are needed). Recording the same pick the card
+    falls back to is what makes the P1 tracker agree with the P1 cards.
+
+    Deliberately NOT routed through record_top_derivatives: that
+    function (a) keeps only the single top-edge derivative per game
+    across every period + Team Total combined, so a real P1 edge can
+    lose the slot to an unrelated same-night pick, (b) applies a flat
+    4.0 floor tuned for the Derivatives tab's aggregate, which silently
+    drops any 0-4% P1 lean the card is already showing, and (c) only
+    ever reads derivative_picks, never the separate paper_picks_p1
+    fallback the cards actually run on most nights.
+
+    Idempotent via UNIQUE(game_id, date, bet_type, pick), same as
+    record_top_derivatives. Stale-row voiding is scoped to this table
+    only (nhl_p1_paper_picks), so it can never touch nhl_derivative_picks
+    rows -- the two tables are fully partitioned, not just by pick-text
+    prefix but by table.
+
+    Expects ``bets`` already filtered to today's ET date (the same
+    ``today_bets`` list the best-bets route feeds record_top_derivatives)
+    -- this function does not re-derive game dates.
+
+    Returns ``{"inserted": N, "updated": N, "skipped": N, "voided": N}``.
+    """
+    _ensure_nhl_p1_paper_table()
+    conn = _conn("nhl")
+    table = NHL_P1_PAPER_TABLE
+    target_date = target_date or et_today_str()
+
+    inserted = updated = skipped = voided = 0
+
+    keep: set[tuple[str, str, str]] = set()
+    for bet in bets:
+        p = _p1_lean_for_bet(bet)
+        if not p:
+            continue
+        gid = str(bet.get("game_id") or "")
+        keep.add((gid, p.get("type") or "", p.get("pick") or ""))
+
+    for bet in bets:
+        p = _p1_lean_for_bet(bet)
+        game_id = str(bet.get("game_id") or "")
+        matchup = bet.get("matchup", "")
+
+        # Void unsettled P1-paper rows for this game that no longer match
+        # today's pick (e.g. the model's side flipped on a line move).
+        # Scoped to THIS table only, so nhl_derivative_picks is untouched.
+        stale_rows = conn.execute(
+            f"SELECT id, bet_type, pick FROM {table} "
+            f"WHERE game_id = ? AND date = ? AND result IS NULL",
+            (game_id, target_date),
+        ).fetchall()
+        for sr in stale_rows:
+            key = (game_id, sr["bet_type"] or "", sr["pick"] or "")
+            if key not in keep:
+                conn.execute(f"DELETE FROM {table} WHERE id = ?", (sr["id"],))
+                voided += 1
+
+        if not p:
+            # _p1_lean_for_bet already applied the edge > 0 gate across
+            # both tiers -- nothing left to record for this game today.
+            continue
+
+        existing = conn.execute(
+            f"SELECT id, result FROM {table} "
+            f"WHERE game_id = ? AND date = ? AND bet_type = ? AND pick = ?",
+            (game_id, target_date, p.get("type"), p.get("pick")),
+        ).fetchone()
+        if existing:
+            if existing["result"] is None:
+                conn.execute(
+                    f"UPDATE {table} SET model_prob = ?, edge = ?, "
+                    f"odds = ? WHERE id = ?",
+                    (p.get("prob"), p.get("edge"), p.get("odds"),
+                     existing["id"]),
+                )
+                updated += 1
+            else:
+                skipped += 1
+            continue
+        try:
+            conn.execute(
+                f"INSERT INTO {table} (game_id, date, matchup, "
+                f"bet_type, pick, model_prob, edge, odds, stake_units) "
+                f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (game_id, target_date, matchup,
+                 p.get("type"), p.get("pick"),
+                 p.get("prob"), p.get("edge"), p.get("odds"),
+                 p.get("stake_units")),
+            )
+            inserted += 1
+        except Exception as e:
+            logger.warning("Could not insert P1 paper pick: %s", e)
+    conn.commit()
+    return {"inserted": inserted, "updated": updated,
+            "skipped": skipped, "voided": voided}
+
+
+def settle_derivative_picks(sport: str, table: str | None = None) -> dict:
     """Settle pending derivative picks. Re-uses the per-sport settler
     by temporarily aliasing the derivative_picks table to picks (via a
-    direct settler call with the right table)."""
+    direct settler call with the right table).
+
+    ``table`` (optional): settle a sibling table instead of the sport's
+    default derivative table -- e.g. ``NHL_P1_PAPER_TABLE`` for the
+    isolated P1 paper tracker. Only wired for NHL today (the only sport
+    with a sibling derivative-shaped table); passing it for mlb/nba
+    raises. Omitted (default), behavior is byte-for-byte unchanged."""
     # Easiest path: copy main settler logic but read/write to the
     # derivative table. Both settlers already handle every Phase 1
     # bet type. We monkey-patch at the lowest level by just running
@@ -271,10 +466,14 @@ def settle_derivative_picks(sport: str) -> dict:
     # For now, pragmatic approach: re-import settle_picks but tell it
     # to operate on the derivative table via a context shim.
     if sport == "mlb":
+        if table is not None:
+            raise ValueError("table override not supported for mlb")
         result = _settle_mlb_derivatives()
     elif sport == "nhl":
-        result = _settle_nhl_derivatives()
+        result = _settle_nhl_derivatives(table=table) if table else _settle_nhl_derivatives()
     elif sport == "nba":
+        if table is not None:
+            raise ValueError("table override not supported for nba")
         result = _settle_nba_derivatives()
     else:
         raise ValueError(f"unknown sport: {sport}")
@@ -283,11 +482,14 @@ def settle_derivative_picks(sport: str) -> dict:
     # `_pot_day.result/profit/settled_at` stay in sync with
     # derivative_picks. The summary endpoint uses a JOIN and works
     # without this, but ad-hoc analytics expect the columns populated
-    # on the lock table directly.
-    try:
-        backfill_derivative_potd_results(sport)
-    except Exception as e:
-        logger.debug("derivative POTD backfill skipped for %s: %s", sport, e)
+    # on the lock table directly. Skipped for a `table` override -- the
+    # P1 paper table has no `_pot_day` lock table of its own (the
+    # existing P1 POTD lock still rides nhl_derivative_picks).
+    if table is None:
+        try:
+            backfill_derivative_potd_results(sport)
+        except Exception as e:
+            logger.debug("derivative POTD backfill skipped for %s: %s", sport, e)
 
     return result
 
@@ -472,27 +674,49 @@ def _settle_mlb_derivatives() -> dict:
             "pushes": pushes}
 
 
-def _settle_nhl_derivatives() -> dict:
-    """NHL twin of _settle_mlb_derivatives. Same trampoline pattern."""
+def _settle_nhl_derivatives(table: str = "nhl_derivative_picks") -> dict:
+    """NHL twin of _settle_mlb_derivatives. Same trampoline pattern.
+
+    ``table`` (optional): source/dest table to settle against. Default
+    is the general nhl_derivative_picks table (unchanged behavior); the
+    isolated P1 paper tracker passes ``NHL_P1_PAPER_TABLE`` to settle
+    its own rows through the exact same trampoline. The mirror target
+    is always the real ``nhl_picks`` table regardless -- only the
+    derivative-side source/dest changes."""
     from .nhl_db import get_conn
     from .nhl_tracker import settle_picks
     conn = get_conn()
     pending = conn.execute(
-        "SELECT * FROM nhl_derivative_picks WHERE result IS NULL"
+        f"SELECT * FROM {table} WHERE result IS NULL"
     ).fetchall()
     if not pending:
         return {"settled": 0, "wins": 0, "losses": 0, "pushes": 0}
     settled = wins = losses = pushes = 0
     for p in pending:
         p = dict(p)
-        cur = conn.execute(
-            "INSERT INTO nhl_picks (game_id, date, matchup, bet_type, pick, "
-            "model_prob, edge, odds) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (p["game_id"], p["date"], p["matchup"],
-             p["bet_type"], p["pick"],
-             p["model_prob"], p["edge"], p["odds"]),
-        )
-        temp_id = cur.lastrowid
+        try:
+            cur = conn.execute(
+                "INSERT INTO nhl_picks (game_id, date, matchup, bet_type, pick, "
+                "model_prob, edge, odds) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (p["game_id"], p["date"], p["matchup"],
+                 p["bet_type"], p["pick"],
+                 p["model_prob"], p["edge"], p["odds"]),
+            )
+            temp_id = cur.lastrowid
+        except Exception:
+            # UNIQUE(date,game_id,bet_type,pick) collision — reuse the existing
+            # row instead of crashing. Without this, one orphaned mirror row
+            # aborts settlement for ALL pending derivatives every 60s cycle
+            # (matches _settle_mlb_derivatives). The finally-DELETE below then
+            # auto-cleans the orphan. (2026-08-20)
+            existing = conn.execute(
+                "SELECT id FROM nhl_picks WHERE date = ? AND game_id = ? "
+                "  AND bet_type = ? AND pick = ? LIMIT 1",
+                (p["date"], p["game_id"], p["bet_type"], p["pick"]),
+            ).fetchone()
+            if not existing:
+                continue
+            temp_id = existing["id"]
         conn.commit()
         try:
             settle_picks()
@@ -501,8 +725,8 @@ def _settle_nhl_derivatives() -> dict:
             ).fetchone()
             if row and row["result"] is not None:
                 conn.execute(
-                    "UPDATE nhl_derivative_picks SET result = ?, profit = ?, "
-                    "settled_at = datetime('now') WHERE id = ?",
+                    f"UPDATE {table} SET result = ?, profit = ?, "
+                    f"settled_at = datetime('now') WHERE id = ?",
                     (row["result"], row["profit"], p["id"]),
                 )
                 if row["result"] == "W":
@@ -512,6 +736,58 @@ def _settle_nhl_derivatives() -> dict:
                 else:
                     pushes += 1
                 settled += 1
+                # Phase-2 cutover: mirror settled Period Total picks into
+                # picks_unified so the Pick Authority gate
+                # (engine.selection.edge_proven) can see them (MintyBot
+                # 2026-10-21, split-by-period refinement same day). Scoped
+                # to the real nhl_derivative_picks table only -- NOT the
+                # isolated P1 paper tracker (table == NHL_P1_PAPER_TABLE),
+                # which is a separate, much larger forward-test sample that
+                # Austin asked to backfill historically but NOT wire for
+                # ongoing capture here (it has no settle hook of its own
+                # wired either -- see the backfill report). bet_type is
+                # parsed PER-PERIOD ("P1 Total" / "P2 Total" / "P3 Total")
+                # from the pick text rather than mirrored as the literal
+                # "Period Total" -- so edge_proven grades/graduates each
+                # period as its OWN market instead of blending P1 (thin or
+                # negative edge historically) with P2/P3. Never raises --
+                # the legacy UPDATE above already committed.
+                if table == "nhl_derivative_picks" and p.get("bet_type") == "Period Total":
+                    try:
+                        from .picks_unified._legacy_bridge import mirror_to_unified
+                        _settled_row = conn.execute(
+                            f"SELECT settled_at FROM {table} WHERE id = ?",
+                            (p["id"],),
+                        ).fetchone()
+                        _pick_s = str(p.get("pick") or "").strip().upper()
+                        _period = (int(_pick_s[1])
+                                   if len(_pick_s) >= 2 and _pick_s[0] == "P"
+                                   and _pick_s[1].isdigit() else None)
+                        if _period is not None:
+                            mirror_to_unified(
+                                sport="nhl", league="nhl",
+                                native_game_id=p.get("game_id"),
+                                pick_date=p.get("date") or "",
+                                matchup=p.get("matchup") or "",
+                                bet_type=f"P{_period} Total",
+                                pick_text=p.get("pick") or "",
+                                odds=int(p.get("odds") or 0),
+                                prob=float(p.get("model_prob") or 0.0),
+                                edge_pct=float(p.get("edge") or 0.0),
+                                stake_units=float(p.get("stake_units") or 0.0),
+                                closing_odds=p.get("closing_odds"),
+                                is_shadow=True,
+                                result=row["result"],
+                                profit=row["profit"],
+                                created_at=p.get("created_at"),
+                                settled_at=(_settled_row["settled_at"]
+                                            if _settled_row else None),
+                                pick_at_period=_period,
+                            )
+                    except Exception as e:
+                        logger.debug(
+                            "picks_unified mirror (nhl derivative Period "
+                            "Total) skipped: %s", e)
         finally:
             conn.execute("DELETE FROM nhl_picks WHERE id = ?", (temp_id,))
             conn.commit()
@@ -532,14 +808,28 @@ def _settle_nba_derivatives() -> dict:
     settled = wins = losses = pushes = 0
     for p in pending:
         p = dict(p)
-        cur = conn.execute(
-            "INSERT INTO nba_picks (game_id, date, matchup, bet_type, pick, "
-            "model_prob, edge, odds) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (p["game_id"], p["date"], p["matchup"],
-             p["bet_type"], p["pick"],
-             p["model_prob"], p["edge"], p["odds"]),
-        )
-        temp_id = cur.lastrowid
+        try:
+            cur = conn.execute(
+                "INSERT INTO nba_picks (game_id, date, matchup, bet_type, pick, "
+                "model_prob, edge, odds) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (p["game_id"], p["date"], p["matchup"],
+                 p["bet_type"], p["pick"],
+                 p["model_prob"], p["edge"], p["odds"]),
+            )
+            temp_id = cur.lastrowid
+        except Exception:
+            # UNIQUE(date,game_id,bet_type,pick) collision — reuse the existing
+            # row instead of crashing the whole settle loop (matches
+            # _settle_mlb_derivatives). The finally-DELETE below auto-cleans the
+            # orphan. (2026-08-20)
+            existing = conn.execute(
+                "SELECT id FROM nba_picks WHERE date = ? AND game_id = ? "
+                "  AND bet_type = ? AND pick = ? LIMIT 1",
+                (p["date"], p["game_id"], p["bet_type"], p["pick"]),
+            ).fetchone()
+            if not existing:
+                continue
+            temp_id = existing["id"]
         conn.commit()
         try:
             settle_picks()
@@ -566,12 +856,19 @@ def _settle_nba_derivatives() -> dict:
             "pushes": pushes}
 
 
-def get_summary(sport: str) -> dict:
+def get_summary(sport: str, table: str | None = None) -> dict:
     """Per-bet-type W/L/P totals + ROI for the dedicated derivative
-    tracker UI. Same shape as the main pick-tracker summary."""
-    _ensure_table(sport)
+    tracker UI. Same shape as the main pick-tracker summary.
+
+    ``table`` (optional): read a sibling table instead of the sport's
+    default derivative table -- e.g. ``NHL_P1_PAPER_TABLE``. Omitted
+    (default), behavior is unchanged."""
+    if table is None:
+        _ensure_table(sport)
+        table = _DERIV_TABLE[sport]
+    elif table == NHL_P1_PAPER_TABLE:
+        _ensure_nhl_p1_paper_table()
     conn = _conn(sport)
-    table = _DERIV_TABLE[sport]
     # Stake-weighted profit + ROI (matches per-sport trackers).
     rows = conn.execute(f"""
         SELECT bet_type,
@@ -611,14 +908,22 @@ def get_summary(sport: str) -> dict:
     return summary
 
 
-def get_history(sport: str, limit: int = 200) -> list[dict]:
+def get_history(sport: str, limit: int = 200,
+                 table: str | None = None) -> list[dict]:
     """Recent derivative picks (newest first), for the UI table.
 
     Profit is projected stake-weighted so the table column matches the
-    summary totals from ``get_summary``."""
-    _ensure_table(sport)
+    summary totals from ``get_summary``.
+
+    ``table`` (optional): read a sibling table instead of the sport's
+    default derivative table -- e.g. ``NHL_P1_PAPER_TABLE``. Omitted
+    (default), behavior is unchanged."""
+    if table is None:
+        _ensure_table(sport)
+        table = _DERIV_TABLE[sport]
+    elif table == NHL_P1_PAPER_TABLE:
+        _ensure_nhl_p1_paper_table()
     conn = _conn(sport)
-    table = _DERIV_TABLE[sport]
     rows = conn.execute(f"""
         SELECT * FROM {table}
         ORDER BY COALESCE(settled_at, created_at) DESC
@@ -636,11 +941,16 @@ def get_history(sport: str, limit: int = 200) -> list[dict]:
 
 # ── Derivative Pick of the Day (per sport) ──────────────────
 
-def _ensure_potd_table(sport: str) -> None:
+def _ensure_potd_table(sport: str, suffix: str = "") -> None:
     """Create the derivative POTD table if missing. Mirrors the main
-    pick_of_day schema so the UI can render it the same way."""
+    pick_of_day schema so the UI can render it the same way.
+
+    ``suffix`` selects a sibling lock table (e.g. "_p1" →
+    ``nhl_derivative_picks_p1_pot_day``) so a scoped POTD (NHL P1) can
+    lock independently of the all-markets derivative POTD. Additive —
+    default "" is the original table (Austin 2026-09-22)."""
     conn = _conn(sport)
-    table = f"{_DERIV_TABLE[sport]}_pot_day"
+    table = f"{_DERIV_TABLE[sport]}{suffix}_pot_day"
     conn.execute(f"""
         CREATE TABLE IF NOT EXISTS {table} (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -677,12 +987,18 @@ def _kelly_fraction(prob: float, odds: int) -> float:
 
 
 def select_derivative_potd(sport: str, bets: list[dict],
-                            min_edge: float = 4.0) -> dict | None:
+                            min_edge: float = 4.0,
+                            pick_filter=None) -> dict | None:
     """Pick the best derivative across the day's slate. Considers
     every game's `derivative_picks` (the live model output) and ranks
     by edge × per-market reliability so a 12% Period DNB doesn't
     automatically beat a 10% F5 Team Total just because its raw edge
     is higher.
+
+    ``pick_filter`` (optional): a predicate ``fn(pick_dict) -> bool``;
+    when supplied, only picks it accepts are considered — used to scope
+    the selection to a single family (e.g. NHL P1 = Period* markets whose
+    pick text starts "P1 "). Additive; default None = all derivatives.
     """
     from .config import DERIVATIVE_BLOCKED_MARKETS, DERIVATIVE_EDGE_FLOOR
     from .dynamic_reliability import get_reliability as _get_reliability
@@ -696,6 +1012,8 @@ def select_derivative_potd(sport: str, bets: list[dict],
         for p in (game.get("derivative_picks") or []):
             bt = p.get("type")
             if bt in blocked:
+                continue
+            if pick_filter is not None and not pick_filter(p):
                 continue
             edge = p.get("edge") or 0
             effective_floor = floor_overrides.get(bt, min_edge)
@@ -762,12 +1080,20 @@ def _mirror_derivative_potd_to_tracker(sport: str, conn, sel: dict, today: str) 
                        exc_info=True)
 
 
-def get_or_create_derivative_potd(sport: str, bets: list[dict] | None = None) -> dict | None:
+def get_or_create_derivative_potd(sport: str, bets: list[dict] | None = None,
+                                   suffix: str = "",
+                                   pick_filter=None) -> dict | None:
     """Return today's locked derivative POTD or compute + lock one
-    from the supplied bets list."""
-    _ensure_potd_table(sport)
+    from the supplied bets list.
+
+    ``suffix`` + ``pick_filter`` (additive, default all-markets) scope a
+    sibling POTD — e.g. NHL P1 locks into ``*_p1_pot_day`` from the
+    Period*/"P1 " picks only. The selected pick is still mirrored into the
+    per-sport derivative tracker so the existing settler grades it and the
+    summary JOIN resolves its result."""
+    _ensure_potd_table(sport, suffix)
     conn = _conn(sport)
-    table = f"{_DERIV_TABLE[sport]}_pot_day"
+    table = f"{_DERIV_TABLE[sport]}{suffix}_pot_day"
     today = et_today_str()
     row = conn.execute(f"SELECT * FROM {table} WHERE date = ?", (today,)).fetchone()
     if row:
@@ -778,7 +1104,7 @@ def get_or_create_derivative_potd(sport: str, bets: list[dict] | None = None) ->
         return dict(row)
     if not bets:
         return None
-    sel = select_derivative_potd(sport, bets)
+    sel = select_derivative_potd(sport, bets, pick_filter=pick_filter)
     if not sel:
         return None
     conn.execute(
@@ -795,17 +1121,18 @@ def get_or_create_derivative_potd(sport: str, bets: list[dict] | None = None) ->
     return out
 
 
-def get_today_derivative_potd(sport: str) -> dict | None:
-    """Read-only fetch of today's derivative POTD (None if not yet selected)."""
-    _ensure_potd_table(sport)
+def get_today_derivative_potd(sport: str, suffix: str = "") -> dict | None:
+    """Read-only fetch of today's derivative POTD (None if not yet selected).
+    ``suffix`` selects a sibling lock table (e.g. "_p1")."""
+    _ensure_potd_table(sport, suffix)
     conn = _conn(sport)
-    table = f"{_DERIV_TABLE[sport]}_pot_day"
+    table = f"{_DERIV_TABLE[sport]}{suffix}_pot_day"
     today = et_today_str()
     row = conn.execute(f"SELECT * FROM {table} WHERE date = ?", (today,)).fetchone()
     return dict(row) if row else None
 
 
-def backfill_derivative_potd_results(sport: str) -> dict:
+def backfill_derivative_potd_results(sport: str, suffix: str = "") -> dict:
     """Propagate settled `result`/`profit`/`settled_at` from
     `derivative_picks` into the `_pot_day` lock table for matching
     rows. The summary read uses a JOIN so display is always correct,
@@ -818,9 +1145,9 @@ def backfill_derivative_potd_results(sport: str) -> dict:
 
     Returns ``{"sport", "updated"}``.
     """
-    _ensure_potd_table(sport)
+    _ensure_potd_table(sport, suffix)
     conn = _conn(sport)
-    pot_table = f"{_DERIV_TABLE[sport]}_pot_day"
+    pot_table = f"{_DERIV_TABLE[sport]}{suffix}_pot_day"
     pick_table = _DERIV_TABLE[sport]
     cur = conn.execute(f"""
         UPDATE {pot_table} AS pot
@@ -862,7 +1189,7 @@ def backfill_derivative_potd_results(sport: str) -> dict:
     return {"sport": sport, "updated": cur.rowcount or 0}
 
 
-def get_derivative_potd_summary(sport: str) -> dict:
+def get_derivative_potd_summary(sport: str, suffix: str = "") -> dict:
     """Aggregate W/L/profit across the derivative POTD lock table —
     same shape as `engine.pick_of_day._read.get_potd_summary` so the
     `summary` prop can be passed straight into PotdHero.
@@ -872,10 +1199,12 @@ def get_derivative_potd_summary(sport: str) -> dict:
     So we JOIN _pot_day -> derivative_picks on (game_id, bet_type,
     pick, date) to read the actual settled result. Self-healing:
     even if the lock table's columns drift, the join surfaces the
-    canonical settled state from derivative_picks."""
-    _ensure_potd_table(sport)
+    canonical settled state from derivative_picks.
+
+    ``suffix`` selects a sibling lock table (e.g. "_p1")."""
+    _ensure_potd_table(sport, suffix)
     conn = _conn(sport)
-    pot_table = f"{_DERIV_TABLE[sport]}_pot_day"
+    pot_table = f"{_DERIV_TABLE[sport]}{suffix}_pot_day"
     pick_table = _DERIV_TABLE[sport]
     row = conn.execute(f"""
         SELECT
@@ -903,3 +1232,70 @@ def get_derivative_potd_summary(sport: str) -> dict:
         "profit": round(overall.get("profit") or 0, 2),
         "win_pct": round(w / settled * 100, 1) if settled > 0 else 0,
     }
+
+
+# ── NHL P1 (first-period) derivative POTD ────────────────────────────
+# Austin 2026-09-22: a real per-tab POTD for the NHL "P1" view. It's a
+# P1-scoped sibling of the all-markets derivative POTD — locked into
+# {sport}_derivative_picks_p1_pot_day, chosen from the Period* markets
+# whose pick text names the first period ("P1 Over 1.5", "P1 BOS", ...).
+# Settlement + summary ride the SAME derivative tracker/settler as the
+# general derivative POTD (the selected pick is mirrored into the deriv
+# tracker on lock), so no new settle path is needed.
+_P1_PERIOD_TYPES = frozenset({"Period Total", "Period BTS", "Period DNB"})
+
+# Per-(sport) "no qualifying P1 pick today" memo. Set when a generation
+# pass over real bets finds nothing to lock; read by the route so repeat
+# hits skip the ~20s best-bets regeneration (there's no bets cache — a
+# fresh api_nhl_best_bets() is the whole cost). Date-keyed so it self-
+# expires at the day roll; cleared the moment a P1 pick locks. Mirrors
+# how the locked POTD row makes the pick-present case instant. (P1 perf
+# fix 2026-09-22.)
+_P1_NOPICK_DATE: dict[str, str] = {}
+
+
+def _is_p1_pick(p: dict) -> bool:
+    return (p.get("type") in _P1_PERIOD_TYPES
+            and isinstance(p.get("pick"), str)
+            and p["pick"].strip().startswith("P1 "))
+
+
+def get_or_create_p1_potd(sport: str,
+                          bets: list[dict] | None = None) -> dict | None:
+    """Today's P1 derivative POTD for ``sport`` (locks on first call).
+
+    Memoizes the "no qualifying pick" outcome per day so callers can avoid
+    re-running the heavy slate generation on every request — see
+    ``p1_potd_known_empty``. Only memoizes when a real generation pass ran
+    (``bets`` supplied) and found nothing; clears the memo when a pick is
+    present so a later-in-day qualifier still surfaces."""
+    res = get_or_create_derivative_potd(sport, bets, suffix="_p1",
+                                        pick_filter=_is_p1_pick)
+    if res is not None:
+        _P1_NOPICK_DATE.pop(sport, None)
+    elif bets:
+        # Generation ran over a real slate and locked nothing → remember it.
+        _P1_NOPICK_DATE[sport] = et_today_str()
+    return res
+
+
+def p1_potd_known_empty(sport: str) -> bool:
+    """True when today's P1 slate was already generated and yielded no
+    qualifying pick (so the route can return the no-pick message instantly
+    instead of regenerating)."""
+    return _P1_NOPICK_DATE.get(sport) == et_today_str()
+
+
+def get_today_p1_potd(sport: str) -> dict | None:
+    """Read-only fetch of today's locked P1 derivative POTD."""
+    return get_today_derivative_potd(sport, suffix="_p1")
+
+
+def get_p1_potd_summary(sport: str) -> dict:
+    """Running W/L/profit for the P1 derivative POTD lock table."""
+    return get_derivative_potd_summary(sport, suffix="_p1")
+
+
+def backfill_p1_potd_results(sport: str) -> dict:
+    """Propagate settled result/profit into the P1 POTD lock table."""
+    return backfill_derivative_potd_results(sport, suffix="_p1")

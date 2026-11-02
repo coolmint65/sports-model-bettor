@@ -59,6 +59,15 @@ def get_live_picks(sport: str, game_id: str) -> list[dict]:
     state = get_state(sport, game_id)
     if not state:
         return []
+    if sport == "nhl":
+        # NHL rebuilt 2026-10-28 (engine.sports.nhl.live_model): ratings-model rates + game-state
+        # multipliers, PA-anchored to HR's live board. Not graduated -- display + shadow evidence only.
+        # One pick per period, like the full-game cards (Austin 2026-10-28): the model's best lean.
+        from engine.sports.nhl.live_model import candidates, best_pick
+        pick = best_pick(candidates(state, shadow=True))
+        if not pick:
+            return []
+        return [dict(pick, graduated=False, lean=True, is_best=True, edge_pct=pick["edge"])]   # LiveBetsPanel reads edge_pct / is_best
     return generate_live_picks(state)
 
 

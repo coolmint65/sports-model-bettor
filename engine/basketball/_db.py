@@ -135,6 +135,25 @@ def _init_uniform_schema(conn: sqlite3.Connection) -> None:
     CREATE INDEX IF NOT EXISTS idx_games_date ON games(date);
     CREATE INDEX IF NOT EXISTS idx_games_status ON games(status);
 
+    -- Component-level predictions per game/market (factor / MC / GBM) — feeds the
+    -- self-improvement loop (2026-08-26). game_id nullable; join by teams + game_date.
+    CREATE TABLE IF NOT EXISTS prediction_signals (
+        id            INTEGER PRIMARY KEY,
+        sport         TEXT,
+        league        TEXT,
+        game_id       TEXT,
+        game_date     TEXT,
+        home_team_id  INTEGER,
+        away_team_id  INTEGER,
+        market        TEXT,
+        factor_prob   REAL,
+        mc_prob       REAL,
+        gbm_prob      REAL,
+        captured_at   TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_ps_teams ON prediction_signals(home_team_id, away_team_id, game_date);
+    CREATE INDEX IF NOT EXISTS idx_ps_captured ON prediction_signals(captured_at);
+
     -- Best-effort migration: add game_type to existing tables that
     -- pre-date this column. SQLite is fine if the column already
     -- exists in newly-created tables; the IF NOT EXISTS guard
@@ -177,6 +196,7 @@ def _init_uniform_schema(conn: sqlite3.Connection) -> None:
         edge         REAL,
         odds         INTEGER,
         stake_units  REAL,
+        is_shadow    INTEGER NOT NULL DEFAULT 0,
         result       TEXT,
         profit       REAL,
         closing_odds INTEGER,
@@ -192,7 +212,7 @@ def _init_uniform_schema(conn: sqlite3.Connection) -> None:
     -- the same family on every slate hit — 25+ copies per game in
     -- NBA Q1_TOTAL before the 2026-06-10 hardening pass.
     CREATE UNIQUE INDEX IF NOT EXISTS uq_picks_family
-        ON picks(date, game_id, bet_type, pick);
+        ON picks(date, game_id, bet_type, pick, is_shadow);  -- + is_shadow: paper rows own namespace (2026-11-01)
 
     CREATE TABLE IF NOT EXISTS model_config (
         key   TEXT PRIMARY KEY,
@@ -203,6 +223,15 @@ def _init_uniform_schema(conn: sqlite3.Connection) -> None:
     # columns existed. Cheap (PRAGMA + maybe one ALTER per cold open).
     _add_column_if_missing(conn, "teams", "logo_url", "TEXT")
     _add_column_if_missing(conn, "games", "start_time", "TEXT")
+    _add_column_if_missing(conn, "picks", "is_shadow", "INTEGER NOT NULL DEFAULT 0")  # paper-pick namespace (Austin 2026-09-19)
+    # ESPN neutralSite / conferenceCompetition -- the college ratings model's home edge
+    # (none at neutral sites, conference vs non-conference differ) (MintyBot 2026-10-26)
+    _add_column_if_missing(conn, "games", "neutral", "INTEGER")
+    _add_column_if_missing(conn, "games", "conf_game", "INTEGER")
+    # Per-team lookups (features / recent form / settle) filter on a team id; without these
+    # every query scanned the whole games table -- ~25k rows a query for college.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_games_home_team ON games(home_team_id, date)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_games_away_team ON games(away_team_id, date)")
     conn.commit()
 
 

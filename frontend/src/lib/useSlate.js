@@ -94,6 +94,12 @@ function _refetch(key) {
         data, fetchedAt: Date.now(), lastReadAt: Date.now(),
       })
       _notify(key, data)
+      // Backend cold-cache placeholder ({loading:true}) — poll fast until the
+      // real slate lands so the non-blocking cache fills in quickly (Austin 2026-09-19).
+      if (data && data.loading) {
+        const subs = _subscribers.get(key)
+        if (subs && subs.size > 0) setTimeout(() => _refetch(key), 4000)
+      }
       return data
     })
     .catch(() => {
@@ -175,7 +181,9 @@ export function useSlate(endpoint, params, api) {
     return Promise.resolve(_refetch(key)).finally(() => setLoading(false))
   }, [key, disabled])
 
-  return { data, loading, refresh }
+  // `loading` also covers the backend cold-cache placeholder so every panel's
+  // existing loading branch shows a spinner while the slate fills in.
+  return { data, loading: loading || !!(data && data.loading), refresh }
 }
 
 

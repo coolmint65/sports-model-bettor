@@ -20,6 +20,40 @@ from . import mc_constants as _mc
 
 logger = logging.getLogger(__name__)
 
+_B2B_SLATE: dict = {}   # yesterday (YYYYMMDD) -> (fetched_at, ESPN abbreviations that played)
+
+
+def _played_yesterday(abbr: str) -> bool:
+    """Back-to-back: the same test the factor model uses (engine.sports.nba.q1_predict._check_back_to_back --
+    the team is on ESPN's NBA scoreboard for yesterday), with yesterday's slate fetched once per 30 min
+    instead of once per team. The sims have always applied the B2B penalty; nothing set the flag until
+    2026-10-28 (Austin "Does NBA have B2B?")."""
+    import json
+    import time
+    import urllib.request
+    from datetime import timedelta
+    day = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
+    hit = _B2B_SLATE.get(day)
+    if not hit or time.time() - hit[0] > 1800:
+        teams = set()
+        try:
+            req = urllib.request.Request(
+                f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={day}",
+                headers={"User-Agent": "curl/8.4.0", "Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+            for ev in data.get("events", []):
+                for comp in ev.get("competitions", []):
+                    for c in comp.get("competitors", []):
+                        a = (c.get("team") or {}).get("abbreviation")
+                        if a:
+                            teams.add(a)
+        except Exception as e:
+            logger.debug("NBA B2B slate fetch failed: %s", e)
+            return bool(hit) and abbr in hit[1]
+        hit = _B2B_SLATE[day] = (time.time(), teams)
+    return abbr in hit[1]
+
 
 def run_nba_q1_mc(home_abbr: str, away_abbr: str,
                    n_sims: int = 50_000,
@@ -28,6 +62,8 @@ def run_nba_q1_mc(home_abbr: str, away_abbr: str,
     """Load Q1 stats from the NBA DB and run the Q1 MC simulator."""
     home = _load_q1_profile(home_abbr)
     away = _load_q1_profile(away_abbr)
+    home.is_b2b = _played_yesterday(home_abbr)   # simulate_q1: -1.0 pt Q1, same as the factor model
+    away.is_b2b = _played_yesterday(away_abbr)
 
     if is_playoff is None:
         try:
@@ -44,6 +80,8 @@ def run_nba_q1_mc(home_abbr: str, away_abbr: str,
         "away": away.name,
         "is_playoff": is_playoff,
         "n_sims": n_sims,
+        "home_b2b": home.is_b2b,
+        "away_b2b": away.is_b2b,
     }
     return agg
 
@@ -110,6 +148,8 @@ def run_nba_full_mc(home_abbr: str, away_abbr: str,
     """
     home = _load_full_profile(home_abbr)
     away = _load_full_profile(away_abbr)
+    home.is_b2b = _played_yesterday(home_abbr)   # simulate_full: -2.5 pts, same as the factor model's B2B_PENALTY
+    away.is_b2b = _played_yesterday(away_abbr)
 
     if is_playoff is None:
         try:
@@ -126,6 +166,8 @@ def run_nba_full_mc(home_abbr: str, away_abbr: str,
         "away": away.name,
         "is_playoff": is_playoff,
         "n_sims": n_sims,
+        "home_b2b": home.is_b2b,
+        "away_b2b": away.is_b2b,
     }
     return agg
 

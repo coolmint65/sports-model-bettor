@@ -102,6 +102,29 @@ def _resolve_outcome(pick: Pick, state: dict) -> tuple[Result, float] | None:
             return None
         return result, _profit_for(result, odds)
 
+    if bt in ("TEAM_TOTAL", "TEAM TOTAL"):
+        # Full-game per-team total: the TEAM's own final score vs the line
+        # (scope=FULL -> hs/as_ are the final scores). Must precede the game-
+        # TOTAL branch below ("TOTAL" in "TEAM_TOTAL").
+        line = _extract_line(pick_text)
+        if line is None:
+            return None
+        first = pick_text.strip().split()[0].upper()
+        if first == home_abbr:
+            team_score = hs
+        elif first == away_abbr:
+            team_score = as_
+        else:
+            return None
+        is_over = "OVER" in pick_text.upper()
+        if team_score > line:
+            result = Result.WIN if is_over else Result.LOSS
+        elif team_score < line:
+            result = Result.LOSS if is_over else Result.WIN
+        else:
+            result = Result.PUSH
+        return result, _profit_for(result, odds)
+
     if "TOTAL" in bt:
         line = _extract_line(pick_text)
         if line is None:

@@ -164,13 +164,22 @@ LEAGUE_REGISTRY: dict[str, dict] = {
         "season_months": (11, 12, 1, 2, 3, 4),
         "db_path": "data/basketball/ncaam.db",
         "status": "beta",
+        # College model (MintyBot 2026-10-26, Austin "fix up college basketball ... the same
+        # standard as NBA"): engine.basketball._ratings -- opponent-adjusted offense/defense
+        # ratings with last-season priors and a conference / non-conference / neutral-site home
+        # edge. The PPG constants above belong to the retired factor model (margin RMSE 15.5
+        # vs the closing line's 11.25 on 2025-26); only the logged GBM / MC side legs read them.
+        "model": "ratings",
+        "season_label": "end_year",   # ESPN + our DB: 2026-27 is season 2027
+        "pick_authority": True,       # per-market PA weight, shadow lane, per-view headline gate
     },
     "ncaaw": {
         "display_name": "NCAA Women's Basketball",
         "country": "USA",
-        # HR ships NCAAW under a separate competition id; populated at
-        # first sports-tree probe (left None here per framework convention).
-        "hr_comp_id": None,
+        # HR ships NCAAW under its own competition (sports tree, 2026-10-26); team names
+        # carry a " (W)" suffix there.
+        "hr_comp_id": "733517462193143829",
+        "hr_name_suffix": " (W)",
         "hr_comp_name": "NCAAW",
         "data_source": "espn",
         "espn_league_path": "basketball/womens-college-basketball",
@@ -189,13 +198,12 @@ LEAGUE_REGISTRY: dict[str, dict] = {
         "league_avg_pace": None,
         "season_months": (11, 12, 1, 2, 3, 4),
         "db_path": "data/basketball/ncaaw.db",
-        # Data + model + walk-forward calibration all in place
-        # (2026-05-17: 1862 finals backfilled from ESPN, GBM trained
-        # on 19072 train + 4769 test, all 6 markets seeded). Only gap
-        # is odds — HR doesn't carry NCAAW (confirmed via sports tree
-        # probe). Picks fire automatically the moment any odds source
-        # surfaces NCAAW.
-        "status": "pending_odds",
+        # HR lists NCAAW now (comp above), so it runs as beta like NCAAM -- same college
+        # ratings model and Pick Authority path (MintyBot 2026-10-26).
+        "status": "beta",
+        "model": "ratings",
+        "season_label": "end_year",
+        "pick_authority": True,
     },
     "nba_summer_league": {
         "display_name": "NBA Summer League",
@@ -362,7 +370,7 @@ LEAGUE_REGISTRY: dict[str, dict] = {
         "display_name": "Latvia LBL",
         "country": "Latvia",
         "hr_comp_id": "752902912330006536",
-        "hr_comp_name": "Latvia - LBL",
+        "hr_comp_name": "Latvian-Estonian League",   # HR name since 2026-27 (was "Latvia - LBL")
         "data_source": "realgm",
         "espn_league_path": None,
         "quarters": 4, "period_minutes": 10, "total_minutes": 40,
@@ -508,7 +516,7 @@ LEAGUE_REGISTRY: dict[str, dict] = {
         "display_name": "Slovakia Extraliga",
         "country": "Slovakia",
         "hr_comp_id": "694566215660961795",
-        "hr_comp_name": "Slovakia - Extraliga",
+        "hr_comp_name": "Slovakia - SBL",   # HR name since 2026-27 (was "Slovakia - Extraliga")
         "data_source": "realgm",
         "espn_league_path": None,
         "quarters": 4, "period_minutes": 10, "total_minutes": 40,
@@ -524,7 +532,7 @@ LEAGUE_REGISTRY: dict[str, dict] = {
         "display_name": "Sweden Ligan",
         "country": "Sweden",
         "hr_comp_id": "695689202059116547",
-        "hr_comp_name": "Sweden - Ligan",
+        "hr_comp_name": "Sweden - SBL Herr",   # HR name since 2026-27 (was "Sweden - Ligan")
         "data_source": "realgm",
         "espn_league_path": None,
         "quarters": 4, "period_minutes": 10, "total_minutes": 40,
@@ -661,7 +669,7 @@ LEAGUE_REGISTRY: dict[str, dict] = {
     "australia_nbl": {
         "display_name": "Australia NBL",
         "country": "Australia",
-        "hr_comp_id": None,
+        "hr_comp_id": "703133762717286406",
         "hr_comp_name": "Australia - NBL",
         "data_source": "realgm",
         "espn_league_path": None,
@@ -670,9 +678,18 @@ LEAGUE_REGISTRY: dict[str, dict] = {
         "margin_std": None, "total_std": None,
         "league_avg_total": None, "league_avg_ppg": None,
         "league_avg_pace": None,
-        "season_months": (9, 10, 11, 12, 1, 2, 3),
+        "season_months": (9, 10, 11, 12, 1, 2, 3, 4),
         "db_path": "data/basketball/australia_nbl.db",
         "status": "beta",
+        # RealGM / short names -> the canonical (Sofascore full) names stored in teams (2026-10-29 dedupe)
+        "team_aliases": {"Sydney": "Sydney Kings", "Adelaide": "Adelaide 36ers", "South East Melbourne": "South East Melbourne Phoenix",
+                         "SE Melbourne": "South East Melbourne Phoenix", "Perth": "Perth Wildcats", "Melbourne": "Melbourne United",
+                         "Tasmania": "Tasmania JackJumpers", "Tasmania Jackjumpers": "Tasmania JackJumpers", "Illawarra": "Illawarra Hawks",
+                         "New Zealand": "New Zealand Breakers", "Cairns": "Cairns Taipans", "Brisbane": "Brisbane Bullets"},
+        # Ratings model + Pick Authority (MintyBot 2026-10-29, Austin "NBL ... up to standard fully"): the
+        # college/CBA standard. Seasons are labelled by START year in this DB (2026 = 2026-27).
+        "model": "ratings",
+        "pick_authority": True,
     },
     "nz_nbl": {
         "display_name": "New Zealand NBL",
@@ -708,7 +725,7 @@ LEAGUE_REGISTRY: dict[str, dict] = {
         "league_avg_total": None, "league_avg_ppg": None,
         "league_avg_pace": None,
         # AFL season runs Mar–Sep (premiership season + Sep finals).
-        "season_months": (3, 4, 5, 6, 7, 8, 9, 10),
+        "season_months": (),  # RETIRED 2026-08-09 (Austin): focus trim - empty months = warmer skips, routes/history intact
         "db_path": "data/basketball/afl.db",
         "status": "beta",
     },
@@ -727,8 +744,40 @@ LEAGUE_REGISTRY: dict[str, dict] = {
         "season_months": (10, 11, 12, 1, 2, 3, 4, 5),
         "db_path": "data/basketball/china_cba.db",
         "status": "beta",
+        # Ratings model + Pick Authority (MintyBot 2026-10-28, Austin backlog #5 "CBA up to par"):
+        # engine.basketball._ratings (opponent-adjusted O/D ratings, last-season priors), the same
+        # standard as NCAAM/NCAAW. Seasons are labelled by START year in this DB.
+        "model": "ratings",
+        "pick_authority": True,
+        # Sofascore names -> DB names (MintyBot 2026-10-30). The realgm ingest merges Sofascore finals; without these,
+        # the first-word index sent "Beijing Royal Fighters" to Shougang and "Zhejiang Golden Bulls" to Guangsha and
+        # created duplicate games under the wrong team.
+        "team_aliases": {
+            "Beijing Ducks": "Beijing Shougang", "Beijing Royal Fighters": "Beijing BeiKong",
+            "Fujian Sturgeons": "Fujian", "Guangdong Southern Tigers": "Guangdong Dongguan",
+            "Jiangsu Dragons": "Jiangsu Kendia", "Jilin Northeast Tigers": "Jilin Northeast",
+            "Liaoning Flying Leopards": "Liaoning", "Nanjing Monkey Kings": "Nanjing Tongxi Monkey King",
+            "Qingdao Eagles": "Qingdao", "Shandong Heroes": "Shandong", "Shanghai Sharks": "Shanghai Dongfang",
+            "Shanxi Loongs": "Shanxi Zhongyu", "Shenzhen Leopards": "Shenzhen", "Tianjin Pioneers": "Tianjin Ronggang",
+            "Xinjiang Flying Tigers": "Xinjiang Guanghui", "Zhejiang Golden Bulls": "Zhejiang Chouzhou",
+            "Zhejiang Guangsha Lions": "Zhejiang Guangsha",
+        },
     },
 }
+
+# Smaller leagues REMOVED 2026-10-27 (Austin: "I don't care about the smaller ... leagues, let's
+# just remove them"; kept NBA / WNBA / NCAAM / NCAAW + China CBA, which gets a model rework).
+# Their entries stay above so a league comes back by deleting it from this set; their data was
+# archived to _archive_minorleagues_20261027.
+_REMOVED_2026_10_27 = frozenset({
+    "nba_summer_league", "euroleague", "fiba_champions", "france_pro_b", "lithuania_lkl",
+    "israel_super", "greece_a1", "czech_nbl", "latvia_lbl", "bulgaria_nbl",
+    "iceland_urvalsdeild", "iceland_urvalsdeild_w", "germany_bbl", "hungary_nb1", "slovenia_skl",
+    "denmark_basketligaen", "finland_korisliiga", "slovakia_extraliga", "sweden_ligan", "dominican_lnb",
+    "puerto_rico_bsn", "brazil_nbb", "brazil_lbf_w", "argentina_lnb", "japan_b2",
+    "korea_kbl", "nz_nbl", "afl",   # australia_nbl restored 2026-10-29 (Austin "Lets work on NBL")
+})
+REMOVED_LEAGUES = {k: LEAGUE_REGISTRY.pop(k) for k in sorted(_REMOVED_2026_10_27) if k in LEAGUE_REGISTRY}
 
 
 # ── Helpers ───────────────────────────────────────────────────
@@ -773,6 +822,23 @@ def get_league_config(league: str) -> dict:
         known = ", ".join(sorted(LEAGUE_REGISTRY))
         raise KeyError(f"Unknown basketball league {league!r}. Known: {known}")
     return LEAGUE_REGISTRY[league]
+
+
+def season_label(league: str, when=None) -> int:
+    """The ``games.season`` label a game played on ``when`` (date / datetime / 'YYYY-MM-DD';
+    default today ET) carries in this league's DB. A season starts in season_months[0]; most
+    leagues label it by its start year, college basketball by its END year (ESPN: 2026-27 =
+    2027; registry ``season_label: "end_year"``). Computing the start year for college read
+    LAST season's games as "this season" all year (MintyBot 2026-10-26)."""
+    cfg = LEAGUE_REGISTRY.get(league) or {}
+    months = cfg.get("season_months") or (10,)
+    if when is None:
+        from .._tz import et_now
+        when = et_now()
+    if isinstance(when, str):
+        when = datetime.strptime(when[:10], "%Y-%m-%d")
+    start = when.year if when.month >= months[0] else when.year - 1
+    return start + 1 if cfg.get("season_label") == "end_year" else start
 
 
 def active_leagues(today: datetime | None = None) -> list[str]:

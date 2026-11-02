@@ -46,7 +46,7 @@ _SOCCER = {
     "us_open_cup", "us_nwsl",
 }
 _BASEBALL = {"college"}
-_FOOTBALL = {"ufl"}
+_FOOTBALL = {"ufl", "nfl", "cfb"}
 
 
 def _calibration_path(sport: str) -> Path | None:

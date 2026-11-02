@@ -518,6 +518,10 @@ def generate_picks(date: str | None = None, *,
 
     for r in rows:
         d = dict(r)
+        # ATP dropped from the model 2026-08-05 (WTA is the only tennis
+        # edge; ATP loses on short-odds favorites). Reversible: delete.
+        if (d.get("tour") or "").lower() == "atp":
+            continue
         try:
             pred = predict_match(
                 d["tour"], int(d["p1_id"]), int(d["p2_id"]),

@@ -179,8 +179,12 @@ def _parse_event(ev: dict, name_to_abbr: dict[str, str]) -> dict | None:
     # authoritative puck-drop time when our theScore ingest doesn't
     # have one (HR-only stub path in routes_hockey).
     et_ms = ev.get("eventTime")
+    try:   # HR's REST events ship eventTime as a numeric STRING ("1793674800000"), GraphQL as a number
+        et_ms = float(et_ms)
+    except (TypeError, ValueError):
+        et_ms = None
     start_iso = None
-    if isinstance(et_ms, (int, float)) and et_ms > 0:
+    if et_ms is not None and et_ms > 0:
         from datetime import datetime as _dt, timezone as _tz
         try:
             start_iso = _dt.fromtimestamp(et_ms / 1000.0,

@@ -278,7 +278,7 @@ def _check_back_to_back(team_abbr: str) -> bool:
             f"/scoreboard?dates={yesterday}"
         )
         req = urllib.request.Request(url, headers={
-            "User-Agent": "SportsBettor/1.0",
+            "User-Agent": "curl/8.4.0",
             "Accept": "application/json",
         })
         with urllib.request.urlopen(req, timeout=10) as resp:

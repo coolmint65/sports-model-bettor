@@ -62,6 +62,7 @@ from typing import Sequence
 from ._config import get_league_config
 from ._db import get_conn
 from ._elo import get_rating, INIT_ELO, HOME_ADVANTAGE_ELO
+from ._epl_xg import epl_xg_lambdas
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +99,7 @@ ELO_GOAL_K_DEFAULT: float = 0.4
 def _pmf_poisson(lam: float, k_max: int) -> list[float]:
     """Poisson PMF P(X=0..k_max) as a list. We don't use scipy.stats
     here because the soccer predictor needs to be importable without
-    pulling scipy — basketball/golf already gate on numpy alone.
+    pulling scipy — basketball already gates on numpy alone.
 
     Stable recurrence: P(0) = exp(-λ); P(k) = P(k-1) · λ / k."""
     out = [0.0] * (k_max + 1)
@@ -260,6 +261,27 @@ def predict_match(league: str, home_team_id: int, away_team_id: int,
     lam_h = min(max(lam_h, 0.1), 5.0)
     lam_a = min(max(lam_a, 0.1), 5.0)
 
+    # ─── EPL xG override ──────────────────────────────────────────────
+    # For the Premier League, replace the single-Elo-scalar λ with a
+    # per-team xG attack/defense goal-rate model (data/epl/epl-ratings.json,
+    # rebuilt nightly on the Pi from SofaScore match xG). Strictly better
+    # than the Elo tilt: it separates chance creation + suppression from
+    # finishing variance — the signal soccer was missing (never a green day
+    # on single-Elo). Falls back to the Elo λ above when a team has no rating
+    # (just-promoted + unsynced) and on the override path (walk-forward
+    # replays Elo state, must not see current-snapshot ratings) / neutral or
+    # flipped home_side. conn is in scope here: the override-is-None gate
+    # means we took the else branch above that binds conn = get_conn(league).
+    if (league == "eng_premier" and home_side == "home"
+            and r_home_override is None and r_away_override is None):
+        try:
+            _xg = epl_xg_lambdas(conn, home_team_id, away_team_id)
+        except Exception:
+            _xg = None
+        if _xg is not None:
+            lam_h = min(max(_xg[0], 0.1), 5.0)
+            lam_a = min(max(_xg[1], 0.1), 5.0)
+
     grid = _score_grid(lam_h, lam_a, rho)
 
     p_home = 0.0
@@ -419,9 +441,22 @@ def predict_match(league: str, home_team_id: int, away_team_id: int,
                 key = f"away+{-diff}"
             p_wm[key] = p_wm.get(key, 0.0) + p
 
+    # Over probability at every half-point line off the two grids, so the OU builders price the
+    # book's own line instead of snapping to 1.5 / 2.5 / 3.5 (2026-10-28).
+    def _over_lines(g, top):
+        dist = {}
+        for hh in range(len(g)):
+            for aa in range(len(g[hh])):
+                dist[hh + aa] = dist.get(hh + aa, 0.0) + g[hh][aa]
+        return {k + 0.5: sum(v for t, v in dist.items() if t > k) for k in range(top)}
+    p_over_lines = _over_lines(grid, 8)
+    p_h1_over_lines = _over_lines(h1_grid, 5)
+
     return {
         "lambda_home": lam_h,
         "lambda_away": lam_a,
+        "p_over_lines": p_over_lines,
+        "p_h1_over_lines": p_h1_over_lines,
         "elo_home": r_home,
         "elo_away": r_away,
         "neutral_site": bool(neutral_site),
@@ -514,7 +549,7 @@ def predict_slate(league: str, date: str) -> list[dict]:
         "FROM matches m "
         "JOIN teams ht ON ht.id = m.home_team_id "
         "JOIN teams at ON at.id = m.away_team_id "
-        "WHERE m.date = ? AND m.status IN ('scheduled', 'live') "
+        "WHERE m.date = ? AND m.status IN ('scheduled', 'live', 'final') "  # +final: keep today's finished games on the slate (graded picks via _lock_live_picks), like NHL -- stops the fall-forward dropping them (Austin 2026-10-17 EPL issue A)
         "ORDER BY m.start_time ASC",
         (date,),
     ).fetchall()
@@ -529,7 +564,8 @@ def predict_slate(league: str, date: str) -> list[dict]:
             neutral_site=bool(r["neutral_site"]),
             home_side=r["home_side"],
         )
-        if blend_w is not None:
+        from ._market_anchor import is_pa as _is_pa
+        if blend_w is not None and not _is_pa(league):   # PA leagues anchor once, in _picks (2026-10-28)
             _apply_v31_blend(pred, league, r["date"],
                               r["home_abbr"], r["away_abbr"],
                               float(blend_w))

@@ -1,18 +1,23 @@
 /**
- * PropPickCard — single-pick card matching the GameCard visual
- * language. Used in PropsPanel to replace the legacy PicksTable
- * for pending picks.
+ * PropPickCard — player-prop card in the GameCard visual language.
+ * Restyle 2026-10-22 (Austin): matchup strip with team logos (like the
+ * game cards), tiled in a grid, plus a last-10 recent-form sparkline.
  *
  * Layout:
- *   [photo]  Player Name                         [edge badge]
- *            Bet Type · Pick                     odds
+ *   [awayLogo AWAY @ homeLogo HOME]              [edge / result]
+ *   [photo]  Player Name · Bet Type
+ *            Pick  odds  [CLV]
  *            ───── model probability bar ─────
+ *            L10  ▁▅▃▇▂  7/10 hit
  */
 
 import { useState } from 'react'
 import { humanizeBetType } from '../lib/betType'
 import { playerPhotoUrl } from '../lib/playerPhoto'
+import { resolveTeamLogo } from '../lib/teamLogo'
 import { cn } from '../lib/utils'
+import CLVBadge from './CLVBadge'
+import L10Spark from './L10Spark'
 
 const CONF_ACCENT = {
   strong:   'border-l-positive bg-positive/[0.03]',
@@ -20,30 +25,49 @@ const CONF_ACCENT = {
   lean:     'border-l-border',
 }
 
-// Once a pick settles, the card communicates outcome instead of
-// confidence — the conviction tier no longer matters and the result
-// (W / L / Push) becomes the dominant signal.
 const RESULT_ACCENT = {
   W: 'border-l-positive bg-positive/[0.10] ring-1 ring-positive/30',
   L: 'border-l-negative bg-negative/[0.08] ring-1 ring-negative/25',
   P: 'border-l-muted-foreground bg-muted/40',
 }
 
+// "AWAY @ HOME" -> { away, home }. Tolerates extra spaces / missing side.
+function parseMatchup(m) {
+  if (!m || typeof m !== 'string' || !m.includes('@')) return { away: null, home: null }
+  const [a, h] = m.split('@').map(s => s.trim())
+  return { away: a || null, home: h || null }
+}
+
+
+// Game date for a pick locked ahead of its game day ("Tue 10/27") -- NHL props lock the
+// first time HR prices the game, usually the evening before (Austin 2026-10-26).
+function upcomingDate(pick) {
+  const d = pick?.date
+  if (!d || pick.result) return null
+  const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' })
+  if (d <= todayET) return null
+  const dt = new Date(`${d}T12:00:00Z`)
+  return isNaN(dt.getTime()) ? null
+    : dt.toLocaleDateString('en-US', { timeZone: 'America/New_York', weekday: 'short', month: 'numeric', day: 'numeric' })
+}
+
 
 export default function PropPickCard({ pick, sport }) {
   const [photoErr, setPhotoErr] = useState(false)
   if (!pick) return null
-  const photo = !photoErr ? playerPhotoUrl(sport, pick.player_id) : null
+  const photo = !photoErr ? (pick.headshot || playerPhotoUrl(sport, pick.player_id)) : null
   const odds = pick.odds
   const oddsStr = odds != null ? `${odds > 0 ? '+' : ''}${odds}` : ''
   const conf = (pick.confidence || 'lean').toString().toLowerCase()
   const edgePct = Number(pick.edge || 0)
   const modelPct = Math.round((Number(pick.model_prob) || 0) * 100)
-  const result = pick.result // 'W' | 'L' | 'P' | null
+  const result = pick.result
   const settled = !!result
   const accent = settled
     ? (RESULT_ACCENT[result] || CONF_ACCENT.lean)
     : (CONF_ACCENT[conf] || CONF_ACCENT.lean)
+  const { away, home } = parseMatchup(pick.matchup)
+  const gameDay = upcomingDate(pick)
 
   return (
     <div
@@ -54,40 +78,46 @@ export default function PropPickCard({ pick, sport }) {
         accent,
       )}
     >
+      {/* Matchup strip — team logos, so the card reads like a game card */}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <MatchupStrip sport={sport} away={away} home={home} rawMatchup={pick.matchup} />
+          {gameDay && (
+            <span className="flex-shrink-0 rounded-full bg-warning/15 px-2 py-0.5 text-[10px] font-semibold text-warning">
+              {gameDay}
+            </span>
+          )}
+        </div>
+        {settled
+          ? <ResultBadge result={result} profit={pick.profit} />
+          : <EdgeBadge edge={edgePct} confidence={conf} />}
+      </div>
+
+      {/* Player + pick */}
       <div className="flex items-start gap-3">
-        {/* Player photo */}
         <div className="flex-shrink-0">
           {photo ? (
             <img
               src={photo}
               alt=""
-              className="h-14 w-14 rounded-full object-cover bg-muted ring-1 ring-border"
+              className="h-12 w-12 rounded-full object-cover bg-muted ring-1 ring-border"
               onError={() => setPhotoErr(true)}
             />
           ) : (
-            <div className="h-14 w-14 rounded-full bg-muted ring-1 ring-border flex items-center justify-center text-xs font-bold text-muted-foreground">
+            <div className="h-12 w-12 rounded-full bg-muted ring-1 ring-border flex items-center justify-center text-xs font-bold text-muted-foreground">
               {(pick.player_name || '?').slice(0, 1)}
             </div>
           )}
         </div>
 
-        {/* Body */}
         <div className="flex-1 min-w-0">
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0">
-              <div className="text-sm font-bold text-foreground truncate">
-                {pick.player_name}
-              </div>
-              <div className="text-[11px] text-muted-foreground truncate">
-                {humanizeBetType(pick.bet_type)} · {pick.matchup}
-              </div>
-            </div>
-            {settled
-              ? <ResultBadge result={result} profit={pick.profit} />
-              : <EdgeBadge edge={edgePct} confidence={conf} />}
+          <div className="text-sm font-bold text-foreground truncate">
+            {pick.player_name}
           </div>
-
-          <div className="mt-2 flex items-baseline gap-2 flex-wrap">
+          <div className="text-[11px] text-muted-foreground truncate">
+            {humanizeBetType(pick.bet_type)}
+          </div>
+          <div className="mt-1.5 flex items-baseline gap-2 flex-wrap">
             <span className="text-base font-bold tracking-tight text-foreground">
               {pick.pick}
             </span>
@@ -96,12 +126,64 @@ export default function PropPickCard({ pick, sport }) {
                 {oddsStr}
               </span>
             )}
+            {pick.odds != null && (
+              <CLVBadge entryOdds={pick.odds} closingOdds={pick.closing_odds} />
+            )}
+            {!settled && pick.stake && (
+              <span
+                title={`Suggested stake: ${pick.stake.why}`}
+                className={cn('rounded-full px-2 py-0.5 text-[10px] font-bold',
+                  pick.stake.units >= 1 ? 'bg-emerald-500/15 text-emerald-400'
+                    : pick.stake.units >= 0.5 ? 'bg-amber-500/15 text-amber-400'
+                    : 'bg-orange-500/15 text-orange-400')}
+              >
+                {pick.stake.label}
+              </span>
+            )}
           </div>
         </div>
       </div>
 
       <ModelBar modelPct={modelPct} />
+
+      {pick.l10 && pick.l10.n > 0 && (
+        <L10Spark l10={pick.l10} pick={pick} />
+      )}
     </div>
+  )
+}
+
+
+function MatchupStrip({ sport, away, home, rawMatchup }) {
+  if (!away || !home) {
+    return (
+      <span className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        {rawMatchup || ''}
+      </span>
+    )
+  }
+  return (
+    <div className="flex min-w-0 items-center gap-1.5 text-[11px] font-bold tracking-wide">
+      <TeamChip sport={sport} abbr={away} />
+      <span className="font-normal text-muted-foreground/50">@</span>
+      <TeamChip sport={sport} abbr={home} />
+    </div>
+  )
+}
+
+function TeamChip({ sport, abbr }) {
+  const logo = resolveTeamLogo(sport, abbr)
+  return (
+    <span className="inline-flex items-center gap-1">
+      {logo ? (
+        <img
+          src={logo}
+          alt=""
+          className="h-5 w-5 flex-shrink-0 rounded-full object-contain bg-foreground/[0.06] ring-1 ring-border p-px"
+        />
+      ) : null}
+      <span className="text-foreground/80">{abbr}</span>
+    </span>
   )
 }
 
@@ -155,9 +237,6 @@ function ModelBar({ modelPct }) {
         <span>Model probability</span>
         <span className="tabular-nums font-bold text-foreground">{modelPct}%</span>
       </div>
-      {/* Bumped from h-2/bg-secondary to h-2.5/bg-muted for more
-          contrast against the card background; fill is now full-
-          opacity bg-positive so it actually reads in dark mode. */}
       <div className="relative h-2.5 w-full rounded-full bg-muted overflow-hidden ring-1 ring-border/50">
         <div
           className="absolute inset-y-0 left-0 rounded-full bg-positive transition-all"

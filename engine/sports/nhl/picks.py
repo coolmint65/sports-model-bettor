@@ -73,192 +73,40 @@ def generate_nhl_picks_with_context(home_key: str, away_key: str,
     with rest, injuries, and other metadata so callers can surface b2b
     warnings and injury impact without re-running the full prediction.
 
-    When `pred` is provided the factor pipeline is skipped; callers that
-    pre-compute MC + GBM alongside the factor model pass the augmented
-    dict in so ensemble_nhl() blends all three signals. Without it we
-    fall back to factor-only (legacy behavior).
+    Pick Authority (MintyBot 2026-10-26, Austin "Let's make sure NHL is up to snuff"): every
+    market prices off ONE score distribution -- the ratings model (engine.sports.nhl._ratings,
+    overlaid on ``pred`` by predict_matchup) -- and each candidate anchors to the de-vigged
+    market with its own Pick Authority weight (engine.sports.nhl._market_anchor; 0.50 proven
+    / 0.15 unproven / 1.0 inside shadow_mode). That anchor is the only calibration
+    (calibration_gate.anchor_only("nhl")). Both sides of every two-way market are scored; HR
+    lines the model has no number for are skipped rather than guessed (the old path invented
+    a +170/-200 puck line from the moneyline).
     """
     from .predict import predict_matchup
+    from . import _market_anchor as _ma
 
     if pred is None:
         pred = predict_matchup(home_key, away_key)
     if not pred:
         return [], {}
 
-    # Compute the ensemble blend. pred may already carry factor + MC +
-    # GBM (when the backend helper ran them); if only factor is present
-    # ensemble_nhl collapses to factor-only.
     try:
-        from ...ensemble import ensemble_nhl
-        pred["ensemble"] = ensemble_nhl(pred)
-    except Exception as e:
-        logger.debug("NHL ensemble blend failed: %s", e)
-        pred["ensemble"] = {}
-
-    odds = _sanitize_odds(odds)
-    wp = pred["win_prob"]
-    pl = pred["puck_line"]
-
-    # Route ML home WP through the ensemble when present; otherwise
-    # the original factor-only win_prob dict is used. O/U and PL
-    # distributions stay on the factor model.
-    ens = pred.get("ensemble") or {}
-    if ens.get("home_win") is not None:
-        wp = {"home": float(ens["home_win"]),
-              "away": 1.0 - float(ens["home_win"])}
-
-    h_abbr = pred["home"]["abbreviation"]
-    a_abbr = pred["away"]["abbreviation"]
-
-    picks = []
-
-    # ── Moneyline ──
-    # Migrated 2026-05-02 to engine.picks_core.score_pick. The shared
-    # core handles juice wall + odds cap + belief gate + calibration
-    # + edge ceiling + edge floor in one place. To add a new gate
-    # that should apply across sports, edit picks_core, not here.
-    home_ml = odds.get("home_ml")
-    away_ml = odds.get("away_ml")
-
-    if ENABLE_NHL_ML:
-        from ...picks_core import score_pick as _score_pick
-        if home_ml is not None:
-            scored = _score_pick({
-                "type": "ML", "pick": h_abbr,
-                "raw_prob": wp["home"], "odds": home_ml,
-            }, sport="nhl", juice_wall=JUICE_WALL)
-            if scored:
-                picks.append(scored)
-        if away_ml is not None:
-            scored = _score_pick({
-                "type": "ML", "pick": a_abbr,
-                "raw_prob": wp["away"], "odds": away_ml,
-            }, sport="nhl", juice_wall=JUICE_WALL)
-            if scored:
-                picks.append(scored)
-
-    # ── Totals (O/U) ──  Migrated 2026-05-02 to picks_core.score_pick.
-    vegas_total = odds.get("over_under")
-    if ENABLE_NHL_OU and vegas_total and pred.get("over_under"):
-        vt = float(vegas_total)
-        # Find closest line in the pred's per-line distribution
-        best_key = min(pred["over_under"],
-                        key=lambda k: abs(float(k) - vt),
-                        default=None)
-        if best_key:
-            ou = pred["over_under"][best_key]
-            pick_over = ou["over"] > ou["under"]
-            prob = max(ou["over"], ou["under"])
-            label = f"{'Over' if pick_over else 'Under'} {vt}"
-            real_odds = (odds.get("over_odds") if pick_over
-                         else odds.get("under_odds")) or -110
-            from ...picks_core import score_pick as _score_pick
-            scored = _score_pick({
-                "type": "O/U",
-                "pick": label,
-                "raw_prob": prob,
-                "odds": real_odds,
-            }, sport="nhl", juice_wall=JUICE_WALL)
-            if scored:
-                picks.append(scored)
-
-    # ── Puck Line ──
-    home_pl_odds = odds.get("home_spread_odds")
-    away_pl_odds = odds.get("away_spread_odds")
-    home_pl_point = odds.get("home_spread_point")
-    away_pl_point = odds.get("away_spread_point")
-
-    if not ENABLE_NHL_PL:
-        # Skip PL entirely when disabled (still computed above for display parity)
-        home_pl_point = None
-        away_pl_point = None
-
-    # Derive from ML if no puck line data
-    if home_pl_point is None and home_ml and away_ml:
-        home_is_fav = home_ml < away_ml
-        if home_is_fav:
-            home_pl_point = -1.5
-            away_pl_point = 1.5
-            home_pl_odds = home_pl_odds or 170
-            away_pl_odds = away_pl_odds or -200
-        else:
-            home_pl_point = 1.5
-            away_pl_point = -1.5
-            home_pl_odds = home_pl_odds or -200
-            away_pl_odds = away_pl_odds or 170
-
-    # Migrated 2026-05-02 to engine.picks_core.score_pick.
-    from ...picks_core import score_pick as _score_pick
-    if home_pl_point is not None and home_pl_odds:
-        h_pl_prob = (pl["home_minus_1_5"] if home_pl_point < 0
-                     else pl["home_plus_1_5"])
-        scored = _score_pick({
-            "type": "PL",
-            "pick": f"{h_abbr} {home_pl_point:+.1f}",
-            "raw_prob": h_pl_prob,
-            "odds": home_pl_odds,
-        }, sport="nhl", juice_wall=JUICE_WALL)
-        if scored:
-            picks.append(scored)
-    if away_pl_point is not None and away_pl_odds:
-        a_pl_prob = (pl["away_minus_1_5"] if away_pl_point < 0
-                     else pl["away_plus_1_5"])
-        scored = _score_pick({
-            "type": "PL",
-            "pick": f"{a_abbr} {away_pl_point:+.1f}",
-            "raw_prob": a_pl_prob,
-            "odds": away_pl_odds,
-        }, sport="nhl", juice_wall=JUICE_WALL)
-        if scored:
-            picks.append(scored)
-
-    # ── Phase 1 derivatives ──
-    # Team totals, per-period totals/BTS/DNB, total odd/even, overtime
-    # yes/no, full-game BTS. All pure probability extraction from the
-    # existing pred data — no factor stacking. Master gate +
-    # per-market gates live in engine/config.py.
-    from .derivative_picks import append_derivative_picks
-    append_derivative_picks(picks, pred, odds, h_abbr, a_abbr)
-
-    # CI band on the win-probability point estimate (data-quality
-    # uncertainty). Same shape as MLB so the shared ProbHistogram
-    # component renders identically across all three sports.
-    ci_hw = (pred.get("confidence") or {}).get("ci_half_width", 0.05)
-    for p in picks:
-        prob = p.get("prob")
-        if prob is None:
-            continue
-        p["prob_low"] = round(max(0.0, prob - ci_hw), 4)
-        p["prob_high"] = round(min(1.0, prob + ci_hw), 4)
-        p["ci_half_width"] = ci_hw
-
-    # NOTE: pred["win_prob"] used to get re-stomped here with the
-    # calibrated ML prob so the "Projected Outcome" panel matched the
-    # pick card. That was wrong on two layers:
-    #   (1) the calibrators are trained on winning-side prob and
-    #       inverted the bar when home was the dog (PHI 98% bug);
-    #   (2) NHL blend_calibration heavily compresses favorites
-    #       (raw 0.59 → 0.40), making the bar show the dog as
-    #       favored — also inverted from the market.
-    # Per-pick prob in the loop above is already calibrated, so the
-    # pick badge shows truthful odds. Leave pred["win_prob"] as the
-    # raw factor/ensemble output for the display bar.
-
-    # Drop picks that flipped to negative edge after calibration.
-    picks = [p for p in picks if (p.get("edge") or 0) > 0]
-
-    # Adjusted EV: edge * reliability weight. Reliability is auto-tuned
-    # from settled NHL tracker history when volume permits, falls back to
-    # NHL_BET_RELIABILITY for cold-start bet types. See engine.dynamic_reliability.
-    from ...dynamic_reliability import get_reliability as _get_reliability
-    for p in picks:
-        reliability = _get_reliability("nhl", p["type"])
-        p["adjusted_ev"] = round(p["edge"] * reliability, 2)
-    picks.sort(key=lambda p: -p["adjusted_ev"])
-
-    from ..._pick_helpers import tag_confidence, filter_by_data_driven_floors
-    picks = filter_by_data_driven_floors("nhl", picks)
-    tag_confidence(picks)
+        from ...config import NHL_MODEL as _NHL_MODEL
+    except Exception:
+        _NHL_MODEL = "ratings"
+    _ratings = pred.get("model") == "ratings"
+    if _ratings:
+        # One model -> no blend; keep the ensemble block for readers that expect it.
+        pred["ensemble"] = {"home_win": float(pred["win_prob"]["home"]),
+                            "total_expected": float(pred.get("total") or 0.0),
+                            "weights_used": {"ratings": 1.0}}
+    else:
+        try:
+            from ...ensemble import ensemble_nhl
+            pred["ensemble"] = ensemble_nhl(pred)
+        except Exception as e:
+            logger.debug("NHL ensemble blend failed: %s", e)
+            pred["ensemble"] = {}
 
     context = {
         "rest": pred.get("rest", {}),
@@ -271,5 +119,147 @@ def generate_nhl_picks_with_context(home_key: str, away_key: str,
         "factors": pred.get("factors", {}),
         "season_context": pred.get("season_context", {}),
         "granular": pred.get("granular", {}),
+        "model": pred.get("model"),
     }
+    if _NHL_MODEL == "ratings" and not _ratings:
+        # The ratings model couldn't price this game; never fall back to the factor numbers.
+        return [], context
+
+    odds = _sanitize_odds(odds)
+    wp = pred["win_prob"]
+    if not _ratings:
+        ens = pred.get("ensemble") or {}
+        if ens.get("home_win") is not None:
+            wp = {"home": float(ens["home_win"]), "away": 1.0 - float(ens["home_win"])}
+
+    h_abbr = pred["home"]["abbreviation"]
+    a_abbr = pred["away"]["abbreviation"]
+    from ...picks_core import score_pick as _score_pick
+
+    def _emit(bet_type, pick_text, prob, ml, opp_ml):
+        if prob is None or ml is None:
+            return
+        scored = _score_pick({
+            "type": bet_type, "pick": pick_text,
+            "raw_prob": _ma.anchor(float(prob), ml, opp_ml, bet_type, pick_text),
+            "odds": int(ml),
+        }, sport="nhl", juice_wall=JUICE_WALL)
+        if scored:
+            scored["prob_model"] = round(float(prob), 4)
+            picks.append(scored)
+
+    picks = []
+
+    # ── Moneyline (both sides) ──
+    home_ml = odds.get("home_ml")
+    away_ml = odds.get("away_ml")
+    if ENABLE_NHL_ML and home_ml is not None and away_ml is not None:
+        _emit("ML", h_abbr, wp["home"], home_ml, away_ml)
+        _emit("ML", a_abbr, wp["away"], away_ml, home_ml)
+
+    # ── Totals (both sides, HR's own line) ──
+    vegas_total = odds.get("over_under")
+    ou_dist = pred.get("over_under") or {}
+    if ENABLE_NHL_OU and vegas_total is not None and ou_dist:
+        try:
+            vt = float(vegas_total)
+        except (TypeError, ValueError):
+            vt = None
+        cell = ou_dist.get(f"{vt:.1f}") if vt is not None else None
+        if cell is None and vt is not None and not _ratings:
+            # Factor fallback: nearest line in its per-line table.
+            k = min(ou_dist, key=lambda x: abs(float(x) - vt), default=None)
+            cell = ou_dist.get(k) if k is not None else None
+        oo, uo = odds.get("over_odds"), odds.get("under_odds")
+        if cell and oo is not None and uo is not None:
+            _emit("O/U", f"Over {vt}", cell.get("over"), oo, uo)
+            _emit("O/U", f"Under {vt}", cell.get("under"), uo, oo)
+
+    # Alt totals (MintyBot 2026-10-27, Austin "It should be looking at alt lines"): HR's alt
+    # ladder, both sides, off the same score grid. Own bet type (ALT O/U -> the ALT_TOTAL cell) so
+    # the Pick Authority grades the ladder as its own market, never inside the main-line O/U cell.
+    if ENABLE_NHL_OU and ou_dist and _ratings:
+        try:
+            _main_t = float(vegas_total) if vegas_total is not None else None
+        except (TypeError, ValueError):
+            _main_t = None
+        for alt in odds.get("alt_totals") or []:
+            try:
+                lt = float(alt.get("line"))
+            except (TypeError, ValueError):
+                continue
+            acell = ou_dist.get(f"{lt:.1f}") if lt != _main_t else None
+            aoo, auo = alt.get("over_odds"), alt.get("under_odds")
+            if acell and _valid_odds(aoo) and _valid_odds(auo):
+                _emit("ALT O/U", f"Over {lt}", acell.get("over"), aoo, auo)
+                _emit("ALT O/U", f"Under {lt}", acell.get("under"), auo, aoo)
+
+    # ── Puck line (both sides, HR's own points) ──
+    hp, ap = odds.get("home_spread_point"), odds.get("away_spread_point")
+    ho, ao = odds.get("home_spread_odds"), odds.get("away_spread_odds")
+    if ENABLE_NHL_PL and hp is not None and ap is not None and ho is not None and ao is not None:
+        cov = pred.get("spread_cover") or {}
+        pl = pred.get("puck_line") or {}
+        try:
+            hp, ap = float(hp), float(ap)
+        except (TypeError, ValueError):
+            hp = ap = None
+        if hp is not None:
+            h_prob = cov.get(f"home_{hp:+.1f}")
+            if h_prob is None and abs(hp) == 1.5:
+                h_prob = pl.get("home_minus_1_5" if hp < 0 else "home_plus_1_5")
+            a_prob = (1.0 - cov[f"home_{-ap:+.1f}"]) if f"home_{-ap:+.1f}" in cov else (
+                pl.get("away_minus_1_5" if ap < 0 else "away_plus_1_5") if abs(ap) == 1.5 else None)
+            _emit("PL", f"{h_abbr} {hp:+.1f}", h_prob, ho, ao)
+            _emit("PL", f"{a_abbr} {ap:+.1f}", a_prob, ao, ho)
+
+    # Alt puck lines (MintyBot 2026-10-27): HR's alt_spreads, both sides; "point" is the HOME
+    # point. Half-points only -- a whole-number rung can push, and 1 - P(home covers) would
+    # misprice the away side.
+    if ENABLE_NHL_PL and _ratings:
+        cov = pred.get("spread_cover") or {}
+        try:
+            _main_hp = float(odds.get("home_spread_point"))
+        except (TypeError, ValueError):
+            _main_hp = None
+        for alt in odds.get("alt_spreads") or []:
+            try:
+                pt = float(alt.get("point"))
+            except (TypeError, ValueError):
+                continue
+            if pt == _main_hp or pt % 1 == 0:
+                continue
+            h_alt = cov.get(f"home_{pt:+.1f}")
+            aho, aao = alt.get("home_odds"), alt.get("away_odds")
+            if h_alt is None or not (_valid_odds(aho) and _valid_odds(aao)):
+                continue
+            _emit("ALT PL", f"{h_abbr} {pt:+.1f}", h_alt, aho, aao)
+            _emit("ALT PL", f"{a_abbr} {-pt:+.1f}", 1.0 - float(h_alt), aao, aho)
+
+    # ── Derivatives (team totals, periods, 3-ways, BTS, OT, odd/even) ──
+    from .derivative_picks import append_derivative_picks
+    append_derivative_picks(picks, pred, odds, h_abbr, a_abbr)
+
+    # CI band on the win-probability point estimate (data-quality uncertainty).
+    ci_hw = (pred.get("confidence") or {}).get("ci_half_width", 0.05)
+    for p in picks:
+        prob = p.get("prob")
+        if prob is None:
+            continue
+        p["prob_low"] = round(max(0.0, prob - ci_hw), 4)
+        p["prob_high"] = round(min(1.0, prob + ci_hw), 4)
+        p["ci_half_width"] = ci_hw
+
+    picks = [p for p in picks if (p.get("edge") or 0) > 0]
+
+    from ...dynamic_reliability import get_reliability as _get_reliability
+    for p in picks:
+        reliability = _get_reliability("nhl", p["type"])
+        p["adjusted_ev"] = round(p["edge"] * reliability, 2)
+    picks.sort(key=lambda p: -p["adjusted_ev"])
+
+    # The legacy per-cell edge floors (engine.edge_floors) were fit on the retired model's
+    # record; the Pick Authority (edge_proven) is the gate now, so they no longer apply.
+    from ..._pick_helpers import tag_confidence
+    tag_confidence(picks)
     return picks, context

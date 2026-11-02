@@ -56,7 +56,11 @@ def _profit_for(result: Result, odds: int) -> float:
 
 def _extract_line(text: str) -> float | None:
     import re
-    m = re.findall(r'-?\d+\.?\d*', text or "")
+    # Strip a trailing period/half scope token (Q1-4, 1H/2H, H1/H2) so the
+    # line parse doesn't grab the scope digit — e.g. "Over 105.5 1H" -> 105.5
+    # (was grabbing the "1"). Q1 totals/spreads had the same latent bug.
+    t = re.sub(r'\s+(Q[1-4]|[12]H|H[12])\s*$', '', text or "", flags=re.I)
+    m = re.findall(r'-?\d+\.?\d*', t)
     if not m:
         return None
     try:

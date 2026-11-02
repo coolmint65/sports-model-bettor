@@ -1,4 +1,5 @@
 import { memo } from 'react'
+import { clvPct } from '../../lib/clv'
 import { humanizeBetType } from '../../lib/betType'
 import { cn } from '../../lib/utils'
 import MatchupCell from './MatchupCell'
@@ -58,14 +59,14 @@ function PicksTableImpl({
   typeColumnLabel = 'Type',
   profitFormatter = defaultProfit,
   sport,
+  unstaked = false,
 }) {
   const pct = n => n != null ? `${(n * 100).toFixed(1)}%` : '-'
 
   // American odds → implied prob → CLV % swing.
   const clvFor = (p) => {
-    if (p.odds == null || p.closing_odds == null) return null
-    const imp = (o) => o < 0 ? Math.abs(o) / (Math.abs(o) + 100) : 100 / (o + 100)
-    return Math.round((imp(p.closing_odds) - imp(p.odds)) * 1000) / 10
+    const c = clvPct(p.odds, p.closing_odds)
+    return c == null ? null : Math.round(c * 10) / 10
   }
 
   return (
@@ -106,6 +107,7 @@ function PicksTableImpl({
                 className={cn(
                   'border-b border-border/60 hover:bg-accent/30 transition-colors',
                   rowTint,
+                  p.is_shadow && 'border-l-2 border-l-sky-500/70',
                 )}
               >
                 <Td className="text-xs text-muted-foreground whitespace-nowrap">
@@ -119,7 +121,11 @@ function PicksTableImpl({
                 </Td>
                 <Td className="font-semibold text-foreground">{p.pick}</Td>
                 <Td align="right" className="tabular-nums text-muted-foreground">
-                  {formatStakeUnits(
+                  {unstaked ? (
+                    <span title="Paper is graded flat 1u (unstaked)">1u</span>
+                  ) : p.is_shadow ? (
+                    <span className="rounded-sm bg-sky-500/20 px-1 py-0.5 text-[9px] font-bold uppercase tracking-wider text-sky-300">paper</span>
+                  ) : formatStakeUnits(
                     p.stake_units != null
                       ? p.stake_units
                       : deriveStakeUnits(p.model_prob, p.edge)
@@ -132,7 +138,7 @@ function PicksTableImpl({
                   {p.model_prob ? pct(p.model_prob) : '-'}
                 </Td>
                 <Td align="right" className={cn('tabular-nums font-semibold', edgeTone)}>
-                  {p.edge ? `+${p.edge.toFixed(1)}%` : '-'}
+                  {p.edge != null ? `${p.edge > 0 ? '+' : ''}${p.edge.toFixed(1)}%` : '-'}
                 </Td>
                 <Td align="right" className={cn('tabular-nums', clvTone)}
                     title={clv == null ? 'No closing line captured' : `Closing odds: ${p.closing_odds > 0 ? '+' : ''}${p.closing_odds}`}>

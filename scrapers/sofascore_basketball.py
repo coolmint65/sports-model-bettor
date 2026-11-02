@@ -31,7 +31,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-_BASE = "https://api.sofascore.com/api/v1"
+_BASE = "https://www.sofascore.com/api/v1"  # api. host 403s curl_cffi since ~10-29; www serves the same JSON
 _TIMEOUT_S = 15.0
 
 

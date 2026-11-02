@@ -57,6 +57,11 @@ LEAGUE_REGISTRY: dict[str, dict] = {
         # walk-forward fit 2026-09-03 on 2023-25 (858 games): K=20 best Brier (.2209); slope 30 Elo/pt
         "elo_k":             20.0,
         "elo_per_point":     30.0,
+        # Home field, walk-forward fit 2026-10-25 on 2023-26 (910 games; Austin "A B and C"):
+        # 40 Elo = 1.33 pts. The converted mean home margin (2.39 pts = 71.7 Elo) rated home teams
+        # 59% (actual 55%) and leaned home +1.0 pt vs HR's 2026 lines; 40 Elo is in the log-loss
+        # optimum (.6478 vs .6542), mean p .552 vs .547 actual, -0.13 pt vs HR. Wins over the overlay.
+        "hfa_elo":           40.0,
         "season_months":     (8, 9, 10, 11, 12, 1, 2),
         "db_path":           "data/football/nfl.db",
         "home_advantage":    None,
@@ -78,6 +83,17 @@ LEAGUE_REGISTRY: dict[str, dict] = {
         # K=20 .513/.2021); Elo->pts slope fit 24.5 Elo/pt, so the 25 convention stands.
         "elo_k":             40.0,
         "elo_per_point":     22.0,   # refit with FCS board in (5,031 games): 22.2 Elo/pt @K40
+        # Points-based ratings (2026-10-25 walk-forward re-tune, see engine.football._elo). The
+        # legacy K40 Elo above stays for the GBM's features (trained on it) and backtests.
+        "elo_update":        "pts",
+        "elo_pts_k":         2.2,     # Elo per point of margin error
+        "elo_pts_cap":       50.0,    # margin-error clamp
+        "elo_pts_early":     1.0,     # 2x step over a team's first games of a season, tapering by game 4
+        "elo_pts_err_epp":   22.0,    # Elo->pts inside the update (kp absorbs the scale)
+        "elo_season_regress": 0.2,    # 20% back toward the tier prior each August
+        "elo_init_other":    800.0,   # non-FBS teams start here (FBS = 1500); data/football/cfb_fbs_teams.json
+        "elo_pts_hfa":       80.0,    # ~3.9 pts at the fitted slope
+        "elo_pts_per_point": 20.4,    # margin slope fit on 2025-26 pre-game ratings
         "lookahead_days":    0,      # today only (Saturday slates are 70+ games); ?days=N to peek
         "season_months":     (8, 9, 10, 11, 12, 1),
         "db_path":           "data/football/cfb.db",
@@ -86,6 +102,14 @@ LEAGUE_REGISTRY: dict[str, dict] = {
         "status":            "beta",
     },
 }
+
+# Smaller leagues REMOVED 2026-10-27 (Austin: "I don't care about the smaller ... leagues, let's
+# just remove them"; kept NFL + CFB). Their entries stay above so a league comes back by deleting
+# it from this set; their data was archived to _archive_minorleagues_20261027.
+_REMOVED_2026_10_27 = frozenset({
+    "ufl",
+})
+REMOVED_LEAGUES = {k: LEAGUE_REGISTRY.pop(k) for k in sorted(_REMOVED_2026_10_27) if k in LEAGUE_REGISTRY}
 
 
 def _apply_fitted_overrides() -> None:
@@ -120,6 +144,10 @@ def _apply_fitted_overrides() -> None:
             # a >4-pt mean margin to a flat 100 Elo (CFB 7.15 -> 100, the reported bug).
             data["home_advantage"] = round(min(pts, 3.0) * per_pt, 1)
         LEAGUE_REGISTRY[league].update(data)
+    # A walk-forward-fit Elo HFA (registry ``hfa_elo``) wins over the converted mean home margin.
+    for cfg in LEAGUE_REGISTRY.values():
+        if cfg.get("hfa_elo") is not None:
+            cfg["home_advantage"] = float(cfg["hfa_elo"])
 
 
 _apply_fitted_overrides()

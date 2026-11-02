@@ -18,7 +18,10 @@ from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
-MIN_EDGE = 5.0  # Minimum edge % to qualify as POTD candidate
+MIN_EDGE = 0.0  # was 5.0; lowered 2026-10-06 (Austin): POTD = the BEST pick
+                # for every sport actually playing today, not just high-edge
+                # locks. After the calibration de-bias, honest edges fell
+                # under the old 5.0 floor and the daily sports went blank.
 
 # Minimum model probability to qualify as POTD candidate. User
 # directive 2026-04-30: POTD should be the bet that wins ~80% of the
@@ -26,7 +29,7 @@ MIN_EDGE = 5.0  # Minimum edge % to qualify as POTD candidate
 # +EV play, not a "lock". The 0.65 floor pushes POTD onto medium-to-
 # heavy favorites. Combined with the new prob-weighted scoring
 # (below), POTD lands on the highest-conviction qualifying pick.
-MIN_PROB = 0.65
+MIN_PROB = 0.50  # was 0.65; lowered 2026-10-06 with MIN_EDGE (see above). Score is still confidence-led, so the top pick remains the most confident +EV play; this just lets a sport whose best play is a modest favorite still surface.
 
 # Deprecated 2026-04-24 — POTD now considers every pick from
 # `all_picks`, ranked by `_score_pick`. Kept here as documentation of
@@ -146,7 +149,10 @@ def _score_pick(pick: dict, sport: str = "mlb") -> float:
     if prob <= 0:
         return 0.0
 
-    confidence_factor = prob * prob
+    # "Both" ranker (Austin 2026-10-17): POTD = THE STRONGEST PLAY = edge × prob
+    # (value × likelihood), not prob² alone. A 70%/+13pp (9.1) now beats a 90%/+5pp
+    # (4.5) — edge is IN the ranker now, not just the MIN_EDGE gate. Backup: .bak-both.
+    strength = edge * prob
 
     bet_type = pick.get("type", "") or ""
     try:
@@ -158,4 +164,4 @@ def _score_pick(pick: dict, sport: str = "mlb") -> float:
 
     class_factor = _market_class_factor(sport, bet_type)
 
-    return confidence_factor * reliability_factor * class_factor
+    return strength * reliability_factor * class_factor

@@ -1,0 +1,868 @@
+{
+ "arg_lpf": {
+  "AH": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "DC": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "DNB": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "H1_DC": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "H1_DNB": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "ML": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "OU": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  }
+ },
+ "bra_seriea": {
+  "AH": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "DC": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "DNB": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "H1_DC": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "H1_DNB": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "H1_TOTAL": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "OU": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  }
+ },
+ "conmebol_libertadores": {
+  "DC": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "DNB": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "H1_DNB": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "H1_TOTAL": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "ML": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "OU": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  }
+ },
+ "eng_premier": {
+  "AH": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "DC": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "DNB": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "H1_TOTAL": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "OU": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  }
+ },
+ "esp_laliga": {
+  "AH": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "DC": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "DNB": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "H1_TOTAL": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "ML": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "OU": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  }
+ },
+ "euroleague": {
+  "SPREAD": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "TOTAL": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  }
+ },
+ "f1": {
+  "PODIUM": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "WINNER": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  }
+ },
+ "fifa_world_cup": {
+  "ADVANCE": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "AH": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "DC": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "DNB": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "GIBH": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "H1_DC": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "H1_DNB": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "H1_ML": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "H1_TOTAL": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "ML": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "OU": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  }
+ },
+ "fra_ligue1": {
+  "DC": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "H1_DNB": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "ML": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "OU": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  }
+ },
+ "ger_bundesliga": {
+  "DNB": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "OU": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  }
+ },
+ "ita_seriea": {
+  "AH": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "DC": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "DNB": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "H1_DC": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "OU": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  }
+ },
+ "mlb": {
+  "1st INN": {
+   "hr": "listed",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "ALT O/U": {
+   "hr": "listed",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "ALT RL": {
+   "hr": "listed",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "Batter Hits O/U": {
+   "hr": "listed",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": "BASEBALL:FT:PROPHMULTILINE"
+  },
+  "Batter RBI": {
+   "hr": "listed",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "Batter Runs Scored": {
+   "hr": "listed",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "Batter TB": {
+   "hr": "listed",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": "BASEBALL:FT:PROPTBMULTILINE"
+  },
+  "Batter Walks": {
+   "hr": "listed",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "F5 ML": {
+   "hr": "listed",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": "BASEBALL:P:ML5"
+  },
+  "F5 O/U": {
+   "hr": "listed",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": "BASEBALL:P:OU5"
+  },
+  "ML": {
+   "hr": "listed",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": "BASEBALL:FTEI:ML"
+  },
+  "O/U": {
+   "hr": "listed",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": "BASEBALL:FTEI:OU"
+  },
+  "Pitcher Earned Runs": {
+   "hr": "listed",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": "BASEBALL:FT:PROPERMULTILINE"
+  },
+  "Pitcher Hits Allowed": {
+   "hr": "listed",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": "BASEBALL:FT:PROPHAMULTILINE"
+  },
+  "Pitcher Ks O/U": {
+   "hr": "listed",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": "BASEBALL:FT:PROPSOMULTILINE"
+  },
+  "Pitcher Outs Recorded": {
+   "hr": "listed",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": "BASEBALL:FT:PROPOUT"
+  },
+  "Pitcher Walks O/U": {
+   "hr": "listed",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "RL": {
+   "hr": "listed",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": "BASEBALL:FTEI:SPRD"
+  },
+  "Team Total": {
+   "hr": "listed",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  }
+ },
+ "mls": {
+  "AH": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "BTTS": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "DC": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "DNB": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "H1_BTTS": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "H1_DC": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "H1_DNB": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "H1_TOTAL": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "OU": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  }
+ },
+ "nascar": {
+  "PODIUM": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  }
+ },
+ "nba": {
+  "ALT SPREAD": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "ALT TOTAL": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "Player 3PM": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "Player Assists": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "Player Blocks": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "Player PRA": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "Player Points": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "Player Rebounds": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "Player Steals": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "Q1_ML": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "Q1_SPREAD": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "Q1_TOTAL": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "SPREAD": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "TOTAL": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  }
+ },
+ "nba_summer_league": {
+  "ML": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "Q1_SPREAD": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "SPREAD": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "TOTAL": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  }
+ },
+ "nhl": {
+  "Goalie Saves": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "ML": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "O/U": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "PL": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "Skater Assists": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "Skater Points": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "Skater SOG": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  }
+ },
+ "uefa_champions": {
+  "H1_DNB": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "OU": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  }
+ },
+ "us_nwsl": {
+  "DC": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "DNB": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "H1_DNB": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "H1_TOTAL": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "OU": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  }
+ },
+ "us_open_cup": {
+  "ML": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  }
+ },
+ "usl_championship": {
+  "BTTS": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "DC": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "DNB": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "H1_DNB": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "H1_TOTAL": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "ML": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "OU": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  }
+ },
+ "wnba": {
+  "ML": {
+   "hr": "wired",
+   "kalshi": "wired",
+   "dk": "wired",
+   "hr_market_type": null
+  },
+  "Player 3PM": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "Player Assists": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "Player PRA": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "Player Points": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "Player Rebounds": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "Q1_ML": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "Q1_SPREAD": {
+   "hr": "unknown",
+   "kalshi": "unknown",
+   "dk": "unknown",
+   "hr_market_type": null
+  },
+  "Q1_TOTAL": {
+   "hr": "wired",
+   "kalshi": "wired",
+   "dk": "wired",
+   "hr_market_type": null
+  },
+  "SPREAD": {
+   "hr": "wired",
+   "kalshi": "wired",
+   "dk": "wired",
+   "hr_market_type": null
+  },
+  "TOTAL": {
+   "hr": "wired",
+   "kalshi": "wired",
+   "dk": "wired",
+   "hr_market_type": null
+  }
+ }
+}

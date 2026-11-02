@@ -106,7 +106,15 @@ def _participant_name_for(event: dict, side: str) -> str | None:
                 return p.get("name")
         except (TypeError, ValueError):
             continue
-    return None
+    # HR Oct-2026 shape change: participants[] dropped; derive the players from
+    # the event `name` ("P1 vs P2"). _extract_teams returns (second, first);
+    # side "A" = position 0 = first. (MintyBot 2026-10-13)
+    try:
+        from scrapers.hardrock_odds import _extract_teams
+        second, first = _extract_teams(event)
+        return (first if side == "A" else second) or None
+    except Exception:
+        return None
 
 
 # ── Per-market extractors ─────────────────────────────────────

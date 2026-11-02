@@ -214,15 +214,37 @@ def _extract_closing_for_pick(bet_type: str, pick_text: str,
     return None
 
 
+def _started_fn(league: str):
+    """(pick_id) -> True once that pick's match has kicked off (matches.start_time, UTC ISO).
+    HR keeps soccer matches in its feed IN-PLAY, so without this the capture kept stamping live
+    prices as the "close" (2026-10-28 audit: EVE@HUL -260 was captured 89 min after kickoff)."""
+    from datetime import datetime, timezone
+    conn = get_conn(league)
+
+    def started(pick_id) -> bool:
+        row = conn.execute(
+            f"SELECT m.start_time FROM {picks_table(league)} p JOIN matches m ON m.id = p.match_id "
+            f"WHERE p.id = ?", (pick_id,)).fetchone()
+        st = row[0] if row else None
+        if not st:
+            return True   # unknown kickoff -> treat as started (never stamp an unverifiable close)
+        t = datetime.fromisoformat(str(st).replace("Z", "+00:00"))
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc) >= t
+    return started
+
+
 def capture_closing_odds(league: str) -> int:
-    """Snapshot current HR odds for pending picks in the soccer league.
-    Returns rows updated. Idempotent."""
+    """Snapshot current HR odds for pending picks in the soccer league, up to kickoff (each
+    refresh overwrites, so the last pre-kickoff read is the close). Returns rows updated."""
     adapter = SportAdapter(
         name=league,
         get_conn=lambda: get_conn(league),
         picks_table=picks_table(league),
         hr_fetch=lambda: fetch_league_odds(league),
         extract_closing=_extract_closing_for_pick,
+        started=_started_fn(league),
     )
     return core_capture_closing_odds(adapter)
 

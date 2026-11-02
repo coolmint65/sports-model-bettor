@@ -9,13 +9,12 @@ REM and inherited here; fallbacks only matter for a standalone run.
 
 cd /d "%~dp0"
 
-if not defined HR_RELAY_URL set HR_RELAY_URL=http://127.0.0.1:7478
-if not defined AUTO_BET_LIVE set AUTO_BET_LIVE=1
+if not defined HR_RELAY_TOKEN call "%~dp0relay-secrets.bat"
 if not exist "data\logs" mkdir "data\logs"
 
 :loop
 echo [%date% %time%] backend-supervisor: starting uvicorn on :8000 >> data\logs\backend.log
-python -m uvicorn backend.server:app --host 0.0.0.0 --port 8000 --no-access-log >> data\logs\backend.log 2>&1
+"%~dp0.venv\Scripts\python.exe" -m uvicorn backend.server:app --host 0.0.0.0 --port 8000 --no-access-log >> data\logs\backend.log 2>&1
 echo [%date% %time%] backend-supervisor: uvicorn EXITED (errorlevel=%errorlevel%) - restarting in 5s >> data\logs\backend.log
 timeout /t 5 /nobreak >nul
 goto loop

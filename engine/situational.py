@@ -145,7 +145,7 @@ def pitcher_rest_factor(pitcher_id: int, game_date: str,
     Standard rest: 5 days between starts.
     Short rest (4 days): slight negative.
     Extra rest (6+ days): slight positive (fresh arm).
-    Very long rest (10+): slight negative (rusty).
+    Very long rest (11+): neutral (a deliberately-rested ace isn't rusty).
 
     Returns multiplier (1.0 = normal rest).
     """
@@ -179,7 +179,7 @@ def pitcher_rest_factor(pitcher_id: int, game_date: str,
     elif days_rest <= 10:
         return 1.0        # Extended but not rusty
     else:
-        return 1.02       # Very long layoff = rust
+        return 1.0        # Very long layoff: neutral, not rust (rested ace != rusty, 2026-10-11)
 
 
 # ── Lineup Strength ─────────────────────────────────────────

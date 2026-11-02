@@ -130,7 +130,7 @@ def _compute_pit_stats(conn, team_id: int, game_date: str,
         else:
             losses += 1
 
-        if i == 0 and r.get("date"):
+        if i == 0 and r["date"]:
             last_game_date = r["date"]
 
         if i < 5:

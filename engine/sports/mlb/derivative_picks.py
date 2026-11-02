@@ -105,6 +105,7 @@ def _try_score(picks: list, *, type_: str, pick_text: str,
         "type": type_,
         "pick": pick_text,
         "raw_prob": raw_prob,
+        "deriv_market_key": "mlb:" + str(type_),
         "odds": int(ml),
     }
     if direction is not None:

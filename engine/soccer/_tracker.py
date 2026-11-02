@@ -176,6 +176,21 @@ def _resolve_result(row: dict, match: dict) -> tuple[str | None, float | None]:
     def L(): return ("L", _payout(odds, False))
     def P(): return ("P", 0.0)
 
+    # -- Unified grading core (audit T2 migration) --
+    # Core-first for covered markets (ML 3-way / OU / BTTS / DNB / DC / AH
+    # + H1 variants); legacy fallback for ADVANCE / GIBH / anything else.
+    try:
+        from ..grading import soccer_adapter as _core_soccer
+        _cr = _core_soccer.grade_pick(row, match)
+    except Exception:
+        _cr = None
+    if _cr == "W":
+        return W()
+    if _cr == "L":
+        return L()
+    if _cr == "P":
+        return P()
+
     if bt == "ML":
         if side == "home" or pick_text == match.get("home_abbr"):
             return W() if h > a else L()

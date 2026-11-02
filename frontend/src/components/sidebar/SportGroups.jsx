@@ -107,68 +107,6 @@ export function SoccerGroup({
 }
 
 
-// ── Motorsports ───────────────────────────────────────────────
-// F1 + IndyCar + NASCAR. Flat — series list is small enough that
-// confederation-style sub-grouping adds noise.
-
-export function MotorsportsGroup({
-  expanded, onToggleExpanded, selected, onSelect, series, gameCount,
-}) {
-  // Series entries carry `status: 'pending_data'` for shell entries
-  // (IndyCar / NASCAR pre-ingest). They stay clickable but dim.
-  const leagues = (series || []).map(s => ({
-    ...s,
-    // ExpandableGroup + LeagueButton speak in {key, display_name,
-    // game_count_today, in_season}. Series objects use `key` +
-    // `display_name` already, plus `active` and `status`.
-    in_season: s.in_season ?? (s.status !== 'pending_data'),
-    game_count_today: s.game_count_today || 0,
-  }))
-  const sorted = [...leagues].sort(seasonAlpha)
-  return (
-    <ExpandableGroup
-      icon="🏎" label="Motorsports"
-      expanded={expanded} onToggleExpanded={onToggleExpanded}
-      isAnyChildActive={leagues.some(L => L.key === selected)}
-      gameCount={gameCount}
-    >
-      {sorted.map(L => (
-        <LeagueButton
-          key={L.key} league={L}
-          isActive={selected === L.key}
-          onSelect={onSelect}
-        />
-      ))}
-    </ExpandableGroup>
-  )
-}
-
-
-// ── Baseball ──────────────────────────────────────────────────
-
-export function BaseballGroup({
-  expanded, onToggleExpanded, selected, onSelect, leagues, gameCount,
-}) {
-  const sorted = [...leagues].sort(seasonAlpha)
-  return (
-    <ExpandableGroup
-      icon="⚾" label="Baseball"
-      expanded={expanded} onToggleExpanded={onToggleExpanded}
-      isAnyChildActive={leagues.some(L => L.key === selected)}
-      gameCount={gameCount}
-    >
-      {sorted.map(L => (
-        <LeagueButton
-          key={L.key} league={L}
-          isActive={selected === L.key}
-          onSelect={onSelect}
-        />
-      ))}
-    </ExpandableGroup>
-  )
-}
-
-
 // ── Region / confederation section (shared by Basketball + Soccer) ──
 
 function RegionSection({ region, leagues, selected, onSelect }) {

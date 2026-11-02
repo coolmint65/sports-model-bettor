@@ -70,11 +70,11 @@ python -c "from engine.lineup_refresh import refresh_for_date; import json; prin
 
 echo ""
 echo "Recording today's picks..."
-python scripts/run.py engine.tracker --record
+python scripts/run.py engine.tracker --record || echo "[sync] WARN: tracker --record failed (exit $?) -- continuing so settle + backups still run"
 
 echo ""
 echo "Settling completed picks..."
-python scripts/run.py engine.tracker --settle
+python scripts/run.py engine.tracker --settle || echo "[sync] WARN: tracker --settle failed (exit $?) -- continuing so calibration + backups still run"
 
 echo ""
 echo "Refreshing empirical calibration..."

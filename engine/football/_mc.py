@@ -27,6 +27,8 @@ from __future__ import annotations
 import math
 import random
 
+import numpy as np
+
 # Per-team standard deviation. The margin σ from `_calibrate` (~13.2
 # for UFL) splits into σ_per_team = σ_margin / sqrt(2) ≈ 9.4 under the
 # independence assumption. Refit when the σ_margin constant changes.
@@ -50,47 +52,54 @@ def _sample_score(mean: float, sigma: float, rng: random.Random) -> int:
 def simulate(*, expected_home: float, expected_away: float,
               margin_sigma: float, spread: float | None = None,
               total_line: float | None = None,
+              margin_samples=None, margin_mean: float = 0.0,
               n_sims: int = DEFAULT_N_SIMS,
+              return_samples: bool = False,
               seed: int | None = None) -> dict:
     """Run ``n_sims`` independent samples. Returns realized
     probabilities for the markets the picker cares about."""
-    rng = random.Random(seed)
+    rng = np.random.default_rng(seed)
     sigma_per_team = margin_sigma * _PER_TEAM_SIGMA_FROM_MARGIN
 
-    home_wins = 0
-    home_covers = 0
-    overs = 0
-    pushes_ml = 0
-    pushes_spread = 0
-    pushes_total = 0
-    total_home_pts = 0
-    total_away_pts = 0
-
-    for _ in range(n_sims):
-        h = _sample_score(expected_home, sigma_per_team, rng)
-        a = _sample_score(expected_away, sigma_per_team, rng)
-        total_home_pts += h
-        total_away_pts += a
+    expected_margin = expected_home - expected_away
+    if margin_samples:
+        # Key-number-aware: MARGIN from the empirical dist (shifted to expected_margin),
+        # TOTAL from the Normal, scores derived so the total bet stays realistic.
+        margin = rng.choice(np.asarray(margin_samples, dtype=float),
+                            size=n_sims) + (expected_margin - margin_mean)
+        tot_s = rng.normal(expected_home + expected_away, margin_sigma, n_sims)
+        h = (tot_s + margin) / 2.0
+        a = (tot_s - margin) / 2.0
+    else:
+        h = np.round(np.clip(
+            rng.normal(expected_home, sigma_per_team, n_sims),
+            _MIN_PTS, _MAX_PTS))
+        a = np.round(np.clip(
+            rng.normal(expected_away, sigma_per_team, n_sims),
+            _MIN_PTS, _MAX_PTS))
         margin = h - a
-        if margin > 0:
-            home_wins += 1
-        elif margin == 0:
-            pushes_ml += 1
-        if spread is not None:
-            # Home covers ``spread`` iff (home - away + spread) > 0.
-            # Football lines are typically half-points so a literal
-            # push is rare, but record it when the line is whole.
-            cover = margin + spread
-            if cover > 0:
-                home_covers += 1
-            elif cover == 0:
-                pushes_spread += 1
-        if total_line is not None:
-            tot = h + a
-            if tot > total_line:
-                overs += 1
-            elif tot == total_line:
-                pushes_total += 1
+
+    total_home_pts = float(h.sum())
+    total_away_pts = float(a.sum())
+    home_wins = int((margin > 0).sum())
+    pushes_ml = int((margin == 0).sum())
+
+    home_covers = 0
+    pushes_spread = 0
+    if spread is not None:
+        # Home covers ``spread`` iff (home - away + spread) > 0.
+        # Football lines are typically half-points so a literal
+        # push is rare, but record it when the line is whole.
+        cover = margin + spread
+        home_covers = int((cover > 0).sum())
+        pushes_spread = int((cover == 0).sum())
+
+    overs = 0
+    pushes_total = 0
+    if total_line is not None:
+        tot = h + a
+        overs = int((tot > total_line).sum())
+        pushes_total = int((tot == total_line).sum())
 
     p_home = home_wins / n_sims
     # Excluding ties from ML denominator so the prob is "home wins
@@ -119,4 +128,9 @@ def simulate(*, expected_home: float, expected_away: float,
         out["mc_p_over"]  = round(overs / n_sims, 4)
         out["mc_p_under"] = round(
             1.0 - overs / n_sims - (pushes_total / n_sims), 4)
+    if return_samples:
+        # raw per-sim scores so the derivative pricer can count any line
+        # (alt ladders / team totals / margin / OT) off the SAME sim run.
+        out["_h"] = h
+        out["_a"] = a
     return out

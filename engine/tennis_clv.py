@@ -164,6 +164,27 @@ def _extract_closing(pick: dict, event: dict) -> int | None:
     return None
 
 
+def _match_started(status, start_time) -> bool:
+    """True once the match is live/final -- freeze the pre-game close then."""
+    if status and str(status).lower() in ("in", "post", "live", "final", "inprogress"):
+        return True
+    if start_time:
+        try:
+            from datetime import datetime, timezone
+            st = datetime.fromisoformat(str(start_time).replace("Z", "+00:00"))
+            if st.tzinfo is None:
+                st = st.replace(tzinfo=timezone.utc)
+            return datetime.now(timezone.utc) >= st
+        except Exception:
+            return False
+    return False
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+
+
 def capture_closing_odds() -> int:
     """Snapshot HR closing odds for every pending tennis pick that
     doesn't yet have one (or whose previous capture changed). Returns
@@ -172,8 +193,11 @@ def capture_closing_odds() -> int:
     from .tennis_odds import fetch_all
     conn = get_conn()
     pending = conn.execute(
-        "SELECT id, tour, matchup, bet_type, pick, closing_odds "
-        "FROM tennis_picks WHERE result IS NULL"
+        "SELECT p.id, p.tour, p.matchup, p.bet_type, p.pick, p.closing_odds, "
+        "       s.start_time AS _start, s.status AS _status "
+        "FROM tennis_picks p "
+        "LEFT JOIN tennis_scheduled_matches s ON s.match_id = p.match_id "
+        "WHERE p.result IS NULL"
     ).fetchall()
     if not pending:
         return 0
@@ -191,6 +215,12 @@ def capture_closing_odds() -> int:
     updated = refreshed = 0
     for row in pending:
         pick = dict(row)
+        # CLEAN PRE-GAME CLOSE (edge-hunt): freeze the close once the match
+        # starts. Refreshing while pending overwrote the pre-game close with
+        # IN-PLAY drift -> CLV became a measurement artifact (the SET_SPREAD
+        # +21%% CLV was exactly this). The last pre-game value IS the close.
+        if _match_started(pick.get("_status"), pick.get("_start")):
+            continue
         names = _split_matchup(pick["matchup"])
         if not names:
             continue
@@ -219,14 +249,16 @@ def capture_closing_odds() -> int:
         prior = pick.get("closing_odds")
         if prior is None:
             conn.execute(
-                "UPDATE tennis_picks SET closing_odds = ? WHERE id = ?",
-                (closing_int, pick["id"]),
+                "UPDATE tennis_picks SET closing_odds = ?, "
+                "closing_odds_captured_at = ? WHERE id = ?",
+                (closing_int, _now_iso(), pick["id"]),
             )
             updated += 1
         elif int(prior) != closing_int:
             conn.execute(
-                "UPDATE tennis_picks SET closing_odds = ? WHERE id = ?",
-                (closing_int, pick["id"]),
+                "UPDATE tennis_picks SET closing_odds = ?, "
+                "closing_odds_captured_at = ? WHERE id = ?",
+                (closing_int, _now_iso(), pick["id"]),
             )
             refreshed += 1
     conn.commit()

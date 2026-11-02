@@ -4,7 +4,6 @@ import { sortSports } from '../lib/sportSort'
 import { cn } from '../lib/utils'
 import {
   BasketballGroup, HockeyGroup, SoccerGroup,
-  MotorsportsGroup, BaseballGroup,
 } from './sidebar/SportGroups'
 
 /**
@@ -48,11 +47,8 @@ const SPORT_LABELS = {
   hockey: 'Hockey',
   tennis: 'Tennis',
   afl: 'AFL',
-  f1: 'Formula 1',
-  golf: 'Golf',
   soccer: 'Soccer',
   ufl: 'UFL',
-  college_baseball: 'College Baseball',
 }
 
 const SPORT_ICONS = {
@@ -63,11 +59,8 @@ const SPORT_ICONS = {
   hockey: '🏒',
   tennis: '🎾',
   afl: '🏉',
-  f1: '🏎',
-  golf: '⛳',
   soccer: '⚽',
   ufl: '🏈',
-  college_baseball: '⚾',
 }
 
 // Set of league keys that count as "basketball" — used to keep the
@@ -91,24 +84,9 @@ function isSoccerLeague(key, leagues) {
   return leagues.some(L => L.key === key)
 }
 
-function isMotorsportsSeries(key, series) {
-  // 'f1' acts as the legacy standalone key; treat it as "in motorsports"
-  // when the registry is loaded so the group auto-expands.
-  if (!series) return key === 'f1'
-  return series.some(S => S.key === key)
-}
-
-function isBaseballLeague(key, leagues) {
-  // 'mlb' acts as the legacy standalone key — treat it as part of
-  // baseball whenever the group is loaded so the group auto-expands.
-  if (!leagues) return key === 'mlb'
-  return leagues.some(L => L.key === key)
-}
-
 function SidebarImpl({
-  sports, selected, onSelect, gameCounts = {}, queueCount = 0,
+  sports, selected, onSelect, gameCounts = {},
   basketballLeagues = null, hockeyLeagues = null, soccerLeagues = null,
-  motorsportsSeries = null, baseballLeagues = null,
 }) {
   const ranked = sortSports(sports, gameCounts)
   const [open, setOpen] = useState(false)
@@ -135,20 +113,6 @@ function SidebarImpl({
     if (isSoccerLeague(selected, soccerLeagues)) setSoccerExpanded(true)
   }, [selected, soccerLeagues])
 
-  // Motorsports — auto-expand when F1 / IndyCar / NASCAR is selected.
-  const msInitiallyExpanded = isMotorsportsSeries(selected, motorsportsSeries)
-  const [msExpanded, setMsExpanded] = useState(msInitiallyExpanded)
-  useEffect(() => {
-    if (isMotorsportsSeries(selected, motorsportsSeries)) setMsExpanded(true)
-  }, [selected, motorsportsSeries])
-
-  // Baseball — auto-expand when MLB or any baseball-framework league
-  // is selected. Same pattern as the other groups.
-  const baseballInitiallyExpanded = isBaseballLeague(selected, baseballLeagues)
-  const [baseballExpanded, setBaseballExpanded] = useState(baseballInitiallyExpanded)
-  useEffect(() => {
-    if (isBaseballLeague(selected, baseballLeagues)) setBaseballExpanded(true)
-  }, [selected, baseballLeagues])
 
   // Close on Esc and when viewport widens to md+
   useEffect(() => {
@@ -180,9 +144,6 @@ function SidebarImpl({
   const hockeyGameCount = hockeyLeagues
     ? hockeyLeagues.reduce((s, L) => s + (L.game_count_today || 0), 0)
     : (gameCounts.hockey ?? gameCounts.nhl ?? 0)
-  const baseballGameCount = baseballLeagues
-    ? baseballLeagues.reduce((s, L) => s + (L.game_count_today || 0), 0)
-    : (gameCounts.baseball ?? gameCounts.mlb ?? 0)
   // Soccer rolls up every competition's today-count into the parent
   // entry badge — same pattern as Basketball + Hockey groups.
   const soccerGameCount = soccerLeagues
@@ -254,64 +215,67 @@ function SidebarImpl({
           </div>
 
           <button
-            onClick={() => handleSelect('dashboard')}
+            onClick={() => handleSelect('arb')}
             className={cn(
               'flex w-full items-center justify-between rounded-md px-3 py-2.5 text-sm font-medium transition-colors',
               'focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-              selected === 'dashboard'
+              selected === 'arb'
                 ? 'bg-primary text-primary-foreground'
                 : 'text-foreground hover:bg-accent hover:text-accent-foreground',
             )}
           >
             <span className="flex items-center gap-2.5">
-              <LayoutDashboard className="h-4 w-4" aria-hidden="true" />
-              <span>Dashboard</span>
+              <span className="text-base leading-none" aria-hidden="true">⚖️</span>
+              <span>Arb Scanner</span>
             </span>
           </button>
 
           <button
-            onClick={() => handleSelect('portfolio')}
+            onClick={() => handleSelect('public')}
             className={cn(
               'flex w-full items-center justify-between rounded-md px-3 py-2.5 text-sm font-medium transition-colors',
               'focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-              selected === 'portfolio'
+              selected === 'public'
                 ? 'bg-primary text-primary-foreground'
                 : 'text-foreground hover:bg-accent hover:text-accent-foreground',
             )}
           >
             <span className="flex items-center gap-2.5">
-              <span className="text-base leading-none" aria-hidden="true">📊</span>
-              <span>Portfolio</span>
+              <span className="text-base leading-none" aria-hidden="true">👥</span>
+              <span>Public Betting</span>
             </span>
           </button>
 
           <button
-            onClick={() => handleSelect('queue')}
+            onClick={() => handleSelect('horses')}
             className={cn(
               'flex w-full items-center justify-between rounded-md px-3 py-2.5 text-sm font-medium transition-colors',
               'focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-              selected === 'queue'
+              selected === 'horses'
                 ? 'bg-primary text-primary-foreground'
                 : 'text-foreground hover:bg-accent hover:text-accent-foreground',
             )}
           >
             <span className="flex items-center gap-2.5">
-              <span className="text-base leading-none" aria-hidden="true">🎯</span>
-              <span>Bet Queue</span>
+              <span className="text-base leading-none" aria-hidden="true">🐎</span>
+              <span>Horses</span>
             </span>
-            {queueCount > 0 && (
-              <span
-                className={cn(
-                  'rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums',
-                  selected === 'queue'
-                    ? 'bg-primary-foreground/20 text-primary-foreground'
-                    : 'bg-positive/20 text-positive',
-                )}
-                title={`${queueCount} pick${queueCount === 1 ? '' : 's'} ready`}
-              >
-                {queueCount}
-              </span>
+          </button>
+
+          <button
+            onClick={() => handleSelect('potd')}
+            className={cn(
+              'flex w-full items-center justify-between rounded-md px-3 py-2.5 text-sm font-medium transition-colors',
+              'focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+              selected === 'potd'
+                ? 'bg-primary text-primary-foreground'
+                : 'text-foreground hover:bg-accent hover:text-accent-foreground',
             )}
+          >
+            <span className="flex items-center gap-2.5">
+              <span className="text-base leading-none" aria-hidden="true">🏆</span>
+              <span>Pick of the Day</span>
+            </span>
           </button>
 
           <div className="mb-2 mt-4 px-3">
@@ -352,35 +316,50 @@ function SidebarImpl({
                 />
               )
             }
-            // Baseball expansion: replace the standalone MLB entry
-            // with a Baseball group containing MLB + College Baseball
-            // (and future KBO/NPB). MLB stays on its dedicated heavy
-            // path; baseball-framework leagues route through
-            // /api/baseball/<league>/today.
-            if (sport === 'mlb' && baseballLeagues && baseballLeagues.length > 1) {
-              return (
-                <BaseballGroup
-                  key="baseball"
-                  expanded={baseballExpanded}
-                  onToggleExpanded={() => setBaseballExpanded(v => !v)}
-                  selected={selected}
-                  onSelect={handleSelect}
-                  leagues={baseballLeagues}
-                  gameCount={baseballGameCount}
-                />
-              )
-            }
-            // Suppress the standalone college_baseball entry — it's
-            // rendered inside the Baseball group above.
-            if (sport === 'college_baseball' && baseballLeagues
-                && baseballLeagues.length > 1) {
-              return null
-            }
             // Soccer expansion: replace the flat 'soccer' entry with a
             // collapsible group that lists every competition (MLS,
             // Premier League, La Liga, Champions League, WC, …),
             // grouped by confederation.
+            // Soccer: when exactly ONE competition is in-season (EPL-only right
+            // now), render that league as its OWN top-level tab instead of
+            // burying it in a 1-item collapsible "Soccer" group (Austin
+            // 2026-10-11: "I want EPL on its own, not in the soccer tab"). 2+
+            // in-season still roll up into the SoccerGroup.
             if (sport === 'soccer' && soccerLeagues && soccerLeagues.length > 0) {
+              const _inSn = soccerLeagues.filter(L => L.in_season)
+              if (_inSn.length === 1) {
+                const L = _inSn[0]
+                const lgActive = selected === L.key
+                const lgCount = L.game_count_today || 0
+                return (
+                  <button
+                    key={L.key}
+                    onClick={() => handleSelect(L.key)}
+                    className={cn(
+                      'flex w-full items-center justify-between rounded-md px-3 py-2.5 text-sm font-medium transition-colors',
+                      'focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                      lgActive
+                        ? 'bg-primary text-primary-foreground'
+                        : 'text-foreground hover:bg-accent hover:text-accent-foreground',
+                    )}
+                  >
+                    <span className="flex items-center gap-2.5">
+                      <span className="text-base leading-none" aria-hidden="true">⚽</span>
+                      <span>{L.display_name || 'Premier League'}</span>
+                    </span>
+                    {lgCount > 0 && (
+                      <span className={cn(
+                        'rounded-full px-1.5 py-0.5 text-[10px] font-semibold tabular-nums',
+                        lgActive
+                          ? 'bg-primary-foreground/20 text-primary-foreground'
+                          : 'bg-muted text-muted-foreground',
+                      )}>
+                        {lgCount}
+                      </span>
+                    )}
+                  </button>
+                )
+              }
               return (
                 <SoccerGroup
                   key="soccer"
@@ -390,23 +369,6 @@ function SidebarImpl({
                   onSelect={handleSelect}
                   leagues={soccerLeagues}
                   gameCount={soccerGameCount}
-                />
-              )
-            }
-            // Motorsports expansion: replace the standalone 'f1' entry
-            // with a Motorsports group covering F1 / IndyCar / NASCAR.
-            // IndyCar + NASCAR ship as pending_data until their ingest
-            // pipelines land — they render dimmed with an "off" tag.
-            if (sport === 'f1' && motorsportsSeries && motorsportsSeries.length > 0) {
-              return (
-                <MotorsportsGroup
-                  key="motorsports"
-                  expanded={msExpanded}
-                  onToggleExpanded={() => setMsExpanded(v => !v)}
-                  selected={selected}
-                  onSelect={handleSelect}
-                  series={motorsportsSeries}
-                  gameCount={gameCounts.f1 || 0}
                 />
               )
             }
@@ -442,11 +404,7 @@ function SidebarImpl({
                         : 'bg-muted text-muted-foreground',
                     )}
                   >
-                    {/* F1 races weekly, so showing "13" without a unit
-                        looks like a games-today count and misleads. The
-                        '13d' suffix makes the count read as days-until-
-                        race, matching what the F1 panel shows. */}
-                    {sport === 'f1' ? `${gameCount}d` : gameCount}
+                    {gameCount}
                   </span>
                 )}
                 {!inSeason && (

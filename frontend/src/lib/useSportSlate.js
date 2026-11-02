@@ -15,7 +15,8 @@
 import { useEffect, useState } from 'react'
 
 
-export function useSportSlate(api, prefix = '') {
+// `enabled` false = an off-season sport (MLB since 2026-10-29): no fetches, no 2-min best-bets poll.
+export function useSportSlate(api, prefix = '', enabled = true) {
   const [games, setGames] = useState([])
   const [bestBets, setBestBets] = useState(null)
   const [bbProgress, setBbProgress] = useState(null)
@@ -23,6 +24,7 @@ export function useSportSlate(api, prefix = '') {
   const p = prefix || ''
 
   useEffect(() => {
+    if (!enabled) return undefined
     let cancelled = false
     const fetchGames = () =>
       api.get(`${p}/scoreboard`)
@@ -57,7 +59,7 @@ export function useSportSlate(api, prefix = '') {
       runBestBets()
     }, 2 * 60 * 1000)
     return () => { cancelled = true; clearInterval(id) }
-  }, [api, p])
+  }, [api, p, enabled])
 
   return { games, bestBets, bbProgress, loading, setGames, setBestBets }
 }

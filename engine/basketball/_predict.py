@@ -24,7 +24,7 @@ import logging
 import math
 from datetime import datetime
 
-from ._config import get_league_config
+from ._config import get_league_config, season_label
 from ._db import get_conn, games_table, teams_table
 from .._tz import et_today_str
 
@@ -170,6 +170,102 @@ def _recent_form(league: str, team_id: int, n: int = 10) -> dict:
     }
 
 
+# ── College path (registry "model": "ratings") ───────────────
+
+def _predict_ratings(league: str, home_abbr: str, away_abbr: str, *,
+                     spread: float | None = None, total: float | None = None,
+                     home_id=None, away_id=None, game_date: str | None = None,
+                     neutral=None, conf_game=None, game_id=None, **_ignored) -> dict:
+    """NCAAM / NCAAW: engine.basketball._ratings (opponent-adjusted O/D ratings) is both the
+    factor leg and the decision. The GBM leg is still computed and logged to
+    prediction_signals so it can be evaluated walk-forward, but carries no weight -- it lost
+    to the ratings on 2025-26 (MintyBot 2026-10-26). Pass team ids: college abbreviations
+    collide (UNI = Northern Iowa AND Union (TN), VAL, WIN, ...)."""
+    from . import _ratings
+    constants, _src = _resolve_constants(league)
+    if home_id is None:
+        home_id = _team_id_for(league, home_abbr)
+    if away_id is None:
+        away_id = _team_id_for(league, away_abbr)
+    if home_id is None or away_id is None:
+        return {"league": league, "constants_source": "ratings",
+                "error": f"team not found (home={home_abbr}, away={away_abbr})",
+                "home_expected": None, "away_expected": None}
+    home_id, away_id = int(home_id), int(away_id)
+    game_date = (game_date or et_today_str())[:10]
+    r = _ratings.predict(league, home_id, away_id, game_date=game_date,
+                         neutral=bool(neutral), conf=bool(conf_game))
+    margin, total_pred = r["margin"], r["total"]
+    sd_m, sd_t = r["margin_std"], r["total_std"]
+    constants = dict(constants, margin_std=sd_m, total_std=sd_t, home_boost=r["home_court"])
+    cover = _ratings.cover_prob(margin, sd_m, spread) if spread is not None else None
+    over = _ratings.over_prob(total_pred, sd_t, total) if total is not None else None
+    hr_, ar_ = r["home_rating"], r["away_rating"]
+    reasoning = [
+        f"ratings (net, pts vs avg D1): {home_abbr} {hr_['net']:+.1f}, {away_abbr} {ar_['net']:+.1f}"
+        f" ({hr_['games']}/{ar_['games']} games this season)",
+        "neutral site -- no home edge" if r["neutral"] else
+        f"{home_abbr} home court +{r['home_court']:.1f} ({'conference' if r['conf_game'] else 'non-conference'})",
+    ]
+    signals = {"factor": {"margin": margin, "total": total_pred, "ml_home": r["ml_home"]},
+               "gbm": {}, "mc": {}}
+    try:
+        from ._features import extract_features
+        from ._gbm import predict as _gbm_predict
+        feats = extract_features(league, {"home_team_id": home_id, "away_team_id": away_id,
+                                          "date": game_date, "season": r["season"]})
+        if feats:
+            signals["gbm"] = {"margin": _gbm_predict(league, "margin", feats),
+                              "total": _gbm_predict(league, "total_points", feats),
+                              "ml_home": _gbm_predict(league, "home_win", feats)}
+    except Exception as e:
+        logger.debug("[%s] GBM side leg skipped: %s", league, e)
+    try:
+        _f, _g = signals["factor"], signals["gbm"]
+        _rows = [("basketball", league, str(game_id) if game_id else None, game_date, home_id,
+                  away_id, _mk, _f.get(_mk), None, _g.get(_mk))
+                 for _mk in ("ml_home", "margin", "total")]
+        _cn = get_conn(league)
+        _cn.executemany(
+            "INSERT INTO prediction_signals (sport, league, game_id, game_date, "
+            "home_team_id, away_team_id, market, factor_prob, mc_prob, gbm_prob) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)", _rows)
+        _cn.commit()
+    except Exception as e:
+        logger.debug("[%s] prediction_signals log skipped: %s", league, e)
+    one = {"factor": 1.0, "gbm": 0.0, "mc": 0.0}
+    return {
+        "league": league,
+        "constants_source": "ratings",
+        "home_abbr": home_abbr,
+        "away_abbr": away_abbr,
+        "home_expected": round(r["home_expected"], 2),
+        "away_expected": round(r["away_expected"], 2),
+        "predicted_margin": round(margin, 2),
+        "predicted_total": round(total_pred, 2),
+        "ml_home": round(r["ml_home"], 4),
+        "ml_away": round(1.0 - r["ml_home"], 4),
+        "spread_cover_prob": round(cover, 4) if cover is not None else None,
+        "over_prob": round(over, 4) if over is not None else None,
+        "ensemble": {
+            "ensemble": {"margin": margin, "total": total_pred, "ml_home": r["ml_home"],
+                         "spread_cover_prob": cover, "over_prob": over},
+            "signals": signals,
+            "weights": {"ml_home": one, "margin": one, "total": one, "method": "ratings_only"},
+        },
+        "period": r["period"],
+        "factors": {
+            "home_rating": hr_, "away_rating": ar_,
+            "home_court": r["home_court"], "neutral": r["neutral"], "conf_game": r["conf_game"],
+            "season": r["season"], "phase": r["phase"], "fit_finals": r["fit_finals"],
+            "home_recent": _recent_form(league, home_id),
+            "away_recent": _recent_form(league, away_id),
+            "constants": constants,
+        },
+        "reasoning": reasoning,
+    }
+
+
 # ── Core prediction ───────────────────────────────────────────
 
 def predict_full(league: str, home_abbr: str, away_abbr: str,
@@ -217,14 +313,14 @@ def predict_full(league: str, home_abbr: str, away_abbr: str,
             result.setdefault("away_abbr", away_abbr)
         return result
 
+    if get_league_config(league).get("model") == "ratings":
+        return _predict_ratings(league, home_abbr, away_abbr, spread=spread, total=total,
+                                **kwargs)
+
     constants, source = _resolve_constants(league)
     if season is None:
-        # Use league's primary season-start month (first entry of season_months)
-        cfg = get_league_config(league)
-        months = cfg.get("season_months") or (10,)
-        primary_start = months[0]
-        now = datetime.now()
-        season = now.year if now.month >= primary_start else now.year - 1
+        # The league's DB season label for today (college labels by END year).
+        season = season_label(league)
 
     home_id = _team_id_for(league, home_abbr)
     away_id = _team_id_for(league, away_abbr)
@@ -294,22 +390,36 @@ def predict_full(league: str, home_abbr: str, away_abbr: str,
     if hb >= 1.0:
         reasoning.append(f"{home_abbr} home-court boost applied (+{hb:.1f})")
 
-    # 2.5) Roster availability — subtract OUT players' expected scoring
-    # contribution. Per-league penalty calibrated for roster size; the
-    # B2 GBM features will refine this with per-player VORP.
+    # 2.5) Roster availability — subtract OUT players' expected scoring.
+    # LIVE uses the flat per-head penalty; the player-WEIGHTED penalty
+    # (each OUT player's actual PPG, replacement-shrunk — a star costs
+    # ~0.65*PPG, a benchwarmer ~nothing) is computed and shadow-logged
+    # alongside so the flip-to-live gate can prove weighting beats flat
+    # before it moves money (2026-08-09, Austin "lets upgrade").
     from ._injuries import (
         out_count_for_team, margin_penalty_for_team,
+        weighted_penalty_for_team, log_avail_shadow, USE_WEIGHTED_AVAIL,
     )
     home_out = out_count_for_team(league, home_id)
     away_out = out_count_for_team(league, away_id)
-    if home_out:
-        pen = margin_penalty_for_team(league, home_id)
-        home_expected -= pen
-        reasoning.append(f"{home_abbr} missing {home_out} (-{pen:.1f} pts)")
-    if away_out:
-        pen = margin_penalty_for_team(league, away_id)
-        away_expected -= pen
-        reasoning.append(f"{away_abbr} missing {away_out} (-{pen:.1f} pts)")
+    flat_home = margin_penalty_for_team(league, home_id) if home_out else 0.0
+    flat_away = margin_penalty_for_team(league, away_id) if away_out else 0.0
+    wtd_home, det_home = weighted_penalty_for_team(league, home_id)
+    wtd_away, det_away = weighted_penalty_for_team(league, away_id)
+    try:
+        log_avail_shadow(league, home_abbr, away_abbr, home_id, away_id,
+                         et_today_str(), flat_home, flat_away,
+                         wtd_home, wtd_away, det_home, det_away)
+    except Exception:
+        pass
+    pen_home = wtd_home if USE_WEIGHTED_AVAIL else flat_home
+    pen_away = wtd_away if USE_WEIGHTED_AVAIL else flat_away
+    if pen_home:
+        home_expected -= pen_home
+        reasoning.append(f"{home_abbr} missing {home_out} (-{pen_home:.1f} pts)")
+    if pen_away:
+        away_expected -= pen_away
+        reasoning.append(f"{away_abbr} missing {away_out} (-{pen_away:.1f} pts)")
 
     # 3) Recent form blend (70/30 with season).
     if home_recent["recent_games"] >= 3 and home_recent["recent_scored"]:
@@ -406,6 +516,27 @@ def predict_full(league: str, home_abbr: str, away_abbr: str,
                 home_id=home_id, away_id=away_id,
                 spread=spread, total=total,
             )
+            # Log the 3 component predictions (factor/MC/GBM) per market for the
+            # self-improvement loop. Fail-safe: a logging error can NEVER touch the bet. (2026-08-26)
+            try:
+                from ._db import get_conn as _gc
+                from datetime import datetime as _dt
+                _sig = (ensemble_block or {}).get("signals") or {}
+                _f = _sig.get("factor") or {}; _g = _sig.get("gbm") or {}; _m = _sig.get("mc") or {}
+                _gd = _dt.utcnow().strftime("%Y-%m-%d")
+                _rows = [("basketball", league, None, _gd, home_id, away_id, _mk,
+                          _f.get(_mk), _m.get(_mk), _g.get(_mk))
+                         for _mk in ("ml_home", "margin", "total")
+                         if any(_x.get(_mk) is not None for _x in (_f, _m, _g))]
+                if _rows:
+                    _cn = _gc(league)
+                    _cn.executemany(
+                        "INSERT INTO prediction_signals (sport, league, game_id, game_date, "
+                        "home_team_id, away_team_id, market, factor_prob, mc_prob, gbm_prob) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?)", _rows)
+                    _cn.commit()
+            except Exception as _se:
+                logger.debug("[%s] prediction_signals log skipped: %s", league, _se)
     except Exception as e:
         logger.debug("[%s] ensemble blend failed: %s", league, e)
 

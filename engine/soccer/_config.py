@@ -427,6 +427,17 @@ LEAGUE_REGISTRY: dict[str, dict] = {
     },
 }
 
+# Smaller leagues REMOVED 2026-10-27 (Austin: "I don't care about the smaller ... leagues, let's
+# just remove them"; kept the Premier League only). Their entries stay above so a league comes back by deleting
+# it from this set; their data was archived to _archive_minorleagues_20261027.
+_REMOVED_2026_10_27 = frozenset({
+    "mls", "usl_championship", "us_nwsl", "us_open_cup", "esp_laliga",
+    "ita_seriea", "ger_bundesliga", "fra_ligue1", "uefa_champions", "uefa_europa",
+    "uefa_conference", "bra_seriea", "arg_lpf", "conmebol_libertadores", "fifa_internationals",
+    "fifa_world_cup",
+})
+REMOVED_LEAGUES = {k: LEAGUE_REGISTRY.pop(k) for k in sorted(_REMOVED_2026_10_27) if k in LEAGUE_REGISTRY}
+
 
 # ── Calibration-constants loader ──────────────────────────────
 
@@ -474,8 +485,23 @@ def active_leagues(*, ref_month: int | None = None) -> list[str]:
     """Leagues currently in season per ``season_months``. ``ref_month``
     defaults to the current calendar month — pass a specific month for
     testing."""
+    # EPL-ONLY paper relaunch 2026-10-11 (Austin: "Greenlight EPL ... but I only
+    # want EPL for now"). The soccer MODEL was overhauled off the single-Elo
+    # scalar (results-only, never a green day) to a per-team xG attack/defense
+    # goal-rate lambda: engine/soccer/_epl_xg.py + data/epl/epl-ratings.json,
+    # rebuilt nightly on the Pi from SofaScore match xG (scanners/epl-*.js cron).
+    # Every OTHER soccer league stays dark until EPL proves it beats the close
+    # as paper. Widen later by adding keys to _EPL_ONLY, or restore the full
+    # season_months sweep retired below.
     m = ref_month if ref_month is not None else datetime.utcnow().month
+    _EPL_ONLY = {"eng_premier"}
     return [
-        key for key, cfg in LEAGUE_REGISTRY.items()
-        if m in (cfg.get("season_months") or ())
+        key for key in _EPL_ONLY
+        if m in ((LEAGUE_REGISTRY.get(key) or {}).get("season_months") or ())
     ]
+    # --- retired paths (history) ---------------------------------------
+    # 2026-10-05 KILLED entirely: `return []`.
+    # 2026-09-19 all-leagues PAPER: swept LEAGUE_REGISTRY by season_months
+    #   minus {fifa_internationals, fifa_world_cup}. Ungated it was -45u
+    #   (2026-08-09); the gated profitable subset lives in engine/soccer/_picks
+    #   (edge<10, drop AH/H1_TOTAL).

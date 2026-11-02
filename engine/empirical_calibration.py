@@ -178,6 +178,25 @@ def _direction_label(bet_type: str, pick_text: str | None) -> str | None:
 # Per-sport calibration tables: {sport: {bet_type: [(lo, hi, real_wr)]}}
 _TABLE: dict[str, dict[str, list[tuple[float, float, float]]]] = {}
 _TABLE_LOCK = threading.Lock()
+_REFRESH_LOCK = threading.Lock()
+
+
+def _ensure_calibration(sport: str) -> None:
+    """Load `sport`'s calibration table once, serialized. The on-demand refresh is the
+    ~48s nightly-style rebuild; without a guard, concurrent cold requests each kicked off
+    their OWN refresh (a thundering herd -> perpetual timeout on a cold process). Double-
+    checked lock: one thread rebuilds, the rest wait then find it loaded. _REFRESH_LOCK is
+    separate from _TABLE_LOCK (which refresh_calibration holds for its writes) so there is
+    no deadlock. MintyBot 2026-10-15 (cold-load root fix)."""
+    if _TABLE_LOADED.get(sport):
+        return
+    with _REFRESH_LOCK:
+        if _TABLE_LOADED.get(sport):
+            return
+        try:
+            refresh_calibration(sport)
+        except Exception as e:
+            logger.debug("calibration load failed (%s): %s", sport, e)
 _TABLE_LOADED: dict[str, bool] = {}
 # Isotonic curves per sport, keyed by (bt, ...) without the bucket.
 # Populated during refresh_calibration; consulted by calibrate() before
@@ -211,18 +230,43 @@ _SPORT_SOURCES = {
     "wnba":  ("engine.basketball._db", "picks", "wnba"),
     "ncaam": ("engine.basketball._db", "picks", "ncaam"),
     "afl":   ("engine.basketball._db", "picks", "afl"),
+    # Football game models (Austin 2026-10-05): were PASSTHROUGH (no framework cal file +
+    # no walk-forward). Registered on the empirical Bayesian+isotonic loop like the big-3.
+    # score_pick passes sport="football_<league>" so these keys match; 3-tuple -> get_conn(league).
+    "football_nfl": ("engine.football._db", "picks", "nfl"),
+    "football_cfb": ("engine.football._db", "picks", "cfb"),
+    "football_ufl": ("engine.football._db", "picks", "ufl"),
 }
 
 
 def _normalize_bet_type(bt: str) -> str:
-    """Collapse capitalization variants the tracker has accumulated."""
+    """Collapse the label variants the tracker has accumulated into ONE cell per market.
+
+    Routed through engine/_bet_type_alias.canonical_bet_type (MintyBot 2026-10-25) so the
+    calibrator buckets exactly like the proven-edge gate: "O/U"/"TOTAL", "RL"/"RUN_LINE",
+    "ALT O/U"/"ALT_TOTAL", "F5 O/U"/"F5_TOTAL", "Team Total"/"TEAM_TOTAL" each collapse to
+    one (lower-cased) key. Before this, MLB's post-10-23 labels calibrated on near-empty
+    cells (coarse fallback) while hundreds of settled rows sat under the old spelling."""
     if not bt:
         return ""
-    bt = bt.strip().lower()
+    from ._bet_type_alias import canonical_bet_type
+    bt = canonical_bet_type(bt).lower()
     # Keep "1st inn" -> "nrfi" so NRFI / 1st INN bucket together
-    if bt in ("1st inn", "1stinn"):
+    if bt in ("1st_inn", "1stinn", "1st inn"):
         return "nrfi"
     return bt
+
+
+# Soccer framework leagues (Austin 2026-10-12): calibrate each league's picks the
+# same per-(bet_type, prob-bucket) way as the other framework sports. EPL
+# (eng_premier) was the one POTD sport whose hero edge had ZERO calibration
+# (fully raw). Thin leagues shrink to the parent prior (effectively passthrough)
+# until they accrue settled rows -- harmless. Hardcoded (no import of
+# soccer._config) to avoid a circular import into this low-level module.
+_SOCCER_LEAGUES = ("eng_premier", "esp_laliga", "ita_seriea", "ger_bundesliga",
+                   "fra_ligue1", "bra_seriea", "arg_lpf", "conmebol_libertadores")
+for _lg in _SOCCER_LEAGUES:
+    _SPORT_SOURCES[_lg] = ("engine.soccer._db", "picks", _lg)
 
 
 def has_isotonic(sport: str, bet_type: str,
@@ -235,11 +279,9 @@ def has_isotonic(sport: str, bet_type: str,
     over the framework walk-forward bucket calibrator: once we have
     n>=ISOTONIC_MIN_N live samples the tracker signal is fresher +
     more honest than an offline replay."""
+    _ensure_calibration(sport)
     if not _TABLE_LOADED.get(sport):
-        try:
-            refresh_calibration(sport)
-        except Exception:
-            return False
+        return False
     iso_table = _ISO_TABLE.get(sport) or {}
     if not iso_table:
         return False
@@ -316,13 +358,9 @@ def calibrate(bet_type: str, raw_prob: float, sport: str = "mlb",
     """
     if raw_prob is None:
         return raw_prob
+    _ensure_calibration(sport)
     if not _TABLE_LOADED.get(sport):
-        try:
-            refresh_calibration(sport)
-        except Exception as e:
-            logger.debug("calibration load failed (%s): passthrough: %s",
-                         sport, e)
-            return raw_prob
+        return raw_prob
 
     bt = _normalize_bet_type(bet_type)
     sport_table = _TABLE.get(sport, {})
@@ -466,11 +504,23 @@ def _signal_log_calibration_rows(sport: str) -> list[dict]:
         # Ensemble probability — simple mean of the components that ran.
         # If any single component is missing, the others still inform
         # the ensemble; this matches what picks_core consumes downstream.
-        comps = [sig.get(k) for k in ("factor_prob", "mc_prob", "gbm_prob")]
-        comps = [float(c) for c in comps if c is not None]
-        if not comps:
+        # Blend with the SAME production weights (audit T2 C 2.1). Serving
+        # uses weights_for()'s (possibly tuned) blend, so calibrating on the
+        # plain mean fits a DIFFERENT distribution than we serve. blend()
+        # reduces to the mean under uniform weights, so this is a no-op
+        # until weights actually tune, then it stays matched.
+        _named = {"factor": sig.get("factor_prob"), "mc": sig.get("mc_prob"),
+                  "gbm": sig.get("gbm_prob")}
+        _named = {k: float(v) for k, v in _named.items() if v is not None}
+        if not _named:
             continue
-        ensemble = sum(comps) / len(comps)
+        try:
+            from .ensemble import weights_for as _wf, blend as _eblend
+            ensemble = _eblend(_named, _wf(sport, market))
+        except Exception:
+            ensemble = None
+        if ensemble is None:
+            ensemble = sum(_named.values()) / len(_named)
         if not (0.0 <= ensemble <= 1.0):
             continue  # safety — skip rows where the value isn't a prob
         actual = _actual_for_market(sport, market, game_row)

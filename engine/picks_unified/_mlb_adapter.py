@@ -41,8 +41,51 @@ def _resolve_state(key: GameKey) -> dict | None:
         (key.native_id,),
     ).fetchone()
     if not row:
+        row = _resolve_by_espn_id(conn, key.native_id)
+    if not row:
         return None
     return dict(row)
+
+
+def _resolve_by_espn_id(conn, espn_id):
+    """2026-10-23 (MintyBot): the card's paper/shadow rows reach picks_unified keyed by the
+    card's ESPN event id (paper_shadow.game_id, e.g. 401908042), NOT MLB's game_pk
+    (games.mlb_game_id, e.g. 849805) — so they could never settle (every MLB shadow row
+    sat pending since the 10-14 cutover). Map ESPN id -> (date, matchup) via paper_shadow
+    -> team abbreviations (alias-tolerant) -> the final games row (±1 day)."""
+    try:
+        ps = conn.execute(
+            "SELECT date, matchup FROM paper_shadow WHERE game_id = ? LIMIT 1",
+            (str(espn_id),)).fetchone()
+    except Exception:
+        return None
+    if not ps:
+        return None
+    date, matchup = ps[0], (ps[1] or "")
+    sep = " @ " if " @ " in matchup else "@"
+    parts = [x.strip() for x in matchup.split(sep)]
+    if len(parts) != 2 or not date:
+        return None
+    try:
+        from ..abbr import aliases_for
+        aw = list(dict.fromkeys(list(aliases_for(parts[0], sport="mlb") or []) + [parts[0]]))
+        hm = list(dict.fromkeys(list(aliases_for(parts[1], sport="mlb") or []) + [parts[1]]))
+    except Exception:
+        aw, hm = [parts[0]], [parts[1]]
+    q = ("SELECT g.*, ht.abbreviation AS home_abbr, at.abbreviation AS away_abbr "
+         "FROM games g "
+         "JOIN teams ht ON g.home_team_id = ht.mlb_id "
+         "JOIN teams at ON g.away_team_id = at.mlb_id "
+         "WHERE g.status = 'final' "
+         f"AND ht.abbreviation IN ({','.join('?' * len(hm))}) "
+         f"AND at.abbreviation IN ({','.join('?' * len(aw))}) "
+         "AND g.date BETWEEN date(?, '-1 day') AND date(?, '+1 day') "
+         "ORDER BY ABS(julianday(g.date) - julianday(?)) LIMIT 1")
+    try:
+        return conn.execute(q, (*hm, *aw, date, date, date)).fetchone()
+    except Exception as e:
+        logger.debug("mlb adapter espn fallback failed for %s: %s", espn_id, e)
+        return None
 
 
 # ── Outcome resolver ──────────────────────────────────────────
@@ -104,8 +147,14 @@ def _resolve_outcome(pick: Pick, state: dict) -> tuple[Result, float] | None:
         return result, _profit_for(result, odds)
 
     # ── RL / ALT RL ───────────────────────────────────────
-    if bt in ("RL", "ALT RL"):
+    # 2026-10-23 (MintyBot): the card's paper layer mirrors with the NEW labels
+    # (RUN_LINE / TOTAL / ALT_*) and the number in the separate `line` column
+    # (pick_text = "CLE" / "Over"), so these rows sat pending forever and were
+    # auto-pushed as stale. Accept both label families + fall back to pick.line.
+    if bt in ("RL", "ALT RL", "RUN_LINE", "ALT_RL", "ALT RUN_LINE", "RUNLINE"):
         line = _extract_line(pick_text)
+        if line is None and pick.line is not None:
+            line = float(pick.line)
         if line is None:
             return None
         first = pick_text.strip().split()[0].upper()
@@ -125,12 +174,14 @@ def _resolve_outcome(pick: Pick, state: dict) -> tuple[Result, float] | None:
         return result, _profit_for(result, odds)
 
     # ── O/U / ALT O/U ─────────────────────────────────────
-    if bt in ("O/U", "ALT O/U"):
+    if bt in ("O/U", "ALT O/U", "TOTAL", "ALT_TOTAL", "ALT TOTAL"):
         line = _extract_line(pick_text)
+        if line is None and pick.line is not None:
+            line = float(pick.line)
         if line is None:
             return None
         total = hs + as_
-        is_over = "OVER" in pick_text.upper()
+        is_over = ("OVER" in pick_text.upper()) or ((pick.side or "").lower() == "over")
         if total > line:
             result = Result.WIN if is_over else Result.LOSS
         elif total < line:
@@ -139,8 +190,63 @@ def _resolve_outcome(pick: Pick, state: dict) -> tuple[Result, float] | None:
             result = Result.PUSH
         return result, _profit_for(result, odds)
 
+    # ── TEAM_TOTAL (full + F5) / F5_TOTAL ──────────────────
+    # 2026-10-25 (MintyBot, Austin "Over 0.5 on which side?"): MLB derivative rows mirror
+    # with pick_text '<TEAM> Over' / '<TEAM> F5 Over' (team first, F5 span token, side
+    # last) and the number in `line`. Full spans grade on the team's final score; F5 spans
+    # on the first five innings of the games.*_linescore JSON the state row already
+    # carries (SELECT g.*). No team token / no 5-inning linescore -> None (stays pending),
+    # never mis-graded against the wrong span.
+    if bt in ("TEAM_TOTAL", "F5_TEAM_TOTAL", "F5_TOTAL"):
+        import json as _json
+        toks = pick_text.strip().upper().split()
+        is_f5 = bt.startswith("F5") or "F5" in toks
+        line = (float(pick.line) if pick.line is not None
+                else _extract_line(" ".join(t for t in toks if t != "F5")))
+        if line is None:
+            return None
+        side = (pick.side or "").lower()
+        is_over = ("OVER" in toks) or side == "over"
+        is_under = ("UNDER" in toks) or side == "under"
+        if not (is_over or is_under):
+            return None
+
+        def _ls(col):
+            try:
+                v = state.get(col)
+                return [int(x or 0) for x in _json.loads(v)] if v else None
+            except Exception:
+                return None
+
+        if bt == "F5_TOTAL":
+            lh, la = _ls("home_linescore"), _ls("away_linescore")
+            if not lh or not la or len(lh) < 5 or len(la) < 5:
+                return None
+            val = sum(lh[:5]) + sum(la[:5])
+        else:
+            team = toks[0] if toks else ""
+            if team == home_abbr:
+                full_val, ls = hs, _ls("home_linescore")
+            elif team == away_abbr:
+                full_val, ls = as_, _ls("away_linescore")
+            else:
+                return None
+            if is_f5:
+                if not ls or len(ls) < 5:
+                    return None
+                val = sum(ls[:5])
+            else:
+                val = full_val
+        if val > line:
+            result = Result.WIN if is_over else Result.LOSS
+        elif val < line:
+            result = Result.LOSS if is_over else Result.WIN
+        else:
+            result = Result.PUSH
+        return result, _profit_for(result, odds)
+
     # Unknown bet_type — log once, return None so the row stays pending.
-    # F5 / NRFI / derivatives land here for now; they'll get ported in
+    # NRFI / other derivatives land here for now; they'll get ported in
     # the next pass.
     return None
 

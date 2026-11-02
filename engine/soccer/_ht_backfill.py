@@ -78,6 +78,25 @@ def _extract_ht(summary: dict) -> tuple[int, int] | None:
     return home_h1, away_h1
 
 
+def _first_half_over(summary: dict) -> bool:
+    """True once the first half is finished (halftime, 2nd half, or later). The live pass used to
+    read linescores[0] mid-first-half and store the CURRENT score as the halftime score -- every EPL
+    match that ran through it during the first half got a 0-0 HT (2026-10-31: SUN-COV stored 0-0, ESPN
+    HT 2-0), and the NULL guard then froze the wrong value and H1 picks graded off it."""
+    comps = (summary.get("header") or {}).get("competitions") or [{}]
+    st = (comps[0] or {}).get("status") or {}
+    typ = st.get("type") or {}
+    if typ.get("completed") or typ.get("state") == "post":
+        return True
+    name = str(typ.get("name") or "").upper()
+    if "HALFTIME" in name or "HALF_TIME" in name:
+        return True
+    try:
+        return int(st.get("period") or 0) >= 2
+    except (TypeError, ValueError):
+        return False
+
+
 def _extract_periods(summary: dict) -> dict | None:
     """Pull all period totals + shootout from the summary linescores.
     Returns ``{home_ht, away_ht, home_et, away_et, home_pens, away_pens,
@@ -175,7 +194,7 @@ def backfill(league: str, *, limit: int | None = None,
         if not summary:
             totals["errors"] += 1
         else:
-            ht = _extract_ht(summary)
+            ht = _extract_ht(summary) if _first_half_over(summary) else None
             if ht is None:
                 totals["skipped"] += 1
             else:

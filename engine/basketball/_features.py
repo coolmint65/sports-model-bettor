@@ -263,14 +263,11 @@ def _schedule_density(conn, league: str, team_id: int,
 
 
 def _season_from_date(league: str, game_date: str) -> int | None:
-    """Best-guess season-start year from a game date. Each league has
-    its own season-start month; defaults to October if unspecified."""
-    from ._config import get_league_config
-    cfg = get_league_config(league)
-    months = cfg.get("season_months") or (10,)
-    primary = months[0]
+    """The DB season label for a game date (start year; college: END year -- see
+    _config.season_label). Each league has its own season-start month."""
+    from ._config import season_label
     try:
         d = datetime.strptime(game_date, "%Y-%m-%d")
     except ValueError:
         return None
-    return d.year if d.month >= primary else d.year - 1
+    return season_label(league, d)

@@ -1,0 +1,592 @@
+{
+  "401872981": {
+    "matchup": "PHI@JAX",
+    "pred": {
+      "league": "nfl",
+      "home_team_id": 30,
+      "away_team_id": 21,
+      "elo_home": 1615.1,
+      "elo_away": 1600.4,
+      "p_home": 0.6051,
+      "p_away": 0.3949,
+      "expected_margin": 2.88,
+      "expected_total": 45.54,
+      "expected_home": 24.21,
+      "expected_away": 21.33,
+      "injury_home": {
+        "qb_out": null,
+        "starters_out": 2,
+        "n_injuries": 25
+      },
+      "injury_away": {
+        "qb_out": null,
+        "starters_out": 6,
+        "n_injuries": 25
+      },
+      "mc_n_sims": 10000,
+      "mc_p_home": 0.5634,
+      "mc_p_home_decided": 0.5634,
+      "mc_p_away": 0.4366,
+      "mc_p_tie": 0.0,
+      "mc_expected_home": 24.24,
+      "mc_expected_away": 21.28,
+      "mc_expected_margin": 2.95,
+      "mc_expected_total": 45.52,
+      "gbm_trained": true,
+      "gbm_p_home": 0.8792,
+      "gbm_p_away": 0.1208,
+      "gbm_p_home_cover": null,
+      "gbm_p_away_cover": null,
+      "gbm_p_over": null,
+      "gbm_p_under": null,
+      "_signal_factor": {
+        "p_home": 0.6218,
+        "p_away": 0.3782,
+        "p_home_cover": null,
+        "p_away_cover": null,
+        "p_over": null,
+        "p_under": null
+      },
+      "_signal_mc": {
+        "p_home": 0.5634,
+        "p_away": 0.4366,
+        "p_home_cover": null,
+        "p_away_cover": null,
+        "p_over": null,
+        "p_under": null
+      },
+      "_signal_gbm": {
+        "p_home": 0.8792,
+        "p_away": 0.1208,
+        "p_home_cover": null,
+        "p_away_cover": null,
+        "p_over": null,
+        "p_under": null
+      },
+      "_ensemble_weights": {
+        "ml": {
+          "factor": 0.45,
+          "mc": 0.35,
+          "gbm": 0.2
+        },
+        "spread": {
+          "factor": 0.5,
+          "mc": 0.5,
+          "gbm": 0.0
+        },
+        "total": {
+          "factor": 0.5,
+          "mc": 0.5,
+          "gbm": 0.0
+        }
+      },
+      "_signal_gbm_trained": true,
+      "game_id": "401872981"
+    },
+    "odds": {
+      "hr_event_id": "5999335051995775400",
+      "start_time": 1791725400000.0,
+      "home_abbr": "JAX",
+      "away_abbr": "PHI",
+      "home_full_name": "Jaguars",
+      "away_full_name": "Eagles",
+      "home_ml": -400,
+      "away_ml": 300,
+      "home_spread_point": -7.5,
+      "home_spread_odds": -110,
+      "away_spread_point": 7.5,
+      "away_spread_odds": -110,
+      "over_under": 41.5,
+      "over_odds": -115,
+      "under_odds": -105
+    },
+    "home_abbr": "JAX",
+    "away_abbr": "PHI",
+    "start_time": "2026-10-11T13:30Z",
+    "current_paper_picks": [
+      {
+        "type": "ML",
+        "market": "ML",
+        "pick": "JAX",
+        "line": null,
+        "odds": -375,
+        "edge": -13.8,
+        "prob": 0.6516,
+        "result": null,
+        "paper": true
+      }
+    ]
+  },
+  "401872984": {
+    "matchup": "HOU@TEN",
+    "pred": {
+      "league": "nfl",
+      "home_team_id": 10,
+      "away_team_id": 34,
+      "elo_home": 1173.3,
+      "elo_away": 1568.6,
+      "p_home": 0.284,
+      "p_away": 0.716,
+      "expected_margin": -10.79,
+      "expected_total": 45.54,
+      "expected_home": 17.38,
+      "expected_away": 28.16,
+      "injury_home": {
+        "qb_out": null,
+        "starters_out": 2,
+        "n_injuries": 25
+      },
+      "injury_away": {
+        "qb_out": null,
+        "starters_out": 3,
+        "n_injuries": 25
+      },
+      "mc_n_sims": 10000,
+      "mc_p_home": 0.2039,
+      "mc_p_home_decided": 0.2039,
+      "mc_p_away": 0.7961,
+      "mc_p_tie": 0.0,
+      "mc_expected_home": 17.23,
+      "mc_expected_away": 28.17,
+      "mc_expected_margin": -10.94,
+      "mc_expected_total": 45.39,
+      "gbm_trained": true,
+      "gbm_p_home": 0.3991,
+      "gbm_p_away": 0.6009,
+      "gbm_p_home_cover": null,
+      "gbm_p_away_cover": null,
+      "gbm_p_over": null,
+      "gbm_p_under": null,
+      "_signal_factor": {
+        "p_home": 0.1343,
+        "p_away": 0.8657,
+        "p_home_cover": null,
+        "p_away_cover": null,
+        "p_over": null,
+        "p_under": null
+      },
+      "_signal_mc": {
+        "p_home": 0.2039,
+        "p_away": 0.7961,
+        "p_home_cover": null,
+        "p_away_cover": null,
+        "p_over": null,
+        "p_under": null
+      },
+      "_signal_gbm": {
+        "p_home": 0.3991,
+        "p_away": 0.6009,
+        "p_home_cover": null,
+        "p_away_cover": null,
+        "p_over": null,
+        "p_under": null
+      },
+      "_ensemble_weights": {
+        "ml": {
+          "factor": 0.45,
+          "mc": 0.35,
+          "gbm": 0.2
+        },
+        "spread": {
+          "factor": 0.5,
+          "mc": 0.5,
+          "gbm": 0.0
+        },
+        "total": {
+          "factor": 0.5,
+          "mc": 0.5,
+          "gbm": 0.0
+        }
+      },
+      "_signal_gbm_trained": true,
+      "game_id": "401872984"
+    },
+    "odds": {
+      "hr_event_id": "3716010040918933929",
+      "start_time": 1791738000000.0,
+      "home_abbr": "TEN",
+      "away_abbr": "HOU",
+      "home_full_name": "Titans",
+      "away_full_name": "Texans",
+      "away_ml": -375,
+      "home_ml": 300,
+      "home_spread_point": 6.5,
+      "home_spread_odds": 105,
+      "away_spread_point": -6.5,
+      "away_spread_odds": -130,
+      "over_under": 38.5,
+      "over_odds": -105,
+      "under_odds": -115
+    },
+    "home_abbr": "TEN",
+    "away_abbr": "HOU",
+    "start_time": "2026-10-11T17:00Z",
+    "current_paper_picks": [
+      {
+        "type": "ML",
+        "market": "ML",
+        "pick": "HOU",
+        "line": null,
+        "odds": -375,
+        "edge": -0.5,
+        "prob": 0.7849,
+        "result": null,
+        "paper": true
+      }
+    ]
+  },
+  "401872982": {
+    "matchup": "CIN@MIA",
+    "pred": {
+      "league": "nfl",
+      "home_team_id": 15,
+      "away_team_id": 4,
+      "elo_home": 1362.3,
+      "elo_away": 1500.5,
+      "p_home": 0.3875,
+      "p_away": 0.6125,
+      "expected_margin": -2.22,
+      "expected_total": 45.54,
+      "expected_home": 21.66,
+      "expected_away": 23.88,
+      "injury_home": {
+        "qb_out": null,
+        "starters_out": 6,
+        "n_injuries": 25
+      },
+      "injury_away": {
+        "qb_out": null,
+        "starters_out": 2,
+        "n_injuries": 25
+      },
+      "mc_n_sims": 10000,
+      "mc_p_home": 0.3925,
+      "mc_p_home_decided": 0.3925,
+      "mc_p_away": 0.6075,
+      "mc_p_tie": 0.0,
+      "mc_expected_home": 21.78,
+      "mc_expected_away": 23.79,
+      "mc_expected_margin": -2.01,
+      "mc_expected_total": 45.57,
+      "gbm_trained": true,
+      "gbm_p_home": 0.4425,
+      "gbm_p_away": 0.5575,
+      "gbm_p_home_cover": null,
+      "gbm_p_away_cover": null,
+      "gbm_p_over": null,
+      "gbm_p_under": null,
+      "_signal_factor": {
+        "p_home": 0.4054,
+        "p_away": 0.5946,
+        "p_home_cover": null,
+        "p_away_cover": null,
+        "p_over": null,
+        "p_under": null
+      },
+      "_signal_mc": {
+        "p_home": 0.3925,
+        "p_away": 0.6075,
+        "p_home_cover": null,
+        "p_away_cover": null,
+        "p_over": null,
+        "p_under": null
+      },
+      "_signal_gbm": {
+        "p_home": 0.4425,
+        "p_away": 0.5575,
+        "p_home_cover": null,
+        "p_away_cover": null,
+        "p_over": null,
+        "p_under": null
+      },
+      "_ensemble_weights": {
+        "ml": {
+          "factor": 0.45,
+          "mc": 0.35,
+          "gbm": 0.2
+        },
+        "spread": {
+          "factor": 0.5,
+          "mc": 0.5,
+          "gbm": 0.0
+        },
+        "total": {
+          "factor": 0.5,
+          "mc": 0.5,
+          "gbm": 0.0
+        }
+      },
+      "_signal_gbm_trained": true,
+      "game_id": "401872982"
+    },
+    "odds": {
+      "hr_event_id": "4605470967324606870",
+      "start_time": 1791738000000.0,
+      "home_abbr": "MIA",
+      "away_abbr": "CIN",
+      "home_full_name": "Dolphins",
+      "away_full_name": "Bengals",
+      "away_ml": -350,
+      "home_ml": 260,
+      "home_spread_point": 6.5,
+      "home_spread_odds": 105,
+      "away_spread_point": -6.5,
+      "away_spread_odds": -130,
+      "over_under": 43.5,
+      "over_odds": -110,
+      "under_odds": -110
+    },
+    "home_abbr": "MIA",
+    "away_abbr": "CIN",
+    "start_time": "2026-10-11T17:00Z",
+    "current_paper_picks": [
+      {
+        "type": "ML",
+        "market": "ML",
+        "pick": "CIN",
+        "line": null,
+        "odds": -325,
+        "edge": -17.2,
+        "prob": 0.5927,
+        "result": null,
+        "paper": true
+      }
+    ]
+  },
+  "401872986": {
+    "matchup": "LV@NE",
+    "pred": {
+      "league": "nfl",
+      "home_team_id": 17,
+      "away_team_id": 13,
+      "elo_home": 1600.2,
+      "elo_away": 1330.0,
+      "p_home": 0.6974,
+      "p_away": 0.3026,
+      "expected_margin": 11.4,
+      "expected_total": 45.54,
+      "expected_home": 28.47,
+      "expected_away": 17.07,
+      "injury_home": {
+        "qb_out": null,
+        "starters_out": 7,
+        "n_injuries": 25
+      },
+      "injury_away": {
+        "qb_out": null,
+        "starters_out": 3,
+        "n_injuries": 25
+      },
+      "mc_n_sims": 10000,
+      "mc_p_home": 0.8217,
+      "mc_p_home_decided": 0.8217,
+      "mc_p_away": 0.1783,
+      "mc_p_tie": 0.0,
+      "mc_expected_home": 28.61,
+      "mc_expected_away": 17.09,
+      "mc_expected_margin": 11.52,
+      "mc_expected_total": 45.69,
+      "gbm_trained": true,
+      "gbm_p_home": 0.7794,
+      "gbm_p_away": 0.2206,
+      "gbm_p_home_cover": null,
+      "gbm_p_away_cover": null,
+      "gbm_p_over": null,
+      "gbm_p_under": null,
+      "_signal_factor": {
+        "p_home": 0.8774,
+        "p_away": 0.1226,
+        "p_home_cover": null,
+        "p_away_cover": null,
+        "p_over": null,
+        "p_under": null
+      },
+      "_signal_mc": {
+        "p_home": 0.8217,
+        "p_away": 0.1783,
+        "p_home_cover": null,
+        "p_away_cover": null,
+        "p_over": null,
+        "p_under": null
+      },
+      "_signal_gbm": {
+        "p_home": 0.7794,
+        "p_away": 0.2206,
+        "p_home_cover": null,
+        "p_away_cover": null,
+        "p_over": null,
+        "p_under": null
+      },
+      "_ensemble_weights": {
+        "ml": {
+          "factor": 0.45,
+          "mc": 0.35,
+          "gbm": 0.2
+        },
+        "spread": {
+          "factor": 0.5,
+          "mc": 0.5,
+          "gbm": 0.0
+        },
+        "total": {
+          "factor": 0.5,
+          "mc": 0.5,
+          "gbm": 0.0
+        }
+      },
+      "_signal_gbm_trained": true,
+      "game_id": "401872986"
+    },
+    "odds": {
+      "hr_event_id": "1263289870420410795",
+      "start_time": 1791738000000.0,
+      "home_abbr": "NE",
+      "away_abbr": "LV",
+      "home_full_name": "Patriots",
+      "away_full_name": "Raiders",
+      "home_ml": -190,
+      "away_ml": 160,
+      "home_spread_point": -6.5,
+      "home_spread_odds": 130,
+      "away_spread_point": 6.5,
+      "away_spread_odds": -160,
+      "over_under": 45.5,
+      "over_odds": -110,
+      "under_odds": -110
+    },
+    "home_abbr": "NE",
+    "away_abbr": "LV",
+    "start_time": "2026-10-11T17:00Z",
+    "current_paper_picks": [
+      {
+        "type": "ML",
+        "market": "ML",
+        "pick": "NE",
+        "line": null,
+        "odds": -195,
+        "edge": 17.8,
+        "prob": 0.8395,
+        "result": null,
+        "paper": true
+      }
+    ]
+  },
+  "401872987": {
+    "matchup": "MIN@NO",
+    "pred": {
+      "league": "nfl",
+      "home_team_id": 18,
+      "away_team_id": 16,
+      "elo_home": 1328.0,
+      "elo_away": 1665.0,
+      "p_home": 0.284,
+      "p_away": 0.716,
+      "expected_margin": -8.84,
+      "expected_total": 45.54,
+      "expected_home": 18.35,
+      "expected_away": 27.19,
+      "injury_home": {
+        "qb_out": null,
+        "starters_out": 3,
+        "n_injuries": 25
+      },
+      "injury_away": {
+        "qb_out": null,
+        "starters_out": 4,
+        "n_injuries": 25
+      },
+      "mc_n_sims": 10000,
+      "mc_p_home": 0.2411,
+      "mc_p_home_decided": 0.2411,
+      "mc_p_away": 0.7589,
+      "mc_p_tie": 0.0,
+      "mc_expected_home": 18.49,
+      "mc_expected_away": 27.26,
+      "mc_expected_margin": -8.76,
+      "mc_expected_total": 45.75,
+      "gbm_trained": true,
+      "gbm_p_home": 0.4972,
+      "gbm_p_away": 0.5028,
+      "gbm_p_home_cover": null,
+      "gbm_p_away_cover": null,
+      "gbm_p_over": null,
+      "gbm_p_under": null,
+      "_signal_factor": {
+        "p_home": 0.1784,
+        "p_away": 0.8216,
+        "p_home_cover": null,
+        "p_away_cover": null,
+        "p_over": null,
+        "p_under": null
+      },
+      "_signal_mc": {
+        "p_home": 0.2411,
+        "p_away": 0.7589,
+        "p_home_cover": null,
+        "p_away_cover": null,
+        "p_over": null,
+        "p_under": null
+      },
+      "_signal_gbm": {
+        "p_home": 0.4972,
+        "p_away": 0.5028,
+        "p_home_cover": null,
+        "p_away_cover": null,
+        "p_over": null,
+        "p_under": null
+      },
+      "_ensemble_weights": {
+        "ml": {
+          "factor": 0.45,
+          "mc": 0.35,
+          "gbm": 0.2
+        },
+        "spread": {
+          "factor": 0.5,
+          "mc": 0.5,
+          "gbm": 0.0
+        },
+        "total": {
+          "factor": 0.5,
+          "mc": 0.5,
+          "gbm": 0.0
+        }
+      },
+      "_signal_gbm_trained": true,
+      "game_id": "401872987"
+    },
+    "odds": {
+      "hr_event_id": "3343337171754025374",
+      "start_time": 1791738000000.0,
+      "home_abbr": "NO",
+      "away_abbr": "MIN",
+      "home_full_name": "Saints",
+      "away_full_name": "Vikings",
+      "home_ml": 120,
+      "away_ml": -140,
+      "home_spread_point": 2.5,
+      "home_spread_odds": -110,
+      "away_spread_point": -2.5,
+      "away_spread_odds": -110,
+      "over_under": 41.5,
+      "over_odds": -110,
+      "under_odds": -110
+    },
+    "home_abbr": "NO",
+    "away_abbr": "MIN",
+    "start_time": "2026-10-11T17:00Z",
+    "current_paper_picks": [
+      {
+        "type": "ML",
+        "market": "ML",
+        "pick": "MIN",
+        "line": null,
+        "odds": -130,
+        "edge": 16.6,
+        "prob": 0.7317,
+        "result": null,
+        "paper": true
+      }
+    ]
+  }
+}

@@ -358,6 +358,8 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         odds        INTEGER,
         result      TEXT,            -- 'W', 'L', 'P' (push), NULL (pending)
         profit      REAL,            -- dollars won/lost on $100 bet
+        closing_odds INTEGER,        -- CLV (audit T2 schema-drift fix)
+        stake_units REAL,            -- queue reads this; omitting it dropped the sport
         created_at  TEXT DEFAULT (datetime('now')),
         settled_at  TEXT
     );
@@ -600,7 +602,7 @@ def upsert_game(mlb_game_id: int, **kwargs) -> None:
         )
         return
 
-    fields = ["date", "home_team_id", "away_team_id", "home_score", "away_score",
+    fields = ["date", "start_time", "home_team_id", "away_team_id", "home_score", "away_score",
               "status", "home_pitcher_id", "away_pitcher_id", "venue", "day_night",
               "weather_temp", "weather_wind", "umpire", "winning_pitcher",
               "losing_pitcher", "save_pitcher", "season", "home_linescore",

@@ -19,12 +19,49 @@ is a separate task (#209).
 from __future__ import annotations
 
 import logging
+import threading
+from contextlib import contextmanager
 from typing import Iterable
 
 from ._config import get_league_config
 from ._db import get_conn, games_table
 
 logger = logging.getLogger(__name__)
+
+
+# ── Pick Authority (leagues with registry "pick_authority": NCAAM / NCAAW) ──
+# MintyBot 2026-10-26, Austin "fix up college basketball ... the same standard as NBA":
+# each candidate anchors to the de-vigged market with ITS OWN Pick Authority weight,
+# edge_proven.market_weight("basketball", league, bet_type, pick, odds) -- 0.50 once that
+# market has proven an edge, 0.15 until then -- and that anchor is the only calibration
+# (calibration_gate.anchor_only). Inside shadow_mode() the anchor is skipped (W=1): the
+# shadow lane records the MODEL's own number for every market so unproven ones can earn
+# their way onto the card. Other framework leagues keep the flat 0.5 anchor.
+_PA_TL = threading.local()
+_PA_FALLBACK_W = 0.15
+
+
+@contextmanager
+def shadow_mode():
+    """Price candidates on the model's own probability (W=1) -- the PA shadow lane.
+    Thread-local, so concurrent slate workers don't leak into each other."""
+    prev = getattr(_PA_TL, "shadow", False)
+    _PA_TL.shadow = True
+    try:
+        yield
+    finally:
+        _PA_TL.shadow = prev
+
+
+def _pa_weight(league: str, cand: dict) -> float:
+    if getattr(_PA_TL, "shadow", False):
+        return 1.0
+    try:
+        from ..selection.edge_proven import market_weight
+        return float(market_weight("basketball", league, cand.get("type"),
+                                   cand.get("pick") or "", cand.get("odds")))
+    except Exception:
+        return _PA_FALLBACK_W
 
 
 # ── Juice wall ────────────────────────────────────────────────
@@ -65,6 +102,28 @@ def _emit(candidates: list[dict], league: str) -> list[dict]:
     on the 0.50 boundary)."""
     from ..picks_core import score_pick
     juice_wall = _juice_wall_for(league)
+
+    # Market-anchor (MintyBot 2026-10-16): blend each candidate's raw_prob toward
+    # the de-vigged market, mirroring NHL/football. Candidates come in opposing
+    # pairs per type (ML / SPREAD / TOTAL / Q1_*); each side anchors against the
+    # other side's odds. NBA is unaffected (it exits generate_picks before _emit).
+    # anchor_to_market is a safe no-op when a pair/odds is missing.
+    from ..market_blend import anchor_to_market as _anchor
+    _pa = bool(get_league_config(league).get("pick_authority"))
+    _by_type = {}
+    for _c in candidates:
+        _by_type.setdefault(_c.get("type"), []).append(_c)
+    for _grp in _by_type.values():
+        if len(_grp) == 2:
+            _a, _b = _grp
+            _ao, _bo = _a.get("odds"), _b.get("odds")
+            if _pa:
+                _wa, _wb = _pa_weight(league, _a), _pa_weight(league, _b)
+                _a["raw_prob"] = _anchor(_a.get("raw_prob"), _ao, _bo, _wa)
+                _b["raw_prob"] = _anchor(_b.get("raw_prob"), _bo, _ao, _wb)
+            else:
+                _a["raw_prob"] = _anchor(_a.get("raw_prob"), _ao, _bo)
+                _b["raw_prob"] = _anchor(_b.get("raw_prob"), _bo, _ao)
     out: list[dict] = []
     for c in candidates:
         try:
@@ -238,7 +297,20 @@ def generate_picks(league: str, prediction: dict, odds: dict | None,
     q1_total_std = cfg.get("q1_total_std")
     q1_home_boost = cfg.get("q1_home_boost")
     q1_avg_total = cfg.get("q1_avg_total")
-    if q1 and q1_margin_std and q1_total_std and q1_avg_total is not None:
+    _per = prediction.get("period")
+    if q1 and _per:
+        # College ratings (NCAAM 1st half / NCAAW 1st quarter): the period lines come straight
+        # off the fitted period model -- margin share + total share of the full-game ratings
+        # projection and their own residual sigmas -- not the shared-share + flat
+        # q1_home_boost path below (which added a 4.2-pt home edge on top of a margin that
+        # already carried one). (MintyBot 2026-10-26)
+        import math
+        def _ncdf(x): return 0.5 * (1 + math.erf(x / math.sqrt(2)))
+        q1_margin = _per["margin"]
+        q1_total = _per["total"]
+        q1_margin_std = _per["margin_std"]
+        q1_total_std = _per["total_std"]
+    if q1 and not _per and q1_margin_std and q1_total_std and q1_avg_total is not None:
         import math
         def _ncdf(x): return 0.5 * (1 + math.erf(x / math.sqrt(2)))
         # Derive Q1 predicted margin + total from the full-game numbers.
@@ -258,6 +330,7 @@ def generate_picks(league: str, prediction: dict, odds: dict | None,
         # since the full-margin already prices that in).
         if q1_margin is not None:
             q1_margin = q1_margin + q1_home_boost
+    if q1 and (_per or (q1_margin_std and q1_total_std and q1_avg_total is not None)):
         # Q1 ML — Draw-No-Bet refunds ties; we treat tie prob as ~3%
         # and compute side-win probs against margin > 0.
         q1_ml = q1.get("ml") or {}

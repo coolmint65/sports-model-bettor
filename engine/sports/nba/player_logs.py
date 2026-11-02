@@ -278,4 +278,36 @@ def ingest_today() -> dict:
     return {"games": games, "rows": total}
 
 
-__all__ = ["ingest_game", "ingest_recent_finals", "ingest_today"]
+def ingest_missing_finals(days: int = 10) -> dict:
+    """Box scores for every final of the last ``days`` that has no player rows yet.
+    (MintyBot 2026-10-26) The props pipeline only ingested when a PENDING pick needed
+    settling -- no picks, no box scores, no model data, no picks: 2026-27 opened with zero
+    NBA props and 28 finals unlogged by 10-26. The worker now runs this on a clock; one
+    query when nothing is missing."""
+    from .db import get_conn
+    conn = get_conn()
+    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    rows = conn.execute(
+        "SELECT g.game_id FROM nba_games g "
+        "WHERE g.date >= ? AND g.status = 'final' "
+        "  AND NOT EXISTS (SELECT 1 FROM player_game_logs p WHERE p.game_id = g.game_id) "
+        "ORDER BY g.date",
+        (cutoff,),
+    ).fetchall()
+    games = total = 0
+    for r in rows:
+        gid = r["game_id"] if hasattr(r, "keys") else r[0]
+        if not gid:
+            continue
+        n = ingest_game(str(gid))
+        if n:
+            games += 1
+            total += n
+        time.sleep(_REQUEST_INTERVAL_S)
+    if rows:
+        logger.info("nba ingest_missing_finals: missing=%d games=%d rows=%d",
+                    len(rows), games, total)
+    return {"missing": len(rows), "games": games, "rows": total}
+
+
+__all__ = ["ingest_game", "ingest_recent_finals", "ingest_today", "ingest_missing_finals"]

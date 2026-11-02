@@ -45,11 +45,13 @@ _DEFAULT_WEIGHTS = {
     ("nhl", "total"):          {"factor": 0.50, "mc": 0.10, "gbm": 0.40},
     ("nhl", "p1_home_win"):    {"factor": 0.45, "mc": 0.10, "gbm": 0.45},
     ("nhl", "p1_total"):       {"factor": 0.45, "mc": 0.10, "gbm": 0.45},
-    # NBA: same three-way default for each market; Q1 markets lean a
-    # bit more on MC because the factor model is Q1-specific.
-    ("nba", "q1_home_win"):    {"factor": 0.30, "mc": 0.40, "gbm": 0.30},
-    ("nba", "q1_total"):       {"factor": 0.30, "mc": 0.40, "gbm": 0.30},
-    ("nba", "q1_margin"):      {"factor": 0.30, "mc": 0.40, "gbm": 0.30},
+    # NBA Q1: MC DROPPED 2026-10-26 (MintyBot, Austin "NBA for PA"). Its Q1 home-win
+    # leg spans 1%-99% (sd .32 -- a first quarter is never a 99% lock), Brier .249 on 24
+    # pre-tip games 2026-05..10 and .383 this season (worse than a coin flip), and it runs
+    # Q1 totals +4.6 pts high. It carried the biggest weight (0.40). Factor + GBM split it.
+    ("nba", "q1_home_win"):    {"factor": 0.50, "mc": 0.00, "gbm": 0.50},
+    ("nba", "q1_total"):       {"factor": 0.50, "mc": 0.00, "gbm": 0.50},
+    ("nba", "q1_margin"):      {"factor": 0.50, "mc": 0.00, "gbm": 0.50},
     # Full-game NBA (Phase 2k). All three signals are real now: factor
     # via nba_predict, MC via mc_nba.simulate_full, GBM via the new
     # total_points / margin / home_win artifacts. Equal three-way blend
@@ -379,9 +381,27 @@ def ensemble_nba(pred: dict, log_meta: dict | None = None) -> dict:
     factor_full_wp = full_pred.get("ml_home")
     mc_full_wp = (mc_full.get("win_prob") or {}).get("home")
     gbm_full_wp = gbm.get("home_win")
+    # Missing regulars (MintyBot 2026-10-26): the factor leg already prices them (predict_full ->
+    # `availability`); the MC and GBM legs never see injuries, so the same shift is applied to them here --
+    # before this only a third of an absence reached the blended moneyline.
+    _av = full_pred.get("availability") or {}
+    _dm, _dt = float(_av.get("margin_delta") or 0.0), float(_av.get("total_delta") or 0.0)
+    if _dm:
+        from statistics import NormalDist as _ND
+        try:
+            from .mc_constants import nba_full_margin_std as _mstd
+            _sig = float(_mstd())
+        except Exception:
+            _sig = 16.06
+        _nd = _ND()
+        _shift = lambda p: _nd.cdf(_nd.inv_cdf(min(max(float(p), 1e-6), 1 - 1e-6)) + _dm / _sig)
+        mc_full_wp = _shift(mc_full_wp) if mc_full_wp is not None else None
+        gbm_full_wp = _shift(gbm_full_wp) if gbm_full_wp is not None else None
     w = weights_for("nba", "home_win")
-    full_wp = blend({"factor": factor_full_wp, "mc": mc_full_wp,
-                     "gbm": gbm_full_wp}, w)
+    # _resolve (not bare blend) so the per-game legs land in ensemble_log when the
+    # caller passes log_meta -- the win-% bar calibration fits on them (2026-10-26).
+    full_wp = _resolve("nba", "home_win", {"factor": factor_full_wp, "mc": mc_full_wp,
+                                           "gbm": gbm_full_wp}, w, log_meta)
     if full_wp is not None:
         out["home_win"] = round(full_wp, 4)
         out["weights_used"]["home_win"] = w
@@ -390,9 +410,12 @@ def ensemble_nba(pred: dict, log_meta: dict | None = None) -> dict:
     factor_full_total = full_pred.get("predicted_total")
     mc_full_total = (mc_full.get("expected_points") or {}).get("total")
     gbm_full_total = gbm.get("total_points")
+    if _dt:
+        mc_full_total = mc_full_total + _dt if mc_full_total is not None else None
+        gbm_full_total = gbm_full_total + _dt if gbm_full_total is not None else None
     w = weights_for("nba", "total")
-    total_blend = blend({"factor": factor_full_total, "mc": mc_full_total,
-                         "gbm": gbm_full_total}, w)
+    total_blend = _resolve("nba", "total", {"factor": factor_full_total, "mc": mc_full_total,
+                                            "gbm": gbm_full_total}, w, log_meta)
     if total_blend is not None:
         out["total_expected"] = round(total_blend, 3)
         out["weights_used"]["total"] = w
@@ -405,6 +428,9 @@ def ensemble_nba(pred: dict, log_meta: dict | None = None) -> dict:
     if ep.get("home") is not None and ep.get("away") is not None:
         mc_full_margin = ep["home"] - ep["away"]
     gbm_full_margin = gbm.get("margin")
+    if _dm:
+        mc_full_margin = mc_full_margin + _dm if mc_full_margin is not None else None
+        gbm_full_margin = gbm_full_margin + _dm if gbm_full_margin is not None else None
     w = weights_for("nba", "margin")
     margin_blend = blend({"factor": factor_full_margin, "mc": mc_full_margin,
                           "gbm": gbm_full_margin}, w)

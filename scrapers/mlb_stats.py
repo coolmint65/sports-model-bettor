@@ -177,6 +177,7 @@ def fetch_schedule(start_date: str, end_date: str) -> list[dict]:
             game = {
                 "mlb_game_id": game_id,
                 "date": game_date,
+                "start_time": g.get("gameDate"),
                 "home_team_id": home_team.get("team", {}).get("id"),
                 "away_team_id": away_team.get("team", {}).get("id"),
                 "home_score": home_team.get("score"),

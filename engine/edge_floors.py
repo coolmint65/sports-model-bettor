@@ -112,6 +112,16 @@ MARGINAL_CELL_FLOOR = 15.0
 # their stake back.
 BLEED_CELL_FLOOR = 20.0
 
+# Chronic-loser shadow gate (2026-08-09, Austin msg 24712 "Do 2"): a cell
+# with SHADOW_MIN_N+ settled picks losing in BOTH the all-time and the
+# trailing SHADOW_WINDOW_DAYS windows emits at stake 0 (shadow) instead of
+# the 0.10 multiplier floor. Distinct from the pre-07-03 NOPLAY hard bans
+# (n=5-8 noise, picks REJECTED = learning stopped): shadow keeps emission
+# and recording, and the nightly refit lifts it the moment the rolling
+# window turns positive. Evidence bar is 3x the old ban threshold.
+SHADOW_MIN_N = 50
+SHADOW_WINDOW_DAYS = 60
+
 
 def stake_multiplier_for_roi(roi_pct: float) -> float:
     """Continuous stake-size scale factor from realized ROI.
@@ -244,16 +254,6 @@ _SOURCES = {
     "nwsl":              ("engine.soccer._db", "picks", "nwsl"),
     "usl_championship":  ("engine.soccer._db", "picks", "usl_championship"),
     "usa_open_cup":      ("engine.soccer._db", "picks", "usa_open_cup"),
-    # Motorsports series — same shape as basketball framework leagues:
-    # per-series `picks` table with (bet_type, edge, result, profit).
-    # F1 already had implicit coverage via the picks_core path but
-    # never registered here for automated floor refits. NASCAR + IndyCar
-    # onboard fresh with beta status — floors self-populate as picks
-    # settle. NASCAR's variance (restrictor plate lottery + fuel
-    # strategy noise) is exactly the pattern edge_floors was built for.
-    "f1":                ("engine.motorsports._db", "picks", "f1"),
-    "nascar":            ("engine.motorsports._db", "picks", "nascar"),
-    "indycar":           ("engine.motorsports._db", "picks", "indycar"),
 }
 
 
@@ -277,7 +277,7 @@ def _load_settled(sport: str, since: str | None = None) -> list[dict]:
     if since:
         where.append("date >= ?")
         params.append(since)
-    sql = (f"SELECT bet_type, pick, edge, result, profit, odds "
+    sql = (f"SELECT bet_type, pick, edge, result, profit, odds, date "
            f"FROM {table} WHERE {' AND '.join(where)}")
     try:
         rows = conn.execute(sql, params).fetchall()
@@ -293,7 +293,7 @@ def _load_settled(sport: str, since: str | None = None) -> list[dict]:
     # compute_floors only saw the game-line picks table.
     try:
         pp_where = list(where)
-        pp_sql = (f"SELECT bet_type, pick, edge, result, profit, odds "
+        pp_sql = (f"SELECT bet_type, pick, edge, result, profit, odds, date "
                    f"FROM player_props_picks "
                    f"WHERE {' AND '.join(pp_where)}")
         prop_rows = conn.execute(pp_sql, params).fetchall()
@@ -325,11 +325,26 @@ def compute_floors(sport: str, since: str | None = None) -> dict:
         lambda: {tier[0]: {"n": 0, "profit": 0.0, "w": 0, "l": 0}
                   for tier in _EDGE_TIERS}
     )
+    # Cell-level totals incl. a rolling window — feeds the chronic-loser
+    # shadow gate (2026-08-09, Austin): n>=50 with negative ROI in BOTH
+    # the all-time and trailing-60d windows -> stake goes to zero while
+    # the pick keeps emitting, so learning continues (the 07-03 objection
+    # to hard NOPLAY bans) but the record stops paying for a dead cell.
+    from datetime import datetime as _dt, timedelta as _td
+    _recent_cut = (_dt.utcnow() - _td(days=SHADOW_WINDOW_DAYS)).strftime("%Y-%m-%d")
+    totals: dict[tuple, dict] = defaultdict(
+        lambda: {"n": 0, "profit": 0.0, "n60": 0, "profit60": 0.0})
     for r in rows:
         bt = (r.get("bet_type") or "").strip()
         if not bt:
             continue
         direction = _direction_label(bt, r.get("pick"))
+        tot = totals[(bt, direction)]
+        tot["n"] += 1
+        tot["profit"] += float(r.get("profit") or 0)
+        if ((r.get("date") or "")[:10]) >= _recent_cut:
+            tot["n60"] += 1
+            tot["profit60"] += float(r.get("profit") or 0)
         edge = float(r.get("edge") or 0.0)
         if edge <= 0:
             continue
@@ -404,6 +419,22 @@ def compute_floors(sport: str, since: str | None = None) -> dict:
                 "stake_mult": round(
                     stake_multiplier_for_roi(chosen_roi), 3),
             }
+        # Chronic-loser shadow: enough evidence (n>=SHADOW_MIN_N) that
+        # the cell loses BOTH all-time and in the trailing window ->
+        # zero the stake but keep emitting. Self-healing on the nightly
+        # refit: a positive rolling window lifts the flag automatically.
+        tot = totals.get((bt, direction))
+        if tot and cell_key in floors:
+            roi_all = (tot["profit"] / tot["n"]) if tot["n"] else 0.0
+            roi60 = (tot["profit60"] / tot["n60"]) if tot["n60"] else 0.0
+            floors[cell_key]["n_all"] = tot["n"]
+            floors[cell_key]["roi_all"] = round(roi_all, 2)
+            floors[cell_key]["n60"] = tot["n60"]
+            floors[cell_key]["roi60"] = round(roi60, 2)
+            if (tot["n"] >= SHADOW_MIN_N and roi_all < 0.0
+                    and tot["n60"] > 0 and roi60 < 0.0):
+                floors[cell_key]["shadow"] = True
+                floors[cell_key]["stake_mult"] = 0.0
 
     _persist(sport, floors)
     return floors
@@ -472,6 +503,8 @@ def stake_multiplier(sport: str, bet_type: str,
     entry = sport_table.get(cell_key) or sport_table.get(bet_type)
     if entry is None:
         return default
+    if entry.get("shadow"):
+        return 0.0
     mult = entry.get("stake_mult")
     if mult is None:
         # Legacy row without stake_mult — derive it now so old JSONs

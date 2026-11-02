@@ -11,7 +11,7 @@ from ._scoreboard import _fetch_nba_scoreboard, _parse_q1_scores
 logger = logging.getLogger(__name__)
 
 
-def settle_picks() -> dict:
+def settle_picks(table: str = "nba_picks") -> dict:
     """Settle all pending NBA picks against final game results.
 
     Q1 markets settle the moment Q1 ends; full-game markets gate on
@@ -25,12 +25,12 @@ def settle_picks() -> dict:
     # MLB / NHL settlers.
     stale_cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
     stale = conn.execute(
-        "SELECT id, date, matchup, bet_type, pick FROM nba_picks "
+        f"SELECT id, date, matchup, bet_type, pick FROM {table} "
         "WHERE result IS NULL AND date < ?", (stale_cutoff,),
     ).fetchall()
     for row in stale:
         conn.execute(
-            "UPDATE nba_picks SET result='P', profit=0, settled_at=datetime('now') "
+            f"UPDATE {table} SET result='P', profit=0, settled_at=datetime('now') "
             "WHERE id=?", (row["id"],),
         )
         logger.warning(
@@ -42,7 +42,7 @@ def settle_picks() -> dict:
         conn.commit()
 
     pending = conn.execute(
-        "SELECT * FROM nba_picks WHERE result IS NULL"
+        f"SELECT * FROM {table} WHERE result IS NULL"
     ).fetchall()
 
     if not pending:
@@ -114,7 +114,19 @@ def settle_picks() -> dict:
         odds = pick["odds"] or -110
         result = None
 
-        if bt == "Q1_ML":
+        # -- Unified grading core (audit T2 migration) --
+        # Core-first (fixes the Q1_SPREAD/Team-Total assume-away); legacy
+        # fallback for markets/teams it does not resolve; core errors fall
+        # back to legacy -- settlement never breaks.
+        try:
+            from ..grading import nba_adapter as _core_nba
+            _cr = _core_nba.grade_pick(pick, game)
+        except Exception as _ce:
+            logger.warning("nba core grade failed, legacy fallback: %s", _ce)
+            _cr = None
+        if _cr is not None:
+            result = _cr
+        elif bt == "Q1_ML":
             pick_team = pk.split()[0]
             home_won_q1 = q1_margin > 0
             is_home_pick = (pick_team == h or pick_team == _ALT_ABBRS.get(h, ""))
@@ -140,6 +152,9 @@ def settle_picks() -> dict:
                 pick_team = parts[0]
                 spread = float(parts[1])
                 is_home_pick = (pick_team == h or pick_team == _ALT_ABBRS.get(h, ""))
+                is_away_pick = (pick_team == a or pick_team == _ALT_ABBRS.get(a, ""))
+                if not is_home_pick and not is_away_pick:
+                    continue  # abstain: unresolved team, no guessed side (audit)
                 if is_home_pick:
                     actual_margin = h_q1 - a_q1
                 else:
@@ -183,6 +198,9 @@ def settle_picks() -> dict:
                 except ValueError:
                     continue
                 is_home_pick = (pick_team == h or pick_team == _ALT_ABBRS.get(h, ""))
+                is_away_pick = (pick_team == a or pick_team == _ALT_ABBRS.get(a, ""))
+                if not is_home_pick and not is_away_pick:
+                    continue  # abstain: unresolved team, no guessed side (audit)
                 team_q1 = h_q1 if is_home_pick else a_q1
                 if team_q1 > line:
                     result = "W" if direction == "over" else "L"
@@ -232,6 +250,9 @@ def settle_picks() -> dict:
                     except ValueError:
                         continue
                     is_home_pick = (pick_team == h or pick_team == _ALT_ABBRS.get(h, ""))
+                    is_away_pick = (pick_team == a or pick_team == _ALT_ABBRS.get(a, ""))
+                    if not is_home_pick and not is_away_pick:
+                        continue  # abstain: pick matches neither side (was assume-away sign-flip)
                     actual = full_margin if is_home_pick else -full_margin
                     covered = actual + spread
                     if covered > 0:
@@ -269,8 +290,8 @@ def settle_picks() -> dict:
         else:
             profit = 0.0
 
-        conn.execute("""
-            UPDATE nba_picks SET result = ?, profit = ?, settled_at = datetime('now')
+        conn.execute(f"""
+            UPDATE {table} SET result = ?, profit = ?, settled_at = datetime('now')
             WHERE id = ?
         """, (result, round(profit, 2), pick["id"]))
         settled += 1
@@ -282,6 +303,6 @@ def settle_picks() -> dict:
         "wins": wins,
         "losses": losses,
         "pending_remaining": conn.execute(
-            "SELECT COUNT(*) as c FROM nba_picks WHERE result IS NULL"
+            f"SELECT COUNT(*) as c FROM {table} WHERE result IS NULL"
         ).fetchone()["c"],
     }

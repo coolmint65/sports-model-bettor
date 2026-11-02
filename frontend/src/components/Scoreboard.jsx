@@ -14,6 +14,9 @@ function ScoreboardImpl(props) {
       renderCard={({ game, bet, onClick, key }) => (
         <MLBGameCard key={key} game={game} bet={bet} onClick={onClick} sport="mlb" />
       )}
+      renderFinal={({ game, bet, onClick, key }) => (
+        <MLBGameCard key={key} game={game} bet={bet} onClick={onClick} sport="mlb" />
+      )}
     />
   )
 }

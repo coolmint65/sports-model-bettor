@@ -28,6 +28,52 @@ from ._helpers import _core_picks, _extract_closing_for_pick
 from ._scoreboard import _fetch_espn_scoreboard
 from .._tz import et_today_str
 
+# ── 2026-10-23 (MintyBot): record_picks had FIVE silent `continue`s, so when MLB recording
+# stopped on 2026-09-15 nothing said why for 5 weeks. Every record/skip decision now writes
+# one line to logs/mlb_record_picks.log (bounded) + logger.info. Field access is tolerant
+# (edge/edge_pct, odds/american/price, prob/model_prob) so a card-dict key rename can't
+# silently zero the tracker again.
+import os as _os
+_DIAG_PATH = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))),
+                           "logs", "mlb_record_picks.log")
+
+def _diag(msg: str) -> None:
+    try:
+        _os.makedirs(_os.path.dirname(_DIAG_PATH), exist_ok=True)
+        if _os.path.exists(_DIAG_PATH) and _os.path.getsize(_DIAG_PATH) > 1_000_000:
+            with open(_DIAG_PATH, "r", encoding="utf-8", errors="replace") as fh:
+                tail = fh.read()[-200_000:]
+            with open(_DIAG_PATH, "w", encoding="utf-8") as fh:
+                fh.write(tail)
+        with open(_DIAG_PATH, "a", encoding="utf-8") as fh:
+            fh.write(f"{datetime.now().isoformat(timespec='seconds')} {msg}\n")
+    except Exception:
+        pass
+    logger.info("mlb record_picks: %s", msg)
+
+def _num(*vals):
+    for v in vals:
+        if v is None:
+            continue
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+def _odds_of(p) -> int | None:
+    if not p:
+        return None
+    for k in ("odds", "american", "price", "odds_american"):
+        v = p.get(k)
+        if v is None:
+            continue
+        try:
+            return int(float(str(v).replace("+", "")))
+        except (TypeError, ValueError):
+            continue
+    return None
+
 logger = logging.getLogger(__name__)
 
 
@@ -309,6 +355,7 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
         matchup = f"{a} @ {h}"
 
         if h in _live_or_done or a in _live_or_done:
+            _diag(f"{target_date} {matchup}: SKIP live/done (ESPN state in/post)")
             continue
 
         # Build matchup abbreviation alias set up-front — used by both
@@ -345,7 +392,7 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
         ).fetchone()["c"]
         if existing > 0:
             print(f"[RECORD]   {matchup}: already recorded, skipping", flush=True)
-            continue
+            continue  # (normal steady state — not diag-logged, would spam every card hit)
 
         # Read from the picks store (single source of truth from best-bets).
         # If best-bets already ran, this returns the exact same picks the
@@ -356,20 +403,33 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
             if stored and stored.get("picks"):
                 picks = stored["picks"]
                 game_odds = stored.get("odds", {})
-                best = get_best_pick(_core_picks(picks))
-                if best and best["edge"] >= min_edge and _valid_odds(best.get("odds")):
+                core = _core_picks(picks)
+                best = get_best_pick(core)
+                b_edge = _num(best.get("edge"), best.get("edge_pct")) if best else None
+                b_odds = _odds_of(best)
+                b_prob = _num(best.get("prob"), best.get("model_prob"), best.get("raw_prob")) if best else None
+                if not best:
+                    _diag(f"{target_date} {matchup}: SKIP no playable core pick "
+                          f"(core={len(core)}/{len(picks)} types={[p.get('type') for p in picks][:8]} "
+                          f"conf={[p.get('confidence') for p in core][:8]})")
+                elif b_edge is None or b_edge < min_edge:
+                    _diag(f"{target_date} {matchup}: SKIP edge {b_edge} < {min_edge} ({best.get('type')} {best.get('pick')})")
+                elif not _valid_odds(b_odds):
+                    _diag(f"{target_date} {matchup}: SKIP invalid odds {b_odds!r} ({best.get('type')} {best.get('pick')} keys={list(best)[:14]})")
+                else:
                     conn.execute("""
                         INSERT OR IGNORE INTO picks (game_id, date, matchup, bet_type, pick,
                                          model_prob, edge, odds, stake_units)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (game_id, target_date, matchup, best["type"], best["pick"],
-                          best["prob"], best["edge"], best["odds"],
+                          b_prob, b_edge, b_odds,
                           best.get("stake_units")))
                     recorded.append({
                         "matchup": matchup, "type": best["type"],
-                        "pick": best["pick"], "prob": round(best["prob"], 3),
-                        "edge": round(best["edge"], 1), "odds": best["odds"],
+                        "pick": best["pick"], "prob": round(b_prob or 0.0, 3),
+                        "edge": round(b_edge, 1), "odds": b_odds,
                     })
+                    _diag(f"{target_date} {matchup}: RECORDED {best.get('type')} {best.get('pick')} edge {b_edge} odds {b_odds} (card picks store)")
                 # 1st INN side-track: NRFI/YRFI runs its own per-market
                 # edge floor (currently 0.5%). Log them separately so
                 # the 1st INN tracker collects evidence even when ML or
@@ -389,6 +449,7 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
                 continue
         except Exception as e:
             logger.debug("picks_store branch failed for %s: %s — regenerating", matchup, e)
+            _diag(f"{target_date} {matchup}: picks_store branch EXC {e!r} -> regenerating from model+HR odds")
 
         game_odds = match_odds(h, a, all_odds)
 
@@ -404,11 +465,14 @@ def record_picks(date: str | None = None, min_edge: float = 1.5,
         # Defense-in-depth odds sanity check.
         best = get_best_pick(_core_picks(picks))
         if not best or best["edge"] < min_edge:
+            _diag(f"{target_date} {matchup}: SKIP regen path — " + ("no playable core pick" if not best else f"edge {best.get('edge')} < {min_edge}") + f" (HR odds matched: {bool(game_odds)})")
             continue
         if not _valid_odds(best.get("odds")):
             logger.warning("Skipping pick with invalid odds=%s for %s",
                            best.get("odds"), matchup)
+            _diag(f"{target_date} {matchup}: SKIP regen path — invalid odds {best.get('odds')!r}")
             continue
+        _diag(f"{target_date} {matchup}: RECORDED {best.get('type')} {best.get('pick')} edge {best.get('edge')} odds {best.get('odds')} (regen path)")
 
         conn.execute("""
             INSERT OR IGNORE INTO picks (game_id, date, matchup, bet_type, pick,

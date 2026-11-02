@@ -26,6 +26,7 @@ from typing import Iterable
 from ._config import get_league_config
 from ._db import get_conn
 from ._predict import predict_slate
+from ..market_blend import anchor_to_market as _anchor, devig_multiway as _devig_multi, anchor_prob as _anchor_p
 
 logger = logging.getLogger(__name__)
 
@@ -37,12 +38,57 @@ logger = logging.getLogger(__name__)
 JUICE_WALL = -250
 
 
+def _sp(cand: dict, *, sport: str, juice_wall=None):
+    """score_pick with the market blend applied per league (MintyBot 2026-10-28). Builders pass
+    the MODEL probability as raw_prob plus the market to blend toward: ``_opp`` (the other side's
+    price, two-way) or ``_dv`` (this outcome's de-vigged share of a 3-way board). Pick Authority
+    leagues (_market_anchor.PA_LEAGUES, EPL) blend with the cell's PA weight -- every market,
+    1X2 / DC / DNB included -- and calibrate nowhere else (calibration_gate.anchor_only).
+    Every other league keeps its exact legacy blend: the fixed 0.5 market_blend on the markets
+    that had one, nothing on ML/DC/DNB (``_pa_only``)."""
+    from ..picks_core import score_pick
+    from . import _market_anchor as _MA
+    opp = cand.pop("_opp", None)
+    dv = cand.pop("_dv", None)
+    pa_only = cand.pop("_pa_only", False)
+    p = cand.get("raw_prob")
+    if p is not None:
+        if _MA.is_pa(sport):
+            cand["model_prob_raw"] = float(p)
+            if dv is not None:
+                cand["raw_prob"] = _anchor_p(float(p), dv, _MA.weight(sport, cand.get("type"), cand.get("pick"), cand.get("odds")))
+            elif opp is not None:
+                cand["raw_prob"] = _MA.anchor(sport, float(p), cand.get("odds"), opp, cand.get("type"), cand.get("pick"))
+        elif not pa_only:
+            if dv is not None:
+                cand["raw_prob"] = _anchor_p(float(p), dv)
+            elif opp is not None:
+                cand["raw_prob"] = _anchor(float(p), cand.get("odds"), opp)
+    return score_pick(cand, sport=sport, juice_wall=juice_wall)
+
+
+def _exact_over(pred: dict, line, key: str = "p_over_lines"):
+    """P(over) at the book's own half-point line off the score grid, or None. The old OU builders
+    snapped HR's line to the closest of 1.5 / 2.5 / 3.5 (H1: .5 / 1.5 / 2.5), so an Under 4.5 was
+    priced as P(under 3.5) (2026-10-28 audit: NFO@CRY Under 4.5)."""
+    try:
+        L = float(line)
+    except (TypeError, ValueError):
+        return None
+    if abs(abs(L % 1) - 0.5) > 1e-9:
+        return None
+    v = (pred.get(key) or {}).get(L)
+    return float(v) if v is not None else None
+
+
 def _ml_picks(league: str, matchup: str, match_id: int,
               pred: dict, odds: dict) -> list[dict]:
     """Three independent 1X2 candidates — home / draw / away."""
     ml = odds.get("ml") or {}
     out = []
-    from ..picks_core import score_pick as _score_pick
+    _score_pick = _sp
+    _mldv = _devig_multi([ml.get("home"), ml.get("draw"), ml.get("away")], 1.0)
+    _mlidx = {"home": 0, "draw": 1, "away": 2}
     for side, prob_key, odds_key, label in (
         ("home", "p_home", "home", pred["home_abbr"]),
         ("draw", "p_draw", "draw", "Draw"),
@@ -54,6 +100,7 @@ def _ml_picks(league: str, matchup: str, match_id: int,
         scored = _score_pick({
             "type": "ML", "pick": label,
             "raw_prob": pred[prob_key],
+            "_dv": _mldv[_mlidx[side]] if _mldv else None, "_pa_only": True,
             "odds": ml_odds,
             "direction": side,
         }, sport=league, juice_wall=JUICE_WALL)
@@ -82,18 +129,21 @@ def _ou_picks(league: str, matchup: str, match_id: int,
     over_key, under_key = line_map[closest]
     p_over = pred.get(over_key, 0.5)
     p_under = pred.get(under_key, 0.5)
+    _ex = _exact_over(pred, line)
+    if _ex is not None:
+        p_over, p_under = _ex, 1.0 - _ex
     out = []
-    from ..picks_core import score_pick as _score_pick
-    for direction, prob, ml in (
-        ("over",  p_over,  total.get("over_odds")),
-        ("under", p_under, total.get("under_odds")),
+    _score_pick = _sp
+    for direction, prob, ml, opp in (
+        ("over",  p_over,  total.get("over_odds"), total.get("under_odds")),
+        ("under", p_under, total.get("under_odds"), total.get("over_odds")),
     ):
         if ml is None:
             continue
         scored = _score_pick({
             "type": "OU",
             "pick": f"{direction.capitalize()} {line}",
-            "raw_prob": prob,
+            "raw_prob": float(prob), "_opp": opp,
             "odds": ml,
             "direction": direction,
         }, sport=league, juice_wall=JUICE_WALL)
@@ -112,17 +162,17 @@ def _btts_picks(league: str, matchup: str, match_id: int,
     if not btts:
         return []
     out = []
-    from ..picks_core import score_pick as _score_pick
-    for direction, prob, ml in (
-        ("yes", pred.get("p_btts_yes", 0.0), btts.get("yes")),
-        ("no",  pred.get("p_btts_no", 0.0),  btts.get("no")),
+    _score_pick = _sp
+    for direction, prob, ml, opp in (
+        ("yes", pred.get("p_btts_yes", 0.0), btts.get("yes"), btts.get("no")),
+        ("no",  pred.get("p_btts_no", 0.0),  btts.get("no"), btts.get("yes")),
     ):
         if ml is None:
             continue
         scored = _score_pick({
             "type": "BTTS",
             "pick": f"BTTS {direction.capitalize()}",
-            "raw_prob": prob,
+            "raw_prob": float(prob), "_opp": opp,
             "odds": ml,
             "direction": direction,
         }, sport=league, juice_wall=JUICE_WALL)
@@ -145,10 +195,10 @@ def _advance_picks(league: str, matchup: str, match_id: int,
     if not adv:
         return []
     out = []
-    from ..picks_core import score_pick as _score_pick
-    for side, prob, ml in (
-        ("home", pred.get("p_advance_home", 0.5), adv.get("home")),
-        ("away", pred.get("p_advance_away", 0.5), adv.get("away")),
+    _score_pick = _sp
+    for side, prob, ml, opp in (
+        ("home", pred.get("p_advance_home", 0.5), adv.get("home"), adv.get("away")),
+        ("away", pred.get("p_advance_away", 0.5), adv.get("away"), adv.get("home")),
     ):
         if ml is None:
             continue
@@ -156,7 +206,7 @@ def _advance_picks(league: str, matchup: str, match_id: int,
         scored = _score_pick({
             "type": "ADVANCE",
             "pick": f"{label} to Advance",
-            "raw_prob": prob,
+            "raw_prob": float(prob), "_opp": opp,
             "odds": ml,
             "direction": side,
         }, sport=league, juice_wall=JUICE_WALL)
@@ -177,17 +227,17 @@ def _gibh_picks(league: str, matchup: str, match_id: int,
     if not gibh:
         return []
     out = []
-    from ..picks_core import score_pick as _score_pick
-    for direction, prob, ml in (
-        ("yes", pred.get("p_gibh_yes", 0.0), gibh.get("yes")),
-        ("no",  pred.get("p_gibh_no", 0.0),  gibh.get("no")),
+    _score_pick = _sp
+    for direction, prob, ml, opp in (
+        ("yes", pred.get("p_gibh_yes", 0.0), gibh.get("yes"), gibh.get("no")),
+        ("no",  pred.get("p_gibh_no", 0.0),  gibh.get("no"), gibh.get("yes")),
     ):
         if ml is None:
             continue
         scored = _score_pick({
             "type": "GIBH",
             "pick": f"Goal Both Halves {direction.capitalize()}",
-            "raw_prob": prob,
+            "raw_prob": float(prob), "_opp": opp,
             "odds": ml,
             "direction": direction,
         }, sport=league, juice_wall=JUICE_WALL)
@@ -205,7 +255,7 @@ def _dnb_picks(league: str, matchup: str, match_id: int,
     if not dnb:
         return []
     out = []
-    from ..picks_core import score_pick as _score_pick
+    _score_pick = _sp
     for side, prob, ml in (
         ("home", pred.get("p_dnb_home", 0.5), dnb.get("home")),
         ("away", pred.get("p_dnb_away", 0.5), dnb.get("away")),
@@ -217,6 +267,7 @@ def _dnb_picks(league: str, matchup: str, match_id: int,
             "type": "DNB",
             "pick": f"{label} (DNB)",
             "raw_prob": prob,
+            "_opp": dnb.get("away") if side == "home" else dnb.get("home"), "_pa_only": True,
             "odds": ml,
             "direction": side,
         }, sport=league, juice_wall=JUICE_WALL)
@@ -275,17 +326,17 @@ def _ah_picks(league: str, matchup: str, match_id: int,
     p_home = _p_home_covers_ah(lam_h, lam_a, line)
     p_away = 1.0 - p_home
     out = []
-    from ..picks_core import score_pick as _score_pick
-    for side, prob, ml, label_line in (
-        ("home", p_home, home_odds, line),
+    _score_pick = _sp
+    for side, prob, ml, label_line, opp in (
+        ("home", p_home, home_odds, line, away_odds),
         # Away line is the negation: -line for the away side
-        ("away", p_away, away_odds, -line),
+        ("away", p_away, away_odds, -line, home_odds),
     ):
         sign = "+" if label_line >= 0 else ""
         scored = _score_pick({
             "type": "AH",
             "pick": f"{pred['home_abbr'] if side == 'home' else pred['away_abbr']} {sign}{label_line}",
-            "raw_prob": prob,
+            "raw_prob": float(prob), "_opp": opp,
             "odds": ml,
             "direction": side,
         }, sport=league, juice_wall=JUICE_WALL)
@@ -304,7 +355,9 @@ def _dc_picks(league: str, matchup: str, match_id: int,
     if not dc:
         return []
     out = []
-    from ..picks_core import score_pick as _score_pick
+    _score_pick = _sp
+    _dcdv = _devig_multi([dc.get("home_draw"), dc.get("draw_away"), dc.get("home_away")], 2.0)
+    _dcidx = {"home_draw": 0, "draw_away": 1, "home_away": 2}
     for side, prob_key, odds_key, label in (
         ("home_draw", "p_dc_home", "home_draw", f"{pred['home_abbr']} or Draw"),
         ("draw_away", "p_dc_away", "draw_away", f"Draw or {pred['away_abbr']}"),
@@ -317,6 +370,7 @@ def _dc_picks(league: str, matchup: str, match_id: int,
             "type": "DC",
             "pick": label,
             "raw_prob": pred.get(prob_key, 0.5),
+            "_dv": _dcdv[_dcidx[side]] if _dcdv else None, "_pa_only": True,
             "odds": ml,
             "direction": side,
         }, sport=league, juice_wall=JUICE_WALL)
@@ -337,7 +391,9 @@ def _h1_ml_picks(league: str, matchup: str, match_id: int,
     if not ml:
         return []
     out = []
-    from ..picks_core import score_pick as _score_pick
+    _score_pick = _sp
+    _h1ml_dv = _devig_multi([ml.get("home"), ml.get("draw"), ml.get("away")], 1.0)
+    _h1ml_idx = {"home": 0, "draw": 1, "away": 2}
     for side, prob_key, odds_key, label in (
         ("home", "p_h1_home", "home", pred["home_abbr"]),
         ("draw", "p_h1_draw", "draw", "Draw"),
@@ -348,7 +404,7 @@ def _h1_ml_picks(league: str, matchup: str, match_id: int,
             continue
         scored = _score_pick({
             "type": "H1_ML", "pick": f"{label} (H1)",
-            "raw_prob": pred.get(prob_key, 0.0),
+            "raw_prob": pred.get(prob_key, 0.0), "_dv": _h1ml_dv[_h1ml_idx[side]] if _h1ml_dv else None,
             "odds": ml_odds,
             "direction": side,
         }, sport=league, juice_wall=JUICE_WALL)
@@ -372,18 +428,22 @@ def _h1_ou_picks(league: str, matchup: str, match_id: int,
                  2.5: ("p_h1_over_25", "p_h1_under_25")}
     closest = min(line_map.keys(), key=lambda x: abs(x - line))
     over_key, under_key = line_map[closest]
+    _h1o, _h1u = pred.get(over_key, 0.5), pred.get(under_key, 0.5)
+    _ex = _exact_over(pred, line, "p_h1_over_lines")
+    if _ex is not None:
+        _h1o, _h1u = _ex, 1.0 - _ex
     out = []
-    from ..picks_core import score_pick as _score_pick
-    for direction, prob, ml in (
-        ("over",  pred.get(over_key, 0.5),  total.get("over_odds")),
-        ("under", pred.get(under_key, 0.5), total.get("under_odds")),
+    _score_pick = _sp
+    for direction, prob, ml, opp in (
+        ("over",  _h1o,  total.get("over_odds"), total.get("under_odds")),
+        ("under", _h1u, total.get("under_odds"), total.get("over_odds")),
     ):
         if ml is None:
             continue
         scored = _score_pick({
             "type": "H1_TOTAL",
             "pick": f"{direction.capitalize()} {line} (H1)",
-            "raw_prob": prob,
+            "raw_prob": float(prob), "_opp": opp,
             "odds": ml,
             "direction": direction,
         }, sport=league, juice_wall=JUICE_WALL)
@@ -403,17 +463,17 @@ def _h1_btts_picks(league: str, matchup: str, match_id: int,
     if not btts:
         return []
     out = []
-    from ..picks_core import score_pick as _score_pick
-    for direction, prob, ml in (
-        ("yes", pred.get("p_h1_btts_yes", 0.0), btts.get("yes")),
-        ("no",  pred.get("p_h1_btts_no", 0.0),  btts.get("no")),
+    _score_pick = _sp
+    for direction, prob, ml, opp in (
+        ("yes", pred.get("p_h1_btts_yes", 0.0), btts.get("yes"), btts.get("no")),
+        ("no",  pred.get("p_h1_btts_no", 0.0),  btts.get("no"), btts.get("yes")),
     ):
         if ml is None:
             continue
         scored = _score_pick({
             "type": "H1_BTTS",
             "pick": f"BTTS {direction.capitalize()} (H1)",
-            "raw_prob": prob,
+            "raw_prob": float(prob), "_opp": opp,
             "odds": ml,
             "direction": direction,
         }, sport=league, juice_wall=JUICE_WALL)
@@ -432,10 +492,10 @@ def _h1_dnb_picks(league: str, matchup: str, match_id: int,
     if not dnb:
         return []
     out = []
-    from ..picks_core import score_pick as _score_pick
-    for side, prob, ml in (
-        ("home", pred.get("p_h1_dnb_home", 0.5), dnb.get("home")),
-        ("away", pred.get("p_h1_dnb_away", 0.5), dnb.get("away")),
+    _score_pick = _sp
+    for side, prob, ml, opp in (
+        ("home", pred.get("p_h1_dnb_home", 0.5), dnb.get("home"), dnb.get("away")),
+        ("away", pred.get("p_h1_dnb_away", 0.5), dnb.get("away"), dnb.get("home")),
     ):
         if ml is None:
             continue
@@ -443,7 +503,7 @@ def _h1_dnb_picks(league: str, matchup: str, match_id: int,
         scored = _score_pick({
             "type": "H1_DNB",
             "pick": f"{label} (H1 DNB)",
-            "raw_prob": prob,
+            "raw_prob": float(prob), "_opp": opp,
             "odds": ml,
             "direction": side,
         }, sport=league, juice_wall=JUICE_WALL)
@@ -462,7 +522,9 @@ def _h1_dc_picks(league: str, matchup: str, match_id: int,
     if not dc:
         return []
     out = []
-    from ..picks_core import score_pick as _score_pick
+    _score_pick = _sp
+    _h1dc_dv = _devig_multi([dc.get("home_draw"), dc.get("draw_away"), dc.get("home_away")], 2.0)
+    _h1dc_idx = {"home_draw": 0, "draw_away": 1, "home_away": 2}
     for side, prob_key, odds_key, label in (
         ("home_draw", "p_h1_dc_home", "home_draw",
           f"{pred['home_abbr']} or Draw (H1)"),
@@ -477,7 +539,7 @@ def _h1_dc_picks(league: str, matchup: str, match_id: int,
         scored = _score_pick({
             "type": "H1_DC",
             "pick": label,
-            "raw_prob": pred.get(prob_key, 0.5),
+            "raw_prob": pred.get(prob_key, 0.5), "_dv": _h1dc_dv[_h1dc_idx[side]] if _h1dc_dv else None,
             "odds": ml,
             "direction": side,
         }, sport=league, juice_wall=JUICE_WALL)
@@ -535,10 +597,23 @@ def generate_picks_for_match(league: str, pred: dict, odds: dict
     advance: list[dict] = []
     advance += _advance_picks(league, matchup, match_id, pred, odds)
 
-    # Drop anything that went negative-edge post-calibration.
-    full = [p for p in full if (p.get("edge") or 0) > 0]
-    h1 = [p for p in h1 if (p.get("edge") or 0) > 0]
-    advance = [p for p in advance if (p.get("edge") or 0) > 0]
+    # Edge gate (Austin 2026-09-19): backtest showed the model is OVERCONFIDENT —
+    # its high-edge picks are false (edge>=10 bled -13 to -21% over 657 settled), and
+    # AH/H1_TOTAL structurally bleed. The calibrated moderate picks (0<edge<10, minus
+    # those markets) are +9.4% ROI over 207 settled. Keep those. Interim guard until
+    # the isotonic recal lands (then the hard cap relaxes to a recalibrated edge floor).
+    # In-sample -> paper. See memory tennis_soccer_model_edge_analysis.
+    _GATE_DROP = {"AH", "H1_TOTAL"}
+    from . import _market_anchor as _MA
+    _pa_league = _MA.is_pa(league)
+    def _passes_gate(p):
+        e = p.get("edge") or 0
+        if _pa_league:   # EPL (2026-10-28): the edge cap / market drops were fit on the retired Elo model
+            return e > 0
+        return 0 < e < 10 and (p.get("type") or p.get("bet_type")) not in _GATE_DROP
+    full = [p for p in full if _passes_gate(p)]
+    h1 = [p for p in h1 if _passes_gate(p)]
+    advance = [p for p in advance if _passes_gate(p)]
 
     def _top1(cands: list[dict]) -> list[dict]:
         if not cands:
@@ -547,7 +622,16 @@ def generate_picks_for_match(league: str, pred: dict, odds: dict
                                    -(p.get("raw_prob") or 0)))
         return [cands[0]]
 
+    _all = full + h1 + advance
     out = _top1(full) + _top1(h1) + _top1(advance)
+    if _pa_league:
+        # The Pick Authority picks from EVERY gated candidate (an unproven top-edge pick in a family
+        # must not mask a proven one under it -- the NBA lesson, 2026-10-26). The slate route reads
+        # this; the tracker still records the per-family top picks above.
+        for p in out:
+            p["_candidates"] = None
+        if out:
+            out[0]["_candidates"] = [{k: v for k, v in c.items() if k != "_candidates"} for c in _all]
 
     # World Cup over-confidence guard. Group-stage data (2026-06-11..15,
     # n=21 settled picks) showed a tight calibration pattern:
@@ -630,6 +714,11 @@ def generate_picks_for_slate(league: str, date: str,
         key = f"{pred['away_abbr']}@{pred['home_abbr']}"
         odds = odds_map.get(key) or {}
         picks = generate_picks_for_match(league, pred, odds)
+        cands = None
+        for p in picks:
+            c = p.pop("_candidates", None)
+            if c is not None:
+                cands = c
         by_match.append({
             "match_id": pred["match_id"],
             "matchup": _format_matchup(pred),
@@ -664,6 +753,7 @@ def generate_picks_for_slate(league: str, date: str,
             },
             "odds": odds,
             "picks": picks,
+            "candidates": cands if cands is not None else list(picks),
         })
         all_picks.extend(picks)
     all_picks.sort(key=lambda p: -(p.get("edge") or 0))

@@ -30,6 +30,12 @@ _USER_AGENT = "curl/8.4.0"
 _HEADERS = {"User-Agent": _USER_AGENT}
 
 
+# FBS-board game-ID cache (Austin 2026-09-19): populated from ESPN group 80 (FBS) during
+# ingest so the CFB display can filter to FBS games (our tables carry no FBS/FCS flag).
+# Keyed by (league, date) -> set of ESPN event ids. Display-only; Elo still ingests FCS.
+_FBS_BOARD: dict = {}
+
+
 try:
     from zoneinfo import ZoneInfo
     _ET = ZoneInfo("America/New_York")
@@ -132,16 +138,30 @@ def ingest_teams(league: str) -> int:
 
 
 def _parse_status(event: dict) -> str:
-    state = (event.get("status") or {}).get("type", {})
-    name = (state.get("name") or "").upper()
-    if "FINAL" in name:
-        return "final"
-    if "IN_PROGRESS" in name or "PROGRESS" in name or name == "STATUS_IN":
-        return "live"
+    """ESPN ships a coarse ``state`` (pre / in / post) alongside a finer
+    ``name`` (STATUS_IN_PROGRESS, STATUS_HALFTIME, STATUS_END_PERIOD,
+    STATUS_DELAYED, STATUS_FINAL, ...). The old version of this function
+    matched only ``name`` substrings for "live" ("IN_PROGRESS"/"PROGRESS"/
+    exact "STATUS_IN") — STATUS_HALFTIME, STATUS_END_PERIOD and
+    STATUS_DELAYED contain none of those, so a game at halftime or under an
+    in-game weather delay fell through to "scheduled" mid-game. That
+    un-locks the live pick (_lock_football_live_pick no-ops on "scheduled")
+    and the frontend renders the card as not-yet-started. ``state`` stays
+    "in" through all of those, so key off it first — mirrors
+    ``engine.basketball._espn_ingest`` — and only fall back to ``name`` for
+    postponed/cancelled, which ``state`` doesn't distinguish from a normal
+    pre/post game (Austin 2026-10-10 live-staleness fix)."""
+    status_type = (event.get("status") or {}).get("type") or {}
+    state = status_type.get("state") or "pre"
+    name = (status_type.get("name") or "").upper()
     if "POSTPONED" in name:
         return "postponed"
     if "CANCELED" in name or "CANCELLED" in name:
         return "cancelled"
+    if state == "post":
+        return "final"
+    if state == "in":
+        return "live"
     return "scheduled"
 
 
@@ -178,15 +198,24 @@ def ingest_today(league: str, *, date: str | None = None,
             continue
         if data is None:
             data = d
+        _is_fbs = "groups=80" in sfx   # ESPN FBS board -> cache ids for the CFB FBS-only display
         for ev in (d.get("events") or []):
             eid = str(ev.get("id") or "")
-            if eid and eid not in seen:
+            if not eid:
+                continue
+            if _is_fbs:
+                _FBS_BOARD.setdefault((league, target), set()).add(eid)
+            if eid not in seen:
                 seen.add(eid); merged.append(ev)
     if not data:
         return {"ingested": 0, "skipped": 0}
     data["events"] = merged
 
     conn = get_conn(league)
+    try:
+        conn.execute("ALTER TABLE games ADD COLUMN status_detail TEXT")
+    except Exception:
+        pass   # already there
     # Make sure teams are present + logos fresh. The old gate ran only when
     # the table was EMPTY, so NFL (seeded logo-less on first ingest) never
     # got its logos and the tracker showed initials. Refresh on a ~daily TTL
@@ -274,14 +303,34 @@ def ingest_today(league: str, *, date: str | None = None,
         et_date = _et_date_for_iso(iso) or target
         venue = (comp.get("venue") or {}).get("fullName") or ""
         week = ((ev.get("week") or {}).get("number") or None)
+        # Per-period points (2026-10-25): ESPN ships competitors[].linescores = [{value}, ...]
+        # (Q1..Q4, a 5th+ entry for OT) and status.period (4 = regulation, >4 = OT). Period
+        # markets (H1/H2/Q1-Q4 spreads/totals/team totals/3-way) settle off these.
+        def _ls(side):
+            vals = [_safe_int(x.get("value")) for x in (side.get("linescores") or []) if isinstance(x, dict)]
+            vals = [v for v in vals if v is not None]
+            return json.dumps(vals) if vals else None
+        h_ls, a_ls = _ls(home), _ls(away)
+        periods = _safe_int((ev.get("status") or {}).get("period"))
+        # ESPN's scoreboard stopped carrying season.year for 2026 (every 2026 CFB + NFL row was NULL); the
+        # football season is the year it starts in (Jan bowls / playoffs belong to the prior season)
+        if not season and et_date:
+            try:
+                _y, _m = int(et_date[:4]), int(et_date[5:7])
+                season = _y if _m >= 7 else _y - 1
+            except ValueError:
+                pass
+        # live clock for the card footer ("8:42 - 2nd", "Halftime"), as the NHL card shows it (2026-10-31)
+        status_detail = (((ev.get("status") or {}).get("type") or {}).get("shortDetail")
+                         or ((comp.get("status") or {}).get("type") or {}).get("shortDetail") or None)
         conn.execute(
             "INSERT OR REPLACE INTO games "
             "(game_id, date, start_time, home_team_id, away_team_id, "
             " home_score, away_score, status, season, week, venue, "
-            " updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+            " updated_at, home_linescore, away_linescore, periods, status_detail) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?, ?, ?, ?)",
             (eid, et_date, iso, h_id, a_id, h_score, a_score, status,
-              season, week, venue),
+              season, week, venue, h_ls, a_ls, periods, status_detail),
         )
         ingested += 1
     conn.commit()

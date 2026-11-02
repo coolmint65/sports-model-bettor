@@ -300,6 +300,7 @@ def fetch_scoreboard(date: str = "") -> list[dict]:
 
         game = {
             "date": game_date,
+            "start_time": game_date_raw,
             "home_team_id": home_team_id,
             "away_team_id": away_team_id,
             "home_score": home_score,

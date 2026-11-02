@@ -3,7 +3,7 @@
  *
  * Phase 2d-iv restyle: Tailwind tokens, three confidence variants
  * mapped to semantic colors (positive / primary / muted). The Q1
- * accent stays warning-amber. "NO PICK" empty state uses a dashed
+ * accent stays warning-amber. "NO LEAN" empty state uses a dashed
  * muted treatment so it reads as "we looked, nothing came back."
  *
  * Layout: [TYPE LABEL] [PICK TEXT] ────── [+EDGE%]
@@ -67,9 +67,9 @@ export default function EdgeBadge({ pick, confidence = 'lean', empty, accent, ty
           'flex items-center justify-center rounded-md border border-dashed border-border bg-muted/20',
           'px-3 py-1.5 text-[11px] font-bold uppercase tracking-widest text-muted-foreground',
         )}
-        title="Model found no +EV play in the calibrated edges"
+        title="No lean: nothing on this game clears the model's edge gates at the current prices"
       >
-        No pick
+        No lean
       </div>
     )
   }

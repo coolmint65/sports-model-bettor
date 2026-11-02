@@ -267,8 +267,10 @@ def fetch_schedule(start_date: str, end_date: str) -> list[dict]:
             month = int(game_date[5:7])
             season_start = yr if month >= 9 else yr - 1
 
+            start_time = g.get("startTimeUTC") or ""
             game = {
                 "date": game_date,
+                "start_time": start_time,
                 "home_team_id": home.get("id"),
                 "away_team_id": away.get("id"),
                 "home_score": _safe_int(home.get("score")) if status != "scheduled" else None,
@@ -340,9 +342,24 @@ def fetch_boxscore(game_id: int) -> dict | None:
             if gp.get("position", "") == "G":
                 away_goalies.append(gp)
 
-    # Starting goalie = goalie with most saves or first listed
-    home_goalie_id = home_goalies[0].get("playerId") if home_goalies else None
-    away_goalie_id = away_goalies[0].get("playerId") if away_goalies else None
+    # Starting goalie: the boxscore's own `starter` flag, else the goalie with the most
+    # ice time. (Was "first listed", which is often the backup who never played --
+    # e.g. 2025020873 listed J. Johansson 0:00 ahead of starter Vasilevskiy.)
+    def _starter(gs):
+        if not gs:
+            return None
+        flagged = [g for g in gs if g.get("starter") is True]
+        if flagged:
+            return flagged[0].get("playerId")
+        def _toi(g):
+            try:
+                m, s_ = str(g.get("toi") or "0:0").split(":")
+                return int(m) * 60 + int(s_)
+            except ValueError:
+                return 0
+        return max(gs, key=_toi).get("playerId")
+    home_goalie_id = _starter(home_goalies)
+    away_goalie_id = _starter(away_goalies)
 
     # Team game stats (the NHL API may nest these differently)
     home_shots = _safe_int(home_stats.get("sog"))
@@ -460,7 +477,10 @@ def fetch_boxscores_for_date(date_str: str) -> int:
 
     conn = get_conn()
     rows = conn.execute(
-        "SELECT game_id FROM nhl_games WHERE date = ? AND status = 'final' AND home_shots IS NULL",
+        # goalie ids too: the 10-26 box backfill fills shots first, and this used to skip any
+        # game with shots -- so goalie ids stopped being written from Oct 2025 (MintyBot 2026-10-31)
+        "SELECT game_id FROM nhl_games WHERE date = ? AND status = 'final' "
+        "AND (home_shots IS NULL OR home_goalie_id IS NULL OR away_goalie_id IS NULL)",
         (date_str,)
     ).fetchall()
 
@@ -863,12 +883,19 @@ def sync_nhl(full: bool = False) -> None:
         _progress("[2] Fetching rosters (32 teams, ~1 req/sec)...")
         fetch_rosters()
 
-        _progress("[3] Fetching season games...")
+        _progress("[3] Fetching season games (played + upcoming schedule)...")
         season = _current_season_str()
         yr = _season_start_year(season)
-        start_date = f"{yr}-10-01"
-        end_date = datetime.now().strftime("%Y-%m-%d")
-        fetch_schedule(start_date, end_date)
+        # Season can open in late September, so start mid-Sept; and ALSO fetch
+        # the next two weeks so the upcoming schedule (needed to record picks +
+        # props PRE-game) actually loads. The old range (Oct-1 -> today) ran
+        # backwards before the opener and never pulled future games, leaving
+        # nhl_games stale at season start (fixed 2026-09-28).
+        _today = datetime.now().strftime("%Y-%m-%d")
+        start_date = f"{yr}-09-15"
+        if start_date <= _today:
+            fetch_schedule(start_date, _today)
+        fetch_schedule(_today, (datetime.now() + timedelta(days=14)).strftime("%Y-%m-%d"))
 
         _progress("[4] Fetching boxscores for recent games...")
         # Fetch boxscores for the last 7 days

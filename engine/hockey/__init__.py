@@ -92,6 +92,14 @@ HOCKEY_LEAGUE_REGISTRY: dict[str, dict] = {
     },
 }
 
+# Smaller leagues REMOVED 2026-10-27 (Austin: "I don't care about the smaller ... leagues, let's
+# just remove them"; kept NHL only). Their entries stay above so a league comes back by deleting
+# it from this set; their data was archived to _archive_minorleagues_20261027.
+_REMOVED_2026_10_27 = frozenset({
+    "ahl", "pwhl", "aihl", "nzihl",
+})
+REMOVED_LEAGUES = {k: HOCKEY_LEAGUE_REGISTRY.pop(k) for k in sorted(_REMOVED_2026_10_27) if k in HOCKEY_LEAGUE_REGISTRY}
+
 
 def get_league_config(league: str) -> dict:
     if league not in HOCKEY_LEAGUE_REGISTRY:

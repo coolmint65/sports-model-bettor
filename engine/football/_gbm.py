@@ -43,6 +43,28 @@ def _is_trained(league: str) -> bool:
     return _model_path(league).exists()
 
 
+_BUNDLE_CACHE: dict = {}  # league -> (mtime, bundle)
+
+
+def _load_bundle(league: str):
+    path = _model_path(league)
+    try:
+        mt = path.stat().st_mtime
+    except OSError:
+        return None
+    cached = _BUNDLE_CACHE.get(league)
+    if cached is not None and cached[0] == mt:
+        return cached[1]
+    try:
+        import joblib
+        bundle = joblib.load(path)
+        _BUNDLE_CACHE[league] = (mt, bundle)
+        return bundle
+    except Exception as e:
+        logger.warning("[football:%s] GBM load failed: %s", league, e)
+        return None
+
+
 def predict_gbm(*, league: str, home_team_id: int, away_team_id: int,
                  expected_margin: float, expected_total: float,
                  spread: float | None = None,
@@ -61,13 +83,11 @@ def predict_gbm(*, league: str, home_team_id: int, away_team_id: int,
             "gbm_p_over":      None,
             "gbm_p_under":     None,
         }
-    # Trained-model branch — loaded lazily because joblib import is
-    # ~80ms cold-start. Falls back to None on any read error.
-    try:
-        import joblib
-        bundle = joblib.load(_model_path(league))
-    except Exception as e:
-        logger.warning("[football:%s] GBM load failed: %s", league, e)
+    # Load the model via an mtime-cached loader (Austin 2026-09-19): joblib.load
+    # per call ran ~3x/game x full slate = 200+ disk reads, adding ~10-20s to
+    # every compute once the GBM was enabled. Cache it; reload only if retrained.
+    bundle = _load_bundle(league)
+    if bundle is None:
         return {"gbm_trained": False, "gbm_p_home": None, "gbm_p_away": None,
                 "gbm_p_home_cover": None, "gbm_p_away_cover": None,
                 "gbm_p_over": None, "gbm_p_under": None}
@@ -130,7 +150,9 @@ def _build_features(*, league: str, home_team_id: int, away_team_id: int,
     """
     from ._elo import replay, INIT_ELO
     try:
-        ratings = replay(league)
+        # legacy=True: train() walks the win/loss Elo (_elo.update), so the features must too --
+        # CFB's serving ratings went points-based 2026-10-25 (different scale + priors).
+        ratings = replay(league, legacy=True)
     except Exception:
         return None
     r_h = ratings.get(int(home_team_id), INIT_ELO)
@@ -141,13 +163,21 @@ def _build_features(*, league: str, home_team_id: int, away_team_id: int,
     form_home = _recent_margin(league, home_team_id, n=4, as_home=True)
     form_away = _recent_margin(league, away_team_id, n=4, as_home=False)
 
-    return [
+    # 3-feature vector (Austin 2026-09-19): elo_diff + recent form per side —
+    # matches train(). Dropped expected_margin/total (train fed 0.0 there → a
+    # feature mismatch, and they duplicate what Elo already encodes).
+    _base = [
         float(elo_diff),
-        float(expected_margin),
-        float(expected_total),
         float(form_home if form_home is not None else 0.0),
         float(form_away if form_away is not None else 0.0),
     ]
+    # Market features (MintyBot 2026-10-16): the de-vigged line + line movement
+    # Elo never learned from. For a live pick the game is today, so query today's
+    # odds window. Leak-safe in train() (the close line is pre-game).
+    from datetime import date as _date
+    from ..gbm.market_features_football import extract_market_features as _mf, FEATURE_KEYS as _MFK
+    _m = _mf(league, home_team_id, away_team_id, _date.today().isoformat())
+    return _base + [float(_m[k]) for k in _MFK]
 
 
 def _recent_margin(league: str, team_id: int, *, n: int,
@@ -214,22 +244,44 @@ def train(league: str) -> dict:
     # time so each game's features are computed from PRE-game state
     # only (avoids leakage). Future expansion: walk-forward
     # calibration to fit per-market shrinkage.
-    from ._elo import update as _elo_update, INIT_ELO
+    from ._elo import update as _elo_update, INIT_ELO, DEFAULT_HFA, DEFAULT_K
+    from . import get_league_config as _glc
+    import numpy as _np
+    _cfg = _glc(league)
+    _hfa = _cfg.get("home_advantage") or DEFAULT_HFA
+    _k = _cfg.get("elo_k") or DEFAULT_K
     ratings: dict[int, float] = {}
+    form: dict[int, list] = {}
+    from ..gbm.market_features_football import extract_market_features as _mf_extract, FEATURE_KEYS as _MFK
     feats_ml = []; labels_ml = []
+    feats_sp = []; labels_sp = []
     for r in rows:
         h_id = int(r["home_team_id"]); a_id = int(r["away_team_id"])
+        hs = int(r["home_score"]); as_ = int(r["away_score"])
         r_h = ratings.get(h_id, INIT_ELO)
         r_a = ratings.get(a_id, INIT_ELO)
-        elo_diff = r_h - r_a
-        form_h = _recent_margin(league, h_id, n=4, as_home=True) or 0.0
-        form_a = _recent_margin(league, a_id, n=4, as_home=False) or 0.0
-        feats_ml.append([elo_diff, 0.0, 0.0, form_h, form_a])
-        labels_ml.append(int(int(r["home_score"]) > int(r["away_score"])))
-        n_h, n_a = _elo_update(r_h, r_a,
-                                home_score=int(r["home_score"]),
-                                away_score=int(r["away_score"]))
+        fh = form.get(h_id, []); fa = form.get(a_id, [])
+        # Leak-safe (Austin 2026-09-19): form from PRE-game games only — the old
+        # _recent_margin pulled the team's latest N games across ALL history, so a
+        # historical training row saw FUTURE results. Also aligns to the 3 features
+        # _build_features feeds at predict (was a train/predict mismatch: train fed
+        # 0.0 where predict feeds expected_margin/total).
+        form_h = float(_np.mean(fh[-4:])) if fh else 0.0
+        form_a = float(_np.mean(fa[-4:])) if fa else 0.0
+        _m = _mf_extract(league, h_id, a_id, str(r["date"]))
+        _mvec = [float(_m[k]) for k in _MFK]
+        _base = [r_h - r_a, form_h, form_a] + _mvec
+        feats_ml.append(_base)
+        labels_ml.append(int(hs > as_))
+        if _m["has_market_data"] and _m["market_spread_line"] != 0.0:
+            _sl = _m["market_spread_line"]
+            feats_sp.append(_base + [_sl])
+            labels_sp.append(int((hs - as_) > -_sl))
+        n_h, n_a = _elo_update(r_h, r_a, home_score=hs, away_score=as_,
+                                hfa=_hfa, k=_k)
         ratings[h_id] = n_h; ratings[a_id] = n_a
+        form.setdefault(h_id, []).append(hs - as_)
+        form.setdefault(a_id, []).append(as_ - hs)
 
     if not feats_ml:
         return {"trained": False, "n_games": n_final, "error": "no usable rows"}
@@ -238,15 +290,20 @@ def train(league: str) -> dict:
                                          learning_rate=0.05,
                                          random_state=42)
     ml.fit(feats_ml, labels_ml)
-    bundle = {"ml": ml, "spread": None, "total": None,
+    spread_model = None
+    if len(feats_sp) >= 100:
+        spread_model = HistGradientBoostingClassifier(max_iter=200, max_depth=4,
+                                                       learning_rate=0.05, random_state=42)
+        spread_model.fit(feats_sp, labels_sp)
+    bundle = {"ml": ml, "spread": spread_model, "total": None,
               "trained_at": str(__import__("datetime").datetime.now()),
-              "n_games": n_final}
+              "n_games": n_final, "n_spread": len(feats_sp)}
     out_path = _model_path(league)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(bundle, out_path)
     logger.info("[football:%s] GBM trained n=%d → %s",
                 league, n_final, out_path)
-    return {"trained": True, "n_games": n_final, "path": str(out_path)}
+    return {"trained": True, "n_games": n_final, "n_spread": len(feats_sp), "path": str(out_path)}
 
 
 def _cli() -> int:

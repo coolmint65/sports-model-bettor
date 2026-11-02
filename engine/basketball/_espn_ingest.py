@@ -31,8 +31,10 @@ logger = logging.getLogger(__name__)
 
 # ── HTTP ─────────────────────────────────────────────────────
 
-_USER_AGENT = "SportsBettor/1.0 (basketball-framework)"
+_USER_AGENT = "curl/8.4.0"
 
+
+_DETAIL_COL: set = set()   # (league, table) pairs whose games table has status_detail
 
 def _fetch(url: str, retries: int = 3) -> dict | list | None:
     for attempt in range(retries):
@@ -255,8 +257,11 @@ def _resolve_team_id(league: str, team: dict) -> tuple[int, bool]:
         return (tid, True)
     # 3. Abbreviation → existing team_id (handles the California /
     # Utah SL case where the sub-league ships franchise-alias teams
-    # with different ids but the same abbreviation).
-    if abbr:
+    # with different ids but the same abbreviation). NOT for college:
+    # ESPN's college ids are one clean namespace while ~900 schools share
+    # abbreviations (UNI = Northern Iowa and Union (TN)) -- aliasing would
+    # merge two schools' games into one rating (MintyBot 2026-10-26).
+    if abbr and get_league_config(league).get("model") != "ratings":
         alias = conn.execute(
             f"SELECT id FROM {tbl} WHERE UPPER(abbreviation) = ? "
             f"ORDER BY id LIMIT 1",
@@ -293,6 +298,12 @@ def _upsert_game(league: str, ev: dict) -> bool:
     was written."""
     conn = get_conn(league)
     g_tbl = games_table(league)
+    if (league, g_tbl) not in _DETAIL_COL:
+        try:
+            conn.execute(f"ALTER TABLE {g_tbl} ADD COLUMN status_detail TEXT")
+        except Exception:
+            pass   # already there
+        _DETAIL_COL.add((league, g_tbl))
     comp = (ev.get("competitions") or [{}])[0]
     competitors = comp.get("competitors") or []
     if len(competitors) < 2:
@@ -317,8 +328,16 @@ def _upsert_game(league: str, ev: dict) -> bool:
             (away.get("team") or {}).get("abbreviation"),
         )
         return False
-    state = ((ev.get("status") or {}).get("type") or {}).get("state") or "pre"
+    st_type = (ev.get("status") or {}).get("type") or {}
+    state = st_type.get("state") or "pre"
     status = "final" if state == "post" else ("in" if state == "in" else "scheduled")
+    # ESPN puts postponed / cancelled games in state "post" too (completed: false), which
+    # landed them as 0-0 finals -- the settler then graded Unders as wins on games never
+    # played (63 NCAAM + 105 NCAAW rows, 2022-26). (MintyBot 2026-10-26)
+    st_name = (st_type.get("name") or "").upper()
+    if state == "post" and (st_type.get("completed") is False
+                            or "CANCEL" in st_name or "POSTPONE" in st_name):
+        status = "postponed" if "POSTPONE" in st_name else "cancelled"
     home_score = _safe_int(home.get("score"))
     away_score = _safe_int(away.get("score"))
     # Period splits — ESPN ships each period on competitor.linescores,
@@ -345,6 +364,9 @@ def _upsert_game(league: str, ev: dict) -> bool:
     game_id = str(ev.get("id"))
     iso_date = ev.get("date") or comp.get("date") or ""
     date = _us_eastern_date(iso_date)
+    # Site + conference flags (college ratings home edge; harmless for the pros).
+    neutral = 1 if comp.get("neutralSite") else 0
+    conf_game = 1 if comp.get("conferenceCompetition") else 0
 
     conn.execute(
         f"INSERT OR REPLACE INTO {g_tbl} "
@@ -352,8 +374,8 @@ def _upsert_game(league: str, ev: dict) -> bool:
         f" home_score, away_score, "
         f" home_q1, away_q1, home_q2, away_q2, "
         f" home_q3, away_q3, home_q4, away_q4, "
-        f" status, season, external_id) "
-        f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        f" status, season, external_id, neutral, conf_game, status_detail) "
+        f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             game_id, date, iso_date, home_id, away_id,
             # Persist scores for in-progress games too — the live card
@@ -366,7 +388,8 @@ def _upsert_game(league: str, ev: dict) -> bool:
             home_quarters[1], away_quarters[1],
             home_quarters[2], away_quarters[2],
             home_quarters[3], away_quarters[3],
-            status, int(season), game_id,
+            status, int(season), game_id, neutral, conf_game,
+            st_type.get("shortDetail") or None,   # live clock for the card ("4:12 - 2nd Half", "Halftime")
         ),
     )
     return True
@@ -405,11 +428,9 @@ def _safe_int(v, default=0):
 
 
 def _current_season_year(league: str) -> int:
-    cfg = get_league_config(league)
-    months = cfg.get("season_months") or (10,)
-    primary = months[0]
-    now = datetime.now()
-    return now.year if now.month >= primary else now.year - 1
+    # ESPN's season year == our DB label (college: END year) -- one shared rule.
+    from ._config import season_label
+    return season_label(league, datetime.now())
 
 
 def ingest_today(league: str, date: str | None = None) -> dict:
@@ -436,9 +457,13 @@ def ingest_today(league: str, date: str | None = None) -> dict:
             out["ingested"] += sub.get("ingested", 0)
             out["skipped"] += sub.get("skipped", 0)
         from ._config import is_far_east
-        if is_far_east(league):
-            tmrw = (today_dt + timedelta(days=1)).strftime("%Y-%m-%d")
-            sub = _ingest_one_date(league, tmrw)
+        # College (2026-10-29): Hard Rock posts college games ~4-5 days out, and the HR odds
+        # resolver can only attach an event to a game we have -- opening night had 62 of 182
+        # games because nothing ingested days ahead. Sweep the next 5 days for ncaam/ncaaw.
+        ahead = 5 if league in ("ncaam", "ncaaw") else 2   # WNBA etc.: 2 days ahead, so the next game has a card the night before (Austin 2026-10-30)
+        for fwd in range(1, ahead + 1):
+            d = (today_dt + timedelta(days=fwd)).strftime("%Y-%m-%d")
+            sub = _ingest_one_date(league, d)
             out["ingested"] += sub.get("ingested", 0)
             out["skipped"] += sub.get("skipped", 0)
         return out

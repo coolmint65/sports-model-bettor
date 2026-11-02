@@ -77,16 +77,10 @@ def _game_key_for(sport: str, league: str, native_id: Any) -> GameKey:
         return GameKey.for_soccer(league, nid)
     if sport == "football":
         return GameKey.for_football(league, nid)
-    if sport == "baseball":
-        return GameKey.for_baseball(league, nid)
     if sport == "hockey":
         return GameKey.for_hockey(league, nid)
     if sport == "tennis":
         return GameKey.for_tennis(league, nid)
-    if sport == "golf":
-        return GameKey.for_golf(league, nid)
-    if sport == "motorsports":
-        return GameKey.for_motorsports(league, nid)
     # Fallback — generic format
     return GameKey(sport=sport, league=league, native_id=nid)
 
@@ -210,11 +204,11 @@ def ensure_adapters_registered() -> None:
     from . import (
         _mlb_adapter, _nhl_adapter, _nba_adapter,
         _basketball_adapter, _soccer_adapter,
-        _football_adapter, _baseball_adapter, _hockey_adapter,
-        _tennis_adapter, _golf_adapter, _motorsports_adapter,
+        _football_adapter, _hockey_adapter,
+        _tennis_adapter,
     )
     # Touch them so static analyzers don't flag unused imports.
     _ = (_mlb_adapter, _nhl_adapter, _nba_adapter,
          _basketball_adapter, _soccer_adapter,
-         _football_adapter, _baseball_adapter, _hockey_adapter,
-         _tennis_adapter, _golf_adapter, _motorsports_adapter)
+         _football_adapter, _hockey_adapter,
+         _tennis_adapter)

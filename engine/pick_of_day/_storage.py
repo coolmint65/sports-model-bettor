@@ -51,16 +51,6 @@ def _get_conn(sport: str):
                 return mod.get_conn()
         except Exception:
             pass
-        # Baseball framework dispatch (college today, others later).
-        # Same shape as basketball/hockey — per-league DB under
-        # data/baseball/<league>.db.
-        try:
-            from ..baseball import LEAGUE_REGISTRY as _BB_REG
-            from ..baseball._db import get_conn as base_get_conn
-            if sport in _BB_REG:
-                return base_get_conn(sport)
-        except Exception:
-            pass
         # Soccer framework dispatch. Per-league DB under
         # data/soccer/<league>.db; shared "picks" table convention.
         try:

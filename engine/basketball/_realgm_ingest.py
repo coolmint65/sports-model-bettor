@@ -151,7 +151,7 @@ def ingest_teams(league: str) -> dict:
             f"SELECT id, abbreviation FROM {t_tbl} WHERE name = ?",
             (team_name,),
         ).fetchone()
-        if existing:
+        if existing or team_name.lower() in _team_id_lookup(conn, t_tbl, league):   # alias / short-name of a stored club
             updated += 1
             continue
         abbr = _derive_abbreviation(team_name, used)
@@ -172,18 +172,37 @@ def ingest_teams(league: str) -> dict:
 
 # ── Game ingest ────────────────────────────────────────────────
 
-def _team_id_lookup(conn, t_tbl: str) -> dict[str, int]:
+def _team_id_lookup(conn, t_tbl: str, league: str | None = None) -> dict[str, int]:
     """Build {name_lower: id} for the league. RealGM ships variation in
     team display ('Beijing' vs 'Beijing Shougang'), so we also index
     the first word so HR-shipped abbreviated names still resolve."""
     out: dict[str, int] = {}
-    for r in conn.execute(
+    rows = conn.execute(
         f"SELECT id, name FROM {t_tbl} WHERE name IS NOT NULL"
-    ).fetchall():
+    ).fetchall()
+    # First word only when no other team shares it: CBA has two Beijing and two Zhejiang clubs, and the
+    # last one written used to win (2026-10-30 duplicate games under the wrong team).
+    first_ids: dict[str, set] = {}
+    for r in rows:
+        nm = (r["name"] or "").strip()
+        if nm:
+            first_ids.setdefault(nm.split()[0].lower(), set()).add(int(r["id"]))
+    for r in rows:
         nm = (r["name"] or "").strip()
         out[nm.lower()] = int(r["id"])
-        if " " in nm:
+        if " " in nm and len(first_ids[nm.split()[0].lower()]) == 1:
             out[nm.split()[0].lower()] = int(r["id"])
+    # Explicit per-league aliases (registry ``team_aliases``: source name -> canonical DB name). NBL 2026-10-29:
+    # RealGM ships "South East Melbourne" / "New Zealand" for clubs stored as "South East Melbourne Phoenix" /
+    # "New Zealand Breakers"; the first-word index can't bridge those, so they were registered twice.
+    if league:
+        try:
+            for src, canon in (get_league_config(league).get("team_aliases") or {}).items():
+                tid = out.get(canon.lower())
+                if tid:
+                    out[src.lower()] = tid
+        except Exception:
+            pass
     return out
 
 
@@ -194,7 +213,7 @@ def _upsert_game(league: str, row: dict, season: int) -> bool:
     t_tbl = teams_table(league)
     g_tbl = games_table(league)
 
-    lookup = _team_id_lookup(conn, t_tbl)
+    lookup = _team_id_lookup(conn, t_tbl, league)
     home_id = lookup.get((row.get("home") or "").lower())
     away_id = lookup.get((row.get("away") or "").lower())
     if not (home_id and away_id):

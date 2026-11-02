@@ -34,6 +34,8 @@ _SPORT_DB_FACTORY: dict[str, tuple] = {
     "nhl": ("engine.nhl_db", "get_conn", None),
     "nba": ("engine.nba_db", "get_conn", None),
     "ufl": ("engine.football._db", "get_conn", "ufl"),
+    "nfl": ("engine.football._db", "get_conn", "nfl"),
+    "cfb": ("engine.football._db", "get_conn", "cfb"),
 }
 
 

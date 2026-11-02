@@ -9,9 +9,43 @@ import logging
 from datetime import datetime, timedelta
 
 from ._helpers import _get_nhl_db
-from ._scoreboard import _fetch_nhl_scoreboard
+from ._scoreboard import _fetch_nhl_scoreboard, build_game_state_map
 
 logger = logging.getLogger(__name__)
+
+
+# ESPN scoreboard uses non-standard abbrs for a few teams (SJ, TB, LA,
+# NJ) while the model records the league-standard ones (SJS, TBL, LAK,
+# NJD). Expand each side's forms with its whole alias group so a pick
+# in either convention resolves (else SJ/TB/LA/NJ picks never settle
+# and false-push to "P" after 7 days).
+_ABBR_ALIASES = [{"SJ", "SJS"}, {"TB", "TBL"}, {"LA", "LAK"},
+                 {"NJ", "NJD"}, {"UTA", "UTAH"}]
+
+
+def _resolve_abbr(raw, game):
+    """Resolve a pick's team token(s) to this game's home/away abbr.
+
+    Accepts an abbreviation ("PIT"), a full display name ("Pittsburgh
+    Penguins"), a location ("Pittsburgh") or a nickname ("Penguins") --
+    matched case-insensitively against the forms the scoreboard reported
+    for each side. Returns the matching side's abbr, else the cleaned
+    input unchanged so callers comparing against h/a simply abstain
+    instead of mis-grading. Fail-open: never raises."""
+    try:
+        s = str(raw or "").strip()
+        if not s:
+            return ""
+        up = s.upper()
+        for f in (game.get("home_forms") or []):
+            if f and up == str(f).strip().upper():
+                return game.get("home_abbr", s)
+        for f in (game.get("away_forms") or []):
+            if f and up == str(f).strip().upper():
+                return game.get("away_abbr", s)
+        return s
+    except Exception:
+        return str(raw or "").strip()
 
 
 def settle_picks() -> dict:
@@ -70,68 +104,7 @@ def settle_picks() -> dict:
     # DNB P1) can settle as soon as their period ends — no waiting
     # for the full game. Full-game bet types (ML, O/U, PL, Team Total,
     # Total O/E, Overtime, BTS) still gate on `is_completed`.
-    final_scores = {}
-    for d in dates:
-        events = _fetch_nhl_scoreboard(d)
-        for event in events:
-            eid = event.get("id", "")
-            comp = event.get("competitions", [{}])[0]
-            status_info = comp.get("status", {})
-            status = status_info.get("type", {})
-            state = status.get("state", "pre")
-            if state == "pre":
-                continue
-            is_completed = status.get("completed", False)
-
-            cur_period = status_info.get("period") or 0
-            detail = (status.get("detail") or status.get("shortDetail")
-                      or "").lower()
-            went_to_ot = (is_completed and (cur_period > 3
-                          or "ot" in detail or "shootout" in detail))
-
-            home_score = 0
-            away_score = 0
-            h_abbr = ""
-            a_abbr = ""
-            home_periods: list[int] = []
-            away_periods: list[int] = []
-            for c in comp.get("competitors", []):
-                team = c.get("team", {})
-                raw = c.get("score", "0")
-                score = int(raw) if isinstance(raw, (int, str)) and str(raw).isdigit() else 0
-                ls_raw = c.get("linescores") or []
-                periods = []
-                for ls in ls_raw:
-                    val = ls.get("value")
-                    try:
-                        periods.append(int(val))
-                    except (TypeError, ValueError):
-                        periods.append(0)
-                if c.get("homeAway") == "home":
-                    home_score = score
-                    h_abbr = team.get("abbreviation", "")
-                    home_periods = periods
-                else:
-                    away_score = score
-                    a_abbr = team.get("abbreviation", "")
-                    away_periods = periods
-
-            linescore_depth = min(len(home_periods), len(away_periods))
-            if is_completed:
-                periods_locked = linescore_depth
-            else:
-                periods_locked = max(0, min(linescore_depth, cur_period - 1))
-
-            final_scores[eid] = {
-                "home_abbr": h_abbr, "away_abbr": a_abbr,
-                "home_score": home_score, "away_score": away_score,
-                "total": home_score + away_score,
-                "home_periods": home_periods,
-                "away_periods": away_periods,
-                "went_to_ot": went_to_ot,
-                "is_completed": is_completed,
-                "periods_locked": periods_locked,
-            }
+    final_scores = build_game_state_map(dates)
 
     # Fetch current NHL odds for closing line capture
     closing_odds_map = _fetch_closing_map_for_settle()
@@ -140,214 +113,248 @@ def settle_picks() -> dict:
     wins = 0
     losses = 0
 
-    for pick in pending:
-        pick = dict(pick)
-        game_id = pick["game_id"]
+    for _rp in pending:
+        pick = dict(_rp)
+        try:
+            game_id = pick["game_id"]
 
-        game = final_scores.get(game_id)
-        if not game:
-            continue
+            game = final_scores.get(game_id)
+            if not game:
+                continue
 
-        hs = game["home_score"]
-        as_ = game["away_score"]
-        total = game["total"]
-        h = game["home_abbr"]
-        a = game["away_abbr"]
+            hs = game["home_score"]
+            as_ = game["away_score"]
+            total = game["total"]
+            h = game["home_abbr"]
+            a = game["away_abbr"]
 
-        # Settle-time closing-odds capture removed 2026-05-02 — see
-        # engine.tracker._settle for rationale. PRE-game stamps via
-        # capture_closing_odds() are the only canonical source.
+            # Settle-time closing-odds capture removed 2026-05-02 — see
+            # engine.tracker._settle for rationale. PRE-game stamps via
+            # capture_closing_odds() are the only canonical source.
 
-        bt = pick["bet_type"]
-        pk = pick["pick"]
-        odds = pick["odds"] or -110
-        result = None
+            bt = pick["bet_type"]
+            pk = pick["pick"]
+            odds = pick["odds"] or -110
+            result = None
 
-        # Per-bet-type readiness check.
-        _FULL_GAME_TYPES = {
-            "ML", "O/U", "ALT O/U", "PL", "ALT PL",
-            "Team Total", "Total O/E", "Overtime", "BTS",
-        }
-        if bt in _FULL_GAME_TYPES and not game.get("is_completed", False):
-            continue
+            # Per-bet-type readiness check.
+            _FULL_GAME_TYPES = {
+                "ML", "O/U", "ALT O/U", "PL", "ALT PL",
+                "Team Total", "Total O/E", "Overtime", "BTS",
+            }
+            if bt in _FULL_GAME_TYPES and not game.get("is_completed", False):
+                continue
 
-        if bt == "ML":
-            home_won = hs > as_
-            if pk == h:
-                won = home_won
-            else:
-                won = not home_won
-            result = "W" if won else "L"
+            # -- Unified grading core (audit T2 migration) --
+            # Core-first for covered markets; legacy fallback otherwise; any
+            # core error falls back to legacy -- settlement never breaks.
+            try:
+                from ..grading import nhl_adapter as _core_nhl
+                _cr = _core_nhl.grade_pick(pick, game)
+            except Exception as _ce:
+                logger.warning("nhl core grade failed, legacy fallback: %s", _ce)
+                _cr = None
+            if _cr is not None:
+                result = _cr
+            elif bt == "ML":
+                home_won = hs > as_
+                _pt = _resolve_abbr(pk, game)
+                if _pt == h:
+                    won = home_won
+                elif _pt == a:
+                    won = not home_won
+                else:
+                    continue  # abstain: pick matches neither side (was assume-away)
+                result = "W" if won else "L"
 
-        elif bt in ("O/U", "ALT O/U"):
-            if "Over" in pk:
-                line = float(pk.split()[-1])
-                if total > line:
+            elif bt in ("O/U", "ALT O/U"):
+                if "Over" in pk:
+                    line = float(pk.split()[-1])
+                    if total > line:
+                        result = "W"
+                    elif total < line:
+                        result = "L"
+                    else:
+                        result = "P"
+                else:
+                    line = float(pk.split()[-1])
+                    if total < line:
+                        result = "W"
+                    elif total > line:
+                        result = "L"
+                    else:
+                        result = "P"
+
+            elif bt in ("PL", "ALT PL"):
+                # Line = last token when it is a number; team = everything
+                # before it. Handles "PIT +1.5" and full-name mirrors like
+                # "Pittsburgh Penguins +1.5" (POTD). float() on the team name
+                # was the crash that aborted the entire settle batch.
+                parts = pk.split()
+                spread = 1.5
+                team_raw = pk
+                if parts:
+                    try:
+                        spread = float(parts[-1])
+                        team_raw = " ".join(parts[:-1]) or parts[0]
+                    except ValueError:
+                        team_raw = pk
+                pick_team = _resolve_abbr(team_raw, game)
+
+                if pick_team == h:
+                    team_margin = hs - as_
+                elif pick_team == a:
+                    team_margin = as_ - hs
+                else:
+                    continue  # unresolved team -> abstain (was assume-away)
+
+                if team_margin + spread > 0:
                     result = "W"
-                elif total < line:
+                elif team_margin + spread == 0:
+                    result = "P"
+                else:
                     result = "L"
-                else:
-                    result = "P"
+
+            # ── Phase 1 derivative markets ──
+            elif bt == "Team Total":
+                parts = pk.split()
+                if len(parts) >= 3:
+                    pick_team = parts[0]
+                    direction = parts[1].lower()
+                    try:
+                        line = float(parts[2])
+                    except ValueError:
+                        continue
+                    team_goals = hs if pick_team == h else as_
+                    if team_goals > line:
+                        result = "W" if direction == "over" else "L"
+                    elif team_goals < line:
+                        result = "L" if direction == "over" else "W"
+                    else:
+                        result = "P"
+
+            elif bt == "Period Total":
+                home_periods = game.get("home_periods") or []
+                away_periods = game.get("away_periods") or []
+                parts = pk.split()
+                if len(parts) >= 3 and parts[0].startswith("P"):
+                    try:
+                        period_n = int(parts[0][1:])
+                        line = float(parts[2])
+                    except ValueError:
+                        continue
+                    direction = parts[1].lower()
+                    if period_n < 1 or period_n > game.get("periods_locked", 0):
+                        continue
+                    period_total = (home_periods[period_n - 1]
+                                    + away_periods[period_n - 1])
+                    if period_total > line:
+                        result = "W" if direction == "over" else "L"
+                    elif period_total < line:
+                        result = "L" if direction == "over" else "W"
+                    else:
+                        result = "P"
+
+            elif bt == "Period BTS":
+                home_periods = game.get("home_periods") or []
+                away_periods = game.get("away_periods") or []
+                parts = pk.split()
+                if len(parts) >= 3 and parts[0].startswith("P"):
+                    try:
+                        period_n = int(parts[0][1:])
+                    except ValueError:
+                        continue
+                    direction = parts[2].lower()
+                    if period_n < 1 or period_n > game.get("periods_locked", 0):
+                        continue
+                    bts_yes = (home_periods[period_n - 1] > 0
+                               and away_periods[period_n - 1] > 0)
+                    if direction == "yes":
+                        result = "W" if bts_yes else "L"
+                    else:
+                        result = "W" if not bts_yes else "L"
+
+            elif bt == "Period DNB":
+                home_periods = game.get("home_periods") or []
+                away_periods = game.get("away_periods") or []
+                parts = pk.split()
+                # Accept both old "P{n} DNB {team}" (3 tokens) and new
+                # "P{n} {team}" (2 tokens) formats. The "DNB" label was
+                # confusing the user; new picks drop it. Settler walks
+                # tokens to find the team rather than hard-indexing.
+                if len(parts) >= 2 and parts[0].startswith("P"):
+                    try:
+                        period_n = int(parts[0][1:])
+                    except ValueError:
+                        continue
+                    # Team is the last non-"DNB" token
+                    pick_team = next((t for t in reversed(parts[1:]) if t != "DNB"), "")
+                    if not pick_team:
+                        continue
+                    if period_n < 1 or period_n > game.get("periods_locked", 0):
+                        continue
+                    hp = home_periods[period_n - 1]
+                    ap = away_periods[period_n - 1]
+                    if hp == ap:
+                        result = "P"  # tied period pushes
+                    elif pick_team == h:
+                        result = "W" if hp > ap else "L"
+                    else:
+                        result = "W" if ap > hp else "L"
+
+            elif bt == "Total O/E":
+                parts = pk.split()
+                if len(parts) >= 2:
+                    direction = parts[1].lower()
+                    is_odd = (total % 2 == 1)
+                    if direction == "odd":
+                        result = "W" if is_odd else "L"
+                    else:
+                        result = "W" if not is_odd else "L"
+
+            elif bt == "Overtime":
+                went_to_ot = game.get("went_to_ot", False)
+                parts = pk.split()
+                if len(parts) >= 2:
+                    direction = parts[1].lower()
+                    if direction == "yes":
+                        result = "W" if went_to_ot else "L"
+                    else:
+                        result = "W" if not went_to_ot else "L"
+
+            elif bt == "BTS":
+                bts_yes = (hs > 0 and as_ > 0)
+                parts = pk.split()
+                if len(parts) >= 2:
+                    direction = parts[1].lower()
+                    if direction == "yes":
+                        result = "W" if bts_yes else "L"
+                    else:
+                        result = "W" if not bts_yes else "L"
+
+            if result is None:
+                continue
+
+            if result == "W":
+                profit = (odds if odds > 0 else 100 / abs(odds) * 100)
+                wins += 1
+            elif result == "L":
+                profit = -100
+                losses += 1
             else:
-                line = float(pk.split()[-1])
-                if total < line:
-                    result = "W"
-                elif total > line:
-                    result = "L"
-                else:
-                    result = "P"
+                profit = 0
 
-        elif bt in ("PL", "ALT PL"):
-            parts = pk.split()
-            pick_team = parts[0] if parts else ""
-            spread = float(parts[1]) if len(parts) > 1 else 1.5
-
-            if pick_team == h:
-                team_margin = hs - as_
-            else:
-                team_margin = as_ - hs
-
-            if team_margin + spread > 0:
-                result = "W"
-            elif team_margin + spread == 0:
-                result = "P"
-            else:
-                result = "L"
-
-        # ── Phase 1 derivative markets ──
-        elif bt == "Team Total":
-            parts = pk.split()
-            if len(parts) >= 3:
-                pick_team = parts[0]
-                direction = parts[1].lower()
-                try:
-                    line = float(parts[2])
-                except ValueError:
-                    continue
-                team_goals = hs if pick_team == h else as_
-                if team_goals > line:
-                    result = "W" if direction == "over" else "L"
-                elif team_goals < line:
-                    result = "L" if direction == "over" else "W"
-                else:
-                    result = "P"
-
-        elif bt == "Period Total":
-            home_periods = game.get("home_periods") or []
-            away_periods = game.get("away_periods") or []
-            parts = pk.split()
-            if len(parts) >= 3 and parts[0].startswith("P"):
-                try:
-                    period_n = int(parts[0][1:])
-                    line = float(parts[2])
-                except ValueError:
-                    continue
-                direction = parts[1].lower()
-                if period_n < 1 or period_n > game.get("periods_locked", 0):
-                    continue
-                period_total = (home_periods[period_n - 1]
-                                + away_periods[period_n - 1])
-                if period_total > line:
-                    result = "W" if direction == "over" else "L"
-                elif period_total < line:
-                    result = "L" if direction == "over" else "W"
-                else:
-                    result = "P"
-
-        elif bt == "Period BTS":
-            home_periods = game.get("home_periods") or []
-            away_periods = game.get("away_periods") or []
-            parts = pk.split()
-            if len(parts) >= 3 and parts[0].startswith("P"):
-                try:
-                    period_n = int(parts[0][1:])
-                except ValueError:
-                    continue
-                direction = parts[2].lower()
-                if period_n < 1 or period_n > game.get("periods_locked", 0):
-                    continue
-                bts_yes = (home_periods[period_n - 1] > 0
-                           and away_periods[period_n - 1] > 0)
-                if direction == "yes":
-                    result = "W" if bts_yes else "L"
-                else:
-                    result = "W" if not bts_yes else "L"
-
-        elif bt == "Period DNB":
-            home_periods = game.get("home_periods") or []
-            away_periods = game.get("away_periods") or []
-            parts = pk.split()
-            # Accept both old "P{n} DNB {team}" (3 tokens) and new
-            # "P{n} {team}" (2 tokens) formats. The "DNB" label was
-            # confusing the user; new picks drop it. Settler walks
-            # tokens to find the team rather than hard-indexing.
-            if len(parts) >= 2 and parts[0].startswith("P"):
-                try:
-                    period_n = int(parts[0][1:])
-                except ValueError:
-                    continue
-                # Team is the last non-"DNB" token
-                pick_team = next((t for t in reversed(parts[1:]) if t != "DNB"), "")
-                if not pick_team:
-                    continue
-                if period_n < 1 or period_n > game.get("periods_locked", 0):
-                    continue
-                hp = home_periods[period_n - 1]
-                ap = away_periods[period_n - 1]
-                if hp == ap:
-                    result = "P"  # tied period pushes
-                elif pick_team == h:
-                    result = "W" if hp > ap else "L"
-                else:
-                    result = "W" if ap > hp else "L"
-
-        elif bt == "Total O/E":
-            parts = pk.split()
-            if len(parts) >= 2:
-                direction = parts[1].lower()
-                is_odd = (total % 2 == 1)
-                if direction == "odd":
-                    result = "W" if is_odd else "L"
-                else:
-                    result = "W" if not is_odd else "L"
-
-        elif bt == "Overtime":
-            went_to_ot = game.get("went_to_ot", False)
-            parts = pk.split()
-            if len(parts) >= 2:
-                direction = parts[1].lower()
-                if direction == "yes":
-                    result = "W" if went_to_ot else "L"
-                else:
-                    result = "W" if not went_to_ot else "L"
-
-        elif bt == "BTS":
-            bts_yes = (hs > 0 and as_ > 0)
-            parts = pk.split()
-            if len(parts) >= 2:
-                direction = parts[1].lower()
-                if direction == "yes":
-                    result = "W" if bts_yes else "L"
-                else:
-                    result = "W" if not bts_yes else "L"
-
-        if result is None:
+            conn.execute("""
+                UPDATE nhl_picks SET result = ?, profit = ?, settled_at = datetime('now')
+                WHERE id = ?
+            """, (result, round(profit, 2), pick["id"]))
+            settled += 1
+        except Exception as _pe:
+            logger.warning(
+                "NHL settle: skipped bad pick id=%s %s '%s': %s",
+                pick.get("id"), pick.get("bet_type"), pick.get("pick"), _pe,
+            )
             continue
-
-        if result == "W":
-            profit = (odds if odds > 0 else 100 / abs(odds) * 100)
-            wins += 1
-        elif result == "L":
-            profit = -100
-            losses += 1
-        else:
-            profit = 0
-
-        conn.execute("""
-            UPDATE nhl_picks SET result = ?, profit = ?, settled_at = datetime('now')
-            WHERE id = ?
-        """, (result, round(profit, 2), pick["id"]))
-        settled += 1
 
     conn.commit()
 

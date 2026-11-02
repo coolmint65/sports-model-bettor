@@ -24,15 +24,14 @@ const SPORT_LABEL = {
   mlb: 'MLB', nhl: 'NHL', nba: 'NBA',
   basketball: 'Basketball', hockey: 'Hockey',
   soccer: 'Soccer', football: 'Football',
-  baseball: 'College Baseball',
-  tennis: 'Tennis', golf: 'Golf', motorsports: 'Motorsports',
+  tennis: 'Tennis',
 }
 
 const SPORT_ICON = {
   mlb: '⚾', nhl: '🏒', nba: '🏀',
   basketball: '🏀', hockey: '🏒',
-  soccer: '⚽', football: '🏈', baseball: '⚾',
-  tennis: '🎾', golf: '⛳', motorsports: '🏎',
+  soccer: '⚽', football: '🏈',
+  tennis: '🎾',
 }
 
 const RESULT_OPTS = [

@@ -182,6 +182,9 @@ def ingest_teams(league: str) -> int:
 
 # ── Matches / scoreboard ────────────────────────────────────
 
+_NATIONAL_TEAM_LEAGUES = frozenset({"fifa_internationals", "fifa_world_cup"})
+
+
 def _upsert_match(league: str, ev: dict) -> bool:
     """Upsert one ESPN event into matches. Returns True when written."""
     conn = get_conn(league)
@@ -250,10 +253,14 @@ def _upsert_match(league: str, ev: dict) -> bool:
     if is_aet_or_pen:
         home_reg = _reg_score_from_linescores(home)
         away_reg = _reg_score_from_linescores(away)
-        home_score = (home_reg if home_reg is not None
-                      else _safe_int(home.get("score")))
-        away_score = (away_reg if away_reg is not None
-                      else _safe_int(away.get("score")))
+        # Knockout that went to ET/pens: FT markets (ML/totals/DNB) settle
+        # on the REGULATION score, not the ET-inclusive aggregate ESPN puts
+        # in `score`. When we can't derive regulation (scoreboard endpoint
+        # ships no linescores), leave the score UNSET rather than stamp the
+        # ET total and phantom-grade -- the pick stays pending for a
+        # regulation backfill (audit T1/T2).
+        home_score = home_reg
+        away_score = away_reg
     else:
         home_score = _safe_int(home.get("score"))
         away_score = _safe_int(away.get("score"))
@@ -316,7 +323,12 @@ def _upsert_match(league: str, ev: dict) -> bool:
         k = (s or "").strip().lower()
         return _ALIAS.get(k, k)
 
-    if venue_country and (home_country or away_country):
+    # National-team competitions only (MintyBot 2026-10-28): for a CLUB, ESPN's team.location is
+    # its city ("London", "Manchester"), which never equals the venue country ("England"), so
+    # this branch flagged EVERY club match neutral -- every EPL fixture this season was priced
+    # with no home edge, off the Elo fallback (the xG model only runs for home_side == "home").
+    # Club leagues use ESPN's explicit neutralSite flag (cup finals) and are home games otherwise.
+    if league in _NATIONAL_TEAM_LEAGUES and venue_country and (home_country or away_country):
         vc = _norm(venue_country)
         hc = _norm(home_country)
         ac = _norm(away_country)

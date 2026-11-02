@@ -1,0 +1,407 @@
+[
+ {
+  "id": 334,
+  "old_result": "W",
+  "old_profit": 90.9090909090909,
+  "old_settled_at": "2026-05-18T21:30:31.086448+00:00",
+  "pick": "Amit Vales",
+  "bet_type": "ML",
+  "date": "2026-05-18"
+ },
+ {
+  "id": 1069,
+  "old_result": "W",
+  "old_profit": 160.0,
+  "old_settled_at": "2026-07-03T21:43:21.783498+00:00",
+  "pick": "Robin Catry +1.5",
+  "bet_type": "SET_SPREAD",
+  "date": "2026-07-03"
+ },
+ {
+  "id": 1087,
+  "old_result": "W",
+  "old_profit": 105.0,
+  "old_settled_at": "2026-07-06T21:25:03.931961+00:00",
+  "pick": "Finn Bass Yes",
+  "bet_type": "WIN_AT_LEAST_ONE_SET",
+  "date": "2026-07-06"
+ },
+ {
+  "id": 1111,
+  "old_result": "L",
+  "old_profit": -100.0,
+  "old_settled_at": "2026-07-10T21:39:36.758760+00:00",
+  "pick": "Daniel Rincon Yes",
+  "bet_type": "WIN_AT_LEAST_ONE_SET",
+  "date": "2026-07-10"
+ },
+ {
+  "id": 1113,
+  "old_result": "L",
+  "old_profit": -100.0,
+  "old_settled_at": "2026-07-10T21:39:36.758760+00:00",
+  "pick": "Henri Squire Yes",
+  "bet_type": "WIN_AT_LEAST_ONE_SET",
+  "date": "2026-07-10"
+ },
+ {
+  "id": 1115,
+  "old_result": "W",
+  "old_profit": 350.0,
+  "old_settled_at": "2026-07-11T14:37:30.708019+00:00",
+  "pick": "Matthew Dellavedova +1.5",
+  "bet_type": "SET_SPREAD",
+  "date": "2026-07-11"
+ },
+ {
+  "id": 1117,
+  "old_result": "W",
+  "old_profit": 325.0,
+  "old_settled_at": "2026-07-11T15:22:04.738895+00:00",
+  "pick": "Yannik Kelm +1.5",
+  "bet_type": "SET_SPREAD",
+  "date": "2026-07-11"
+ },
+ {
+  "id": 1130,
+  "old_result": "W",
+  "old_profit": 100.0,
+  "old_settled_at": "2026-07-11T19:21:31.864920+00:00",
+  "pick": "Valentin Royer Yes",
+  "bet_type": "WIN_AT_LEAST_ONE_SET",
+  "date": "2026-07-11"
+ },
+ {
+  "id": 1134,
+  "old_result": "W",
+  "old_profit": 300.0,
+  "old_settled_at": "2026-07-12T17:04:40.013174+00:00",
+  "pick": "Andrea Guerrieri +1.5",
+  "bet_type": "SET_SPREAD",
+  "date": "2026-07-12"
+ },
+ {
+  "id": 1145,
+  "old_result": "W",
+  "old_profit": 86.95652173913044,
+  "old_settled_at": "2026-07-12T23:06:02.829051+00:00",
+  "pick": "Kody Pearson Yes",
+  "bet_type": "WIN_AT_LEAST_ONE_SET",
+  "date": "2026-07-12"
+ },
+ {
+  "id": 1146,
+  "old_result": "W",
+  "old_profit": 83.33333333333334,
+  "old_settled_at": "2026-07-12T22:55:10.670829+00:00",
+  "pick": "Arda Azkara Yes",
+  "bet_type": "WIN_AT_LEAST_ONE_SET",
+  "date": "2026-07-12"
+ },
+ {
+  "id": 1160,
+  "old_result": "W",
+  "old_profit": 145.0,
+  "old_settled_at": "2026-07-14T23:38:56.628852+00:00",
+  "pick": "Sofia Costoulas Yes",
+  "bet_type": "WIN_AT_LEAST_ONE_SET",
+  "date": "2026-07-13"
+ },
+ {
+  "id": 1163,
+  "old_result": "W",
+  "old_profit": 110.0,
+  "old_settled_at": "2026-07-14T23:35:38.565146+00:00",
+  "pick": "Nao Hibino Yes",
+  "bet_type": "WIN_AT_LEAST_ONE_SET",
+  "date": "2026-07-13"
+ },
+ {
+  "id": 1169,
+  "old_result": "L",
+  "old_profit": -100.0,
+  "old_settled_at": "2026-07-14T23:35:38.565146+00:00",
+  "pick": "Katarzyna Kawa Yes",
+  "bet_type": "WIN_AT_LEAST_ONE_SET",
+  "date": "2026-07-13"
+ },
+ {
+  "id": 1194,
+  "old_result": "W",
+  "old_profit": 230.0,
+  "old_settled_at": "2026-07-15T09:24:35.503190+00:00",
+  "pick": "Anastasia Bertacchi +1.5",
+  "bet_type": "SET_SPREAD",
+  "date": "2026-07-15"
+ },
+ {
+  "id": 1218,
+  "old_result": "W",
+  "old_profit": 71.42857142857143,
+  "old_settled_at": "2026-07-15T17:42:47.533588+00:00",
+  "pick": "Elsa Jacquemot Yes",
+  "bet_type": "WIN_AT_LEAST_ONE_SET",
+  "date": "2026-07-15"
+ },
+ {
+  "id": 1234,
+  "old_result": "W",
+  "old_profit": 195.0,
+  "old_settled_at": "2026-07-16T09:32:22.218518+00:00",
+  "pick": "Gaia Maduzzi +1.5",
+  "bet_type": "SET_SPREAD",
+  "date": "2026-07-16"
+ },
+ {
+  "id": 1251,
+  "old_result": "L",
+  "old_profit": -100.0,
+  "old_settled_at": "2026-07-16T19:11:34.135357+00:00",
+  "pick": "Murphy Cassone Yes",
+  "bet_type": "WIN_AT_LEAST_ONE_SET",
+  "date": "2026-07-16"
+ },
+ {
+  "id": 1283,
+  "old_result": "W",
+  "old_profit": 275.0,
+  "old_settled_at": "2026-07-17T16:23:17.623948+00:00",
+  "pick": "Francisco Rocha +1.5",
+  "bet_type": "SET_SPREAD",
+  "date": "2026-07-17"
+ },
+ {
+  "id": 1292,
+  "old_result": "W",
+  "old_profit": 400.0,
+  "old_settled_at": "2026-07-17T18:03:31.655832+00:00",
+  "pick": "Philip Sekulic +1.5",
+  "bet_type": "SET_SPREAD",
+  "date": "2026-07-17"
+ },
+ {
+  "id": 1321,
+  "old_result": "W",
+  "old_profit": 74.07407407407408,
+  "old_settled_at": "2026-07-18T20:05:56.686765+00:00",
+  "pick": "Tiago Pereira Yes",
+  "bet_type": "WIN_AT_LEAST_ONE_SET",
+  "date": "2026-07-18"
+ },
+ {
+  "id": 1327,
+  "old_result": "W",
+  "old_profit": 125.0,
+  "old_settled_at": "2026-07-18T21:52:32.509866+00:00",
+  "pick": "Murphy Cassone Yes",
+  "bet_type": "WIN_AT_LEAST_ONE_SET",
+  "date": "2026-07-18"
+ },
+ {
+  "id": 1341,
+  "old_result": "W",
+  "old_profit": 275.0,
+  "old_settled_at": "2026-07-19T11:33:58.209509+00:00",
+  "pick": "Iiro Vasa +1.5",
+  "bet_type": "SET_SPREAD",
+  "date": "2026-07-19"
+ },
+ {
+  "id": 1356,
+  "old_result": "W",
+  "old_profit": 83.33333333333334,
+  "old_settled_at": "2026-07-19T16:44:53.713764+00:00",
+  "pick": "Samuele Pieri Yes",
+  "bet_type": "WIN_AT_LEAST_ONE_SET",
+  "date": "2026-07-19"
+ },
+ {
+  "id": 1362,
+  "old_result": "W",
+  "old_profit": 115.0,
+  "old_settled_at": "2026-07-19T16:56:40.082451+00:00",
+  "pick": "Christopher Papa Yes",
+  "bet_type": "WIN_AT_LEAST_ONE_SET",
+  "date": "2026-07-19"
+ },
+ {
+  "id": 1367,
+  "old_result": "W",
+  "old_profit": 125.0,
+  "old_settled_at": "2026-07-19T19:11:18.245837+00:00",
+  "pick": "Isabella Shinikova Yes",
+  "bet_type": "WIN_AT_LEAST_ONE_SET",
+  "date": "2026-07-19"
+ },
+ {
+  "id": 1369,
+  "old_result": "W",
+  "old_profit": 76.92307692307693,
+  "old_settled_at": "2026-07-19T20:05:25.797737+00:00",
+  "pick": "Miriana Tona Yes",
+  "bet_type": "WIN_AT_LEAST_ONE_SET",
+  "date": "2026-07-19"
+ },
+ {
+  "id": 1382,
+  "old_result": "W",
+  "old_profit": 100.0,
+  "old_settled_at": "2026-07-20T10:35:17.087306+00:00",
+  "pick": "Luca Staeheli Yes",
+  "bet_type": "WIN_AT_LEAST_ONE_SET",
+  "date": "2026-07-20"
+ },
+ {
+  "id": 1385,
+  "old_result": "W",
+  "old_profit": 375.0,
+  "old_settled_at": "2026-07-20T11:47:38.509953+00:00",
+  "pick": "Amit Vales +1.5",
+  "bet_type": "SET_SPREAD",
+  "date": "2026-07-20"
+ },
+ {
+  "id": 1405,
+  "old_result": "W",
+  "old_profit": 150.0,
+  "old_settled_at": "2026-07-20T16:32:19.855170+00:00",
+  "pick": "Thomas Faurel Yes",
+  "bet_type": "WIN_AT_LEAST_ONE_SET",
+  "date": "2026-07-20"
+ },
+ {
+  "id": 1408,
+  "old_result": "W",
+  "old_profit": 83.33333333333334,
+  "old_settled_at": "2026-07-20T17:04:21.142096+00:00",
+  "pick": "Aidan Mayo Yes",
+  "bet_type": "WIN_AT_LEAST_ONE_SET",
+  "date": "2026-07-20"
+ },
+ {
+  "id": 1412,
+  "old_result": "W",
+  "old_profit": 350.0,
+  "old_settled_at": "2026-07-20T17:33:46.543328+00:00",
+  "pick": "Julia Adams +1.5",
+  "bet_type": "SET_SPREAD",
+  "date": "2026-07-20"
+ },
+ {
+  "id": 1414,
+  "old_result": "L",
+  "old_profit": -100.0,
+  "old_settled_at": "2026-07-20T19:46:19.864458+00:00",
+  "pick": "Bruno Kuzuhara Yes",
+  "bet_type": "WIN_AT_LEAST_ONE_SET",
+  "date": "2026-07-20"
+ },
+ {
+  "id": 1426,
+  "old_result": "W",
+  "old_profit": 350.0,
+  "old_settled_at": "2026-07-21T04:35:51.357689+00:00",
+  "pick": "Manish Sureshkumar +1.5",
+  "bet_type": "SET_SPREAD",
+  "date": "2026-07-20"
+ },
+ {
+  "id": 1430,
+  "old_result": "W",
+  "old_profit": 76.92307692307693,
+  "old_settled_at": "2026-07-21T11:31:59.371818+00:00",
+  "pick": "Aliaksandra Sasnovich Yes",
+  "bet_type": "WIN_AT_LEAST_ONE_SET",
+  "date": "2026-07-21"
+ },
+ {
+  "id": 1438,
+  "old_result": "W",
+  "old_profit": 95.23809523809523,
+  "old_settled_at": "2026-07-21T14:10:57.641267+00:00",
+  "pick": "Adolfo Daniel Vallejo Yes",
+  "bet_type": "WIN_AT_LEAST_ONE_SET",
+  "date": "2026-07-21"
+ },
+ {
+  "id": 1441,
+  "old_result": "W",
+  "old_profit": 90.9090909090909,
+  "old_settled_at": "2026-07-21T14:24:44.978345+00:00",
+  "pick": "Miguel Damas Yes",
+  "bet_type": "WIN_AT_LEAST_ONE_SET",
+  "date": "2026-07-21"
+ },
+ {
+  "id": 1459,
+  "old_result": "W",
+  "old_profit": 83.33333333333334,
+  "old_settled_at": "2026-07-22T11:06:15.909090+00:00",
+  "pick": "Akira Santillan Yes",
+  "bet_type": "WIN_AT_LEAST_ONE_SET",
+  "date": "2026-07-22"
+ },
+ {
+  "id": 1463,
+  "old_result": "W",
+  "old_profit": 260.0,
+  "old_settled_at": "2026-07-22T12:51:58.154465+00:00",
+  "pick": "Daria Yesypchuk +1.5",
+  "bet_type": "SET_SPREAD",
+  "date": "2026-07-22"
+ },
+ {
+  "id": 1464,
+  "old_result": "W",
+  "old_profit": 90.9090909090909,
+  "old_settled_at": "2026-07-22T13:14:04.221311+00:00",
+  "pick": "Zsombor Piros Yes",
+  "bet_type": "WIN_AT_LEAST_ONE_SET",
+  "date": "2026-07-22"
+ },
+ {
+  "id": 1465,
+  "old_result": "W",
+  "old_profit": 230.0,
+  "old_settled_at": "2026-07-22T14:45:03.674181+00:00",
+  "pick": "Ann Akasha Ceuca +1.5",
+  "bet_type": "SET_SPREAD",
+  "date": "2026-07-22"
+ },
+ {
+  "id": 1468,
+  "old_result": "W",
+  "old_profit": 110.0,
+  "old_settled_at": "2026-07-22T14:56:38.329508+00:00",
+  "pick": "Eero Vasa Yes",
+  "bet_type": "WIN_AT_LEAST_ONE_SET",
+  "date": "2026-07-22"
+ },
+ {
+  "id": 1493,
+  "old_result": "W",
+  "old_profit": 325.0,
+  "old_settled_at": "2026-07-23T20:23:31.181241+00:00",
+  "pick": "Fiona Crawley +1.5",
+  "bet_type": "SET_SPREAD",
+  "date": "2026-07-23"
+ },
+ {
+  "id": 1499,
+  "old_result": "W",
+  "old_profit": 80.0,
+  "old_settled_at": "2026-07-24T11:05:35.252102+00:00",
+  "pick": "Alina Charaeva Yes",
+  "bet_type": "WIN_AT_LEAST_ONE_SET",
+  "date": "2026-07-24"
+ },
+ {
+  "id": 1544,
+  "old_result": "W",
+  "old_profit": 90.9090909090909,
+  "old_settled_at": "2026-07-25T20:46:01.929768+00:00",
+  "pick": "Elias Ymer Yes",
+  "bet_type": "WIN_AT_LEAST_ONE_SET",
+  "date": "2026-07-25"
+ }
+]

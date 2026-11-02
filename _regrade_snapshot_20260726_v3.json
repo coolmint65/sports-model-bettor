@@ -1,0 +1,38 @@
+[
+ {
+  "id": 1183,
+  "old_result": "L",
+  "old_profit": -100.0,
+  "old_settled_at": "2026-07-15T21:32:45.331006+00:00",
+  "pick": "Under 2.5",
+  "bet_type": "TOTAL_SETS",
+  "date": "2026-07-15"
+ },
+ {
+  "id": 1376,
+  "old_result": "L",
+  "old_profit": -100.0,
+  "old_settled_at": "2026-07-26T18:17:29.138943+00:00",
+  "pick": "Ayla Aksu Yes",
+  "bet_type": "WIN_AT_LEAST_ONE_SET",
+  "date": "2026-07-20"
+ },
+ {
+  "id": 1425,
+  "old_result": "L",
+  "old_profit": -100.0,
+  "old_settled_at": "2026-07-21T04:05:14.110166+00:00",
+  "pick": "Jumpei Yamasaki +1.5",
+  "bet_type": "SET_SPREAD",
+  "date": "2026-07-20"
+ },
+ {
+  "id": 1516,
+  "old_result": "L",
+  "old_profit": -100.0,
+  "old_settled_at": "2026-07-24T17:47:12.045384+00:00",
+  "pick": "Loan Lestir +1.5",
+  "bet_type": "SET_SPREAD",
+  "date": "2026-07-24"
+ }
+]

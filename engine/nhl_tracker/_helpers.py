@@ -34,16 +34,55 @@ def _compute_clv(bet_odds, closing_odds):
     return round((close_implied - bet_implied) * 100, 2)
 
 
+_NHL_ABBR_MAP = None
+
+
+def _nhl_abbr(name):
+    """Resolve a team identifier to its NHL abbreviation. Pick text is sometimes
+    the abbr (nhl_picks: 'SEA') and sometimes the full display name or city
+    (POTD: 'Seattle Kraken'); normalize both so the closing-odds side-match hits
+    OUR side. CLV audit 2026-10-06: full-name PL picks matched the OPPONENT's
+    spread -> bogus CLV (Seattle Kraken +1.5 at -185 captured VGK -1.5's +140)."""
+    global _NHL_ABBR_MAP
+    if not name:
+        return None
+    n = str(name).strip()
+    if _NHL_ABBR_MAP is None:
+        _NHL_ABBR_MAP = {}
+        try:
+            conn = _get_nhl_db()
+            for r in conn.execute("SELECT name, abbreviation, city FROM nhl_teams"):
+                ab = (r["abbreviation"] or "").strip()
+                if not ab:
+                    continue
+                _NHL_ABBR_MAP[ab.upper()] = ab
+                if r["name"]:
+                    _NHL_ABBR_MAP[str(r["name"]).strip().lower()] = ab
+                if r["city"]:
+                    _NHL_ABBR_MAP[str(r["city"]).strip().lower()] = ab
+        except Exception:
+            _NHL_ABBR_MAP = {}
+    if len(n) <= 4 and n.upper() in _NHL_ABBR_MAP:
+        return _NHL_ABBR_MAP[n.upper()]
+    hit = _NHL_ABBR_MAP.get(n.lower())
+    if hit:
+        return hit
+    return n.upper() if len(n) <= 4 else None
+
+
 def _extract_nhl_closing_for_pick(bet_type: str, pick_text: str,
                                   home_abbr: str, game_odds: dict) -> int | None:
-    """Pure helper: pick the right closing-odds field for an NHL pick
-    out of a Hard Rock odds bucket. Mirrors
-    engine.tracker._extract_closing_for_pick for the NHL-specific
-    bet_types (ML / PL / O/U / ALT PL)."""
+    """Pick the right closing-odds field for an NHL pick out of a Hard Rock odds
+    bucket (ML / PL / O/U / ALT PL). Rewritten 2026-10-06 (CLV audit): the line is
+    parsed off the END of the pick text (handles 'SEA +1.5' AND 'Seattle Kraken
+    +1.5'), the team is resolved to its abbr via _nhl_abbr so we match OUR side,
+    and the HR field names are correct (home_spread_point / away_spread_point /
+    over_under -- the old home_spread_pt / total_line never matched, silently
+    falling through to alt lines)."""
     if not game_odds:
         return None
+    import re as _re
     pk = pick_text or ""
-    parts = pk.split()
 
     def _line_matches(a, b, tol: float = 0.001) -> bool:
         if a is None or b is None:
@@ -53,26 +92,31 @@ def _extract_nhl_closing_for_pick(bet_type: str, pick_text: str,
         except (TypeError, ValueError):
             return False
 
-    def _signed(idx: int):
-        if len(parts) <= idx:
-            return None
+    def _team_and_line(text):
+        """'SEA +1.5' / 'Seattle Kraken +1.5' -> (team, line)."""
+        m = _re.search(r"([+-]?\d*\.?\d+)\s*$", text or "")
+        if not m:
+            return (text or "").strip(), None
+        tok = m.group(1)
         try:
-            return float(parts[idx])
+            ln = float(tok)
         except (TypeError, ValueError):
-            return None
+            ln = None
+        return text[:m.start()].strip(), ln
 
     if bet_type == "ML":
-        return (game_odds.get("home_ml") if pk == home_abbr
+        return (game_odds.get("home_ml") if _nhl_abbr(pk) == home_abbr
                 else game_odds.get("away_ml"))
     if bet_type in ("O/U", "OU"):
-        # NHL total lines rarely move (mostly 6/6.5) but they DO on
-        # some games. Only stamp closing_odds when the current line
-        # matches the one we bet — pre-fix we blindly used current
-        # over/under odds even if the line moved, which stamped odds
-        # for a different market as ours (CLV audit 2026-07-03).
         is_over = "Over" in pk
-        bet_line = _signed(1)  # e.g. "Over 6.5" → 6.5
-        primary_line = game_odds.get("total_line")
+        _m = _re.search(r"([+-]?\d*\.?\d+)\s*$", pk)
+        bet_line = None
+        if _m:
+            try:
+                bet_line = float(_m.group(1))
+            except (TypeError, ValueError):
+                bet_line = None
+        primary_line = game_odds.get("over_under")
         if bet_line is None or _line_matches(primary_line, bet_line):
             return (game_odds.get("over_odds") if is_over
                     else game_odds.get("under_odds"))
@@ -82,13 +126,10 @@ def _extract_nhl_closing_for_pick(bet_type: str, pick_text: str,
                         else alt.get("under_odds"))
         return None
     if bet_type == "PL":
-        pick_team = parts[0] if parts else ""
-        is_home = pick_team == home_abbr
-        bet_line = _signed(1)
-        primary_home = game_odds.get("home_spread_pt")
-        primary_away = game_odds.get("away_spread_pt")
-        target = bet_line if is_home else (-bet_line if bet_line is not None
-                                             else None)
+        _team, bet_line = _team_and_line(pk)
+        is_home = _nhl_abbr(_team) == home_abbr
+        primary_home = game_odds.get("home_spread_point")
+        primary_away = game_odds.get("away_spread_point")
         if bet_line is None:
             return (game_odds.get("home_spread_odds") if is_home
                     else game_odds.get("away_spread_odds"))
@@ -104,15 +145,11 @@ def _extract_nhl_closing_for_pick(bet_type: str, pick_text: str,
                 return alt.get("away_odds")
         return None
     if bet_type == "ALT PL":
-        try:
-            line = float(parts[1]) if len(parts) >= 2 else None
-        except (ValueError, IndexError):
-            line = None
-        pick_team = parts[0] if parts else ""
-        is_home = pick_team == home_abbr
+        _team, line = _team_and_line(pk)
+        is_home = _nhl_abbr(_team) == home_abbr
         if line is not None:
             for alt in game_odds.get("alt_spreads", []) or []:
-                if alt.get("point") == line or alt.get("point") == -line:
+                if _line_matches(alt.get("point"), line) or _line_matches(alt.get("point"), -line):
                     return (alt.get("home_odds") if is_home
                             else alt.get("away_odds"))
         return (game_odds.get("home_spread_odds") if is_home
@@ -147,6 +184,8 @@ def _get_nhl_db():
             closing_odds INTEGER,
             result TEXT,
             profit REAL,
+            stake_units REAL,
+            is_shadow INTEGER DEFAULT 0,
             created_at TEXT DEFAULT (datetime('now')),
             settled_at TEXT
         )
@@ -162,6 +201,24 @@ def _get_nhl_db():
         # Column already exists or table just created with it.
         logger.debug("nhl_picks closing_odds migration skipped: %s", e)
 
+    # Migration: add is_shadow column for the calibrated PAPER layer
+    # (Austin 2026-09-22). is_shadow=1 rows are the model's calibrated
+    # leans, tracked as a forward test — settled + CLV'd by the SAME
+    # machinery (settle_picks / capture_closing_odds select WHERE
+    # result IS NULL with no is_shadow filter) but NEVER counted in the
+    # real P/L (get_pick_summary + the /tracker/history real rows both
+    # filter COALESCE(is_shadow,0)=0). Non-destructive ADD COLUMN —
+    # existing 131 real rows default to is_shadow=0 untouched.
+    try:
+        existing = conn.execute("PRAGMA table_info(nhl_picks)").fetchall()
+        col_names = [r[1] for r in existing]
+        if "is_shadow" not in col_names:
+            conn.execute(
+                "ALTER TABLE nhl_picks ADD COLUMN is_shadow INTEGER DEFAULT 0"
+            )
+    except Exception as e:
+        logger.debug("nhl_picks is_shadow migration skipped: %s", e)
+
     # Dedup index on (date, game_id, bet_type, pick) for pending rows.
     # Mirror of the MLB/NBA dedup so record_picks can iterate every
     # pick above min_edge and INSERT OR IGNORE without piling up
@@ -173,8 +230,35 @@ def _get_nhl_db():
     # copies per game before the 2026-06-10 cross-sport hardening).
     conn.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS uq_nhl_picks_family
-            ON nhl_picks(date, game_id, bet_type, pick)
+            ON nhl_picks(date, game_id, bet_type, pick, is_shadow)
     """)
+
+    # Paper-first migration (Austin 2026-09-22): real+paper coexistence needs
+    # is_shadow IN the dedup keys, so a per-game PAPER best pick records even
+    # when a REAL row already occupies (date,game_id,bet_type,pick). Rebuild
+    # any legacy UNIQUE index that still lacks is_shadow. Non-destructive —
+    # DROP/CREATE INDEX preserves all table rows. Idempotent: once rebuilt the
+    # index sql contains "is_shadow" so this is a no-op on every later call.
+    try:
+        for _ix in ("uq_nhl_picks_family", "idx_nhl_picks_unique"):
+            _row = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='index' AND name=?",
+                (_ix,),
+            ).fetchone()
+            if _row and _row[0] and "is_shadow" not in _row[0]:
+                conn.execute(f"DROP INDEX {_ix}")
+                if _ix == "idx_nhl_picks_unique":
+                    conn.execute(
+                        "CREATE UNIQUE INDEX idx_nhl_picks_unique ON nhl_picks"
+                        "(date, game_id, bet_type, pick, is_shadow) "
+                        "WHERE result IS NULL")
+                else:
+                    conn.execute(
+                        "CREATE UNIQUE INDEX uq_nhl_picks_family ON nhl_picks"
+                        "(date, game_id, bet_type, pick, is_shadow)")
+                logger.info("nhl_picks: rebuilt %s with is_shadow", _ix)
+    except Exception as e:
+        logger.debug("nhl_picks is_shadow index rebuild skipped: %s", e)
 
     conn.commit()
     return conn

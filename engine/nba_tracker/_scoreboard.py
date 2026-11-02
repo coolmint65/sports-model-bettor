@@ -18,7 +18,7 @@ def _fetch_nba_scoreboard(date: str) -> list[dict]:
     )
     try:
         req = urllib.request.Request(url, headers={
-            "User-Agent": "Mozilla/5.0",
+            "User-Agent": "curl/8.4.0",
             "Accept": "application/json",
         })
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -69,15 +69,25 @@ def _parse_q1_scores(event: dict) -> dict | None:
             val = linescores[0].get("value")
             if val is not None:
                 q1 = int(val)
+        # 1st half = Q1+Q2, locked once Q3 has tipped (or the game is over). Feeds H1_* grading and,
+        # with the final, H2_* (2nd half incl. OT = final - 1H). Added 2026-11-01: H1/H2 picks reached
+        # nba_paper_picks via first-pick-wins and sat ungraded.
+        h1 = None
+        if len(linescores) >= 2 and (state == "post" or cur_period > 2):
+            v1, v2 = linescores[0].get("value"), linescores[1].get("value")
+            if v1 is not None and v2 is not None:
+                h1 = int(v1) + int(v2)
 
         if is_home:
             result["home_abbr"] = abbr
             result["home_score"] = score
             result["home_q1"] = q1
+            result["home_h1"] = h1
         else:
             result["away_abbr"] = abbr
             result["away_score"] = score
             result["away_q1"] = q1
+            result["away_h1"] = h1
 
     if result.get("home_q1") is None or result.get("away_q1") is None:
         return None

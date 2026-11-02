@@ -61,11 +61,6 @@ class GameKey:
         return cls("hockey", league, str(thescore_id))
 
     @classmethod
-    def for_baseball(cls, league: str, espn_id: str) -> "GameKey":
-        """College baseball, future KBO/NPB."""
-        return cls("baseball", league, str(espn_id))
-
-    @classmethod
     def for_football(cls, league: str, espn_id: str) -> "GameKey":
         """UFL, future NFL/NCAAF."""
         return cls("football", league, str(espn_id))
@@ -74,15 +69,6 @@ class GameKey:
     def for_tennis(cls, tour: str, match_id: str) -> "GameKey":
         """ATP, WTA. `tour` is the league slot."""
         return cls("tennis", tour, str(match_id))
-
-    @classmethod
-    def for_golf(cls, tour: str, tournament_id: str | int) -> "GameKey":
-        """PGA, LPGA, Korn Ferry. `tour` is the league slot."""
-        return cls("golf", tour, str(tournament_id))
-
-    @classmethod
-    def for_motorsports(cls, series: str, race_id: str | int) -> "GameKey":
-        return cls("motorsports", series, str(race_id))
 
     def to_legacy_game_id(self) -> str:
         """Compatibility shim — return the bare native_id for code

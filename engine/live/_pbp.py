@@ -78,7 +78,7 @@ def _fetch_summary(sport: str, game_id: str) -> dict | None:
     url = f"{_ESPN_BASE}/{path}/summary?event={game_id}"
     try:
         req = urllib.request.Request(url, headers={
-            "User-Agent": "live_worker/1.0",
+            "User-Agent": "curl/8.4.0",
             "Accept": "application/json",
         })
         with urllib.request.urlopen(req, timeout=8) as resp:

@@ -49,6 +49,16 @@ def _conn(sport: str):
         from .nhl_db import get_conn
     elif sport == "nba":
         from .nba_db import get_conn
+    elif sport.startswith("football_"):
+        # score_pick / get_flag key the football framework as "football_<league>"
+        # (football_nfl, football_cfb, ...). Until 2026-10-25 this raised
+        # "unknown sport", so every football flag lookup silently fell back to
+        # the module constants — ENABLE_FINAL_CALIBRATION etc. could not be
+        # overridden at runtime for NFL/CFB (Austin: "add the footnote in too").
+        # Per-league DB (nfl.db / cfb.db); an unknown league still raises inside
+        # get_conn and is swallowed by get_override's try/except as before.
+        from .football._db import get_conn as _fb_conn
+        return _fb_conn(sport.split("_", 1)[1])
     else:
         raise ValueError(f"unknown sport: {sport}")
     return get_conn()

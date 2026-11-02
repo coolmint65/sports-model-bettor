@@ -11,10 +11,12 @@ import { useEffect, useMemo, useState } from 'react'
 import { useSlate } from '../lib/useSlate'
 import { CalibrationView, StandingsView } from './hockey/subviews'
 import GameCard from './primitives/GameCard'
+import RailLayout, { CardAnchor } from './primitives/RailLayout'
 import { OddsGrid, OddsRow, CardInsight as CardInsightShell } from './primitives/OddsGrid'
 import PanelShell from './primitives/PanelShell'
 import PickHistory from './PickHistory'
 import PickOfDayHero from './PickOfDayHero'
+import PaperPickOfDayHero from './PaperPickOfDayHero'
 
 const HK_TABS = [
   { id: 'bets',        label: 'Bets' },
@@ -29,6 +31,27 @@ export default function HockeyPanel({ api, leagueKey, leagues }) {
     [leagues, leagueKey],
   )
   const [view, setView] = useState('bets')
+  // POTD-own record (Austin 2026-09-19): the Pick-of-the-Day's own running
+  // W-L / profit, so the paper POTD hero shows its track record.
+  const [potdRec, setPotdRec] = useState(null)
+  // Locked POTD (Austin 2026-10-06): read the backend game-day-locked POTD and pass it to
+  // the hero so THIS page matches the overall POTD page (both /pick-of-day/<lg>) instead of
+  // the hero recomputing a different live max-edge pick (NHL page showed FLA -1.5 while the
+  // POTD page showed the locked Seattle +1.5).
+  const [lockedPotd, setLockedPotd] = useState(null)
+  useEffect(() => {
+    if (!leagueKey) return
+    let alive = true
+    api.get(`/pick-of-day/${leagueKey}/summary`).then(r => {
+      if (!alive) return
+      const x = r.data || {}
+      setPotdRec({ ...x, total: (x.wins || 0) + (x.losses || 0) })
+    }).catch(() => { if (alive) setPotdRec(null) })
+    api.get(`/pick-of-day/${leagueKey}`).then(r => {
+      if (alive) setLockedPotd(r.data && r.data.pick ? r.data : null)
+    }).catch(() => { if (alive) setLockedPotd(null) })
+    return () => { alive = false }
+  }, [api, leagueKey])
 
   if (!leagueKey || !cfg) {
     return (
@@ -59,10 +82,7 @@ export default function HockeyPanel({ api, leagueKey, leagues }) {
       onTabChange={setView}
     >
       {view === 'bets' && (
-        <>
-          <PickOfDayHero sport={leagueKey} />
-          <BetsView api={api} leagueKey={leagueKey} cfg={cfg} />
-        </>
+        <BetsView api={api} leagueKey={leagueKey} cfg={cfg} />
       )}
       {view === 'tracker'     && <TrackerView api={api} leagueKey={leagueKey} />}
       {view === 'calibration' && <CalibrationView api={api} leagueKey={leagueKey} />}
@@ -113,12 +133,14 @@ function adaptGameShape(g) {
       name: g.home_name,
       score: g.home_score,
       logo: g.home_logo,
+      odds: (g.odds && g.odds.home_ml != null) ? g.odds.home_ml : null,  // per-side ML (overhaul step 1)
     },
     away: {
       abbreviation: g.away_short || g.away_name,
       name: g.away_name,
       score: g.away_score,
       logo: g.away_logo,
+      odds: (g.odds && g.odds.away_ml != null) ? g.odds.away_ml : null,
     },
     status: {
       state: stateMap[g.status] || 'pre',
@@ -143,10 +165,11 @@ function adaptBetShape(g) {
   return {
     game_id: g.id,
     best_pick: best,
+    paper_pick: (() => { const pp = g.paper_picks || []; return pp.length ? pp.reduce((a, b) => ((b.edge ?? -99) > (a.edge ?? -99) ? b : a)) : (g.card_lean || null); })(),  // lean fallback (Austin 2026-10-26)
     confidence: conf,
-    win_prob: g.prediction?.ml_home != null
+    win_prob: g.card_win_prob ?? (g.prediction?.ml_home != null
       ? { home: g.prediction.ml_home, away: 1 - g.prediction.ml_home }
-      : null,
+      : null),
     // NHL-shaped supporting fields. AHL/PWHL ingest doesn't yet
     // produce factors / season_context / rest / injuries — pass
     // empty objects so NHLCardInsight returns null gracefully and
@@ -197,6 +220,7 @@ function BetsView({ api, leagueKey, cfg }) {
       )}
       {slate && !loading && (
         <>
+          <PaperPickOfDayHero games={games} sport={leagueKey} summary={potdRec} locked={(lockedPotd) ?? null} />
           <div className="flex items-center justify-between">
             <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
               {slate.date} · {games.length} game{games.length === 1 ? '' : 's'}
@@ -214,17 +238,18 @@ function BetsView({ api, leagueKey, cfg }) {
               </div>
             </div>
           ) : (
-            <>
+            <RailLayout entries={[...adaptedActive, ...adaptedFinal]}>
               {adaptedActive.length > 0 && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {adaptedActive.map(({ game, bet, raw }) => (
+                    <CardAnchor key={game.game_id} id={game.id ?? game.game_id}>
                     <HockeyGameCard
-                      key={game.game_id}
                       game={game}
                       bet={bet}
                       raw={raw}
                       sport={`hockey/${leagueKey}`}
                     />
+                    </CardAnchor>
                   ))}
                 </div>
               )}
@@ -235,18 +260,19 @@ function BetsView({ api, leagueKey, cfg }) {
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3 opacity-80">
                     {adaptedFinal.map(({ game, bet, raw }) => (
+                      <CardAnchor key={game.game_id} id={game.id ?? game.game_id}>
                       <HockeyGameCard
-                        key={game.game_id}
                         game={game}
                         bet={bet}
                         raw={raw}
                         sport={`hockey/${leagueKey}`}
                       />
+                      </CardAnchor>
                     ))}
                   </div>
                 </>
               )}
-            </>
+            </RailLayout>
           )}
           <div className="text-[10px] text-muted-foreground italic px-1">
             Beta — paper-bet only until ROI accumulates. Predictions
@@ -420,9 +446,18 @@ function HockeyCardInsight({ bet, home, away, game, raw }) {
     })
   }
 
+  // One-bet-per-card (Austin 2026-09-19): the paper lean used to render here IN
+  // ADDITION to the gated EdgeBadge (this insight only shows when there IS a gated
+  // pick), so a gated game showed green + a redundant paper badge. The single
+  // headline bet lives in GameCard (gated EdgeBadge, or PaperBadge when there's no
+  // gated pick); the POTD carries the best paper lean. Insight = strongest reason.
   if (reasons.length === 0) return null
   reasons.sort((a, b) => b.weight - a.weight)
-  return <CardInsightShell>{reasons[0].text}</CardInsightShell>
+  return (
+    <div className="space-y-1">
+      <CardInsightShell>{reasons[0].text}</CardInsightShell>
+    </div>
+  )
 }
 
 

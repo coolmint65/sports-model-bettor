@@ -83,23 +83,37 @@ def auto_tune_sport(sport: str, min_samples: int | None = None,
         arrays = [comps[n] for n in names]
         is_class = all(a in (0, 1) for a in actuals)
         n_components = len(names)
-        weights, score = best_weights(arrays, actuals, is_classification=is_class)
-
-        # ── Baselines for regression-gate + reporting ──
-        # Be-right philosophy: only persist when the tuned blend is
-        # demonstrably better than (a) uniform 1/N weights and
-        # (b) the currently-persisted blend if any. Without this gate
-        # a slate of unlucky settled picks could overwrite a healthy
-        # weight with a worse one purely from variance.
         metric = _brier_metric if is_class else _rmse_metric
-        uniform_w = [1.0 / n_components] * n_components
-        uniform_blend = [
-            sum(uniform_w[i] * arrays[i][j] for i in range(n_components))
-            for j in range(len(actuals))
-        ]
-        uniform_score = round(metric(uniform_blend, actuals), 4)
 
-        # Read currently-persisted weights for a head-to-head check.
+        # ── Train/validation holdout (audit T2 C 2.2) ──
+        # The grid-min over ALL data beats uniform by >=0 BY CONSTRUCTION
+        # (uniform is in the grid), so the old in-sample gate rubber-stamped
+        # overfit weights. Fit weights on a 70%% train split and SELECT/GATE on
+        # the held-out 30%% so a weight only persists if it actually generalizes.
+        # Too few to hold out reliably -> skip (stay on uniform 1/N).
+        n_obs = len(actuals)
+        if n_obs < 2 * floor:
+            summary["skipped"][market] = (
+                f"only {n_obs} settled (need {2 * floor} to validate a holdout)")
+            continue
+        cut = int(n_obs * 0.7)
+        tr_arrays = [arr[:cut] for arr in arrays]
+        val_arrays = [arr[cut:] for arr in arrays]
+        tr_actuals, val_actuals = actuals[:cut], actuals[cut:]
+
+        weights, _train_score = best_weights(
+            tr_arrays, tr_actuals, is_classification=is_class)
+
+        def _blend(w, arrs, m):
+            return [sum(w[i] * arrs[i][j] for i in range(n_components))
+                    for j in range(m)]
+        nv = len(val_actuals)
+        uniform_w = [1.0 / n_components] * n_components
+        # Honest OUT-OF-SAMPLE scores on the held-out validation rows.
+        score = round(metric(_blend(weights, val_arrays, nv), val_actuals), 4)
+        uniform_score = round(metric(_blend(uniform_w, val_arrays, nv), val_actuals), 4)
+
+        # Read currently-persisted weights for a head-to-head check (on val).
         prior_score: float | None = None
         try:
             from .model_overrides import get_override
@@ -107,11 +121,8 @@ def auto_tune_sport(sport: str, min_samples: int | None = None,
             if prior_payload:
                 prior_w_dict = json.loads(prior_payload)
                 prior_w = [float(prior_w_dict.get(n, 0.0)) for n in names]
-                prior_blend = [
-                    sum(prior_w[i] * arrays[i][j] for i in range(n_components))
-                    for j in range(len(actuals))
-                ]
-                prior_score = round(metric(prior_blend, actuals), 4)
+                prior_score = round(
+                    metric(_blend(prior_w, val_arrays, nv), val_actuals), 4)
         except Exception as e:
             logger.debug("prior weight read failed for %s: %s", market, e)
 

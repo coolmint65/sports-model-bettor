@@ -24,6 +24,95 @@ import { cachedGet, peek, invalidate } from '../lib/apiCache'
 const fmtMoney = n => `${n > 0 ? '+' : ''}$${(n || 0).toFixed(2)}`
 
 
+// "2026-10-27" -> "Oct 27"
+const fmtShortDate = d => {
+  if (!d) return ''
+  const t = new Date(d + 'T12:00:00')
+  return isNaN(t) ? d : t.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
+// Props POTD: stake chip (= the card's chip, what the POTD is graded at) + the
+// proven-accuracy cell it came from. proven=false gets a loud "not proven yet".
+function PropsPotdBadges({ potd }) {
+  const rec = potd?.cell_record
+  const st = potd?.stake
+  if (!rec && !st) return null
+  const recTxt = rec
+    ? `${rec.cell} ${rec.wins ?? 0}-${rec.losses ?? 0}${rec.win_pct != null ? ` \u00b7 ${rec.win_pct}%` : ''}${rec.be_pct != null ? ` vs ${rec.be_pct}% needed` : ''}${rec.roi != null ? ` \u00b7 ROI ${rec.roi > 0 ? '+' : ''}${rec.roi}%` : ''}`
+    : null
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-[11px]">
+      {st && (
+        <span
+          title={`Stake: ${st.why}`}
+          className={cn('rounded-full px-2 py-0.5 font-bold',
+            st.units >= 1 ? 'bg-emerald-500/15 text-emerald-400'
+              : st.units >= 0.5 ? 'bg-amber-500/15 text-amber-400'
+              : 'bg-orange-500/15 text-orange-400')}
+        >
+          {st.label}
+        </span>
+      )}
+      {potd.proven === true && (
+        <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 font-bold uppercase tracking-wider text-emerald-400">
+          Proven
+        </span>
+      )}
+      {potd.proven === false && (
+        <span className="rounded-full bg-amber-500/15 px-2 py-0.5 font-bold uppercase tracking-wider text-amber-400">
+          Not proven yet
+        </span>
+      )}
+      {recTxt && (
+        <span className="tabular-nums text-muted-foreground">
+          {recTxt}{rec.since ? ` since ${fmtShortDate(rec.since)}` : ''}
+        </span>
+      )}
+    </div>
+  )
+}
+
+function PropsPotdRecordNote({ summary }) {
+  const s = summary.since_model || {}
+  const lg = summary.legacy || {}
+  return (
+    <div className="mt-1 space-y-0.5 text-[10px] text-muted-foreground tabular-nums lg:text-right">
+      {s.be_pct != null && (
+        <div>vs {s.be_pct}% break-even{s.pending ? ` \u00b7 ${s.pending} pending` : ''}</div>
+      )}
+      {(lg.wins || lg.losses) ? (
+        <div className="opacity-70">Before: {lg.wins}-{lg.losses} ({lg.win_pct}%)</div>
+      ) : null}
+    </div>
+  )
+}
+
+
+function CardGateNote({ gate }) {
+  // NHL card gate (MintyBot 2026-11-01): the card only shows picks from a proven stat x side cell;
+  // everything else the model picks is tracked as shadow (NOT bets). Say so plainly.
+  if (!gate || gate.error) return null
+  const proven = gate.proven_cells || []
+  const cells = (gate.cells || []).slice(0, 4)
+  return (
+    <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-xs text-muted-foreground space-y-1">
+      <div className="font-semibold text-amber-400">
+        {proven.length ? `Card gated: picks only from proven cells (${proven.join(', ')})` : 'Card paused: no proven cell yet, so no NHL prop picks to bet'}
+      </div>
+      <div>Rule: a stat and side needs {gate.min_n}+ graded picks since {fmtShortDate(gate.since)} and ROI above 1 standard error. Calibration review 11-01: the model's 62% claims hit about 48%.</div>
+      {cells.length > 0 && (
+        <div className="tabular-nums">
+          {cells.map(c => `${c.cell} ${c.wins}-${c.losses} (${c.roi_pct > 0 ? '+' : ''}${c.roi_pct}%${c.se_pct != null ? ` \u00b1${c.se_pct}` : ''})`).join(' \u00b7 ')}
+        </div>
+      )}
+      {gate.shadow_pending > 0 && (
+        <div className="opacity-80">{gate.shadow_pending} shadow pick{gate.shadow_pending === 1 ? '' : 's'} tracked (not bets, not shown).</div>
+      )}
+    </div>
+  )
+}
+
+
 export default function PropsPanel({ sport }) {
   const potdUrl = `/${sport}/player-props/potd`
   const summaryUrl     = `/${sport}/props-tracker/summary`
@@ -113,10 +202,27 @@ export default function PropsPanel({ sport }) {
     return s
   }, [pending])
   const todayCombined = useMemo(
-    () => [
-      ...pending,
-      ...finished.filter(p => liveGameKeys.has(matchupGameKey(p))),
-    ],
+    () => {
+      const combined = [
+        ...pending,
+        ...finished.filter(p => liveGameKeys.has(matchupGameKey(p))),
+      ]
+      // Dedup by player + market: the same prop can linger as both an
+      // int-line ("50+") and float-line ("50.0+") row across formatting
+      // changes; show it once, preferring a settled row then higher edge
+      // (Austin 2026-09-29).
+      const byKey = new Map()
+      for (const p of combined) {
+        const k = `${p.player_id ?? p.player_name}|${p.bet_type}`
+        const cur = byKey.get(k)
+        if (!cur) { byKey.set(k, p); continue }
+        const better = (p.result != null && cur.result == null)
+          || ((p.result != null) === (cur.result != null)
+              && (Number(p.edge) || 0) > (Number(cur.edge) || 0))
+        if (better) byKey.set(k, p)
+      }
+      return [...byKey.values()]
+    },
     [pending, finished, liveGameKeys],
   )
   // Compact-table history = settled picks whose game is no longer
@@ -148,6 +254,19 @@ export default function PropsPanel({ sport }) {
       }))
       .sort((a, b) => (b.picks[0]?.edge || 0) - (a.picks[0]?.edge || 0))
   }, [todayCombined])
+
+  // Flat slate: one tiled grid of all today's picks. Each card now
+  // carries its own matchup + team logos, so per-matchup sub-headers
+  // are redundant. Pending first, then by edge desc.
+  const todaySorted = useMemo(
+    () => todayCombined.slice().sort((a, b) => {
+      const ap = a.result == null ? 0 : 1
+      const bp = b.result == null ? 0 : 1
+      if (ap !== bp) return ap - bp
+      return (Number(b.edge) || 0) - (Number(a.edge) || 0)
+    }),
+    [todayCombined],
+  )
 
   const byBetType = useMemo(() => {
     const out = {}
@@ -298,14 +417,19 @@ export default function PropsPanel({ sport }) {
           pick={potd}
           summary={potdSummary}
           accent="primary"
+          recordLabel={potdSummary?.since ? `Record since ${fmtShortDate(potdSummary.since)} model` : 'POTD Record'}
+          extra={<PropsPotdBadges potd={potd} />}
+          recordFooter={potdSummary?.since_model ? <PropsPotdRecordNote summary={potdSummary} /> : null}
         />
       )}
+
+      {sport === 'nhl' && summary?.card_gate && <CardGateNote gate={summary.card_gate} />}
 
       {/* Today's Slate — single card grid that contains both pending
           and settled-today picks. PropPickCard transitions W/L/Push
           tint on settlement so the card visually flows from pending →
           coloured outcome without changing position. */}
-      {groupedToday.length > 0 && (
+      {todaySorted.length > 0 && (
         <section className="space-y-4">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold text-foreground">Today's Slate</h3>
@@ -313,23 +437,11 @@ export default function PropsPanel({ sport }) {
               {todayCombined.length} pick{todayCombined.length === 1 ? '' : 's'}
             </span>
           </div>
-          {groupedToday.map(g => (
-            <div key={g.matchup} className="space-y-3">
-              <div className="flex items-baseline justify-between gap-3">
-                <h4 className="text-sm font-bold text-foreground tracking-tight">
-                  {g.matchup}
-                </h4>
-                <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  {g.picks.length} pick{g.picks.length === 1 ? '' : 's'}
-                </span>
-              </div>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                {g.picks.map(p => (
-                  <PropPickCard key={p.id} pick={p} sport={sport} />
-                ))}
-              </div>
-            </div>
-          ))}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {todaySorted.map(p => (
+              <PropPickCard key={p.id} pick={p} sport={sport} />
+            ))}
+          </div>
         </section>
       )}
 

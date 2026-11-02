@@ -335,6 +335,31 @@ def get_flag(name: str, default=None, sport: str = "mlb"):
     return globals().get(name, default)
 
 
+# Closing-line Bayesian prior / CLV (Austin 2026-10-05). Blends model prob with the closing-line
+# implied prob (engine/closing_line_prior.py); weight fit per (sport,bet_type), floor 0.5,
+# _DEFAULT_WEIGHT=1.0 so unfitted cells pass through unchanged = self-regulating. Validated OOS
+# (tennis win-a-set +0.094, CFB ML +0.036). PAPER until the placer is armed.
+ENABLE_CLOSING_LINE_PRIOR = True
+
+
+# ── Final post-hoc per-league calibration toggle (2026-09-15, MintyBot) ──
+# Master switch for engine/final_calibration.py — the last-stage monotonic
+# correction that de-biases the overconfident model `prob` per league
+# (fit post-hoc on settled picks; see data/final_calibration.json). Read in
+# picks_core.score_pick via get_flag("ENABLE_FINAL_CALIBRATION", True). Set
+# False here (or write a model_overrides row) to bypass. PAPER model, safe.
+ENABLE_FINAL_CALIBRATION = True
+
+
+# ---- Derivative / Q1 / player-prop post-hoc calibration toggle (2026-09-16) ----
+# Master switch for engine/derivative_prob_calibration.py -- the derivative
+# twin of ENABLE_FINAL_CALIBRATION. De-biases the overconfident prob on the
+# derivative/Q1/prop scoring paths (fit on settled derivative/prop history;
+# see data/derivative_prob_calibration.json). Read in picks_core.score_pick
+# and the prop scorers via get_flag("ENABLE_DERIV_CALIBRATION", True). PAPER.
+ENABLE_DERIV_CALIBRATION = True
+
+
 MLB_BET_RELIABILITY = {
     "RL": 1.00,     # 55.6% hit rate, +$384 - proven profitable
     "ML": 0.70,     # 48% hit rate, slightly losing - watch
@@ -476,8 +501,30 @@ MAIN_EDGE_CEILING = {
     "mlb": {
         "ALT O/U": 15.0,
     },
-    "nhl": {},
-    "nba": {},
+    # NHL: the same 20pp ceiling (2026-10-26) -- calibrates once on the PA market anchor
+    # (engine.sports.nhl._market_anchor); a >20pp edge is the model fighting the line.
+    "nhl": {"_default": 20.0},
+    # NBA: same 20pp ceiling as football (2026-10-26) -- NBA now calibrates ONCE too (the
+    # Pick Authority market anchor), so a >20pp edge is the model wildly disagreeing with the
+    # line, not value; it had no ceiling at all (DEFAULT 60).
+    "nba": {"_default": 20.0},
+    # College basketball: the same 20pp ceiling (2026-10-26) -- calibrates once on the PA
+    # market anchor like NBA; a >20pp edge is the model fighting the line, not value.
+    "ncaam": {"_default": 20.0},
+    "ncaaw": {"_default": 20.0},
+    # Football: one 20pp ceiling on EVERY market ("_default" = any bet type without its own
+    # entry). A >20pp football edge is the model wildly disagreeing with the market -- the
+    # FBS-vs-FCS blind spot, an injury applied a week early (Austin 2026-09-19). It used to
+    # live only as a post-filter in engine/football/_picks; the paper lane never had it, and
+    # once football calibrated once (2026-10-25) raw +24/+29pp leans reached the card.
+    "football_nfl": {"_default": 20.0},
+    "football_cfb": {"_default": 20.0},
+    "football_ufl": {"_default": 20.0},
+    # EPL: the same 20pp ceiling (2026-10-28) -- calibrates once on the PA market anchor
+    # (engine.soccer._market_anchor); replaces the soccer picker's legacy 0 < edge < 10 cap.
+    "eng_premier": {"_default": 20.0},
+    "china_cba": {"_default": 20.0},
+    "australia_nbl": {"_default": 20.0},
 }
 
 
@@ -566,6 +613,10 @@ MAIN_ODDS_CAP = {
 # model is wrong about a bucket, that pick gets dropped before it
 # reaches the Scoreboard / Best Bets / POTD surfaces.
 ENABLE_MLB_NRFI = True
+# NHL market model (MintyBot 2026-10-26): "ratings" = engine.sports.nhl._ratings prices every
+# market (goals + shots ridge-Poisson ratings, empty-net-aware score grid); the factor model
+# only supplies display context, and the game MC + GBM legs are not run. "factor" = legacy.
+NHL_MODEL = "ratings"
 ENABLE_NHL_ML = True
 ENABLE_NHL_OU = True
 ENABLE_NHL_PL = True
@@ -616,6 +667,11 @@ ENABLE_NHL_PERIOD_BTS = True
 ENABLE_NHL_PERIOD_DNB = True
 ENABLE_NHL_TOTAL_OE = True
 ENABLE_NHL_OVERTIME = True
+# NHL extra markets (MintyBot 2026-10-18 'do the extra markets'). 3 LIVE +
+# shadow-tracking; GOAL1/FIRST_GOAL PARKED until a first-goal settlement feed.
+ENABLE_NHL_REG_3WAY = True
+ENABLE_NHL_PERIOD_3WAY = True
+ENABLE_NHL_PERIOD_SPREAD = True
 ENABLE_NHL_BTS_FULL = True
 
 # NBA Phase 1 derivative markets — Q1-specific extensions priced
@@ -627,6 +683,7 @@ ENABLE_NHL_BTS_FULL = True
 # See engine/nba_derivative_picks.py.
 ENABLE_NBA_DERIVATIVES = True
 ENABLE_NBA_Q1_TEAM_TOTAL = True
+ENABLE_NBA_TEAM_TOTAL = True
 ENABLE_NBA_Q1_TOTAL_OE = True
 
 # Monte Carlo simulators (engine.mc_mlb / mc_nhl / mc_nba).
@@ -637,7 +694,10 @@ ENABLE_NBA_Q1_TOTAL_OE = True
 # accuracy gain, ~2x runtime per game; still fits in the per-slate
 # refresh budget.
 ENABLE_MLB_MC = True
-MLB_MC_N_SIMS = 100_000
+MLB_MC_N_SIMS = 15_000  # Austin 2026-09-18: 100k = ~59s/game MC -> the best-bets slate
+# (15 games, GIL-serialized thread pool) never completed (~18min) so PickMint cards went
+# dark. 15k = ~8.7s/game (~2.7min slate), CI half-width +/-0.33% on a win prob -- negligible
+# vs multi-point betting edges. Completes -> caches -> cards load.
 # NHL/NBA MC enabled 2026-04-24 so all derivative pickers can read
 # from MC empirical distributions (per-period, total odd/even,
 # overtime, BTS, team totals). Without MC enabled these derivatives

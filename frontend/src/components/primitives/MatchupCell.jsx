@@ -4,7 +4,7 @@
  * Team sports: parses "AWAY @ HOME" and renders a small logo next to
  * each abbreviation (via lib/teamLogo). Falls back to the raw string
  * when the format doesn't match or the sport doesn't have logo support
- * (tennis vs, motorsports race names, golf tournament names).
+ * (tennis player names).
  */
 import { useState } from 'react'
 import { cn } from '../../lib/utils'
@@ -12,8 +12,7 @@ import { resolveTeamLogo } from '../../lib/teamLogo'
 
 
 // Sports where we render logos. Every other sport gets the plain matchup
-// string — tennis uses player names ("Player A vs Player B"), motorsports
-// use race names, golf uses tournament names, etc.
+// string — tennis uses player names ("Player A vs Player B").
 const _TEAM_SPORTS = new Set([
   'mlb', 'nhl', 'nba',
   'wnba', 'ncaam', 'ncaaw', 'afl', 'euroleague', 'nba_summer_league',
@@ -22,7 +21,7 @@ const _TEAM_SPORTS = new Set([
   'ger_bundesliga', 'fra_ligue1', 'mls', 'us_nwsl', 'usl_championship',
   'us_open_cup', 'uefa_champions', 'uefa_europa', 'uefa_conference',
   'conmebol_libertadores', 'bra_seriea', 'arg_lpf', 'fifa_internationals',
-  'ufl', 'nfl', 'cfb', 'college_baseball',
+  'ufl', 'nfl', 'cfb',
   // basketball framework overseas leagues
   'china_cba', 'bulgaria_nbl', 'czech_nbl', 'germany_bbl',
   'denmark_basketligaen', 'finland_korisliiga', 'france_pro_b',

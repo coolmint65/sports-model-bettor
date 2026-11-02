@@ -121,27 +121,79 @@ def record(sport: str, *,
         date = date or et_today_str()
         pick_key = _make_pick_key(game_id, bet_type, pick_text)
         blob = gzip.compress(json.dumps(trace, default=str).encode("utf-8"))
-        conn = _conn()
-        conn.execute(
-            "INSERT INTO pick_provenance "
-            "  (sport, date, pick_key, bet_type, pick_text, accepted, "
-            "   final_prob, final_edge, trace_gz, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now')) "
-            "ON CONFLICT(sport, date, pick_key) DO UPDATE SET "
-            "  bet_type   = excluded.bet_type, "
-            "  pick_text  = excluded.pick_text, "
-            "  accepted   = excluded.accepted, "
-            "  final_prob = excluded.final_prob, "
-            "  final_edge = excluded.final_edge, "
-            "  trace_gz   = excluded.trace_gz, "
-            "  created_at = excluded.created_at",
-            (sport.lower(), date, pick_key, bet_type, pick_text,
-             1 if accepted else 0, final_prob, final_edge, blob),
-        )
-        conn.commit()
-        conn.close()
+        row = (sport.lower(), date, pick_key, bet_type, pick_text,
+               1 if accepted else 0, final_prob, final_edge, blob)
+        with _buf_lock:
+            _buf[row[:3]] = row      # same key re-recorded before a flush -> last write wins
+            _ensure_flusher()
     except Exception as exc:
         logger.debug("pick_provenance.record skipped: %s", exc)
+
+
+# Buffered writer (2026-10-28 speed pass). record() used to open a connection, run the DDL and
+# commit for EVERY scored candidate: ~31 ms each on the Beelink, x11k NFL / x2k NBA rows per
+# slate recompute = minutes of a request thread spent in fsyncs (NBA best-bets/POTD timed out).
+# Now rows queue in memory and one daemon thread writes them in a single transaction every
+# _FLUSH_SECS. Last write per (sport, date, pick_key) still wins; readers may lag by a second.
+import atexit
+import threading
+
+_FLUSH_SECS = 1.0
+_buf: dict[tuple, tuple] = {}
+_buf_lock = threading.Lock()
+_flusher: threading.Thread | None = None
+
+_UPSERT = (
+    "INSERT INTO pick_provenance "
+    "  (sport, date, pick_key, bet_type, pick_text, accepted, "
+    "   final_prob, final_edge, trace_gz, created_at) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now')) "
+    "ON CONFLICT(sport, date, pick_key) DO UPDATE SET "
+    "  bet_type   = excluded.bet_type, "
+    "  pick_text  = excluded.pick_text, "
+    "  accepted   = excluded.accepted, "
+    "  final_prob = excluded.final_prob, "
+    "  final_edge = excluded.final_edge, "
+    "  trace_gz   = excluded.trace_gz, "
+    "  created_at = excluded.created_at"
+)
+
+
+def _ensure_flusher() -> None:
+    global _flusher
+    if _flusher is None or not _flusher.is_alive():
+        _flusher = threading.Thread(target=_flush_loop, name="pick-provenance-flush", daemon=True)
+        _flusher.start()
+
+
+def flush() -> int:
+    """Write every buffered row in one transaction. Returns rows written."""
+    with _buf_lock:
+        if not _buf:
+            return 0
+        rows = list(_buf.values())
+        _buf.clear()
+    try:
+        conn = _conn()
+        try:
+            conn.executemany(_UPSERT, rows)
+            conn.commit()
+        finally:
+            conn.close()
+        return len(rows)
+    except Exception as exc:
+        logger.debug("pick_provenance.flush skipped %d rows: %s", len(rows), exc)
+        return 0
+
+
+def _flush_loop() -> None:
+    import time
+    while True:
+        time.sleep(_FLUSH_SECS)
+        flush()
+
+
+atexit.register(flush)
 
 
 def get(sport: str, date: str, pick_key: str) -> dict | None:

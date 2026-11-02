@@ -9,14 +9,17 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
+import { clvPct } from '../lib/clv'
 import { useSlate } from '../lib/useSlate'
 import GameCard from './primitives/GameCard'
+import RailLayout, { CardAnchor } from './primitives/RailLayout'
 import { OddsGrid, OddsRow, CardInsight as CardInsightShell } from './primitives/OddsGrid'
 import MarketToggle from './primitives/MarketToggle'
 import PanelShell from './primitives/PanelShell'
 import PickHistory from './PickHistory'
-import BasketballGameDetail from './BasketballGameDetail'
+import UnifiedTracker from './UnifiedTracker'
 import PickOfDayHero from './PickOfDayHero'
+import PaperPickOfDayHero from './PaperPickOfDayHero'
 import PropsPanel from './PropsPanel'
 import LiveBetsPanel from './LiveBetsPanel'
 import LiveTrackerPanel from './LiveTrackerPanel'
@@ -66,12 +69,9 @@ export default function BasketballPanel({ api, leagueKey, leagues }) {
       onTabChange={setView}
     >
       {view === 'bets' && (
-        <>
-          <PickOfDayHero sport={leagueKey} />
-          <BetsView api={api} leagueKey={leagueKey} cfg={cfg} />
-        </>
+        <BetsView api={api} leagueKey={leagueKey} cfg={cfg} />
       )}
-      {view === 'tracker' && <TrackerView api={api} leagueKey={leagueKey} />}
+      {view === 'tracker' && <UnifiedTracker sport={`basketball/${leagueKey}`} api={api} />}
       {view === 'calibration' && <CalibrationView api={api} leagueKey={leagueKey} />}
       {view === 'standings' && <StandingsView api={api} leagueKey={leagueKey} />}
     </PanelShell>
@@ -116,16 +116,18 @@ function adaptGameShape(g) {
       name: g.home_name,
       score: g.home_score,
       logo: g.home_logo,
+      odds: g.odds?.ml?.home ?? null,  // per-side ML on the card (overhaul step 1)
     },
     away: {
       abbreviation: g.away_abbr,
       name: g.away_name,
       score: g.away_score,
       logo: g.away_logo,
+      odds: g.odds?.ml?.away ?? null,
     },
     status: {
       state: stateMap[g.status] || 'pre',
-      detail: g.status === 'final' ? 'Final' : '',
+      detail: g.status === 'final' ? 'Final' : (g.status_detail || ''),   // live clock where the ingest records it (2026-10-31)
     },
     // Series metadata — backend's `series` block when present mirrors
     // the NBA/NHL shape (game_number, home_wins, away_wins, etc).
@@ -193,9 +195,18 @@ function BasketballCardInsight({ bet, home, away, raw }) {
     })
   }
 
+  // One-bet-per-card (Austin 2026-09-19): the paper lean used to render here IN
+  // ADDITION to the gated EdgeBadge (this insight only shows when there IS a gated
+  // pick), so a gated game showed green + a redundant paper badge. The single
+  // headline bet lives in GameCard (gated EdgeBadge, or PaperBadge when there's no
+  // gated pick); the POTD carries the best paper lean. Insight = strongest reason.
   if (reasons.length === 0) return null
   reasons.sort((a, b) => b.weight - a.weight)
-  return <CardInsightShell>{reasons[0].text}</CardInsightShell>
+  return (
+    <div className="space-y-1">
+      <CardInsightShell>{reasons[0].text}</CardInsightShell>
+    </div>
+  )
 }
 
 
@@ -205,10 +216,17 @@ function adaptBetShape(g) {
   return {
     game_id: g.game_id,
     best_pick: best,
+    // Held graduated headline (the recorded authority pick the tracker grades) IS the pill -- never a
+    // different held lean or max-edge candidate (Austin 2026-11-01: card pill disagreed with the tracker).
+    paper_pick: (() => { if (best && best.held) return { ...best, graduated: true, lean: false }; if (g.card_lean) return g.card_lean; const pp = (g.paper_picks || []).filter(p => (p.edge ?? 0) > 0); if (!pp.length) return null;   // card_lean (PA lean, held) first (2026-10-29)
+       const m = pp.reduce((a, b) => ((b.edge ?? -99) > (a.edge ?? -99) ? b : a)); return { ...m, graduated: !!(g.best_pick && g.best_pick.type === m.type && g.best_pick.pick === m.pick) }; })(),  // lean fallback (Austin 2026-10-26)
     confidence: conf,
-    win_prob: g.prediction?.ml_home != null
-      ? { home: g.prediction.ml_home, away: 1 - g.prediction.ml_home }
-      : null,
+    win_prob: g.card_win_prob ?? (() => {
+      // Show the ENSEMBLE win prob (what the pick logic actually uses), not factor-only — they
+      // diverge (Austin 2026-09-18: bar read NY 52% factor while the ensemble had NY at 42%).
+      const mlh = g.prediction?.ensemble?.ensemble?.ml_home ?? g.prediction?.ml_home;
+      return mlh != null ? { home: mlh, away: 1 - mlh } : null;
+    })(),
     // Pass-through slots that GameCard renders conditionally — empty
     // values degrade silently (no chip) per the NHL pattern.
     rest: g.rest || g.prediction?.factors?.rest || null,
@@ -229,31 +247,28 @@ function adaptBetShape(g) {
 // Special-case leagues that have extra tabs beyond Full + Q1.
 // Everything else in _Q1_LEAGUES gets a plain "Q1" tab appended.
 const _MARKET_OPTIONS_SPECIAL = {
-  wnba:  [{ id: 'q1', label: 'Q1' },
-          { id: 'live',  label: 'Live' },
-          { id: 'props', label: 'Player Props' }],
-  ncaam: [{ id: 'q1',   label: '1st Half' },
-          { id: 'live', label: 'Live' }],
+  wnba:  [{ id: 'props', label: 'Player Props' }],
+  // ncaam: 1st Half + Live tabs removed 2026-10-29 (Austin) -- Best only; halves compete inside Best
 }
 
 // Every framework league with fitted q1_margin_std + q1_home_boost +
 // q1_avg_total constants gets a "Q1" tab. Kept as a set so adding a
 // new league is one-line: add its key + a Q1 entry to LEAGUE_REGISTRY.
 const _Q1_LEAGUES = new Set([
-  'afl', 'euroleague', 'ncaaw',
-  'china_cba', 'bulgaria_nbl', 'czech_nbl', 'germany_bbl',
+  'afl', 'euroleague',   // ncaaw out 2026-10-29 with ncaam: Best only
+  'bulgaria_nbl', 'czech_nbl', 'germany_bbl',   // china_cba removed 2026-10-29 (Austin): Q1 merges into Best
   'denmark_basketligaen', 'finland_korisliiga', 'france_pro_b',
   'greece_a1', 'hungary_nb1',
   'iceland_urvalsdeild', 'iceland_urvalsdeild_w', 'israel_super',
   'latvia_lbl', 'lithuania_lkl',
   'slovakia_extraliga', 'slovenia_skl', 'sweden_ligan',
   'argentina_lnb', 'brazil_lbf_w', 'brazil_nbb', 'dominican_lnb',
-  'puerto_rico_bsn', 'japan_b2', 'nz_nbl', 'australia_nbl',
+  'puerto_rico_bsn', 'japan_b2', 'nz_nbl',   // australia_nbl removed 2026-10-30 (Austin): Q1 merges into Best
   'korea_kbl', 'nba_summer_league',
 ])
 
 function buildMarketOptions(leagueKey) {
-  const opts = [{ id: 'full', label: 'Full Game' }]
+  const opts = [{ id: 'best', label: 'Best' }]
   if (_MARKET_OPTIONS_SPECIAL[leagueKey]) {
     opts.push(..._MARKET_OPTIONS_SPECIAL[leagueKey])
   } else if (_Q1_LEAGUES.has(leagueKey)) {
@@ -266,7 +281,6 @@ function buildMarketOptions(leagueKey) {
 function BetsView({ api, leagueKey, cfg }) {
   const [err, setErr] = useState(null)
   const [recording, setRecording] = useState(false)
-  const [selectedGameId, setSelectedGameId] = useState(null)
   const marketOptions = useMemo(() => buildMarketOptions(leagueKey), [leagueKey])
   const [market, setMarket] = useState(marketOptions[0]?.id || 'full')
   // Reset to Full Game when switching leagues — other leagues don't have
@@ -281,6 +295,21 @@ function BetsView({ api, leagueKey, cfg }) {
   const { data: slate, loading, refresh: refreshCache } =
     useSlate(`/basketball/${leagueKey}/today`, slateParams, api)
   const refresh = () => { setErr(null); refreshCache() }
+
+  // POTD-OWN record (Austin 2026-09-19): the Pick-of-the-Day's own running
+  // W-L / profit (from /pick-of-day/{league}/summary), NOT the all-picks paper
+  // aggregate — the hero must show the POTD's track record, not every pick.
+  const [paperRec, setPaperRec] = useState(undefined)  // undefined = fetch in flight; null/object = loaded
+  useEffect(() => {
+    // Game-day-locked PAPER POTD per view (Austin 2026-10-03): /paper-potd returns
+    // {full:{potd,potd_record},q1:{...}} - the locked pick + its record, so the hero
+    // shows a STABLE day pick instead of recomputing live.
+    let alive = true
+    api.get(`/basketball/${leagueKey}/paper-potd`)
+      .then(r => { if (alive) setPaperRec(r.data || null) })
+      .catch(() => { if (alive) setPaperRec(null) })
+    return () => { alive = false }
+  }, [api, leagueKey])
 
   const onRecord = () => {
     setRecording(true)
@@ -305,11 +334,16 @@ function BetsView({ api, leagueKey, cfg }) {
   // candidates; if none, the card renders without a pick badge. The
   // route also writes `best_pick_full` directly so the WNBA fallback
   // is no longer load-bearing.
-  const viewKey = market === 'q1' ? 'best_pick_q1' : 'best_pick_full'
-  const gamesForView = (market === 'full' || market === 'q1')
+  // 'best' = cross-market merged headline (g.best_pick + all paper leans);
+  // 'q1' keeps its own period pick. Full Game retired -> Best (Austin 2026-10-23).
+  const viewKey = market === 'q1' ? 'best_pick_q1' : 'best_pick'
+  const gamesForView = (market === 'best' || market === 'q1')
     ? games.map(g => {
         const chosen = g[viewKey] != null ? g[viewKey] : null
-        return { ...g, best_pick: chosen, picks: chosen ? [chosen] : [] }
+        const pp = market === 'best'
+          ? [...(g.paper_picks || []), ...(g.paper_picks_q1 || [])]
+          : (g.paper_picks_q1 || [])
+        return { ...g, best_pick: chosen, paper_picks: pp, picks: chosen ? [chosen] : [] }
       })
     : games
   const totalPicks = gamesForView.reduce((n, g) => n + (g.picks?.length || 0), 0)
@@ -327,21 +361,6 @@ function BetsView({ api, leagueKey, cfg }) {
   const adaptedFinal = finalRaw.map(g => ({
     game: adaptGameShape(g), bet: adaptBetShape(g), raw: g,
   }))
-
-  // Detail-pane lookup: when a card is clicked, find the matching raw
-  // game and render BasketballGameDetail in place of the slate grid.
-  const selectedRaw = selectedGameId
-    ? games.find(g => g.game_id === selectedGameId)
-    : null
-  if (selectedRaw) {
-    return (
-      <BasketballGameDetail
-        rawGame={selectedRaw}
-        league={leagueKey}
-        onBack={() => setSelectedGameId(null)}
-      />
-    )
-  }
 
   // Props / Live tabs route to dedicated panels — they own their own
   // loaders + layouts. Same pattern NBA uses in BetsView. Skip the
@@ -390,6 +409,8 @@ function BetsView({ api, leagueKey, cfg }) {
       )}
       {slate && !loading && (
         <>
+          {market === 'best' && <PaperPickOfDayHero games={games} sport={leagueKey} scope="full" summary={paperRec?.full?.potd_record} locked={(paperRec?.full?.potd) ?? null} loading={paperRec === undefined} />}
+          {market === 'q1' && <PaperPickOfDayHero games={games} sport={leagueKey} scope="q1" summary={paperRec?.q1?.potd_record} locked={(paperRec?.q1?.potd) ?? null} loading={paperRec === undefined} />}
           {slate.fell_forward && (
             <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] font-medium text-amber-200">
               No games today — showing next slate ({slate.date}).
@@ -421,23 +442,23 @@ function BetsView({ api, leagueKey, cfg }) {
               </div>
             </div>
           ) : (
-            <>
+            <RailLayout entries={[...adaptedActive, ...adaptedFinal]}>
               {adaptedActive.length > 0 && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {adaptedActive.map(({ game, bet, raw }) => {
                     const home = game.home, away = game.away
                     return (
+                      <CardAnchor key={game.game_id} id={game.id ?? game.game_id}>
                       <GameCard
-                        key={game.game_id}
                         game={game}
                         bet={bet}
                         sport={leagueKey}
                         odds={<HrOddsRow raw={raw} />}
                         insight={<BasketballCardInsight bet={bet} home={home} away={away} raw={raw} />}
-                        onClick={() => setSelectedGameId(raw.game_id)}
                         isPotd={!!raw.is_potd}
                         restTiredLabel="B2B"
                       />
+                      </CardAnchor>
                     )
                   })}
                 </div>
@@ -451,21 +472,21 @@ function BetsView({ api, leagueKey, cfg }) {
                     {adaptedFinal.map(({ game, bet, raw }) => {
                       const home = game.home, away = game.away
                       return (
+                        <CardAnchor key={game.game_id} id={game.id ?? game.game_id}>
                         <GameCard
-                          key={game.game_id}
                           game={game}
                           bet={bet}
                           sport={leagueKey}
                           odds={<HrOddsRow raw={raw} />}
                           insight={<BasketballCardInsight bet={bet} home={home} away={away} raw={raw} />}
-                          onClick={() => setSelectedGameId(raw.game_id)}
                         />
+                        </CardAnchor>
                       )
                     })}
                   </div>
                 </>
               )}
-            </>
+            </RailLayout>
           )}
           <div className="text-[10px] text-muted-foreground italic px-1">
             Beta — paper-bet only until ROI accumulates.
@@ -772,16 +793,8 @@ function _recomputeTrackerSummary(rows, byType, allowedTypes) {
   }
   let clvSum = 0, clvN = 0
   for (const r of rows) {
-    if (r.odds != null && r.closing_odds != null) {
-      const betImp = r.odds < 0
-        ? Math.abs(r.odds) / (Math.abs(r.odds) + 100)
-        : 100 / (r.odds + 100)
-      const clsImp = r.closing_odds < 0
-        ? Math.abs(r.closing_odds) / (Math.abs(r.closing_odds) + 100)
-        : 100 / (r.closing_odds + 100)
-      clvSum += (clsImp - betImp) * 100
-      clvN += 1
-    }
+    const _c = clvPct(r.odds, r.closing_odds)
+    if (_c != null) { clvSum += _c; clvN += 1 }
   }
   const settled = wins + losses
   return {
@@ -801,6 +814,7 @@ function _recomputeTrackerSummary(rows, byType, allowedTypes) {
 function TrackerView({ api, leagueKey }) {
   const [rows, setRows] = useState(null)
   const [summary, setSummary] = useState(null)
+  const [paper, setPaper] = useState(null)
   const [loading, setLoading] = useState(false)
   const [settling, setSettling] = useState(false)
   const trackerOptions = useMemo(() => buildTrackerOptions(leagueKey), [leagueKey])
@@ -814,8 +828,9 @@ function TrackerView({ api, leagueKey }) {
       .then(r => {
         setRows(r.data?.rows || [])
         setSummary(r.data?.summary || null)
+        setPaper(r.data?.paper || null)
       })
-      .catch(() => { setRows([]); setSummary(null) })
+      .catch(() => { setRows([]); setSummary(null); setPaper(null) })
       .finally(() => setLoading(false))
   }
   useEffect(refresh, [api, leagueKey])  // eslint-disable-line
@@ -884,6 +899,11 @@ function TrackerView({ api, leagueKey }) {
         </div>
       )}
       <PickHistory
+        paper={market === 'q1' ? paper?.q1 : market === 'full' ? paper?.full : paper}
+        paperRows={(paper?.rows || []).filter(r => !hasQ1Tab ? true : (market === 'q1'
+          ? String(r.bet_type || '').toUpperCase().startsWith('Q1_')
+          : !String(r.bet_type || '').toUpperCase().startsWith('Q1_')))
+          .map(r => ({ ...r, type: r.bet_type, prob: r.model_prob }))}
         summary={filteredSummary}
         history={filteredHistory}
         loading={loading}

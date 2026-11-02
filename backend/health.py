@@ -89,12 +89,14 @@ def _check_schedule(sport: str) -> dict:
 def _check_calibration(sport: str) -> dict:
     """Calibration table built and has at least one bucket cleared."""
     try:
-        from engine.empirical_calibration import snapshot, refresh_calibration
+        from engine.empirical_calibration import snapshot, _ensure_calibration
         snap = snapshot(sport)
         if not snap:
-            # Lazy-build attempt
+            # Lazy-build attempt -- through the single-flight loader: a bare refresh here ran the
+            # ~48s rebuild on EVERY /health hit for a sport with no buckets, and concurrent hits
+            # stacked until they held the whole threadpool (2026-10-28 speed pass).
             try:
-                refresh_calibration(sport)
+                _ensure_calibration(sport)
                 snap = snapshot(sport)
             except Exception as e:
                 return {"status": "warn",

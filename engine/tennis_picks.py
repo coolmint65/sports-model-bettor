@@ -200,7 +200,8 @@ def generate_tennis_picks(prediction: dict, odds: dict | None, *,
                            min_edge_ml: float = 4.0,
                            min_edge_other: float = 6.0,
                            tournament_level: str | None = None,
-                           include_lower_tiers: bool = False
+                           include_lower_tiers: bool = False,
+                           paper: bool = False
                            ) -> list[dict]:
     """Compare a prediction against an odds dict and emit edges.
 
@@ -281,7 +282,8 @@ def generate_tennis_picks(prediction: dict, odds: dict | None, *,
     if isinstance(odds.get("markets"), dict):
         return _score_full_markets(prediction, odds["markets"],
                                      min_edge_ml=min_edge_ml,
-                                     min_edge_other=min_edge_other)
+                                     min_edge_other=min_edge_other,
+                                     paper=paper)
 
     picks: list[dict] = []
     p1_prob = float(prediction.get("p1_win_prob") or 0.0)
@@ -378,6 +380,27 @@ def generate_tennis_picks(prediction: dict, odds: dict | None, *,
     return picks
 
 
+def filter_tennis_picks(picks, tour=None):
+    """Paper edge-gate (Austin 2026-09-19). The raw model bleeds on totals + favorites;
+    the profitable subset is SET_SPREAD + underdogs (odds >= +150), with ATP additionally
+    dropping high-edge picks (its 20+ edges are overconfident, -15%). Gated ROI +22.5%
+    over 414 settled (both tours positive) vs -1.1% raw. In-sample -> paper. See memory
+    tennis_soccer_model_edge_analysis."""
+    t = (tour or "").lower()
+    out = []
+    for p in picks or []:
+        bt = p.get("type") or p.get("bet_type")
+        odds = p.get("odds") or 0
+        edge = p.get("edge") or 0
+        if bt == "TOTAL_GAMES":
+            continue
+        if t == "atp" and edge >= 20:
+            continue
+        if bt == "SET_SPREAD" or odds >= 150:
+            out.append(p)
+    return out
+
+
 def _bo5_to_bo3(p_match_bo5: float) -> float:
     """When the Elo-derived prob is in BO5 form (Slam) but we need
     the per-set prob (which our inversion is calibrated for BO3),
@@ -404,8 +427,32 @@ def _bo5_to_bo3(p_match_bo5: float) -> float:
     return (lo + hi) / 2.0
 
 
+def _tennis_cal(bet_type: str, raw_prob: float) -> float:
+    """Tennis bet-calibrated prob (Platt -> blend) — mirrors the tennis
+    branch of picks_core.score_pick (Platt is fit on actual bet results)
+    but WITHOUT its belief/floor/juice/odds-cap gates. Used only for the
+    PAPER lean, so a card shows the model's best calibrated VALUE lean
+    (favorite or dog) instead of "NO PICK". Falls back to raw on any miss
+    so a card never breaks."""
+    cal = float(raw_prob or 0.0)
+    try:
+        from .tennis_platt_calibration import (tennis_calibrate as _tc,
+                                                has_fit as _thf)
+        if _thf(bet_type):
+            cal = float(_tc(bet_type, cal))
+    except Exception:
+        pass
+    try:
+        from .blend_calibration import calibrate as _blend
+        cal = float(_blend("tennis", cal))
+    except Exception:
+        pass
+    return min(0.999, max(0.001, cal))
+
+
 def _score_full_markets(prediction: dict, markets: dict, *,
-                          min_edge_ml: float, min_edge_other: float) -> list[dict]:
+                          min_edge_ml: float, min_edge_other: float,
+                          paper: bool = False) -> list[dict]:
     """Score the rich HR-derived markets dict. One pick per
     market-side that clears its edge floor. Conviction follows the
     POTD formula and bet_type strings match what the tracker
@@ -427,6 +474,27 @@ def _score_full_markets(prediction: dict, markets: dict, *,
         # path in one edit. The local `floor` arg is honored after
         # picks_core's data-driven floor — whichever is stricter wins.
         if odds_val is None:
+            return
+        if paper:
+            # PAPER lean (mirrors NHL _nhl_paper_picks): calibrated prob vs
+            # implied, edge computed DIRECTLY — bypasses score_pick's belief
+            # (prob>=0.50), edge-floor, juice-wall and odds-cap gates so the
+            # best calibrated VALUE lean (fav or dog) surfaces. Keeps only a
+            # 20pp ceiling (overconfidence guard, same as NHL's CEIL).
+            imp = _implied_prob(odds_val)
+            if imp is None:
+                return
+            cal = _tennis_cal(bt, prob)
+            edge = round((cal - imp) * 100, 1)
+            if not (0 < edge <= 20):
+                return
+            picks.append({
+                "type": bt, "bet_type": bt, "pick": pick_text,
+                "odds": int(odds_val), "model_prob": round(cal, 4),
+                "edge": edge, "confidence": _confidence_for_edge(edge),
+                "conviction_score": round(_conviction_score(cal, edge), 4),
+                "paper": True,
+            })
             return
         from .picks_core import score_pick as _score_pick
         scored = _score_pick({

@@ -351,7 +351,11 @@ def _line_from_name(name: str | None) -> float | None:
 
 def _start_time_iso(ev: dict) -> str | None:
     et = ev.get("eventTime")
-    if not isinstance(et, (int, float)) or et <= 0:
+    try:   # HR's REST events ship eventTime as a numeric STRING ("1793674800000"), GraphQL as a number
+        et = float(et)
+    except (TypeError, ValueError):
+        return None
+    if et <= 0:
         return None
     from datetime import datetime as _dt, timezone as _tz
     try:
@@ -668,15 +672,21 @@ def _pick_main_ah(cands: list[dict]) -> dict | None:
 
 def _parse_event(ev: dict, name_to_abbr: dict[str, str],
                   league_name: str) -> dict | None:
-    parts = ev.get("participants") or []
-    if len(parts) < 2:
-        return None
-    en = ev.get("eventNames") or {}
-    canonical = en.get("name") if isinstance(en, dict) else ""
-    away_name, home_name = _split_canonical(canonical or "")
+    from scrapers.hardrock_odds import _extract_teams
+    # HR dropped participants[] in an Oct-2026 event-shape change (now ships a
+    # single `name` like "Man City vs Ipswich"); read teams via the shared
+    # _extract_teams helper first, then the legacy eventNames / participants[]
+    # paths. (MintyBot 2026-10-13)
+    away_name, home_name = _extract_teams(ev)
     if not (away_name and home_name):
-        away_name = (parts[0].get("name") or "").strip()
-        home_name = (parts[1].get("name") or "").strip()
+        en = ev.get("eventNames") or {}
+        canonical = en.get("name") if isinstance(en, dict) else ""
+        away_name, home_name = _split_canonical(canonical or "")
+    if not (away_name and home_name):
+        parts = ev.get("participants") or []
+        if len(parts) >= 2:
+            away_name = (parts[0].get("name") or "").strip()
+            home_name = (parts[1].get("name") or "").strip()
 
     home_abbr = _resolve_team(home_name, name_to_abbr)
     away_abbr = _resolve_team(away_name, name_to_abbr)

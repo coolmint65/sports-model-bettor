@@ -157,7 +157,22 @@ def settle_picks() -> dict:
         pk = pick["pick"]
         odds = pick["odds"] or -110
 
-        if bt in ("ml", "ML"):
+        # -- Unified grading core (audit T2 migration) --
+        # Authoritative for the markets it covers (ML/O-U/RL/NRFI, with
+        # the assume-away + NRFI-heuristic + impossible-push bugs fixed);
+        # falls through to the legacy branches for markets it does not
+        # cover yet (F5, team total, props). ANY core error falls back to
+        # legacy -- settlement never breaks.
+        try:
+            from ..grading import mlb_adapter as _core_mlb
+            _cr = _core_mlb.grade_pick(pick, game, h, a, home_team, away_team)
+        except Exception as _ce:
+            logger.warning("mlb core grade id=%s failed, legacy fallback: %s",
+                           pick.get("id"), _ce)
+            _cr = None
+        if _cr is not None:
+            result = _cr
+        elif bt in ("ml", "ML"):
             home_won = hs > as_
             if pk == h:
                 won = home_won
@@ -262,7 +277,11 @@ def settle_picks() -> dict:
             elif pick_team == a:
                 team_margin = as_ - hs
             else:
-                team_margin = as_ - hs  # fallback: assume away
+                # Abstain instead of assuming a side: an unresolved pick
+                # team (abbr/alias miss) must NOT be graded on a guessed
+                # sign, or a home run-line is silently scored for the wrong
+                # team. Leave it pending (audit T1).
+                continue
 
             if team_margin + spread > 0:
                 result = "W"
@@ -300,8 +319,10 @@ def settle_picks() -> dict:
                     result = "P"
                 elif pk == h:
                     result = "W" if f5_margin > 0 else "L"
-                else:
+                elif pk == a:
                     result = "W" if f5_margin < 0 else "L"
+                else:
+                    continue  # abstain: pick matches neither side (was assume-away sign-flip)
 
             elif sub in ("O/U", "OU"):
                 parts = pk.split()
@@ -326,8 +347,10 @@ def settle_picks() -> dict:
                     spread = 0.5
                 if pick_team == h:
                     team_margin = f5_margin
-                else:
+                elif pick_team == a:
                     team_margin = -f5_margin
+                else:
+                    continue  # abstain: pick matches neither side (was assume-away sign-flip)
                 if team_margin + spread > 0:
                     result = "W"
                 elif team_margin + spread == 0:
@@ -347,7 +370,12 @@ def settle_picks() -> dict:
                     line = float(parts[2])
                 except ValueError:
                     continue
-                team_runs = hs if pick_team == h else as_
+                if pick_team == h:
+                    team_runs = hs
+                elif pick_team == a:
+                    team_runs = as_
+                else:
+                    continue  # abstain: pick matches neither side (was assume-away sign-flip)
                 if team_runs > line:
                     result = "W" if direction == "over" else "L"
                 elif team_runs < line:
@@ -376,7 +404,12 @@ def settle_picks() -> dict:
                     line = float(parts[3])
                 except ValueError:
                     continue
-                team_f5 = sum(h_inn[:5]) if pick_team == h else sum(a_inn[:5])
+                if pick_team == h:
+                    team_f5 = sum(h_inn[:5])
+                elif pick_team == a:
+                    team_f5 = sum(a_inn[:5])
+                else:
+                    continue  # abstain: pick matches neither side (was assume-away sign-flip)
                 if team_f5 > line:
                     result = "W" if direction == "over" else "L"
                 elif team_f5 < line:
@@ -458,8 +491,10 @@ def settle_picks() -> dict:
                     result = "W" if h1 == a1 else "L"
                 elif pick_label == h:
                     result = "W" if h1 > a1 else "L"
-                else:
+                elif pick_label == a:
                     result = "W" if a1 > h1 else "L"
+                else:
+                    continue  # abstain: pick matches neither side (was assume-away sign-flip)
 
         elif bt == "F5 Winner":
             # 3-way: tie is a winnable outcome.
@@ -484,8 +519,10 @@ def settle_picks() -> dict:
                     result = "W" if f5_home == f5_away else "L"
                 elif pick_label == h:
                     result = "W" if f5_home > f5_away else "L"
-                else:
+                elif pick_label == a:
                     result = "W" if f5_away > f5_home else "L"
+                else:
+                    continue  # abstain: pick matches neither side (was assume-away sign-flip)
 
         elif bt == "Total O/E":
             if (game.get("status") or "").lower() != "final":

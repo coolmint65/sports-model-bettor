@@ -14,7 +14,7 @@ its raw output directly.
 Markets seeded (all leakage-clean from historical scores):
   ML     — Poisson grid P(home wins) vs realized winner
   SPREAD — Skellam tail P(margin > L) at puck-line offsets, vs
-           realized margin. Same approach AFL/golf use: probe the
+           realized margin. Same approach AFL uses: probe the
            model's distribution at several offsets per game and bucket
            by max(p, 1-p) so the realized-cover rate per conviction
            bucket emerges from real outcome data, no synthesized lines.

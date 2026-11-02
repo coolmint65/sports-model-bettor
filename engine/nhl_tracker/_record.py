@@ -28,6 +28,135 @@ def capture_closing_odds() -> int:
     return core_capture_closing_odds(adapter)
 
 
+def record_paper(matchup: str, game_id, paper_picks,
+                 date: str | None = None) -> dict:
+    """Persist NHL PAPER picks as is_shadow=1 rows in nhl_picks — the
+    CALIBRATED shadow layer (Austin 2026-09-22). Mirrors
+    engine.football._tracker.record_paper, adapted to nhl_picks (pick
+    text is the full string, e.g. "Over 6.5" / "BOS -1.5"; no separate
+    line column).
+
+    Unlike the football/basketball paper (RAW model), the NHL paper
+    leans come pre-CALIBRATED from routes_nhl._nhl_paper_picks (the
+    same empirical→framework→blend→final chain the real card uses), and
+    they intentionally bypass the real-bet EDGE FLOOR so the model's
+    sub-threshold calibrated leans still get a forward test.
+
+    Kickoff-locked via nhl_games; prematch it is a LIVE MIRROR — one
+    is_shadow=1 row per game held equal to the single current card paper
+    pick (caller passes that one lean), swapping as the model's best lean
+    moves and freezing at game start, exactly like the active layer chases
+    best_pick. Stale/extra/voided is_shadow=1 rows are DELETEd (never
+    voided) so the (date,game_id,bet_type,pick,is_shadow) unique index can
+    never block a re-insert. Rides the real settle_picks +
+    capture_closing_odds (both select WHERE result IS NULL, no is_shadow
+    filter) for free grading + CLV."""
+    from datetime import datetime as _dt
+    conn = _get_nhl_db()
+    try:
+        conn.execute("PRAGMA busy_timeout = 4000")  # bound lock waits (concurrent best-bets hits)
+    except Exception:
+        pass
+    target_date = date or et_today_str()
+    # Kickoff lock — once the game is live/final/postponed (or its stored
+    # date has rolled past the slate date), the paper record is frozen.
+    row = conn.execute(
+        "SELECT date, status, start_time FROM nhl_games WHERE game_id = ? LIMIT 1",
+        (str(game_id),),
+    ).fetchone()
+    _start_iso = (row["start_time"] if row is not None else None)
+    if row is not None:
+        started = (row["status"] in ("live", "final", "postponed"))
+        try:
+            started = started or (str(row["date"]) < target_date)
+        except Exception:
+            pass
+        if started:
+            return {"recorded": 0, "locked": 1}
+    # LOCK on first (Austin 2026-10-06): if a pending paper lean already exists for this game,
+    # it's LOCKED -- keep it, don't swap/clear as the line moves. The card holds the first
+    # pre-game lean; the line moving away is our CLV, not a reason to re-pick. (Was a live
+    # mirror that chased the card's best lean, 2026-10-03.) Refresh edge/odds only if the
+    # locked pick is still the model's current best; otherwise hold it unchanged.
+    # Time-based lock (Austin 2026-10-14): freeze the pending lean only once its game
+    # reaches the lock_schedule time (7am day / 4:30pm night / prior-9pm overnight ET);
+    # before that it stays PROVISIONAL and re-mirrors the best lean (was unconditional
+    # lock-on-first). If start_time is unknown, fall back to lock-on-first (conservative).
+    _locked_now = None
+    if _start_iso:
+        try:
+            from engine.lock_schedule import is_locked as _is_locked
+            from datetime import datetime as _dt2
+            _locked_now = _is_locked(_dt2.fromisoformat(str(_start_iso).replace("Z", "+00:00")))
+        except Exception:
+            _locked_now = None
+    _cur0 = next((p for p in (paper_picks or []) if p.get("type") and p.get("pick")), None)
+    _lk = conn.execute(
+        "SELECT id, bet_type, pick FROM nhl_picks WHERE game_id=? AND date=? "
+        "AND COALESCE(is_shadow,0)=1 AND result IS NULL ORDER BY id LIMIT 1",
+        (str(game_id), target_date)).fetchone()
+    if _lk is not None and (_locked_now is True or _locked_now is None):
+        if _cur0 and _cur0.get("type") == _lk["bet_type"] and _cur0.get("pick") == _lk["pick"]:
+            conn.execute("UPDATE nhl_picks SET model_prob=?, edge=?, odds=? WHERE id=?",
+                         (float(_cur0.get("prob") or 0.0), float(_cur0.get("edge") or 0.0),
+                          int(_cur0.get("odds") or 0), _lk["id"]))
+            conn.commit()
+        return {"recorded": 0, "locked": 1}
+    # LIVE MIRROR (Austin 2026-10-03, strictly-paper one-per-game): make the game's
+    # pending is_shadow=1 row EXACTLY the single current card paper pick. The caller
+    # passes only that one lean. Prematch, the tracker chases the card (swaps when
+    # the model's best lean moves) just like the active layer chases best_pick; the
+    # kickoff lock above freezes it at game start. Every stale/extra/voided
+    # is_shadow=1 row is DELETEd (never voided), so no leftover row can block the
+    # (date,game_id,bet_type,pick,is_shadow) unique index on re-insert — that block
+    # was what stranded games with no paper row. is_shadow=0 (active) is untouched.
+    picks = [p for p in (paper_picks or []) if (p.get("type") and p.get("pick"))]
+    if not picks:
+        conn.execute(
+            "DELETE FROM nhl_picks WHERE game_id=? AND date=? "
+            "AND COALESCE(is_shadow,0)=1 AND result IS NULL",
+            (str(game_id), target_date),
+        )
+        conn.commit()
+        return {"recorded": 0}
+    p = picks[0]
+    bt, pk = p.get("type"), p.get("pick")
+    _prob = float(p.get("prob") or 0.0)
+    _edge = float(p.get("edge") or 0.0)
+    _odds = int(p.get("odds") or 0)
+    # Drop every is_shadow=1 row for this game/slate that ISN'T the current pending
+    # card pick: stale other-family leans AND any voided leftover (incl. a voided
+    # copy of this very pick that would otherwise block the INSERT).
+    conn.execute(
+        "DELETE FROM nhl_picks WHERE game_id=? AND date=? AND COALESCE(is_shadow,0)=1 "
+        "AND NOT (result IS NULL AND bet_type=? AND pick=?)",
+        (str(game_id), target_date, bt, pk),
+    )
+    existing = conn.execute(
+        "SELECT id FROM nhl_picks WHERE game_id=? AND date=? AND COALESCE(is_shadow,0)=1 "
+        "AND result IS NULL AND bet_type=? AND pick=? LIMIT 1",
+        (str(game_id), target_date, bt, pk),
+    ).fetchone()
+    if existing is not None:
+        # same pick still current -> refresh the live edge/odds, keep the row (+ its
+        # captured closing_odds) so the forward test isn't reset by a no-op hit.
+        conn.execute(
+            "UPDATE nhl_picks SET model_prob=?, edge=?, odds=? WHERE id=?",
+            (_prob, _edge, _odds, existing[0]),
+        )
+        rec = 0
+    else:
+        conn.execute(
+            "INSERT OR IGNORE INTO nhl_picks "
+            "(game_id, date, matchup, bet_type, pick, model_prob, edge, "
+            " odds, stake_units, is_shadow) VALUES (?,?,?,?,?,?,?,?,0,1)",
+            (str(game_id), target_date, matchup or "", bt, pk, _prob, _edge, _odds),
+        )
+        rec = 1
+    conn.commit()
+    return {"recorded": rec}
+
+
 def refresh_pending_for_today(bets: list[dict],
                                target_date: str | None = None) -> dict:
     """NHL twin of engine.tracker.refresh_pending_for_today. See that
@@ -61,9 +190,15 @@ def refresh_pending_for_today(bets: list[dict],
         if bp:
             current_by_matchup[b["matchup"]] = bp
 
+    # is_shadow=0 ONLY (Austin 2026-10-03): refresh swaps a pending pick to the
+    # card's best_pick as the line moves — correct for the active layer, but it
+    # must NOT touch the is_shadow=1 PAPER rows, or the calibrated paper lean gets
+    # overwritten with the active best_pick (WSH paper showed PL +1.5 instead of
+    # the card's ML). The strictly-paper layer is locked at record + deduped in
+    # routes_nhl; refresh leaves it alone.
     pending = conn.execute(
         "SELECT id, matchup, bet_type, pick, game_id FROM nhl_picks "
-        "WHERE date = ? AND result IS NULL",
+        "WHERE date = ? AND result IS NULL AND COALESCE(is_shadow,0)=0",
         (target_date,),
     ).fetchall()
 

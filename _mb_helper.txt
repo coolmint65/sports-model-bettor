@@ -1,0 +1,41 @@
+def _mlb_recorded_authority_pick(game_id, conn, date=None):
+    """The game's recorded AUTHORITY pick = the `picks`-table row the card
+    headlined — EXACTLY what _get_recorded_pick reads (best-EDGE non-void row per
+    game; ORDER BY edge DESC mirrors _get_recorded_pick's own selection). Replaces
+    the paper_shadow re-derivation (_mlb_merged_recorded_best) so the MLB tracker ==
+    the card. MLB's `picks` table (data/mlb.db) has NO is_shadow column — every row
+    is a recorded authority pick (the shadow pool is the SEPARATE paper_shadow
+    table) — and NO `line` column, so pick text renders as stored. Returns the
+    chip-shaped dict + flat-$100 profit + _scope + its own matchup/date. One
+    row/game. (MintyBot 2026-10-23: Pick Authority — one pick, read everywhere.)"""
+    dq = " AND date = ?" if date else ""
+    args = (str(game_id), date) if date else (str(game_id),)
+    try:
+        r = conn.execute(
+            "SELECT matchup,date,bet_type,pick,odds,edge,model_prob,result,profit,"
+            "closing_odds,stake_units FROM picks WHERE game_id=?" + dq + " "
+            "AND (result IS NULL OR result != 'V') "
+            "ORDER BY edge DESC LIMIT 1", args).fetchone()
+    except Exception:
+        return None
+    if not r:
+        return None
+    d = dict(r)
+    # picks has no `scope` column; derive the tracker chip from bet_type so a
+    # 1st-INN / F5 / Team-Total authority pick still buckets correctly.
+    _bt = (d.get("bet_type") or "").strip().upper()
+    if _bt == "1ST INN" or _bt in ("NRFI", "YRFI"):
+        _scope_tok = "first_inning"
+    elif _bt.startswith("F5") or "TEAM TOTAL" in _bt:
+        _scope_tok = "derivative"
+    else:
+        _scope_tok = "full"
+    return {"type": d["bet_type"], "market": d["bet_type"],
+            "pick": _disp_pick(d["bet_type"], d["pick"], None),
+            "odds": d["odds"], "edge": d["edge"], "prob": d["model_prob"],
+            "result": d["result"], "paper": True,
+            "_scope": _mlb_market_scope(_scope_tok),
+            "closing_odds": d.get("closing_odds"),
+            "profit": _mlb_flat_profit(d["result"], d["odds"]),
+            "stake_units": 1.0,
+            "matchup": d.get("matchup"), "date": d.get("date")}

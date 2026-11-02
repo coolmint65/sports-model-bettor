@@ -469,7 +469,7 @@ def generate_picks(home_team_id: int, away_team_id: int,
 
 
 def get_best_pick(picks: list[dict]) -> dict | None:
-    """Return the single best pick (highest edge) from a picks list.
+    """Return the single best pick (the STRONGEST play = edge x prob) from a picks list.
 
     Prefers picks with a real stake recommendation (`stake_units > 0`)
     so shadow picks (NOPLAY cells / below-floor edges that emit at 0u
@@ -484,6 +484,11 @@ def get_best_pick(picks: list[dict]) -> dict | None:
     playable = [p for p in picks if p.get("confidence") != "skip"]
     if not playable:
         return None
+    # "Both" headline (Austin 2026-10-17): the card's best pick is the STRONGEST
+    # play = edge x prob, not the largest edge. A 70%/+13pp pick (9.1) beats a
+    # 90%/+5pp pick (4.5). Local sort -- does NOT mutate the caller's list.
+    playable = sorted(playable,
+                      key=lambda p: -((float(p.get("edge") or 0)) * (float(p.get("prob") or p.get("model_prob") or p.get("raw_prob") or 0))))
     staked = [p for p in playable if (p.get("stake_units") or 0) > 0]
     return staked[0] if staked else playable[0]
 

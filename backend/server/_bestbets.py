@@ -118,3 +118,84 @@ def _bb_reset_on_exit(sport: str):
             return _bb_single_flight(sport, _runner)
         return wrapper
     return decorator
+
+
+# --- Persisted best-bets response cache (survives process restart) ----------
+# The in-process _*_BB_CACHE is ephemeral: after a restart the first /best-bets
+# request recomputes the whole slate synchronously on the request thread (the
+# "Computing predictions 0/N" multi-minute stall). Mirror each assembled response
+# to disk so a cold process serves the last-known slate INSTANTLY and lets the
+# existing stale-while-revalidate refresh update it in the background.
+# MintyBot 2026-10-15.
+import json as _json
+import os as _os
+
+_BB_PERSIST_DIR = _os.path.join(
+    _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))),
+    "data", "bb_cache")
+_BB_PERSIST_LOCK = _threading.Lock()
+
+
+def persist_bb(sport, resp):
+    """Mirror an assembled best-bets response to disk. Best-effort; never raises."""
+    try:
+        from fastapi.encoders import jsonable_encoder
+        path = _os.path.join(_BB_PERSIST_DIR, sport + ".json")
+        tmp = path + ".tmp"
+        with _BB_PERSIST_LOCK:
+            _os.makedirs(_BB_PERSIST_DIR, exist_ok=True)
+            with open(tmp, "w", encoding="utf-8") as f:
+                _json.dump({"saved_at": _time.time(), "resp": jsonable_encoder(resp)}, f)
+            _os.replace(tmp, path)
+    except Exception:
+        pass
+
+
+def load_bb(sport):
+    """Return (resp, saved_at_epoch) persisted for `sport`, or (None, None)."""
+    try:
+        path = _os.path.join(_BB_PERSIST_DIR, sport + ".json")
+        with open(path, "r", encoding="utf-8") as f:
+            d = _json.load(f)
+        return d.get("resp"), d.get("saved_at")
+    except Exception:
+        return None, None
+
+
+# --- Backtest response cache (speed pass 2026-10-28) -------------------------
+# Full-season backtests replay every game (MLB ~3 min, NHL ~40 s), so the Backtest tab timed
+# out or crawled on every visit. Serve the last result for a param set (persisted, survives
+# restarts) and re-run it in the background at most every 6 h. Only the very first run of a
+# param set blocks.
+_BT_CACHE: dict = {}
+_BT_REFRESHING: set = set()
+_BT_TTL_S = 6 * 3600
+
+
+def cached_backtest(ck, run):
+    cached = _BT_CACHE.get(ck)
+    if cached is None:
+        resp, saved = load_bb(ck)
+        if resp is not None:
+            cached = _BT_CACHE[ck] = (saved or 0.0, resp)
+    if cached is not None:
+        built, resp = cached
+        if _time.time() - built >= _BT_TTL_S and ck not in _BT_REFRESHING:
+            _BT_REFRESHING.add(ck)
+
+            def _bg():
+                try:
+                    r = run()
+                    if not (isinstance(r, dict) and r.get("error")):
+                        _BT_CACHE[ck] = (_time.time(), r)
+                        persist_bb(ck, r)
+                finally:
+                    _BT_REFRESHING.discard(ck)
+
+            _threading.Thread(target=_bg, daemon=True).start()
+        return resp
+    r = run()
+    if not (isinstance(r, dict) and r.get("error")):
+        _BT_CACHE[ck] = (_time.time(), r)
+        persist_bb(ck, r)
+    return r

@@ -223,7 +223,17 @@ def _blended_pitcher(sp_pit: dict | None, sp_db: dict | None,
             # nudge the estimate (30% recent / 70% season).
             effective_era = recent_era * 0.30 + season_era * 0.70
 
-    pit_factor = effective_era / MLB_AVG_ERA
+    # ERA-shrinkage (calibrated 2026-09-22; backup factors.py.bak-mlbcal):
+    # point-in-time / proxy ERA is over-dispersed and over-trusted here.
+    # For pitchers with >8 starts _blended_pitcher uses 100% pit_factor
+    # (the FIP-based db_factor is dropped), so the noisy season/proxy ERA
+    # drove the run multiplier unshrunk. Regressing the ERA deviation
+    # toward league average (x0.6) improved held-out logloss + Brier on
+    # BOTH 2025 and 2026 in a point-in-time backtest (fit on 2023-24).
+    # Peripheral weights (WHIP/K9/BB9) were checked, left as-is (no robust
+    # gain); recency-weighting did not generalize (helped 2026, hurt 2025).
+    _ERA_SHRINK = 0.6
+    pit_factor = 1.0 + _ERA_SHRINK * (effective_era / MLB_AVG_ERA - 1.0)
     pit_factor = max(0.60, min(1.50, pit_factor))
 
     if starts == 0:

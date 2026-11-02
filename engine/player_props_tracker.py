@@ -74,6 +74,25 @@ _NHL_STAT_KEY: dict[str, str] = {
     "Skater Blocks":      "blocks",
     "Goalie Saves":       "saves",
     "Goalie Goals Against": "ga",
+    # NHL anytime-goal PAPER model (engine.sports.nhl.anytime_goal):
+    # Yes side on line 0.5, so actual goals > 0.5 (i.e. >=1 goal) wins.
+    # Same "g" stat key as Skater Goals — settles via _determine_outcome's
+    # existing over/yes rule, no new branch needed.
+}
+
+# NFL anytime-TD PAPER model. "td_total" = any TD (rush+rec+return+def),
+# stored per game by engine.sports.nfl.player_logs; the market settles
+# on actual > 0.5 (i.e. >=1 TD) for the Yes side. See engine.sports.nfl.
+_NFL_STAT_KEY: dict[str, str] = {
+    "Anytime TD": "td_total",
+    "Passing Yards": "pass_yds",
+    "Rushing Yards": "rush_yds",
+    "Receiving Yards": "rec_yds",
+    "Receptions": "receptions",
+    "Rushing Attempts": "carries",
+    "Pass Attempts": "pass_att",
+    "Completions": "completions",
+    "Rush+Rec Yards": "rr_yds",
 }
 
 
@@ -88,6 +107,8 @@ def _stat_key_for(sport: str, bet_type: str) -> str | None:
         return _NBA_STAT_KEY.get(bet_type)
     if sport == "nhl":
         return _NHL_STAT_KEY.get(bet_type)
+    if sport == "nfl":
+        return _NFL_STAT_KEY.get(bet_type)
     return None
 
 
@@ -145,6 +166,33 @@ def _lookup_actual(sport: str, player_id: int, game_id: str,
     by short-circuiting to None so we don't false-settle on partial data.
     """
     conn = _conn_for(sport)
+    # NFL props v2 (2026-10-26): game_id is the real ESPN event id -> read the
+    # player's line from THAT game (prop_model.settle_lookup: nflverse logs matched
+    # by game date +-1 and the two teams; 0 when he took snaps without a touch).
+    if (sport == "nfl" and stat_key in ("pass_yds", "rush_yds", "rec_yds", "receptions")
+            and str(game_id).isdigit()):
+        from .sports.nfl.prop_model import settle_lookup
+        status, val = settle_lookup(int(player_id), str(game_id), stat_key)
+        return val if status == "ok" else None
+    # NFL yards/receptions props settle from player_prop_logs (nflverse ingest),
+    # matched by player + game date (game_id carries the slate date). The
+    # player's game on/after that date holds the box-score stat. td_total
+    # (anytime) falls through to player_game_logs below.
+    if sport == "nfl" and stat_key in ("pass_yds", "rush_yds", "rec_yds", "receptions"):
+        # The slate date (game_id) can sit a day AFTER the real game date — a
+        # Sunday game is recorded 09-27 but the pick stamped the 09-28 slate — so
+        # a strict date>=game_id missed the stat and the prop wrongly PUSHED. Reach
+        # back one day; still takes the earliest game on/after that.
+        pr = conn.execute(
+            "SELECT %s v FROM player_prop_logs WHERE espn_id = ? "
+            "AND date >= date(?, '-1 day') ORDER BY date LIMIT 1" % stat_key,
+            (int(player_id), str(game_id))).fetchone()
+        if not pr or pr["v"] is None:
+            return None
+        try:
+            return float(pr["v"])
+        except (TypeError, ValueError):
+            return None
     row = conn.execute(
         "SELECT stats_json FROM player_game_logs "
         "WHERE player_id = ? AND game_id = ?",
@@ -183,11 +231,29 @@ def _game_is_final(sport: str, game_id: str) -> bool:
     """Return True when the per-sport games table marks this game final.
     Used to detect DNP props — if the game is final but no log exists
     for the player, the prop should void rather than sit pending."""
+    # NFL player-props (yards/receptions) store the slate DATE as game_id and
+    # settle from player_prop_logs; a date-format game_id is final once the date
+    # has passed AND the nflverse ingest has that slate's games (avoids voiding
+    # a game that just hasn't been ingested yet).
+    import re as _re_pp
+    if sport == "nfl" and _re_pp.match(r"^\d{4}-\d{2}-\d{2}$", str(game_id)):
+        from datetime import date as _date_pp
+        if str(game_id) >= _date_pp.today().isoformat():
+            return False
+        try:
+            from .player_props_db import _conn_for as _pc_pp
+            r = _pc_pp("nfl").execute(
+                "SELECT 1 FROM player_prop_logs WHERE date >= date(?, '-1 day') LIMIT 1",
+                (str(game_id),)).fetchone()
+            return bool(r)
+        except Exception:
+            return str(game_id) < _date_pp.today().isoformat()
     table_col = {
         "mlb":  ("games", "mlb_game_id"),  # picks store espn_event_id; mlb games keyed on mlb_game_id
         "nhl":  ("nhl_games", "game_id"),
         "nba":  ("nba_games", "game_id"),
         "wnba": ("games", "game_id"),      # basketball framework db
+        "nfl":  ("games", "game_id"),       # football game-model nfl.db (read-only)
     }.get(sport)
     if not table_col:
         return False
@@ -202,6 +268,12 @@ def _game_is_final(sport: str, game_id: str) -> bool:
         elif sport == "wnba":
             from .basketball._db import get_conn
             conn = get_conn("wnba")
+        elif sport == "nfl":
+            # Read the football GAME model's nfl.db READ-ONLY for game
+            # status. We never write to it — the paper model's own tables
+            # live in the isolated nfl_player.db.
+            from engine.football._db import get_conn
+            conn = get_conn("nfl")
         else:
             from .nba_db import get_conn
             conn = get_conn()
@@ -226,6 +298,47 @@ def _game_is_final(sport: str, game_id: str) -> bool:
         return False
 
 
+def _nfl_player_game_done(sport: str, player_id: int, game_id: str) -> bool:
+    """For NFL date-format props: True only when the player's TEAM has a game log
+    in the slate window — i.e. the player's game actually played + was ingested.
+    Distinguishes a real DNP (teammates logged, this player absent → OK to push)
+    from an upcoming game (no teammate logged yet → leave pending). Without this,
+    a whole upcoming slate mass-pushes the moment any one game that week lands in
+    the feed (e.g. a Thursday game ingested while Sunday's slate is still pending).
+    Non-NFL / non-date-format game_ids pass through (defer to _game_is_final)."""
+    import re as _re_pg
+    if sport == "nfl" and str(game_id).isdigit():
+        # v2 rows (ESPN event id): push only once nflverse has the game AND its snap
+        # counts and the player isn't in them (prop_model.settle_lookup -> 'dnp').
+        try:
+            from .sports.nfl.prop_model import settle_lookup
+            from .player_props_db import _conn_for as _pc_v2
+            r = _pc_v2("nfl").execute(
+                "SELECT bet_type FROM player_props_picks WHERE game_id = ? AND player_id = ? "
+                "AND result IS NULL LIMIT 1", (str(game_id), int(player_id))).fetchone()
+            stat = _NFL_STAT_KEY.get(r["bet_type"]) if r else None
+            return bool(stat) and settle_lookup(int(player_id), str(game_id), stat)[0] == "dnp"
+        except Exception:
+            return False
+    if sport != "nfl" or not _re_pg.match(r"^\d{4}-\d{2}-\d{2}$", str(game_id)):
+        return True
+    try:
+        from .player_props_db import _conn_for as _pc_pg
+        conn = _pc_pg("nfl")
+        trow = conn.execute(
+            "SELECT team FROM player_prop_logs WHERE espn_id = ? AND team IS NOT NULL "
+            "ORDER BY date DESC LIMIT 1", (int(player_id),)).fetchone()
+        if not trow or not trow["team"]:
+            return False  # unknown team → can't confirm the game played → don't push
+        r = conn.execute(
+            "SELECT 1 FROM player_prop_logs WHERE team = ? "
+            "AND date BETWEEN date(?, '-1 day') AND date(?, '+1 day') LIMIT 1",
+            (trow["team"], str(game_id), str(game_id))).fetchone()
+        return bool(r)
+    except Exception:
+        return False
+
+
 def settle_player_props(sport: str) -> dict:
     """Settle pending prop picks for ``sport``. Idempotent — re-runs
     only touch rows still pending at call time. Returns a per-call
@@ -236,7 +349,7 @@ def settle_player_props(sport: str) -> dict:
     void DNP props — encoding as Push matches that behaviour and stops
     the row sitting pending forever after a player scratch / late-OUT.
     """
-    if sport not in ("mlb", "nhl", "nba", "wnba"):
+    if sport not in ("mlb", "nhl", "nba", "wnba", "nfl"):
         raise ValueError(f"unknown sport: {sport}")
 
     pending = list_picks(sport, pending_only=True, limit=10_000)
@@ -274,6 +387,10 @@ def settle_player_props(sport: str) -> dict:
                 from engine.basketball._espn_ingest import ingest_today as _fs
                 _fs("wnba", date=yesterday)
                 _fs("wnba", date=today)
+            elif sport == "nfl":
+                # Game status in nfl.db is maintained by the football
+                # game-model sync; the paper settler doesn't trigger it.
+                pass
             else:  # nba
                 from scrapers.nba_espn import fetch_schedule as _fs
                 _fs(yesterday, today)
@@ -314,6 +431,8 @@ def settle_player_props(sport: str) -> dict:
                 from .basketball._wnba_player_logs import (
                     ingest_recent_finals as _ingest,
                 )
+            elif sport == "nfl":
+                from .sports.nfl.player_logs import ingest_recent_finals as _ingest
             else:
                 from .nba_player_logs import ingest_recent_finals as _ingest
             _ingest(lookback_days=3)
@@ -336,7 +455,10 @@ def settle_player_props(sport: str) -> dict:
             # Game log not in DB yet. If the game itself is final the
             # player didn't play — void as Push so the row leaves the
             # pending queue. Otherwise leave pending; next tick gets it.
-            if _game_is_final(sport, str(pick["game_id"])):
+            # _nfl_player_game_done guards against mass-pushing an upcoming NFL
+            # slate just because another game that week is already in the feed.
+            if (_game_is_final(sport, str(pick["game_id"]))
+                    and _nfl_player_game_done(sport, int(pick["player_id"]), str(pick["game_id"]))):
                 ok = settle_pick(sport, int(pick["id"]),
                                  actual_value=None, result="P", profit=0.0)
                 if ok:

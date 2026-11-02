@@ -2,7 +2,7 @@
  * ExpandableGroup — shared collapsible sidebar group.
  *
  * Every sport that expands into leagues (Basketball / Hockey / Soccer /
- * Motorsports / Baseball) uses this shell:
+ * Baseball) uses this shell:
  *   - Parent row with icon + label + count badge + chevron
  *   - Highlighted when one of its children is active
  *   - `children` renders the expanded sub-list (per-sport shape:

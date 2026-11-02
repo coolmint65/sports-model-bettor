@@ -23,7 +23,7 @@ def _fetch_espn_scoreboard(date: str) -> list[dict]:
     url = f"{ESPN_BASE}/baseball/mlb/scoreboard?dates={espn_date}"
     try:
         req = urllib.request.Request(url, headers={
-            "User-Agent": "Mozilla/5.0",
+            "User-Agent": "curl/8.4.0",
             "Accept": "application/json",
         })
         with urllib.request.urlopen(req, timeout=10) as resp:

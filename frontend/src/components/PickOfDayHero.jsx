@@ -18,13 +18,11 @@ import PotdHero from './PotdHero'
 // Sport keys that have core /api/pick-of-day/{sport} routes — the
 // historical surface (mlb / nhl / nba / tennis). Anything else routes
 // through its sport-framework scoped path.
-const _CORE_SPORTS = new Set(['mlb', 'nhl', 'nba', 'tennis'])
-// Hockey framework leagues use /api/hockey/{league}/potd. Baseball
-// framework leagues use /api/baseball/{league}/potd. Soccer framework
+const _CORE_SPORTS = new Set(['mlb', 'nhl', 'nba', 'tennis', 'nfl', 'cfb', 'ufl'])
+// Hockey framework leagues use /api/hockey/{league}/potd. Soccer framework
 // leagues use /api/soccer/{league}/potd. Any league key not in
-// CORE / HOCKEY / BASEBALL / SOCCER falls back to basketball.
+// CORE / HOCKEY / SOCCER falls back to basketball.
 const _HOCKEY_LEAGUES = new Set(['ahl', 'pwhl'])
-const _BASEBALL_LEAGUES = new Set(['college'])
 const _SOCCER_LEAGUES = new Set([
   'mls', 'usl_championship', 'us_nwsl', 'us_open_cup',
   'eng_premier', 'esp_laliga', 'ita_seriea', 'ger_bundesliga',
@@ -37,39 +35,44 @@ const _SOCCER_LEAGUES = new Set([
 export default function PickOfDayHero({ sport, view, tour }) {
   const isCore = _CORE_SPORTS.has(sport)
   const isHockey = _HOCKEY_LEAGUES.has(sport)
-  const isBaseball = _BASEBALL_LEAGUES.has(sport)
   const isSoccer = _SOCCER_LEAGUES.has(sport)
   // Tennis-only: include the active tour in the URL so ATP and WTA
   // POTDs are scoped separately. Cache key derives from URL so the
   // ATP/WTA toggle invalidates correctly without a second hook.
+  // NHL P1 (Austin 2026-09-22): the first-period tab has its OWN POTD —
+  // a P1-scoped derivative POTD served by /pick-of-day/nhl?view=p1 (+ the
+  // matching /summary?view=p1 record). Without the view param NHL falls
+  // back to the full-game POTD, which is what the P1 tab used to show.
+  const isNhlP1 = sport === 'nhl' && view === 'p1'
   const potdUrl = sport === 'nba'
     ? `/pick-of-day/${sport}?view=both`
-    : sport === 'tennis' && tour
-      ? `/pick-of-day/${sport}?tour=${tour}`
-      : isCore
-        ? `/pick-of-day/${sport}`
-        : isHockey
-          ? `/hockey/${sport}/potd`
-          : isBaseball
-            ? `/baseball/${sport}/potd`
-            : isSoccer
-              ? `/soccer/${sport}/potd`
-              : `/basketball/${sport}/potd`
-  const summaryUrl = isCore
-    ? `/pick-of-day/${sport}/summary`
-    : isHockey
-      ? `/hockey/${sport}/potd/summary`
-      : isBaseball
-        ? `/baseball/${sport}/potd/summary`
-        : isSoccer
-          ? `/soccer/${sport}/potd/summary`
-          : `/basketball/${sport}/potd/summary`
+    : isNhlP1
+      ? `/pick-of-day/nhl?view=p1`
+      : sport === 'tennis' && tour
+        ? `/pick-of-day/${sport}?tour=${tour}`
+        : isCore
+          ? `/pick-of-day/${sport}`
+          : isHockey
+            ? `/hockey/${sport}/potd`
+              : isSoccer
+                ? `/soccer/${sport}/potd`
+                : `/basketball/${sport}/potd`
+  const summaryUrl = isNhlP1
+    ? `/pick-of-day/nhl/summary?view=p1`
+    : isCore
+      ? `/pick-of-day/${sport}/summary`
+      : isHockey
+        ? `/hockey/${sport}/potd/summary`
+          : isSoccer
+            ? `/soccer/${sport}/potd/summary`
+            : `/basketball/${sport}/potd/summary`
 
   // Initial state hydrates synchronously from the cache when warm,
   // so a remount on tab-switch shows the POTD immediately rather than
   // flashing null. Cold mounts still resolve via the async effect.
   const [data, setData] = useState(() => peek(potdUrl) ?? null)
   const [summary, setSummary] = useState(() => peek(summaryUrl) ?? null)
+  const [loaded, setLoaded] = useState(() => peek(potdUrl) != null)
 
   useEffect(() => {
     let cancelled = false
@@ -78,12 +81,13 @@ export default function PickOfDayHero({ sport, view, tour }) {
         if (cancelled) return
         setData(p)
         setSummary(s)
+        setLoaded(true)
       })
-      .catch(() => {})
+      .catch(() => { if (!cancelled) setLoaded(true) })
     return () => { cancelled = true }
   }, [potdUrl, summaryUrl])
 
-  if (!data) return null
+  if (!loaded) return null
 
   // NBA: pluck the right view; everything else: data IS the POTD.
   // No cross-view fallback — when the user is on the Full Game tab and
@@ -96,7 +100,8 @@ export default function PickOfDayHero({ sport, view, tour }) {
   } else {
     potd = data
   }
-  if (!potd || potd.error || potd.message) return null
+  if (potd && potd.error) return null  // hard error: stay hidden
+  const _hasPick = !!(potd && !potd.message && (potd.pick || potd.matchup || potd.bet_type))
 
   const labelSuffix = sport === 'nba' && view
     ? ` · ${view === 'q1' ? 'Q1' : 'Full Game'} POTD`
@@ -116,7 +121,8 @@ export default function PickOfDayHero({ sport, view, tour }) {
     <PotdHero
       label={labelText}
       sport={sport}
-      pick={potd}
+      pick={_hasPick ? potd : null}
+      noPick={!_hasPick}
       summary={summary}
       accent="primary"
     />

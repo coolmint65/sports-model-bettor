@@ -149,7 +149,7 @@ def _calibration_bonus(sport: str, bet_type: str) -> float:
     """
     try:
         from .empirical_calibration import (
-            _TABLE, _TABLE_LOADED, _normalize_bet_type, refresh_calibration,
+            _TABLE, _TABLE_LOADED, _normalize_bet_type, _ensure_calibration,
         )
     except ImportError:
         return 1.0
@@ -160,7 +160,7 @@ def _calibration_bonus(sport: str, bet_type: str) -> float:
     # back to the static dict's value.
     if not _TABLE_LOADED.get(sport):
         try:
-            refresh_calibration(sport)
+            _ensure_calibration(sport)   # single-flight: concurrent cold callers wait for one rebuild
         except Exception as e:
             import logging
             logging.getLogger(__name__).warning(

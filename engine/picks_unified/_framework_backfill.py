@@ -1,4 +1,4 @@
-"""Framework backfills — UFL/college baseball/hockey leagues. Same shape
+"""Framework backfills — UFL/hockey leagues. Same shape
 as basketball_backfill (per-league walk, INSERT OR IGNORE on unique).
 """
 from __future__ import annotations
@@ -88,22 +88,6 @@ def backfill_football() -> dict:
             conn.row_factory = sqlite3.Row
             per[league] = _migrate_picks_table(
                 "football", league, conn, key_factory=GameKey.for_football,
-            )
-        except Exception as e:
-            per[league] = {"error": str(e)}
-    return per
-
-
-def backfill_baseball() -> dict:
-    from ..baseball import LEAGUE_REGISTRY
-    from ..baseball._db import get_conn
-    per = {}
-    for league in LEAGUE_REGISTRY:
-        try:
-            conn = get_conn(league)
-            conn.row_factory = sqlite3.Row
-            per[league] = _migrate_picks_table(
-                "baseball", league, conn, key_factory=GameKey.for_baseball,
             )
         except Exception as e:
             per[league] = {"error": str(e)}

@@ -30,7 +30,16 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
 BACKUP_ROOT = DATA_DIR / "backups"
 
-DB_FILES = ["mlb.db", "nhl.db", "nba.db"]
+DB_FILES = ["mlb.db", "nhl.db", "nba.db", "tennis.db"]  # queue_placer/placements.db archived 2026-10-26 (bet queue removed)
+# Per-league pick DBs (soccer / basketball / baseball) -- small + paper but
+# they hold real pick history, so back them up too (audit T2 robustness).
+# Globbed at run time so newly-added leagues are picked up automatically.
+import glob as _glob
+for _sub in ("soccer", "basketball"):
+    for _p in sorted(_glob.glob(str(DATA_DIR / _sub / "*.db"))):
+        _rel = str(Path(_p).relative_to(DATA_DIR)).replace("\\", "/")
+        if _rel not in DB_FILES:
+            DB_FILES.append(_rel)
 RETENTION_DAYS_DEFAULT = 30
 
 
@@ -97,6 +106,7 @@ def main() -> int:
             logger.info("Would back up %s -> %s", src, dst)
             continue
         try:
+            dst.parent.mkdir(parents=True, exist_ok=True)  # placements.db lives in a subdir
             size = _backup_one(src, dst)
             total_bytes += size
             snapshots += 1

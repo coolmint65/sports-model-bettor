@@ -41,6 +41,16 @@ from ._tz import et_today_str
 logger = logging.getLogger(__name__)
 
 
+def _ts_now() -> str:
+    """Current UTC timestamp for closing_odds_captured_at.
+
+    Mirrors ``engine.tracker_core._cc_now_iso`` exactly so props CLV
+    timestamps are directly comparable to the main-line tracker's.
+    """
+    from datetime import timezone
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _conn_for(sport: str):
     if sport == "mlb":
         from .db import get_conn
@@ -57,6 +67,12 @@ def _conn_for(sport: str):
         # sit alongside games/teams/picks for the same league.
         from .basketball._db import get_conn
         return get_conn("wnba")
+    if sport == "nfl":
+        # NFL anytime-TD PAPER model. Isolated DB (data/football/
+        # nfl_player.db) that holds ONLY prop tables — never the
+        # football GAME model's nfl.db. See engine.sports.nfl._propdb.
+        from .sports.nfl._propdb import get_conn
+        return get_conn()
     raise ValueError(f"unknown sport: {sport}")
 
 
@@ -97,11 +113,14 @@ CREATE TABLE IF NOT EXISTS player_props_picks (
     odds          INTEGER,
     confidence    TEXT,             -- 'strong' / 'moderate' / 'lean'
     stake_units   REAL,             -- Quarter-Kelly recommendation (1u = $100)
+    headshot      TEXT,             -- player photo URL (nullable; NHL props 2026-10-01)
+    team_logo     TEXT,             -- team logo URL (nullable; NHL props 2026-10-01)
     -- Settlement
     actual_value  REAL,             -- actual Ks/HR/PRA/SOG observed
     result        TEXT,             -- 'W' / 'L' / 'P' / NULL
     profit        REAL,
     closing_odds  INTEGER,
+    closing_odds_captured_at TEXT,
     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
     settled_at    TEXT,
     UNIQUE(game_id, player_id, bet_type, pick)
@@ -123,11 +142,36 @@ CREATE TABLE IF NOT EXISTS player_props_picks_pot_day (
 """
 
 
+def _migrate_prop_columns(conn) -> None:
+    """Add columns introduced after the original DDL, for DBs created
+    before they existed — mirrors the pre-existing closing_odds /
+    closing_odds_captured_at situation (those predate this file's
+    migration helper entirely; the live DB already had them applied
+    out-of-band, which is why insert_pick/settle_pick still carry a
+    defensive PRAGMA check of their own). headshot/team_logo (2026-10-01,
+    NHL props) go through this one instead. Checked via PRAGMA each
+    call, same idempotent-every-write pattern as ensure_tables itself."""
+    cols = {d[1] for d in conn.execute("PRAGMA table_info(player_props_picks)")}
+    if "headshot" not in cols:
+        conn.execute("ALTER TABLE player_props_picks ADD COLUMN headshot TEXT")
+    if "team_logo" not in cols:
+        conn.execute("ALTER TABLE player_props_picks ADD COLUMN team_logo TEXT")
+    # Props POTD by proven accuracy (Austin 2026-11-01 "Yes to all"): the lock row carries the
+    # cell it was picked from (bet_type + Over/Under), whether that cell was PROVEN, the cell's
+    # record at lock time (JSON), and the stake = the card's stake chip. NULL on older rows.
+    pcols = {d[1] for d in conn.execute("PRAGMA table_info(player_props_picks_pot_day)")}
+    for name, typ in (("cell", "TEXT"), ("proven", "INTEGER"),
+                      ("cell_record", "TEXT"), ("stake_units", "REAL")):
+        if name not in pcols:
+            conn.execute(f"ALTER TABLE player_props_picks_pot_day ADD COLUMN {name} {typ}")
+
+
 def ensure_tables(sport: str) -> None:
     """Create the three player-props tables for ``sport`` if missing.
     Idempotent — safe to call on every write."""
     conn = _conn_for(sport)
     conn.executescript(_DDL)
+    _migrate_prop_columns(conn)
     conn.commit()
 
 
@@ -226,11 +270,19 @@ def insert_pick(sport: str, *,
                 edge: float | None,
                 odds: int | None,
                 confidence: str | None = None,
-                stake_units: float | None = None) -> int | None:
+                stake_units: float | None = None,
+                headshot: str | None = None,
+                team_logo: str | None = None) -> int | None:
     """Insert a fresh prop pick. UNIQUE constraint on (game, player,
     bet_type, pick) keeps re-runs of best-bets from duplicating rows
     — repeat calls quietly no-op when the same pick already exists.
-    Returns the pick id (existing or new), or None on failure."""
+    Returns the pick id (existing or new), or None on failure.
+
+    ``headshot``/``team_logo`` (optional, 2026-10-01) are display-only
+    URLs set at insert time and never touched again — they're static
+    per player/team, so a repeat sighting of an already-existing pick
+    (the "already existed" branch below) doesn't need to refresh them.
+    """
     ensure_tables(sport)
     # Compute stake_units when caller didn't pass one (every caller
     # should now, but legacy paths still work).
@@ -246,14 +298,14 @@ def insert_pick(sport: str, *,
             "INSERT OR IGNORE INTO player_props_picks "
             "(game_id, date, matchup, player_id, player_name, "
             " bet_type, pick, line, side, model_prob, edge, odds, confidence, "
-            " stake_units) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " stake_units, headshot, team_logo) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 str(game_id), date, matchup,
                 int(player_id), player_name,
                 bet_type, pick, line, side,
                 model_prob, edge, odds, confidence,
-                stake_units,
+                stake_units, headshot, team_logo,
             ),
         )
         conn.commit()
@@ -265,6 +317,31 @@ def insert_pick(sport: str, *,
             "WHERE game_id = ? AND player_id = ? AND bet_type = ? AND pick = ?",
             (str(game_id), int(player_id), bet_type, pick),
         ).fetchone()
+        if row and odds is not None:
+            # Closing-odds capture (2026-08-09): every re-sighting of a
+            # still-pending pick carries the board's CURRENT price, so the
+            # last refresh before tip is the closing snapshot — props had
+            # no CLV data at all before this. Semantics: it's the price at
+            # the pick's last QUALIFYING sighting (if the edge dies late,
+            # the refresh stops there). A settlement-time writer passing
+            # settle_pick(closing_odds=...) still wins over this value.
+            # CLV needs to know a close was captured PRE-GAME to trust it --
+            # stamp when, guarded so a DB without the column still works
+            # (mirrors engine.tracker_core.core_capture_closing_odds).
+            _has_ts = any(d[1] == "closing_odds_captured_at" for d in
+                          conn.execute("PRAGMA table_info(player_props_picks)"))
+            if _has_ts:
+                conn.execute(
+                    "UPDATE player_props_picks SET closing_odds = ?, "
+                    "closing_odds_captured_at = ? "
+                    "WHERE id = ? AND result IS NULL",
+                    (int(odds), _ts_now(), row["id"]))
+            else:
+                conn.execute(
+                    "UPDATE player_props_picks SET closing_odds = ? "
+                    "WHERE id = ? AND result IS NULL",
+                    (int(odds), row["id"]))
+            conn.commit()
         return row["id"] if row else None
     except Exception as e:
         logger.warning("player_props.insert_pick failed for %s/%s %s: %s",
@@ -280,14 +357,37 @@ def settle_pick(sport: str, pick_id: int, *,
     ensure_tables(sport)
     conn = _conn_for(sport)
     try:
-        conn.execute(
-            "UPDATE player_props_picks SET "
-            "  actual_value = ?, result = ?, profit = ?, "
-            "  closing_odds = COALESCE(?, closing_odds), "
-            "  settled_at = datetime('now') "
-            "WHERE id = ?",
-            (actual_value, result, profit, closing_odds, int(pick_id)),
-        )
+        _has_ts = any(d[1] == "closing_odds_captured_at" for d in
+                      conn.execute("PRAGMA table_info(player_props_picks)"))
+        if _has_ts:
+            # A pick first seen at settlement time (never re-sighted while
+            # still pending) never went through insert_pick's re-sight
+            # stamp above, so it would otherwise carry a closing_odds
+            # with no timestamp forever. Stamp it here too, but only when
+            # the row is about to hold a non-null closing_odds (same
+            # COALESCE the closing_odds column itself uses) and doesn't
+            # already have one -- never overwrite an earlier, more
+            # accurate pre-game stamp.
+            conn.execute(
+                "UPDATE player_props_picks SET "
+                "  actual_value = ?, result = ?, profit = ?, "
+                "  closing_odds = COALESCE(?, closing_odds), "
+                "  closing_odds_captured_at = COALESCE(closing_odds_captured_at, "
+                "    CASE WHEN COALESCE(?, closing_odds) IS NOT NULL THEN ? ELSE NULL END), "
+                "  settled_at = datetime('now') "
+                "WHERE id = ?",
+                (actual_value, result, profit, closing_odds, closing_odds,
+                 _ts_now(), int(pick_id)),
+            )
+        else:
+            conn.execute(
+                "UPDATE player_props_picks SET "
+                "  actual_value = ?, result = ?, profit = ?, "
+                "  closing_odds = COALESCE(?, closing_odds), "
+                "  settled_at = datetime('now') "
+                "WHERE id = ?",
+                (actual_value, result, profit, closing_odds, int(pick_id)),
+            )
         conn.commit()
         return True
     except Exception as e:
@@ -324,7 +424,11 @@ def list_picks(sport: str, *,
 def set_potd(sport: str, pick_id: int, *,
              date: str | None = None,
              selection_score: float | None = None,
-             reasoning: str | None = None) -> bool:
+             reasoning: str | None = None,
+             cell: str | None = None,
+             proven: bool | None = None,
+             cell_record: str | None = None,
+             stake_units: float | None = None) -> bool:
     """Set today's prop POTD. UNIQUE on date so re-running overwrites
     cleanly — the selector can re-rank as the slate develops without
     leaving stale POTD rows behind."""
@@ -334,14 +438,20 @@ def set_potd(sport: str, pick_id: int, *,
     try:
         conn.execute(
             "INSERT INTO player_props_picks_pot_day "
-            "(date, pick_id, selection_score, reasoning) "
-            "VALUES (?, ?, ?, ?) "
+            "(date, pick_id, selection_score, reasoning, "
+            " cell, proven, cell_record, stake_units) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(date) DO UPDATE SET "
             "  pick_id = excluded.pick_id, "
             "  selected_at = datetime('now'), "
             "  selection_score = excluded.selection_score, "
-            "  reasoning = excluded.reasoning",
-            (target, int(pick_id), selection_score, reasoning),
+            "  reasoning = excluded.reasoning, "
+            "  cell = excluded.cell, proven = excluded.proven, "
+            "  cell_record = excluded.cell_record, "
+            "  stake_units = excluded.stake_units",
+            (target, int(pick_id), selection_score, reasoning,
+             cell, (None if proven is None else int(bool(proven))),
+             cell_record, stake_units),
         )
         conn.commit()
         return True
@@ -358,7 +468,8 @@ def get_potd(sport: str, date: str | None = None) -> dict | None:
     target = date or et_today_str()
     row = conn.execute(
         "SELECT pot.date AS potd_date, pot.selected_at, pot.selection_score, "
-        "       pot.reasoning, p.* "
+        "       pot.reasoning, pot.cell, pot.proven, pot.cell_record, "
+        "       pot.stake_units AS potd_stake_units, pot.id AS pot_id, p.* "
         "FROM player_props_picks_pot_day pot "
         "JOIN player_props_picks p ON p.id = pot.pick_id "
         "WHERE pot.date = ?",

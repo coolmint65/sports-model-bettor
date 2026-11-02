@@ -1,5 +1,6 @@
 import { memo, useMemo } from 'react'
 import { cn } from '../lib/utils'
+import TeamRow from './primitives/TeamRow'
 
 /**
  * FirstInningPicks — NRFI/YRFI surface section above the MLB scoreboard.
@@ -7,30 +8,30 @@ import { cn } from '../lib/utils'
  * Phase 2-cleanup restyle: Tailwind tokens. Backend already filters by
  * MLB_*_MIN_EDGE so anything reaching this component is playable.
  */
-function FirstInningPicksImpl({ bestBets }) {
+function FirstInningPicksImpl({ bestBets, games }) {
   const firstInningPicks = useMemo(() => {
-    if (!bestBets || bestBets.length === 0) return []
     const out = []
-    for (const bet of bestBets) {
-      const picks = bet.all_picks || []
-      // Skip 'skip'-tier picks (sub-floor edge, picker tagged but
-      // didn't recommend) so the panel doesn't surface +0.8% NRFI
-      // bets that the tracker explicitly rejects.
-      const fi = picks.find(p => p.type === '1st INN'
+    const covered = new Set()
+    for (const bet of (bestBets || [])) {
+      const fi = (bet.all_picks || []).find(p => p.type === '1st INN'
                                   && (p.confidence || 'lean') !== 'skip')
       if (!fi) continue
-      out.push({
-        game_id: bet.game_id,
-        matchup: bet.matchup,
-        home: bet.home,
-        away: bet.away,
-        time: bet.time,
-        pick: fi,
-      })
+      out.push({ game_id: bet.game_id, matchup: bet.matchup, home: bet.home,
+                 away: bet.away, time: bet.time, pick: fi, paper: false })
+      covered.add(String(bet.game_id))
+    }
+    // PAPER fill (Austin 2026-09-19): the model's NRFI/YRFI lean for every game with no gated
+    // 1st-inning rec — from the scoreboard-merged first_inning_paper (MC nrfi vs HR's I1 market).
+    for (const g of (games || [])) {
+      const pp = g.first_inning_paper
+      if (pp && !covered.has(String(g.id))) {
+        out.push({ game_id: g.id, matchup: `${g.away?.abbreviation ?? ''} @ ${g.home?.abbreviation ?? ''}`,
+                   home: g.home, away: g.away, time: g.date, pick: pp, paper: true })
+      }
     }
     out.sort((a, b) => (b.pick.edge || 0) - (a.pick.edge || 0))
     return out
-  }, [bestBets])
+  }, [bestBets, games])
 
   if (firstInningPicks.length === 0) return null
 
@@ -60,36 +61,34 @@ function FirstInningPicksImpl({ bestBets }) {
 
 
 function FirstInningCard({ entry, pct }) {
-  const { pick } = entry
+  const { pick, home, away } = entry
   const isNrfi = pick.pick === 'NRFI'
   const confTint =
     pick.edge >= 8 ? 'border-l-positive' :
     pick.edge >= 4 ? 'border-l-primary'  :
                      'border-l-border'
-
   const gameTime = useMemo(
     () => entry.time
       ? new Date(entry.time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
       : '',
     [entry.time],
   )
-
   return (
     <div className={cn(
       'rounded-lg border border-border border-l-4 bg-card px-3 py-2.5',
       confTint,
     )}>
-      <div className="flex items-center justify-between text-xs">
-        <span className="font-semibold text-foreground">{entry.matchup}</span>
-        {gameTime && (
-          <span className="tabular-nums text-muted-foreground">{gameTime}</span>
-        )}
+      <div className="mb-1.5 flex items-center justify-between text-[11px]">
+        <span className="flex items-center gap-1.5 font-semibold uppercase tracking-wider text-muted-foreground">
+          1st Inn
+          {entry.paper && <span className="rounded-sm bg-sky-500/25 px-1 text-[8px] font-bold uppercase tracking-wider text-sky-300">Paper</span>}
+        </span>
+        {gameTime && <span className="tabular-nums text-muted-foreground">{gameTime}</span>}
       </div>
-      <div className="mt-1 flex items-baseline justify-between">
-        <span className={cn(
-          'text-lg font-bold',
-          isNrfi ? 'text-primary' : 'text-warning',
-        )}>
+      {away && <TeamRow team={away} sport="mlb" />}
+      {home && <TeamRow team={home} sport="mlb" />}
+      <div className="mt-2 flex items-baseline justify-between border-t border-border/60 pt-2">
+        <span className={cn('text-lg font-bold', isNrfi ? 'text-primary' : 'text-warning')}>
           {pick.pick}
         </span>
         <span className="text-sm font-semibold tabular-nums text-muted-foreground">
@@ -98,8 +97,8 @@ function FirstInningCard({ entry, pct }) {
       </div>
       <div className="mt-1 flex items-center justify-between text-xs">
         <span className="tabular-nums text-foreground/85">{pct(pick.prob)}</span>
-        <span className="font-semibold tabular-nums text-positive">
-          +{pick.edge}% edge
+        <span className={cn('font-semibold tabular-nums', pick.edge >= 0 ? 'text-positive' : 'text-muted-foreground')}>
+          {pick.edge >= 0 ? '+' : ''}{pick.edge}% edge
         </span>
       </div>
     </div>

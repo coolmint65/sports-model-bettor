@@ -22,7 +22,7 @@ from ._config import get_league_config
 logger = logging.getLogger(__name__)
 
 
-_USER_AGENT = "SportsBettor/1.0 (basketball-injuries)"
+_USER_AGENT = "curl/8.4.0"
 _CACHE: dict[str, tuple[float, dict[int, list[dict]]]] = {}
 _CACHE_TTL_S = 900  # 15 min — injuries don't move per-minute
 
@@ -38,6 +38,21 @@ _OUT_PENALTY_PER_PLAYER = {
     # NBA is handled by its own injuries module; left here for reference.
     "nba": 1.4,
 }
+
+# Player-WEIGHTED availability (2026-08-09, Austin "lets upgrade"): the flat
+# per-head penalty above treats a 20-PPG star and a 12th-woman identically.
+# The weighted path replaces the flat count with each OUT player's actual
+# recent scoring, shrunk for replacement production (a starter sitting means
+# minutes/usage redistribute to the bench, who produce SOME of it back).
+# REPLACEMENT_RECOVERY = fraction the replacement recovers; team loses the
+# rest of the OUT player's PPG. A prior, refittable once labeled.
+REPLACEMENT_RECOVERY = 0.35
+_PPG_LOOKBACK = 8
+
+# LIVE stays on the flat penalty until the shadow log proves weighting
+# beats it (same gate discipline as calibration). Flip to True to make the
+# weighted penalty drive real pricing.
+USE_WEIGHTED_AVAIL = False
 
 
 def _fetch(url: str) -> dict | None:
@@ -123,10 +138,107 @@ def out_count_for_team(league: str, team_id: int) -> int:
 
 def margin_penalty_for_team(league: str, team_id: int) -> float:
     """Expected-points cost to a team's scoring from current OUT
-    players. ``-1.8 * out_count`` for WNBA by default."""
+    players. ``-1.8 * out_count`` for WNBA by default (flat per head)."""
     n = out_count_for_team(league, team_id)
     per_player = _OUT_PENALTY_PER_PLAYER.get(league, 1.4)
     return n * per_player
+
+
+def _out_names_for_team(league: str, team_id: int) -> list[str]:
+    feed = fetch_league_injuries(league)
+    items = feed.get(int(team_id)) or []
+    return [i.get("player") for i in items
+            if i.get("status") == "Out" and i.get("player")]
+
+
+def _recent_ppg(conn, player_name: str, team_id: int,
+                lookback: int = _PPG_LOOKBACK) -> float | None:
+    """Mean points over a player's last ``lookback`` logged games.
+    Matches on name (exact then case-insensitive), preferring rows for
+    this team but falling back to name-only (covers a recent trade)."""
+    import json as _json
+    for extra, params in (
+        (" AND team_id=?", (player_name, player_name.lower(), int(team_id), lookback)),
+        ("", (player_name, player_name.lower(), lookback)),
+    ):
+        try:
+            rows = conn.execute(
+                "SELECT stats_json FROM player_game_logs "
+                "WHERE (player_name=? OR lower(player_name)=?)" + extra +
+                " ORDER BY date DESC LIMIT ?", params).fetchall()
+        except Exception:
+            return None
+        pts = []
+        for (sj,) in rows:
+            try:
+                pts.append(float(_json.loads(sj).get("pts") or 0))
+            except Exception:
+                pass
+        if pts:
+            return sum(pts) / len(pts)
+    return None
+
+
+def weighted_penalty_for_team(league: str, team_id: int):
+    """Player-weighted availability penalty for a team's OUT list, plus a
+    per-player breakdown ``[(name, ppg_or_None, contribution), ...]``.
+    Star out costs ~0.65*PPG; a benchwarmer costs almost nothing; a
+    player with no logs (rookie/callup) falls back to the flat per-head
+    value so an unknown is never treated as free."""
+    outs = _out_names_for_team(league, team_id)
+    if not outs:
+        return 0.0, []
+    try:
+        from ._db import get_conn
+        conn = get_conn(league)
+    except Exception:
+        return margin_penalty_for_team(league, team_id), []
+    flat = _OUT_PENALTY_PER_PLAYER.get(league, 1.4)
+    detail, total = [], 0.0
+    for name in outs:
+        ppg = _recent_ppg(conn, name, team_id)
+        if ppg is None:
+            contrib = flat
+            detail.append((name, None, round(contrib, 2)))
+        else:
+            contrib = ppg * (1 - REPLACEMENT_RECOVERY)
+            detail.append((name, round(ppg, 1), round(contrib, 2)))
+        total += contrib
+    return round(total, 2), detail
+
+
+def _shadow_path() -> str:
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    return os.path.join(root, "data", "basketball", "avail_shadow.jsonl")
+
+
+def log_avail_shadow(league, home_abbr, away_abbr, home_id, away_id, date,
+                     flat_home, flat_away, wtd_home, wtd_away,
+                     det_home, det_away) -> None:
+    """Append one row comparing flat vs weighted availability penalty per
+    game. Append-only; dedupe on read (last write per league:matchup:date
+    wins). This is the labeled set the flip-to-live gate reads."""
+    import json as _json
+    if not (det_home or det_away):
+        return   # no OUT players either side — nothing to measure
+    row = {"ts": None, "league": league, "date": date,
+           "home": home_abbr, "away": away_abbr,
+           "home_id": home_id, "away_id": away_id,
+           "flat_home": round(flat_home, 2), "flat_away": round(flat_away, 2),
+           "wtd_home": wtd_home, "wtd_away": wtd_away,
+           "out_home": det_home, "out_away": det_away}
+    try:
+        from datetime import datetime
+        row["ts"] = datetime.utcnow().isoformat()
+    except Exception:
+        pass
+    try:
+        with open(_shadow_path(), "a", encoding="utf-8") as f:
+            f.write(_json.dumps(row) + "\n")
+    except Exception:
+        pass
 
 
 def reset_cache() -> None:

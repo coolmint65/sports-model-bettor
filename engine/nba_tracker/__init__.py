@@ -38,6 +38,10 @@ from ._record import (
 )
 from ._settle import settle_picks
 from ._summary import get_pick_summary, get_nba_pick_history
+from ._paper import (
+    record_paper, settle_paper, paper_summary, list_paper_history,
+    capture_closing_odds_paper,
+)
 
 # nba_-prefixed aliases used by backend/server.py — the routes import
 # sport-prefixed names by convention so endpoint code reads clearly.
@@ -53,4 +57,7 @@ __all__ = [
     "settle_picks", "get_pick_summary", "get_nba_pick_history",
     # Aliases
     "record_nba_picks", "settle_nba_picks", "get_nba_pick_summary",
+    # Paper (shadow) layer — isolated nba_paper_picks table (Phase 2)
+    "record_paper", "settle_paper", "paper_summary", "list_paper_history",
+    "capture_closing_odds_paper",
 ]

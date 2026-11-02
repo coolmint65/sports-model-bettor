@@ -16,7 +16,7 @@ from .prop_features import feature_cols, extract_features
 
 logger = logging.getLogger(__name__)
 _MODEL_DIR = Path(__file__).resolve().parents[3] / "data" / "models"
-_SHIPPED_STATS = {"g", "a"}
+_SHIPPED_STATS = {"g", "a", "sog", "saves"}
 _model_cache: dict[str, object] = {}
 
 

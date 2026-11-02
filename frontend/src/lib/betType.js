@@ -55,6 +55,15 @@ const BET_TYPE_LABELS = {
   'ALT SPREAD': 'Alt Spread',
   'ALT TOTAL': 'Alt Total',
 
+  // Engine emits UNDERSCORE keys (ALT_SPREAD, TEAM_TOTAL, ...); map them
+  // explicitly so the raw enum never leaks into a card/tracker label.
+  'ALT_SPREAD': 'Alt Spread',
+  'ALT_TOTAL': 'Alt Total',
+  'TEAM_TOTAL': 'Team Total',
+  'ALT_RL': 'Alt Run Line',
+  'ALT_PL': 'Alt Puck Line',
+  'ALT_OU': 'Alt Over/Under',
+
   // Phase 1 derivatives. Labels mirror the engine keys closely so the
   // empirical-calibration tracker output and the UI use identical
   // strings — the only places we humanize are abbreviations
@@ -100,5 +109,30 @@ export function humanizeBetType(t) {
   if (!t) return ''
   return BET_TYPE_LABELS[t]
       || BET_TYPE_LABELS[t.toUpperCase()]
+      || BET_TYPE_LABELS[String(t).toUpperCase().replace(/_/g,' ')]
       || t.replace(/_/g, ' ')
+}
+
+
+// ── Derivative market label (Austin 2026-09-19) ────────────────────────
+// Explicit, team-resolved label for MLB derivative picks so the UI never
+// shows a bare "TEAM_TOTAL / Over 0.5" (which team? F5 or full?). Reads
+// {tt_team:'home'|'away', tt_span:'f5'|'full'} (paper/POTD/live), falling
+// back to a market string like "TT WSH" / "F5 TT LAD".
+export function derivMarketLabel(pick, opts = {}) {
+  if (!pick) return ''
+  const bt = String(pick.bet_type || pick.type || '').toUpperCase()
+  const mkt = String(pick.market || '')
+  const isF5 = pick.tt_span === 'f5' || /\bF5\b/i.test(mkt) || /F5/.test(bt)
+  const span = isF5 ? 'F5 ' : ''
+  const isTT = bt.includes('TEAM_TOTAL') || /\bTT\b/i.test(mkt)
+  if (isTT) {
+    let team = null
+    if (pick.tt_team === 'home') team = opts.homeName || opts.homeAbbr
+    else if (pick.tt_team === 'away') team = opts.awayName || opts.awayAbbr
+    if (!team) { const m = mkt.match(/TT\s+([A-Za-z]{2,4})/i); if (m) team = m[1].toUpperCase() }
+    return `${team ? team + ' ' : ''}${span}Team Total`
+  }
+  if (bt.includes('F5_TOTAL') || bt === 'TOTAL' || /F5\s*O\/U/i.test(mkt)) return `${span}Game Total`
+  return mkt || humanizeBetType(pick.bet_type || pick.type) || 'Derivative'
 }

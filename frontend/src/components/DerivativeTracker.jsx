@@ -26,7 +26,7 @@ const derivProfitFmt = n => {
  *   sport — 'mlb' | 'nhl' | 'nba'
  *   api   — axios-shaped client with .get() / .post()
  */
-export default function DerivativeTracker({ sport, api, pickFilter, title }) {
+export default function DerivativeTracker({ sport, api, pickFilter, title, subtitle }) {
   const summaryUrl     = `/${sport}/derivative-tracker/summary`
   const historyUrl     = `/${sport}/derivative-tracker/history`
   const potdUrl        = `/${sport}/derivative-pick-of-day`
@@ -166,9 +166,11 @@ export default function DerivativeTracker({ sport, api, pickFilter, title }) {
             {title || `${sport.toUpperCase()} Derivative Tracker`}
           </h2>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            {pickFilter
-              ? 'Filtered view · pulls from derivative-tracker data'
-              : 'Paper-bet log · top 1 per game above 4% edge'}
+            {subtitle
+              ? subtitle
+              : pickFilter
+                ? 'Filtered view · pulls from derivative-tracker data'
+                : 'Paper-bet log · top 1 per game above 4% edge'}
           </p>
         </div>
         <button

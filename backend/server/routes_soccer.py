@@ -1,6 +1,6 @@
 """Soccer backend routes.
 
-Per-league read endpoints. Pattern mirrors routes_golf — one ingest +
+Per-league read endpoints. Pattern mirrors the per-sport routes — one ingest +
 predict + odds + picks call per slate hit, with debounced ESPN +
 debounced HR odds caching at the layer below.
 """
@@ -173,15 +173,14 @@ def api_soccer_leagues() -> dict:
                     n = int(nxt["n"] or 0)
         except Exception:
             return 0
-        if n == 0:
-            espn_n = _live_espn_soccer_count(cfg.get("espn_league_path"),
-                                              today)
-            if espn_n is not None:
-                n = espn_n
-        if n == 0 and cfg.get("hr_comp_id"):
-            hr_n = _live_hr_soccer_count(cfg.get("hr_comp_id"))
-            if hr_n is not None:
-                n = hr_n
+        # NAV PERF (2026-10-11, MintyBot): the sidebar fetches /soccer/leagues on
+        # every page load via a one-shot useOnce — a COLD call doing these live
+        # ESPN + HR per-league count lookups ran ~8s and timed out the nav fetch,
+        # so soccer (EPL) silently vanished from the sidebar. The badge only needs
+        # a game count, and the DB (fresh from the worker ingest) has it; dropping
+        # the synchronous network fallbacks from the nav path makes it return
+        # instantly. An empty-DB league just shows 0 until the next ingest — fine
+        # for a nav badge (opening the slate still hits ESPN/HR live elsewhere).
         return n
 
     return {
@@ -198,6 +197,8 @@ def api_soccer_leagues() -> dict:
                 "game_count_today": _count_today(k) if k in in_season else 0,
             }
             for k, v in LEAGUE_REGISTRY.items()
+            # Austin 2026-09-19: World Cup over + FIFA internationals no edge — off the sidebar.
+            if k not in ("fifa_internationals", "fifa_world_cup")
         ],
     }
 
@@ -263,8 +264,77 @@ def _live_hr_soccer_count(comp_id: str | None) -> int | None:
         return None
 
 
+from backend.server._slate_cache import SlateCache
+_SOCCER_CACHE = SlateCache("soccer")
+
+
+# Pick Authority shadow lane for PA soccer leagues (EPL, 2026-10-28 -- the NBA / NHL / college design):
+# every market re-priced on the MODEL's own probability (W=1) and mirrored to picks_unified as
+# is_shadow=1, so unproven markets build a settled record and can graduate. Pre-kickoff matches
+# only; at most once per _SOC_SHADOW_EVERY_S per match (record_shadow_slate keeps the FIRST row
+# per match + market, so this is about cost, not double counting).
+_SOC_SHADOW_EVERY_S = 1800
+_SOC_SHADOW_LAST: dict = {}
+_SOC_SHADOW_CANDS: dict = {}   # (league, match_id) -> last W=1 candidates: the card's model lean (NBA design)
+
+
+def _soccer_pa_shadow(league, matches):
+    import time as _t
+    from datetime import datetime as _dt, timezone as _tz
+    try:
+        from engine.soccer import _market_anchor as _MA
+        from engine.soccer._picks import generate_picks_for_match
+        from engine.soccer._predict import predict_match
+        from engine.picks_unified import record_shadow_slate
+    except Exception as e:
+        logger.debug("[soccer:%s] PA shadow import failed: %s", league, e)
+        return
+    now = _dt.now(_tz.utc)
+    for m in matches or []:
+        mid = m.get("match_id")
+        st = m.get("start_time")
+        try:
+            if not mid or not st or _dt.fromisoformat(str(st).replace("Z", "+00:00")) <= now:
+                continue
+        except Exception:
+            continue
+        if _t.time() - _SOC_SHADOW_LAST.get((league, mid), 0.0) < _SOC_SHADOW_EVERY_S:
+            continue
+        if not (m.get("odds") or {}):
+            continue
+        try:
+            from engine.soccer._db import get_conn as _gc
+            row = _gc(league).execute(
+                "SELECT home_team_id, away_team_id, neutral_site, home_side, date FROM matches WHERE id = ?",
+                (int(mid),)).fetchone()
+            if not row:
+                continue
+            pred = predict_match(league, int(row["home_team_id"]), int(row["away_team_id"]),
+                                 neutral_site=bool(row["neutral_site"]), home_side=row["home_side"])
+            pred.update(match_id=int(mid), home_abbr=(m.get("home") or {}).get("abbr"),
+                        away_abbr=(m.get("away") or {}).get("abbr"))
+            with _MA.shadow_mode():
+                picks = generate_picks_for_match(league, pred, m.get("odds") or {})
+            cands = []
+            for p in picks:
+                cands.extend(p.pop("_candidates", None) or [])
+            record_shadow_slate("soccer", league, mid, m.get("matchup"), cands or picks, pick_date=row["date"])
+            _SOC_SHADOW_CANDS[(league, mid)] = cands or picks
+            _SOC_SHADOW_LAST[(league, mid)] = _t.time()
+        except Exception as e:
+            logger.debug("[soccer:%s] PA shadow %s failed: %s", league, mid, e)
+
+
 @router.get("/api/soccer/{league}/today")
 def api_soccer_today(league: str) -> dict:
+    from engine.soccer import LEAGUE_REGISTRY
+    if league not in LEAGUE_REGISTRY:
+        return {"error": f"unknown league {league!r}"}
+    return _SOCCER_CACHE.serve((league,), lambda: _compute_api_soccer_today(league),
+                               {"league": league, "matches": [], "loading": True})
+
+
+def _compute_api_soccer_today(league: str) -> dict:
     """Slate for ``league`` on the current UTC day. Returns matches with
     prediction + odds + picks per match plus the day's top pick across
     the slate."""
@@ -290,6 +360,17 @@ def api_soccer_today(league: str) -> dict:
                     ingest_today(league, date=d)
                 except Exception as e:
                     logger.debug("[soccer:%s] backsweep %s failed: %s",
+                                  league, d, e)
+            # Forward look-ahead (Austin 2026-09-19): European leagues play tonight +
+            # this weekend, but ingest_today only pulled the current day, so the
+            # fall-forward below found nothing (upcoming games were never ingested).
+            # Pull the next 6 days so tonight's + weekend fixtures surface. Mirrors football.
+            for fwd in range(1, 7):
+                d = (today_dt + _td0(days=fwd)).strftime("%Y-%m-%d")
+                try:
+                    ingest_today(league, date=d)
+                except Exception as e:
+                    logger.debug("[soccer:%s] lookahead %s failed: %s",
                                   league, d, e)
             _INGEST_TS[league] = now
         except Exception as e:
@@ -328,15 +409,19 @@ def api_soccer_today(league: str) -> dict:
     _lock_live_picks(_soc_conn(league), slate)
 
     # Piggyback record + settle on every slate hit so the tracker stays
-    # fresh without a separate cron. Same pattern as golf. Live matches
+    # fresh without a separate cron. Live matches
     # skip record_picks — their picks were already locked in when the
     # match was scheduled, and re-recording would be a no-op against
     # the open-pick unique index anyway.
     try:
         from engine.soccer._tracker import record_picks, settle_picks
+        from engine.soccer import _market_anchor as _soc_ma0
+        _pa_rec = _soc_ma0.is_pa(league)
         for m in slate["matches"]:
             if m.get("_locked"):
                 continue
+            if _pa_rec:
+                continue   # PA: records the card's held authority best_pick after selection (2026-11-01)
             if m["picks"]:
                 record_picks(league, m["match_id"], m["picks"])
         settle_picks(league)
@@ -379,6 +464,122 @@ def api_soccer_today(league: str) -> dict:
     except Exception as e:
         logger.debug("[soccer:%s] tomorrow-lookahead failed: %s", league, e)
 
+    # Step 3 (Pick Authority, Austin 2026-10-17): route each match's selected
+    # pick through the ONE authority (apply_selected) so the BACKEND sets the
+    # authoritative best_pick and the card reads THAT -- no more frontend
+    # re-selection (the adaptBetShape max-edge reduce) that let the card diverge
+    # from the tracker (AVL: card showed full-game DNB, tracker had H1 Double
+    # Chance). picks[0] is the slate's top pick across ALL markets (incl H1);
+    # apply_selected keeps the pick's edge when cal_edge has no soccer fit, so
+    # this never corrupts the number.
+    # Pick Authority (Austin 2026-10-18 "apply this to EPL/soccer"): ONE proven-
+    # edge-gated selector (edge x prob). Soccer proven markets = ML (+8.3%) +
+    # Double Chance (+7.6%); the rest (OU/DNB/AH/BTTS/H1_*) lose -> NO-PLAY as a
+    # headline. record_picks below still records ALL candidates (is_shadow=0) so
+    # every market keeps its W-map track record + can graduate.
+    try:
+        from engine.selection import select_pick as _authority_select
+        from engine.soccer import _market_anchor as _soc_ma
+        _pa = _soc_ma.is_pa(league)
+        if _pa:
+            _soccer_pa_shadow(league, (slate.get("matches") or []) + (upcoming or []))
+        for _m in (slate.get("matches") or []) + (upcoming or []):
+            # PA leagues select over EVERY gated candidate, not each family's top-1 (2026-10-28)
+            _cands = [p for p in ((_m.get("candidates") if _pa else None) or _m.get("picks") or []) if p]
+            _m["best_pick"] = _authority_select("soccer", league, _cands)
+            # Card == tracker (Austin 2026-11-01 "one pick, read everywhere"): once the match has a
+            # RECORDED authority pick, the headline HOLDS it at its entry price (pre-game, live, final)
+            # instead of re-selecting as lines move. /tracker/unified reads the SAME function.
+            if _pa:
+                try:
+                    _rec = _soccer_recorded_authority_best(league, _m.get("match_id"))
+                except Exception:
+                    _rec = None
+                if _rec:
+                    from engine.config import EDGE_STRONG, EDGE_MODERATE
+                    _re = float(_rec.get("edge") or 0)
+                    _m["best_pick"] = {**_rec, "model_prob": _rec.get("prob"), "raw_prob": _rec.get("prob"),
+                                       "stake_units": _rec.get("recorded_stake_units"),
+                                       "held": True, "locked": True,
+                                       "confidence": ("strong" if _re >= EDGE_STRONG else "moderate" if _re >= EDGE_MODERATE else "lean")}
+            try:
+                from engine.selection import card_lean as _card_lean
+                _lean_src = (_SOC_SHADOW_CANDS.get((league, _m.get("match_id"))) if _pa else None) or _cands
+                _m["card_lean"] = _card_lean("soccer", league, _lean_src, _m["best_pick"])  # card's best lean (Austin 2026-10-26): graduated pick, else the ungraduated lean -- display only
+                from engine.selection import lean_lock as _lean_lock
+                _m["card_lean"] = _lean_lock.hold(f"soccer:{league}", _m.get("match_id"), _m["card_lean"])   # first lean held through live + final (Austin 2026-10-27)
+            except Exception:
+                _m["card_lean"] = None
+    except Exception as _e:
+        logger.debug("[soccer:%s] select_pick fold-in failed: %s", league, _e)
+
+    # Live / final state + score per match, and the held lean's grade once it's over (Austin 2026-10-31:
+    # "these games aren't grading, and prematch also"). The slate rows never carried status or score, so
+    # every soccer card rendered as pre-game forever and the lean never showed W/L.
+    try:
+        from engine.soccer import _market_anchor as _soc_ma2
+        _soc_pa_card = _soc_ma2.is_pa(league)
+    except Exception:
+        _soc_pa_card = False
+    try:
+        _sc = _soc_conn(league)
+        for _m in (slate.get("matches") or []) + (upcoming or []):
+            _r = _sc.execute("SELECT status, status_detail, home_score, away_score, home_score_ht, away_score_ht "
+                             "FROM matches WHERE id = ?", (_m.get("match_id"),)).fetchone()
+            if not _r:
+                continue
+            _st = (_r["status"] or "scheduled").lower()
+            _m["status"] = _st
+            _m["status_detail"] = _r["status_detail"]
+            if _st in ("live", "halftime", "final"):
+                _m["home_score"], _m["away_score"] = _r["home_score"], _r["away_score"]
+                _m["home_score_ht"], _m["away_score_ht"] = _r["home_score_ht"], _r["away_score_ht"]
+                try:
+                    from engine.selection import lean_lock as _lean_lock
+                    _held = _lean_lock.held_with_result(f"soccer:{league}", league, _m.get("match_id"),
+                                                        game_key=f"soccer:{league}:{_m.get('match_id')}")
+                    if _held and not (_m.get("best_pick") or {}).get("held"):
+                        _m["card_lean"] = _held
+                except Exception:
+                    pass
+                if _soc_pa_card and not (_m.get("best_pick") or {}).get("held"):
+                    _m["best_pick"] = None   # never a live re-selection as the headline (2026-11-01)
+    except Exception as _e:
+        logger.debug("[soccer:%s] status/score fold-in failed: %s", league, _e)
+
+    # PA recorder (2026-11-01): record the card's authority headline (best_pick) -- first pick wins --
+    # for today's pre-kickoff matches; once recorded the card holds it, so a re-hit is a no-op.
+    try:
+        from engine.soccer import _market_anchor as _soc_ma1
+        if _soc_ma1.is_pa(league):
+            from datetime import datetime as _dtr, timezone as _tzr
+            from engine.soccer._tracker import record_picks as _rp
+            _nowr = _dtr.now(_tzr.utc)
+            for _m in (slate.get("matches") or []) + (upcoming or []):   # every card that can headline a pick
+                _bp = _m.get("best_pick")
+                if not _bp or _bp.get("held") or (_m.get("status") or "scheduled") in ("live", "halftime", "final", "postponed", "cancelled"):
+                    continue
+                try:
+                    if _dtr.fromisoformat(str(_m.get("start_time")).replace("Z", "+00:00")) <= _nowr:
+                        continue
+                except Exception:
+                    continue
+                _rp(league, _m["match_id"], [dict(_bp, matchup=_bp.get("matchup") or _m.get("matchup"))])
+    except Exception as _e:
+        logger.warning("[soccer:%s] PA authority record failed: %s", league, _e)
+
+    # Card % = the Pick Authority's market blend of the 1X2 model with the de-vigged 1X2 board (Austin
+    # 2026-10-26 "Any percentages for any card in any sport, should be that way").
+    try:
+        from ._display_cal import market_card_wp3
+        for _m in (slate.get("matches") or []) + (upcoming or []):
+            _p = _m.get("prediction") or {}
+            _ml = (_m.get("odds") or {}).get("ml") or {}
+            _m["card_win_prob"] = market_card_wp3("soccer", league, _p.get("p_home"), _p.get("p_draw"),
+                                                  _p.get("p_away"), _ml.get("home"), _ml.get("draw"), _ml.get("away"))
+    except Exception as _e:
+        logger.debug("[soccer:%s] card blend failed: %s", league, _e)
+
     return {
         "league": league,
         "display_name": cfg.get("display_name") or league,
@@ -420,6 +621,276 @@ def api_soccer_calibration(league: str) -> dict:
     }
 
 
+# -- soccer unified tracker (MintyBot 2026-10-22, NBA "tracker merge" -> soccer) --
+# ONE per-league tracker = the card's single BEST per match = the merged CALIBRATED
+# best across all markets (Full Game core: ML/OU/DNB/AH/DC/BTTS + the First-Half H1_*
+# extras), GATED like NBA/NHL: core full-game always eligible; an EXTRA (H1_*) market
+# may only HEADLINE once it has EARNED a track record (>=60 settled / >=30 days,
+# calibration_gate.headline_eligible) AND clears the +EV floor. PAPER / display only:
+# soccer is a paper-only model, so EVERY pick in the league's `picks` table IS a paper
+# pick (no is_shadow split, no real money). League-scoped (eng_premier etc.). cal_edge
+# is keyed on the LEAGUE; soccer has no calibrator fit, so cal_edge falls back to the
+# stored raw edge (gate still enforces the +EV floor). Forked from routes_nba.
+
+_SOC_EV_CACHE = {}  # {league: {"ts": float, "map": {bet_type: (n, days)}}}
+
+def _soccer_extra_evidence_map(conn, league):
+    """{bet_type: (settled_n, days_tracked)} for the EXTRA (H1_*) markets in this
+    league's picks table. Cached 300s per league so the gate costs one GROUP BY per
+    window. Mirror of _nba_extra_evidence_map (soccer has one picks table)."""
+    import time as _t
+    c = _SOC_EV_CACHE.get(league)
+    if c and c["map"] and (_t.monotonic() - c["ts"]) < 300:
+        return c["map"]
+    m = {}
+    try:
+        for row in conn.execute(
+                "SELECT bet_type, COUNT(*) n, MIN(date) mn, MAX(date) mx FROM picks "
+                "WHERE result IS NOT NULL AND result != 'V' AND UPPER(bet_type) LIKE 'H1\\_%' ESCAPE '\\' "
+                "GROUP BY bet_type"):
+            n = (row["n"] or 0)
+            days = 0
+            if row["mn"] and row["mx"]:
+                try:
+                    days = int((conn.execute("SELECT julianday(?)-julianday(?)",
+                                (row["mx"], row["mn"])).fetchone()[0]) or 0)
+                except Exception:
+                    days = 0
+            m[row["bet_type"]] = (n, days)
+    except Exception:
+        return {}
+    _SOC_EV_CACHE[league] = {"ts": _t.monotonic(), "map": m}
+    return m
+
+
+def _soccer_market_scope(bet_type, pick=None):
+    """Market bucket for the tracker chip, keyed on the BET: First Half (H1_*) vs
+    Full Game (ML/OU/DNB/AH/DC/BTTS/...). Mirror of _nba_market_scope."""
+    bt = (bet_type or "").strip().upper()
+    if bt.startswith("H1_") or bt.startswith("H1 "):
+        return "First Half"
+    return "Full Game"
+
+
+def _soccer_flat_profit(result, odds):
+    """Flat $100-stake P/L from (result, American odds) -- win: +odds if positive
+    else 100/abs(odds)*100; loss: -$100; push/void: $0. Paper rows record
+    stake_units~=0 so profit*stake_units would read a useless $0 -- grade every row
+    flat $100 instead. Mirror of _nba_flat_profit (Austin 2026-10-22)."""
+    r = (result or "").strip().upper()
+    if not r:
+        return None  # pending -- excluded from the P/L sum
+    if r == "W":
+        try:
+            o = float(odds if odds is not None else -110)
+        except (TypeError, ValueError):
+            o = -110.0
+        if o == 0:
+            return 0.0
+        return round(o, 2) if o > 0 else round(100.0 / abs(o) * 100.0, 2)
+    if r == "L":
+        return -100.0
+    return 0.0  # P / PUSH / V
+
+
+_LAST_SOC_AUTO_SETTLE = {}  # {league: monotonic ts}
+def _maybe_auto_settle_soccer(league):
+    """Throttled, non-blocking settle so a league's paper picks grade shortly after
+    matches go final. Fires on a tracker view, at most once per 10 min/league, in a
+    daemon thread. Mirror of _maybe_auto_settle_nba."""
+    import time as _t, threading as _th
+    now = _t.monotonic()
+    if now - _LAST_SOC_AUTO_SETTLE.get(league, 0.0) < 600.0:
+        return
+    _LAST_SOC_AUTO_SETTLE[league] = now
+    def _run():
+        try:
+            from engine.soccer import settle_picks as _sp
+            _sp(league)
+        except Exception as _e:
+            logger.warning("auto-settle soccer %s failed: %s", league, _e)
+    _th.Thread(target=_run, daemon=True).start()
+
+
+def _soccer_merged_recorded_best(league, match_id, date=None, conn=None, ev_map=None):
+    """The match's single BEST recorded PAPER pick = the merged CALIBRATED best
+    across all markets (Full Game core + First-Half H1_*), GATED: core full-game
+    always eligible; an EXTRA (H1_*) market only once it has EARNED a track record
+    (headline_eligible) AND clears the +EV floor. soccer is paper-only, so the
+    league's `picks` table IS the paper store. Chip-shaped + flat-$100 profit +
+    _scope. Pass conn/ev_map to share them across many matches. Mirror of
+    _nba_merged_recorded_best; cal_edge keyed on the league."""
+    import sqlite3 as _sq
+    from engine.soccer._db import get_conn
+    from engine.calibration_gate import cal_edge as _ce, headline_eligible as _he
+    if conn is None:
+        try:
+            conn = get_conn(league); conn.row_factory = _sq.Row
+        except Exception:
+            return None
+    if ev_map is None:
+        ev_map = _soccer_extra_evidence_map(conn, league)
+    dq = " AND date = ?" if date else ""
+    args = (str(match_id), date) if date else (str(match_id),)
+    cands = []
+    try:
+        # The ABS(edge)<=20 guard drops a blown-up calibration edge (mirror NBA/NHL).
+        for r in conn.execute(
+                "SELECT bet_type,pick,odds,edge,model_prob,result,profit,stake_units,closing_odds "
+                "FROM picks WHERE match_id=?" + dq + " "
+                "AND (result IS NULL OR result != 'V') AND ABS(COALESCE(edge,0))<=20.0", args):
+            d = dict(r); d["_scope"] = _soccer_market_scope(d.get("bet_type"), d.get("pick"))
+            d["_extra"] = (d["_scope"] != "Full Game"); cands.append(d)
+    except Exception:
+        return None
+    if not cands:
+        return None
+    scored = []
+    for p in cands:
+        ce = _ce(league, p.get("bet_type"), p.get("model_prob"), p.get("odds"),
+                 pick_text=p.get("pick"), raw_edge=p.get("edge"))
+        n = days = None
+        if p["_extra"]:
+            n, days = ev_map.get(p["bet_type"], (0, 0))
+        eligible = _he(ce, p["_extra"], n, days)
+        scored.append((eligible, ce if ce is not None else -999.0, p))
+    pool = [sc for sc in scored if sc[0]]
+    if not pool:
+        return None
+    b = max(pool, key=lambda sc: sc[1])[2]
+    return {"type": b["bet_type"], "market": b["bet_type"], "pick": b["pick"],
+            "odds": b["odds"], "edge": b["edge"], "prob": b["model_prob"],
+            "result": b["result"], "paper": True, "_scope": b["_scope"],
+            "closing_odds": b.get("closing_odds"),
+            "profit": _soccer_flat_profit(b["result"], b["odds"]),
+            "stake_units": 1.0}
+
+
+def _soccer_recorded_authority_best(league, match_id, date=None, conn=None):
+    """The match's RECORDED AUTHORITY pick = EXACTLY what the card headlined, read back from the
+    league's `picks` table (Austin 2026-11-01 "one pick, read everywhere"; mirror of
+    _nba_recorded_authority_best). Shared by the card hold (_compute_api_soccer_today) and
+    /api/soccer/{league}/tracker/unified, so the two can never disagree.
+
+    PA leagues (EPL): the /today recorder writes the card's select_pick headline (best_pick) only,
+    first pick wins (engine.soccer._tracker.record_picks family lock + the card hold) -> the FIRST
+    recorded non-void row IS the headline. (Rows before 2026-11-01 were the per-family max-edge heads;
+    the first one still wins.) Other leagues: the per-family heads the card selected from -> max by
+    edge x prob (the card's ranking). NO cal_edge / headline_eligible regate, NO edge guard.
+    Chip-shaped + flat-$100 profit + _scope (tracker row shape unchanged)."""
+    import sqlite3 as _sq
+    from engine.soccer._db import get_conn
+    from engine.soccer import _market_anchor as _ma
+    if conn is None:
+        try:
+            conn = get_conn(league); conn.row_factory = _sq.Row
+        except Exception:
+            return None
+    if match_id is None or match_id == "":
+        return None
+    dq = " AND date = ?" if date else ""
+    args = (str(match_id), date) if date else (str(match_id),)
+    rows = []
+    try:
+        for r in conn.execute(
+                "SELECT id,bet_type,pick,odds,edge,model_prob,result,stake_units,closing_odds "
+                "FROM picks WHERE match_id=?" + dq + " "
+                "AND (result IS NULL OR result != 'V') ORDER BY id", args):
+            d = dict(r); d["_scope"] = _soccer_market_scope(d.get("bet_type"), d.get("pick"))
+            rows.append(d)
+    except Exception:
+        return None
+    if not rows:
+        return None
+    if _ma.is_pa(league):
+        b = rows[0]   # first recorded headline wins
+    else:
+        b = max(rows, key=lambda p: float(p.get("edge") or 0) * float(p.get("model_prob") or 0))
+    return {"type": b["bet_type"], "market": b["bet_type"], "pick": b["pick"],
+            "odds": b["odds"], "edge": b["edge"], "prob": b["model_prob"],
+            "result": b["result"], "paper": True, "_scope": b["_scope"],
+            "closing_odds": b.get("closing_odds"),
+            "profit": _soccer_flat_profit(b["result"], b["odds"]),
+            "stake_units": 1.0, "recorded_stake_units": b.get("stake_units")}
+
+
+@router.get("/api/soccer/{league}/tracker/unified")
+def api_soccer_tracker_unified(league: str, limit: int = 300):
+    """ONE soccer tracker (per league) = the card's 'Best' per match (the merged
+    CALIBRATED best across Full Game + First-Half H1_*). Mirrors the NBA/NHL tracker
+    merge. soccer is paper-only, so the league's `picks` table IS the paper store.
+    One row per match (the merged best), via _soccer_merged_recorded_best; P/L graded
+    FLAT $100. Read-only; per-market endpoints untouched."""
+    from engine.soccer import LEAGUE_REGISTRY
+    empty = {"rows": [], "summary": {"all": {"n": 0, "wins": 0, "losses": 0,
+             "pushes": 0, "pending": 0, "profit": 0.0, "win_pct": 0.0}}, "by_market": {}}
+    if league not in LEAGUE_REGISTRY:
+        return {"error": f"unknown league {league!r}", **empty}
+    _maybe_auto_settle_soccer(league)
+    import sqlite3 as _sq
+    from engine.soccer._db import get_conn
+    conn = get_conn(league); conn.row_factory = _sq.Row
+    # Team logos (MintyBot 2026-10-23): unified tracker rows lacked crests
+    # (only the history endpoint built them). Mirror it: abbr -> teams.logo_url.
+    _logo_by_abbr = {}
+    try:
+        for _ab, _lg in conn.execute("SELECT abbreviation, logo_url FROM teams").fetchall():
+            if _ab:
+                _logo_by_abbr[str(_ab)] = _lg
+    except Exception:
+        _logo_by_abbr = {}
+    try:
+        mids = [r[0] for r in conn.execute(
+            "SELECT match_id, MAX(created_at) c FROM picks "
+            "GROUP BY match_id ORDER BY c DESC LIMIT ?", (limit,))]
+    except Exception as e:
+        logger.warning("soccer %s unified tracker match list failed: %s", league, e)
+        mids = []
+    evm = _soccer_extra_evidence_map(conn, league)
+    rows = []
+    for mid in mids:
+        best = _soccer_recorded_authority_best(league, mid, conn=conn)  # == the card's held headline (2026-11-01)
+        if not best:
+            continue
+        meta = conn.execute("SELECT matchup,date FROM picks WHERE match_id=? LIMIT 1", (str(mid),)).fetchone()
+        _mu = meta["matchup"] if meta else None
+        _aa = _ha = None
+        if _mu and " @ " in _mu:
+            _aa, _ha = [x.strip() for x in _mu.split(" @ ", 1)]
+        rows.append({
+            "game_id": mid,
+            "date": meta["date"] if meta else None,
+            "matchup": _mu,
+            "a_abbr": _aa, "h_abbr": _ha,
+            "away_logo": _logo_by_abbr.get(_aa) if _aa else None,
+            "home_logo": _logo_by_abbr.get(_ha) if _ha else None,
+            "market": best.get("_scope"),
+            "bet_type": best["type"], "pick": best["pick"], "odds": best["odds"],
+            "edge": best["edge"], "result": best["result"], "profit": best.get("profit"),
+            "model_prob": best.get("prob"), "closing_odds": best.get("closing_odds"),
+            "stake_units": best.get("stake_units"),
+        })
+
+    def _sum(rs):
+        w = sum(1 for r in rs if r["result"] == "W")
+        l = sum(1 for r in rs if r["result"] == "L")
+        pu = sum(1 for r in rs if r["result"] in ("P", "PUSH"))
+        pend = sum(1 for r in rs if not r["result"])
+        prof = round(sum((r["profit"] or 0) for r in rs if r["result"]), 2)
+        dec = w + l
+        return {"n": len(rs), "wins": w, "losses": l, "pushes": pu, "pending": pend,
+                "profit": prof, "win_pct": round(100.0 * w / dec, 1) if dec else 0.0}
+
+    by_market = {}
+    for r in rows:
+        by_market.setdefault(r["market"] or "?", []).append(r)
+    return {
+        "rows": rows,
+        "summary": {"all": _sum(rows)},
+        "by_market": {m: _sum(rs) for m, rs in by_market.items()},
+    }
+
+
 @router.get("/api/soccer/{league}/tracker/history")
 def api_soccer_tracker_history(league: str, limit: int = 200) -> dict:
     """Tracker view — pending + settled with summary."""
@@ -431,12 +902,30 @@ def api_soccer_tracker_history(league: str, limit: int = 200) -> dict:
     except Exception as e:
         logger.debug("[soccer:%s] settle on history failed: %s", league, e)
     rows = list_history(league, limit=limit)
+    # Team logos for tracker rows (Austin 2026-10-17: EPL tracker showed abbr
+    # badges, no crests). Mirror football h_abbr/a_abbr/home_logo/away_logo so
+    # PickHistory renders the ESPN crests. abbr -> logo_url from the teams table.
+    from engine.soccer._db import get_conn as _soc_conn0
+    _logo_by_abbr: dict = {}
+    try:
+        for _ab, _lg in _soc_conn0(league).execute(
+                "SELECT abbreviation, logo_url FROM teams").fetchall():
+            if _ab:
+                _logo_by_abbr[str(_ab)] = _lg
+    except Exception as _e:
+        logger.debug("[soccer:%s] tracker logo map failed: %s", league, _e)
     rows_out = []
     for r in rows:
         d = dict(r) if not isinstance(r, dict) else dict(r)
         stake_u = d["stake_units"] if d.get("stake_units") is not None else 1.0
         if d.get("profit") is not None:
             d["profit"] = round(d["profit"] * stake_u, 2)
+        _mu = str(d.get("matchup") or "")
+        if " @ " in _mu:
+            _aa, _ha = [x.strip() for x in _mu.split(" @ ", 1)]
+            d["a_abbr"], d["h_abbr"] = _aa, _ha
+            d["away_logo"] = _logo_by_abbr.get(_aa)
+            d["home_logo"] = _logo_by_abbr.get(_ha)
         rows_out.append(d)
     # Summary scans every pick on file (not just the limit-200 slice)
     # so the hero P/L reflects the full history. Stake-weighted: per
@@ -541,14 +1030,20 @@ def api_soccer_potd(league: str) -> dict:
     if league not in LEAGUE_REGISTRY:
         return {"error": f"unknown league {league!r}"}
     _ensure_potd_table(league)
+    # Attach game_date (= slate date, which is a fell-forward FUTURE date when the
+    # league has no games today) so the cross-sport hero filters it out instead of
+    # headlining e.g. Saturday's EPL game as today's pick. MintyBot 2026-10-13.
+    slate = api_soccer_today(league)
+    _slate_date = slate.get("date")
     existing = get_today_potd(league)
     if existing:
-        return existing
-    slate = api_soccer_today(league)
+        return {**existing, "game_date": _slate_date} if _slate_date else existing
     bets = _build_soccer_potd_bets(slate.get("matches") or [])
     if not bets:
         return {"message": "No qualifying picks today", "sport": league}
-    potd = get_or_create_potd(league, bets)
+    potd = get_or_create_potd(league, bets, db_sport="soccer", league=league)
+    if potd and _slate_date:
+        potd = {**potd, "game_date": _slate_date}
     return potd or {"message": "No qualifying picks today", "sport": league}
 
 

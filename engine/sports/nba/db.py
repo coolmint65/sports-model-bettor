@@ -120,6 +120,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         closing_odds INTEGER,
         result TEXT,
         profit REAL,
+        stake_units REAL,
         created_at TEXT DEFAULT (datetime('now')),
         settled_at TEXT
     );
@@ -403,7 +404,7 @@ def upsert_nba_game(game_id: str, **kwargs) -> None:
 
     # New game -- INSERT with all provided fields
     fields = [
-        "date", "home_team_id", "away_team_id", "home_score", "away_score",
+        "date", "start_time", "home_team_id", "away_team_id", "home_score", "away_score",
         "home_q1", "away_q1", "home_q2", "away_q2",
         "home_q3", "away_q3", "home_q4", "away_q4",
         "status", "season", "home_pace", "away_pace",

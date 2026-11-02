@@ -15,7 +15,7 @@ healing, ROI accounting — is universal and lives here.
 Adapters are registered by the per-sport modules at import time. The
 dispatch table is empty by default; importing a sport's adapter populates
 its entry. Allows the settler to ship without depending on every sport
-being importable (golf-only deploys still work).
+being importable (partial deploys still work).
 """
 from __future__ import annotations
 

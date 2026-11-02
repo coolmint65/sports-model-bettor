@@ -20,7 +20,7 @@ Factors mirrored from Q1:
     4. Rest / B2B penalty
     5. Recent form (last 10 full games, 70/30 vs season)
     6. Team quality (net rating diff)
-    7. Roster availability (gated, off by default — same as Q1)
+    7. Roster availability: missing regulars, market-sized (engine.sports.nba.availability, 2026-10-26)
     8. Market spread anchor (blend toward posted line)
 
 Q1-specific factors removed:
@@ -409,59 +409,40 @@ def predict_full(home_abbr: str, away_abbr: str,
         from ...config import NBA_ENABLE_ROSTER_ADJUSTMENT as _ROSTER_ON
     except Exception:
         _ROSTER_ON = False
+    availability = {"margin_delta": 0.0, "total_delta": 0.0}
     if _ROSTER_ON and not backtest:
         try:
-            from .injuries import compute_q1_adjustment
-            # Scale Q1 deltas to full game (~4× since Q1 is ~1/4 of game,
-            # but starters typically rest some Q4 minutes too — ~3.5×).
-            FULL_GAME_SCALE = 3.5
-            def _scale_player_impacts(players):
-                """Augment each out_player with a `full_impact` field
-                (q1_impact × FULL_GAME_SCALE) so the full-game detail
-                panel can show the player's full-game points-lost
-                instead of mislabelling Q1 numbers as full-game."""
-                out = []
-                for p in (players or []):
-                    p2 = dict(p)
-                    q1_imp = p.get("q1_impact")
-                    if isinstance(q1_imp, (int, float)):
-                        p2["full_impact"] = round(q1_imp * FULL_GAME_SCALE, 2)
-                    out.append(p2)
-                return out
-            if home.get("team_id"):
-                q1_h = compute_q1_adjustment(home["team_id"], season)
-                home_roster_adj = {
-                    "delta": round((q1_h.get("q1_delta") or 0) * FULL_GAME_SCALE, 2),
-                    "starters_out": q1_h.get("starters_out", 0),
-                    "load_management": q1_h.get("load_management", False),
-                    "out_players": _scale_player_impacts(q1_h.get("out_players")),
-                }
-            if away.get("team_id"):
-                q1_a = compute_q1_adjustment(away["team_id"], season)
-                away_roster_adj = {
-                    "delta": round((q1_a.get("q1_delta") or 0) * FULL_GAME_SCALE, 2),
-                    "starters_out": q1_a.get("starters_out", 0),
-                    "load_management": q1_a.get("load_management", False),
-                    "out_players": _scale_player_impacts(q1_a.get("out_players")),
-                }
-            # Stack cap: keep combined delta from running away in
-            # heavy-rest spots (Q1 used -4; scale to -14 for full game).
-            COMBINED_CAP = -14.0
-            combined = home_roster_adj["delta"] + away_roster_adj["delta"]
-            if combined < COMBINED_CAP:
-                scale = COMBINED_CAP / combined
-                home_roster_adj["delta"] = round(home_roster_adj["delta"] * scale, 2)
-                away_roster_adj["delta"] = round(away_roster_adj["delta"] * scale, 2)
-            if home_roster_adj["delta"] < 0:
-                home_expected += home_roster_adj["delta"]
-                reasoning.append(
-                    f"{home_abbr} roster: {home_roster_adj['delta']:+.1f} pts "
-                    f"({home_roster_adj['starters_out']} starter(s) out)")
-            if away_roster_adj["delta"] < 0:
-                away_expected += away_roster_adj["delta"]
-                reasoning.append(
-                    f"{away_abbr} roster: {away_roster_adj['delta']:+.1f} pts "
-                    f"({away_roster_adj['starters_out']} starter(s) out)")
+            # Market-sized missing-regulars adjustment (MintyBot 2026-10-26, engine.sports.nba.availability):
+            # regulars on ESPN's report x their chance of missing x 0.12 margin / -0.049 total points per unit of
+            # production above replacement. Replaces the hand-built Q1 impact x 3.5, which ran ~1.5x what the
+            # closing line prices (OKC w/o J. Williams + Holmgren + Wallace: -6.3 vs ~-4). ensemble_nba gives the
+            # injury-blind MC + GBM legs the same shift via `availability`.
+            from .availability import adjustment as _avail, MARGIN_PER_VAL as _MPV
+            from .db import get_conn as _nba_conn
+            from ..._tz import et_today_str as _et_today
+            if home.get("team_id") and away.get("team_id"):
+                av = _avail(_nba_conn(), int(home["team_id"]), int(away["team_id"]), _et_today())
+                dm, dt = float(av.get("margin") or 0.0), float(av.get("total") or 0.0)
+                availability = {"margin_delta": dm, "total_delta": dt}
+
+                def _roster(m, own_delta):
+                    players = m.get("players") or []
+                    return {"delta": round(own_delta, 2),
+                            "starters_out": sum(1 for x in players if x["w"] >= 1.0 and x["val"] >= 8),
+                            "load_management": sum(1 for x in players if x["w"] >= 1.0 and x["val"] >= 8) >= 3,
+                            "out_players": [{"name": x["name"], "status": x["status"],
+                                             "full_impact": round(_MPV * x["w"] * x["val"], 2),
+                                             "pra": x["pra"], "val": x["val"]} for x in players],
+                            "missing_val": m.get("val", 0.0)}
+                home_roster_adj = _roster(av["home"], dm / 2 + dt / 2)
+                away_roster_adj = _roster(av["away"], -dm / 2 + dt / 2)
+                if dm or dt:
+                    home_expected += dm / 2 + dt / 2
+                    away_expected += -dm / 2 + dt / 2
+                for abbr, adj in ((home_abbr, home_roster_adj), (away_abbr, away_roster_adj)):
+                    if adj["out_players"]:
+                        reasoning.append(f"{abbr} missing: " + ", ".join(
+                            f"{x['name']} ({x['status']})" for x in adj["out_players"][:4]))
         except Exception as e:
             logger.warning("Full-game roster adjustment failed: %s", e)
 
@@ -571,6 +552,7 @@ def predict_full(home_abbr: str, away_abbr: str,
             "away_roster": away_roster_adj,
         },
         "series_context": series if series.get("in_series") else None,
+        "availability": availability,
         "reasoning": reasoning,
     }
 

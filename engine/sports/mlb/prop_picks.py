@@ -63,6 +63,13 @@ PROP_MAX_ODDS = 400
 # win $100 — a 2pp model edge needs to be near-perfect to be +EV.
 PROP_JUICE_WALL = -200
 
+# Chronic money-losers, killed at GENERATION only (2026-08-10, Austin 'kill the 2
+# bleeder markets'). Settlement of already-open picks is untouched (player_props_
+# tracker._MLB_STAT_KEY still maps them), so pending rows keep resolving. NB: the
+# Batter Hits O/U Under side was ~breakeven/fair; the Over side was the bleeder,
+# but we kill the whole market per the ask. Restore = remove the entry.
+_DISABLED_BET_TYPES = {"Pitcher Outs Recorded", "Batter Hits O/U"}
+
 
 def _normalize_name(name: str) -> str:
     """Lowercase, strip accents and punctuation. Handles HR's
@@ -123,7 +130,33 @@ def _implied_prob(odds: int | None) -> float | None:
     return 100.0 / (n + 100.0) if n > 0 else abs(n) / (abs(n) + 100.0)
 
 
-def score_player_prop(samples: dict, prop: dict) -> dict | None:
+def _continuous_over_under(samp, line) -> tuple[float, float]:
+    """P(over)=P(X>=line), P(under)=P(X<=line) for a CONTINUOUS stat,
+    read from the best-AIC continuous fit of the player's samples.
+
+    Parallel to the count path (``prob_over`` / ``prob_under`` use the
+    empirical CDF of the samples); here we fit a continuous family
+    (``engine.distribution_fit.fit_all_continuous``) and read its
+    survival / CDF. Continuous => P(X == line) = 0, so the two sides
+    sum to ~1. Falls back to the empirical survival if no fit yields a
+    CDF, so the scorer never returns a silently-wrong probability."""
+    import numpy as _np
+    from ...distribution_fit import fit_all_continuous
+    arr = _np.asarray(samp, dtype=float)
+    fits = fit_all_continuous(arr)
+    best = fits[0] if fits else None
+    if best is not None and best.get("cdf") is not None:
+        cdf = best["cdf"]
+        sf = best.get("sf")
+        p_under = min(1.0, max(0.0, float(cdf(line))))
+        p_over = float(sf(line)) if sf is not None else (1.0 - p_under)
+        p_over = min(1.0, max(0.0, p_over))
+        return p_over, p_under
+    return prob_over(arr, line), prob_under(arr, line)
+
+
+def score_player_prop(samples: dict, prop: dict,
+                      *, kind: str | None = None) -> dict | None:
     """For one HR prop row, return the best-side pick dict or None
     when neither side clears ``PROP_MIN_EDGE_PCT``.
 
@@ -132,6 +165,8 @@ def score_player_prop(samples: dict, prop: dict) -> dict | None:
     bet_type, line, over_odds, under_odds, is_alt, hr_market_type).
     """
     bet_type = prop.get("bet_type") or ""
+    if bet_type in _DISABLED_BET_TYPES:
+        return None
     line = prop.get("line")
     if line is None:
         return None
@@ -144,8 +179,18 @@ def score_player_prop(samples: dict, prop: dict) -> dict | None:
 
     over_odds = prop.get("over_odds")
     under_odds = prop.get("under_odds")
-    p_over = prob_over(samp, line)
-    p_under = prob_under(samp, line)
+    # Dispatch by stat KIND. COUNT (default) keeps the empirical
+    # survival on the MC samples, exactly as before. CONTINUOUS fits a
+    # continuous family to the samples and reads P(X>=line)/P(X<=line)
+    # from its survival/CDF. Resolving kind via the registry keeps every
+    # current (count) caller on the identical count path.
+    from ...distribution_fit import get_stat_kind as _gsk
+    eff_kind = kind if kind is not None else _gsk("mlb", stat_key)
+    if eff_kind == "continuous":
+        p_over, p_under = _continuous_over_under(samp, line)
+    else:
+        p_over = prob_over(samp, line)
+        p_under = prob_under(samp, line)
     # Shrink toward 50% per the per-stat calibration findings. Only
     # the "winning side" gets pulled in (whichever has p > 0.5); the
     # losing side gets the complement so we don't over-correct.
@@ -154,6 +199,19 @@ def score_player_prop(samples: dict, prop: dict) -> dict | None:
         p_over = 0.5 + (p_over - 0.5) * shrink
         p_under = 0.5 + (p_under - 0.5) * shrink
 
+    # ---- Derivative/prop post-hoc calibration (2026-09-16) ----
+    # De-bias per-stat overconfidence on the settled prop history
+    # (data/derivative_prob_calibration.json), keyed "mlb:<bet_type>",
+    # right before edge. Reversible via ENABLE_DERIV_CALIBRATION.
+    try:
+        from ...config import get_flag as _gf
+        if _gf("ENABLE_DERIV_CALIBRATION", True, sport="mlb"):
+            from ...derivative_prob_calibration import apply as _dcal
+            _dk = "mlb:" + str(bet_type)
+            p_over = _dcal(_dk, p_over)
+            p_under = _dcal(_dk, p_under)
+    except Exception:
+        pass
     candidates: list[dict] = []
     if over_odds is not None:
         implied = _implied_prob(over_odds)

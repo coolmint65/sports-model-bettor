@@ -1,14 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
+import { clvPct } from '../lib/clv'
 import { User } from 'lucide-react'
 import { cn } from '../lib/utils'
 import EdgeBadge from './primitives/EdgeBadge'
 import PickEventsBadge from './PickEventsBadge'
-import PickOfDayHero from './PickOfDayHero'
 import PicksTable from './primitives/PicksTable'
 import PickHistory from './PickHistory'
 import MatchCard, { TierChip } from './tennis/MatchCard'
 import TournamentDropdownView from './tennis/TournamentDropdownView'
-import TennisMatchDetail from './tennis/MatchDetail'
 
 // Render a signed integer with explicit sign for + values. Replaces
 // Python f-string format specs (`:+.0f`) which JSX can't parse.
@@ -41,12 +40,9 @@ export default function TennisPanel({ api }) {
   const [tour, setTour] = useState('atp')
   const [surface, setSurface] = useState('Hard')
   const [view, setView] = useState('index') // index | rankings | matchup | tracker | calibration
-  const [selectedMatch, setSelectedMatch] = useState(null)
 
   const tabs = [
     { id: 'index',       label: 'Tournaments' },
-    { id: 'rankings',    label: 'Rankings'    },
-    { id: 'matchup',     label: 'Matchup'     },
     { id: 'tracker',     label: 'Tracker'     },
     { id: 'calibration', label: 'Calibration' },
   ]
@@ -111,27 +107,14 @@ export default function TennisPanel({ api }) {
         <TournamentDropdownView
           api={api}
           tour={tour}
-          onOpenMatch={setSelectedMatch}
         />
       )}
-      {view === 'rankings' && (
-        <RankingsView api={api} tour={tour} surface={surface} />
-      )}
-      {view === 'matchup' && (
-        <MatchupView api={api} tour={tour} surface={surface} />
-      )}
+
       {view === 'tracker' && (
         <TrackerView api={api} tour={tour} />
       )}
       {view === 'calibration' && (
         <CalibrationView api={api} tour={tour} />
-      )}
-      {selectedMatch && (
-        <TennisMatchDetail
-          api={api}
-          match={selectedMatch}
-          onClose={() => setSelectedMatch(null)}
-        />
       )}
     </div>
   )
@@ -598,23 +581,48 @@ function PlayerPicker({ api, tour, label, value, onChange }) {
 // CLV from American odds → implied prob delta in pp.
 // Same formula team-sport tracker uses.
 function clvFor(r) {
-  if (r.odds == null || r.closing_odds == null) return null
-  const imp = (o) => o < 0 ? Math.abs(o) / (Math.abs(o) + 100) : 100 / (o + 100)
-  return Math.round((imp(r.closing_odds) - imp(r.odds)) * 1000) / 10
+  const c = clvPct(r.odds, r.closing_odds)
+  return c == null ? null : Math.round(c * 10) / 10
 }
 
 
 function TrackerView({ api, tour }) {
   const [rows, setRows] = useState([])
   const [summary, setSummary] = useState(null)
+  const [paper, setPaper] = useState(null)
+  const [paperRows, setPaperRows] = useState([])
   const [loading, setLoading] = useState(false)
 
+  // PickMint tennis parity Phase 2 (Austin 2026-10-10): /tracker/history
+  // now bundles {rows, summary, paper:{...,rows}} in one call — real and
+  // paper rows/summaries split server-side on is_paper, the same shape
+  // BasketballPanel's TrackerView reads (api/basketball/{league}/tracker
+  // /history). /tracker/summary stays a SEPARATE call purely for the
+  // probation banner fields (on_probation / probation_min_decided /
+  // probation_brier_ceiling) — those only ever lived there, not on the
+  // bundled history response.
+  //
+  // DEFENSIVE: the backend half of this ships tonight (bundled uvicorn
+  // restart). Until then /tracker/history still returns the OLD shape —
+  // {tour, rows} with no `paper` key, `rows` real+paper mixed. Guard on
+  // `data.paper` so this never crashes against the old shape: no `paper`
+  // key -> empty paper section (not a client-side guess, and NOT the old
+  // 🧪-emoji-in-the-matchup-string hack this replaces). Once the backend
+  // deploys, `paper` + `paper.rows` populate on the very next refresh —
+  // no frontend redeploy needed.
   const refresh = () => {
     setLoading(true)
     Promise.all([
-      api.get(`/tennis/tracker/history`, { params: { tour, limit: 200 }}).then(r => setRows(r.data?.rows || [])),
-      api.get(`/tennis/tracker/summary`, { params: { tour }}).then(r => setSummary(r.data)),
+      api.get(`/tennis/tracker/history`, { params: { tour, limit: 200 }}),
+      api.get(`/tennis/tracker/summary`, { params: { tour }}),
     ])
+      .then(([histRes, summRes]) => {
+        const data = histRes.data || {}
+        setRows(data.rows || [])
+        setPaper(data.paper || null)
+        setPaperRows(data.paper?.rows || [])
+        setSummary(summRes.data || null)
+      })
       .catch(() => {})
       .finally(() => setLoading(false))
   }
@@ -632,34 +640,17 @@ function TrackerView({ api, tour }) {
     api.post(`/tennis/scheduled/refresh`).finally(refresh)
   }
 
-  // Map tennis history rows into the team-sport pick shape PickHistory
-  // already understands. The 🧪 prefix on paper rows lives inside the
-  // matchup cell so PicksTable stays tour-agnostic.
-  const decoratedHistory = rows.map(r => ({
-    ...r,
-    matchup: r.is_paper ? `🧪 ${r.matchup}` : r.matchup,
-  }))
-
   return (
     <section className="space-y-4">
-      {summary?.on_probation && (
-        <div className="rounded-lg border border-warning/40 bg-warning/10 px-4 py-3">
-          <div className="text-xs font-bold uppercase tracking-wider text-warning">
-            🧪 PAPER-BET PROBATION
-          </div>
-          <div className="mt-1 text-xs text-foreground">
-            Tennis picks are paper-only until {summary.probation_min_decided}+ settled
-            picks accumulate AND model Brier ≤ {summary.probation_brier_ceiling}.
-            Currently {(summary.wins || 0) + (summary.losses || 0)} decided.
-          </div>
-        </div>
-      )}
       <PickHistory
         summary={summary}
-        history={decoratedHistory}
+        history={rows}
+        paper={paper}
+        paperRows={paperRows}
         loading={loading}
         onRecord={onRecord}
         onSettle={onSettle}
+        sport="tennis"
       />
     </section>
   )

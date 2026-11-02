@@ -34,10 +34,15 @@ _DEFAULT_WEIGHTS = {
 
 # Once a GBM is trained for the league, swap to a 0.4/0.3/0.3 split so
 # the GBM gets a meaningful voice without dominating a small sample.
+# Austin 2026-09-19: GBM validated as only MARGINALLY better BLENDED (and worse
+# SOLO than the Elo/factor leg), so it gets a CONSERVATIVE 20% voice on ML only
+# (the one market train() fits). Spread/total have no GBM model, so they stay
+# 50/50 factor/mc (avoids the weight table silently re-tilting them when a model
+# exists). Revisit weights via a proper walk-forward fit if we enrich features.
 _DEFAULT_WEIGHTS_WITH_GBM = {
-    "ml":     {"factor": 0.4, "mc": 0.3, "gbm": 0.3},
-    "spread": {"factor": 0.4, "mc": 0.3, "gbm": 0.3},
-    "total":  {"factor": 0.4, "mc": 0.3, "gbm": 0.3},
+    "ml":     {"factor": 0.45, "mc": 0.35, "gbm": 0.20},
+    "spread": {"factor": 0.4,  "mc": 0.3,  "gbm": 0.3},
+    "total":  {"factor": 0.5,  "mc": 0.5,  "gbm": 0.0},
 }
 
 
@@ -80,6 +85,27 @@ def blend(league: str, pred: dict) -> None:
     """
     gbm_trained = bool(pred.get("gbm_trained"))
     weights = _load_weights(league, gbm_trained)
+
+    # GBM is blind to QB injuries (no injury feature in training) -- when a
+    # starting QB is Out its probs assume the starter plays, leaking an
+    # injury-ignorant, over-confident signal into the blend. Zero its weight
+    # across all markets so the ensemble leans on the injury-aware factor+MC
+    # (Austin 2026-10-11; caught it inflating a BAL ML pick with Lamar out).
+    def _injh(_s): return (pred.get(_s) or {})
+    # Drop GBM when injuries materially move the line (GBM is blind to ALL
+    # injuries): either QB out, or non-QB injuries >= ~1.5pts (45 Elo). Austin
+    # 2026-10-11 (QB fix + snap-share non-QB layer).
+    # 2026-10-25: injuries are now weighted by the chance each player misses THIS game, so a
+    # starting QB who is merely likely-out (Lamar 0.41 next week) carries a real qb_penalty
+    # without being flagged starter_qb_out -- the QB penalty's size counts too.
+    _inj_material = bool(
+        _injh("injury_home").get("starter_qb_out") or _injh("injury_away").get("starter_qb_out")
+        or (_injh("injury_home").get("qb_penalty") or 0) >= 45.0
+        or (_injh("injury_away").get("qb_penalty") or 0) >= 45.0
+        or (_injh("injury_home").get("non_qb_penalty") or 0) >= 45.0
+        or (_injh("injury_away").get("non_qb_penalty") or 0) >= 45.0)
+    if _inj_material:
+        weights = {_mkt: {**_w, "gbm": 0.0} for _mkt, _w in weights.items()}
 
     # Snapshot factor-only legs before we overwrite them.
     pred["_signal_factor"] = {

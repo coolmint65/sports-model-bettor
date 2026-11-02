@@ -228,8 +228,10 @@ def backfill_all(*, dry_run: bool = False) -> dict:
     out["nba"] = _backfill_one("nba", _pull_nba(), dry_run=dry_run)
     out["tennis"] = _backfill_one("tennis", _pull_tennis(), dry_run=dry_run)
     # Basketball framework leagues — only ones that have actually
-    # been onboarded with a populated DB.
-    for league in ("wnba", "euroleague"):
+    # been onboarded with a populated DB, and still registered (euroleague was removed with
+    # the minor leagues 2026-10-27; its get_conn raised and failed every sync after that).
+    from .basketball import LEAGUE_REGISTRY
+    for league in [l for l in ("wnba", "euroleague") if l in LEAGUE_REGISTRY]:
         out[f"basketball_{league}"] = _backfill_one(
             league, _pull_basketball_framework(league),
             dry_run=dry_run, league=league,

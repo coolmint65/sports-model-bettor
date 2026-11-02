@@ -30,5 +30,10 @@ export function playerPhotoUrl(sport, playerId) {
   if (sport === 'nhl') {
     return `https://assets.nhle.com/mugs/nhl/latest/${id}.png`
   }
+  if (sport === 'nfl' || sport === 'cfb') {
+    // ESPN NFL headshot (player_id = espn_id, same namespace the anytime-TD
+    // board uses). Added 2026-09-29 — props cards were showing initials.
+    return `https://a.espncdn.com/i/headshots/nfl/players/full/${id}.png`
+  }
   return null
 }

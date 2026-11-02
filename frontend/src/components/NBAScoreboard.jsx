@@ -28,15 +28,21 @@ function NBAScoreboardImpl(props) {
           pickEventsScope={view}
         />
       )}
-      renderFinal={({ game, onClick, key }) => {
-        const q1 = game.q1 || {}
-        const extra = q1.home != null && q1.away != null ? (
-          <div className="q1-final-line">
-            Q1: {game.away.abbreviation} {q1.away} - {game.home.abbreviation} {q1.home}
-          </div>
-        ) : null
-        return <FinalRow key={key} game={game} onClick={onClick} extra={extra} />
-      }}
+      renderFinal={({ game, bet, onClick, key }) => (
+        // Route finals through NBAGameCard (Austin 2026-10-03), same fix as
+        // MLB/NHL: the bare <FinalRow> dropped `bet`/game.paper_pick, so the
+        // pick + its W/L never showed on a final card. NBAGameCard already
+        // renders the Q1 final score (its isFinal liveExtras), so the old
+        // FinalRow `extra` is covered.
+        <NBAGameCard
+          key={key}
+          game={game}
+          bet={bet}
+          onClick={onClick}
+          sport="nba"
+          pickEventsScope={view}
+        />
+      )}
     />
   )
 }

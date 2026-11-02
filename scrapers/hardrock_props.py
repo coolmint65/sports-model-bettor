@@ -221,6 +221,12 @@ _NHL_ALT: list[tuple[re.Pattern, str]] = [
 ]
 
 
+_NBA_ML = re.compile(r"^BASKETBALL:FT:PROP(PTS|REB|AST|3PM|PPAP|STL)MULTILINE$")
+_NBA_ML_BT = {"PTS": "Player Points", "REB": "Player Rebounds", "AST": "Player Assists",
+              "3PM": "Player 3PM", "PPAP": "Player PRA", "STL": "Player Steals"}
+_ML_SEL = re.compile(r"^(over|under)\s+(-?\d+(?:\.\d+)?)$", re.I)
+
+
 _MAIN_BY_SPORT = {"mlb": _MLB_MAIN, "nba": _NBA_MAIN, "nhl": _NHL_MAIN,
                   "wnba": _NBA_MAIN}
 _ALT_BY_SPORT  = {"mlb": _MLB_ALT,  "nba": _NBA_ALT,  "nhl": _NHL_ALT,
@@ -337,26 +343,23 @@ def _matchup_key(event_name: str, away_abbr: str, home_abbr: str) -> str:
 
 
 def _fetch_raw(comp_id: str) -> dict:
-    """POST the betSync query and return the parsed JSON, or {} on
-    any error.
+    """Fetch events (with markets) for a comp via the migrated REST route.
 
-    Routed through the shared ``_graphql_post`` helper from
-    hardrock_odds — it carries the curl_cffi/Firefox TLS impersonation
-    needed to clear Cloudflare's JA3 fingerprint check. Without it
-    Cloudflare 403s every request (observed 2026-05-09: props silently
-    flatlined across MLB/NBA/NHL while game-line scraping kept working
-    because game-line had already migrated to curl_cffi)."""
-    body = _build_request_body(comp_id)
-    headers = _load_headers()
-    status, raw, err = _graphql_post(EVENT_TREE_URL, body, headers, timeout=20.0)
-    if err or status != 200 or not raw:
-        logger.warning("HR props HTTP %s err=%s", status, err)
-        return {}
-    try:
-        return json.loads(raw)
-    except (json.JSONDecodeError, ValueError) as e:
-        logger.warning("HR props bad JSON: %s", e)
-    return {}
+    HR moved markets off the GraphQL ``betSync`` POST (/java-graphql/graphql)
+    to the REST ``competitions/{comp}/events?includeMarkets=true`` GET on
+    2026-10-13; the old POST now 403s (props flatlined across MLB/NHL/WNBA/NFL
+    while game lines kept working -- game lines migrated to the REST route,
+    props hadn't). Reuse ``_fetch_events_for_comp`` from hardrock_odds: it uses
+    the new route AND normalizes the new shape (``selections``->``selection``,
+    ``rootIdx``->``odds``) so the parse below reads the legacy shape unchanged.
+    Wrap the events in the old ``data.betSync.events.data`` envelope so every
+    caller (_fetch_props + the NFL harvesters) finds the list unchanged.
+    MintyBot 2026-10-15 (see hr_odds_coverage_gap_2026-10-13)."""
+    from scrapers.hardrock_odds import _fetch_events_for_comp
+    events, err = _fetch_events_for_comp(comp_id)
+    if err:
+        logger.warning("HR props fetch (comp %s) err=%s", comp_id, err)
+    return {"data": {"betSync": {"events": {"data": events or []}}}}
 
 
 def _parse_event(event: dict, sport: str = "mlb") -> tuple[str, list[dict]]:
@@ -369,8 +372,34 @@ def _parse_event(event: dict, sport: str = "mlb") -> tuple[str, list[dict]]:
     home_abbr = _team_abbr(sport, home_name)
     key = _matchup_key(event.get("name", ""), away_abbr, home_abbr)
     rows: list[dict] = []
+    ml_rows: dict[tuple, dict] = {}
     for market in (event.get("markets") or []):
         mtype = market.get("type") or ""
+        mlm = _NBA_ML.match(mtype) if sport in ("nba", "wnba") else None
+        if mlm:
+            # MULTILINE ladder (MintyBot 2026-11-01): one market, selections "Over X" / "Under X" across many X.
+            # HR posts these hours before the per-line PROPPTS mains (11-01 board had only these + one-sided
+            # ALTs, so NBA props priced nothing); merged per (player, stat, line) into two-sided rows.
+            if market.get("state") != "OPEN":
+                continue
+            player = _extract_player_name(market.get("name", ""))
+            if not player:
+                continue
+            bt = _NBA_ML_BT[mlm.group(1)]
+            for sel in (market.get("selection") or []):
+                od = _parse_odds_string(sel.get("odds"))
+                mt = _ML_SEL.match((sel.get("type") or sel.get("name") or "").strip())
+                if od is None or not mt:
+                    continue
+                ln = float(mt.group(2))
+                row = ml_rows.get((player, bt, ln))
+                if row is None:
+                    row = ml_rows[(player, bt, ln)] = {
+                        "player_name": player, "bet_type": bt, "line": ln,
+                        "team_side": _extract_side(market), "over_odds": None, "under_odds": None,
+                        "is_alt": False, "hr_market_id": market.get("id"), "hr_market_type": mtype}
+                row["over_odds" if mt.group(1).lower() == "over" else "under_odds"] = od
+            continue
         bet_type, is_alt, alt_threshold = _classify_market(mtype, sport)
         if not bet_type:
             continue
@@ -401,6 +430,7 @@ def _parse_event(event: dict, sport: str = "mlb") -> tuple[str, list[dict]]:
             "hr_market_id": market.get("id"),
             "hr_market_type": mtype,
         })
+    rows.extend(ml_rows.values())
     return key, rows
 
 
@@ -441,4 +471,191 @@ def fetch_nba_props() -> dict[str, list[dict]]: return _fetch_props("nba")
 def fetch_nhl_props() -> dict[str, list[dict]]: return _fetch_props("nhl")
 
 
-__all__ = ["fetch_mlb_props", "fetch_nba_props", "fetch_nhl_props"]
+# ── NFL player props: passing/rushing/receiving yards + receptions ──
+# HR prices these as ALTERNATE-LINE thresholds ("125+ Pass Yards" YES/NO),
+# market type PROPALT{PSYDS,RSYDS,RECYDS,RECEPTIONS}<threshold>. We surface
+# each (player, market, threshold, YES-odds); the model prices P(stat >= line).
+import re as _re_nflpp
+_NFL_PP_ALT = _re_nflpp.compile(r"PROPALT(PSYDS|RSYDS|RECYDS|RECEPTIONS)(\d+)$")
+_NFL_PP_MARKET = {"PSYDS": "Passing Yards", "RSYDS": "Rushing Yards",
+                  "RECYDS": "Receiving Yards", "RECEPTIONS": "Receptions"}
+
+
+# HR "NFL" regular-season competition id (engine.football LEAGUE_REGISTRY),
+# shared by the NFL player-props fetcher below.
+_NFL_COMP_ID = "2295257447167426824"
+
+
+def fetch_nfl_player_props() -> list[dict]:
+    """HR NFL player-prop thresholds (alt-line: passing/rushing/receiving yards
+    + receptions). Returns rows {player_name, bet_type, line(threshold), yes_odds,
+    event_name, hr_market_id}. YES = the 'Over'/clears-the-threshold selection.
+    Empty list on any failure (model then runs probability-only)."""
+    now = time.time()
+    key = "nfl_playerprops"
+    if key in _cache:
+        ts, cached = _cache[key]
+        ttl = EMPTY_CACHE_TTL if not cached else CACHE_TTL
+        if now - ts < ttl:
+            return cached
+    payload = _fetch_raw(_NFL_COMP_ID)
+    events = (payload.get("data", {}).get("betSync", {})
+              .get("events", {}).get("data", []) or [])
+    out: list[dict] = []
+    seen: set = set()
+    for ev in events:
+        ev_name = ev.get("name") or ""
+        for m in (ev.get("markets") or []):
+            mm = _NFL_PP_ALT.search((m.get("type") or "").upper())
+            if not mm or m.get("state") != "OPEN":
+                continue
+            bet_type = _NFL_PP_MARKET.get(mm.group(1))
+            if not bet_type:
+                continue
+            thr = int(mm.group(2))
+            nm = m.get("name") or ""
+            player = (nm.split(" - ")[0].strip() if " - " in nm
+                      else _extract_player_name(nm))
+            if not player:
+                continue
+            yes = None
+            for sel in (m.get("selection") or []):
+                st = (sel.get("type") or "").lower()
+                od = _parse_odds_string(sel.get("odds"))
+                if od is None:
+                    continue
+                if st.startswith("over") or st == "yes":
+                    yes = od
+            if yes is None:
+                continue
+            dedup = (player, bet_type, thr)
+            if dedup in seen:
+                continue
+            seen.add(dedup)
+            out.append({"player_name": player, "bet_type": bet_type,
+                        "line": float(thr), "yes_odds": yes,
+                        "event_name": ev_name, "hr_market_id": m.get("id")})
+    _cache[key] = (now, out)
+    logger.info("HR NFL player props: %d thresholds across %d events",
+                len(out), len(events))
+    return out
+
+
+# ── NFL player props v2: two-sided ladders (MintyBot 2026-10-26) ──
+# Austin: "follow in the footsteps of NHL props" -> main line only, both sides,
+# de-vigged + market-anchored. fetch_nfl_player_props above only kept the YES
+# price of the ALT thresholds, and its regex wanted PROPALTRSYDS -- HR's rushing
+# market is PROPALTRUYDS, so rushing yards was never priced. HR ships every NFL
+# player stat twice: ALT threshold markets (PROPALT<STAT><N>, one market per N,
+# Over/Under selections at N-0.5) and one MULTILINE market (selections typed
+# "Over X" / "Under X" across many X). Both are merged per (player, stat, line)
+# into the shared {matchup: [rows]} shape the NHL/NBA pickers and
+# engine.player_props_clv already read (American over_odds / under_odds).
+_NFL_PP2_ALT = _re_nflpp.compile(
+    r"^AMERICAN_FOOTBALL:FT:PROPALT(PSYDS|RUYDS|RECYDS|RECEPTIONS|RSATT)(\d+)$")
+_NFL_PP2_ML = _re_nflpp.compile(
+    r"^AMERICAN_FOOTBALL:FT:PROP(PSYDS|RSYDS|RCYDS|REC|PSATT|PSCMP)MULTILINE$")
+# per-line main O/U (subtype "...#14.5", selections typed Over / Under) -- added 2026-11-01
+_NFL_PP2_MAIN = _re_nflpp.compile(r"^AMERICAN_FOOTBALL:FT:PROP(RSATT|RSPRCYDS)$")
+_NFL_PP2_BT = {"PSYDS": "Passing Yards", "RUYDS": "Rushing Yards",
+               "RSYDS": "Rushing Yards", "RECYDS": "Receiving Yards",
+               "RCYDS": "Receiving Yards", "RECEPTIONS": "Receptions",
+               "REC": "Receptions", "RSATT": "Rushing Attempts",
+               "PSATT": "Pass Attempts", "PSCMP": "Completions",
+               "RSPRCYDS": "Rush+Rec Yards"}
+_NFL_PP2_SEL = _re_nflpp.compile(r"^(over|under)\s+(-?\d+(?:\.\d+)?)$", _re_nflpp.I)
+
+
+def fetch_nfl_props() -> dict[str, list[dict]]:
+    """HR NFL player props as two-sided lines, ``{"AWAY@HOME": [row, ...]}``.
+
+    Row: ``player_name, bet_type, line, over_odds, under_odds, team_side``
+    ('home'/'away' -- HR's A = home, B = away), ``hr_player_id, hr_market_id,
+    hr_market_type, event_name, event_time`` (ms). Pre-match events only; a
+    line may carry one side only (deep ladder rungs). Cached CACHE_TTL."""
+    now = time.time()
+    key = "nfl_props_v2"
+    if key in _cache:
+        ts, cached = _cache[key]
+        if now - ts < (EMPTY_CACHE_TTL if not cached else CACHE_TTL):
+            return cached
+    payload = _fetch_raw(_NFL_COMP_ID)
+    events = (payload.get("data", {}).get("betSync", {})
+              .get("events", {}).get("data", []) or [])
+    try:
+        from engine.football._odds import _build_name_lookup, _resolve_team
+        name_to_abbr = _build_name_lookup("nfl")
+    except Exception as e:
+        logger.warning("HR NFL props v2: team lookup unavailable: %s", e)
+        return {}
+    out: dict[str, list[dict]] = {}
+    n_lines = 0
+    for ev in events:
+        if ev.get("inplay"):
+            continue
+        away_name, home_name = _extract_teams(ev)
+        a = _resolve_team(away_name, name_to_abbr, "nfl")
+        h = _resolve_team(home_name, name_to_abbr, "nfl")
+        if not (a and h):
+            continue
+        lines: dict[tuple, dict] = {}
+        for m in (ev.get("markets") or []):
+            if m.get("state") != "OPEN":
+                continue
+            t = (m.get("type") or "").upper()
+            ma = _NFL_PP2_ALT.match(t)
+            mm = None if ma else _NFL_PP2_ML.match(t)
+            mn = None if (ma or mm) else _NFL_PP2_MAIN.match(t)
+            if not (ma or mm or mn):
+                continue
+            bet_type = _NFL_PP2_BT[(ma or mm or mn).group(1)]
+            main_line = None
+            if mn:
+                _ml = re.search(r"#(-?\d+(?:\.\d+)?)", m.get("subtype") or "")
+                if not _ml:
+                    continue
+                main_line = float(_ml.group(1))
+            nm = m.get("name") or ""
+            player = (nm.split(" - ")[0].strip() if " - " in nm
+                      else _extract_player_name(nm))
+            if not player:
+                continue
+            sub = m.get("subtype") or m.get("period") or ""
+            parts = sub.split("#")[0].split(":")
+            team_side = {"A": "home", "B": "away"}.get(parts[1] if len(parts) > 1 else "")
+            hr_pid = parts[2] if len(parts) > 2 else None
+            for sel in (m.get("selection") or []):
+                od = _parse_odds_string(sel.get("odds"))
+                if od is None:
+                    continue
+                if ma or mn:
+                    st = (sel.get("type") or "").strip().lower()
+                    if st not in ("over", "under"):
+                        continue
+                    side, line = st, (float(ma.group(2)) - 0.5 if ma else main_line)
+                else:
+                    mt = (_NFL_PP2_SEL.match((sel.get("type") or "").strip())
+                          or _NFL_PP2_SEL.match((sel.get("name") or "").strip()))
+                    if not mt:
+                        continue
+                    side, line = mt.group(1).lower(), float(mt.group(2))
+                row = lines.get((player, bet_type, line))
+                if row is None:
+                    row = lines[(player, bet_type, line)] = {
+                        "player_name": player, "bet_type": bet_type, "line": line,
+                        "over_odds": None, "under_odds": None, "is_alt": False,
+                        "team_side": team_side, "hr_player_id": hr_pid,
+                        "hr_market_id": m.get("id"), "hr_market_type": t,
+                        "event_name": ev.get("name") or "",
+                        "event_time": ev.get("eventTime")}
+                row["over_odds" if side == "over" else "under_odds"] = od
+        if lines:
+            out.setdefault(f"{a}@{h}", []).extend(lines.values())
+            n_lines += len(lines)
+    _cache[key] = (now, out)
+    logger.info("HR NFL props v2: %d lines across %d games", n_lines, len(out))
+    return out
+
+
+__all__ = ["fetch_mlb_props", "fetch_nba_props", "fetch_nhl_props",
+           "fetch_nfl_player_props", "fetch_nfl_props"]

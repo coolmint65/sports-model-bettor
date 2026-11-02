@@ -30,7 +30,7 @@ from ._db import get_conn
 logger = logging.getLogger(__name__)
 
 
-_USER_AGENT = "SportsBettor/1.0 (basketball-boxscore)"
+_USER_AGENT = "curl/8.4.0"
 
 
 def _fetch(url: str, retries: int = 3) -> dict | None:

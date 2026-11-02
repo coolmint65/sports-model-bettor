@@ -63,7 +63,14 @@ def settle_potd(sport: str) -> dict:
 
         for potd in pending:
             potd = dict(potd)
-            result, profit = _determine_outcome(sport, conn, potd)
+            try:
+                result, profit = _determine_outcome(sport, conn, potd)
+            except Exception as e:
+                logger.warning("POTD settle: outcome error on %s %s id=%s "
+                               "bet=%r pick=%r: %s", sport, potd.get("date"),
+                               potd.get("id"), potd.get("bet_type"),
+                               potd.get("pick"), e)
+                continue  # one bad row must not abort the whole sweep
 
             if result is None:
                 continue  # Game not finished yet
@@ -571,27 +578,37 @@ def _determine_outcome(sport: str, conn, potd: dict) -> tuple[str | None, float]
         # ALT O/U is identical to O/U for settlement — same "Over N.N" /
         # "Under N.N" pick label, just at a different line value.
         total = hs + as_
-        if "Over" in pick:
-            line = float(pick.split()[-1])
-            if total > line:
-                result = "W"
-            elif total < line:
-                result = "L"
-            else:
+        # Line: prefer the stored `line` column (football stores pick="Under"
+        # + line=50.0 separately); fall back to a number in the pick text
+        # ("Over 158.5", basketball style). Guarded so a garbled line can't
+        # crash the whole sweep.
+        _ln = potd.get("line")
+        if _ln is None:
+            try:
+                _ln = float(pick.split()[-1])
+            except (ValueError, IndexError):
+                _ln = None
+        if _ln is not None:
+            line = float(_ln)
+            is_over = "over" in pick.lower()
+            if total == line:
                 result = "P"
-        else:
-            line = float(pick.split()[-1])
-            if total < line:
-                result = "W"
-            elif total > line:
-                result = "L"
+            elif is_over:
+                result = "W" if total > line else "L"
             else:
-                result = "P"
+                result = "W" if total < line else "L"
 
     elif bet_type in ("RL", "PL", "ALT RL", "ALT PL",
-                       "SPREAD", "ALT SPREAD"):
-        spread_match = re.search(r'([+-]?\d+\.?\d*)\s*$', pick)
-        spread = float(spread_match.group(1)) if spread_match else 1.5
+                       "SPREAD", "ALT SPREAD", "ALT_SPREAD"):
+        # Spread: prefer the stored `line` column (football stores pick="CLE"
+        # + line=-3.5 separately, from the PICK team's perspective); fall back
+        # to a signed number in the pick text.
+        _ln = potd.get("line")
+        if _ln is not None:
+            spread = float(_ln)
+        else:
+            spread_match = re.search(r'([+-]?\d+\.?\d*)\s*$', pick)
+            spread = float(spread_match.group(1)) if spread_match else 1.5
 
         # Case-insensitive substring match (see ML branch above).
         pick_l = pick.lower()

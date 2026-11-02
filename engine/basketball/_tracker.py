@@ -60,6 +60,7 @@ def record_pick(league: str, pick: dict) -> int | None:
     # game_id, we ALSO migrate the row's game_id to the canonical so
     # settle can match against the games table.
     gid = str(pick.get("game_id") or "")
+    is_shadow = 1 if pick.get("is_shadow") else 0  # paper picks tracked in their OWN namespace (Austin 2026-09-19)
     date = pick.get("date")
     matchup = pick.get("matchup") or ""
     incoming_bt = (pick.get("bet_type") or "").upper()
@@ -67,15 +68,28 @@ def record_pick(league: str, pick: dict) -> int | None:
     # must dedupe within their own family, not against each other. Without
     # this, recording the Q1 pick for a game overwrites the previously
     # recorded full-game pick (AFL/WNBA Q1 tracker bug, 2026-05-17).
-    incoming_family = "q1" if incoming_bt.startswith("Q1_") else "full"
+    # Full-game markets (ML/SPREAD/TOTAL) dedupe within their OWN market rather
+    # than collapsing into one "full" family — so a recorded runner-up (e.g. ML)
+    # isn't voided against the headline (e.g. SPREAD) for the same game. This is
+    # what silently zeroed out WNBA ML for days (Total/Spread out-edged it and
+    # crowded it out). Mirrors the settled-dup market split below. Q1 markets
+    # still collapse into one q1 family. (2026-08-20: record full-game runner-up.)
+    def _fam(bt: str) -> str:
+        bt = (bt or "").upper()
+        if bt.startswith("Q1_"):
+            return "q1"
+        if bt in ("ML", "SPREAD", "TOTAL"):
+            return bt.lower()
+        return bt or "full"
+    incoming_family = _fam(incoming_bt)
     def _row_family(bt: str) -> str:
-        return "q1" if (bt or "").upper().startswith("Q1_") else "full"
+        return _fam(bt)
     existing = None
     if gid:
         for row in conn.execute(
             f"SELECT id, game_id, bet_type, pick FROM {tbl} "
-            f"WHERE game_id = ? AND result IS NULL",
-            (gid,),
+            f"WHERE game_id = ? AND is_shadow = ? AND result IS NULL",
+            (gid, is_shadow),
         ).fetchall():
             if _row_family(row["bet_type"]) == incoming_family:
                 existing = row
@@ -83,8 +97,8 @@ def record_pick(league: str, pick: dict) -> int | None:
     if not existing and date and matchup:
         for row in conn.execute(
             f"SELECT id, game_id, bet_type, pick FROM {tbl} "
-            f"WHERE date = ? AND matchup = ? AND result IS NULL",
-            (date, matchup),
+            f"WHERE date = ? AND matchup = ? AND is_shadow = ? AND result IS NULL",
+            (date, matchup, is_shadow),
         ).fetchall():
             if _row_family(row["bet_type"]) == incoming_family:
                 existing = row
@@ -98,8 +112,8 @@ def record_pick(league: str, pick: dict) -> int | None:
         if away_part and home_part:
             candidates = conn.execute(
                 f"SELECT id, game_id, bet_type, pick, matchup FROM {tbl} "
-                f"WHERE date = ? AND result IS NULL",
-                (date,),
+                f"WHERE date = ? AND is_shadow = ? AND result IS NULL",
+                (date, is_shadow),
             ).fetchall()
             for cand in candidates:
                 cand_matchup = (cand["matchup"] or "")
@@ -144,20 +158,20 @@ def record_pick(league: str, pick: dict) -> int | None:
         ph = ','.join('?' * len(fam_types))
         settled_dup = conn.execute(
             f"SELECT id FROM {tbl} "
-            f"WHERE date = ? AND game_id = ? "
+            f"WHERE date = ? AND game_id = ? AND is_shadow = ? "
             f"  AND bet_type IN ({ph}) "
             f"  AND result IN ('W', 'L', 'P') LIMIT 1",
-            (date, gid, *fam_types),
+            (date, gid, is_shadow, *fam_types),
         ).fetchone()
         # Fallback to (matchup, exact pick text) when game_id not yet
         # canonical (legacy HR-stub case).
         if not settled_dup and matchup:
             settled_dup = conn.execute(
                 f"SELECT id FROM {tbl} "
-                f"WHERE date = ? AND matchup = ? "
+                f"WHERE date = ? AND matchup = ? AND is_shadow = ? "
                 f"  AND bet_type = ? AND pick = ? "
                 f"  AND result IN ('W', 'L', 'P') LIMIT 1",
-                (date, matchup, pick.get("bet_type"), pick.get("pick")),
+                (date, matchup, is_shadow, pick.get("bet_type"), pick.get("pick")),
             ).fetchone()
     if settled_dup:
         return int(settled_dup["id"])
@@ -214,8 +228,8 @@ def record_pick(league: str, pick: dict) -> int | None:
         cur = conn.execute(
             f"INSERT INTO {tbl} ("
             f"  date, game_id, matchup, bet_type, pick, "
-            f"  model_prob, edge, odds, stake_units"
-            f") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            f"  model_prob, edge, odds, stake_units, is_shadow"
+            f") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 pick.get("date"),
                 str(pick.get("game_id") or ""),
@@ -226,6 +240,7 @@ def record_pick(league: str, pick: dict) -> int | None:
                 pick.get("edge"),
                 pick.get("odds"),
                 pick.get("stake_units"),
+                is_shadow,
             ),
         )
     except sqlite3.IntegrityError:
@@ -234,9 +249,9 @@ def record_pick(league: str, pick: dict) -> int | None:
         # so the caller's flow continues exactly as if we'd inserted.
         winner = conn.execute(
             f"SELECT id FROM {tbl} "
-            f"WHERE date = ? AND game_id = ? "
+            f"WHERE date = ? AND game_id = ? AND is_shadow = ? "
             f"  AND bet_type = ? AND pick = ? AND result IS NULL",
-            (pick.get("date"), str(pick.get("game_id") or ""),
+            (pick.get("date"), str(pick.get("game_id") or ""), is_shadow,
              pick.get("bet_type"), pick.get("pick")),
         ).fetchone()
         if winner:
@@ -246,7 +261,8 @@ def record_pick(league: str, pick: dict) -> int | None:
     new_id = int(cur.lastrowid) if cur.lastrowid else None
 
     # Phase-2 cutover: dual-write into picks_unified (canonical store).
-    if new_id:
+    # PAPER (is_shadow) picks stay OUT of the unified store so the real record/P&L is unpolluted.
+    if new_id and not is_shadow:
         try:
             from ..picks_unified._legacy_bridge import mirror_to_unified
             mirror_to_unified(
@@ -265,6 +281,39 @@ def record_pick(league: str, pick: dict) -> int | None:
             logger.debug("picks_unified mirror (basketball/%s) skipped: %s",
                          league, e)
     return new_id
+
+
+def _sync_unified_results(league):
+    """Mirror settled legacy results into picks_unified (the canonical store the frontend
+    reads). settle_picks updates the legacy table; without this the unified Active-Picks view
+    stays PENDING (the legacy->unified result sync drifted since June 2026). Idempotent - only
+    fills ungraded unified rows, matched by (pick_date, matchup, bet_type). (Austin 2026-08-15.)"""
+    import os as _os, sqlite3 as _sq
+    try:
+        upath = _os.path.join(_os.path.dirname(__file__), "..", "..", "data", "picks_unified.db")
+        if not _os.path.exists(upath):
+            return 0
+        leg = get_conn(league); leg.row_factory = _sq.Row
+        p_tbl = picks_table(league)
+        rows = leg.execute(
+            f"SELECT date, matchup, bet_type, result, profit, settled_at FROM {p_tbl} "
+            f"WHERE result IS NOT NULL AND is_shadow = 0 AND date >= date('now','-30 days')"
+        ).fetchall()
+        uni = _sq.connect(upath)
+        n = 0
+        for r in rows:
+            cur = uni.execute(
+                "UPDATE picks SET result=?, profit=?, settled_at=COALESCE(?, settled_at) "
+                "WHERE sport='basketball' AND pick_date=? AND matchup=? AND bet_type=? AND result IS NULL",
+                (r["result"], r["profit"], r["settled_at"], r["date"], r["matchup"], r["bet_type"]),
+            )
+            n += cur.rowcount
+        uni.commit(); uni.close()
+        if n:
+            logger.info("[%s] synced %d settled results into picks_unified", league, n)
+        return n
+    except Exception:
+        return 0
 
 
 def settle_picks(league: str) -> dict:
@@ -459,6 +508,10 @@ def settle_picks(league: str) -> dict:
         )
         out["settled"] += 1
     conn.commit()
+    try:
+        _sync_unified_results(league)
+    except Exception as _se:
+        logger.warning("[%s] picks_unified result-sync failed: %s", league, _se)
     return out
 
 
@@ -495,7 +548,7 @@ def _verdict(bet_type: str, pick: str, matchup: str | None,
             tag_l = (tag or "").lower().strip()
             if not tag_l:
                 continue
-            if t == tag_l or tag_l in t or t in tag_l:
+            if t == tag_l or f" {tag_l} " in f" {t} " or f" {t} " in f" {tag_l} ":
                 return True
         return False
 
@@ -798,10 +851,18 @@ def _reconcile_orphan_picks(conn, league: str) -> int:
                 orph["matchup"], orph["bet_type"],
             )
         else:
-            conn.execute(
-                f"UPDATE {p_tbl} SET game_id = ? WHERE id = ?",
-                (real_gid, orph["id"]),
-            )
+            try:
+                conn.execute(
+                    f"UPDATE {p_tbl} SET game_id = ? WHERE id = ?",
+                    (real_gid, orph["id"]),
+                )
+            except Exception:
+                # (date, real_gid, bet_type) already taken by another pick (the UNIQUE key does
+                # NOT include pick text, so the existing-check above misses a pick-text change) —
+                # the orphan is a superseded dupe; delete rather than crash the whole settler
+                # (this crash blocked ALL WNBA grading since ~Aug 12). 2026-08-15.
+                conn.execute(f"DELETE FROM {p_tbl} WHERE id = ?", (orph["id"],))
+                logger.info("[%s] orphan id=%s collided re-stamping to %s - deleted (superseded)", league, orph["id"], real_gid)
         rewritten += 1
     if rewritten:
         conn.commit()
@@ -823,14 +884,15 @@ def list_pending(league: str, limit: int = 200) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def list_history(league: str, limit: int = 200) -> list[dict]:
+def list_history(league: str, limit: int = 200, real_only: bool = False) -> list[dict]:
     if league == "nba":
         from ..nba_tracker import list_history as _nba_history  # type: ignore
         return _nba_history(limit=limit)
     conn = get_conn(league)
     tbl = picks_table(league)
+    _where = "WHERE is_shadow = 0 " if real_only else ""
     rows = conn.execute(
-        f"SELECT * FROM {tbl} ORDER BY id DESC LIMIT ?",
+        f"SELECT * FROM {tbl} {_where}ORDER BY id DESC LIMIT ?",
         (int(limit),),
     ).fetchall()
     return [dict(r) for r in rows]

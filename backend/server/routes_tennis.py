@@ -16,10 +16,15 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Query, Body
 
 from ._tz import et_today_str, et_now
+from engine.picks import get_best_pick
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Tours the rankings/search/player endpoints accept. Referenced by four routes but never
+# defined, so /api/tennis/top-players and /players/search 500'd (fixed 2026-10-28).
+_TENNIS_TOURS = ("atp", "wta")
 
 
 # Process-local response cache for /api/tennis/scheduled. HR's GraphQL
@@ -33,7 +38,7 @@ _TENNIS_RESPONSE_CACHE: dict = {}
 # ATP↔WTA inside 90s hit the rebuild. Predict state is deterministic
 # (no real-time odds in the assembly itself) so a few-minute stale is
 # safe. Performance audit win: ~20-30s saved per tour-toggle click.
-_TENNIS_RESPONSE_TTL_S = 300.0
+_TENNIS_RESPONSE_TTL_S = 900.0  # 15min — warm=1 warmer force-rebuilds every ~6min (< TTL) so the cache never expires between refreshes; TTL is just the max-staleness backstop if the warmer dies (Austin 2026-09-20)
 
 
 @router.get("/api/tennis/scheduled")
@@ -41,7 +46,8 @@ def api_tennis_scheduled(date: str | None = Query(None),
                           days: int = Query(2, ge=1, le=7),
                           tour: str | None = Query(None),
                           refresh: bool = Query(False),
-                          include_unbookable: bool = Query(False)):
+                          include_unbookable: bool = Query(False),
+                          warm: bool = Query(False)):
     """Tennis slate — ESPN-fetched matches with predictions, HR odds,
     and per-match picks pre-computed. Mirrors the response shape of
     `/api/{sport}/best-bets` so the frontend can render the bet card
@@ -63,7 +69,7 @@ def api_tennis_scheduled(date: str | None = Query(None),
     from datetime import timedelta as _td
     from engine.tennis_db import get_conn, ensure_tables
     from engine.tennis_predict import predict_match
-    from engine.tennis_picks import generate_tennis_picks
+    from engine.tennis_picks import generate_tennis_picks, filter_tennis_picks
     from engine.tennis_odds import (build_lookup, find_match,
                                       align_to_caller)
     ensure_tables()
@@ -77,7 +83,11 @@ def api_tennis_scheduled(date: str | None = Query(None),
     # ATP↔WTA toggling unusable. Refresh requests bypass the cache.
     cache_key = (start_date, end_date, tour or "all",
                   bool(include_unbookable))
-    if not refresh:
+    # warm=1 (the background warmer) force-rebuilds + re-caches even when the
+    # cache is still valid, so the entry is refreshed BEFORE the 300s TTL
+    # expires and the old (valid) cache keeps serving users during the ~60s
+    # rebuild — no cold-boundary hit. (Austin 2026-09-20)
+    if not refresh and not warm:
         cached_resp = _TENNIS_RESPONSE_CACHE.get(cache_key)
         if cached_resp and (_time.time() - cached_resp["ts"]
                               < _TENNIS_RESPONSE_TTL_S):
@@ -109,8 +119,22 @@ def api_tennis_scheduled(date: str | None = Query(None),
     # window — bounded cost.
     if not refresh:
         try:
-            from datetime import datetime as _dt
+            from datetime import datetime as _dt, timedelta as _td
             now_utc = _dt.utcnow()
+            # Absurdly-stale live rows (>4h) are over — ESPN dropped them
+            # (lower-tier events it stops tracking) and re-ingesting can't
+            # clear them, so without this ONE stuck row re-triggers the full
+            # ingest_schedule_window on EVERY request forever (the WTA slate
+            # timed out for hours off a single stuck BBVA row, 2026-09-20).
+            _stale_cut = (now_utc - _td(hours=4)).strftime("%Y-%m-%dT%H:%M:%S")
+            _cleared = conn.execute(
+                "UPDATE tennis_scheduled_matches SET status='post' "
+                "WHERE status='in' AND fetched_at < ?", (_stale_cut,)).rowcount
+            if _cleared:
+                conn.commit()
+                logger.info("tennis: cleared %d hopelessly-stale live rows",
+                            _cleared)
+                rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
             for r in rows:
                 if r.get("status") != "in":
                     continue
@@ -210,6 +234,15 @@ def api_tennis_scheduled(date: str | None = Query(None),
             if hr_match:
                 odds = align_to_caller(hr_match, r["p1_name"], r["p2_name"])
         match["odds"] = odds
+        # Card % = the Pick Authority's market blend of p1's win chance with the de-vigged ML (Austin
+        # 2026-10-26 "Any percentages for any card in any sport, should be that way"); home = p1.
+        try:
+            from ._display_cal import market_card_wp
+            _ml = ((odds or {}).get("markets") or {}).get("ml") or {}
+            match["card_win_prob"] = market_card_wp("tennis", r.get("tour") or "", (pred or {}).get("p1_win_prob"),
+                                                    _ml.get("p1_odds"), _ml.get("p2_odds"))
+        except Exception:
+            match["card_win_prob"] = None
 
         # HR carries the bookmaker's live start time — that's what the
         # user sees on their bet slip, so it's the right thing to show
@@ -240,10 +273,43 @@ def api_tennis_scheduled(date: str | None = Query(None),
             except Exception as e:
                 logger.debug("tennis picks gen failed for %s: %s",
                              r.get("match_id"), e)
+        picks = filter_tennis_picks(picks, r.get("tour"))
         picks.sort(key=lambda p: -(p.get("conviction_score") or 0))
         match["picks"] = picks
-        best = picks[0] if picks else None
+        best = get_best_pick(picks)  # calibrated select, skip-filtered (2026-10-13)
         match["best_pick"] = best
+        # Ungated calibrated PAPER lean (mirrors NHL _nhl_paper_picks): the
+        # model's best calibrated lean per market, with NO edge floor and NO
+        # profitability filter (filter_tennis_picks), capped at 20pp — so the
+        # card shows a lean instead of "NO PICK" when no gated pick clears.
+        # Display-only; the gated best_pick above is unchanged. Uses the same
+        # score_pick(sport="tennis") calibration as the gated tier, so leans
+        # come off the CALIBRATED prob, not raw Elo (the model is overconfident).
+        paper_leans: list[dict] = []
+        if pred:
+            try:
+                raw_leans = generate_tennis_picks(
+                    pred_for_picks, odds,
+                    min_edge_ml=0.0, min_edge_other=0.0,
+                    tournament_level=level, include_lower_tiers=True,
+                    paper=True,
+                )
+                by_market: dict = {}
+                for _p in sorted(raw_leans,
+                                 key=lambda x: -(x.get("conviction_score") or 0)):
+                    _e = _p.get("edge") or 0
+                    if not (0 < _e <= 20):
+                        continue
+                    _mk = _p.get("type") or _p.get("bet_type")
+                    if _mk not in by_market:
+                        _q = dict(_p); _q["paper"] = True
+                        by_market[_mk] = _q
+                paper_leans = sorted(by_market.values(),
+                                     key=lambda x: -(x.get("edge") or 0))
+            except Exception as _ex:
+                logger.debug("tennis paper leans failed for %s: %s",
+                             r.get("match_id"), _ex)
+        match["paper_picks"] = paper_leans
         match["confidence"] = (best.get("confidence") if best else "skip")
         match["tournament_level"] = level
         match["tournament_priority"] = TOURNAMENT_PRIORITY.get(level, 30)
@@ -315,7 +381,20 @@ def api_tennis_scheduled(date: str | None = Query(None),
     # rankings views that want the full slate.
     total_before = len(out)
     if not include_unbookable:
-        out = [m for m in out if (m.get("odds") or {}).get("markets")]
+        # Keep a match if it is MAIN TOUR (ATP/WTA 250+ — the focus) OR
+        # anything HR actually prices (bookable, any tier — so a Challenger-
+        # only week, e.g. an ATP off-week, still shows the games you CAN bet).
+        # Only unbookable lower-tier (ITF / Challenger / WTA125 / UTR
+        # prediction-only noise) is dropped. (Austin 2026-09-20 "main-tour OR
+        # bookable"; supersedes strict main-tour-only, which left ATP empty on
+        # weeks HR priced only Challengers.)
+        def _keep_tennis(m):
+            lvl = m.get("tournament_level")
+            is_main = (lvl not in ("125", "C", "ITF")
+                       and "utr" not in str(m.get("tournament") or "").lower())
+            is_bookable = bool((m.get("odds") or {}).get("markets"))
+            return is_main or is_bookable
+        out = [m for m in out if _keep_tennis(m)]
         if total_before and len(out) < total_before:
             logger.info("tennis slate: filtered %d/%d matches without HR odds",
                         total_before - len(out), total_before)
@@ -360,7 +439,7 @@ def api_tennis_scheduled(date: str | None = Query(None),
         for m in out:
             if not m.get("match_id"):
                 continue
-            best = m.get("best_pick")
+            best = m.get("best_pick") or (m.get("paper_picks") or [None])[0]
             if not best:
                 continue
             try:
@@ -731,7 +810,7 @@ def api_tennis_picks_preview(tour: str = Query("atp"),
     if tour not in _TENNIS_TOURS:
         raise HTTPException(status_code=400, detail="tour must be atp/wta")
     from engine.tennis_predict import predict_match
-    from engine.tennis_picks import generate_tennis_picks
+    from engine.tennis_picks import generate_tennis_picks, filter_tennis_picks
     from engine.tennis_db import get_player_by_id
     pred = predict_match(tour, p1_id, p2_id,
                           surface=surface, best_of=best_of)
@@ -745,6 +824,7 @@ def api_tennis_picks_preview(tour: str = Query("atp"),
     picks = generate_tennis_picks(pred, odds,
                                    tournament_level=tourney_level,
                                    include_lower_tiers=True)
+    picks = filter_tennis_picks(picks, tour)
     return {"tour": tour, "prediction": pred, "picks": picks}
 
 
@@ -778,15 +858,54 @@ def _kick_tennis_settle() -> None:
 @router.get("/api/tennis/tracker/history")
 def api_tennis_tracker_history(tour: str | None = Query(None),
                                 limit: int = Query(200)):
-    """Tracker view — pending + settled tennis picks.
+    """Tracker view — pending + settled tennis picks, real + paper
+    split (PickMint tennis parity Phase 2, Austin 2026-10-10).
+
+    Bundles real rows/summary AND the paper (is_paper=1) lean's
+    summary + settled rows into ONE response — the same
+    ``{rows, summary, paper}`` shape
+    ``/api/basketball/{league}/tracker/history`` returns (``paper``
+    flat with its own total/wins/losses/profit/roi/pending/avg_clv +
+    ``by_type`` + ``rows``, same keys ``PickHistory`` already reads
+    for every other sport). Tennis used to dump real and paper rows
+    into one list and let the frontend fake the split with a client-
+    side emoji prefix — harmless only because tennis has been 100%
+    paper the whole time; this is the real fix so a future real pick
+    can't get mislabeled once tennis graduates off probation.
 
     Settle runs in a background thread on a 5-min cooldown so the
     route returns immediately; freshly-settled rows appear on the
     next refresh."""
-    from engine.tennis_tracker import list_history
+    from engine.tennis_tracker import list_history, get_pick_summary
     _kick_tennis_settle()
-    rows = list_history(tour, limit=limit)
-    return {"tour": tour or "all", "rows": rows}
+
+    rows = list_history(tour, limit=limit, is_paper=False)
+    summary = get_pick_summary(tour, is_paper=False)
+
+    paper_summary = get_pick_summary(tour, is_paper=True)
+    paper = dict(paper_summary["overall"])
+    paper["by_type"] = paper_summary["by_type"]
+    # Settled-only for the display list (mirrors basketball's route:
+    # "result IS NOT NULL AND result != 'V'") — pending/voided paper
+    # leans still count toward paper["pending"] above via the overall
+    # summary, they just don't clutter the "Paper Picks" table. Pull a
+    # wider pool before the result filter + limit so a run of pending
+    # paper picks can't crowd the settled ones out of the response.
+    _paper_all = list_history(tour, limit=max(limit, 500), is_paper=True)
+    _paper_pending = [r for r in _paper_all if not r.get("result")]
+    _paper_settled = [r for r in _paper_all if r.get("result") in ("W", "L", "P")]
+    # Live (pending) leans first, then settled — matches the "Live and
+    # settled picks" header. Pending are display-only; W/L/ROI/CLV come
+    # from the summary so they don't skew stats. (Austin 2026-10-11:
+    # tennis leans weren't surfacing as pending in the tracker.)
+    paper["rows"] = (_paper_pending + _paper_settled)[:limit]
+
+    return {
+        "tour": tour or "all",
+        "rows": rows,
+        "summary": summary,
+        "paper": paper,
+    }
 
 
 @router.get("/api/tennis/tracker/summary")
@@ -821,3 +940,31 @@ def api_tennis_tracker_settle():
     """Manual trigger for the tennis settler (matches table walk)."""
     from engine.tennis_tracker import settle_tennis_picks
     return settle_tennis_picks()
+
+
+@router.get("/api/tennis/paper-potd")
+def api_tennis_paper_potd(tour: str | None = Query(None)):
+    """Game-day-locked PAPER Pick-of-the-Day for ``tour``. Mirrors
+    /api/basketball/{league}/paper-potd: the day's highest-edge
+    is_paper=1 lean, FROZEN once the day arrives
+    (record_tennis_paper_potd is idempotent per date+tour). Feeds
+    PaperPickOfDayHero's `locked` + `summary` props so the tennis tab's
+    hero shows a STABLE day pick instead of recomputing live — same
+    contract every other sport's paper POTD keeps (PickMint tennis
+    parity Phase 2/3, Austin 2026-10-10). Also the source
+    backend/server/routes_potd.py's cross-sport fallback reads from,
+    so the cross-sport Pick-of-the-Day tab shows the same pick."""
+    from engine.tennis_paper_potd import (
+        record_tennis_paper_potd, get_tennis_paper_potd, tennis_paper_potd_summary,
+    )
+    t = tour or "atp"
+    try:
+        record_tennis_paper_potd(t)  # idempotent game-day lock
+    except Exception as e:
+        logger.debug("tennis paper POTD lock (%s) failed: %s", t, e)
+    try:
+        return {"tour": t, "potd": get_tennis_paper_potd(t),
+                "potd_record": tennis_paper_potd_summary(t)}
+    except Exception as e:
+        logger.warning("tennis paper POTD read (%s) failed: %s", t, e)
+        return {"tour": t, "potd": None, "potd_record": None}

@@ -175,8 +175,94 @@ def is_settled_dup(
     return None
 
 
+def paper_pick_lock_gate(
+    conn,
+    *,
+    table: str = "picks",
+    game_id: str,
+    start_iso: str | None = None,
+    game_id_col: str = "game_id",
+    shadow_col: str = "is_shadow",
+    result_col: str = "result",
+):
+    """Time-based lock gate (engine.lock_schedule: 7am-ET day / 4:30pm night / prior-9pm overnight) for one game's pending (``shadow_col``=1,
+    ``result_col`` IS NULL) paper/card pick (Austin 2026-10-10, made
+    game-date-aware 2026-10-11). Mirrors
+    ``engine.pick_of_day._select.get_or_create_potd``'s pre-7am-provisional
+    / post-7am-frozen split, generalized to a per-GAME pending row (POTD
+    locks one pick per SLATE; this locks one pick per game — same gate,
+    different granularity). Sport-agnostic by design — parameterized on
+    table/column names and keyed purely off ``start_iso`` (no football-
+    specific assumptions), so any sport's ``record_paper`` can call it
+    unchanged. Football is the first caller; others wire in once this
+    validates live.
+
+    GAME-DATE-AWARE, not "today": the lock time is 7am ET on THIS GAME'S
+    OWN start date, not 7am ET on whatever day the caller happens to run.
+    A same-day game (e.g. a CFB Saturday slate) locks at 7am ET today —
+    identical to the original same-day rule. A game days out (NFL
+    Sun/Mon/Thu, viewed on an earlier day) is NOT yet past its own 7am and
+    stays PROVISIONAL until that morning arrives — the original same-day
+    check (``et_now().hour >= 7``) would have locked it at 7am on
+    whatever day it happened to run, freezing an NFL card up to several
+    days before its own game-day market had a chance to settle (Austin
+    2026-10-11).
+
+    Returns ``(existing_row, lock_passed)``:
+      - ``existing_row``: the game's current pending row (a ``Row``/tuple
+        from ``table``), or ``None`` if there isn't one yet.
+      - ``lock_passed``: True once a freshly-written row is allowed to be
+        the PERMANENT lock — true at/after 7am ET on the game's OWN start
+        date, or immediately if the game's own kickoff (``start_iso``, an
+        ESPN-style UTC ISO string) falls before 7am ET on that same date,
+        so a game can't be stuck waiting on a lock time that's already
+        past its own start (rare — e.g. no CFB/NFL kickoff is ever that
+        early; more relevant to leagues with pre-dawn-ET games). Falls
+        back to the plain same-day check if ``start_iso`` is missing or
+        unparsable (no game-date to anchor to).
+
+    Caller contract (mirrors get_or_create_potd exactly):
+      - ``existing_row is not None and lock_passed`` -> already locked.
+        Return early and write NOTHING. This is also what keeps a row
+        that was pending *before* this gate shipped (or before its own
+        lock time arrived) frozen exactly as-is on the first pass after
+        deploy, instead of re-picking it.
+      - otherwise -> the caller may (re)compute its best ELIGIBLE
+        candidate and DELETE-then-INSERT this game's pending row
+        (replacing ``existing_row`` if there was one — e.g. a pick that
+        was prematurely locked by an earlier, same-day-only version of
+        this gate and is now, correctly, still provisional re-syncs to
+        the current best lean here, not left frozen on the stale pick).
+        Whether that write ends up being the permanent lock or stays
+        provisional is just ``lock_passed`` at write time — a pre-lock
+        write will get replaced again by a later pre-lock pass the same
+        way get_or_create_potd's provisional POTD row does.
+    """
+    from engine._tz import et_now
+    row = conn.execute(
+        f"SELECT * FROM {table} WHERE {game_id_col}=? AND {shadow_col}=1 "
+        f"AND {result_col} IS NULL LIMIT 1",
+        (str(game_id),),
+    ).fetchone()
+    now_et = et_now()
+    lock_passed = now_et.hour >= 7  # fallback: no game-date to anchor to
+    if start_iso:
+        try:
+            # Time-based lock via engine.lock_schedule (Austin 2026-10-14):
+            # 7am day / 4:30pm night / prior-9pm overnight ET off the game
+            # own start time -- upgrades the former flat 7am-game-day lock.
+            from datetime import datetime as _dt
+            from engine.lock_schedule import is_locked as _is_locked
+            _ko = _dt.fromisoformat(start_iso.replace("Z", "+00:00"))
+            lock_passed = _is_locked(_ko, now_et)
+        except Exception:
+            pass  # keep the same-day fallback computed above
+    return row, lock_passed
+
+
 __all__ = [
     "default_family_for",
     "enforce_one_per_game_per_family",
     "is_settled_dup",
+    "paper_pick_lock_gate",
 ]

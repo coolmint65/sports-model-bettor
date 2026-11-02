@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import threading
 from functools import lru_cache
 from pathlib import Path
 
@@ -99,10 +100,20 @@ def _devig_moneyline(home_ml: int | None,
     return h_imp / s
 
 
-@lru_cache(maxsize=1)
+_tls = threading.local()
+
+
 def _hist_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(_HIST_DB), timeout=10)
-    conn.row_factory = sqlite3.Row
+    # Per-thread conn (was @lru_cache(maxsize=1) = ONE conn shared across all
+    # threads). The slate recompute runs in a bg refresh thread, so reusing a
+    # conn created in another thread raised "SQLite objects created in a thread
+    # can only be used in that same thread" -> the GBM leg threw -> the whole
+    # slate cache silently stopped refreshing (frozen cards). MintyBot 2026-10-17.
+    conn = getattr(_tls, "c", None)
+    if conn is None:
+        conn = sqlite3.connect(str(_HIST_DB), timeout=10)
+        conn.row_factory = sqlite3.Row
+        _tls.c = conn
     return conn
 
 

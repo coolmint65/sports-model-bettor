@@ -3,21 +3,30 @@
  *
  * Mirrors engine team-sport `primitives/GameCard` shell so a tennis
  * match reads visually identical to an NBA / NHL row: bordered rounded
- * card with a left-border confidence accent, status pill at the top,
- * players stacked vertically (p1 above p2 — the analog of away above
- * home in team sports), a win-prob bar, and the time + tournament
- * context at the bottom.
+ * card with a left-border accent, status pill at the top, players
+ * stacked vertically (p1 above p2 — the analog of away above home in
+ * team sports), a thin win-prob bar, and the time + tournament context
+ * at the bottom.
  *
  * Extracted from TennisPanel 2026-07-03 so the cross-sport bet queue
  * renders tennis picks with the exact same card the tennis panel uses —
  * the user's "copy and paste effectively" directive.
+ *
+ * Compact restyle (PickMint tennis parity Phase 1, 2026-10-10): trimmed
+ * to GameCard's summary-card density. Dropped from the card — not from
+ * the app — because tennis/MatchDetail.jsx already carries a strictly
+ * superset of this content behind the click (every HR market, H2H,
+ * recent form, per-player Elo, every qualifying pick):
+ *   - the always-on ML/Set/O-U/Sets odds grid (was TennisOddsGrid)
+ *   - the Elo/form "why" blurb (was TennisCardInsight)
+ *   - player avatars/flags + the inline Elo-rating text per row
+ * Also now follows GameCard's real-pick rule: the card NEVER shows a
+ * real gated pick, only the model's best calibrated PAPER lean (or the
+ * empty state) — same as every other sport's card since 2026-09-29.
  */
-import { useState } from 'react'
-import { User } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import PickEventsBadge from '../PickEventsBadge'
 import SetScoreGrid from './SetScoreGrid'
-import TennisOddsGrid from './TennisOddsGrid'
 
 // Tournament tier chips (Slam / Masters / 500 / etc.) — same treatment
 // used in the tournament index.
@@ -51,23 +60,31 @@ export function TierChip({ level }) {
 
 export default function MatchCard({ match, onOpen }) {
   const pred = match.prediction || {}
-  const p1Prob = pred.p1_win_prob ?? null
-  const p2Prob = pred.p2_win_prob ?? null
-  const elo1 = pred.p1_rating != null ? Math.round(pred.p1_rating) : null
-  const elo2 = pred.p2_rating != null ? Math.round(pred.p2_rating) : null
+  // Card % = the Pick Authority's market blend (backend card_win_prob, home = p1), model's own number below.
+  const cwp = match.card_win_prob
+  const p1Prob = cwp?.home ?? pred.p1_win_prob ?? null
+  const p2Prob = cwp?.away ?? pred.p2_win_prob ?? null
+  const p1Model = cwp?.source === 'blend' ? cwp.model_home : null
+  const p2Model = cwp?.source === 'blend' ? cwp.model_away : null
   const isLive = match.status === 'in'
   const isFinal = match.status === 'post'
   const isPre = !isLive && !isFinal
-  const bestPick = match.best_pick || null
-  const odds = match.odds || {}
-  const conf = match.confidence || (bestPick ? 'lean' : 'skip')
+  // Card-level pick is ALWAYS the model's best calibrated PAPER lean —
+  // never the real gated pick (GameCard's rule, Austin 2026-09-29: "the
+  // real gated pick NEVER renders on the card"; real picks live on the
+  // Tracker tab only). Max-edge of paper_picks, independent of whether
+  // a real best_pick also exists for this match.
+  const paperPicks = match.paper_picks || []
+  const paperPick = paperPicks.length
+    ? paperPicks.reduce((a, b) => ((b.edge ?? -99) > (a.edge ?? -99) ? b : a))
+    : null
 
-  const accentClass = {
-    strong:   'border-l-positive bg-positive/[0.03]',
-    moderate: 'border-l-primary bg-primary/[0.025]',
-    lean:     'border-l-border',
-    skip:     'border-l-border',
-  }[conf] || 'border-l-border'
+  // Left-border accent follows the paper pick (sky), matching GameCard's
+  // CONF_ACCENT — confidence-tinted (strong/moderate) borders are retired
+  // from the card along with the real pick they used to describe.
+  const accentClass = paperPick
+    ? 'border-l-sky-500/70 bg-sky-500/[0.03]'
+    : 'border-l-border'
 
   const dayLabel = (() => {
     if (!match.date) return null
@@ -87,19 +104,26 @@ export default function MatchCard({ match, onOpen }) {
   return (
     <div
       className={cn(
-        'group relative flex flex-col gap-2 rounded-xl border border-border border-l-4 bg-card p-4 cursor-pointer',
+        'group relative flex flex-col gap-2 rounded-xl border border-border border-l-4 bg-card p-4',
         'transition-all duration-150',
-        'hover:border-border hover:bg-accent/40 hover:-translate-y-px hover:shadow-lg',
+        'hover:border-border hover:bg-accent/40',
+        onOpen && 'cursor-pointer hover:-translate-y-px hover:shadow-lg',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
         accentClass,
         isLive && 'ring-1 ring-negative/30',
       )}
       onClick={onOpen}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen?.() } }}
+      role={onOpen ? 'button' : undefined}
+      tabIndex={onOpen ? 0 : undefined}
+      onKeyDown={onOpen ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen?.() } } : undefined}
     >
       <div className="flex items-center gap-2 flex-wrap">
+        {match.tournament && (
+          <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-foreground/75 max-w-[62%]" title={match.tournament}>
+            <TierChip level={match.tournament_level} />
+            <span className="truncate">{match.tournament}</span>
+          </span>
+        )}
         {isLive && (
           <span className="inline-flex w-max items-center gap-1 rounded-full bg-negative/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-negative">
             ● Live
@@ -128,7 +152,7 @@ export default function MatchCard({ match, onOpen }) {
       {isPre && (
         <div className="flex items-stretch gap-2" onClick={(e) => e.stopPropagation()}>
           <div className="flex-1 min-w-0">
-            <TennisEdgeBadge pick={bestPick} confidence={conf} />
+            <TennisEdgeBadge pick={paperPick} />
           </div>
           {match.match_id && (
             <div className="flex-shrink-0">
@@ -139,39 +163,15 @@ export default function MatchCard({ match, onOpen }) {
       )}
 
       <div className="flex flex-col gap-1">
-        <PlayerRow
-          name={match.p1_name}
-          country={match.p1_country}
-          image={match.p1_image}
-          flag={match.p1_flag}
-          elo={elo1}
-          prob={p1Prob}
-          isFav={p1Prob != null && p1Prob >= (p2Prob ?? 0)}
-          showProb={isPre || isLive}
-        />
-        <PlayerRow
-          name={match.p2_name}
-          country={match.p2_country}
-          image={match.p2_image}
-          flag={match.p2_flag}
-          elo={elo2}
-          prob={p2Prob}
-          isFav={p2Prob != null && p2Prob > (p1Prob ?? 0)}
-          showProb={isPre || isLive}
-        />
+        <PlayerRow name={match.p1_name} country={match.p1_country} image={match.p1_image} odds={match.odds?.markets?.ml?.p1_odds} />
+        <PlayerRow name={match.p2_name} country={match.p2_country} image={match.p2_image} odds={match.odds?.markets?.ml?.p2_odds} />
       </div>
 
       {(isPre || isLive) && p1Prob != null && p2Prob != null && (
         <TennisProbBar
-          p1Prob={p1Prob} p2Prob={p2Prob}
+          p1Prob={p1Prob} p2Prob={p2Prob} p1Model={p1Model} p2Model={p2Model}
           p1Name={match.p1_name} p2Name={match.p2_name}
         />
-      )}
-
-      {isPre && <TennisOddsGrid odds={odds} match={match} />}
-
-      {isPre && (
-        <TennisCardInsight match={match} pred={match.prediction} />
       )}
 
       {isPre && match.line_movement && (
@@ -220,32 +220,47 @@ function prettyTennisType(t) {
   return TENNIS_TYPE_LABEL[t] || (t ? t.replace(/_/g, ' ') : '')
 }
 
-function TennisEdgeBadge({ pick, confidence }) {
-  const STYLE = {
-    strong:   'bg-positive/10 text-positive border-positive/30',
-    moderate: 'bg-primary/10 text-primary border-primary/30',
-    lean:     'bg-muted/40 text-foreground/85 border-border',
-  }
+// Card ONLY ever shows the model's best calibrated PAPER lean (or the
+// empty state) — never a real gated pick, matching primitives/GameCard's
+// PaperBadge treatment exactly (same classes) so a tennis card and an
+// NBA/NHL card read as the same visual language. Real picks + settled
+// W/L live on the Tracker tab only.
+function TennisEdgeBadge({ pick }) {
   if (!pick) {
     return (
       <div className="flex items-center justify-center rounded-md border border-dashed border-border bg-muted/20 px-3 py-1.5 text-[11px] font-bold uppercase tracking-widest text-muted-foreground"
-           title="No tennis edge above the floor for this match">
+           title="No tennis edge for this match">
         No pick
       </div>
     )
   }
-  const tone = STYLE[confidence] || STYLE.lean
+  // Edge is in pp (percentage points of model prob over market-implied) —
+  // same unit NHL/GameCard's PaperBadge uses.
   const edge = pick.edge != null ? Math.round(pick.edge * 10) / 10 : null
   const sign = (edge ?? 0) >= 0 ? '+' : ''
   return (
-    <div className={cn('flex items-center gap-2 rounded-md border px-3 py-1.5', tone)}>
-      <span className="text-[10px] font-semibold uppercase tracking-wider opacity-75">
+    <div className="flex items-center gap-2 rounded-md border border-dashed border-amber-500/70 bg-amber-500/[0.07] px-2.5 py-1 text-[11px]"
+         title="Model lean only. Tennis markets have NOT graduated: no proven edge yet. Not a bet. (Austin 2026-10-26)">
+      <span className="rounded-sm bg-amber-500/25 px-1 text-[9px] font-bold uppercase tracking-wider text-amber-200 whitespace-nowrap">
+        lean · not graduated
+      </span>
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
         {prettyTennisType(pick.type)}
       </span>
-      <span className="text-sm font-bold leading-none truncate">{pick.pick}</span>
+      <span className="font-semibold text-foreground/90 truncate flex-1">{pick.pick}</span>
       {edge != null && (
-        <span className="ml-auto text-xs font-bold tabular-nums">
-          {sign}{edge.toFixed(1)}%
+        <span className={cn('font-bold tabular-nums', edge >= 0 ? 'text-emerald-400' : 'text-muted-foreground')}>
+          {sign}{edge.toFixed(1)}pp
+        </span>
+      )}
+      {pick.result && (
+        <span className={cn(
+          'rounded-sm px-1 text-[9px] font-bold uppercase tracking-wider',
+          pick.result === 'W' ? 'bg-emerald-500/20 text-emerald-300'
+            : pick.result === 'L' ? 'bg-red-500/20 text-red-300'
+            : 'bg-muted text-muted-foreground',
+        )}>
+          {pick.result === 'W' ? 'won' : pick.result === 'L' ? 'lost' : pick.result === 'P' ? 'push' : pick.result}
         </span>
       )}
     </div>
@@ -290,87 +305,58 @@ function LineMovedChip({ lm, match }) {
 }
 
 
-// ── Card insight ─────────────────────────────────────────────
+// TennisCardInsight (Elo-diff / form-hot / model-favorite "why" blurb)
+// and PlayerAvatar (headshot + flag images) removed from the summary
+// card in the Phase 1 compact restyle (2026-10-10) — not lost, just
+// relocated: tennis/MatchDetail.jsx's DetailPlayerBlock already shows
+// each player's Elo rating + win prob, and FormBlock already shows
+// each player's recent-form record, behind the card's onClick. That's
+// the same underlying data this blurb summarized, just not pre-written
+// into one sentence.
 
-function TennisCardInsight({ match, pred }) {
-  if (!pred) return null
-  const reasons = []
-  const lastName = (n) => (n || '').split(' ').slice(-1)[0]
-  const p1 = lastName(match.p1_name)
-  const p2 = lastName(match.p2_name)
-  const r1 = pred.p1_rating, r2 = pred.p2_rating
-  if (r1 != null && r2 != null) {
-    const diff = Math.abs(r1 - r2)
-    if (diff >= 60) {
-      const better = r1 > r2 ? p1 : p2
-      reasons.push({
-        weight: diff,
-        text: <><strong>{better}</strong> +{Math.round(diff)} surface Elo edge</>,
-      })
-    }
-  }
-  const f1 = match.p1_form?.win_pct
-  const f2 = match.p2_form?.win_pct
-  if (f1 != null && f2 != null) {
-    const diff = (f1 - f2) * 100
-    if (Math.abs(diff) >= 25) {
-      const better = diff > 0 ? p1 : p2
-      reasons.push({
-        weight: Math.abs(diff),
-        text: <><strong>{better}</strong> hot ({Math.round(Math.max(f1, f2) * 100)}% L10)</>,
-      })
-    }
-  }
-  const p1Prob = pred.p1_win_prob
-  if (p1Prob != null && Math.abs(p1Prob - 0.5) >= 0.20) {
-    const fav = p1Prob > 0.5 ? p1 : p2
-    const pct = Math.round(Math.max(p1Prob, 1 - p1Prob) * 100)
-    reasons.push({
-      weight: Math.abs(p1Prob - 0.5) * 10,
-      text: <><strong>{fav}</strong> model favorite ({pct}%)</>,
-    })
-  }
-  if (reasons.length === 0) return null
-  reasons.sort((a, b) => b.weight - a.weight)
+
+// ── Player row ───────────────────────────────────────────────
+//
+// Matches primitives/TeamRow's density: name + a thin muted trailing
+// label, no imagery, no inline Elo/probability text. Win probability
+// (and which side is favored) lives solely in TennisProbBar below,
+// same split GameCard uses (TeamRow + a separate WinProbBar).
+
+function PlayerRow({ name, country, image, odds }) {
+  // Polish (Austin 2026-10-11): headshot + ML odds back on the card. The
+  // avatar was dropped for compactness; a 24px circle keeps it tight while
+  // matching the other sports' logo+odds density. Broken images hide cleanly.
+  // Missing/broken headshots (common for lower-ranked players) fall back to
+  // the player's INITIALS, not a blank circle, so no card looks half-empty
+  // (Austin 2026-10-12).
+  const _initials = (name || '').split(/\s+/).map(w => w[0]).filter(Boolean).slice(0, 2).join('').toUpperCase()
   return (
-    <div className="rounded-md border border-border/60 bg-background/30 px-2.5 py-1.5 text-[11px] text-foreground/85">
-      {reasons[0].text}
-    </div>
-  )
-}
-
-
-// ── Player row + avatar + prob bar ──────────────────────────
-
-function PlayerRow({ name, country, image, flag, elo, prob, isFav, showProb }) {
-  const metaParts = []
-  if (country) metaParts.push(country)
-  if (elo != null) metaParts.push(`Elo ${elo}`)
-  return (
-    <div className={cn(
-      'flex items-center gap-2.5 min-w-0 rounded-md px-1 py-1',
-      isFav && 'bg-positive/[0.04]',
-    )}>
-      <PlayerAvatar image={image} flag={flag} name={name} />
-      <div className="flex flex-col min-w-0 flex-1">
-        <span className={cn(
-          'text-sm leading-tight truncate',
-          isFav ? 'font-bold text-foreground' : 'font-semibold text-foreground/90',
-        )}>
-          {name}
+    <div className="flex items-center gap-2 min-w-0">
+      <span className="relative h-6 w-6 flex-shrink-0">
+        <span className="absolute inset-0 flex items-center justify-center rounded-full bg-muted text-[9px] font-bold text-muted-foreground">
+          {_initials}
         </span>
-        {metaParts.length > 0 && (
-          <span className="text-[10px] tabular-nums text-muted-foreground">
-            {metaParts.join(' · ')}
-          </span>
+        {image && (
+          <img
+            src={image}
+            alt=""
+            loading="lazy"
+            className="absolute inset-0 h-6 w-6 rounded-full object-cover"
+            onError={(e) => { e.currentTarget.style.display = 'none' }}
+          />
         )}
-      </div>
-      {showProb && prob != null && (
-        <span className={cn(
-          'ml-auto text-lg tabular-nums',
-          isFav ? 'font-bold text-positive' : 'font-semibold text-muted-foreground',
-        )}>
-          {(prob * 100).toFixed(0)}%
+      </span>
+      <span className="text-sm font-semibold text-foreground/90 truncate flex-1">
+        {name}
+      </span>
+      {country && (
+        <span className="text-[11px] text-muted-foreground tabular-nums">
+          {country}
+        </span>
+      )}
+      {odds != null && (
+        <span className="ml-1 text-[11px] font-semibold tabular-nums text-foreground/70">
+          {odds > 0 ? '+' : ''}{odds}
         </span>
       )}
     </div>
@@ -378,39 +364,7 @@ function PlayerRow({ name, country, image, flag, elo, prob, isFav, showProb }) {
 }
 
 
-function PlayerAvatar({ image, flag, name }) {
-  const [imgFailed, setImgFailed] = useState(false)
-  const [flagFailed, setFlagFailed] = useState(false)
-  const showImg = image && !imgFailed
-  return (
-    <div className="relative flex-shrink-0">
-      {showImg ? (
-        <img
-          src={image}
-          alt=""
-          onError={() => setImgFailed(true)}
-          className="h-10 w-10 rounded-full object-cover bg-foreground/[0.06] ring-1 ring-border"
-        />
-      ) : (
-        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-secondary ring-1 ring-border"
-             title={name || 'No headshot available'}>
-          <User className="h-5 w-5 text-muted-foreground" aria-hidden="true" />
-        </div>
-      )}
-      {flag && !flagFailed && (
-        <img
-          src={flag}
-          alt=""
-          onError={() => setFlagFailed(true)}
-          className="absolute -bottom-0.5 -right-0.5 h-4 w-4 rounded-full object-cover ring-1 ring-card bg-card"
-        />
-      )}
-    </div>
-  )
-}
-
-
-function TennisProbBar({ p1Prob, p2Prob, p1Name, p2Name }) {
+function TennisProbBar({ p1Prob, p2Prob, p1Name, p2Name, p1Model, p2Model }) {
   const p1Fav = p1Prob >= p2Prob
   const lastName = (n) => (n || '').split(' ').slice(-1)[0]
   return (
@@ -427,6 +381,11 @@ function TennisProbBar({ p1Prob, p2Prob, p1Name, p2Name }) {
         <div className="bg-warning" style={{ width: `${p1Prob * 100}%` }} />
         <div className="bg-primary" style={{ width: `${p2Prob * 100}%` }} />
       </div>
+      {p1Model != null && p2Model != null && Math.abs(p1Model - p1Prob) >= 0.005 && (
+        <div className="mt-0.5 text-[9px] tabular-nums text-muted-foreground/70">
+          model: {lastName(p1Name)} {Math.round(p1Model * 100)}% · {lastName(p2Name)} {Math.round(p2Model * 100)}%
+        </div>
+      )}
     </div>
   )
 }

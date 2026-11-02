@@ -48,7 +48,7 @@ export default function TeamRow({ team, isLive, isFinal, sport }) {
       <span className="text-sm text-muted-foreground truncate hidden sm:inline">
         {team.name}
       </span>
-      <span className="text-[11px] text-muted-foreground tabular-nums">
+      <span className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground tabular-nums">
         {team.record}
       </span>
       {team.streak && (
@@ -65,7 +65,7 @@ export default function TeamRow({ team, isLive, isFinal, sport }) {
           {team.streak}
         </span>
       )}
-      {showScore && (
+      {showScore ? (
         <span
           className={cn(
             'ml-auto text-lg tabular-nums',
@@ -74,7 +74,14 @@ export default function TeamRow({ team, isLive, isFinal, sport }) {
         >
           {team.score}
         </span>
-      )}
+      ) : team.odds != null ? (
+        // Pre-game: this side's moneyline sits where the score will go, so EVERY
+        // sport's card carries per-side odds uniformly (Austin 2026-10-11 overhaul,
+        // step 1). Each sport's adapter populates team.odds; absent = nothing shown.
+        <span className="ml-auto text-sm font-semibold tabular-nums text-foreground/75">
+          {team.odds > 0 ? '+' : ''}{team.odds}
+        </span>
+      ) : null}
     </div>
   )
 }

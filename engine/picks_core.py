@@ -94,7 +94,8 @@ def _edge_ceiling_passes(sport: str, bet_type: str, edge_pct: float) -> bool:
             ceiling = TENNIS_EDGE_CEILING.get(bet_type)
         else:
             from .config import MAIN_EDGE_CEILING
-            ceiling = (MAIN_EDGE_CEILING.get(sport) or {}).get(bet_type)
+            _sc = MAIN_EDGE_CEILING.get(sport) or {}
+            ceiling = _sc.get(bet_type, _sc.get("_default"))
         if ceiling is None:
             from .config import DEFAULT_EDGE_CEILING_PCT
             ceiling = DEFAULT_EDGE_CEILING_PCT
@@ -247,7 +248,33 @@ def score_pick(candidate: dict[str, Any], *,
     #      before enough live samples land.
     #   3. Empirical Beta-Binomial bucket (via _empirical fallback).
     cal_emp = float(raw_prob)
-    if _empirical_has_iso(sport, bet_type, edge=None, odds=odds,
+    # Football calibrates ONCE (Austin 2026-10-25 "A B and C", the Pick Authority spec): the
+    # de-vigged market anchor applied upstream (engine/football/_picks + _derivatives, weight =
+    # edge_proven.market_weight) IS the calibration. The stages below were fit on picks from
+    # retired football model versions -- non-monotonic buckets, a flat ~7pp final haircut -- and
+    # stacked on the anchor they turned even a PROVEN cell's +10 edge into -11.
+    from .calibration_gate import anchor_only as _anchor_only
+    _ao = _anchor_only(sport)
+    # Tennis: Platt (bet-calibrated) takes precedence. The walk-forward framework is
+    # PREDICTION-calibrated (strong favs win 88%) but the model's BETS lose (48%); the
+    # empirical cells are thin for tennis favorites (ML 0.8+ = n=2). Platt is fit on actual
+    # bet results so the edge math reflects how the bets DO. Empirical skipped for tennis.
+    # MintyBot 2026-10-06.
+    _tcal = None
+    if sport == "tennis":
+        try:
+            from .tennis_platt_calibration import tennis_calibrate as _tc, has_fit as _thf
+            if _thf(bet_type):
+                _tcal = _tc
+        except Exception:
+            _tcal = None
+    if _ao:
+        trace["calibrator"] = "anchor_only"
+    elif _tcal is not None:
+        cal_emp = float(_tcal(bet_type, raw_prob))
+        trace["tennis_platt_calibrated"] = round(cal_emp, 4)
+        trace["calibrator"] = "tennis_platt"
+    elif sport != "tennis" and _empirical_has_iso(sport, bet_type, edge=None, odds=odds,
                             pick_text=pick_text):
         cal_emp = float(_empirical(bet_type, raw_prob, sport=sport,
                                     edge=None,
@@ -275,7 +302,7 @@ def score_pick(candidate: dict[str, Any], *,
                                     odds=odds, pick_text=pick_text))
         trace["empirical_calibrated"] = round(cal_emp, 4)
         trace["calibrator"] = "empirical"
-    cal = float(_blend(sport, cal_emp))
+    cal = cal_emp if _ao else float(_blend(sport, cal_emp))
     trace["blend_calibrated"] = round(cal, 4)
 
     # Closing-line Bayesian prior — final stage. Treats market implied
@@ -287,7 +314,7 @@ def score_pick(candidate: dict[str, Any], *,
     # which is a no-op anyway). See engine/closing_line_prior.py.
     try:
         from .config import get_flag as _gf
-        if _gf("ENABLE_CLOSING_LINE_PRIOR", False, sport=sport):
+        if not _ao and _gf("ENABLE_CLOSING_LINE_PRIOR", False, sport=sport):
             from .closing_line_prior import (
                 learned_weight as _clp_w,
                 posterior_prob as _clp_post,
@@ -299,6 +326,53 @@ def score_pick(candidate: dict[str, Any], *,
             cal = cal_post
     except Exception as exc:
         logger.debug("closing_line_prior skipped (%s)", exc)
+
+    # ── Final post-hoc per-league calibration (2026-09-15, MintyBot) ──
+    # The internal chain above (empirical → blend → closing-line) leaves
+    # `cal` badly OVERCONFIDENT vs realized win% (+13..+38pp per league on
+    # settled picks: cfb 74/36, nfl 62/29, atp 63/43, wnba 72/53, mlb 66/51,
+    # nhl 60/47, nba 68/55, wta 62/46). This last stage applies a monotonic
+    # correction fit post-hoc on the settled-pick history
+    # (data/final_calibration.json), keyed on `sport` — the exact runtime
+    # league id THIS picker passed (e.g. "tennis","mlb","football_cfb",
+    # "wnba"). It falls back to a pooled `_global` calibrator for thin /
+    # unknown keys and passes through unchanged if the JSON is absent.
+    # PAPER model; reversible via ENABLE_FINAL_CALIBRATION (default True)
+    # or by deleting the JSON. See engine/final_calibration.py.
+    # ---- Derivative / Q1 / player-prop calibration (2026-09-16) ----
+    # Candidates the derivative/Q1 pickers tag with `deriv_market_key`
+    # ("<sport>:<bet_type>") are scored on paths where the main per-league
+    # final_calibration is the WRONG curve; apply the derivative twin here
+    # INSTEAD (keyed on the market), fit on the settled derivative/prop
+    # history (data/derivative_prob_calibration.json). Reversible via
+    # ENABLE_DERIV_CALIBRATION (default True) / deleting the JSON. See
+    # engine/derivative_prob_calibration.py.
+    _deriv_applied = False
+    _deriv_key = candidate.get("deriv_market_key")
+    if _deriv_key and not _ao:
+        try:
+            from .config import get_flag as _gfd
+            if _gfd("ENABLE_DERIV_CALIBRATION", True, sport=sport):
+                from . import derivative_prob_calibration as _deriv_cal
+                _cal_before = cal
+                cal = float(_deriv_cal.apply(_deriv_key, cal))
+                trace["deriv_calibration"] = round(cal, 4)
+                trace["deriv_cal_delta"] = round(cal - _cal_before, 4)
+                trace["deriv_market_key"] = _deriv_key
+                _deriv_applied = True
+        except Exception as exc:
+            logger.debug("derivative_prob_calibration skipped (%s)", exc)
+
+    try:
+        from .config import get_flag as _gf2
+        if not _ao and not _deriv_applied and _gf2("ENABLE_FINAL_CALIBRATION", True, sport=sport):
+            from . import final_calibration as _final_cal
+            _cal_before = cal
+            cal = float(_final_cal.apply(sport, cal))
+            trace["final_calibration"] = round(cal, 4)
+            trace["final_cal_delta"] = round(cal - _cal_before, 4)
+    except Exception as exc:
+        logger.debug("final_calibration skipped (%s)", exc)
 
     edge = (cal - _implied(odds)) * 100.0
     trace["edge_pct"] = round(edge, 2)
@@ -316,8 +390,12 @@ def score_pick(candidate: dict[str, Any], *,
     # edges before firing) which does the containment work NOPLAY used
     # to; the stake multiplier below sizes down cell exposure without
     # cutting the model off from new evidence.
-    if not _edge_floor_passes(sport, bet_type, edge,
-                               pick_text=pick_text):
+    # Calibrate-once (Pick Authority) sports: edge_proven is the gate, so the legacy per-cell
+    # floor table -- fit on retired models' records (NHL ML/O-U-under/PL-fav at 20pp, NBA
+    # Q1_SPREAD 15) -- would block the very cells the PA restarted. They keep the static
+    # default floor only. (MintyBot 2026-10-26)
+    if not (_edge_floor_passes(sport, bet_type, edge, pick_text=pick_text) if not _ao
+            else edge >= 4.0):
         trace["edge_floor_passed"] = False
         _record(False, "edge_floor", cal, edge)
         return None
@@ -344,7 +422,7 @@ def score_pick(candidate: dict[str, Any], *,
         kelly_stake = stake_units_for(cal, edge, odds=odds)
         try:
             from .edge_floors import stake_multiplier as _stk_mult
-            mult = _stk_mult(sport, bet_type, pick_text=pick_text)
+            mult = 1.0 if _ao else _stk_mult(sport, bet_type, pick_text=pick_text)
         except Exception:
             mult = 1.0
         out["stake_units"] = round(kelly_stake * mult, 3)
@@ -378,10 +456,11 @@ def rank(picks: list[dict], sport: str) -> list[dict]:
     already cleared the edge floor (so all have positive EV), the
     headline goes to the most-likely-to-win, not the largest-edge.
 
-    Primary sort key: ``conviction = prob × dynamic_reliability``.
-    A 0.80-prob pick at +5% edge ranks above a 0.65-prob pick at
-    +12% edge — full stop. Edge stays as a TIEBREAKER for picks
-    with effectively-equal conviction.
+    Primary sort key: ``both = edge × prob × reliability`` — the
+    STRONGEST play (Austin 2026-10-17: cards rank by edge AND conviction).
+    A 70%-prob @ +13pp ranks above a 90%-prob @ +5pp (9.1 vs 4.5). Edge is
+    the TIEBREAKER. Reliability clamped [0.85,1.15] so it never flips the
+    edge×prob order.
 
     Backward-compat: ``adjusted_ev = edge × reliability`` is still
     written to each pick so any frontend that reads it doesn't break.
@@ -391,21 +470,24 @@ def rank(picks: list[dict], sport: str) -> list[dict]:
         return picks
     try:
         from .dynamic_reliability import get_reliability
-        for p in picks:
-            rel = get_reliability(sport, p["type"])
-            prob = float(p.get("prob") or 0)
-            edge = float(p.get("edge") or 0)
-            p["conviction_score"] = round(prob * rel, 4)
-            # adjusted_ev kept for backward compat (frontend / older
-            # consumers may display it); not the sort key anymore.
-            p["adjusted_ev"] = round(edge * rel, 2)
-        # Primary: conviction descending. Tiebreaker: edge descending.
-        picks.sort(key=lambda p: (-p["conviction_score"], -(p.get("edge") or 0)))
-    except Exception as e:
-        logger.warning("rank: reliability weighting failed (%s) "
-                        "— sorting by raw prob", e)
-        picks.sort(key=lambda p: (-(p.get("prob") or 0),
-                                   -(p.get("edge") or 0)))
+    except Exception:
+        get_reliability = None
+    for p in picks:
+        try:
+            rel = float(get_reliability(sport, p.get("type")) if get_reliability else 1.0)
+        except Exception:
+            rel = 1.0
+        prob = float(p.get("prob") or 0)
+        edge = float(p.get("edge") or 0)
+        p["conviction_score"] = round(prob * rel, 4)   # kept for compat
+        p["adjusted_ev"] = round(edge * rel, 2)        # kept for compat
+        # "Both" = the strongest play = edge × prob, gently reliability-weighted.
+        # rel clamped [0.85,1.15] so a reliability swing never flips the edge×prob
+        # order (Austin's rule: 70%/+13pp beats 90%/+5pp). Revived + wired into cards.
+        rel_c = 0.85 if rel < 0.85 else (1.15 if rel > 1.15 else rel)
+        p["both_score"] = round(edge * prob * rel_c, 4)
+    # Primary: "both" (edge × prob) descending. Tiebreaker: edge descending.
+    picks.sort(key=lambda p: (-p.get("both_score", 0.0), -(p.get("edge") or 0)))
     try:
         from ._pick_helpers import tag_confidence
         tag_confidence(picks)

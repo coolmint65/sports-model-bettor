@@ -17,15 +17,15 @@
  * ITF) still group tournaments visually so the top of the page reads
  * top-down by importance.
  */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { ChevronRight } from 'lucide-react'
 import { cn } from '../../lib/utils'
-import PickOfDayHero from '../PickOfDayHero'
+import PaperPickOfDayHero from '../PaperPickOfDayHero'
 import MatchCard, { TierChip } from './MatchCard'
 import { useSlate } from '../../lib/useSlate'
 
 
-export default function TournamentDropdownView({ api, tour, onOpenMatch }) {
+export default function TournamentDropdownView({ api, tour }) {
   // Shared slate cache — instant on tab switches, background refresh
   // every 2 min. First mount kicks a fetch; every subsequent mount
   // (including cross-tour toggles) returns cached matches immediately.
@@ -34,6 +34,32 @@ export default function TournamentDropdownView({ api, tour, onOpenMatch }) {
     useSlate('/tennis/scheduled', slateParams, api)
   const matches = data?.matches || []
   const [refreshing, setRefreshing] = useState(false)
+
+  // PAPER Pick of the Day (PickMint tennis parity Phase 2/3, Austin
+  // 2026-10-10) — REPLACES the real-only <PickOfDayHero> that used to
+  // sit here. Tennis is 100% on probation (on_probation=true for both
+  // tours — no real pick has ever cleared the gate), so the real hero
+  // was dead chrome: /api/pick-of-day/tennis always answered "No
+  // qualifying picks today" and PickOfDayHero renders null on that
+  // shape. The game-day-locked paper POTD (engine/tennis_paper_potd.py,
+  // exposed at /api/tennis/paper-potd) is the thing that actually has
+  // content every day. If tennis ever graduates off probation this
+  // should go back to a real hero — not automatic, flag for a
+  // follow-up rather than threading a live probation check through
+  // here today.
+  const [paperPotd, setPaperPotd] = useState(null)
+  const [paperPotdRecord, setPaperPotdRecord] = useState(null)
+  useEffect(() => {
+    let alive = true
+    api.get('/tennis/paper-potd', { params: { tour } })
+      .then(r => {
+        if (!alive) return
+        setPaperPotd(r.data?.potd || null)
+        setPaperPotdRecord(r.data?.potd_record || null)
+      })
+      .catch(() => { if (alive) { setPaperPotd(null); setPaperPotdRecord(null) } })
+    return () => { alive = false }
+  }, [api, tour])
 
   const refresh = (force = false) => {
     if (!force) { refreshCache(); return }
@@ -45,8 +71,12 @@ export default function TournamentDropdownView({ api, tour, onOpenMatch }) {
       .finally(() => setRefreshing(false))
   }
 
-  // Group matches by tournament, then group tournaments by priority tier.
-  const tiered = useMemo(() => groupIntoTiers(matches), [matches])
+  // Flattened (Austin 2026-09-19): matches render as ONE time-sorted list
+  // (MLB/NBA style) instead of per-tournament collapsible sections.
+  const sortedMatches = useMemo(
+    () => [...matches].sort((a, b) =>
+      String(a.start_time || a.date || '').localeCompare(String(b.start_time || b.date || ''))),
+    [matches])
 
   const totalEdges = useMemo(
     () => matches.reduce((n, m) => (
@@ -57,7 +87,12 @@ export default function TournamentDropdownView({ api, tour, onOpenMatch }) {
 
   return (
     <section className="space-y-4">
-      <PickOfDayHero sport="tennis" tour={tour} />
+      <PaperPickOfDayHero
+        games={matches}
+        sport="tennis"
+        locked={(paperPotd) ?? null}
+        summary={paperPotdRecord}
+      />
 
       <header className="flex items-baseline justify-between gap-3 pt-2 flex-wrap">
         <div className="flex items-center gap-2 min-w-0">
@@ -95,26 +130,16 @@ export default function TournamentDropdownView({ api, tour, onOpenMatch }) {
         </div>
       )}
 
-      {tiered.map(({ label, tournaments }) => (
-        <div key={label} className="space-y-2">
-          <div className="flex items-center gap-2 pt-1">
-            <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-              {label}
-            </span>
-            <span className="text-[10px] tabular-nums text-muted-foreground/70">
-              ({tournaments.length})
-            </span>
-            <span className="flex-1 border-t border-border ml-1" aria-hidden="true" />
-          </div>
-          {tournaments.map(t => (
-            <TournamentSection
-              key={t.tournament}
-              tournament={t}
-              onOpenMatch={onOpenMatch}
-            />
-          ))}
-        </div>
-      ))}
+      {/* 2-col grid (Phase 1 compact restyle, 2026-10-10) — matches
+          BasketballPanel's GameCard grid (grid-cols-1 md:grid-cols-2
+          gap-3) now that MatchCard is trimmed to the same density;
+          the single-column stack this replaced was built for the old,
+          taller card. */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {sortedMatches.map(m => (
+          <MatchCard key={m.match_id} match={m} />
+        ))}
+      </div>
     </section>
   )
 }

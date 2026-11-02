@@ -44,6 +44,20 @@ _CACHE: dict[str, tuple[float, dict]] = {}
 _CACHE_TTL_S = 120
 
 
+def _basketball_comps(tree: dict) -> dict[str, str]:
+    """{comp_id: name} for every basketball competition in HR's sports tree
+    (data.betSync.sports[].categories[].competitions[])."""
+    out: dict[str, str] = {}
+    for sp in ((tree.get("data") or {}).get("betSync") or {}).get("sports") or []:
+        if not isinstance(sp, dict) or "BASKET" not in str(sp.get("code") or "").upper():
+            continue
+        for cat in sp.get("categories") or []:
+            for comp in (cat or {}).get("competitions") or []:
+                if isinstance(comp, dict) and comp.get("id"):
+                    out[str(comp["id"])] = str(comp.get("name") or "")
+    return out
+
+
 def fetch_league_odds(league: str, force: bool = False) -> dict[str, dict]:
     """Fetch HR's basketball odds for ``league``. Returns a dict keyed
     by ``"<away_abbr>@<home_abbr>"`` so the slate route can match
@@ -79,14 +93,31 @@ def fetch_league_odds(league: str, force: bool = False) -> dict[str, dict]:
     # to a hardcoded ID would silently drop coverage; resolving from the
     # tree picks them up while they're live without registry churn.
     comp_ids: list[str] = [str(comp_id)]
+    listed: dict[str, str] = {}
     try:
         tree, tree_err = _fetch_sports_tree()
         if not tree_err and tree:
+            listed = _basketball_comps(tree)
+            # HR re-IDs competitions between seasons (MintyBot 2026-10-27: Finland, Denmark,
+            # Slovakia, Latvia-Estonia and NBA itself had moved to new ids, so the registry anchor
+            # 404'd every cycle and those leagues got no odds). The name is the stable key.
+            want = str(cfg.get("hr_comp_name") or "").strip().lower()
+            for cid, name in listed.items():
+                if want and name.strip().lower() == want and cid not in comp_ids:
+                    comp_ids.append(cid)
             for cid in _resolve_comp_ids(league, tree):
                 if cid and cid not in comp_ids:
                     comp_ids.append(cid)
     except Exception as e:
         logger.debug("[%s] sibling-comp discovery failed: %s", league, e)
+    if listed:
+        # Only fetch comps HR's tree lists right now -- an unlisted comp 404s (14 leagues, ~280
+        # dead calls a day on 2026-10-27). Nothing listed = HR has no board for this league.
+        comp_ids = [c for c in comp_ids if c in listed]
+        if not comp_ids:
+            logger.debug("[%s] HR lists no comp for this league right now -- skipping odds fetch", league)
+            _CACHE[league] = (now, {})
+            return {}
 
     events: list[dict] = []
     last_err: str | None = None
@@ -107,6 +138,14 @@ def fetch_league_odds(league: str, force: bool = False) -> dict[str, dict]:
         return {}
 
     name_to_abbr = _build_name_lookup(league)
+    # College (NCAAM / NCAAW): exact school-name resolution + tie each event to OUR
+    # scheduled game by team ids (flipping sides when HR has a neutral game the other way
+    # round) instead of the generic first/last-word guesser (MintyBot 2026-10-26).
+    # College only -- China CBA also runs the ratings model (2026-10-28) but its HR names go through
+    # the generic lookup; routing it through the D1 resolver dropped every CBA event.
+    college = league in ("ncaam", "ncaaw")
+    if college:
+        from . import _college_names
     out: dict[str, dict] = {}
     for ev in events:
         parsed = _parse_event(ev, name_to_abbr,
@@ -114,6 +153,14 @@ def fetch_league_odds(league: str, force: bool = False) -> dict[str, dict]:
                                league_key=league)
         if not parsed:
             continue
+        if college:
+            try:
+                parsed = _college_names.attach(league, parsed)
+            except Exception as e:
+                logger.warning("[%s] college odds attach failed: %s", league, e)
+                parsed = None
+            if not parsed:
+                continue
         key = parsed["_key"]
         # Dedup collision: HR sometimes ships the same matchup under
         # two events (a "real" one and a phantom/duplicate stale one).
@@ -249,7 +296,11 @@ def _start_time_iso(ev: dict) -> str | None:
     so the stub-backfill route + GameCard get a real puck-drop / tip-off
     timestamp instead of synthesizing one (see standard_layout #7)."""
     et = ev.get("eventTime")
-    if not isinstance(et, (int, float)) or et <= 0:
+    try:   # HR's REST events ship eventTime as a numeric STRING ("1793674800000"), GraphQL as a number
+        et = float(et)
+    except (TypeError, ValueError):
+        return None
+    if et <= 0:
         return None
     from datetime import datetime as _dt, timezone as _tz
     try:
@@ -302,16 +353,21 @@ def _parse_event(ev: dict, name_to_abbr: dict[str, str],
         selection name (``"Over 162.5"``) — no separate handicap field.
     """
     parts = ev.get("participants") or []
-    if len(parts) < 2:
-        return None
-    en = ev.get("eventNames") or {}
-    canonical_name = en.get("name") if isinstance(en, dict) else ""
-    away_name, home_name = _split_canonical(canonical_name or "")
+    from scrapers.hardrock_odds import _extract_teams
+    # HR dropped participants[] in an Oct-2026 event-shape change (now ships a
+    # single `name` like "Man City vs Ipswich"); read teams via the shared
+    # _extract_teams helper first, then the legacy eventNames / participants[]
+    # paths. (MintyBot 2026-10-13)
+    away_name, home_name = _extract_teams(ev)
     if not (away_name and home_name):
-        # Fallback to participants — but HR's order isn't guaranteed
-        # so this is best-effort.
-        away_name = (parts[0].get("name") or "").strip()
-        home_name = (parts[1].get("name") or "").strip()
+        en = ev.get("eventNames") or {}
+        canonical_name = en.get("name") if isinstance(en, dict) else ""
+        away_name, home_name = _split_canonical(canonical_name or "")
+    if not (away_name and home_name):
+        parts = ev.get("participants") or []
+        if len(parts) >= 2:
+            away_name = (parts[0].get("name") or "").strip()
+            home_name = (parts[1].get("name") or "").strip()
     home_abbr = _resolve_team(home_name, name_to_abbr)
     away_abbr = _resolve_team(away_name, name_to_abbr)
     # Pre-launch leagues (china_cba, brazil_nbb, … any tier without a
@@ -467,6 +523,19 @@ def _parse_event(ev: dict, name_to_abbr: dict[str, str],
         odds["spread"] = _pick_main_spread(full_spread_candidates)
     if full_total_candidates:
         odds["total"] = _pick_main_total(full_total_candidates)
+    # College keeps the alternate lines too, so CLV can be read at a pick's OWN line after the
+    # main number moves (_clv._extract_closing_for_pick already walks alt_spreads/alt_totals).
+    _keep_alts = False
+    if league_key:
+        try:
+            _keep_alts = get_league_config(league_key).get("model") == "ratings"
+        except Exception:
+            _keep_alts = False
+    if _keep_alts:
+        if len(full_spread_candidates) > 1:
+            odds["alt_spreads"] = [c for c in full_spread_candidates if c is not odds.get("spread")]
+        if len(full_total_candidates) > 1:
+            odds["alt_totals"] = [c for c in full_total_candidates if c is not odds.get("total")]
     # Q1 markets — only emit when present so leagues without Q1 coverage
     # (RealGM tier basketball) pass through cleanly. Picker reads the
     # ``q1`` sub-dict and skips when absent.
@@ -478,9 +547,18 @@ def _parse_event(ev: dict, name_to_abbr: dict[str, str],
             q1["spread"] = _pick_main_spread(q1_spread_candidates)
         if q1_total_candidates:
             q1["total"] = _pick_main_total(q1_total_candidates)
+        if _keep_alts:
+            if len(q1_spread_candidates) > 1:
+                q1["alt_spreads"] = [c for c in q1_spread_candidates if c is not q1.get("spread")]
+            if len(q1_total_candidates) > 1:
+                q1["alt_totals"] = [c for c in q1_total_candidates if c is not q1.get("total")]
         odds["q1"] = q1
     if not any(k in odds for k in ("ml", "spread", "total")):
         return None
+    # In-play flag (MintyBot 2026-11-01, Austin "TAS +7.5 for a -5.5 team seems off"): HR keeps the event in the
+    # same feed once it goes live, and our schedule status can still say 'scheduled' (NBL tip-off lag), so the
+    # picker + card lean were pricing IN-PLAY lines as pre-game (TAS +7.5 -120 locked 10 min "before" tip).
+    odds["inplay"] = bool(ev.get("inplay") or ev.get("isLive") or ev.get("live"))
     return odds
 
 
@@ -605,10 +683,11 @@ def _line_value(sel: dict) -> float | None:
                 continue
     name = sel.get("name") or ""
     import re
-    m = re.search(r"([+-]?\d+(?:\.\d+)?)", name)
-    if m:
+    # the LAST number in the name: "Adelaide 36ers +2.5" is +2.5, not 36 (NBL, 2026-10-29)
+    nums = re.findall(r"([+-]?\d+(?:\.\d+)?)", name)
+    if nums:
         try:
-            return float(m.group(1))
+            return float(nums[-1])
         except ValueError:
             return None
     return None

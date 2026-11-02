@@ -1,0 +1,325 @@
+{
+  "fit_all:mlb:tb": {
+    "best": "NegBin",
+    "leaderboard": [
+      {
+        "aic": 13246.780567766,
+        "bic": 13259.540563671,
+        "ks": 0.02368889,
+        "ll": -6621.390283883,
+        "name": "NegBin",
+        "params": {
+          "dispersion_k": 0.864212006,
+          "mu": 1.2071645,
+          "p": 0.417216283,
+          "r": 0.864212006
+        }
+      },
+      {
+        "aic": 13254.660133552,
+        "bic": 13261.040131504,
+        "ks": 0.027749435,
+        "ll": -6626.330066776,
+        "name": "Geometric",
+        "params": {
+          "mu": 1.207157605,
+          "p": 0.453071406
+        }
+      },
+      {
+        "aic": 13657.463580962,
+        "bic": 13670.223576867,
+        "ks": 0.066751848,
+        "ll": -6826.731790481,
+        "name": "ZIP",
+        "params": {
+          "lambda": 1.966957574,
+          "mu": 1.207190921,
+          "pi": 0.386264891
+        }
+      },
+      {
+        "aic": 14929.69720876,
+        "bic": 14936.077206712,
+        "ks": 0.173080555,
+        "ll": -7463.84860438,
+        "name": "Poisson",
+        "params": {
+          "mu": 1.207157605
+        }
+      }
+    ],
+    "n": 4359
+  },
+  "fit_all:nhl:sog": {
+    "best": "NegBin",
+    "leaderboard": [
+      {
+        "aic": 16047.05364891,
+        "bic": 16060.037809891,
+        "ks": 0.002680742,
+        "ll": -8021.526824455,
+        "name": "NegBin",
+        "params": {
+          "dispersion_k": 4.013948093,
+          "mu": 1.55537061,
+          "p": 0.720725156,
+          "r": 4.013948093
+        }
+      },
+      {
+        "aic": 16162.211440512,
+        "bic": 16175.195601494,
+        "ks": 0.034020997,
+        "ll": -8079.105720256,
+        "name": "ZIP",
+        "params": {
+          "lambda": 1.758976107,
+          "mu": 1.555346081,
+          "pi": 0.115766226
+        }
+      },
+      {
+        "aic": 16318.791194189,
+        "bic": 16325.28327468,
+        "ks": 0.05693701,
+        "ll": -8158.395597094,
+        "name": "Poisson",
+        "params": {
+          "mu": 1.555373257
+        }
+      },
+      {
+        "aic": 16681.960166402,
+        "bic": 16688.452246893,
+        "ks": 0.123284683,
+        "ll": -8339.980083201,
+        "name": "Geometric",
+        "params": {
+          "mu": 1.555373257,
+          "p": 0.391332263
+        }
+      }
+    ],
+    "n": 4876
+  },
+  "get_dist:mlb:hr": {
+    "dispersion_k": 5.6,
+    "family": "negbin",
+    "note": "promoted from poisson; NegBin/Poisson AICs tied at 121k but the negbin shape captures the long tail"
+  },
+  "get_dist:mlb:tb": {
+    "dispersion_k": 0.91,
+    "family": "negbin"
+  },
+  "get_dist:nba:ftm": {
+    "dispersion_k": 0.58,
+    "family": "negbin",
+    "note": "heavy overdispersion -- foul-line games"
+  },
+  "get_dist:nba:pts": {
+    "dispersion_k": 1.25,
+    "family": "negbin"
+  },
+  "get_dist:nhl:ga": {
+    "family": "poisson",
+    "note": "under-dispersed -- Poisson tighter than NegBin/Geom"
+  },
+  "get_dist:nhl:sog": {
+    "dispersion_k": 3.86,
+    "family": "negbin"
+  },
+  "get_dist:wnba:pts": {
+    "dispersion_k": 1.25,
+    "family": "negbin"
+  },
+  "prob:tb:0.5": {
+    "p_over": 0.71925,
+    "p_under": 0.28075
+  },
+  "prob:tb:1.5": {
+    "p_over": 0.3625,
+    "p_under": 0.6375
+  },
+  "prob:tb:2.5": {
+    "p_over": 0.14125,
+    "p_under": 0.85875
+  },
+  "score:tb:1.5": null,
+  "score:tb:2.5": null,
+  "score_nocal:tb:1.5": {
+    "edge": 11.369047619,
+    "implied_prob": 0.523809524,
+    "line": 1.5,
+    "model_prob": 0.6375,
+    "odds": -110,
+    "side": "Under"
+  },
+  "score_nocal:tb:2.5": {
+    "edge": 21.589285714,
+    "implied_prob": 0.642857143,
+    "line": 2.5,
+    "model_prob": 0.85875,
+    "odds": -180,
+    "side": "Under"
+  },
+  "summarize:mlb:tb": {
+    "best": "NegBin",
+    "descriptive": {
+      "max": 12,
+      "mean": 1.207157605,
+      "n": 4359,
+      "overdispersion": 2.28,
+      "p_zero": 0.472126635,
+      "var": 2.756581024
+    },
+    "leaderboard": [
+      {
+        "aic": 13246.8,
+        "family": "NegBin",
+        "ks": 0.0237,
+        "params": {
+          "dispersion_k": 0.864212006,
+          "mu": 1.2071645,
+          "p": 0.417216283,
+          "r": 0.864212006
+        }
+      },
+      {
+        "aic": 13254.7,
+        "family": "Geometric",
+        "ks": 0.0277,
+        "params": {
+          "mu": 1.207157605,
+          "p": 0.453071406
+        }
+      },
+      {
+        "aic": 13657.5,
+        "family": "ZIP",
+        "ks": 0.0668,
+        "params": {
+          "lambda": 1.966957574,
+          "mu": 1.207190921,
+          "pi": 0.386264891
+        }
+      },
+      {
+        "aic": 14929.7,
+        "family": "Poisson",
+        "ks": 0.1731,
+        "params": {
+          "mu": 1.207157605
+        }
+      }
+    ],
+    "sport": "mlb",
+    "stat": "tb"
+  },
+  "summarize:nhl:g": {
+    "best": "ZIP",
+    "descriptive": {
+      "max": 3,
+      "mean": 0.17780968,
+      "n": 4876,
+      "overdispersion": 1.11,
+      "p_zero": 0.845159967,
+      "var": 0.19705476
+    },
+    "leaderboard": [
+      {
+        "aic": 4873.7,
+        "family": "ZIP",
+        "ks": 0.0005,
+        "params": {
+          "lambda": 0.283340601,
+          "mu": 0.177809959,
+          "pi": 0.372451536
+        }
+      },
+      {
+        "aic": 4874.1,
+        "family": "NegBin",
+        "ks": 0.0005,
+        "params": {
+          "dispersion_k": 1.574466374,
+          "mu": 0.177809577,
+          "p": 0.898526498,
+          "r": 1.574466374
+        }
+      },
+      {
+        "aic": 4876.4,
+        "family": "Geometric",
+        "ks": 0.0039,
+        "params": {
+          "mu": 0.17780968,
+          "p": 0.849033606
+        }
+      },
+      {
+        "aic": 4895.7,
+        "family": "Poisson",
+        "ks": 0.0081,
+        "params": {
+          "mu": 0.17780968
+        }
+      }
+    ],
+    "sport": "nhl",
+    "stat": "g"
+  },
+  "summarize:nhl:sog": {
+    "best": "NegBin",
+    "descriptive": {
+      "max": 9,
+      "mean": 1.555373257,
+      "n": 4876,
+      "overdispersion": 1.39,
+      "p_zero": 0.26804758,
+      "var": 2.161207798
+    },
+    "leaderboard": [
+      {
+        "aic": 16047.1,
+        "family": "NegBin",
+        "ks": 0.0027,
+        "params": {
+          "dispersion_k": 4.013948093,
+          "mu": 1.55537061,
+          "p": 0.720725156,
+          "r": 4.013948093
+        }
+      },
+      {
+        "aic": 16162.2,
+        "family": "ZIP",
+        "ks": 0.034,
+        "params": {
+          "lambda": 1.758976107,
+          "mu": 1.555346081,
+          "pi": 0.115766226
+        }
+      },
+      {
+        "aic": 16318.8,
+        "family": "Poisson",
+        "ks": 0.0569,
+        "params": {
+          "mu": 1.555373257
+        }
+      },
+      {
+        "aic": 16682.0,
+        "family": "Geometric",
+        "ks": 0.1233,
+        "params": {
+          "mu": 1.555373257,
+          "p": 0.391332263
+        }
+      }
+    ],
+    "sport": "nhl",
+    "stat": "sog"
+  }
+}

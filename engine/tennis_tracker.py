@@ -375,11 +375,27 @@ def _parse_score(score: str | None) -> dict | None:
     p1_games = p2_games = 0
     for m in _SET_SCORE_RE.finditer(score):
         a, b = int(m.group(1)), int(m.group(2))
+        # TennisExplorer mashes the tiebreak onto the 6 of a 7-6 set
+        # with the parens stripped: "7-61" is 7-6(1), not 7 games to
+        # 61. Left as-is the loser scores a phantom set (7-61 -> p2
+        # wins) and win-a-set / total-games grade wrong. TE lists the
+        # winner first so a tiebreak set is always 7-6X; clamp back.
+        if a == 7 and b > 7:
+            b = 6
+        elif b == 7 and a > 7:
+            a = 6
+        elif a > 7 or b > 7:
+            continue
         p1_games += a
         p2_games += b
-        if a > b:
+        # Only count a COMPLETED set (6-0..6-4, 7-5, 7-6). A partial final
+        # set after a retirement ("2-1", "3-2", "6-5") must not count as a
+        # won set, or a straight-sets loser gets a phantom set (win-a-set).
+        _hi, _lo = (a, b) if a > b else (b, a)
+        _completed = (_hi == 6 and _lo <= 4) or (_hi == 7 and _lo in (5, 6))
+        if _completed and a > b:
             p1_sets += 1
-        elif b > a:
+        elif _completed and b > a:
             p2_sets += 1
     if p1_sets == 0 and p2_sets == 0:
         return None
@@ -397,6 +413,19 @@ def _resolve_pick(row: dict, match: dict) -> str | None:
     via ``_match_from_scheduled``. Both end up with the same field
     set so this function doesn't care which source it came from.
     """
+    # -- Unified grading core (audit T2 migration) --
+    # Route through the shared core (proven 527/527 identical to the
+    # logic below). The legacy body stays as an authoritative fallback
+    # for any market the adapter does not cover; any core error also
+    # falls back -- grading never breaks.
+    try:
+        from .grading import tennis_adapter as _core_tennis
+        _cr = _core_tennis.grade_pick(row, match)
+    except Exception:
+        _cr = None
+    if _cr is not None:
+        return _cr
+
     score = match.get("score") or ""
     parsed = _parse_score(score)
     if parsed is None:
@@ -447,20 +476,27 @@ def _resolve_pick(row: dict, match: dict) -> str | None:
             tokens = n.split()
             return tokens[-1] if tokens else n
 
-        # Direct substring match (fast path for full-name vs full-name).
-        if t in winner_name or winner_name.startswith(t) \
-                or winner_name.endswith(t):
-            return True
-        if t in loser_name or loser_name.startswith(t) \
-                or loser_name.endswith(t):
-            return False
-        # Last-name fallback — TE shape vs full-name shape disagreement.
+        # Exact last-name match FIRST (most reliable for TE 'Last F.' shape)
+        # and only when it distinguishes the two players. Checking a winner
+        # substring first let a loser whose surname substrings the winner's
+        # name grade as a phantom winner - the loser-as-winner failure the
+        # swap fix removed, reachable again through the matcher.
         last_pick = _last(t)
-        if last_pick:
-            if last_pick == _last(winner_name):
+        win_last, los_last = _last(winner_name), _last(loser_name)
+        if last_pick and win_last and los_last and win_last != los_last:
+            if last_pick == win_last:
                 return True
-            if last_pick == _last(loser_name):
+            if last_pick == los_last:
                 return False
+        # Substring fallback - require it to match EXACTLY ONE side.
+        in_w = bool(t) and (t in winner_name or winner_name.startswith(t)
+                            or winner_name.endswith(t))
+        in_l = bool(t) and (t in loser_name or loser_name.startswith(t)
+                            or loser_name.endswith(t))
+        if in_w and not in_l:
+            return True
+        if in_l and not in_w:
+            return False
         return None
 
     if bet_type == "ML":
@@ -491,6 +527,12 @@ def _resolve_pick(row: dict, match: dict) -> str | None:
         return "L"
 
     if bet_type == "TOTAL_GAMES":
+        # Void a retired/incomplete match: the winner never reached the
+        # sets needed to win, so the games/sets total is undefined (book
+        # voids). Without this, the completed-set fix makes a retirement
+        # count fewer sets and spuriously win "Under".
+        if p1_sets < (int(row.get("best_of") or 3) // 2 + 1):
+            return None
         m = re.match(r"^(over|under)\s+(\d+\.?\d*)$", pick_text, re.I)
         if not m:
             return None
@@ -506,6 +548,12 @@ def _resolve_pick(row: dict, match: dict) -> str | None:
                        (not is_over and side == "under") else "L"
 
     if bet_type == "TOTAL_SETS":
+        # Void a retired/incomplete match: the winner never reached the
+        # sets needed to win, so the games/sets total is undefined (book
+        # voids). Without this, the completed-set fix makes a retirement
+        # count fewer sets and spuriously win "Under".
+        if p1_sets < (int(row.get("best_of") or 3) // 2 + 1):
+            return None
         m = re.match(r"^(over|under)\s+(\d+\.?\d*)$", pick_text, re.I)
         if not m:
             return None
@@ -652,15 +700,32 @@ def _match_from_results_table(conn, pick: dict) -> dict | None:
            WHERE date BETWEEN date(?, '-2 day') AND date(?, '+2 day')
              AND ((p1_name LIKE ? AND p2_name LIKE ?)
                   OR (p1_name LIKE ? AND p2_name LIKE ?))
+           ORDER BY ABS(julianday(date) - julianday(?))
            LIMIT 1""",
         (pick_date, pick_date,
          f"{last1}%{first1[:1] if first1 else ''}%",
          f"{last2}%{first2[:1] if first2 else ''}%",
          f"{last2}%{first2[:1] if first2 else ''}%",
-         f"{last1}%{first1[:1] if first1 else ''}%"),
+         f"{last1}%{first1[:1] if first1 else ''}%",
+         pick_date),
     ).fetchone()
     if row:
         return _adapt_results_row(dict(row), p1_id, p2_id)
+    return None
+
+
+def _winner_side_from_score(score: str | None) -> str | None:
+    """Derive which row-side (p1/p2) won from the score alone, for TE
+    rows where the `winner` column came back NULL. TennisExplorer lists
+    each set token winner-first and orders p1/p2 winner-first, so the
+    side with more sets is the winner. Returns None if unparseable."""
+    parsed = _parse_score(score)
+    if parsed is None:
+        return None
+    if parsed["p1_sets"] > parsed["p2_sets"]:
+        return "p1"
+    if parsed["p2_sets"] > parsed["p1_sets"]:
+        return "p2"
     return None
 
 
@@ -673,28 +738,41 @@ def _adapt_results_row(row: dict, pick_p1_id: int, pick_p2_id: int) -> dict:
     pick's p1.
     """
     winner_side = row.get("winner")  # 'p1' | 'p2' (TE-side)
+    if winner_side not in ("p1", "p2"):
+        # TE scraper sometimes leaves `winner` NULL while the score is
+        # present. The old code then fell through to the p2 branch and
+        # silently declared p2 the winner -- mis-grading every
+        # WIN_AT_LEAST_ONE_SET on a straight-sets loser as a phantom WIN
+        # (5 flipped 2026-07-26). Derive the winner from the score; if
+        # still unresolvable, leave the pick pending, never fabricate.
+        winner_side = _winner_side_from_score(row.get("score"))
+        if winner_side not in ("p1", "p2"):
+            return None
     res_p1_id = int(row.get("p1_id") or 0)
-    pick_p1_in_te_p1 = (res_p1_id == pick_p1_id) if pick_p1_id else None
-    # If the TE row has p1_id == pick.p1_id, sides align. Otherwise
-    # they're swapped. When ids are missing on TE we leave this
-    # decision up to the name match (last-name was already filtered).
-    if pick_p1_in_te_p1 is False:
-        # Swap winner perspective
-        winner_side = "p2" if winner_side == "p1" else "p1"
+    res_p2_id = int(row.get("p2_id") or 0)
+    # winner_side is in the TE-ROW frame: name the actual winner/loser
+    # straight from that side. The previous code swapped winner_side into
+    # the pick frame but still indexed the TE-row names with it, so when
+    # the pick and TE row ordered the players oppositely it labelled the
+    # LOSER as winner_name -> every win-a-set on that loser graded a
+    # phantom W. (Fixed 2026-07-26.)
     if winner_side == "p1":
-        return {
-            "score": row.get("score"),
-            "winner_id": pick_p1_id or res_p1_id,
-            "winner_name": row.get("p1_name"),
-            "loser_name": row.get("p2_name"),
-            "winner": "p1",
-        }
+        w_id, w_name, l_name = res_p1_id, row.get("p1_name"), row.get("p2_name")
+    else:
+        w_id, w_name, l_name = res_p2_id, row.get("p2_name"), row.get("p1_name")
+    # Express `winner` in the PICK frame for SET_BETTING's winner==p1 test.
+    if pick_p1_id and w_id == pick_p1_id:
+        pick_winner = "p1"
+    elif pick_p2_id and w_id == pick_p2_id:
+        pick_winner = "p2"
+    else:
+        pick_winner = winner_side
     return {
         "score": row.get("score"),
-        "winner_id": pick_p2_id or int(row.get("p2_id") or 0),
-        "winner_name": row.get("p2_name"),
-        "loser_name": row.get("p1_name"),
-        "winner": "p2",
+        "winner_id": w_id,
+        "winner_name": w_name,
+        "loser_name": l_name,
+        "winner": pick_winner,
     }
 
 
@@ -910,52 +988,52 @@ def settle_tennis_picks() -> dict:
     now_iso = datetime.now(timezone.utc).isoformat()
     for row in pending:
         d = dict(row)
-        # Live picks reference ESPN-style match_ids that live in
-        # tennis_scheduled_matches, not Sackmann's tennis_matches
-        # historical CSV. Look at scheduled first (the actual source
-        # for our picks); fall back to tennis_matches for any legacy
-        # Sackmann-id rows still around.
-        sched_row = conn.execute(
-            "SELECT * FROM tennis_scheduled_matches "
-            "WHERE tour = ? AND match_id = ?",
-            (d["tour"], d["match_id"]),
-        ).fetchone()
-        match: dict | None = None
-        if sched_row:
-            sched_dict = dict(sched_row)
-            if (sched_dict.get("status") == "post"
-                    and sched_dict.get("score")):
-                match = _match_from_scheduled(
-                    sched_dict,
-                    int(d.get("p1_id") or 0),
-                    int(d.get("p2_id") or 0),
-                )
-        if not match:
-            match_row = conn.execute(
-                "SELECT * FROM tennis_matches "
+        try:
+            # Live picks reference ESPN-style match_ids that live in
+            # tennis_scheduled_matches, not Sackmann's tennis_matches
+            # historical CSV. Look at scheduled first (the actual source
+            # for our picks); fall back to tennis_matches for any legacy
+            # Sackmann-id rows still around.
+            sched_row = conn.execute(
+                "SELECT * FROM tennis_scheduled_matches "
                 "WHERE tour = ? AND match_id = ?",
                 (d["tour"], d["match_id"]),
             ).fetchone()
-            if match_row:
-                match = dict(match_row)
-        if not match:
-            # HR-supplement fallback: ESPN doesn't carry sub-tour
-            # events (Challenger / ITF / WTA125) so the scheduled row
-            # never flips to 'post', and Sackmann ships annually so
-            # the corpus doesn't have current-season minor-tour
-            # results either. Tennis Explorer fills the gap — see
-            # scrapers.tennis_results. Match by Sackmann player ids
-            # within a ±2 day window, name-pair as a final fallback.
-            match = _match_from_results_table(conn, d)
-        if not match:
-            summary["pending_remaining"] += 1
-            continue
-        result = _resolve_pick(d, match)
-        if result is None:
-            summary["pending_remaining"] += 1
-            continue
-        profit = _profit(d.get("odds"), result)
-        try:
+            match: dict | None = None
+            if sched_row:
+                sched_dict = dict(sched_row)
+                if (sched_dict.get("status") == "post"
+                        and sched_dict.get("score")):
+                    match = _match_from_scheduled(
+                        sched_dict,
+                        int(d.get("p1_id") or 0),
+                        int(d.get("p2_id") or 0),
+                    )
+            if not match:
+                match_row = conn.execute(
+                    "SELECT * FROM tennis_matches "
+                    "WHERE tour = ? AND match_id = ?",
+                    (d["tour"], d["match_id"]),
+                ).fetchone()
+                if match_row:
+                    match = dict(match_row)
+            if not match:
+                # HR-supplement fallback: ESPN doesn't carry sub-tour
+                # events (Challenger / ITF / WTA125) so the scheduled row
+                # never flips to 'post', and Sackmann ships annually so
+                # the corpus doesn't have current-season minor-tour
+                # results either. Tennis Explorer fills the gap — see
+                # scrapers.tennis_results. Match by Sackmann player ids
+                # within a ±2 day window, name-pair as a final fallback.
+                match = _match_from_results_table(conn, d)
+            if not match:
+                summary["pending_remaining"] += 1
+                continue
+            result = _resolve_pick(d, match)
+            if result is None:
+                summary["pending_remaining"] += 1
+                continue
+            profit = _profit(d.get("odds"), result)
             conn.execute(
                 "UPDATE tennis_picks SET result = ?, profit = ?, "
                 "  settled_at = ? WHERE id = ?",
@@ -969,7 +1047,15 @@ def settle_tennis_picks() -> dict:
             else:
                 summary["pushes"] += 1
         except Exception as e:
-            logger.warning("settle update failed for id=%s: %s", d["id"], e)
+            # One bad row (malformed match data, a scraper hiccup, an
+            # unexpected score shape) must never abort the whole pass —
+            # an uncaught crash here previously killed settle_tennis_picks()
+            # for every pending row still queued behind the bad one, and
+            # the background kick thread swallows the exception at DEBUG
+            # level (see _kick_tennis_settle), so it failed silently.
+            # Log + skip this row; it gets retried next cycle.
+            logger.warning("tennis settle: id=%s (%s / %s) crashed: %s",
+                            d.get("id"), d.get("bet_type"), d.get("pick"), e)
             summary["pending_remaining"] += 1
     conn.commit()
     return summary
@@ -977,21 +1063,29 @@ def settle_tennis_picks() -> dict:
 
 # ── Reads ─────────────────────────────────────────────────────
 
-def list_history(tour: str | None = None, limit: int = 200) -> list[dict]:
+def list_history(tour: str | None = None, limit: int = 200,
+                  is_paper: bool | int | None = None) -> list[dict]:
+    """``is_paper``: None (default) returns every row regardless of
+    paper/real status — the original behavior, so any pre-existing
+    caller is unaffected. Pass False/0 for real-only rows, True/1 for
+    paper-only rows — the split the Tracker tab's real/paper sections
+    use (PickMint tennis parity Phase 2, Austin 2026-10-10)."""
     from .tennis_db import get_conn
     ensure_table()
     conn = get_conn()
+    clauses: list[str] = []
+    params: list = []
     if tour:
-        rows = conn.execute(
-            "SELECT * FROM tennis_picks WHERE tour = ? "
-            "ORDER BY id DESC LIMIT ?",
-            (tour, int(limit)),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM tennis_picks ORDER BY id DESC LIMIT ?",
-            (int(limit),),
-        ).fetchall()
+        clauses.append("tour = ?")
+        params.append(tour)
+    if is_paper is not None:
+        clauses.append("is_paper = ?")
+        params.append(1 if is_paper else 0)
+    where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
+    rows = conn.execute(
+        f"SELECT * FROM tennis_picks {where}ORDER BY id DESC LIMIT ?",
+        (*params, int(limit)),
+    ).fetchall()
     out = []
     for r in rows:
         d = dict(r)
@@ -1002,7 +1096,8 @@ def list_history(tour: str | None = None, limit: int = 200) -> list[dict]:
     return out
 
 
-def get_pick_summary(tour: str | None = None) -> dict:
+def get_pick_summary(tour: str | None = None,
+                      is_paper: bool | int | None = None) -> dict:
     """Tracker summary in the same {overall, by_type} shape team
     sports use, so the frontend's PickHistory component renders
     tennis identically to MLB/NHL/NBA.
@@ -1017,16 +1112,28 @@ def get_pick_summary(tour: str | None = None) -> dict:
 
     Also keeps the legacy flat fields (total / wins / losses / etc.)
     so older readers don't break.
+
+    ``is_paper``: None (default) scans every row regardless of
+    paper/real status — the original behavior, so the existing
+    ``/api/tennis/tracker/summary`` caller (and the probation gate's
+    "N decided" banner text) is completely unaffected. Pass False/0
+    / True/1 to scope to real-only / paper-only rows — the split
+    ``/api/tennis/tracker/history`` now uses to build its real vs.
+    paper summaries (PickMint tennis parity Phase 2, Austin
+    2026-10-10).
     """
     from .tennis_db import get_conn
     ensure_table()
     conn = get_conn()
 
-    tour_clause = ""
-    tour_params: list = []
+    filter_clause = ""
+    filter_params: list = []
     if tour:
-        tour_clause = " AND tour = ?"
-        tour_params = [tour]
+        filter_clause += " AND tour = ?"
+        filter_params.append(tour)
+    if is_paper is not None:
+        filter_clause += " AND is_paper = ?"
+        filter_params.append(1 if is_paper else 0)
 
     bet_types = (
         "ML", "SET_BETTING", "SET_SPREAD", "TOTAL_GAMES", "TOTAL_SETS",
@@ -1051,8 +1158,8 @@ def get_pick_summary(tour: str | None = None) -> dict:
                                         THEN COALESCE(stake_units, 1.0)
                                         ELSE 0 END), 0) AS stake_units_settled
                 FROM tennis_picks
-                WHERE bet_type = ?{tour_clause}""",
-            (bt, *tour_params),
+                WHERE bet_type = ?{filter_clause}""",
+            (bt, *filter_params),
         ).fetchone()
         total = row["total"] or 0
         w = row["wins"] or 0
@@ -1082,8 +1189,8 @@ def get_pick_summary(tour: str | None = None) -> dict:
                                     THEN COALESCE(stake_units, 1.0)
                                     ELSE 0 END), 0) AS stake_units_settled
             FROM tennis_picks
-            WHERE 1=1{tour_clause}""",
-        tour_params,
+            WHERE 1=1{filter_clause}""",
+        filter_params,
     ).fetchone()
     tw = totals["wins"] or 0
     tl = totals["losses"] or 0
@@ -1096,8 +1203,8 @@ def get_pick_summary(tour: str | None = None) -> dict:
         f"""SELECT odds, closing_odds FROM tennis_picks
             WHERE result IS NOT NULL
               AND odds IS NOT NULL
-              AND closing_odds IS NOT NULL{tour_clause}""",
-        tour_params,
+              AND closing_odds IS NOT NULL{filter_clause}""",
+        filter_params,
     ).fetchall()
     clv_values: list[float] = []
     for r in clv_rows:

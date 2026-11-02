@@ -18,15 +18,18 @@
  * Scoreboard.jsx / NHLScoreboard.jsx / NBAScoreboard.jsx.
  */
 
-import { useCallback, useMemo } from 'react'
+import { useMemo } from 'react'
 import FinalRow from './FinalRow'
+import GameRail from './GameRail'
+import { buildRailItems, railMatchup, shownPick } from '../../lib/rail'
 
 export default function ScoreboardShell({
   games,
   loading,
   progress,
-  onSelectGame,
   bestBets,
+  showRail = true,   // every sport's scoreboard gets the best-first rail (Austin 2026-10-27)
+  view,
   title,
   loadingLabel,
   emptyPrimary,
@@ -39,7 +42,7 @@ export default function ScoreboardShell({
   // + bestBets. Previously ran on every parent re-render (every time
   // the 5-minute scoreboard refresh fired or any sibling state ticked),
   // mutating activeGames in-place and re-filtering for the edge count.
-  const { betMap, activeGames, finalGames, edgeCount } = useMemo(() => {
+  const { betMap, activeGames, finalGames, edgeCount, railItems } = useMemo(() => {
     const bm = {}
     if (bestBets) {
       for (const b of bestBets) bm[b.game_id] = b
@@ -50,26 +53,22 @@ export default function ScoreboardShell({
       if (g.status?.state === 'post' || g.status?.completed) final.push(g)
       else active.push(g)
     }
-    active.sort((a, b) => {
-      const aEdge = bm[a.id]?.best_pick?.edge ?? -99
-      const bEdge = bm[b.id]?.best_pick?.edge ?? -99
-      return bEdge - aEdge
-    })
+    active.sort((a, b) => ((a.date || a.time) || '').localeCompare((b.date || b.time) || ''))  // Austin 2026-09-30: order cards by DATE, not pp edge
     let ec = 0
     for (const g of active) {
       const c = bm[g.id]?.confidence
       if (c === 'strong' || c === 'moderate') ec++
     }
-    return { betMap: bm, activeGames: active, finalGames: final, edgeCount: ec }
-  }, [games, bestBets])
-
-  // Stable handler per game id. The previous `game => () => ...`
-  // closure allocated a new function for every card on every render,
-  // defeating any shallow-prop equality the card might use.
-  const handleClick = useCallback(
-    game => () => { if (onSelectGame) onSelectGame(game) },
-    [onSelectGame],
-  )
+    // The rail lists what each card shows, ranked best-first (lib/rail.js, Austin 2026-10-27).
+    const railItems = buildRailItems([...active, ...final].map(g => ({
+      id: g.id,
+      matchup: railMatchup(g),
+      pick: shownPick(g, bm[g.id], view),
+      date: g.date || g.time,
+      final: g.status?.state === 'post' || g.status?.completed,
+    })))
+    return { betMap: bm, activeGames: active, finalGames: final, edgeCount: ec, railItems }
+  }, [games, bestBets, view])
 
   if (loading) {
     return <LoadingState progress={progress} fallback={loadingLabel} />
@@ -85,7 +84,9 @@ export default function ScoreboardShell({
   }
 
   return (
-    <div className="space-y-3">
+    <div className="flex gap-4 items-start">
+      {showRail && <GameRail items={railItems} />}
+      <div className="flex-1 min-w-0 space-y-3">
       <header className="flex items-baseline justify-between gap-3 pt-2">
         <h2 className="text-lg font-semibold tracking-tight text-foreground">
           {title}
@@ -109,14 +110,15 @@ export default function ScoreboardShell({
             />
           )}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {activeGames.map(game =>
-              renderCard({
-                game,
-                bet: betMap[game.id],
-                onClick: handleClick(game),
-                key: game.id,
-              })
-            )}
+            {activeGames.map(game => (
+              <div key={game.id} id={`sbcard-${game.id}`} className="scroll-mt-4 h-full">
+                {renderCard({
+                  game,
+                  bet: betMap[game.id],
+                  key: game.id,
+                })}
+              </div>
+            ))}
           </div>
         </>
       )}
@@ -129,16 +131,18 @@ export default function ScoreboardShell({
               const props = {
                 game,
                 bet: betMap[game.id],
-                onClick: handleClick(game),
                 key: game.id,
               }
-              return renderFinal
-                ? renderFinal(props)
-                : <FinalRow {...props} />
+              return (
+                <div key={game.id} id={`sbcard-${game.id}`} className="scroll-mt-4 h-full">
+                  {renderFinal ? renderFinal(props) : <FinalRow {...props} />}
+                </div>
+              )
             })}
           </div>
         </>
       )}
+      </div>
     </div>
   )
 }

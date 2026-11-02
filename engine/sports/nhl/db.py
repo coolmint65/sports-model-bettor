@@ -424,7 +424,7 @@ def upsert_nhl_game(game_id: int, **kwargs) -> None:
 
     # New game - INSERT with all provided fields
     fields = [
-        "date", "home_team_id", "away_team_id", "home_score", "away_score",
+        "date", "start_time", "home_team_id", "away_team_id", "home_score", "away_score",
         "home_goalie_id", "away_goalie_id", "status",
         "home_shots", "away_shots",
         "home_pp_goals", "home_pp_opps", "away_pp_goals", "away_pp_opps",

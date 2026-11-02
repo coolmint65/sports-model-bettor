@@ -50,11 +50,11 @@ python -c "from engine.nba_injury_refresh import refresh_for_date; import json; 
 
 echo ""
 echo "Recording today's NBA picks..."
-python -m engine.nba_tracker --record
+python -m engine.nba_tracker --record || echo "[sync] WARN: nba_tracker --record failed (exit $?) -- continuing so settle + backups still run"
 
 echo ""
 echo "Settling completed NBA picks..."
-python -m engine.nba_tracker --settle
+python -m engine.nba_tracker --settle || echo "[sync] WARN: nba_tracker --settle failed (exit $?) -- continuing so calibration + backups still run"
 
 echo ""
 echo "Refreshing empirical NBA calibration..."

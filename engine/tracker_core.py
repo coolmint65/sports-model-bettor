@@ -48,12 +48,28 @@ class SportAdapter:
     hr_fetch          callable () -> dict[matchup_key → odds]
     extract_closing   callable (bet_type, pick_text, home_abbr, game_odds)
                                 -> int | None
+    started           optional callable (pick_id) -> bool. True once the pick's
+                      game has kicked off: its row is then frozen. For books that
+                      keep a started game in the feed (HR soccer lists matches
+                      IN-PLAY), so the "close" can't be an in-play price.
     """
     name: str
     get_conn: Callable
     picks_table: str
     hr_fetch: Callable
     extract_closing: Callable
+    started: Callable | None = None
+
+
+def _cc_now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _implied_am(o) -> float:
+    """American odds -> implied probability (incl. vig)."""
+    o = float(o)
+    return abs(o) / (abs(o) + 100.0) if o < 0 else 100.0 / (o + 100.0)
 
 
 def core_capture_closing_odds(adapter: SportAdapter) -> int:
@@ -73,8 +89,13 @@ def core_capture_closing_odds(adapter: SportAdapter) -> int:
     adapter.
     """
     conn = adapter.get_conn()
+    # CLV needs to know a close was captured PRE-GAME to trust it -- stamp
+    # when (edge-hunt). Column added per-sport; gate so sports without it
+    # keep working.
+    _has_ts = any(d[1] == "closing_odds_captured_at"
+                  for d in conn.execute(f"PRAGMA table_info({adapter.picks_table})"))
     pending = conn.execute(
-        f"SELECT id, matchup, bet_type, pick, closing_odds "
+        f"SELECT id, matchup, bet_type, pick, closing_odds, odds "
         f"FROM {adapter.picks_table} WHERE result IS NULL"
     ).fetchall()
     if not pending:
@@ -96,6 +117,12 @@ def core_capture_closing_odds(adapter: SportAdapter) -> int:
     refreshed = 0
     for pick in pending:
         pick = dict(pick)
+        if adapter.started is not None:
+            try:
+                if adapter.started(pick["id"]):
+                    continue
+            except Exception:
+                continue   # can't tell if it kicked off -> never risk an in-play stamp
         matchup = pick["matchup"]
         sep = " @ " if " @ " in matchup else "@"
         parts = matchup.split(sep)
@@ -127,20 +154,48 @@ def core_capture_closing_odds(adapter: SportAdapter) -> int:
             continue
         if abs(closing_int) < 100 or abs(closing_int) > 5000:
             continue
+        # Side-sanity guard (Austin 2026-10-14 CLV fix): reject a closing that is
+        # implausible vs the pick's ENTRY odds -- a sign flip (dog<->fav) or a
+        # >15pp implied move is nearly always a MIS-CAPTURE (HR home/away couldn't
+        # be verified, so match_odds returned the OPPONENT's line -- the fake +5.3pp
+        # NHL ML CLV where away picks captured the home team's closing).
+        _entry = pick.get("odds")
+        if _entry:
+            try:
+                if abs(_implied_am(closing_int) - _implied_am(int(_entry))) > 0.15:
+                    logger.debug("%s CLV reject implausible close: %s entry=%s close=%s",
+                                 adapter.name, pick.get("pick"), _entry, closing_int)
+                    continue
+            except Exception:
+                pass
         prior = pick.get("closing_odds")
         if prior is None:
-            conn.execute(
-                f"UPDATE {adapter.picks_table} SET closing_odds = ? "
-                f"WHERE id = ?",
-                (closing_int, pick["id"]),
-            )
+            if _has_ts:
+                conn.execute(
+                    f"UPDATE {adapter.picks_table} SET closing_odds = ?, "
+                    f"closing_odds_captured_at = ? WHERE id = ?",
+                    (closing_int, _cc_now_iso(), pick["id"]),
+                )
+            else:
+                conn.execute(
+                    f"UPDATE {adapter.picks_table} SET closing_odds = ? "
+                    f"WHERE id = ?",
+                    (closing_int, pick["id"]),
+                )
             updated += 1
         elif int(prior) != closing_int:
-            conn.execute(
-                f"UPDATE {adapter.picks_table} SET closing_odds = ? "
-                f"WHERE id = ?",
-                (closing_int, pick["id"]),
-            )
+            if _has_ts:
+                conn.execute(
+                    f"UPDATE {adapter.picks_table} SET closing_odds = ?, "
+                    f"closing_odds_captured_at = ? WHERE id = ?",
+                    (closing_int, _cc_now_iso(), pick["id"]),
+                )
+            else:
+                conn.execute(
+                    f"UPDATE {adapter.picks_table} SET closing_odds = ? "
+                    f"WHERE id = ?",
+                    (closing_int, pick["id"]),
+                )
             refreshed += 1
 
     conn.commit()

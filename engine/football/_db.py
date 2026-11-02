@@ -50,11 +50,27 @@ CREATE TABLE IF NOT EXISTS games (
     week            INTEGER,
     venue           TEXT,
     updated_at      TEXT DEFAULT (datetime('now')),
+    home_linescore  TEXT,               -- JSON list of per-period points (Q1..Q4[,OT..]) — added 2026-10-25 (period markets need it to settle)
+    away_linescore  TEXT,
+    periods         INTEGER,            -- periods played at last ingest (final: 4 = regulation, >4 = OT)
     FOREIGN KEY (home_team_id) REFERENCES teams(id),
     FOREIGN KEY (away_team_id) REFERENCES teams(id)
 );
 CREATE INDEX IF NOT EXISTS idx_games_date ON games(date);
 CREATE INDEX IF NOT EXISTS idx_games_status ON games(status);
+
+CREATE TABLE IF NOT EXISTS game_stats (          -- ESPN box-score cache (2026-10-25, engine.football._boxscore)
+    game_id       TEXT PRIMARY KEY,
+    fetched_at    TEXT DEFAULT (datetime('now')),
+    final         INTEGER,                       -- 1 = settlement-grade (stats present, or ESPN will never post them)
+    home_abbr     TEXT,
+    away_abbr     TEXT,
+    team_stats    TEXT,                          -- JSON {"home": {espn stat name: displayValue}, "away": {...}}
+    group_totals  TEXT,                          -- JSON per-side player stat-group totals (kicking, punting, passing, ...)
+    scoring_plays TEXT,                          -- JSON list, chronological (side/kind/method/XP/2-pt parsed)
+    drives        TEXT,                          -- JSON list, chronological (result bucket + field progress)
+    facts         TEXT                           -- JSON normalized settlement facts (see _boxscore.py docstring)
+);
 
 CREATE TABLE IF NOT EXISTS picks (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,6 +85,7 @@ CREATE TABLE IF NOT EXISTS picks (
     closing_odds    INTEGER,
     result          TEXT,               -- W / L / P / V / NULL
     profit          REAL,
+    stake_units     REAL,               -- added 2026-09-03 (tracker wrote it; DDL never had it)
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
     settled_at      TEXT,
     FOREIGN KEY (game_id) REFERENCES games(game_id)
@@ -81,6 +98,24 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_picks_family
     ON picks(date, game_id, bet_type, pick);
 CREATE INDEX IF NOT EXISTS idx_picks_date ON picks(date);
 CREATE INDEX IF NOT EXISTS idx_picks_game ON picks(game_id);
+
+-- One PENDING paper (is_shadow=1, result IS NULL) pick per game, enforced
+-- at the DB level (Austin 2026-10-10). record_paper()'s own "does a
+-- pending row already exist for this game" check-then-insert is only safe
+-- under strictly sequential execution; two overlapping write-side passes
+-- for the same league (routes_football's old _SLATE_REFRESHING /
+-- _WRITESIDE_RUNNING guards were non-atomic sets) could both pass that
+-- check and both insert — confirmed in production: 43 games across
+-- cfb+nfl ended up with 2-3 conflicting pending markets for one game on
+-- 2026-10-10. record_paper's INSERT already uses INSERT OR IGNORE, so
+-- once this index exists a second concurrent insert is atomically
+-- rejected instead of relying solely on the app-level check. Safe to add
+-- now that the 2026-10-10 cleanup voided every existing duplicate — this
+-- only takes effect for a league the first time _ensure_schema runs in a
+-- FRESH process (i.e. at next restart), never against an already-open
+-- connection's already-ensured schema.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_picks_one_pending_paper
+    ON picks(game_id) WHERE is_shadow=1 AND result IS NULL;
 
 -- Per-prediction signal log. One row per (game_id, market) capture.
 -- Feeds the V3.2 signal_explain endpoint + future per-signal track
@@ -108,6 +143,19 @@ CREATE INDEX IF NOT EXISTS idx_ps_captured
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(_DDL)
+    # 2026-09-03 migration: cfb.db/nfl.db were created before `stake_units` existed, so
+    # record_picks' INSERT and list_history's SELECT both failed ("no such column:
+    # p.stake_units") -> no CFB/NFL picks ever recorded + the Records tab 500'd.
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(picks)").fetchall()}
+    if "stake_units" not in cols:
+        conn.execute("ALTER TABLE picks ADD COLUMN stake_units REAL")
+    # 2026-10-25 migration (MintyBot, Austin "fix up the 3-way, then 3-5"): per-period points + OT
+    # flag on games. The H1/Q1 period picks (since 10-16) and the new H2/Q2-Q4 / period team
+    # totals / 3-way rows could never settle — only final scores were stored.
+    gcols = {r[1] for r in conn.execute("PRAGMA table_info(games)").fetchall()}
+    for _col, _typ in (("home_linescore", "TEXT"), ("away_linescore", "TEXT"), ("periods", "INTEGER")):
+        if _col not in gcols:
+            conn.execute(f"ALTER TABLE games ADD COLUMN {_col} {_typ}")
     conn.commit()
 
 

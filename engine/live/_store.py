@@ -51,6 +51,9 @@ def _conn() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
+    # Wait up to 5s on a write lock instead of raising "database is
+    # locked" instantly and silently dropping the play (audit T2).
+    conn.execute("PRAGMA busy_timeout=5000")
     return conn
 
 

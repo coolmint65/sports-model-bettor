@@ -57,11 +57,11 @@ python -c "from engine.nhl_goalie_refresh import refresh_for_date; import json; 
 
 echo ""
 echo "Recording today's NHL picks..."
-python -m engine.nhl_tracker --record
+python -m engine.nhl_tracker --record || echo "[sync] WARN: nhl_tracker --record failed (exit $?) -- continuing so settle + backups still run"
 
 echo ""
 echo "Settling completed NHL picks..."
-python -m engine.nhl_tracker --settle
+python -m engine.nhl_tracker --settle || echo "[sync] WARN: nhl_tracker --settle failed (exit $?) -- continuing so calibration + backups still run"
 
 echo ""
 echo "Refreshing empirical NHL calibration..."

@@ -64,6 +64,25 @@ _TEAM_ABBR = {
 }
 
 
+
+def _norm_team(name: str) -> str:
+    import unicodedata
+    n = unicodedata.normalize("NFKD", name or "").encode("ascii", "ignore").decode()
+    return " ".join(n.replace(".", " ").lower().split())
+
+
+_TEAM_ABBR_NORM = {_norm_team(k): v for k, v in _TEAM_ABBR.items()}
+
+
+def _team_abbr(name: str) -> str:
+    """DailyFaceoff spells some teams loosely ("St Louis Blues", no period -- 2026-10-31
+    STL showed TBD all day while DF had Hofer confirmed): match ignoring dots/accents/case."""
+    abbr = _TEAM_ABBR.get(name) or _TEAM_ABBR_NORM.get(_norm_team(name), "")
+    if not abbr and name:
+        logger.warning("DailyFaceoff: unmapped team name %r", name)
+    return abbr
+
+
 def get_starting_goalies(date: str | None = None) -> dict:
     """
     Fetch today's starting goalies from DailyFaceoff.
@@ -131,7 +150,7 @@ def get_starting_goalies(date: str | None = None) -> dict:
     for game in games:
         # Home goalie
         home_team = game.get("homeTeamName", "")
-        home_abbr = _TEAM_ABBR.get(home_team, "")
+        home_abbr = _team_abbr(home_team)
         home_name = game.get("homeGoalieName", "")
 
         if home_abbr and home_name:
@@ -163,7 +182,7 @@ def get_starting_goalies(date: str | None = None) -> dict:
 
         # Away goalie
         away_team = game.get("awayTeamName", "")
-        away_abbr = _TEAM_ABBR.get(away_team, "")
+        away_abbr = _team_abbr(away_team)
         away_name = game.get("awayGoalieName", "")
 
         if away_abbr and away_name:

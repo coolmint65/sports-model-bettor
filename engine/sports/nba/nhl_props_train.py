@@ -70,7 +70,7 @@ def train_stat(sport: str, stat_key: str, *, lookback_days: int = 180,
     if sport == "nba":
         from .prop_features import feature_cols, build_training_set
     elif sport == "nhl":
-        from ...nhl_prop_features import feature_cols, build_training_set
+        from ..nhl.prop_features import feature_cols, build_training_set
     else:
         raise ValueError(f"unsupported sport: {sport}")
     rows = build_training_set(stat_key, lookback_days=lookback_days)

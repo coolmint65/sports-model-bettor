@@ -17,6 +17,16 @@ from collections import defaultdict, deque
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response, Body
+
+# pandas 3 stores every string column as a pyarrow array (ArrowStringArray). Every backend crash
+# 10-22..10-26 (3-5 a day, exit 0xc0000005 -> supervisor restart -> cold slates) faulted inside
+# arrow.dll (Windows Application log, event 1000). Keep the pandas-2 object strings the code was
+# written against (MintyBot 2026-10-26).
+try:
+    import pandas as _pd_opt
+    _pd_opt.set_option("future.infer_string", False)
+except Exception:
+    pass
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -36,16 +46,12 @@ from .routes_props import router as props_router
 from .routes_potd import router as potd_router
 from .routes_basketball import router as basketball_router
 from .routes_hockey import router as hockey_router
-from .routes_motorsports import router as motorsports_router
-from .routes_golf import router as golf_router
 from .routes_soccer import router as soccer_router
 from .routes_football import router as football_router
-from .routes_baseball import router as baseball_router
 from .routes_v32 import router as v32_router
 from .routes_health import router as health_router
 from .routes_picks_unified import router as picks_unified_router
-from .routes_bet_queue import router as bet_queue_router
-from .routes_queue_placer import router as queue_placer_router
+from .routes_clv import router as clv_router  # audit T2: CLV edge instrument
 from ._tz import et_today_str, et_now, et_month
 
 logger = logging.getLogger(__name__)
@@ -70,6 +76,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Speed pass 2026-10-28: nothing was compressed (the 570 KB JS/CSS bundle and 100-250 KB tracker
+# JSON went over the wire raw) and hashed Vite assets had no cache headers, so every load
+# re-downloaded the bundle. gzip anything over 1 KB; /assets/* names are content-hashed, so
+# they are safe to cache forever (index.html is not under /assets and stays revalidated).
+from fastapi.middleware.gzip import GZipMiddleware  # noqa: E402
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+
+@app.middleware("http")
+async def _immutable_assets(request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/assets/") and response.status_code == 200:
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return response
+
 # Sport routers split out of this file 2026-05-02 to start breaking the
 # 5800+ line monolith into per-sport modules.
 app.include_router(tennis_router)
@@ -80,25 +101,19 @@ app.include_router(props_router)
 app.include_router(potd_router)
 app.include_router(basketball_router)
 app.include_router(hockey_router)
-app.include_router(motorsports_router)
-app.include_router(golf_router)
 app.include_router(soccer_router)
 app.include_router(football_router)
-app.include_router(baseball_router)
 app.include_router(v32_router)
 app.include_router(health_router)
 # Unified picks API — cross-sport read endpoints fed by the
 # engine.picks_unified layer. Phase 2 of the unification work.
 app.include_router(picks_unified_router)
-# Auto-eligible bet queue — cross-sport recommendation stream. Filters
-# today's picks to those in historically profitable cells (n>=50 +
-# stake-weighted ROI>=5%). Read-only; no actual bet placement.
-app.include_router(bet_queue_router)
-# Queue auto-placer routes (live-fire kill switch, placement log,
-# manual sweep trigger, relay health probe). Default posture is
-# DRY-RUN — real bets require AUTO_BET_LIVE=1 env + /live-fire/on
-# flag, and every attempt is logged to data/queue_placer/placements.db.
-app.include_router(queue_placer_router)
+# Bet queue + queue auto-placer routes REMOVED 2026-10-26 (Austin "get rid of
+# the bet queue and anything that goes with it") -- code archived under
+# _archived_bet_queue_20261026/, placements history under data/_archive_bet_queue_20261026/.
+app.include_router(clv_router)
+# Kalshi Value tab (routes_kalshi.py, /api/kalshi-value) REMOVED 2026-10-26 (Austin "remove kalshi
+# value": Kalshi out-predicted the model, flagged NHL plays 23-70) -> _archived_kalshi_value_20261026/.
 
 
 # ── Rate limiting ────────────────────────────────────────────
@@ -227,6 +242,14 @@ def api_live_state(sport: str, game_id: str | None = Query(default=None)):
     }
 
 
+@app.get("/api/nhl/live-tracker")
+def api_nhl_live_tracker(limit: int = 300):
+    """Live NHL tracker (2026-10-29): record / units / CLV of the start-of-period live picks,
+    overall + by period + by market (engine.sports.nhl.live_model.tracker)."""
+    from engine.sports.nhl.live_model import tracker as _nhl_tracker
+    return _nhl_tracker(limit)
+
+
 @app.get("/api/{sport}/live-picks")
 def api_live_picks_active(sport: str):
     """Phase 3b read endpoint — runs the live picker against every
@@ -259,6 +282,14 @@ def api_live_picks_active(sport: str):
         picks = (get_live_picks(sport, gid)
                   if sport in ("nba", "nhl") else [])
         state = row["state"] or {}
+        live_card = None
+        if sport == "nhl":
+            # NHL live card (2026-10-28): model vs market win%, special teams, period pick strip
+            try:
+                from engine.sports.nhl.live_model import card as _nhl_card
+                live_card = _nhl_card(state)
+            except Exception as e:
+                logger.debug("nhl live card failed %s: %s", gid, e)
         # Include every active game, even if picks=[]. The
         # LiveGameCard component already renders an empty-picks
         # placeholder ("No edges above floor right now") so the live
@@ -272,6 +303,7 @@ def api_live_picks_active(sport: str):
             "away": state.get("away"),
             "linescores": state.get("linescores"),
             "picks": picks,
+            "live": live_card,
         })
     return {"sport": sport, "games": out}
 
@@ -1064,6 +1096,9 @@ _MLB_DERIV_TYPES: set[str] = {
 _NHL_DERIV_TYPES: set[str] = {
     "Team Total", "Period Total", "Period BTS", "Period DNB",
     "Total O/E", "Overtime", "BTS",
+    # 2026-10-26: the 3-way / period-spread markets are derivatives too (they sat in the
+    # card's core list, which is ML / O/U / PL).
+    "Regulation 3-Way", "Period 3-Way", "Period Spread",
 }
 _NBA_DERIV_TYPES: set[str] = {
     "Q1 Team Total", "Q1 Total O/E",
@@ -1251,6 +1286,52 @@ async def _rehydrate_picks_store_on_startup() -> None:
     the very first request after a restart sees the same picks the last
     best-bets run produced — no blocking recompute on cold start."""
     _picks_store_rehydrate()
+
+
+@app.on_event("startup")
+async def _prewarm_football_slates_on_startup() -> None:
+    """Pre-compute the in-season football slate caches in a background thread so
+    the first user hit after a restart is instant, not the ~200s cold compute
+    (Austin 2026-09-19). The SWR cache in routes_football keeps them warm after."""
+    import threading
+
+    def _warm() -> None:
+        try:
+            import time as _t
+            from backend.server.routes_football import (
+                _compute_slate, _SLATE_CACHE, _SLATE_REFRESHING,
+            )
+            for lg in ("cfb", "nfl"):
+                ck = (lg, None)
+                if ck in _SLATE_REFRESHING:
+                    continue  # a request already kicked a compute — don't herd
+                _SLATE_REFRESHING.add(ck)
+                try:
+                    r = _compute_slate(lg, None)
+                    _SLATE_CACHE[ck] = (_t.monotonic(), r)
+                    logger.info("[prewarm] football %s slate cached (%d games)",
+                                lg, len((r or {}).get("games", [])))
+                except Exception as e:
+                    logger.warning("[prewarm] football %s failed: %s", lg, e)
+                finally:
+                    _SLATE_REFRESHING.discard(ck)
+        except Exception as e:
+            logger.warning("[prewarm] football warm thread failed: %s", e)
+        # MLB best-bets (Austin 2026-09-19) — same >4min MC compute; pre-warm it
+        # too so the dashboard's first MLB load after a restart is warm.
+        # MLB OFF for the off-season 2026-10-29 (Austin) -- set PREWARM_MLB=1 to revive.
+        if os.environ.get("PREWARM_MLB") != "1":
+            return
+        try:
+            import time as _t2
+            from backend.server.routes_mlb import _compute_best_bets, _BB_CACHE
+            r = _compute_best_bets()
+            _BB_CACHE["mlb"] = (_t2.monotonic(), r)
+            logger.info("[prewarm] mlb best-bets cached")
+        except Exception as e:
+            logger.warning("[prewarm] mlb best-bets failed: %s", e)
+
+    threading.Thread(target=_warm, daemon=True).start()
 
 
 def _get_recorded_pick(sport: str, matchup: str, date: str) -> dict | None:
@@ -1537,23 +1618,35 @@ def _predict_mlb_full(home_team_id: int, away_team_id: int,
 
 
 def _predict_nhl_full(home_key: str, away_key: str,
-                     use_cache: bool = True) -> dict | None:
+                     use_cache: bool = True,
+                     game_date=None) -> dict | None:
     """Run factor + MC + GBM for NHL so generate_nhl_picks_with_context
-    can blend via ensemble_nhl. Same caching shape as MLB."""
-    cache_key = ("nhl", home_key, away_key)
+    can blend via ensemble_nhl. Same caching shape as MLB.
+
+    `game_date` is the specific game's date (e.g. the ESPN ISO string off
+    the 7-day-lookahead scoreboard) -- threaded through to predict_matchup
+    so back-to-back/rest is judged against THIS game's date rather than
+    wall-clock today (2026-09-30 fix). Folded into the cache key too, so a
+    same-matchup pair recurring on a different date within the lookahead
+    window can't replay a stale rest calculation from the wrong game.
+    """
+    cache_key = ("nhl", home_key, away_key, game_date)
     if use_cache:
         cached = _pred_cache_get(cache_key)
         if cached is not None:
             return cached
 
     from engine.nhl_predict import predict_matchup as _nhl_pm
-    result = _nhl_pm(home_key, away_key)
+    result = _nhl_pm(home_key, away_key, game_date=game_date)
     if not result:
         return None
 
     from engine.config import get_flag as _get_flag
+    # The ratings model (engine.sports.nhl._ratings, 2026-10-26) prices every market from its own
+    # exact score grid -- the MC and GBM legs (near-constant: home ~.51, total ~6.35) aren't run.
+    _nhl_ratings_on = result.get("model") == "ratings"
 
-    if _get_flag("ENABLE_NHL_MC", False, sport="nhl"):
+    if _get_flag("ENABLE_NHL_MC", False, sport="nhl") and not _nhl_ratings_on:
         try:
             from engine.mc_nhl_run import run_nhl_mc
             import engine.config as _cfg
@@ -1569,7 +1662,7 @@ def _predict_nhl_full(home_key: str, away_key: str,
             logger.warning("NHL MC failed for %s/%s: %s", home_key, away_key, e)
             result["mc"] = {"error": str(e)}
 
-    if _get_flag("ENABLE_NHL_GBM", False, sport="nhl"):
+    if _get_flag("ENABLE_NHL_GBM", False, sport="nhl") and not _nhl_ratings_on:
         try:
             from engine.gbm.predict import predict_nhl as _gbm_predict_nhl
             from engine.nhl_db import get_conn as _nhl_conn
@@ -1609,7 +1702,7 @@ def _predict_nhl_full(home_key: str, away_key: str,
             logger.warning("NHL GBM failed for %s/%s: %s", home_key, away_key, e)
             result["gbm"] = {"error": str(e)}
 
-    _log_signals_nhl_safe(home_key, away_key, result)
+    _log_signals_nhl_safe(home_key, away_key, result, game_date)
 
     if use_cache:
         _pred_cache_put(cache_key, result)
@@ -1617,7 +1710,7 @@ def _predict_nhl_full(home_key: str, away_key: str,
 
 
 def _log_signals_nhl_safe(home_key: str, away_key: str,
-                          result: dict | None) -> None:
+                          result: dict | None, game_date=None) -> None:
     """Persist NHL factor/MC/GBM probabilities for ``home_win`` and
     ``total`` markets so engine.ensemble_auto_tune has data to retune
     from. Mirrors the MLB block in ``api_predict``. Wrapped in a
@@ -1634,28 +1727,28 @@ def _log_signals_nhl_safe(home_key: str, away_key: str,
     try:
         from engine.prediction_log import log_signals as _log_signals
         from engine.nhl_db import get_conn as _nhl_conn
-        from datetime import datetime as _dt
-        today = _dt.now().strftime("%Y-%m-%d")
+        from engine.sports.nhl.predict import _resolve_b2b_date
+        from engine.sports.nhl._ratings import canon as _canon
+        # The GAME's ET date (was wall-clock today, and abbreviation lookups hit Utah's two
+        # team rows) -- so prediction_signals.game_id was mostly NULL (MintyBot 2026-10-26).
+        today = _resolve_b2b_date(game_date).isoformat()
         home_abbr = (result.get("home") or {}).get("abbreviation") or home_key
         away_abbr = (result.get("away") or {}).get("abbreviation") or away_key
-        # Resolve game_id + team_ids from the schedule. Missing matches
-        # land with None values; log_signals stores them and the
-        # tuner just skips orphaned rows at JOIN time.
         conn = _nhl_conn()
-        rows = conn.execute(
-            "SELECT id, abbreviation FROM nhl_teams WHERE abbreviation IN (?, ?)",
-            (home_abbr.upper() if home_abbr else "",
-             away_abbr.upper() if away_abbr else "")
-        ).fetchall()
-        by_abbr = {r["abbreviation"]: r["id"] for r in rows}
-        home_tid = by_abbr.get((home_abbr or "").upper())
-        away_tid = by_abbr.get((away_abbr or "").upper())
+        ids: dict[str, list] = {}
+        for r in conn.execute("SELECT id, abbreviation FROM nhl_teams"):
+            ids.setdefault(_canon(r["abbreviation"]), []).append(r["id"])
+        h_ids = ids.get(_canon(home_abbr)) or []
+        a_ids = ids.get(_canon(away_abbr)) or []
         game_row = conn.execute(
-            "SELECT game_id FROM nhl_games "
-            "WHERE date = ? AND home_team_id = ? AND away_team_id = ? LIMIT 1",
-            (today, home_tid, away_tid),
-        ).fetchone() if (home_tid and away_tid) else None
+            "SELECT game_id, home_team_id, away_team_id FROM nhl_games WHERE date = ? "
+            f"AND home_team_id IN ({','.join('?' * len(h_ids))}) "
+            f"AND away_team_id IN ({','.join('?' * len(a_ids))}) LIMIT 1",
+            (today, *h_ids, *a_ids),
+        ).fetchone() if (h_ids and a_ids) else None
         game_id = game_row["game_id"] if game_row else None
+        home_tid = game_row["home_team_id"] if game_row else (h_ids[0] if h_ids else None)
+        away_tid = game_row["away_team_id"] if game_row else (a_ids[0] if a_ids else None)
 
         mc = result.get("mc") or {}
         gbm = result.get("gbm") or {}
@@ -2208,812 +2301,216 @@ def api_refresh_nba_injuries(date: str | None = Query(None),
 # /api/standings + /api/pitcher/{pitcher_id} migrated to routes_mlb.py (#317).
 
 
-# ══════════════════════════════════════════════════════════════
-#  NHL ENDPOINTS
-# ══════════════════════════════════════════════════════════════
-
-# NHL team name → abbreviation (for Odds API matching)
-_NHL_TEAM_ABBR = {
-    "Anaheim Ducks": "ANA", "Arizona Coyotes": "ARI", "Utah Hockey Club": "UTA", "Utah Mammoth": "UTA",
-    "Boston Bruins": "BOS", "Buffalo Sabres": "BUF",
-    "Calgary Flames": "CGY", "Carolina Hurricanes": "CAR",
-    "Chicago Blackhawks": "CHI", "Colorado Avalanche": "COL",
-    "Columbus Blue Jackets": "CBJ", "Dallas Stars": "DAL",
-    "Detroit Red Wings": "DET", "Edmonton Oilers": "EDM",
-    "Florida Panthers": "FLA", "Los Angeles Kings": "LAK",
-    "Minnesota Wild": "MIN", "Montreal Canadiens": "MTL",
-    "Nashville Predators": "NSH", "New Jersey Devils": "NJD",
-    "New York Islanders": "NYI", "New York Rangers": "NYR",
-    "Ottawa Senators": "OTT", "Philadelphia Flyers": "PHI",
-    "Pittsburgh Penguins": "PIT", "San Jose Sharks": "SJS",
-    "Seattle Kraken": "SEA", "St. Louis Blues": "STL",
-    "Tampa Bay Lightning": "TBL", "Toronto Maple Leafs": "TOR",
-    "Vancouver Canucks": "VAN", "Vegas Golden Knights": "VGK",
-    "Washington Capitals": "WSH", "Winnipeg Jets": "WPG",
-}
-
-_NHL_ABBR_ALTS = {
-    "TB": "TBL", "TBL": "TB",
-    "NJ": "NJD", "NJD": "NJ",
-    "SJ": "SJS", "SJS": "SJ",
-    "LA": "LAK", "LAK": "LA",
-    "WAS": "WSH", "WSH": "WAS",
-    "CLB": "CBJ", "CBJ": "CLB",
-    "MON": "MTL", "MTL": "MON",
-    "NAS": "NSH", "NSH": "NAS",
-    "AZ": "UTA", "UTA": "AZ",
-    "UTAH": "UTA", "UTH": "UTA",
-}
-
-# Map ESPN abbreviation to team JSON key
-_NHL_ESPN_TO_KEY = {}  # populated lazily
-
-def _nhl_espn_to_key() -> dict:
-    """Build mapping from ESPN abbreviation to JSON file key."""
-    if _NHL_ESPN_TO_KEY:
-        return _NHL_ESPN_TO_KEY
-    from engine.data import list_teams, load_team
-    for t in list_teams("NHL"):
-        team = load_team("NHL", t["key"])
-        if team:
-            abbr = team.get("abbreviation", "")
-            if abbr:
-                _NHL_ESPN_TO_KEY[abbr] = t["key"]
-                # Add alternate abbreviations
-                alt = _NHL_ABBR_ALTS.get(abbr)
-                if alt:
-                    _NHL_ESPN_TO_KEY[alt] = t["key"]
-            _NHL_ESPN_TO_KEY[t["key"]] = t["key"]
-            # Also map by short name (e.g. "Bruins" -> "bruins")
-            short = team.get("short_name", "")
-            if short:
-                _NHL_ESPN_TO_KEY[short.lower()] = t["key"]
-            # Also map by last word of name (e.g. "Mammoth" for Utah Mammoth)
-            name = team.get("name", "")
-            if name:
-                last_word = name.split()[-1].lower()
-                if last_word not in _NHL_ESPN_TO_KEY:
-                    _NHL_ESPN_TO_KEY[last_word] = t["key"]
-    return _NHL_ESPN_TO_KEY
-
-
-def _nhl_alt_abbr(abbr: str) -> str:
-    return _NHL_ABBR_ALTS.get(abbr, abbr)
-
-
-
-def _get_nhl_scoreboard(date: str = "") -> list[dict]:
-    """Fetch NHL scoreboard from ESPN."""
-    target_date = date or et_today_str()
-    espn_date = target_date.replace("-", "")
-
-    cache_key = f"nhl:{espn_date}"
-    now = time.time()
-    if cache_key in _scoreboard_cache:
-        ts, cached = _scoreboard_cache[cache_key]
-        if now - ts < CACHE_TTL:
-            return cached
-
-    url = f"{ESPN_BASE}/hockey/nhl/scoreboard?dates={espn_date}"
-    logger.info("Fetching NHL scoreboard: %s", url)
-    espn_data = _fetch_espn_json(url)
-
-    games = []
-    if espn_data:
-        events = espn_data.get("events", [])
-        logger.info("ESPN NHL returned %d events", len(events))
-        games = _parse_nhl_scoreboard(espn_data)
-
-    # Yesterday-still-live carryover. Same rationale as NBA: late
-    # games that cross midnight UTC drop off today's slate while
-    # they're still in progress.
-    if date == "":
-        from datetime import timedelta as _td
-        yest = (et_now() - _td(days=1)).strftime("%Y%m%d")
-        try:
-            yest_data = _fetch_espn_json(
-                f"{ESPN_BASE}/hockey/nhl/scoreboard?dates={yest}")
-            if yest_data:
-                yest_games = _parse_nhl_scoreboard(yest_data)
-                seen_ids = {g.get("id") for g in games}
-                for g in yest_games:
-                    state = (g.get("status") or {}).get("state", "")
-                    if state == "in" and g.get("id") not in seen_ids:
-                        games.append(g)
-                        logger.info("NHL: carried over live game from "
-                                    "yesterday: %s", g.get("id"))
-        except Exception as e:
-            logger.debug("NHL yesterday-live carryover failed: %s", e)
-
-    # Fallback without date
-    if not games and date == "":
-        espn_data = _fetch_espn_json(f"{ESPN_BASE}/hockey/nhl/scoreboard")
-        if espn_data:
-            games = _parse_nhl_scoreboard(espn_data)
-
-    # If still no games, try tomorrow
-    if not games and date == "":
-        from datetime import timedelta as _td
-        tomorrow = (et_now() + _td(days=1)).strftime("%Y%m%d")
-        espn_data = _fetch_espn_json(f"{ESPN_BASE}/hockey/nhl/scoreboard?dates={tomorrow}")
-        if espn_data:
-            games = _parse_nhl_scoreboard(espn_data)
-
-    # ── Hard Rock fallback ──────────────────────────────────────
-    # When ESPN hasn't posted today's schedule at all (zero events),
-    # build minimal scoreboard entries from Hard Rock. Only triggers
-    # when ESPN returned nothing — NOT when all games are live/done
-    # (that would pull in tomorrow's games from HR).
-    if not games and date == "":
-        try:
-            from scrapers.hardrock_odds import fetch_nhl as _hr_nhl
-            hr_odds = _hr_nhl()
-            if hr_odds:
-                logger.info("NHL: ESPN empty, building %d games from Hard Rock",
-                            len(hr_odds))
-                for matchup_key, odds_data in hr_odds.items():
-                    parts = matchup_key.split("@")
-                    if len(parts) != 2:
-                        continue
-                    a_abbr, h_abbr = parts
-                    existing = any(
-                        g["home"]["abbreviation"] == h_abbr and
-                        g["away"]["abbreviation"] == a_abbr
-                        for g in games
-                    )
-                    if existing:
-                        continue
-                    games.append({
-                        "id": f"hr_{a_abbr}_{h_abbr}",
-                        "date": target_date,
-                        "home": {
-                            "abbreviation": h_abbr,
-                            "name": h_abbr,
-                            "score": None,
-                        },
-                        "away": {
-                            "abbreviation": a_abbr,
-                            "name": a_abbr,
-                            "score": None,
-                        },
-                        "status": {"state": "pre", "detail": "Scheduled"},
-                        "odds": odds_data,
-                        "source": "hardrock",
-                    })
-        except Exception as e:
-            logger.debug("NHL Hard Rock fallback failed: %s", e)
-
-    # Fetch NHL odds from The Odds API
-    try:
-        nhl_odds = _fetch_nhl_odds()
-        if nhl_odds:
-            matched = 0
-            for game in games:
-                h = game["home"]["abbreviation"]
-                a = game["away"]["abbreviation"]
-                key = f"{a}@{h}"
-                from engine.picks import match_odds as _match
-                matched_odds = _match(h, a, nhl_odds)
-                if matched_odds:
-                    game["odds"] = matched_odds
-                    matched += 1
-            logger.info("NHL odds: matched %d/%d games", matched, len(games))
-
-            # Store odds snapshots for historical backtesting
-            try:
-                from engine.odds_history import store_nhl_odds
-                odds_rows = []
-                for game in games:
-                    if game.get("odds"):
-                        odds_rows.append({
-                            "game_date": target_date,
-                            "home_abbr": game["home"]["abbreviation"],
-                            "away_abbr": game["away"]["abbreviation"],
-                            "odds": game["odds"],
-                        })
-                if odds_rows:
-                    store_nhl_odds(odds_rows)
-            except Exception as e:
-                logger.debug("Odds history storage failed: %s", e)
-
-            # Compare current odds against tracked opening odds for line movement.
-            # If we haven't seen this matchup yet, store the opening snapshot.
-            try:
-                from engine.line_movement import get_line_movement, track_opening_odds
-                for game in games:
-                    if not game.get("odds"):
-                        continue
-                    h_abbr = game["home"]["abbreviation"]
-                    a_abbr = game["away"]["abbreviation"]
-                    game_date = (game.get("date", "") or "")[:10] or target_date
-                    key = f"{game_date}_{a_abbr}@{h_abbr}"
-                    movement = get_line_movement("nhl", key, game["odds"])
-                    if movement:
-                        game["line_movement"] = movement
-                    else:
-                        track_opening_odds("nhl", key, game["odds"])
-            except Exception as e:
-                logger.debug("NHL line movement failed: %s", e)
-    except Exception as e:
-        logger.warning("NHL odds failed: %s", e)
-
-    # Enrich with starting goalies - try DailyFaceoff first, then NHL API
-    goalie_count = 0
-    try:
-        from scrapers.dailyfaceoff import get_starting_goalies
-        df_goalies = get_starting_goalies()
-        if df_goalies:
-            for game in games:
-                h = game["home"]["abbreviation"]
-                a = game["away"]["abbreviation"]
-                for abbr_try, side in [(h, "home_goalie"), (a, "away_goalie")]:
-                    for try_abbr in [abbr_try, _nhl_alt_abbr(abbr_try)]:
-                        if try_abbr in df_goalies:
-                            game[side] = df_goalies[try_abbr]
-                            goalie_count += 1
-                            break
-    except Exception as e:
-        logger.debug("DailyFaceoff failed: %s", e)
-
-    # Fallback: NHL API for goalies if DailyFaceoff didn't work
-    if goalie_count == 0:
-        try:
-            nhl_schedule = _fetch_espn_json("https://api-web.nhle.com/v1/score/now")
-            if nhl_schedule and nhl_schedule.get("games"):
-                for nhl_game in nhl_schedule["games"]:
-                    # Extract team abbreviations
-                    def _gs(obj):
-                        return obj.get("default", "") if isinstance(obj, dict) else str(obj) if obj else ""
-
-                    h_abbr = _gs(nhl_game.get("homeTeam", {}).get("abbrev", ""))
-                    a_abbr = _gs(nhl_game.get("awayTeam", {}).get("abbrev", ""))
-
-                    # Match to our scoreboard games
-                    for game in games:
-                        gh = game["home"]["abbreviation"]
-                        ga = game["away"]["abbreviation"]
-                        if (gh == h_abbr or _nhl_alt_abbr(gh) == h_abbr) and \
-                           (ga == a_abbr or _nhl_alt_abbr(ga) == a_abbr):
-                            # Home goalie
-                            hg = nhl_game.get("homeTeam", {}).get("goalie", {})
-                            if not hg:
-                                # Try alternate field names
-                                hg = nhl_game.get("homeTeam", {}).get("startingGoalie", {})
-                            if hg and hg.get("id"):
-                                first = _gs(hg.get("firstName", ""))
-                                last = _gs(hg.get("lastName", ""))
-                                game["home_goalie"] = {
-                                    "name": f"{first} {last}".strip(),
-                                    "status": "expected",
-                                    "id": hg.get("id"),
-                                }
-
-                            # Away goalie
-                            ag = nhl_game.get("awayTeam", {}).get("goalie", {})
-                            if not ag:
-                                ag = nhl_game.get("awayTeam", {}).get("startingGoalie", {})
-                            if ag and ag.get("id"):
-                                first = _gs(ag.get("firstName", ""))
-                                last = _gs(ag.get("lastName", ""))
-                                game["away_goalie"] = {
-                                    "name": f"{first} {last}".strip(),
-                                    "status": "expected",
-                                    "id": ag.get("id"),
-                                }
-                            break
-        except Exception as e:
-            logger.debug("NHL API goalie fallback failed: %s", e)
-
-    # ── Enrich with playoff series context ──
-    try:
-        from engine.series_context import infer_series
-        from engine.nhl_predict import _is_playoff_window
-        if _is_playoff_window():
-            for game in games:
-                h = game["home"]["abbreviation"]
-                a = game["away"]["abbreviation"]
-                series = infer_series("nhl", h, a)
-                if series.get("in_series"):
-                    game["series"] = series
-    except Exception as e:
-        logger.debug("NHL series enrichment failed: %s", e)
-
-    _scoreboard_cache[cache_key] = (now, games)
-    # Evict oldest entries if cache grows too large
-    if len(_scoreboard_cache) > MAX_CACHE_ENTRIES:
-        oldest = min(_scoreboard_cache, key=lambda k: _scoreboard_cache[k][0])
-        del _scoreboard_cache[oldest]
-    return games
-
-
-def _parse_nhl_scoreboard(data: dict) -> list[dict]:
-    """Parse ESPN NHL scoreboard into game objects."""
-    events = data.get("events", [])
-    games = []
-
-    for event in events:
-        comps = event.get("competitions", [])
-        if not comps:
-            continue
-        comp = comps[0]
-        competitors = comp.get("competitors", [])
-        if len(competitors) < 2:
-            continue
-
-        status = comp.get("status", {})
-        status_type = status.get("type", {})
-
-        home_team = None
-        away_team = None
-        for c in competitors:
-            team = c.get("team", {})
-            raw_score = c.get("score", "0")
-            if isinstance(raw_score, dict):
-                score = raw_score.get("displayValue", raw_score.get("value", "0"))
-            else:
-                score = str(raw_score)
-
-            # Parse record - NHL has W-L-OTL format
-            record = ""
-            if c.get("records"):
-                record = c["records"][0].get("summary", "")
-
-            entry = {
-                "espn_id": team.get("id", ""),
-                "name": team.get("displayName", team.get("name", "")),
-                "abbreviation": team.get("abbreviation", ""),
-                "score": score,
-                "record": record,
-                "logo": "",
-                "winner": c.get("winner", False),
-            }
-
-            logo = team.get("logo", "")
-            if isinstance(logo, str) and logo:
-                entry["logo"] = logo
-            elif isinstance(logo, dict):
-                entry["logo"] = logo.get("href", "")
-            else:
-                logos = team.get("logos", [])
-                if logos and isinstance(logos, list):
-                    first = logos[0]
-                    entry["logo"] = first.get("href", "") if isinstance(first, dict) else (first if isinstance(first, str) else "")
-
-            if c.get("homeAway") == "home":
-                home_team = entry
-            else:
-                away_team = entry
-
-        if not home_team or not away_team:
-            continue
-
-        game = {
-            "id": event.get("id", ""),
-            "date": event.get("date", ""),
-            "name": event.get("name", ""),
-            "short_name": event.get("shortName", ""),
-            "home": home_team,
-            "away": away_team,
-            "status": {
-                "state": status_type.get("state", "pre"),
-                "detail": status_type.get("shortDetail",
-                          status_type.get("detail", "")),
-                "description": status_type.get("description", ""),
-                "completed": status_type.get("completed", False),
-                "period": status.get("period", 0),
-            },
-            "venue": comp.get("venue", {}).get("fullName", ""),
-            "broadcast": "",
-            "odds": None,
-        }
-
-        # Broadcast
-        broadcasts = comp.get("broadcasts", [])
-        if broadcasts:
-            names = []
-            for b in broadcasts:
-                for n in b.get("names", []):
-                    names.append(n)
-            game["broadcast"] = ", ".join(names[:2])
-
-        # ESPN inline odds
-        odds = comp.get("odds", [])
-        if odds:
-            o = odds[0]
-            home_odds = o.get("homeTeamOdds", {}) or {}
-            away_odds = o.get("awayTeamOdds", {}) or {}
-            game["odds"] = {
-                "spread": o.get("details", ""),
-                "over_under": o.get("overUnder"),
-                "home_ml": home_odds.get("moneyLine"),
-                "away_ml": away_odds.get("moneyLine"),
-                "home_spread_odds": home_odds.get("spreadOdds"),
-                "away_spread_odds": away_odds.get("spreadOdds"),
-                "home_spread_point": home_odds.get("spreadLine") or home_odds.get("line"),
-                "away_spread_point": away_odds.get("spreadLine") or away_odds.get("line"),
-                "over_odds": o.get("overOdds"),
-                "under_odds": o.get("underOdds"),
-                "provider": "ESPN",
-            }
-
-        games.append(game)
-
-    return games
-
-
-# NHL odds cache (separate from MLB)
-_nhl_odds_cache: dict | None = None
-_nhl_odds_cache_time: float = 0
-
-# Negative-result TTL: when upstream returns empty, DON'T retry on every
-# best-bets tick. Cache the empty dict for NHL_EMPTY_CACHE_TTL seconds so
-# transient upstream failures don't hammer the source.
-NHL_EMPTY_CACHE_TTL = 120
-
-
-def _fetch_nhl_odds() -> dict:
-    """Fetch NHL odds from Hard Rock Bet (FL operator). Cached for
-    10 min; 2 min for empty results so a transient upstream failure
-    doesn't hammer it."""
-    global _nhl_odds_cache, _nhl_odds_cache_time
-
-    if _nhl_odds_cache is not None:
-        age = time.time() - _nhl_odds_cache_time
-        ttl = 600 if _nhl_odds_cache else NHL_EMPTY_CACHE_TTL
-        if age < ttl:
-            return _nhl_odds_cache
-
-    merged: dict = {}
-
-    # 1. Hard Rock primary
-    try:
-        from scrapers.hardrock_odds import fetch_nhl as _hr_nhl
-        hr = _hr_nhl()
-        if hr:
-            merged.update(hr)
-            logger.info("NHL odds: %d games from Hard Rock", len(hr))
-    except Exception as e:
-        logger.debug("Hard Rock NHL odds failed: %s", e)
-
-    _nhl_odds_cache = merged
-    _nhl_odds_cache_time = time.time()
-    return merged
-
-
-# _fetch_nhl_odds_oddsapi removed 2026-05-11 along with the rest of
-# the The-Odds-API integration.
-
-
-# /api/accuracy migrated to routes_mlb.py (#317).
-
-
-@app.get("/api/line-movement/{sport}/{matchup_key}")
-def api_line_movement(sport: str, matchup_key: str):
-    """Get line movement for a specific game."""
-    try:
-        from engine.line_movement import get_line_movement
-        current_odds = {}
-        if sport == "mlb":
-            from engine.picks import fetch_real_odds_for_games
-            all_odds = fetch_real_odds_for_games()
-            current_odds = all_odds.get(matchup_key, {})
-        return get_line_movement(sport, matchup_key, current_odds) or {"movement": "none"}
-    except Exception as e:
-        return {"error": str(e)}
-
-
-
-
-
-# ══════════════════════════════════════════════════════════════
-#  NBA Q1 ENDPOINTS
-# ══════════════════════════════════════════════════════════════
-
-_nba_scoreboard_cache: dict[str, tuple[float, list]] = {}
-
-
-def _get_nba_scoreboard(date: str = "") -> list[dict]:
-    """Fetch NBA scoreboard from ESPN, enriched with Q1 scores and odds.
-
-    When called with no date (default-today path), also pulls
-    yesterday's scoreboard and keeps any live games. Late-night games
-    that cross midnight UTC otherwise drop off the dashboard while
-    they're still in progress — surfaces as "DEN @ MIN disappeared
-    in the 4th quarter at midnight" on the user side.
-    """
-    target_date = date or et_today_str()
-    espn_date = target_date.replace("-", "")
-
-    cache_key = f"nba:{espn_date}"
-    now = time.time()
-    if cache_key in _nba_scoreboard_cache:
-        ts, cached = _nba_scoreboard_cache[cache_key]
-        if now - ts < CACHE_TTL:
-            return cached
-
-    url = f"{ESPN_BASE}/basketball/nba/scoreboard?dates={espn_date}"
-    logger.info("Fetching NBA scoreboard: %s", url)
-    espn_data = _fetch_espn_json(url)
-
-    games = []
-    if espn_data:
-        events = espn_data.get("events", [])
-        logger.info("ESPN NBA returned %d events", len(events))
-        games = _parse_nba_scoreboard(espn_data)
-
-    # Yesterday-still-live carryover. Only on the default-today path —
-    # explicit ?date=YYYY-MM-DD lookups stay strict.
-    if date == "":
-        from datetime import timedelta as _td
-        yest = (et_now() - _td(days=1)).strftime("%Y%m%d")
-        try:
-            yest_data = _fetch_espn_json(
-                f"{ESPN_BASE}/basketball/nba/scoreboard?dates={yest}")
-            if yest_data:
-                yest_games = _parse_nba_scoreboard(yest_data)
-                seen_ids = {g.get("id") for g in games}
-                for g in yest_games:
-                    state = (g.get("status") or {}).get("state", "")
-                    if state == "in" and g.get("id") not in seen_ids:
-                        games.append(g)
-                        logger.info("NBA: carried over live game from "
-                                    "yesterday: %s", g.get("id"))
-        except Exception as e:
-            logger.debug("NBA yesterday-live carryover failed: %s", e)
-
-    # If no games today, try tomorrow
-    if not games and date == "":
-        from datetime import timedelta as _td
-        tomorrow = (et_now() + _td(days=1)).strftime("%Y%m%d")
-        logger.info("No NBA games today, checking tomorrow (%s)", tomorrow)
-        espn_data = _fetch_espn_json(f"{ESPN_BASE}/basketball/nba/scoreboard?dates={tomorrow}")
-        if espn_data:
-            games = _parse_nba_scoreboard(espn_data)
-            if games:
-                logger.info("Found %d NBA games for tomorrow", len(games))
-
-    # ── Hard Rock fallback (only when ESPN returned zero events) ──
-    if not games and date == "":
-        try:
-            from scrapers.hardrock_odds import fetch_nba as _hr_nba
-            hr_odds = _hr_nba()
-            if hr_odds:
-                logger.info("NBA: ESPN empty, building %d games from Hard Rock",
-                            len(hr_odds))
-                for matchup_key, odds_data in hr_odds.items():
-                    parts = matchup_key.split("@")
-                    if len(parts) != 2:
-                        continue
-                    a_abbr, h_abbr = parts
-                    existing = any(
-                        g["home"]["abbreviation"] == h_abbr and
-                        g["away"]["abbreviation"] == a_abbr
-                        for g in games
-                    )
-                    if existing:
-                        continue
-                    games.append({
-                        "id": f"hr_{a_abbr}_{h_abbr}",
-                        "date": target_date,
-                        "home": {
-                            "abbreviation": h_abbr,
-                            "name": h_abbr,
-                            "score": None,
-                        },
-                        "away": {
-                            "abbreviation": a_abbr,
-                            "name": a_abbr,
-                            "score": None,
-                        },
-                        "status": {"state": "pre", "detail": "Scheduled"},
-                        "odds": odds_data,
-                        "source": "hardrock",
-                    })
-        except Exception as e:
-            logger.debug("NBA Hard Rock fallback failed: %s", e)
-
-    # Fetch NBA odds via the unified chain (Hard Rock → ESPN).
-    try:
-        nba_odds = _fetch_nba_odds()
-        if nba_odds:
-            matched = 0
-            for game in games:
-                h = game["home"]["abbreviation"]
-                a = game["away"]["abbreviation"]
-                key = f"{a}@{h}"
-                from engine.picks import match_odds as _match
-                matched_odds = _match(h, a, nba_odds)
-                if matched_odds:
-                    game["odds"] = matched_odds
-                    matched += 1
-            logger.info("NBA odds: matched %d/%d games", matched, len(games))
-    except Exception as e:
-        logger.warning("NBA odds failed: %s", e)
-
-    # Cache
-    if len(_nba_scoreboard_cache) >= MAX_CACHE_ENTRIES:
-        oldest = min(_nba_scoreboard_cache, key=lambda k: _nba_scoreboard_cache[k][0])
-        del _nba_scoreboard_cache[oldest]
-    # ── Enrich with playoff series context ──
-    try:
-        from engine.series_context import infer_series
-        from engine.nba_q1_predict import _is_nba_playoffs
-        if _is_nba_playoffs():
-            for game in games:
-                h = game["home"]["abbreviation"]
-                a = game["away"]["abbreviation"]
-                series = infer_series("nba", h, a)
-                if series.get("in_series"):
-                    game["series"] = series
-    except Exception as e:
-        logger.debug("NBA series enrichment failed: %s", e)
-
-    _nba_scoreboard_cache[cache_key] = (now, games)
-    return games
-
-
-def _parse_nba_scoreboard(espn_data: dict) -> list[dict]:
-    """Parse ESPN NBA scoreboard response into our standard format with Q1 data."""
-    games = []
-    for ev in espn_data.get("events", []):
-      try:
-        comp = ev.get("competitions", [{}])[0]
-        teams = comp.get("competitors", [])
-        if len(teams) < 2:
-            continue
-
-        home_raw = next((t for t in teams if t.get("homeAway") == "home"), teams[0])
-        away_raw = next((t for t in teams if t.get("homeAway") == "away"), teams[1])
-
-        def parse_team(raw):
-            t = raw.get("team", {})
-            if isinstance(t, str):
-                t = {"name": t}
-            record = ""
-            for r in raw.get("records", []):
-                if not isinstance(r, dict):
-                    continue
-                if r.get("type") == "total":
-                    record = r.get("summary", "")
-                    break
-            logo = t.get("logo", "")
-            if isinstance(logo, dict):
-                logo = logo.get("href", "")
-            elif isinstance(logo, list) and logo:
-                logo = logo[0].get("href", "") if isinstance(logo[0], dict) else str(logo[0])
-            return {
-                "name": t.get("displayName", t.get("name", "")),
-                "abbreviation": t.get("abbreviation", ""),
-                "logo": logo if isinstance(logo, str) else "",
-                "record": record,
-                "score": str(raw.get("score", "")),
-                "winner": raw.get("winner", False),
-            }
-
-        home = parse_team(home_raw)
-        away = parse_team(away_raw)
-
-        # Parse Q1 scores from linescores
-        home_q1 = None
-        away_q1 = None
-        home_ls = home_raw.get("linescores", [])
-        away_ls = away_raw.get("linescores", [])
-        if home_ls and len(home_ls) >= 1:
-            v = home_ls[0]
-            home_q1 = int(v.get("value", 0)) if isinstance(v, dict) else int(v) if str(v).isdigit() else None
-        if away_ls and len(away_ls) >= 1:
-            v = away_ls[0]
-            away_q1 = int(v.get("value", 0)) if isinstance(v, dict) else int(v) if str(v).isdigit() else None
-
-        # Quarter scores for display
-        quarters = []
-        for i in range(max(len(home_ls), len(away_ls))):
-            hval = home_ls[i] if i < len(home_ls) else 0
-            aval = away_ls[i] if i < len(away_ls) else 0
-            hv = int(hval.get("value", 0)) if isinstance(hval, dict) else int(hval) if str(hval).isdigit() else 0
-            av = int(aval.get("value", 0)) if isinstance(aval, dict) else int(aval) if str(aval).isdigit() else 0
-            quarters.append({"quarter": i + 1, "home": hv, "away": av})
-
-        status_raw = comp.get("status", {})
-        status_type = status_raw.get("type", {})
-        state = status_type.get("state", "pre")
-        period = status_raw.get("period", 0)
-
-        game = {
-            "id": ev.get("id", ""),
-            "date": ev.get("date", ""),
-            "venue": comp.get("venue", {}).get("fullName", ""),
-            "broadcast": "",
-            "home": home,
-            "away": away,
-            "q1": {
-                "home": home_q1,
-                "away": away_q1,
-            },
-            "quarters": quarters,
-            "status": {
-                "state": state,
-                "detail": status_type.get("detail", ""),
-                "completed": status_type.get("completed", False),
-                "period": period,
-            },
-        }
-
-        # Extract broadcast - names can be strings or dicts
-        for bc in comp.get("broadcasts", []):
-            if not isinstance(bc, dict):
-                continue
-            raw_names = bc.get("names", [])
-            names = [n.get("shortName", str(n)) if isinstance(n, dict) else str(n) for n in raw_names]
-            if names:
-                game["broadcast"] = ", ".join(names)
-                break
-
-        games.append(game)
-      except Exception as e:
-        import traceback
-        logger.warning("NBA parse event failed: %s\n%s", e, traceback.format_exc())
-        continue
-
-    return games
-
-
-# NBA abbreviation aliases (ESPN vs odds providers)
-_NBA_ABBR_MAP = {
-    "GS": "GSW", "GSW": "GS",
-    "NY": "NYK", "NYK": "NY",
-    "SA": "SAS", "SAS": "SA",
-    "NO": "NOP", "NOP": "NO",
-    "PHX": "PHO", "PHO": "PHX",
-    "WSH": "WAS", "WAS": "WSH",
-    "BKN": "BRK", "BRK": "BKN",
-    "CHA": "CHO", "CHO": "CHA",
-}
-
-
-def _nba_alt_abbr(abbr: str) -> str:
-    return _NBA_ABBR_MAP.get(abbr, abbr)
-
-
-# NBA team name -> abbreviation for odds matching
-_NBA_TEAM_ABBRS = {
-    "Atlanta Hawks": "ATL", "Boston Celtics": "BOS", "Brooklyn Nets": "BKN",
-    "Charlotte Hornets": "CHA", "Chicago Bulls": "CHI", "Cleveland Cavaliers": "CLE",
-    "Dallas Mavericks": "DAL", "Denver Nuggets": "DEN", "Detroit Pistons": "DET",
-    "Golden State Warriors": "GS", "Houston Rockets": "HOU", "Indiana Pacers": "IND",
-    "LA Clippers": "LAC", "Los Angeles Clippers": "LAC",
-    "Los Angeles Lakers": "LAL", "LA Lakers": "LAL",
-    "Memphis Grizzlies": "MEM", "Miami Heat": "MIA", "Milwaukee Bucks": "MIL",
-    "Minnesota Timberwolves": "MIN", "New Orleans Pelicans": "NOP",
-    "New York Knicks": "NYK", "Oklahoma City Thunder": "OKC",
-    "Orlando Magic": "ORL", "Philadelphia 76ers": "PHI",
-    "Phoenix Suns": "PHX", "Portland Trail Blazers": "POR",
-    "Sacramento Kings": "SAC", "San Antonio Spurs": "SAS",
-    "Toronto Raptors": "TOR", "Utah Jazz": "UTA", "Washington Wizards": "WAS",
-}
-
-
-def _fetch_nba_odds() -> dict:
-    """Fetch NBA odds (full-game + Q1 markets) via the unified fallback
-    chain in scrapers.nba_odds (Hard Rock → ESPN).
-
-    Delegates to fetch_all_nba_odds so the UI scoreboard endpoint picks
-    up the same data the tracker uses - including h2h_q1, spreads_q1,
-    and totals_q1 markets via the per-event endpoint. Previously this
-    was a duplicated bulk-only fetcher that silently dropped Q1 markets,
-    which is why the Q1 model picks card kept showing (-110) defaults
-    no matter how many times the scrapers were fixed.
-    """
-    try:
-        from scrapers.nba_odds import fetch_all_nba_odds
-        return fetch_all_nba_odds() or {}
-    except Exception as e:
-        logger.warning("NBA odds unified fetch failed: %s", e)
-        return {}
-
-
-
+# NHL helpers + line-movement route extracted -> routes_nhl_extra (de-god-file 2026-07-27)
+from .routes_nhl_extra import router as _nhl_extra_router  # noqa: E402
+app.include_router(_nhl_extra_router)
+
+# Cross-book Arb scanner tab — display-only feed read from data/arb-latest.json (Arb tab, 2026-09-30)
+from .routes_arb import router as _arb_router  # noqa: E402
+app.include_router(_arb_router)
+# Public Betting tab -- proxies the Pi's HR public-betting snapshots (/api/hr-public), display-only (2026-11-01)
+from .routes_public_betting import router as _public_betting_router  # noqa: E402
+app.include_router(_public_betting_router)
+# Horses tab -- proxies the Pi's Horses v2 place/show PAPER tracker (/api/horses-v2), display-only (2026-11-01)
+from .routes_horses import router as _horses_router  # noqa: E402
+app.include_router(_horses_router)
+from .routes_nhl_extra import (  # noqa: E402,F401  re-export for routes_nhl.py lazy proxies
+    _NHL_TEAM_ABBR, _NHL_ABBR_ALTS, _NHL_ESPN_TO_KEY, _nhl_espn_to_key, _nhl_alt_abbr,
+    _get_nhl_scoreboard, _parse_nhl_scoreboard, NHL_EMPTY_CACHE_TTL, _fetch_nhl_odds,
+)
+
+
+# NBA scoreboard/odds helpers extracted -> _nba_core (de-god-file 2026-07-27)
+from ._nba_core import (  # noqa: E402,F401  re-export for routes_nba.py lazy proxies
+    _get_nba_scoreboard, _parse_nba_scoreboard, _NBA_ABBR_MAP, _nba_alt_abbr, _NBA_TEAM_ABBRS, _fetch_nba_odds,
+)
 
 # Tennis routes + their constants now live in routes_tennis.py.
 
 
+# --- Dashboard static build (production, added 2026-07-31) -----------
+# Serve the built Vite frontend (frontend/dist) straight from FastAPI so
+# the dashboard is a SINGLE process -- no separate flaky vite dev server
+# on :5173. Mounted LAST, after every /api router + @app route above, so
+# the "/" mount can never shadow an API route: Starlette matches routes
+# in registration order, so /api/*, /health, /docs resolve to their
+# handlers and only unmatched paths fall through to the static build.
+# The React app is state-routed (single URL "/"), so html=True serving
+# index.html at root covers every surface -- no SPA catch-all needed.
+# Same-origin serving means the frontend's relative "/api" calls resolve
+# natively with NO proxy.
+# ROLLBACK: delete this block (down to EOF) + re-enable the SportsFrontend
+# scheduled task + relaunch run-frontend.bat.
+from fastapi.staticfiles import StaticFiles  # noqa: E402
+
+_DASHBOARD_DIST = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "dist")
+)
+if os.path.isdir(_DASHBOARD_DIST):
+    app.mount(
+        "/",
+        StaticFiles(directory=_DASHBOARD_DIST, html=True),
+        name="dashboard",
+    )
+    logger.info("dashboard: serving static build from %s", _DASHBOARD_DIST)
+else:
+    logger.warning(
+        "dashboard: build dir %s missing -- API only; run `npm run build`",
+        _DASHBOARD_DIST,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tennis slate warm loop (Austin 2026-09-20). MODULE-LEVEL thread (not
+# @app.on_event — the startup handlers weren't firing/logging here, which also
+# left football's prewarm dead). Runs when uvicorn imports backend.server:app.
+# A cold tennis slate build is slow ONLY because the HR-odds cache goes cold ->
+# the bookable pre-filter is skipped -> the fan-out runs over ~192 rows; keeping
+# the HR-odds cache hot (fetch_all force=True, 15-min TTL) makes even a cold
+# build ~seconds. We also warm the wta/atp slate response cache. Every 5 min.
+# ---------------------------------------------------------------------------
+def _is_backend_server() -> bool:
+    """True only in the actual uvicorn server process. The live_worker (and
+    diagnostic scripts) import backend.server.routes_* and would otherwise
+    spawn the warm/prewarm threads inside THEIR process too — the worker was
+    running them after it imported the soccer route (Austin 2026-09-20)."""
+    import sys as _s, os as _o
+    a0 = (_s.argv[0] if _s.argv else "") or ""
+    return "uvicorn" in a0.lower() or _o.environ.get("PICKMINT_SERVER") == "1"
+
+
+def _tennis_warm_loop() -> None:
+    import time as _tm, urllib.request as _url
+    # 150s, not 25 (MintyBot 2026-10-25): at t+25s this loop (fetch_all = EVERY tennis
+    # comp), the football-warm loop and the startup prewarm all hit Hard Rock from a
+    # fresh process; CF rate-limits the burst, one 403 sweep opens the scraper's
+    # circuit-breaker for 300s and every odds-dependent slate boots EMPTY (3/3 restarts
+    # today). Let the prewarm establish a working profile first.
+    _tm.sleep(150)
+    logger.warning("[tennis-warm] loop started")
+    while True:
+        try:
+            from engine.tennis_odds import fetch_all as _fa
+            _fa(force=True)  # keep HR-odds cache hot -> fast slate builds
+        except Exception as _e:
+            logger.warning("[tennis-warm] hr-odds refresh failed: %s", _e)
+        for _tour in ("wta", "atp"):
+            try:
+                _url.urlopen(
+                    "http://127.0.0.1:8000/api/tennis/scheduled?tour=%s&days=2&warm=1" % _tour,
+                    timeout=300).read()
+            except Exception as _e:
+                logger.warning("[tennis-warm] %s slate failed: %s", _tour, _e)
+        logger.warning("[tennis-warm] cycle done")
+        _tm.sleep(240)  # < 300s response-cache TTL, so warm=1 refreshes before expiry
+
+
+try:
+    import threading as _tennis_th
+    if _is_backend_server():
+        _tennis_th.Thread(target=_tennis_warm_loop, name="tennis-warm", daemon=True).start()
+except Exception as _e:  # never let the warmer break app import
+    logger.warning("[tennis-warm] failed to start: %s", _e)
+
+
+# ---------------------------------------------------------------------------
+# Football (cfb/nfl) slate warm loop (Austin 2026-10-10 live-staleness fix).
+# routes_football's _SLATE_CACHE is pure stale-while-revalidate: nothing
+# refreshes it unless a real request happens to land on an already-stale
+# key. The only PROACTIVE warming was _startup_prewarm_all below, and that
+# fires exactly ONCE per process (hits each URL, logs "complete", exits) —
+# there was no recurring loop, unlike tennis's above. On a quiet stretch (or
+# just a slow compute under concurrent multi-sport load) a live CFB card can
+# sit stale for many minutes — confirmed: SC @ FLA's card score was frozen
+# for 7+ min while ESPN (and the DB) kept moving. MODULE-LEVEL thread, not
+# @app.on_event — those hooks don't fire in this app (see _startup_prewarm_all's
+# own comment). Mirrors _tennis_warm_loop.
+# ---------------------------------------------------------------------------
+def _football_warm_loop() -> None:
+    import time as _tm, urllib.request as _url
+    # 90s, not 25 (MintyBot 2026-10-25): the startup prewarm warms cfb/nfl at t+25s
+    # already; a second concurrent football hit only adds to the boot-time HR burst
+    # that trips CF's breaker (see _tennis_warm_loop / _startup_prewarm_all).
+    _tm.sleep(90)
+    logger.warning("[football-warm] loop started")
+    while True:
+        for _lg in ("cfb", "nfl"):
+            try:
+                _url.urlopen(
+                    "http://127.0.0.1:8000/api/football/%s/today" % _lg,
+                    timeout=300).read()
+            except Exception as _e:
+                logger.warning("[football-warm] %s slate failed: %s", _lg, _e)
+        logger.warning("[football-warm] cycle done")
+        _tm.sleep(210)  # keep the 60s _SLATE_TTL_S from ever going long-stale
+
+
+try:
+    import threading as _football_th
+    if _is_backend_server():
+        _football_th.Thread(target=_football_warm_loop, name="football-warm", daemon=True).start()
+except Exception as _e:  # never let the warmer break app import
+    logger.warning("[football-warm] failed to start: %s", _e)
+
+
+# ---------------------------------------------------------------------------
+# Startup prewarm + picks rehydrate — MODULE-LEVEL (Austin 2026-09-20). The
+# @app.on_event("startup") hooks above DO NOT FIRE in this app (confirmed: 0
+# [prewarm]/Rehydrated log lines this restart vs the module-level tennis
+# warmer's 13). So football/MLB were NEVER actually pre-warmed and picks_cache
+# was never rehydrated on cold start. This module-level thread runs at import
+# (like the tennis warmer), rehydrates picks, then warms every slow-compute
+# slate/best-bets endpoint so the first dashboard hit after a restart is fast
+# for ALL leagues, not just tennis. Per-league SWR caches keep them warm after.
+# ---------------------------------------------------------------------------
+def _startup_prewarm_all() -> None:
+    import time as _t, urllib.request as _u
+    try:
+        _picks_store_rehydrate()
+        logger.warning("[prewarm] picks_cache rehydrated")
+    except Exception as _e:
+        logger.warning("[prewarm] picks rehydrate failed: %s", _e)
+    _t.sleep(25)  # let uvicorn bind before the heavy computes
+    # Boot-burst guard (MintyBot 2026-10-25): probe Hard Rock ONCE before warming anything
+    # that needs odds. If the scraper's CF circuit-breaker is open (a 403 sweep at boot
+    # latches it for 300s), WAIT for it to clear (bounded) instead of computing every slate
+    # into an empty board — 3/3 restarts today booted NFL with 0/13 odds + no picks and an
+    # empty MLB best-bets list, each healing only ~10 min later via the per-hit refresh.
+    try:
+        import scrapers.hardrock_odds as _hr
+        try:
+            _hr._fetch_sports_tree()
+        except Exception as _pe:
+            logger.warning("[prewarm] HR probe failed: %s", str(_pe)[:80])
+        _deadline = _t.time() + 600
+        while getattr(_hr, "_cf_blocked_until", 0.0) > _t.time() and _t.time() < _deadline:
+            _left = int(_hr._cf_blocked_until - _t.time())
+            logger.warning("[prewarm] HR circuit-breaker open (%ds left) — waiting before "
+                           "warming odds-dependent slates", _left)
+            _t.sleep(min(30, max(5, _left + 2)))
+        if getattr(_hr, "_cf_blocked_until", 0.0) > _t.time():
+            logger.warning("[prewarm] HR still blocked after 10 min — warming anyway "
+                           "(slates self-heal on the next good fetch)")
+    except Exception as _e:
+        logger.warning("[prewarm] HR probe skipped: %s", _e)
+    for _p in (
+        "/api/football/cfb/today", "/api/football/nfl/today",
+        "/api/basketball/wnba/today", "/api/basketball/nba/today",
+        *(("/api/best-bets",) if os.environ.get("PREWARM_MLB") == "1" else ()),   # mlb best-bets (>4min MC); MLB off 2026-10-29
+        "/api/nba/best-bets", "/api/nhl/best-bets",
+        "/api/hockey/nhl/today",
+    ):
+        try:
+            _u.urlopen("http://127.0.0.1:8000" + _p, timeout=400).read()
+            logger.warning("[prewarm] warmed %s", _p)
+        except Exception as _e:
+            logger.warning("[prewarm] %s failed: %s", _p, str(_e)[:70])
+    logger.warning("[prewarm] startup prewarm complete")
+
+
+try:
+    import threading as _prewarm_th
+    if _is_backend_server():
+        _prewarm_th.Thread(target=_startup_prewarm_all, name="startup-prewarm", daemon=True).start()
+except Exception as _e:
+    logger.warning("[prewarm] failed to start: %s", _e)

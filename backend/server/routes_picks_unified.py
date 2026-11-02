@@ -30,8 +30,12 @@ def api_picks_list(
     date_to: Optional[str] = None,
     include_shadows: bool = True,
     limit: int = Query(200, ge=1, le=2000),
+    calibrated: bool = False,
 ) -> dict:
-    """Filtered list of picks, newest-first by creation time."""
+    """Filtered list of picks, newest-first by creation time. With
+    ``calibrated=1`` each row's edge_pct is run through the Pick Authority
+    gate (apply_selected) for DISPLAY; the stored raw stays in edge_raw. The
+    record/tracker view keeps raw (default). (Pick Authority L2, Austin 2026-10-14.)"""
     from engine.picks_unified import list_picks
     from engine.picks_unified._legacy_bridge import ensure_adapters_registered
     ensure_adapters_registered()
@@ -71,6 +75,19 @@ def api_picks_list(
             "created_at": p.created_at,
             "settled_at": p.settled_at,
         }
+        if calibrated:
+            try:
+                from engine.selection import apply_selected as _apsel
+                _ck = ("football_%s" % (p.league or "")) if p.sport == "football" else (p.sport or "")
+                _cal = _apsel(_ck, {"type": p.bet_type, "pick": p.pick_text,
+                                    "odds": p.odds, "prob": p.prob, "edge": p.edge_pct})
+                if _cal:
+                    d["edge_raw"] = p.edge_pct
+                    d["edge_pct"] = _cal.get("edge", p.edge_pct)
+                    if _cal.get("confidence"):
+                        d["confidence"] = _cal.get("confidence")
+            except Exception:
+                pass
         out.append(d)
     return {"count": len(out), "picks": out}
 
@@ -194,4 +211,24 @@ def api_picks_settle(sport: Optional[str] = None) -> dict:
     from engine.picks_unified import settle_pending
     from engine.picks_unified._legacy_bridge import ensure_adapters_registered
     ensure_adapters_registered()
-    return settle_pending(sport=sport)
+    result = settle_pending(sport=sport)
+    # Also settle Pick-of-the-Day for every sport that has one. The
+    # live_worker POTD-settle loop only covers mlb/nba/nhl, so wnba/nfl/
+    # cfb/tennis POTDs never settled and their P/L froze (Austin 2026-09-28).
+    # Idempotent (only pending rows); runs on the 15-min settle poller.
+    try:
+        from engine.pick_of_day import settle_potd
+        _psports = [sport] if sport else [
+            "mlb", "nba", "nhl", "wnba", "nfl", "cfb", "tennis"]
+        _potd = {}
+        for _s in _psports:
+            try:
+                _potd[_s] = settle_potd(_s)
+            except Exception as e:
+                _potd[_s] = {"error": str(e)}
+        if isinstance(result, dict):
+            result["potd"] = _potd
+    except Exception as e:
+        if isinstance(result, dict):
+            result["potd_error"] = str(e)
+    return result

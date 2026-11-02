@@ -170,6 +170,58 @@ def capture_closing_odds(league: str) -> int:
     return core_capture_closing_odds(adapter)
 
 
+def capture_unified_closing(league: str) -> int:
+    """Pick Authority CLV for the framework's unified rows (MintyBot 2026-10-26, college
+    basketball): the PA shadow lane lives in picks_unified, which nothing closed for basketball
+    framework leagues -- capture_closing_odds above only touches the league's own picks table.
+    Snapshot HR's price at each pending row's OWN market + side + line (main or alt; full game
+    or first period) while its game is still scheduled; overwrites every call, so the last
+    pre-tip value is the close. A line HR stops offering keeps its last captured value."""
+    from ..tracker_core import _cc_now_iso
+    from ._db import games_table, teams_table
+    try:
+        from ..picks_unified._schema import get_conn as _u_conn
+    except Exception:
+        return 0
+    conn = get_conn(league)
+    sched = {str(r["game_id"]): r["h"] for r in conn.execute(
+        f"SELECT g.game_id, ht.abbreviation AS h FROM {games_table(league)} g "
+        f"LEFT JOIN {teams_table(league)} ht ON ht.id = g.home_team_id "
+        f"WHERE g.status = 'scheduled'")}
+    if not sched:
+        return 0
+    u = _u_conn()
+    rows = [r for r in u.execute(
+        "SELECT id, game_key, bet_type, pick_text FROM picks "
+        "WHERE sport = 'basketball' AND league = ? AND result IS NULL", (league,)).fetchall()
+        if str(r[1]).rsplit(":", 1)[-1] in sched]
+    if not rows:
+        return 0
+    try:
+        odds = fetch_league_odds(league)     # cached; no forced HR hit
+    except Exception:
+        return 0
+    by_gid = {str(v.get("game_id")): v for v in (odds or {}).values() if v.get("game_id")}
+    now = _cc_now_iso()
+    n = 0
+    for rid, gk, bt, pt in rows:
+        gid = str(gk).rsplit(":", 1)[-1]
+        o = by_gid.get(gid)
+        if not o:
+            continue
+        try:
+            am = int(_extract_closing_for_pick(bt, pt, o.get("home_abbr") or sched[gid], o))
+        except (TypeError, ValueError):
+            continue
+        if abs(am) < 100 or abs(am) > 5000:    # HR market-locked sentinels
+            continue
+        u.execute("UPDATE picks SET closing_odds = ?, closing_captured_at = ? WHERE id = ?",
+                  (am, now, rid))
+        n += 1
+    u.commit()
+    return n
+
+
 def _cli() -> int:
     import argparse, logging as _logging
     ap = argparse.ArgumentParser(

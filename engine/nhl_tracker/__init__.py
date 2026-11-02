@@ -31,13 +31,21 @@ from ._record import (
     refresh_pending_for_today,
     record_picks,
     capture_closing_odds,
+    record_paper,
 )
 from ._settle import settle_picks
-from ._summary import get_pick_summary
+from ._summary import (
+    get_pick_summary, paper_summary, list_paper_history,
+    recorded_nhl_paper_pick, record_paper_potd, get_paper_potd,
+    paper_potd_summary,
+)
 
 __all__ = [
     "_core_picks", "_compute_clv", "_extract_nhl_closing_for_pick",
     "_get_nhl_db", "_fetch_nhl_scoreboard",
     "refresh_pending_for_today", "record_picks", "capture_closing_odds",
-    "settle_picks", "get_pick_summary",
+    "record_paper",
+    "settle_picks", "get_pick_summary", "paper_summary", "list_paper_history",
+    "recorded_nhl_paper_pick", "record_paper_potd", "get_paper_potd",
+    "paper_potd_summary",
 ]

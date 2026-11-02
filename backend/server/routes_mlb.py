@@ -1,4 +1,4 @@
-"""MLB API routes — extracted from backend/server/__init__.py.
+"""MLB API routes â€” extracted from backend/server/__init__.py.
 
 Stage-2 of #317 (MLB monolith extraction). 17 of 19 MLB endpoints now
 live here:
@@ -20,7 +20,7 @@ __init__.py because each pulls on a chain of MLB-specific helpers
 _resolve_abbr, _alt_abbr, _safe_game_pk, _parse_espn_scoreboard,
 _compute_injury_impact_pct, _mlb_form_from_reasoning, _mlb_season_context,
 _implied, _find_ou, _mc_seed, PredictRequest model). Migrating those
-safely requires extracting the helpers first — separate sprint.
+safely requires extracting the helpers first â€” separate sprint.
 
 Helper access from this module follows the same lazy-proxy pattern
 ``routes_nba.py`` / ``routes_nhl.py`` use, so the shared helpers
@@ -41,7 +41,7 @@ from engine.db import (
     get_conn, get_all_teams, get_team_by_id, get_team_record,
     get_pitcher_season, get_bullpen, get_recent_games,
 )
-# Hot-path imports — moved up from inside per-request handlers. The
+# Hot-path imports â€” moved up from inside per-request handlers. The
 # best-bets pipeline fans these out to 8 worker threads which each
 # previously paid the import-table lookup cost (~50-80ms per cold req).
 from engine.picks import (
@@ -63,7 +63,7 @@ def _season() -> int:
     return et_now().year
 
 
-# ── Lazy proxies for helpers that still live in __init__.py ──
+# â”€â”€ Lazy proxies for helpers that still live in __init__.py â”€â”€
 def _lazy(name):
     def proxy(*args, **kwargs):
         from backend import server as _srv
@@ -89,7 +89,7 @@ _mlb_form_from_reasoning = _lazy("_mlb_form_from_reasoning")
 class _LazyConst:
     """Proxy for a constant collection that lives in __init__.py.
 
-    Mirrors routes_nba.py's _LazyConst — bare-name lookups inside
+    Mirrors routes_nba.py's _LazyConst â€” bare-name lookups inside
     handler bodies need the symbol bound at module load, but the real
     constant only exists after __init__.py finishes initialising."""
     def __init__(self, name: str):
@@ -118,7 +118,17 @@ class _LazyConst:
 _MLB_DERIV_TYPES = _LazyConst("_MLB_DERIV_TYPES")
 
 
-# ── Teams ─────────────────────────────────────────────────────
+# â”€â”€ Teams â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+def _mlb_card_wp(wp, odds):
+    """Card % = the Pick Authority's market blend (model + de-vigged ML; Austin 2026-10-26 "Any percentages
+    for any card in any sport, should be that way"). Unchanged when there is no price."""
+    try:
+        from ._display_cal import blend_card_wp
+        return blend_card_wp("mlb", "mlb", wp, (odds or {}).get("home_ml"), (odds or {}).get("away_ml"))
+    except Exception:
+        return wp
+
 
 @router.get("/api/teams")
 def api_teams():
@@ -200,7 +210,7 @@ def api_team_profile(team_id: int):
     }
 
 
-# ── Standings ─────────────────────────────────────────────────
+# â”€â”€ Standings â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @router.get("/api/standings")
 def api_standings():
@@ -261,7 +271,7 @@ def api_standings():
     return list(divisions.values())
 
 
-# ── Pitcher ───────────────────────────────────────────────────
+# â”€â”€ Pitcher â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @router.get("/api/pitcher/{pitcher_id}")
 def api_pitcher(pitcher_id: int):
@@ -283,15 +293,215 @@ def api_pitcher(pitcher_id: int):
     }
 
 
-# ── Scoreboard ────────────────────────────────────────────────
+# â”€â”€ Scoreboard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+
+# â”€â”€ PAPER best-pick (Austin 2026-09-18) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Every MLB card shows the single market the model likes best (ML / run line /
+# total), tagged paper, never staked â€” same feature as the framework sports.
+# MLB is root-mounted with no per-game today endpoint, so best-bets (which
+# already predicts EVERY game) stashes the per-game best paper pick here and
+# /api/scoreboard merges it onto each card by game id. Uses the MC model's own
+# probabilities (win_prob, run_line covers, over_under sim table) vs HR's price.
+_MLB_PAPER_BY_GAME: dict = {}
+_MLB_1ST_PAPER_BY_GAME: dict = {}      # 1st-inning (NRFI/YRFI) paper, by game id
+_MLB_DERIV_PAPER_BY_GAME: dict = {}    # best derivative (F5/team-total) paper, by game id
+
+
+def _mlb_implied(o):
+    try:
+        o = float(o)
+    except (TypeError, ValueError):
+        return None
+    return (-o) / (-o + 100) if o < 0 else 100 / (o + 100)
+
+
+def _mlb_ou_prob(pred, line):
+    """P(over) at `line`: prefer the MC sim's over_under table, else full/mc total + std via normal-CDF."""
+    import math
+    key = str(line)
+    for src in (pred.get("over_under"), (pred.get("mc") or {}).get("over_under")):
+        if isinstance(src, dict) and isinstance(src.get(key), dict) and src[key].get("over") is not None:
+            return float(src[key]["over"])
+    total = pred.get("total") or ((pred.get("mc") or {}).get("expected_runs") or {}).get("total")
+    std = ((pred.get("mc") or {}).get("total_std")) or 4.0
+    if total is None or not std:
+        return None
+    return 0.5 * (1 + math.erf((float(total) - float(line)) / (float(std) * math.sqrt(2))))
+
+
+def _mlb_paper_picks(pred, odds, home_abbr, away_abbr):
+    """Single best PAPER pick (highest edge across ML / run line / total) from the MC model's own
+    probabilities vs HR's price. Returns one dict tagged paper (never staked), or None."""
+    if not pred or not odds:
+        return None
+    out = []
+    wp = pred.get("win_prob") or {}
+    if wp.get("home") is not None and (odds.get("home_ml") is not None or odds.get("away_ml") is not None):
+        if wp["home"] >= wp.get("away", 1 - wp["home"]):
+            side, prob, o = (home_abbr or "HOME"), wp["home"], odds.get("home_ml")
+        else:
+            side, prob, o = (away_abbr or "AWAY"), wp.get("away"), odds.get("away_ml")
+        imp = _mlb_implied(o)
+        if o is not None and imp is not None and prob is not None:
+            out.append(dict(type="ML", market="ML", pick=side, line=None, prob=round(prob, 4),
+                            odds=o, edge=round((prob - imp) * 100, 1), paper=True))
+    rl = pred.get("run_line") or {}
+    hsp = odds.get("home_spread_point")
+    if hsp is not None and rl:
+        if float(hsp) < 0:   # home is the -1.5 favorite
+            h_cover, a_cover = rl.get("home_minus_1_5"), rl.get("away_plus_1_5")
+        else:                # home is the +1.5 dog
+            h_cover, a_cover = rl.get("home_plus_1_5"), rl.get("away_minus_1_5")
+        h_ln, a_ln = hsp, odds.get("away_spread_point")
+        if h_cover is not None and a_cover is not None:
+            if h_cover >= a_cover:
+                side, prob, ln, o = (home_abbr or "HOME"), h_cover, h_ln, odds.get("home_spread_odds")
+            else:
+                side, prob, ln, o = (away_abbr or "AWAY"), a_cover, a_ln, odds.get("away_spread_odds")
+            imp = _mlb_implied(o)
+            if o is not None and imp is not None and ln is not None:
+                out.append(dict(type="RUN_LINE", market="RUN_LINE", pick=side, line=ln, prob=round(prob, 4),
+                                odds=o, edge=round((prob - imp) * 100, 1), paper=True))
+    line = odds.get("over_under")
+    if line is not None:
+        ou = _mlb_ou_prob(pred, line)
+        if ou is not None:
+            side, prob, o = ("Over", ou, odds.get("over_odds")) if ou >= 0.5 else ("Under", 1 - ou, odds.get("under_odds"))
+            imp = _mlb_implied(o)
+            if o is not None and imp is not None:
+                out.append(dict(type="TOTAL", market="TOTAL", pick=side, line=line, prob=round(prob, 4),
+                                odds=o, edge=round((prob - imp) * 100, 1), paper=True))
+    if not out:
+        return None
+    best = max(out, key=lambda pk: pk.get("edge", -99))
+    best["matchup"] = "%s @ %s" % (away_abbr or "", home_abbr or "")
+    best["away_abbr"], best["home_abbr"] = away_abbr, home_abbr
+    return best
+
+
+def _mlb_first_inning_paper(pred, odds, h_abbr, a_abbr):
+    """PAPER 1st-inning (NRFI/YRFI): MC no-run-in-1st prob vs HR's I1 first-inning-total-0.5 market
+    (NRFI = Under 0.5, YRFI = Over 0.5). The model's directional lean + edge, never staked."""
+    if not pred or not odds:
+        return None
+    mc = pred.get("mc") or {}
+    nrfi = (mc.get("nrfi") or {}).get("nrfi")
+    if nrfi is None:
+        nrfi = (pred.get("first_inning") or {}).get("nrfi")
+    i1 = (odds.get("inning_totals") or {}).get("I1") or {}
+    if nrfi is None or not i1:
+        return None
+    if nrfi >= 0.5:
+        pick, prob, o = "NRFI", nrfi, i1.get("under_odds")
+    else:
+        pick, prob, o = "YRFI", 1 - nrfi, i1.get("over_odds")
+    imp = _mlb_implied(o)
+    if o is None or imp is None:
+        return None
+    return {"type": "1ST_INN", "market": "1st Inn", "pick": pick, "line": 0.5,
+            "prob": round(prob, 4), "odds": o, "edge": round((prob - imp) * 100, 1), "paper": True,
+            "matchup": "%s @ %s" % (a_abbr or "", h_abbr or ""), "away_abbr": a_abbr, "home_abbr": h_abbr}
+
+
+def _mlb_derivative_paper(pred, odds, h_abbr, a_abbr):
+    """PAPER best derivative across F5 total + F5/full team totals â€” MC over/under sim probs at HR's
+    line (nearest line in the sim table) vs implied, best-by-edge, never staked."""
+    if not pred or not odds:
+        return None
+    mc = pred.get("mc") or {}
+    def _lk(table, line):
+        if not isinstance(table, dict) or not table or line is None:
+            return None
+        try:
+            fl = float(line)
+            key = min(table.keys(), key=lambda k: abs(float(k) - fl))
+        except (TypeError, ValueError):
+            return None
+        return table.get(key)
+    cands = []
+    f5t_line = odds.get("f5_total")
+    cell = _lk((mc.get("f5") or {}).get("over_under") or {}, f5t_line)
+    if cell and f5t_line is not None:
+        po, pu = cell.get("over"), cell.get("under")
+        if po is not None and pu is not None:
+            side, prob, o = ("Over", po, odds.get("f5_over_odds")) if po >= pu else ("Under", pu, odds.get("f5_under_odds"))
+            imp = _mlb_implied(o)
+            if o is not None and imp is not None:
+                cands.append({"type": "F5_TOTAL", "market": "F5 O/U", "pick": side, "line": f5t_line,
+                          "tt_team": None, "tt_span": "f5",
+                              "prob": round(prob, 4), "odds": o, "edge": round((prob - imp) * 100, 1), "paper": True})
+    for tkey, okey, label, mckey in (
+        ("home", "team_total_home", "TT " + (h_abbr or "H"), "team_totals"),
+        ("away", "team_total_away", "TT " + (a_abbr or "A"), "team_totals"),
+        ("home", "f5_team_total_home", "F5 TT " + (h_abbr or "H"), "f5_team_totals"),
+        ("away", "f5_team_total_away", "F5 TT " + (a_abbr or "A"), "f5_team_totals"),
+    ):
+        oo = odds.get(okey) or {}
+        line = oo.get("line")
+        cell = _lk(((mc.get(mckey) or {}).get(tkey) or {}).get("lines") or {}, line)
+        if cell and line is not None:
+            po, pu = cell.get("over"), cell.get("under")
+            if po is not None and pu is not None:
+                side, prob, o = ("Over", po, oo.get("over_odds")) if po >= pu else ("Under", pu, oo.get("under_odds"))
+                imp = _mlb_implied(o)
+                if o is not None and imp is not None:
+                    cands.append({"type": "TEAM_TOTAL", "market": label, "pick": side, "line": line,
+                                  "tt_team": tkey, "tt_span": ("f5" if "f5" in okey else "full"),
+                                  "prob": round(prob, 4), "odds": o, "edge": round((prob - imp) * 100, 1), "paper": True})
+    # Guard vs mispaired/stale odds (Austin 2026-09-19): the HR scraper sometimes labels a
+    # team-total with the wrong LINE (e.g. Dodgers "2.5" carrying the ~5.5-line price), so the
+    # MC prob for the labeled line prices against the wrong odds and fabricates a huge false
+    # edge. Real derivative edges are small; drop anything > 15% as a data error until the
+    # scraper's line<->odds pairing is fixed. See memory pickmint_ui_punchlist_2026-09-19.
+    cands = [c for c in cands if abs(c.get("edge") or 0) <= 15]
+    if not cands:
+        return None
+    best = max(cands, key=lambda c: c["edge"])
+    best["matchup"] = "%s @ %s" % (a_abbr or "", h_abbr or "")
+    best["away_abbr"], best["home_abbr"] = a_abbr, h_abbr
+    return best
+
 
 @router.get("/api/scoreboard")
 def api_scoreboard(date: str = Query(default="")):
     """Today's MLB games. Heavy work happens in __init__.py:_get_scoreboard."""
-    return _get_scoreboard(date)
+    games = _get_scoreboard(date)
+    pby = _MLB_PAPER_BY_GAME
+    fiby = _MLB_1ST_PAPER_BY_GAME
+    dvby = _MLB_DERIV_PAPER_BY_GAME
+    if isinstance(games, list):
+        # The fresh best-bets maps only cover PRE-GAME games (api_best_bets is
+        # pre-game only). Live/final games fall back to the RECORDED paper pick,
+        # which carries the settled W/L â€” so final cards keep showing the pick +
+        # won/lost like WNBA does, instead of a bare score (Austin 2026-09-30).
+        from engine.mlb_paper_shadow import recorded_paper_pick as _rpp
+        def _pp(gid, by, scope):
+            # Card-lock (Austin 2026-10-06): show the RECORDED (locked first lean) pick, not the
+            # live recompute that flips as the line moves pre-game. Fall back to the live map only
+            # if nothing was recorded (record failed / status-locked).
+            try:
+                r = _rpp(gid, scope)
+            except Exception:
+                r = None
+            # Pick Authority (Workstream #1): calibrate the displayed pick so the
+            # scoreboard card == the POTD/hero (raw 13.7 -> calibrated 10.24).
+            # cal_edge recomputes from model_prob, so this is idempotent.
+            _disp = r if r is not None else by.get(gid)
+            try:
+                from engine.selection import apply_selected as _apply_selected
+                return _apply_selected("mlb", _disp) if _disp else _disp
+            except Exception:
+                return _disp
+        games = [{**g,
+                  "paper_pick": _pp(str(g.get("id")), pby, "full"),
+                  "first_inning_paper": _pp(str(g.get("id")), fiby, "1stinn"),
+                  "derivative_paper": _pp(str(g.get("id")), dvby, "derivs")}
+                 for g in games]
+    return games
 
 
-# ── Tracker (pick history / record / settle / summary) ────────
+# â”€â”€ Tracker (pick history / record / settle / summary) â”€â”€â”€â”€â”€â”€â”€â”€
 
 @router.get("/api/tracker/history")
 def api_pick_history():
@@ -301,8 +511,8 @@ def api_pick_history():
     settler trampoline (engine.derivative_tracker._settle_mlb_derivatives)
     inserts temp rows into the main `picks` table mid-flight to reuse
     settle_picks(), then deletes them in the finally block. During that
-    window — observed via fast tab-switching between Pick Tracker and
-    Derivative Tracker — the temp rows leak into this endpoint's
+    window â€” observed via fast tab-switching between Pick Tracker and
+    Derivative Tracker â€” the temp rows leak into this endpoint's
     response. Excluding derivative types here makes the leak invisible
     to the UI even if the trampoline race condition fires.
     """
@@ -314,7 +524,14 @@ def api_pick_history():
         f"ORDER BY created_at DESC LIMIT 50",
         tuple(deriv_types),
     ).fetchall()
-    return [dict(p) for p in picks]
+    out = []
+    for p in picks:
+        d = dict(p)
+        stake_u = d["stake_units"] if d.get("stake_units") is not None else 1.0
+        if d.get("profit") is not None:
+            d["profit"] = round(d["profit"] * stake_u, 2)
+        out.append(d)
+    return out
 
 
 @router.post("/api/tracker/record")
@@ -353,7 +570,375 @@ def api_pick_summary():
     return get_pick_summary()
 
 
-# ── Calibration (MLB-side) ────────────────────────────────────
+# -- MLB unified tracker (MintyBot 2026-10-22, NBA "tracker merge" -> MLB) --
+# ONE MLB tracker = the card's single BEST per game = the merged CALIBRATED best
+# across all game markets (Full Game core + First Inning + Derivative F5/team-total),
+# GATED like NBA/NHL: core full-game always eligible; an EXTRA scope (first_inning /
+# derivative) may only HEADLINE once it has EARNED a track record (>=60 settled /
+# >=30 days, calibration_gate.headline_eligible) AND clears the +EV floor. PAPER /
+# display only -- reads the isolated paper_shadow table (engine.db / mlb.db) that the
+# per-scope paper panels already use; NEVER the real picks / derivative_picks. cal_edge
+# is keyed "mlb" and the extra-evidence is per-SCOPE, EXACTLY matching
+# engine.mlb_paper_shadow.record_potd's own gate. Forked from routes_nba.
+
+_MLB_EV_CACHE = {"ts": 0.0, "map": {}}
+
+def _mlb_extra_evidence_map(conn):
+    """{scope: (settled_n, days_tracked)} for the EXTRA scopes (first_inning,
+    derivative) in paper_shadow. MLB's extra-market unit is the SCOPE (matching
+    engine.mlb_paper_shadow.record_potd), not the bet_type. Cached 300s so the gate
+    costs one GROUP BY per window. (full is also counted but never looked up.)"""
+    import time as _t
+    if _MLB_EV_CACHE["map"] and (_t.monotonic() - _MLB_EV_CACHE["ts"]) < 300:
+        return _MLB_EV_CACHE["map"]
+    m = {}
+    try:
+        for row in conn.execute(
+                "SELECT scope, COUNT(*) n, MIN(date) mn, MAX(date) mx FROM paper_shadow "
+                "WHERE result IS NOT NULL AND result != 'V' GROUP BY scope"):
+            n = (row["n"] or 0)
+            days = 0
+            if row["mn"] and row["mx"]:
+                try:
+                    days = int((conn.execute("SELECT julianday(?)-julianday(?)",
+                                (row["mx"], row["mn"])).fetchone()[0]) or 0)
+                except Exception:
+                    days = 0
+            m[row["scope"]] = (n, days)
+    except Exception:
+        return {}
+    _MLB_EV_CACHE["ts"] = _t.monotonic(); _MLB_EV_CACHE["map"] = m
+    return m
+
+
+def _mlb_market_scope(scope, bet_type=None):
+    """Market bucket for the tracker chip, keyed on the paper_shadow SCOPE column
+    (set per-bet at record time, so it classifies by the BET): full -> Full Game;
+    first_inning -> First Inning; derivative -> Derivative (F5 total / team total)."""
+    s = (scope or "").strip().lower()
+    if s == "first_inning":
+        return "First Inning"
+    if s == "derivative":
+        return "Derivative"
+    return "Full Game"
+
+
+def _mlb_flat_profit(result, odds):
+    """Flat $100-stake P/L from (result, American odds) -- the EXACT convention
+    engine.mlb_paper_shadow._payout already uses at settle (win: +odds if positive
+    else 100/abs(odds)*100; loss: -$100; push/void: $0). paper_shadow has no
+    stake_units, so grading every row flat $100 is the apples-to-apples basis
+    across sports. Mirror of _nba_flat_profit (Austin 2026-10-22)."""
+    r = (result or "").strip().upper()
+    if not r:
+        return None  # pending -- excluded from the P/L sum
+    if r == "W":
+        try:
+            o = float(odds if odds is not None else -110)
+        except (TypeError, ValueError):
+            o = -110.0
+        if o == 0:
+            return 0.0
+        return round(o, 2) if o > 0 else round(100.0 / abs(o) * 100.0, 2)
+    if r == "L":
+        return -100.0
+    return 0.0  # P / PUSH / V
+
+
+_LAST_MLB_AUTO_SETTLE = [0.0]
+def _maybe_auto_settle_mlb():
+    """Throttled, non-blocking settle so MLB paper picks (all scopes) grade shortly
+    after games go final. Fires on a tracker view, at most once per 10 min, in a
+    daemon thread. engine.db.get_conn is per-thread-safe. Mirror of
+    _maybe_auto_settle_nba."""
+    import time as _t, threading as _th
+    now = _t.monotonic()
+    if now - _LAST_MLB_AUTO_SETTLE[0] < 600.0:
+        return
+    _LAST_MLB_AUTO_SETTLE[0] = now
+    def _run():
+        try:
+            from engine.mlb_paper_shadow import settle_paper_shadow as _sp
+            _sp()
+        except Exception as _e:
+            logger.warning("auto-settle mlb (paper shadow) failed: %s", _e)
+    _th.Thread(target=_run, daemon=True).start()
+
+
+def _disp_pick(bet_type, pick, line):
+    """Combine a bare side/team pick with its line for display ("Under 53.5",
+    "ELON +10.5", "CHW -1.5"); ML-type picks pass through, and a pick that already
+    carries its number is left alone. (MintyBot 2026-10-22: football/mlb store
+    pick + line separately, so the unified tracker showed just "Over"/"ELON".)"""
+    p = (pick or "").strip()
+    if line is None or line == "":
+        return p
+    try:
+        lf = float(line)
+    except (TypeError, ValueError):
+        return p
+    toks = p.split()
+    if toks and any(c.isdigit() for c in toks[-1]):
+        return p
+    ls = ("%g" % lf)
+    bt = (bet_type or "").upper()
+    if "TOTAL" in bt or bt in ("O/U", "OU"):
+        return "%s %s" % (p, ls)
+    if "SPREAD" in bt or bt in ("RL", "RUN_LINE", "PL", "PUCK_LINE", "SPRD"):
+        return "%s %s%s" % (p, "+" if lf > 0 else "", ls)
+    return p
+
+
+def _mlb_merged_recorded_best(game_id, date=None, conn=None, ev_map=None):
+    """The game's single BEST recorded PAPER pick = the merged CALIBRATED best
+    across all scopes (Full Game core + First Inning + Derivative), GATED: core
+    full-game always eligible; an EXTRA scope only once it has EARNED a track record
+    (headline_eligible) AND clears the +EV floor. Reads the isolated paper_shadow
+    table ONLY; NEVER the real picks. Chip-shaped + flat-$100 profit + _scope. Pass
+    conn/ev_map to share them across many games. Mirror of _nba_merged_recorded_best;
+    cal_edge keyed "mlb", extra-evidence per-scope."""
+    import sqlite3 as _sq
+    from engine.db import get_conn
+    from engine.calibration_gate import cal_edge as _ce, headline_eligible as _he
+    if conn is None:
+        try:
+            conn = get_conn(); conn.row_factory = _sq.Row
+        except Exception:
+            return None
+    if ev_map is None:
+        ev_map = _mlb_extra_evidence_map(conn)
+    dq = " AND date = ?" if date else ""
+    args = (str(game_id), date) if date else (str(game_id),)
+    cands = []
+    try:
+        # All scopes for the game; the ABS(edge)<=20 guard drops a blown-up
+        # calibration edge (mirror NBA/NHL).
+        for r in conn.execute(
+                "SELECT scope,bet_type,pick,line,odds,edge,model_prob,result,profit,"
+                "tt_team,tt_span,matchup "
+                "FROM paper_shadow WHERE game_id=?" + dq + " "
+                "AND (result IS NULL OR result != 'V') AND ABS(COALESCE(edge,0))<=20.0", args):
+            d = dict(r)
+            d["_scope"] = _mlb_market_scope(d.get("scope"), d.get("bet_type"))
+            d["_extra"] = ((d.get("scope") or "").strip().lower() != "full")
+            cands.append(d)
+    except Exception:
+        return None
+    if not cands:
+        return None
+    scored = []
+    for p in cands:
+        ce = _ce("mlb", p.get("bet_type"), p.get("model_prob"), p.get("odds"),
+                 pick_text=p.get("pick"), raw_edge=p.get("edge"))
+        n = days = None
+        if p["_extra"]:
+            n, days = ev_map.get((p.get("scope") or "").strip().lower(), (0, 0))
+        eligible = _he(ce, p["_extra"], n, days)
+        scored.append((eligible, ce if ce is not None else -999.0, p))
+    pool = [sc for sc in scored if sc[0]]
+    if not pool:
+        return None
+    b = max(pool, key=lambda sc: sc[1])[2]
+    # Team totals: name the team (+ F5 span) — stored pick is the bare side (Austin
+    # 2026-10-25 "Over 0.5 on which side?"). _ce above keeps the raw pick for side detection.
+    _pk = b["pick"]
+    if (b.get("bet_type") or "").upper() == "TEAM_TOTAL":
+        from engine.mlb_paper_shadow import tt_side_text as _tts
+        _pk = _tts(b.get("matchup"), b.get("tt_team"), b.get("tt_span"), b["pick"])
+    return {"type": b["bet_type"], "market": b["bet_type"], "pick": _disp_pick(b["bet_type"], _pk, b.get("line")),
+            "odds": b["odds"], "edge": b["edge"], "prob": b["model_prob"],
+            "result": b["result"], "paper": True, "_scope": b["_scope"],
+            "closing_odds": None,
+            "profit": _mlb_flat_profit(b["result"], b["odds"]),
+            "stake_units": 1.0}
+
+
+def _mlb_matchup_variants(matchup):
+    """All abbreviation-alias spellings of 'AWAY @ HOME' (ESPN ARI/CHW/WSH vs HR AZ/CWS/WAS)."""
+    out = {matchup}
+    sep = " @ " if " @ " in (matchup or "") else "@"
+    parts = [x.strip() for x in (matchup or "").split(sep)]
+    if len(parts) == 2:
+        try:
+            from engine.abbr import aliases_for
+            for a in (aliases_for(parts[0], sport="mlb") or [parts[0]]):
+                for h in (aliases_for(parts[1], sport="mlb") or [parts[1]]):
+                    out.add(f"{a} @ {h}")
+        except Exception:
+            pass
+    return list(out)
+
+
+def _mlb_recorded_authority_row(matchup, date, conn):
+    """The game's RECORDED authority pick = the real tracker `picks` row that
+    engine.tracker.record_picks wrote from the card's own best_pick (what the card
+    headlined; same (date, matchup) lookup _get_recorded_pick uses, alias-tolerant,
+    settled rows included). None when the game predates / skipped recording (MLB
+    recording silently stopped 2026-09-15 — see engine/tracker/_record.py 2026-10-23).
+    Pick Authority: one pick, read everywhere (MintyBot 2026-10-23, Austin "good")."""
+    if not matchup or not date:
+        return None
+    mv = _mlb_matchup_variants(matchup)
+    try:
+        r = conn.execute(
+            "SELECT matchup,date,bet_type,pick,odds,edge,model_prob,result,closing_odds,stake_units "
+            f"FROM picks WHERE date=? AND matchup IN ({','.join('?' * len(mv))}) "
+            "AND (result IS NULL OR result != 'V') ORDER BY edge DESC LIMIT 1",
+            (date, *mv)).fetchone()
+    except Exception:
+        return None
+    if not r:
+        return None
+    d = dict(r)
+    _bt = (d.get("bet_type") or "").strip().upper()
+    if _bt in ("1ST INN", "1ST_INN", "NRFI", "YRFI"):
+        _scope_tok = "first_inning"
+    elif _bt.startswith("F5") or "TEAM TOTAL" in _bt or "TEAM_TOTAL" in _bt:
+        _scope_tok = "derivative"
+    else:
+        _scope_tok = "full"
+    return {"type": d["bet_type"], "market": d["bet_type"],
+            "pick": _disp_pick(d["bet_type"], d["pick"], None),
+            "odds": d["odds"], "edge": d["edge"], "prob": d["model_prob"],
+            "result": d["result"], "paper": False, "authority": True,
+            "_scope": _mlb_market_scope(_scope_tok),
+            "closing_odds": d.get("closing_odds"),
+            "profit": _mlb_flat_profit(d["result"], d["odds"]),
+            "stake_units": 1.0}
+
+
+_MLB_UNIFIED_SETTLE_TS = [0.0]
+
+
+@router.get("/api/mlb/tracker/unified")
+def api_mlb_tracker_unified(limit: int = 300):
+    """ONE MLB tracker, Pick Authority order (2026-10-23): per game, the RECORDED
+    authority pick from the real tracker `picks` table (= what the card headlined, via
+    _mlb_recorded_authority_row) when one exists; otherwise the paper_shadow merged
+    CALIBRATED best (_mlb_merged_recorded_best) — the fallback keeps the Sep-16..Oct
+    history that predates the recording fix instead of blanking it. Games recorded in
+    `picks` but absent from paper_shadow are appended too. P/L graded FLAT $100.
+    Read-only; per-scope endpoints (/api/tracker/paper) untouched."""
+    _maybe_auto_settle_mlb()
+    # Settle MLB rows in picks_unified too (ESPN-id fallback lives in the adapter), ≤ 1/5min.
+    try:
+        import time as _t
+        if _t.time() - _MLB_UNIFIED_SETTLE_TS[0] > 300:
+            _MLB_UNIFIED_SETTLE_TS[0] = _t.time()
+            from engine.picks_unified._legacy_bridge import ensure_adapters_registered as _ear
+            from engine.picks_unified import settle_pending as _usp
+            _ear(); _usp(sport="mlb")
+    except Exception as _e:
+        logger.debug("mlb unified settle failed: %s", _e)
+    import sqlite3 as _sq
+    from engine.db import get_conn
+    conn = get_conn()
+    conn.row_factory = _sq.Row
+    try:
+        gids = [r[0] for r in conn.execute(
+            "SELECT game_id, MAX(captured_at) c FROM paper_shadow "
+            "GROUP BY game_id ORDER BY c DESC LIMIT ?", (limit,))]
+    except Exception as e:
+        logger.warning("mlb unified tracker game list failed: %s", e)
+        gids = []
+    evm = _mlb_extra_evidence_map(conn)
+    rows = []
+    seen = set()
+    def _row(gid, date, matchup, best):
+        return {
+            "game_id": gid, "date": date, "matchup": matchup,
+            "market": best.get("_scope"),
+            "bet_type": best["type"], "pick": best["pick"], "odds": best["odds"],
+            "edge": best["edge"], "result": best["result"], "profit": best.get("profit"),
+            "model_prob": best.get("prob"), "closing_odds": best.get("closing_odds"),
+            "stake_units": best.get("stake_units"),
+            "source": "authority" if best.get("authority") else "paper",
+        }
+    min_date = None
+    for gid in gids:
+        meta = conn.execute("SELECT matchup,date FROM paper_shadow WHERE game_id=? LIMIT 1", (str(gid),)).fetchone()
+        m_date = meta["date"] if meta else None
+        m_matchup = meta["matchup"] if meta else None
+        best = _mlb_recorded_authority_row(m_matchup, m_date, conn) or \
+            _mlb_merged_recorded_best(gid, conn=conn, ev_map=evm)
+        if not best:
+            continue
+        if m_date and (min_date is None or m_date < min_date):
+            min_date = m_date
+        for v in _mlb_matchup_variants(m_matchup or ""):
+            seen.add((m_date, v))
+        rows.append(_row(gid, m_date, m_matchup, best))
+    # Authority-recorded games that never produced a paper_shadow row (e.g. recording
+    # resumed on a day the paper layer skipped) — append so the tracker never hides a
+    # recorded pick. Same window as the paper rows.
+    try:
+        for pr in conn.execute(
+                "SELECT DISTINCT date, matchup FROM picks WHERE date >= ? "
+                "AND (result IS NULL OR result != 'V') ORDER BY date DESC LIMIT ?",
+                (min_date or "2026-10-01", limit)):
+            if any((pr[0], v) in seen for v in _mlb_matchup_variants(pr[1] or "")):
+                continue
+            auth = _mlb_recorded_authority_row(pr[1], pr[0], conn)
+            if not auth:
+                continue
+            for v in _mlb_matchup_variants(pr[1] or ""):
+                seen.add((pr[0], v))
+            rows.append(_row(None, pr[0], pr[1], auth))
+    except Exception as e:
+        logger.debug("mlb unified tracker authority-only append failed: %s", e)
+    rows.sort(key=lambda r: (r.get("date") or ""), reverse=True)
+
+    def _sum(rs):
+        w = sum(1 for r in rs if r["result"] == "W")
+        l = sum(1 for r in rs if r["result"] == "L")
+        pu = sum(1 for r in rs if r["result"] in ("P", "PUSH"))
+        pend = sum(1 for r in rs if not r["result"])
+        prof = round(sum((r["profit"] or 0) for r in rs if r["result"]), 2)
+        dec = w + l
+        return {"n": len(rs), "wins": w, "losses": l, "pushes": pu, "pending": pend,
+                "profit": prof, "win_pct": round(100.0 * w / dec, 1) if dec else 0.0}
+
+    by_market = {}
+    for r in rows:
+        by_market.setdefault(r["market"] or "?", []).append(r)
+    return {
+        "rows": rows,
+        "summary": {"all": _sum(rows)},
+        "by_market": {m: _sum(rs) for m, rs in by_market.items()},
+    }
+
+
+@router.get("/api/tracker/paper")
+def api_paper_shadow():
+    """PAPER-pick shadow, per scope (full / first_inning / derivative) â€” each
+    with a summary + recent rows. Powers the per-tab paper P/L panels and each
+    POTD's running record. Fully isolated from the real picks / real P/L."""
+    from engine.mlb_paper_shadow import (
+        settle_paper_shadow, paper_shadow_summary, paper_shadow_history,
+        settle_potd, record_potd, potd_summary, get_locked_potd,
+        paper_pending_count,
+    )
+    try:
+        settle_paper_shadow()
+        settle_potd()
+    except Exception as e:
+        logger.debug("paper shadow settle (endpoint) failed: %s", e)
+    _sd = et_today_str()
+    out = {}
+    for scope in ("full", "first_inning", "derivative"):
+        try:
+            record_potd(scope, _sd)
+        except Exception:
+            pass
+        out[scope] = {"summary": paper_shadow_summary(scope),
+                      "rows": paper_shadow_history(scope, limit=100),
+                      "pending": paper_pending_count(scope),
+                      "potd": get_locked_potd(scope, _sd),
+                      "potd_record": potd_summary(scope)}
+    return out
+
+
+# â”€â”€ Calibration (MLB-side) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @router.post("/api/calibrate")
 def api_calibrate(days: int = Query(default=30)):
@@ -372,7 +957,7 @@ def api_calibrate_teams():
     return calibrate_teams()
 
 
-# ── Backtest ──────────────────────────────────────────────────
+# â”€â”€ Backtest â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @router.get("/api/backtest")
 def api_backtest(days: int = Query(default=0), min_edge: float = Query(default=3),
@@ -384,7 +969,7 @@ def api_backtest(days: int = Query(default=0), min_edge: float = Query(default=3
 
     # Auto-load historical season data if requesting a past season we
     # haven't ingested yet. 100-game threshold = "this season has barely
-    # any data" — fetch it before running the backtest.
+    # any data" â€” fetch it before running the backtest.
     if yr:
         conn = get_conn()
         game_count = conn.execute(
@@ -397,16 +982,20 @@ def api_backtest(days: int = Query(default=0), min_edge: float = Query(default=3
             fetch_teams()
             fetch_season_results(season=yr)
 
-    results = run_backtest(
-        season=yr,
-        days=days if days > 0 else None,
-        min_edge=min_edge,
-    )
-    results.pop("game_log", None)  # too large for the wire
-    return results
+    # Full-season replay runs 2+ minutes, so the Backtest tab always timed out. Serve the last
+    # result for these params (persisted, survives restarts) and re-run it in the background at
+    # most every 6h (speed pass 2026-10-28). Only the very first run for a param set blocks.
+    ck = f"backtest_mlb_{yr or 0}_{days}_{min_edge:g}"
+
+    def _run():
+        r = run_backtest(season=yr, days=days if days > 0 else None, min_edge=min_edge)
+        r.pop("game_log", None)  # too large for the wire
+        return r
+    from ._bestbets import cached_backtest
+    return cached_backtest(ck, _run)
 
 
-# ── Lineup refresh (MLB) ──────────────────────────────────────
+# â”€â”€ Lineup refresh (MLB) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @router.post("/api/mlb/refresh-lineups")
 def api_refresh_mlb_lineups(date: str | None = Query(None),
@@ -430,7 +1019,7 @@ def api_refresh_mlb_lineups(date: str | None = Query(None),
         return {"error": str(e), "deltas": 0, "invalidated": 0}
 
 
-# ── Debug ─────────────────────────────────────────────────────
+# â”€â”€ Debug â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @router.get("/api/debug/odds")
 def api_debug_odds():
@@ -462,7 +1051,7 @@ def api_debug_teams():
     return [dict(r) for r in rows]
 
 
-# ── Accuracy ──────────────────────────────────────────────────
+# â”€â”€ Accuracy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Cross-sport in spirit (sport= query param) but defaults to MLB and
 # shipped with the MLB router historically.
 
@@ -477,7 +1066,7 @@ def api_accuracy(sport: str = Query(default="mlb")):
         return {"error": str(e)}
 
 
-# ── Predict ───────────────────────────────────────────────────
+# â”€â”€ Predict â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class PredictRequest(BaseModel):
     home_team_id: int
@@ -648,7 +1237,12 @@ def api_predict(req: PredictRequest):
         predict_matchup_str = f"{a_abbr} @ {h_abbr}"
         predict_date = et_today_str()
         recorded = _get_recorded_pick("mlb", predict_matchup_str, predict_date)
-        result["best_pick"] = recorded if recorded else get_best_pick(picks)
+        try:
+            from engine.selection import apply_selected as _apply_selected
+            result["best_pick"] = (_apply_selected("mlb", recorded) if recorded
+                                   else get_best_pick(picks))
+        except Exception:
+            result["best_pick"] = recorded if recorded else get_best_pick(picks)
         result["odds"] = odds
     except Exception as e:
         logger.warning("Unified picks generation failed for %s/%s: %s",
@@ -660,7 +1254,7 @@ def api_predict(req: PredictRequest):
     return result
 
 
-# ── Best Bets ─────────────────────────────────────────────────
+# â”€â”€ Best Bets â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _bb_predict_one(game: dict, all_odds) -> dict | None:
     """Compute the full prediction + odds payload for a single game.
@@ -693,7 +1287,7 @@ def _bb_predict_one(game: dict, all_odds) -> dict | None:
     matched = match_odds(h_abbr, a_abbr, all_odds) or {}
     game_odds = {**(game.get("odds") or {}), **matched}
 
-    # Bypass the 30-min pred cache for games starting within 1hr — late
+    # Bypass the 30-min pred cache for games starting within 1hr â€” late
     # lineup scratches, weather, and line moves all matter most in the
     # final hour. Outside the 1hr window the cache stands.
     use_cache = not _is_game_imminent(game.get("date"))
@@ -726,9 +1320,62 @@ def _bb_predict_one(game: dict, all_odds) -> dict | None:
     }
 
 
+# Best-bets response cache (Austin 2026-09-19 perf): the MLB best-bets MC
+# compute is >4min cold; serve a cached response and refresh it in a background
+# thread (stale-while-revalidate) so the dashboard never waits on it after the
+# first. The paper globals + paper_shadow recording still run inside the compute
+# (cold inline, then in the bg refresh).
+_BB_CACHE: dict = {}
+_BB_TTL_S = 60.0
+
+# Persisted best-bets cache: serve the last-known slate instantly on a cold
+# process (SWR then refreshes it), instead of a synchronous full recompute on
+# the first request after a restart. MintyBot 2026-10-15.
+from ._bestbets import persist_bb as _persist_bb, load_bb as _load_bb  # noqa: E402
+try:
+    import time as _t_rh
+    _bb_rh, _ = _load_bb("mlb")
+    if _bb_rh is not None:
+        _BB_CACHE["mlb"] = (_t_rh.monotonic() - _BB_TTL_S - 1.0, _bb_rh)
+except Exception:
+    pass
+_BB_REFRESHING: set = set()
+
+
 @router.get("/api/best-bets")
-@_bb_reset_on_exit("mlb")
 def api_best_bets():
+    """Served from a short-TTL cache and refreshed in a background thread so the
+    heavy MC compute never blocks a dashboard load after the first (Austin
+    2026-09-19). First hit on a cold cache still computes inline."""
+    import threading
+    import time as _t
+    ck = "mlb"
+    cached = _BB_CACHE.get(ck)
+    if cached is not None:
+        built, resp = cached
+        if (_t.monotonic() - built) >= _BB_TTL_S and ck not in _BB_REFRESHING:
+            _BB_REFRESHING.add(ck)
+
+            def _bg():
+                try:
+                    r = _compute_best_bets()
+                    _BB_CACHE[ck] = (_t.monotonic(), r)
+                    _persist_bb("mlb", r)
+                except Exception as e:
+                    logger.warning("[mlb] bg best-bets refresh failed: %s", e)
+                finally:
+                    _BB_REFRESHING.discard(ck)
+
+            threading.Thread(target=_bg, daemon=True).start()
+        return resp
+    resp = _compute_best_bets()
+    _BB_CACHE[ck] = (_t.monotonic(), resp)
+    _persist_bb("mlb", resp)
+    return resp
+
+
+@_bb_reset_on_exit("mlb")
+def _compute_best_bets():
     """Run predictions on all today's games using the unified picks engine.
 
     Per-game predictions run in parallel (ThreadPoolExecutor) so cold
@@ -765,6 +1412,110 @@ def api_best_bets():
             _bb_progress_increment()
             if row:
                 prepped.append(row)
+
+    # Stash the per-game best PAPER pick for /api/scoreboard to merge onto cards.
+    # Paper-pick shadow (Austin 2026-09-19): also persist each scope into the
+    # ISOLATED paper_shadow table (never the real picks/derivative_picks) so the
+    # tracker can show per-tab paper P/L + each POTD's record.
+    from engine.mlb_paper_shadow import record_paper_shadow, settle_paper_shadow
+    from engine.selection import apply_selected as _apply_selected  # Pick Authority: calibrated DISPLAY copy (record stays raw)
+    _paper = {}
+    for _row in prepped:
+        try:
+            _pp = _mlb_paper_picks(_row["pred"], _row["odds"], _row["h_abbr"], _row["a_abbr"])
+            if _pp:
+                _paper[str(_row["game"]["id"])] = _apply_selected("mlb", _pp)
+                record_paper_shadow(_row["game"]["id"], "full", _pp, game_iso=_row["game"].get("date"))
+        except Exception as _e:
+            logger.debug("paper pick failed: %s", _e)
+    global _MLB_PAPER_BY_GAME
+    _MLB_PAPER_BY_GAME = _paper
+    _fi_paper = {}
+    _dv_paper = {}
+    for _row in prepped:
+        try:
+            _fp = _mlb_first_inning_paper(_row["pred"], _row["odds"], _row["h_abbr"], _row["a_abbr"])
+            if _fp:
+                _fi_paper[str(_row["game"]["id"])] = _apply_selected("mlb", _fp)
+                record_paper_shadow(_row["game"]["id"], "first_inning", _fp, game_iso=_row["game"].get("date"))
+            _dp = _mlb_derivative_paper(_row["pred"], _row["odds"], _row["h_abbr"], _row["a_abbr"])
+            if _dp:
+                _dv_paper[str(_row["game"]["id"])] = _apply_selected("mlb", _dp)
+                record_paper_shadow(_row["game"]["id"], "derivative", _dp, game_iso=_row["game"].get("date"))
+        except Exception as _e:
+            logger.debug("mlb deriv paper failed: %s", _e)
+    global _MLB_1ST_PAPER_BY_GAME, _MLB_DERIV_PAPER_BY_GAME
+    _MLB_1ST_PAPER_BY_GAME = _fi_paper
+    _MLB_DERIV_PAPER_BY_GAME = _dv_paper
+    # Persist picks after kickoff/final (Austin 2026-09-19): api_best_bets only
+    # computes PRE-game, so live/final games drop out of the globals. Backfill them
+    # with the RECORDED pick (+ result). _paper/_fi_paper/_dv_paper ARE the global
+    # dict objects (assigned by ref above), so mutating them updates the globals.
+    try:
+        from engine.mlb_paper_shadow import recorded_paper_pick as _rpp
+        _bygame = {}
+        for _row in prepped:
+            _bygame[str(_row["game"]["id"])] = 1
+        for _g in _get_scoreboard():
+            _gid = str(_g.get("id"))
+            if _gid not in _paper:
+                _r = _rpp(_gid, "full")
+                if _r: _paper[_gid] = _apply_selected("mlb", _r)
+            if _gid not in _fi_paper:
+                _r = _rpp(_gid, "first_inning")
+                if _r: _fi_paper[_gid] = _apply_selected("mlb", _r)
+            if _gid not in _dv_paper:
+                _r = _rpp(_gid, "derivative")
+                if _r: _dv_paper[_gid] = _apply_selected("mlb", _r)
+    except Exception as _e:
+        logger.debug("mlb paper backfill failed: %s", _e)
+    try:
+        settle_paper_shadow()
+    except Exception as _e:
+        logger.debug("paper_shadow settle failed: %s", _e)
+    # Lock today's paper POTD per scope (Austin 2026-09-19) so the DISPLAYED
+    # pick-of-the-day holds across reloads instead of recomputing off the live
+    # slate. Uses the slate's recorded (ESPN) game_ids -> stable paper_shadow rows.
+    try:
+        from engine.mlb_paper_shadow import record_potd as _rp, settle_potd as _sp
+        _slate_gids = list(set(_paper) | set(_fi_paper) | set(_dv_paper))
+        _sd = et_today_str()
+        for _sc in ("full", "first_inning", "derivative"):
+            _rp(_sc, _sd, _slate_gids)
+        _sp()
+    except Exception as _e:
+        logger.debug("paper POTD lock failed: %s", _e)
+
+    # Dual-write today's MLB paper picks into picks_unified (canonical store).
+    # MLB was the ONLY sport not mirroring -> stale since cutover. (Pick Authority L2,
+    # Austin 2026-10-14.) Idempotent upsert; never raises (debug-logged).
+    try:
+        from engine.picks_unified._legacy_bridge import mirror_to_unified as _m2u
+        from engine.db import get_conn as _mlb_conn
+        _mc = _mlb_conn(); _sd2 = et_today_str()
+        _psc = [c[0] for c in _mc.execute("SELECT * FROM paper_shadow LIMIT 0").description]
+        from engine.mlb_paper_shadow import tt_side_text as _tts
+        for _pr in _mc.execute("SELECT * FROM paper_shadow WHERE date=? ORDER BY id DESC LIMIT 300", (_sd2,)).fetchall():
+            _pd = dict(zip(_psc, _pr))
+            try:
+                # Team totals: unified pick_text names the team (+ F5 span) — paper_shadow's
+                # pick is the bare side and the team lives in tt_team/tt_span (Austin
+                # 2026-10-25 "Over 0.5 on which side?"). side = over/under (TOTAL convention;
+                # the unified MLB adapter grades TEAM_TOTAL from team token + side + line).
+                _pk = _pd.get("pick") or ""
+                _side = _pk.strip().lower() if _pk.strip().lower() in ("over", "under") else None
+                if (_pd.get("bet_type") or "").upper() == "TEAM_TOTAL":
+                    _pk = _tts(_pd.get("matchup"), _pd.get("tt_team"), _pd.get("tt_span"), _pk)
+                _m2u(sport="mlb", league="mlb", native_game_id=_pd.get("game_id"),
+                     pick_date=_pd.get("date") or _sd2, matchup=_pd.get("matchup") or "",
+                     bet_type=_pd.get("bet_type") or "", pick_text=_pk, side=_side,
+                     odds=int(_pd.get("odds") or 0), prob=float(_pd.get("model_prob") or 0.0),
+                     edge_pct=float(_pd.get("edge") or 0.0), line=_pd.get("line"),
+                     result=_pd.get("result"), is_shadow=True)
+            except Exception:
+                pass
+    except Exception as _e:
+        logger.debug("mlb unified mirror failed: %s", _e)
 
     _bb_progress_set(phase="building")
 
@@ -808,7 +1559,7 @@ def api_best_bets():
         _picks_store_put("mlb", h_abbr, a_abbr, picks, game_odds)
 
         # Card + POTD must always agree on which pick is "best". To
-        # guarantee that, both compute against CORE picks only —
+        # guarantee that, both compute against CORE picks only â€”
         # derivatives flow exclusively through `derivative_picks` and
         # the dedicated tracker.
         deriv_types = list(_MLB_DERIV_TYPES)
@@ -837,6 +1588,14 @@ def api_best_bets():
             best = {**recorded, "confidence": r_conf}
         else:
             best = live_best
+        # Pick Authority (Workstream #1): calibrate the recorded pick so the
+        # card best_pick == the POTD/hero (same as NHL/football).
+        if recorded:
+            try:
+                from engine.selection import apply_selected as _apply_selected
+                best = _apply_selected("mlb", recorded)
+            except Exception:
+                pass
         # Top derivative pick for the secondary card badge.
         deriv_sorted = sorted(
             (p for p in picks if p.get("type") in deriv_types
@@ -920,7 +1679,7 @@ def api_best_bets():
             "all_picks": all_picks,
             "derivative_picks": derivative_picks,
             "confidence": (best.get("confidence", "lean") if best else "skip"),
-            "win_prob": win_prob,
+            "win_prob": _mlb_card_wp(win_prob, game_odds),
             "rest": rest,
             "factors": factors,
             "injuries": injuries,
@@ -930,7 +1689,7 @@ def api_best_bets():
             "is_locked": locked,
         })
 
-    # Sort by best edge — cores rank above derivatives.
+    # Sort by best edge â€” cores rank above derivatives.
     def _sort_key(b):
         bp = b.get("best_pick")
         if bp:
@@ -970,7 +1729,7 @@ def api_best_bets():
     except Exception as e:
         logger.warning("MLB closing-odds capture (api hit) failed: %s", e)
 
-    # Paper-bet log for derivative markets — separate table so we can
+    # Paper-bet log for derivative markets â€” separate table so we can
     # evaluate derivative profitability in isolation.
     try:
         from engine.derivative_tracker import record_top_derivatives
@@ -981,7 +1740,7 @@ def api_best_bets():
     except Exception as e:
         logger.warning("MLB derivative recorder failed: %s", e)
 
-    # Pick-events breadcrumb log — drives the 📜 badge on BestBets cards.
+    # Pick-events breadcrumb log â€” drives the ðŸ“œ badge on BestBets cards.
     try:
         from engine.pick_events import detect_transitions
         ev = detect_transitions("mlb", [

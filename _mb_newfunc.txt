@@ -1,0 +1,57 @@
+@router.get("/api/mlb/tracker/unified")
+def api_mlb_tracker_unified(limit: int = 300):
+    """ONE MLB tracker = the card's AUTHORITY pick per game — what record_picks
+    wrote to the `picks` table (data/mlb.db) and what _get_recorded_pick reads for
+    the card's headline — one row per game WITH its W/L result, via
+    _mlb_recorded_authority_pick. Replaces the paper_shadow merged re-derivation
+    (_mlb_merged_recorded_best) so the tracker == the card ("one pick, read
+    everywhere"); this also drops the "Over 0.5" team-total clutter — the authority
+    is the core recorded pick, not the paper side-markets. P/L graded FLAT $100.
+    Read-only; per-scope endpoints (/api/tracker/paper) untouched."""
+    _maybe_auto_settle_mlb()
+    import sqlite3 as _sq
+    from engine.db import get_conn
+    conn = get_conn()
+    conn.row_factory = _sq.Row
+    try:
+        gids = [r[0] for r in conn.execute(
+            "SELECT game_id, MAX(created_at) c FROM picks "
+            "WHERE game_id IS NOT NULL AND (result IS NULL OR result != 'V') "
+            "GROUP BY game_id ORDER BY c DESC LIMIT ?", (limit,))]
+    except Exception as e:
+        logger.warning("mlb unified tracker game list failed: %s", e)
+        gids = []
+    rows = []
+    for gid in gids:
+        best = _mlb_recorded_authority_pick(gid, conn=conn)
+        if not best:
+            continue
+        rows.append({
+            "game_id": gid,
+            "date": best.get("date"),
+            "matchup": best.get("matchup"),
+            "market": best.get("_scope"),
+            "bet_type": best["type"], "pick": best["pick"], "odds": best["odds"],
+            "edge": best["edge"], "result": best["result"], "profit": best.get("profit"),
+            "model_prob": best.get("prob"), "closing_odds": best.get("closing_odds"),
+            "stake_units": best.get("stake_units"),
+        })
+
+    def _sum(rs):
+        w = sum(1 for r in rs if r["result"] == "W")
+        l = sum(1 for r in rs if r["result"] == "L")
+        pu = sum(1 for r in rs if r["result"] in ("P", "PUSH"))
+        pend = sum(1 for r in rs if not r["result"])
+        prof = round(sum((r["profit"] or 0) for r in rs if r["result"]), 2)
+        dec = w + l
+        return {"n": len(rs), "wins": w, "losses": l, "pushes": pu, "pending": pend,
+                "profit": prof, "win_pct": round(100.0 * w / dec, 1) if dec else 0.0}
+
+    by_market = {}
+    for r in rows:
+        by_market.setdefault(r["market"] or "?", []).append(r)
+    return {
+        "rows": rows,
+        "summary": {"all": _sum(rows)},
+        "by_market": {m: _sum(rs) for m, rs in by_market.items()},
+    }

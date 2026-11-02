@@ -23,6 +23,8 @@ import math
 import random
 from typing import Iterable
 
+import numpy as np
+
 from ._config import get_league_config
 from ._team_stats import team_rates
 
@@ -73,28 +75,28 @@ def simulate(league: str, home_id: int, away_id: int,
     # Shared pace shock — adds correlation to the joint distribution.
     pace_sigma = league_avg_total * _PACE_SHOCK_PCT * 0.5
 
-    rng = random.Random(seed)
-    home_samples: list[float] = []
-    away_samples: list[float] = []
-    for _ in range(n_sims):
-        shock = rng.gauss(0, pace_sigma)
-        h = rng.gauss(home_expected + shock, home_sigma)
-        a = rng.gauss(away_expected + shock, away_sigma)
-        home_samples.append(h)
-        away_samples.append(a)
+    rng = np.random.default_rng(seed)
+    shock = rng.normal(0.0, pace_sigma, n_sims)
+    home_arr = rng.normal(home_expected + shock, home_sigma)
+    away_arr = rng.normal(away_expected + shock, away_sigma)
 
-    margin_samples = [h - a for h, a in zip(home_samples, away_samples)]
-    total_samples = [h + a for h, a in zip(home_samples, away_samples)]
+    margin_arr = home_arr - away_arr
+    total_arr = home_arr + away_arr
 
-    p_home_win = sum(1 for m in margin_samples if m > 0) / n_sims
+    home_samples: list[float] = home_arr.tolist()
+    away_samples: list[float] = away_arr.tolist()
+    margin_samples = margin_arr.tolist()
+    total_samples = total_arr.tolist()
+
+    p_home_win = int((margin_arr > 0).sum()) / n_sims
     return {
         "n_sims": n_sims,
         "home_samples": home_samples,
         "away_samples": away_samples,
         "margin_samples": margin_samples,
         "total_samples": total_samples,
-        "mean_margin": sum(margin_samples) / n_sims,
-        "mean_total": sum(total_samples) / n_sims,
+        "mean_margin": float(margin_arr.sum()) / n_sims,
+        "mean_total": float(total_arr.sum()) / n_sims,
         "p_home_win": p_home_win,
     }
 

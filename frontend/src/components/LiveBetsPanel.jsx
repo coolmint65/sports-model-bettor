@@ -342,6 +342,11 @@ function LivePickRow({ pick, onLock, state }) {
       )}
       <div className="min-w-0 flex-1">
         <EdgeBadge pick={badgePick} confidence={conf} />
+        {pick.lean && !pick.graduated && (
+          <span className="mt-0.5 inline-block rounded bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-500">
+            Lean · not graduated · not a bet
+          </span>
+        )}
       </div>
       <span className="flex-shrink-0 min-w-[3.5rem] text-right text-xs font-semibold tabular-nums text-muted-foreground">
         {oddsLabel}

@@ -21,16 +21,28 @@ function svPctLabel(sv) {
 }
 
 
+// Final games (Austin 2026-10-01 bugfix): ScoreboardShell's default final-bucket
+// renderer is the bare <FinalRow> primitive -- it only ever reads {game, onClick,
+// extra}, so `bet` (and game.paper_pick) were silently dropped on the floor the
+// moment an NHL game went final, even though both the real pick and the paper-lean
+// fallback were populated correctly. Route finals through the SAME NHLGameCard as
+// the live/upcoming bucket instead -- exactly how BasketballPanel/WNBA keeps using
+// GameCard for its own final bucket -- so the pick (+ settled result) persists
+// pre -> live -> final instead of vanishing at the final whistle.
 function NHLScoreboardImpl(props) {
   return (
     <ScoreboardShell
       {...props}
+      showRail
       title="NHL Games"
       loadingLabel="Loading NHL games..."
       emptyPrimary="No NHL games scheduled today."
       emptySub="Check back for the next slate."
       renderCard={({ game, bet, onClick, key }) => (
-        <NHLGameCard key={key} game={game} bet={bet} onClick={onClick} sport="nhl" />
+        <NHLGameCard key={key} game={game} bet={bet} onClick={onClick} sport="nhl" view={props.view} />
+      )}
+      renderFinal={({ game, bet, onClick, key }) => (
+        <NHLGameCard key={key} game={game} bet={bet} onClick={onClick} sport="nhl" view={props.view} />
       )}
     />
   )
@@ -39,7 +51,7 @@ function NHLScoreboardImpl(props) {
 const NHLScoreboard = memo(NHLScoreboardImpl)
 export default NHLScoreboard
 
-function NHLGameCard({ game, bet, onClick, sport }) {
+function NHLGameCard({ game, bet, onClick, sport, view }) {
   const { home, away } = game
 
   const starters = (game.away_goalie || game.home_goalie) ? (
@@ -64,6 +76,7 @@ function NHLGameCard({ game, bet, onClick, sport }) {
       odds={odds}
       restTiredLabel="B2B"
       sport={sport}
+      view={view}
     />
   )
 }
@@ -165,12 +178,17 @@ function NHLCardInsight({ bet, home, away, game }) {
     })
   }
 
-  // Rest advantage
+  // Rest / fatigue. '3in4' (3 games in 4 nights) is a lighter penalty than
+  // a true back-to-back -- the tier comes from the backend's
+  // home_rest_tier/away_rest_tier (engine.sports.nhl.predict).
   if (rest.home_b2b || rest.away_b2b) {
     const tired = rest.home_b2b ? home.abbreviation : away.abbreviation
+    const tier = rest.home_b2b ? rest.home_rest_tier : rest.away_rest_tier
     reasons.push({
       weight: 5,
-      text: <><strong>{tired}</strong> on back-to-back (fatigue penalty)</>
+      text: tier === '3in4'
+        ? <><strong>{tired}</strong> on 3 games in 4 nights (fatigue)</>
+        : <><strong>{tired}</strong> on back-to-back (fatigue penalty)</>
     })
   }
 

@@ -70,6 +70,20 @@ def capture_closing_odds(league: str) -> int:
     """Snapshot HR closing odds for all pending picks in ``league``.
     Returns rows updated. Idempotent."""
     conn = _conn_for(league)
+    from ..tracker_core import _cc_now_iso
+    _has_ts = any(d[1] == "closing_odds_captured_at"
+                  for d in conn.execute("PRAGMA table_info(picks)"))
+
+    def _stamp(_cid, _val):
+        if _has_ts:
+            conn.execute(
+                "UPDATE picks SET closing_odds = ?, "
+                "closing_odds_captured_at = ? WHERE id = ?",
+                (_val, _cc_now_iso(), _cid))
+        else:
+            conn.execute(
+                "UPDATE picks SET closing_odds = ? WHERE id = ?",
+                (_val, _cid))
     pending = conn.execute(
         "SELECT id, matchup, bet_type, pick, closing_odds "
         "FROM picks WHERE result IS NULL"
@@ -109,16 +123,10 @@ def capture_closing_odds(league: str) -> int:
             continue
         prior = pick.get("closing_odds")
         if prior is None:
-            conn.execute(
-                "UPDATE picks SET closing_odds = ? WHERE id = ?",
-                (int(closing), pick["id"]),
-            )
+            _stamp(pick["id"], int(closing))
             updated += 1
         elif int(prior) != int(closing):
-            conn.execute(
-                "UPDATE picks SET closing_odds = ? WHERE id = ?",
-                (int(closing), pick["id"]),
-            )
+            _stamp(pick["id"], int(closing))
             refreshed += 1
     conn.commit()
     if updated or refreshed:

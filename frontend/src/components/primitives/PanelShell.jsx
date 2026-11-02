@@ -6,7 +6,7 @@
  * is a content edit, not a layout copy. The header takes a small set
  * of slots (title, subtitle, status pill, context chips, right-aligned
  * extras) that cover the variations across MLB/NHL/NBA/Basketball
- * framework/Hockey framework/Motorsports/Golf/Tennis.
+ * framework/Hockey framework/Tennis.
  *
  * Layout contract:
  *   - Header pinned at the top, wraps on narrow screens.
@@ -20,7 +20,7 @@
  *   calibration — per-market reliability + bucket maps
  *   standings   — league / season standings
  *
- * Outright sports (motorsports, golf) re-label `slate` to whatever
+ * Sports that re-label `slate` to whatever
  * makes sense (Race / Tournament) by setting tab.label — the id stays
  * 'slate' so cross-cutting code (POTD hero, deep-links) can rely on it.
  *
@@ -227,7 +227,7 @@ export function ErrorBox({ message }) {
 
 /**
  * Standard tab list for team / framework sports. Outright sports
- * (motorsports, golf) can override `slate` label but should keep
+ * can override `slate` label but should keep
  * the id.
  */
 export const STANDARD_TABS = Object.freeze([

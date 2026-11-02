@@ -197,6 +197,31 @@ def _identity_curve() -> dict:
     return {"method": "identity", "n": 0}
 
 
+# Reject a fitted isotonic curve that fails to DISCRIMINATE among mid-range
+# probabilities. Isotonic on biased/lumpy tracker samples can collapse into a
+# flat plateau across the "action zone" (raw ~0.52-0.68, where nearly all real
+# picks live): MLB n=519 mapped every raw 0.50-0.70 -> 0.5106, so every edge
+# got flattened below the "lean" tag threshold and every pick tagged "skip"
+# (silently emptying the MLB slate — recurred 2026-08 after the same 2026-05
+# incident). The 500-sample floor was meant to prevent this but didn't. When the
+# plateau spread is near-zero the calibrator is worse than nothing, so we
+# passthrough (identity) instead of shipping the collapsed curve. (2026-08-10)
+_MIN_ACTION_ZONE_SPREAD = 0.05
+
+
+def _is_degenerate(curve: dict | None) -> bool:
+    if not curve or curve.get("method") != "isotonic":
+        return False
+    xs = curve.get("x") or []
+    ys = curve.get("y") or []
+    if not xs or not ys or len(xs) != len(ys):
+        return False
+    zone = [ys[i] for i in range(len(xs)) if 0.52 <= xs[i] <= 0.68]
+    if len(zone) < 2:
+        return False
+    return (max(zone) - min(zone)) < _MIN_ACTION_ZONE_SPREAD
+
+
 # ── Public API ────────────────────────────────────────────────
 
 def fit_sport(sport: str, since: str | None = None) -> dict:
@@ -211,7 +236,14 @@ def fit_sport(sport: str, since: str | None = None) -> dict:
         curve = _identity_curve()
         summary["fit"] = "passthrough"
     elif len(samples) >= ISOTONIC_FLOOR:
-        curve = _fit_isotonic(samples) or _fit_platt(samples) or _identity_curve()
+        curve = _fit_isotonic(samples)
+        if _is_degenerate(curve):
+            logger.warning(
+                "blend_cal[%s]: isotonic fit degenerate (flat action zone) on "
+                "n=%d — passthrough instead", sport, len(samples))
+            curve = _identity_curve()
+        elif not curve:
+            curve = _fit_platt(samples) or _identity_curve()
         summary["fit"] = curve["method"]
     else:
         # Reached only if MIN_SAMPLES < ISOTONIC_FLOOR (currently equal).

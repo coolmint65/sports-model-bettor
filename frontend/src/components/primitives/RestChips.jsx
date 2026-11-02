@@ -22,10 +22,18 @@ export default function RestChips({ rest, home, away, tiredLabel = 'tired' }) {
 
   if (!homeTired && !awayTired && !homeRested && !awayRested) return null
 
+  // When the predictor exposes a rest tier (currently NHL only -- see
+  // home_rest_tier/away_rest_tier in engine.sports.nhl.predict), a lighter
+  // "3 games in 4 nights" fatigue state gets its own label instead of being
+  // lumped in with a true back-to-back. Sports without the tier field keep
+  // the plain tiredLabel, unchanged.
+  const homeLabel = rest.home_rest_tier === '3in4' ? '3-in-4' : tiredLabel
+  const awayLabel = rest.away_rest_tier === '3in4' ? '3-in-4' : tiredLabel
+
   return (
     <div className="flex flex-wrap gap-1">
-      {awayTired && <Chip tone="warn">{away.abbreviation} {tiredLabel}</Chip>}
-      {homeTired && <Chip tone="warn">{home.abbreviation} {tiredLabel}</Chip>}
+      {awayTired && <Chip tone="warn">{away.abbreviation} {awayLabel}</Chip>}
+      {homeTired && <Chip tone="warn">{home.abbreviation} {homeLabel}</Chip>}
       {awayRested && <Chip tone="info">{away.abbreviation} rested</Chip>}
       {homeRested && <Chip tone="info">{home.abbreviation} rested</Chip>}
     </div>

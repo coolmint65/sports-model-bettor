@@ -30,6 +30,8 @@ def _classify(bet_type: str) -> tuple[Scope, str, Variant]:
         return Scope.Q4, bet_type, Variant.MAIN
     if bt.startswith("H1"):
         return Scope.H1, bet_type, Variant.MAIN
+    if bt.startswith("H2"):
+        return Scope.H2, bet_type, Variant.MAIN
     if bt.startswith("ALT "):
         return Scope.FULL, bet_type, Variant.ALT
     return Scope.FULL, bet_type, Variant.MAIN

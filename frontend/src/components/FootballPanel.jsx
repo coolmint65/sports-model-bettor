@@ -12,16 +12,27 @@
 import { useEffect, useMemo, useState } from 'react'
 import { cn } from '../lib/utils'
 import GameCard from './primitives/GameCard'
+import RailLayout, { CardAnchor } from './primitives/RailLayout'
 import { OddsGrid, OddsRow, CardInsight as CardInsightShell } from './primitives/OddsGrid'
+import MarketToggle from './primitives/MarketToggle'
 import PanelShell from './primitives/PanelShell'
 import PickHistory from './PickHistory'
+import UnifiedTracker from './UnifiedTracker'
+import PaperPickOfDayHero from './PaperPickOfDayHero'
 import PickOfDayHero from './PickOfDayHero'
+import PropsPanel from './PropsPanel'
+import CLVBadge from './CLVBadge'
 
+// Outer tabs mirror WNBA's BB_TABS exactly (Bets · Tracker · Calibration ·
+// Standings). Player-Props is no longer a top-level tab —
+// they moved INSIDE the Bets/Tracker views as MarketToggle options
+// (Full Game · Anytime TDs · Player Props), matching how WNBA nests
+// Full · Q1 · Player Props under a single Bets tab. See buildMarketOptions.
 const FB_TABS = [
   { id: 'bets',        label: 'Bets' },
   { id: 'tracker',     label: 'Tracker' },
-  { id: 'standings',   label: 'Standings' },
   { id: 'calibration', label: 'Calibration' },
+  { id: 'standings',   label: 'Standings' },
 ]
 
 
@@ -64,14 +75,11 @@ export default function FootballPanel({ api, leagueKey = 'ufl' }) {
       onTabChange={setView}
     >
       {view === 'bets' && (
-        <>
-          <PickOfDayHero sport={leagueKey} />
-          <BetsView api={api} leagueKey={leagueKey} cfg={cfg} />
-        </>
+        <BetsView api={api} leagueKey={leagueKey} cfg={cfg} />
       )}
-      {view === 'tracker'     && <TrackerView api={api} leagueKey={leagueKey} />}
-      {view === 'standings'   && <StandingsView api={api} leagueKey={leagueKey} />}
+      {view === 'tracker'     && <UnifiedTracker sport={`football/${leagueKey}`} api={api} />}
       {view === 'calibration' && <CalibrationView api={api} leagueKey={leagueKey} />}
+      {view === 'standings'   && <StandingsView api={api} leagueKey={leagueKey} />}
     </PanelShell>
   )
 }
@@ -189,16 +197,18 @@ function adaptGameShape(g) {
       name: g.home_name,
       score: g.home_score,
       logo: g.home_logo,
+      odds: (g.odds && g.odds.home_ml != null) ? g.odds.home_ml : null,  // per-side ML on the card (overhaul step 1)
     },
     away: {
       abbreviation: g.away_abbr,
       name: g.away_name,
       score: g.away_score,
       logo: g.away_logo,
+      odds: (g.odds && g.odds.away_ml != null) ? g.odds.away_ml : null,
     },
     status: {
       state: stateMap[g.status] || 'pre',
-      detail: g.status === 'final' ? 'Final' : '',
+      detail: g.status === 'final' ? 'Final' : (g.status_detail || ''),   // live clock, e.g. "9:15 - 3rd" (2026-10-31)
     },
     series: null,
     odds: g.odds || null,
@@ -216,10 +226,11 @@ function adaptBetShape(g) {
   return {
     game_id: g.game_id,
     best_pick: best,
+    paper_pick: (() => { const pp = g.paper_picks || []; return pp.length ? { ...pp.reduce((a, b) => ((b.edge ?? -99) > (a.edge ?? -99) ? b : a)), graduated: !!g.best_pick } : (g.card_lean || null); })(),  // lean fallback (Austin 2026-10-26)
     confidence: conf,
-    win_prob: pred.p_home != null
+    win_prob: g.card_win_prob ?? (pred.p_home != null
       ? { home: pred.p_home, away: pred.p_away ?? (1 - pred.p_home) }
-      : null,
+      : null),
     factors: {},
     season_context: {},
     rest: {},
@@ -228,20 +239,73 @@ function adaptBetShape(g) {
 }
 
 
+// Per-league market sections — mirrors WNBA's _MARKET_OPTIONS_SPECIAL +
+// buildMarketOptions. Player-Props is NFL-only (the models
+// are nflverse-backed and NFL-gated on the backend), so only NFL gets the
+// extra market toggles; CFB/UFL show "Full Game" alone (no toggle renders
+// when there's a single option, same as a WNBA league with no Q1/props).
+// Adding a league to either market is one line here.
+const _FB_MARKET_SPECIAL = {
+  nfl: [{ id: 'props',      label: 'Player Props' }],
+}
+
+function buildMarketOptions(leagueKey) {
+  const opts = [{ id: 'best', label: 'Best' }]
+  if (_FB_MARKET_SPECIAL[leagueKey]) {
+    opts.push(..._FB_MARKET_SPECIAL[leagueKey])
+  }
+  return opts
+}
+
+
 function BetsView({ api, leagueKey, cfg }) {
+  const marketOptions = useMemo(() => buildMarketOptions(leagueKey), [leagueKey])
+  const [market, setMarket] = useState(marketOptions[0]?.id || 'full')
+  // Reset to Full Game when switching leagues — a stale market id (e.g.
+  // 'props' carried over to a league without it) would render empty.
+  useEffect(() => { setMarket(marketOptions[0]?.id || 'full') },
+            [leagueKey, marketOptions])
   const [slate, setSlate] = useState(null)
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState(null)
+  const [paperRec, setPaperRec] = useState(null)  // paper-shadow aggregate for the POTD record
 
-  const refresh = () => {
-    setLoading(true)
+  const refresh = (silent = false) => {
+    // Austin 2026-10-17: background polls (the 30s interval + the cold-retry)
+    // pass silent=true so they DON'T flash the loading state. setLoading(true)
+    // was swapping the whole slate out for a spinner every 30s and bouncing you
+    // back to the top of the page; silent polls update the slate in place.
+    if (!silent) setLoading(true)
     setErr(null)
     api.get(`/football/${leagueKey}/today`)
       .then(r => setSlate(r.data))
       .catch(e => setErr(e?.message || String(e)))
-      .finally(() => setLoading(false))
+      .finally(() => { if (!silent) setLoading(false) })
   }
   useEffect(refresh, [api, leagueKey])  // eslint-disable-line
+  // Keep the slate ticking while the tab stays open — refresh() above only
+  // fires once per mount/league-change, so without this a live card (score,
+  // clock, status) freezes at whatever was loaded, even though the backend
+  // keeps moving. Mirrors LiveBetsPanel's setInterval (Austin 2026-10-10).
+  useEffect(() => {
+    const interval = setInterval(() => refresh(true), 30000)
+    return () => clearInterval(interval)
+  }, [api, leagueKey])  // eslint-disable-line
+  // POTD running record (paper-shadow aggregate) — Austin 2026-09-19.
+  useEffect(() => {
+    let alive = true
+    api.get(`/football/${leagueKey}/tracker/history`)
+      .then(r => { if (alive) setPaperRec(r.data?.paper?.potd_record || null) })  // POTD-own record (Austin 2026-09-19)
+      .catch(() => { if (alive) setPaperRec(null) })
+    return () => { alive = false }
+  }, [api, leagueKey])
+  // Cold-cache backend returns {loading:true} + computes in the background;
+  // poll every few seconds until the real slate lands (Austin 2026-09-19 perf).
+  useEffect(() => {
+    if (!slate?.loading) return
+    const t = setTimeout(() => refresh(true), 4000)
+    return () => clearTimeout(t)
+  }, [slate])  // eslint-disable-line
 
   const games = slate?.games || []
   const totalPicks = games.reduce((n, g) => n + (g.picks?.length || 0), 0)
@@ -257,9 +321,30 @@ function BetsView({ api, leagueKey, cfg }) {
     game: adaptGameShape(g), bet: adaptBetShape(g), raw: g,
   }))
 
+  // The Player-Props market delegates to its own panel (each
+  // owns its loader + persist/settle history), same as WNBA's props/live
+  // early returns — skip the full-game slate scaffold entirely.
+  if (market === 'props') {
+    return (
+      <div className="space-y-4">
+        {marketOptions.length > 1 && (
+          <div className="flex justify-end">
+            <MarketToggle options={marketOptions} active={market} onChange={setMarket} />
+          </div>
+        )}
+        <PropsPanel sport={leagueKey} />
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-4">
-      {loading && (
+      {marketOptions.length > 1 && (
+        <div className="flex justify-end">
+          <MarketToggle options={marketOptions} active={market} onChange={setMarket} />
+        </div>
+      )}
+      {(loading || slate?.loading) && (
         <div className="rounded-lg border border-border bg-card px-6 py-10 text-center text-sm text-muted-foreground">
           Loading {cfg.display_name} slate…
         </div>
@@ -269,8 +354,9 @@ function BetsView({ api, leagueKey, cfg }) {
           Failed to load slate: {err}
         </div>
       )}
-      {slate && !loading && (
+      {slate && !loading && !slate.loading && (
         <>
+          <PickOfDayHero sport={leagueKey} />
           <div className="flex items-center justify-between">
             <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
               {slate.date} · {games.length} game{games.length === 1 ? '' : 's'}
@@ -287,21 +373,24 @@ function BetsView({ api, leagueKey, cfg }) {
                 No games on this slate.
               </div>
               <div className="text-xs text-muted-foreground mt-1">
-                UFL spring season runs March–June. Slate populates as ESPN posts the upcoming week.
+                {leagueKey === 'ufl'
+                  ? 'UFL spring season runs March–June. Slate populates as ESPN posts the upcoming week.'
+                  : 'Slate populates as ESPN posts upcoming games — check back on game day.'}
               </div>
             </div>
           ) : (
-            <>
+            <RailLayout entries={[...adaptedActive, ...adaptedFinal]}>
               {adaptedActive.length > 0 && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {adaptedActive.map(({ game, bet, raw }) => (
+                    <CardAnchor key={game.game_id} id={game.id ?? game.game_id}>
                     <FootballGameCard
-                      key={game.game_id}
                       game={game}
                       bet={bet}
                       raw={raw}
                       sport={`football/${leagueKey}`}
                     />
+                    </CardAnchor>
                   ))}
                 </div>
               )}
@@ -312,18 +401,19 @@ function BetsView({ api, leagueKey, cfg }) {
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3 opacity-80">
                     {adaptedFinal.map(({ game, bet, raw }) => (
+                      <CardAnchor key={game.game_id} id={game.id ?? game.game_id}>
                       <FootballGameCard
-                        key={game.game_id}
                         game={game}
                         bet={bet}
                         raw={raw}
                         sport={`football/${leagueKey}`}
                       />
+                      </CardAnchor>
                     ))}
                   </div>
                 </>
               )}
-            </>
+            </RailLayout>
           )}
           <div className="text-[10px] text-muted-foreground italic px-1">
             Beta — Elo + Monte Carlo ensemble. GBM leg gated until the
@@ -423,15 +513,162 @@ function FootballCardInsight({ bet, home, away, raw }) {
     })
   }
 
+  // One-bet-per-card (Austin 2026-09-19): the paper lean used to render here IN
+  // ADDITION to the gated EdgeBadge (this insight only shows when there IS a gated
+  // pick), so a gated game showed green + a redundant paper badge. The single
+  // headline bet lives in GameCard (gated EdgeBadge, or PaperBadge when there's no
+  // gated pick); the POTD carries the best paper lean. Insight = strongest reason.
   if (reasons.length === 0) return null
   reasons.sort((a, b) => b.weight - a.weight)
-  return <CardInsightShell>{reasons[0].text}</CardInsightShell>
+  return (
+    <div className="space-y-1">
+      <CardInsightShell>{reasons[0].text}</CardInsightShell>
+    </div>
+  )
 }
 
 
 // ── Tracker view ─────────────────────────────────────────────
 
+
+function fmtAmerican(o) {
+  if (o == null) return '—'
+  return o > 0 ? `+${o}` : `${o}`
+}
+
+function PlayerPropCard({ p }) {
+  const [imgOk, setImgOk] = useState(true)
+  const pct = Math.round((p.model_prob || 0) * 100)
+  const edge = p.edge
+  const showEv = p.plus_ev && edge != null && edge <= 30
+  const initials = String(p.player_name || '?')
+    .split(' ').map(s => s[0]).filter(Boolean).slice(0, 2).join('')
+  const accent = (edge != null && edge >= 6) ? 'border-l-positive'
+    : (edge != null && edge > 0) ? 'border-l-primary' : 'border-l-border'
+  const thr = Math.round((p.line ?? 0))
+  return (
+    <div className={cn(
+      'flex items-center gap-3 rounded-xl border border-border border-l-4 bg-card p-3',
+      'transition-colors hover:bg-accent/40', accent)}>
+      <div className="relative h-12 w-12 flex-shrink-0">
+        <div className="h-12 w-12 overflow-hidden rounded-full bg-muted ring-1 ring-border">
+          {imgOk && p.headshot
+            ? <img src={p.headshot} alt="" className="h-full w-full object-cover"
+                   onError={() => setImgOk(false)} />
+            : <div className="flex h-full w-full items-center justify-center text-xs font-bold text-muted-foreground">
+                {initials}
+              </div>}
+        </div>
+        {p.team_logo && (
+          <img src={p.team_logo} alt="" loading="lazy"
+               className="absolute -bottom-1 -right-1 h-5 w-5 rounded-full bg-card p-0.5 ring-1 ring-border" />
+        )}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="truncate font-semibold text-foreground">{p.player_name}</div>
+        <div className="text-[11px] text-muted-foreground">{p.position || '—'} · {p.team}</div>
+        <div className="mt-1 text-sm font-semibold text-foreground">
+          {p.bet_type} <span className="text-primary">{thr}+</span>
+          {p.projection != null && (
+            <span className="ml-2 text-[11px] font-normal text-muted-foreground">
+              proj {p.projection}
+            </span>
+          )}
+        </div>
+      </div>
+      <div className="flex-shrink-0 text-right">
+        <div className="text-xl font-bold leading-none tabular-nums text-foreground">{pct}%</div>
+        <div className="mt-0.5 text-[9px] uppercase tracking-wider text-muted-foreground">to clear</div>
+        <div className="mt-1 flex items-center justify-end gap-2">
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {p.odds != null ? fmtAmerican(p.odds) : '—'}
+          </span>
+          {edge != null && (
+            <span className={cn('text-xs font-semibold tabular-nums',
+              edge > 30 ? 'text-amber-500'
+                : edge > 0 ? 'text-positive' : 'text-muted-foreground')}>
+              {edge > 0 ? '+' : ''}{edge.toFixed(1)}%
+            </span>
+          )}
+          {showEv && (
+            <span className="rounded bg-positive/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-positive">
+              +EV
+            </span>
+          )}
+        </div>
+        <div className="mt-1 flex justify-end">
+          <CLVBadge entryOdds={p.odds} closingOdds={p.closing_odds} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function PlayerPropsView({ api, leagueKey }) {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    setLoading(true)
+    api.get(`/${leagueKey}/player-props/today`)
+      .then(r => setData(r.data))
+      .catch(() => setData(null))
+      .finally(() => setLoading(false))
+  }, [api, leagueKey])
+
+  if (loading) {
+    return (
+      <div className="rounded-xl border border-border bg-card px-6 py-10 text-center text-sm text-muted-foreground">
+        Loading player props…
+      </div>
+    )
+  }
+  const picks = data?.picks || []
+  if (!picks.length) {
+    return (
+      <div className="rounded-xl border border-dashed border-border bg-card/50 px-6 py-10 text-center text-sm">
+        <div className="font-semibold text-foreground">No player props yet.</div>
+        <div className="mt-1 text-xs text-muted-foreground">
+          {data?.message
+            ? data.message
+            : 'Populates when Hard Rock posts NFL player-prop lines for the upcoming slate.'}
+        </div>
+      </div>
+    )
+  }
+  return (
+    <section className="space-y-2">
+      <div className="px-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        {data.date} · {picks.length} prop{picks.length === 1 ? '' : 's'} · passing / rushing / receiving yards + receptions · ranked by edge
+      </div>
+      <div className="space-y-2">
+        {picks.map(p => (
+          <PlayerPropCard key={`${p.player_id}-${p.bet_type}-${p.line}`} p={p} />
+        ))}
+      </div>
+      <div className="px-1 pt-1 text-[10px] italic text-muted-foreground">
+        Paper model · projects each player's per-game distribution from nflverse
+        play-by-play → P(stat ≥ line), priced against Hard Rock's alt-line
+        thresholds. Edge = model − HR implied.
+      </div>
+    </section>
+  )
+}
+
+
+// Tracker uses the same market options as the Bets view (WNBA keeps them
+// separate to allow later divergence, but delegates for now). Full-game
+// tracker = PickHistory; the Player-Props market delegates to
+// the same panels the Bets view uses, each of which carries its own
+// settled/W-L history (so they double as their own tracker).
+const buildTrackerOptions = buildMarketOptions
+
+
 function TrackerView({ api, leagueKey }) {
+  const trackerOptions = useMemo(() => buildTrackerOptions(leagueKey), [leagueKey])
+  const [market, setMarket] = useState(trackerOptions[0]?.id || 'full')
+  useEffect(() => { setMarket(trackerOptions[0]?.id || 'full') },
+            [leagueKey, trackerOptions])
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
 
@@ -450,14 +687,57 @@ function TrackerView({ api, leagueKey }) {
       .finally(refresh)
   }
 
+  // The Player-Props tracker market delegates to its own panel
+  // (they show settled picks with WON/LOST inline), mirroring how WNBA's
+  // tracker routes props → PropsPanel.
+  if (market === 'props') {
+    return (
+      <div className="space-y-4">
+        {trackerOptions.length > 1 && (
+          <div className="flex justify-end">
+            <MarketToggle options={trackerOptions} active={market} onChange={setMarket} />
+          </div>
+        )}
+        <PropsPanel sport={leagueKey} />
+      </div>
+    )
+  }
+
   return (
-    <PickHistory
+    <div className="space-y-4">
+      {trackerOptions.length > 1 && (
+        <div className="flex justify-end">
+          <MarketToggle options={trackerOptions} active={market} onChange={setMarket} />
+        </div>
+      )}
+      <PickHistory
       summary={data?.summary}
+      paper={data?.paper?.summary}
+      paperRows={Object.values((data?.paper?.rows || []).reduce((acc, r) => {
+        // One play per game (Austin 2026-09-19, opt B): keep the highest-edge
+        // pick per matchup so the tracker reads like a card, not 3 correlated
+        // bets — the shadow DB still records spread+total+ML for the market eval.
+        const _k = (r.date || '') + '|' + (r.matchup || '')
+        if (Math.abs(r.edge ?? 0) > 15) return acc  // |edge|<=15 ceiling — same best-lean rule as POTD/card/count (Austin 2026-09-21)
+        if (!acc[_k] || (r.edge ?? -Infinity) > (acc[_k].edge ?? -Infinity)) acc[_k] = r  // max POSITIVE edge, not biggest fade (Austin 2026-09-21)
+        return acc
+      }, {})).map(r => {
+        // Show the line on spread/total picks (Austin 2026-09-19): the paper rows
+        // store pick + line separately, so combine them for the PICK column.
+        const bt = String(r.bet_type || '').toUpperCase()
+        const pick = bt === 'TOTAL'
+          ? `${r.pick} ${r.line}`
+          : (bt === 'SPREAD' || bt === 'RUN_LINE' || bt === 'PUCK_LINE') && r.line != null
+            ? `${r.pick} ${r.line > 0 ? '+' : ''}${r.line}`
+            : r.pick
+        return { ...r, type: r.bet_type, prob: r.model_prob, pick }
+      })}
       history={data?.rows || []}
       loading={loading}
       onSettle={onSettle}
       sport={leagueKey}
-    />
+      />
+    </div>
   )
 }
 

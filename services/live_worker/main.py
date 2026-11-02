@@ -67,7 +67,7 @@ logger = logging.getLogger("live_worker")
 # HR live odds get hit on the same tick (see _poll_sport). If HR
 # starts throwing 429s, decouple by adding a separate scheduler
 # entry for fetch_live_odds at a slower cadence.
-_POLL_INTERVAL_S = {"nba": 5, "nhl": 10, "wnba": 10, "ncaam": 10, "afl": 10}
+_POLL_INTERVAL_S = {"ncaam": 60, "nhl": 30}  # nhl back 2026-10-28: rebuilt live model (engine.sports.nhl.live_model), shadow-recorded  # 2026-09-23 (Austin): nba/nhl/wnba removed from live poll map (paper-only live polling retired); afl removed 2026-10-27 with the smaller leagues
 
 # Garbage-collect rows older than this so completed games don't pile
 # up in the cache. 30 min is generous — gives the API time to read
@@ -91,7 +91,7 @@ _SETTLE_EVERY_S = 60
 # Tracked separately from state polling because the summary endpoint
 # is heavier (per-game fetch) and we want to throttle it independently
 # of the all-games-in-one scoreboard call.
-_PBP_INTERVAL_S = {"nba": 30, "nhl": 30, "wnba": 30, "ncaam": 30, "afl": 30}
+_PBP_INTERVAL_S = {"ncaam": 30}  # 2026-09-23 (Austin): see _POLL_INTERVAL_S; nba/nhl/wnba live polling retired; afl removed 2026-10-27
 
 # Roster refresh cadence. NHL goalies confirm ~2h before puck drop;
 # MLB lineups confirm 2-3h before first pitch; NBA load-management
@@ -118,6 +118,10 @@ _REFRESH_EVERY_S = 900
 _CLV_CAPTURE_INTERVAL_S = 60
 _BACKEND_BASE = os.environ.get("LIVE_WORKER_BACKEND",
                                 "http://127.0.0.1:8000")
+# Sports switched OFF for the off-season (Austin 2026-10-29: "MLB is officially over so lets turn it
+# off"). No prematch emission, lineup refresh, calibration refits or core CLV for these; settles keep
+# running so anything still pending grades. Revive = drop it from LIVE_WORKER_OFF_SPORTS (env) or here.
+_OFF_SPORTS = frozenset(s.strip() for s in os.environ.get("LIVE_WORKER_OFF_SPORTS", "mlb").split(",") if s.strip())
 _REFRESH_PATHS = {
     "mlb": "/api/mlb/refresh-lineups",
     "nhl": "/api/nhl/refresh-goalies",
@@ -142,7 +146,7 @@ _REFRESH_STARTUP_DELAY_S = 60
 # to" instead of "refit on a clock and hope it's enough."
 _CALIBRATION_CHECK_EVERY_S = 3600
 _CALIBRATION_FLOOR_HOURS = 24
-_CALIBRATION_SPORTS = ("mlb", "nhl", "nba", "tennis", "wnba", "ncaam", "afl")
+_CALIBRATION_SPORTS = ("mlb", "nhl", "nba", "wnba", "ncaam", "ncaaw", "football_nfl", "football_cfb")  # ATD/ATG removed 2026-10-22 (anytime models torn down); tennis+afl RETIRED 2026-08-09; euroleague + ufl removed 2026-10-27 (smaller leagues)
 
 # Closing-line prior refit — daily safety floor. Same A8 pattern: the
 # loop ticks daily, but the floor check skips when a recent refit
@@ -174,6 +178,21 @@ _ELO_REFRESH_EVERY_S = 86_400
 # `refit` event per sport so the floor recognises a successful run.
 _PLAYER_PROPS_CHECK_EVERY_S = 21_600   # check every 6h
 _PLAYER_PROPS_FLOOR_HOURS = 24
+
+# Player-prop settle — every 30 min. settle_player_props was previously
+# only reachable via the props-tracker HTTP route (human-triggered), so
+# unwatched slates never graded. Clock-driven settle grades them within
+# ~30 min of a game finalising. Internal throttles (games refresh 3 min,
+# log ingest 5 min) keep the per-tick cost cheap.
+_PLAYER_PROPS_SETTLE_EVERY_S = 1_800
+
+# NFL props v2 (2026-10-26) -- every 30 min: the picker logs every main line each
+# pass and locks the card on game day from 09:00 ET, so the 6h floor tick could
+# miss a 1pm slate entirely.
+_NFL_PROPS_EVERY_S = 1_800
+# NBA props v2 (2026-10-26) -- same 30-min cadence: every pass logs every main line (with
+# DraftKings' line beside it) and locks the card on game day from 09:00 ET.
+_NBA_PROPS_EVERY_S = 1_800
 
 # Framework-league results refresh — hourly. Today's slate for
 # basketball-framework (WNBA / NCAAM / Euroleague / etc) and hockey-
@@ -226,7 +245,6 @@ _SOCCER_HT_DRAIN_EVERY_S = 90         # fire_halftime_picks per in-season league
                                        # halving per-league HR call rate
 _FOOTBALL_SLATE_EVERY_S = 1800        # api_football_today per league (30m)
 _BASEBALL_SLATE_EVERY_S = 1800        # api_baseball_today per league (30m)
-_MOTORSPORTS_SETTLE_EVERY_S = 600     # settle_race for finalized races (10m)
 
 
 _running = True
@@ -284,6 +302,19 @@ def _poll_sport(sport: str) -> int:
         except Exception as e:
             logger.warning("live upsert failed for %s/%s: %s",
                            sport, s.get("game_id"), e)
+    if sport == "nhl":
+        # Live shadow lane (2026-10-28): each period's first live read of ML / PL / O/U per game is
+        # mirrored to picks_unified (is_shadow=1) so the live markets build a graded record.
+        try:
+            from engine.sports.nhl.live_model import record_shadow, capture_live_clv
+            live = [{**s, "odds": odds_map.get(f"{s['away']['abbr']}@{s['home']['abbr']}")}
+                    for s in states if odds_map.get(f"{s['away']['abbr']}@{s['home']['abbr']}")]
+            n_sh = sum(record_shadow(s) for s in live)
+            n_clv = sum(capture_live_clv(s) for s in live)   # same-selection price ~3 min later, score unchanged
+            if n_sh or n_clv:
+                logger.info("nhl live shadow: %d row(s), %d live CLV", n_sh, n_clv)
+        except Exception as e:
+            logger.warning("nhl live shadow failed: %s", e)
     if written:
         logger.info("polled %s — %d game(s) written, %d with HR odds",
                     sport, written, sum(1 for s in states
@@ -304,6 +335,13 @@ def _trigger_intermission_predict(event: dict) -> None:
     unconsumed and a later worker run can retry.
     """
     sport = event["sport"]
+    # Austin 2026-09-16: removed the live (in-game) prediction for NHL + NBA/WNBA — no live edge, so
+    # stop generating live picks for them. Covers both the fresh-fire and the drain retry path (both
+    # route through here). NCAAM/AFL keep the basketball intermission predictor below.
+    # NCAAM / NCAAW joined 2026-10-26 (college to the NBA standard): no live lane until the
+    # pregame Pick Authority proves an edge -- the halftime predictor was ungated.
+    if sport in ("nhl", "nba", "wnba", "ncaam", "ncaaw"):
+        return
     if sport == "nhl":
         from engine.live._nhl_period_predict import run_for_event
         run_for_event(event)
@@ -476,19 +514,21 @@ def _has_pending_today_basketball(league: str) -> bool:
 
 
 def _has_pending_today_soccer(league: str) -> bool:
-    """Soccer twin of _has_pending_today — keyed by club league rather
-    than top-level sport. Same threshold (pending + closing_odds NULL
-    + today's date) so HR fetches stay cheap when nothing needs CLV."""
-    from datetime import datetime as _dt
-    today = _dt.now().strftime("%Y-%m-%d")
+    """Soccer twin of _has_pending_today: any pending pick whose match kicks off within the
+    next 36h (and hasn't yet). It used to also require closing_odds IS NULL, so the first early
+    stamp (often hours before kickoff, right after the pick) was never refreshed and the "close"
+    was just the bet price (2026-10-28 audit). Capture is cheap (HR odds cache) and every
+    refresh up to kickoff overwrites, so the last pre-kickoff read is the close."""
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    now = _dt.now(_tz.utc)
+    lo, hi = now.strftime("%Y-%m-%dT%H:%M"), (now + _td(hours=36)).strftime("%Y-%m-%dT%H:%M")
     try:
         from engine.soccer._db import get_conn as _soc_conn
         conn = _soc_conn(league)
         row = conn.execute(
-            "SELECT COUNT(*) AS n FROM picks "
-            "WHERE date = ? AND result IS NULL "
-            "AND closing_odds IS NULL",
-            (today,),
+            "SELECT COUNT(*) AS n FROM picks p JOIN matches m ON m.id = p.match_id "
+            "WHERE p.result IS NULL AND m.start_time > ? AND m.start_time <= ?",
+            (lo, hi),
         ).fetchone()
     except Exception:
         return False
@@ -589,6 +629,8 @@ def _run_calibration_refresh() -> None:
         logger.warning("calibration refresh import failed: %s", e)
         return
     for sport in _CALIBRATION_SPORTS:
+        if sport in _OFF_SPORTS:
+            continue
         try:
             if not _events.needs_refit(
                 "empirical_calibration", sport,
@@ -661,7 +703,7 @@ def _run_football_slate() -> None:
     UFL only emitted picks when the user opened the page; this lifts
     that gate."""
     try:
-        from engine.football._config import LEAGUE_REGISTRY as _FB_REG
+        from engine.football import LEAGUE_REGISTRY as _FB_REG
         from backend.server.routes_football import (
             api_football_today as _fb_today,
         )
@@ -689,7 +731,7 @@ def _run_baseball_framework_slate() -> None:
     later) and fire its `today` route. Same gap-closure pattern as
     football — slate refresh + picks + settle land via the route."""
     try:
-        from engine.baseball._config import LEAGUE_REGISTRY as _BB_REG
+        from engine.baseball import LEAGUE_REGISTRY as _BB_REG
         from backend.server.routes_baseball import (
             api_baseball_today as _bb_today,
         )
@@ -743,6 +785,12 @@ def _run_soccer_halftime_drain() -> None:
     recorded but no final yet, runs the halftime-adjusted predictor,
     emits picks against HR live odds. UPSERT-keyed so per-minute
     re-runs are no-ops when the live state hasn't changed."""
+    # OFF 2026-10-28 (MintyBot, Austin's live-model pass): the halftime picks were never graded
+    # (result NULL on every row) and priced nonsense -- "MAN or Draw" +550 at 0-0 with a "+59%
+    # edge" (stale pre-game prices vs an in-play model). Live soccer waits for the NHL live model
+    # to prove itself (engine.sports.nhl.live_model).
+    return
+
     try:
         from engine.soccer._config import active_leagues as _soc_active
         from engine.soccer._live_picks import fire_halftime_picks
@@ -758,49 +806,6 @@ def _run_soccer_halftime_drain() -> None:
                             league, stored)
         except Exception as e:
             logger.debug("soccer halftime %s failed: %s", league, e)
-
-
-def _run_motorsports_settle() -> None:
-    """Walk every motorsports series; for any race that's finalized
-    with pending picks, call `settle_race`. The framework slate route
-    only refreshes upcoming races — it doesn't grade past ones, which
-    left F1 picks pending after race finals."""
-    try:
-        from engine.motorsports import SERIES_REGISTRY as _MS_REG
-        from engine.motorsports._db import get_conn as _ms_conn
-        from engine.motorsports._picks import settle_race
-    except Exception as e:
-        logger.debug("motorsports settle import skipped: %s", e)
-        return
-    for series, cfg in (_MS_REG or {}).items():
-        if (cfg.get("status") == "pending_data"
-                or cfg.get("data_source") == "pending"):
-            continue
-        try:
-            conn = _ms_conn(series)
-            # Race finalization status label: F1 (Ergast) writes 'complete',
-            # NASCAR/IndyCar (ESPN core) also writes 'complete'. Earlier
-            # this filter used 'final' which never matched, so NASCAR
-            # picks sat pending after real completed races (Chicago
-            # 2026-07-05 stuck 4 days before manual regrade). Also fall
-            # back to race_date-in-the-past for edges where the ingest
-            # hasn't updated status yet — settle_race is a no-op when
-            # results are missing so this is safe.
-            rows = conn.execute(
-                "SELECT DISTINCT p.race_id FROM picks p "
-                "JOIN races r ON r.race_id = p.race_id "
-                "WHERE p.result IS NULL "
-                "  AND (r.status IN ('complete', 'final') "
-                "       OR (r.race_date IS NOT NULL "
-                "           AND r.race_date < date('now')))"
-            ).fetchall()
-            for r in rows:
-                res = settle_race(series, r["race_id"])
-                if isinstance(res, dict) and (res.get("settled") or 0) > 0:
-                    logger.info("motorsports settle %s/%s: %s",
-                                series, r["race_id"], res)
-        except Exception as e:
-            logger.debug("motorsports settle %s failed: %s", series, e)
 
 
 def _get_backend(path: str, timeout_s: float = 30.0) -> dict | None:
@@ -831,6 +836,8 @@ def _run_prop_calibration_refit() -> None:
         logger.warning("prop calibration import failed: %s", e)
         return
     for sport in _PROP_CALIBRATION_SPORTS:
+        if sport in _OFF_SPORTS:
+            continue
         try:
             if not _events.needs_refit(
                 "prop_shrinkage", sport,
@@ -873,12 +880,15 @@ def _run_player_props_generation() -> None:
     # WNBA's prop picker lives under the basketball framework rather
     # than engine.{sport}_prop_picks — special-case the import path.
     _PROP_PICKER_PATHS = {
-        "mlb":  ("engine.mlb_prop_picks", "generate_picks"),
+        # MLB DISABLED 2026-10-22 (Austin: World Series / off-season; re-add to revive)
+        # "mlb":  ("engine.mlb_prop_picks", "generate_picks"),
         "nba":  ("engine.nba_prop_picks", "generate_picks"),
         "nhl":  ("engine.nhl_prop_picks", "generate_picks"),
         "wnba": ("engine.basketball._wnba_prop_picks", "generate_picks"),
     }
-    for sport in ("mlb", "nba", "nhl", "wnba"):
+    # NBA OFF 2026-10-26 (MintyBot): the MLB-style picker (every alt line, pinned post-hoc
+    # curve, no market anchor) is being replaced NHL/NFL-style; re-add "nba" only for the old one.
+    for sport in ("nhl", "wnba"):  # MLB DISABLED 2026-10-22 (Austin: World Series / off-season; re-add "mlb" to revive)
         try:
             # Gate per calendar-day, not per 24h. Yesterday's 8pm refit
             # would lock today's 4pm slate out under a pure 24h floor;
@@ -900,19 +910,253 @@ def _run_player_props_generation() -> None:
             mod = __import__(mod_path, fromlist=[fn_name])
             res = getattr(mod, fn_name)(date=today)
             picked = res.get("picked", 0) if isinstance(res, dict) else 0
-            _events.write_refit(
-                sport=sport,
-                component="player_props_picks",
-                summary={"picked": picked,
-                          "evaluated": (res or {}).get("evaluated"),
-                          "floor_hours": _PLAYER_PROPS_FLOOR_HOURS,
-                          "date": today},
-                triggered_by="cron_floor",
-            )
-            if picked:
-                logger.info("props floor-gen %s: %d picked", sport, picked)
+            evaluated = res.get("evaluated", 0) if isinstance(res, dict) else 0
+            evaluated = evaluated or 0
+            # Only mark the slate "done for today" once a real board was
+            # actually evaluated. An empty-board tick (props not posted
+            # yet) must NOT write the daily refit — otherwise the
+            # last_date==today gate above locks the sport out for the rest
+            # of the day and props never generate once the book posts them.
+            # WNBA posts player props only a few hours pre-tip (long after
+            # its game lines), so its early-AM tick always saw an empty
+            # board and self-locked every single day → ~2 weeks with zero
+            # WNBA props (root-caused 2026-08-10). Empty ticks now retry.
+            if evaluated > 0:
+                _events.write_refit(
+                    sport=sport,
+                    component="player_props_picks",
+                    summary={"picked": picked,
+                              "evaluated": evaluated,
+                              "floor_hours": _PLAYER_PROPS_FLOOR_HOURS,
+                              "date": today},
+                    triggered_by="cron_floor",
+                )
+                if picked:
+                    logger.info("props floor-gen %s: %d picked", sport, picked)
+            else:
+                logger.debug(
+                    "props floor-gen %s: empty board, will retry next tick",
+                    sport)
         except Exception as e:
             logger.warning("props gen %s failed: %s", sport, e)
+
+
+def _run_nfl_props() -> None:
+    """NFL player props v2 (MintyBot 2026-10-26, Austin "follow in the footsteps of
+    NHL"). Own 30-min timer, not the 6h props floor: every pass prices HR's NFL
+    board, logs every main line to prop_eval_log (first + last price before
+    kickoff) and, on game day from 09:00 ET, locks the card (top 1/game, 3/date,
+    never re-ranked). engine.sports.nfl lives outside the uniform
+    engine.{sport}_prop_picks loop above (different signature + return shape).
+    The board fetch is cached 60s and the nflverse refresh is 6h-throttled."""
+    try:
+        from engine import events as _events
+        from engine._tz import et_today_str
+        from engine.sports.nfl import player_props as _nfl_pp
+        from engine.sports.nfl import prop_picks as _nfl_props
+        today = et_today_str()
+        _nfl_pp.refresh(force=False)
+        res = _nfl_props.generate_picks(target_date=today)
+        recorded = res.get("recorded", 0) if isinstance(res, dict) else 0
+        if recorded:
+            _events.write_refit(
+                sport="nfl", component="player_props_picks",
+                summary={"recorded": recorded,
+                         "count": res.get("count", 0) if isinstance(res, dict) else 0,
+                         "date": today},
+                triggered_by="cron_floor")
+            logger.info("props gen nfl: %d recorded", recorded)
+        graded = _nfl_props.grade_eval_log()
+        if graded:
+            logger.info("props nfl eval-log: %d line(s) graded", graded)
+        # Weekly refit of the model-vs-market blend weight per stat (graded eval-log
+        # lines; stays at the 0.35 default until a stat has enough of them).
+        from engine.sports.nfl import prop_refit as _nfl_refit
+        _nfl_refit.maybe_refit()
+    except Exception as e:
+        logger.warning("props gen nfl failed: %s", e)
+
+
+_NBA_LOGS_LAST = 0.0
+_NBA_LOGS_EVERY_S = 1800
+# Pick Authority CLV for the NBA / NHL shadow lanes (picks_unified): every 5 min until tip.
+_UNIFIED_CLOSE_LAST = 0.0
+_UNIFIED_CLOSE_EVERY_S = 300
+
+
+def _run_unified_closing() -> None:
+    """Close pending NBA + NHL picks_unified rows at their own line (MintyBot 2026-10-26):
+    0 of 291 NBA and 0 of 115 NHL shadow rows had a closing price -- only football's lane
+    was being closed, so the PA graduation lanes had no CLV read."""
+    global _UNIFIED_CLOSE_LAST
+    if time.time() - _UNIFIED_CLOSE_LAST < _UNIFIED_CLOSE_EVERY_S:
+        return
+    _UNIFIED_CLOSE_LAST = time.time()
+    for name, mod in (("nba", "engine.sports.nba.unified_clv"),
+                      ("nhl", "engine.sports.nhl.unified_clv"),
+                      # EPL shadow lane (2026-10-28): kickoff-gated, the soccer extractor's prices
+                      ("eng_premier", "engine.soccer.unified_clv")):
+        try:
+            n = __import__(mod, fromlist=["capture_unified_closing"]).capture_unified_closing()
+            if n:
+                logger.info("%s unified CLV: %d row(s)", name, n)
+        except Exception as e:
+            logger.warning("%s unified CLV crashed: %s", name, e)
+
+
+_NBA_FINAL_LAST = 0.0
+_NBA_FINAL_EVERY_S = 1800
+
+
+def _run_nba_finalize() -> None:
+    """Finalize NBA games stuck mid-game (MintyBot 2026-10-28): nba_games is filled by the ESPN
+    scoreboard poll for a window around TODAY, so a game that ends after midnight ET drops out of
+    the window before its final update and sits as 'live' with a partial score forever (10-21..10-27:
+    12 games). Nothing then settles on it (the unified settler needs status 'final') and the
+    ratings fit reads the partial score. Every 30 min, re-pull ESPN for each past date (last 10
+    days) that still holds a non-final game."""
+    global _NBA_FINAL_LAST
+    if time.time() - _NBA_FINAL_LAST < _NBA_FINAL_EVERY_S:
+        return
+    _NBA_FINAL_LAST = time.time()
+    try:
+        from datetime import timedelta as _td
+        from engine._tz import et_now as _et_now
+        from engine.nba_db import get_conn as _nba_conn
+        from scrapers.nba_espn import fetch_scoreboard as _nba_sb
+        today = _et_now().date()
+        lo = (today - _td(days=10)).isoformat()
+        dates = [r[0] for r in _nba_conn().execute(
+            "SELECT DISTINCT date FROM nba_games WHERE status != 'final' AND date >= ? AND date < ?",
+            (lo, today.isoformat()))]
+        fixed = 0
+        for d in dates:
+            for g in _nba_sb(d.replace("-", "")) or []:
+                fixed += 1 if g.get("status") == "final" else 0
+        if dates:
+            logger.info("nba finalize: re-pulled %d date(s), %d final row(s) written", len(dates), fixed)
+    except Exception as e:
+        logger.warning("nba finalize failed: %s", e)
+
+
+def _run_nba_player_logs() -> None:
+    """NBA box scores on a clock (MintyBot 2026-10-26): they were only ingested when a pending
+    prop needed settling, so a season with no picks never got player data (and never got
+    picks). Every 30 min, pull any final from the last 10 days still missing its box."""
+    global _NBA_LOGS_LAST
+    if time.time() - _NBA_LOGS_LAST < _NBA_LOGS_EVERY_S:
+        return
+    _NBA_LOGS_LAST = time.time()
+    try:
+        from engine.sports.nba.player_logs import ingest_missing_finals
+        r = ingest_missing_finals(days=10)
+        if r.get("games"):
+            logger.info("nba player logs: %d game(s), %d row(s)", r["games"], r["rows"])
+    except Exception as e:
+        logger.warning("nba player logs failed: %s", e)
+
+
+_NHL_BOX_LAST = 0.0
+_NHL_BOX_EVERY_S = 1800
+
+
+def _run_nhl_box_sync() -> None:
+    """NHL period goals + shots on a clock (MintyBot 2026-10-26): nothing scheduled the NHL
+    box-score sync any more, so 2026-27 finals landed without period scores (32 of 184) or shots
+    (27 of 184). The ratings model fits on both and the period markets settle on them. Every 30
+    min, fill any final from the last 10 days still missing its box (NHL API daily score feed)."""
+    global _NHL_BOX_LAST
+    if time.time() - _NHL_BOX_LAST < _NHL_BOX_EVERY_S:
+        return
+    _NHL_BOX_LAST = time.time()
+    try:
+        from engine.sports.nhl.box_sync import sync_recent
+        n = sync_recent(days=10)
+        if n:
+            logger.info("nhl box sync: %d game(s) filled", n)
+    except Exception as e:
+        logger.warning("nhl box sync failed: %s", e)
+    # Lineups (who dressed) feed the injury layer's regulars (engine.sports.nhl.lineups, 2026-10-26).
+    try:
+        from engine.sports.nhl.lineups import sync_recent as _lineups_recent
+        n = _lineups_recent(days=10)
+        if n:
+            logger.info("nhl lineups sync: %d game(s) added", n)
+    except Exception as e:
+        logger.warning("nhl lineups sync failed: %s", e)
+
+
+def _run_nba_props() -> None:
+    """NBA player props v2 (MintyBot 2026-10-26, Austin "...then work on its player props"):
+    price HR's NBA board, log every main line to prop_eval_log (HR + DraftKings price, raw
+    model prob) and on game day from 09:00 ET lock the card (top 1/game, 3/date, never
+    re-ranked). Lives outside the uniform engine.{sport}_prop_picks floor loop (30-min
+    cadence, different return shape), like NFL."""
+    try:
+        from engine import events as _events
+        from engine._tz import et_today_str
+        from engine.sports.nba import prop_picks as _nba_props
+        today = et_today_str()
+        res = _nba_props.generate_picks(target_date=today)
+        recorded = res.get("recorded", 0) if isinstance(res, dict) else 0
+        if recorded:
+            _events.write_refit(
+                sport="nba", component="player_props_picks",
+                summary={"recorded": recorded,
+                         "count": res.get("count", 0) if isinstance(res, dict) else 0,
+                         "date": today},
+                triggered_by="cron_floor")
+            logger.info("props gen nba: %d recorded", recorded)
+    except Exception as e:
+        logger.warning("props gen nba failed: %s", e)
+
+
+def _run_player_props_settle() -> None:
+    """Clock-driven settle for player-prop picks (mlb/nba/nhl/wnba).
+
+    Was a real gap (2026-08-10): settle_player_props() was wired ONLY to
+    the props-tracker HTTP route, so picks graded only when a human
+    opened the tab. Overnight and unwatched slates sat pending; WNBA
+    props whose game-logs landed late then auto-voided to Push on the
+    eventual manual settle. Mirrors the framework/derivative settle
+    loops — settle_player_props self-heals games-table + player-log
+    freshness internally (throttled), so a plain per-tick call is safe."""
+    _run_nba_player_logs()
+    _run_nba_finalize()
+    _run_nhl_box_sync()
+    try:
+        from engine.player_props_tracker import settle_player_props
+    except Exception as e:
+        logger.warning("player props settler import failed: %s", e)
+        return
+    for sport in ("mlb", "nba", "nhl", "wnba", "nfl"):  # nfl added 2026-10-26 (props v2; was route-only)
+        try:
+            r = settle_player_props(sport)
+            n = (r.get("settled") if isinstance(r, dict) else 0) or 0
+            if n:
+                logger.info(
+                    "props settle %s: %d (W=%d L=%d P=%d)", sport, n,
+                    r.get("wins", 0), r.get("losses", 0), r.get("pushes", 0))
+        except Exception as e:
+            logger.warning("props settle %s failed: %s", sport, e)
+    # NHL prop line log: grade logged lines from the box scores, weekly blend refit.
+    try:
+        from engine.sports.nhl import prop_eval as _nhl_eval
+        graded = _nhl_eval.grade()
+        if graded:
+            logger.info("props nhl eval-log: %d line(s) graded", graded)
+        _nhl_eval.maybe_refit()
+    except Exception as e:
+        logger.warning("props nhl eval-log failed: %s", e)
+    # NBA prop line log (v2, 2026-10-26): same grade + weekly refit.
+    try:
+        from engine.sports.nba import prop_eval as _nba_eval
+        graded = _nba_eval.grade()
+        if graded:
+            logger.info("props nba eval-log: %d line(s) graded", graded)
+        _nba_eval.maybe_refit()
+    except Exception as e:
+        logger.warning("props nba eval-log failed: %s", e)
 
 
 def _run_framework_results_refresh() -> None:
@@ -1005,6 +1249,10 @@ def _run_framework_results_refresh() -> None:
                 continue
             months = cfg.get("season_months") or ()
             if today.month not in months:
+                continue
+            if cfg.get("model") == "ratings":
+                # College calibrates ONCE (PA market anchor, calibration_gate.anchor_only); this
+                # walk-forward replays the retired PPG factor and nothing reads its buckets.
                 continue
             try:
                 if not _events.needs_refit(
@@ -1198,14 +1446,23 @@ def _run_framework_results_refresh() -> None:
     # finals feed back into the bucket aggregates within 24h.
     try:
         from engine.soccer import _walkforward as _soc_wf
+        # Registry + active-list imported DIRECTLY here (not reused from the
+        # framework-slate block above): that block also does `from
+        # backend.server.routes_soccer import api_soccer_today`, which fails
+        # silently in the worker's import context (debug-logged, filtered) and
+        # drops _soc_active to `lambda: []` — which froze soccer calibration for
+        # 42 days. Keeping this import backend-free keeps the refit alive.
+        # (Austin 2026-09-20)
+        from engine.soccer import active_leagues as _soc_cal_active
+        from engine.soccer import LEAGUE_REGISTRY as _SOC_CAL_REG
         from engine.framework_calibration import invalidate as _fc_invalidate
         from engine import events as _events
     except Exception as e:
         logger.debug("soccer calibration refresh skipped: %s", e)
         _soc_wf = None
     if _soc_wf is not None:
-        for key in _soc_active():
-            cfg = (_SOC_REG or {}).get(key) or {}
+        for key in _soc_cal_active():
+            cfg = (_SOC_CAL_REG or {}).get(key) or {}
             if not cfg.get("hr_comp_id"):
                 # internationals pool / unmapped leagues — no picks fire
                 # here so calibration refresh would be wasted IO.
@@ -1279,177 +1536,6 @@ def _run_framework_results_refresh() -> None:
             except Exception as e:
                 logger.warning("soccer constants refresh %s failed: %s",
                                key, e)
-
-    # Motorsports — F1 (Ergast-backed). Series-scoped so we walk
-    # SERIES_REGISTRY instead of a league registry. Today route handles
-    # ingest + predict + odds + picks + record.
-    try:
-        from engine.motorsports import SERIES_REGISTRY as _MS_REG
-        from backend.server.routes_motorsports import (
-            api_motorsports_today as _ms_today,
-        )
-    except Exception as e:
-        logger.debug("framework refresh import (motorsports) skipped: %s", e)
-        _MS_REG = {}
-        _ms_today = None
-    for key, cfg in (_MS_REG or {}).items():
-        if not _ms_today:
-            break
-        # Skip series whose ingest pipeline isn't wired yet (IndyCar /
-        # NASCAR). They surface in the sidebar with a "soon" tag but
-        # the worker has no data source to pull from.
-        if (cfg.get("status") == "pending_data"
-                or cfg.get("data_source") == "pending"):
-            continue
-        try:
-            slate = _ms_today(key)
-            picks = slate.get("picks_summary") or {}
-            n_pick = (picks.get("winner") or 0) + (picks.get("podium") or 0)
-            if n_pick:
-                logger.info("framework slate %s: %d pick(s)", key, n_pick)
-        except Exception as e:
-            logger.warning("framework slate %s failed: %s", key, e)
-
-    # Motorsports calibration refresh — F1 uses its own per-series
-    # walk-forward calibrator (engine.motorsports._calibration), not the
-    # team-sports empirical_calibration that _CALIBRATION_SPORTS covers.
-    # Refit lazily: skip when a recent refit event landed within the
-    # floor window so we don't re-replay 50 races every hour.
-    try:
-        from engine.motorsports import _calibration as _ms_cal
-        from engine import events as _events
-    except Exception as e:
-        logger.debug("motorsports calibration refresh skipped: %s", e)
-        _ms_cal = None
-    if _ms_cal is not None:
-        for key, cfg in (_MS_REG or {}).items():
-            # Same pending-data skip as the slate loop above.
-            if (cfg.get("status") == "pending_data"
-                    or cfg.get("data_source") == "pending"):
-                continue
-            try:
-                if not _events.needs_refit(
-                    "motorsports_calibration", key,
-                    max_age_h=_CALIBRATION_FLOOR_HOURS,
-                ):
-                    continue
-                res = _ms_cal.refresh(key)
-                n = (res.get("backfill") or {}).get("rows") if res else None
-                _events.write_refit(
-                    sport=key,
-                    component="motorsports_calibration",
-                    summary={"n_rows": n,
-                              "floor_hours": _CALIBRATION_FLOOR_HOURS},
-                    triggered_by="cron_floor",
-                )
-                if n:
-                    logger.info("motorsports calibration floor-refit %s: "
-                                "rows=%d", key, n)
-            except Exception as e:
-                logger.warning("motorsports calibration refresh %s failed: %s",
-                               key, e)
-
-    # Golf — TOUR_REGISTRY-scoped. Slate route does ingest + predict +
-    # odds + picks + record + settle. Skip tours whose ESPN endpoint
-    # is off-season (no scheduled events).
-    try:
-        from engine.golf import TOUR_REGISTRY as _GOLF_REG
-        from backend.server.routes_golf import (
-            api_golf_today as _golf_today,
-        )
-    except Exception as e:
-        logger.debug("framework refresh import (golf) skipped: %s", e)
-        _GOLF_REG = {}
-        _golf_today = None
-    # Refresh external skill priors (OWGR + DataGolf SG) ahead of slate
-    # so the predictor consumes the freshest data. OWGR updates weekly
-    # (Monday) but is cheap to refetch; DataGolf SG updates inter-round
-    # (~4× per tournament week). The ingest helpers no-op gracefully
-    # when scrapers / network are unavailable, so any failure here
-    # leaves the predictor on its score-to-par-only baseline.
-    try:
-        from engine.golf._external_ingest import (
-            refresh_owgr as _golf_owgr_refresh,
-            refresh_datagolf_sg as _golf_sg_refresh,
-        )
-    except Exception as e:
-        logger.debug("framework refresh import (golf priors) skipped: %s", e)
-        _golf_owgr_refresh = None
-        _golf_sg_refresh = None
-    for key in (_GOLF_REG or {}):
-        if _golf_owgr_refresh:
-            try:
-                r = _golf_owgr_refresh(key)
-                if r and r.get("matched"):
-                    logger.info("framework owgr golf:%s matched=%d skipped=%d",
-                                key, r.get("matched"), r.get("skipped"))
-            except Exception as e:
-                logger.warning("owgr golf:%s failed: %s", key, e)
-        if _golf_sg_refresh:
-            try:
-                r = _golf_sg_refresh(key)
-                if r and r.get("matched"):
-                    logger.info("framework dg-sg golf:%s event=%r matched=%d",
-                                key, r.get("event"), r.get("matched"))
-            except Exception as e:
-                logger.warning("dg-sg golf:%s failed: %s", key, e)
-    # Pre-hydrate fields for upcoming tournaments from HR's WINNER
-    # market. ESPN doesn't post a tournament's field until 24-48h
-    # before start; HR posts outright odds days earlier. Without this
-    # step the slate route renders an empty field + no picks for any
-    # tournament that HR has odds for but ESPN hasn't filed yet
-    # (CJ Cup Byron Nelson 2026-05-18 was the precedent).
-    #
-    # Idempotent: ``ingest_field_from_hr`` uses INSERT OR IGNORE so
-    # re-running on a hydrated tournament is a no-op. Cheap (~1 HR
-    # fetch per tour per tick).
-    try:
-        from engine.golf._ingest import ingest_field_from_hr as _golf_hr_field
-        from engine.golf._db import get_conn as _golf_conn
-        from datetime import datetime as _dt, timedelta as _td
-    except Exception as e:
-        logger.debug("framework refresh import (golf hr-field) skipped: %s", e)
-        _golf_hr_field = None
-    if _golf_hr_field is not None:
-        # Look ahead 10 days for scheduled tournaments missing a field.
-        # Beyond that HR usually doesn't have outright markets yet.
-        today_iso = _dt.utcnow().strftime("%Y-%m-%d")
-        horizon = (_dt.utcnow() + _td(days=10)).strftime("%Y-%m-%d")
-        for key in (_GOLF_REG or {}):
-            try:
-                conn = _golf_conn(key)
-                rows = conn.execute("""
-                    SELECT t.id, t.name
-                    FROM tournaments t
-                    LEFT JOIN field_entries f ON f.tournament_id = t.id
-                    WHERE t.status = 'scheduled'
-                      AND t.start_date >= ?
-                      AND t.start_date <= ?
-                    GROUP BY t.id, t.name
-                    HAVING COUNT(f.player_id) = 0
-                """, (today_iso, horizon)).fetchall()
-                for r in rows:
-                    res = _golf_hr_field(key, r["id"])
-                    n = res.get("rows", 0) if isinstance(res, dict) else 0
-                    if n:
-                        logger.info("framework hr-field golf:%s tournament=%r "
-                                    "hydrated %d players",
-                                    key, r["name"], n)
-            except Exception as e:
-                logger.warning("hr-field hydrate golf:%s failed: %s", key, e)
-
-    for key in (_GOLF_REG or {}):
-        if not _golf_today:
-            break
-        try:
-            slate = _golf_today(key)
-            summary = slate.get("picks_summary") or {}
-            n_pick = sum(summary.values())
-            if n_pick:
-                logger.info("framework slate golf:%s: %d pick(s) %s",
-                            key, n_pick, summary)
-        except Exception as e:
-            logger.warning("framework slate golf:%s failed: %s", key, e)
 
 
 def _run_drift_scan() -> None:
@@ -1572,30 +1658,9 @@ def main() -> None:
     next_settle_at = 0.0
     # Stagger the first refresh past startup so the backend is warm.
     next_refresh_at = time.monotonic() + _REFRESH_STARTUP_DELAY_S
-    # Queue auto-placer cadence. Sweeps the bet queue every N seconds
-    # and either dry-runs (log-only, default) or POSTs to the Beelink
-    # relay (live). Kill switch is env AUTO_BET_LIVE=1 + on-disk flag;
-    # sweep_and_place() reads both and picks the mode. Cheap when the
-    # queue is empty — one build_queue() call → 0 picks → early exit.
-    try:
-        from engine.queue_placer import (
-            sweep_and_place as _placer_sweep,
-            poll_pending_placements as _placer_poll,
-            settle_placements as _placer_settle,
-            PLACER_INTERVAL_S as _PLACER_INTERVAL_S,
-        )
-        _placer_available = True
-    except Exception as _e:
-        logger.debug("queue placer import skipped: %s", _e)
-        _placer_available = False
-        _PLACER_INTERVAL_S = 60
-    next_placer_at = time.monotonic() + 30  # small startup delay
-    # Settler runs less often than the sweeper — matches take 1-3h to
-    # resolve and the tennis grader triggers a 5-call TennisExplorer
-    # fetch when any tennis rows are pending. Cheap when nothing is
-    # pending (single SELECT); expensive-ish otherwise, so 5 min cadence.
-    _PLACER_SETTLE_INTERVAL_S = 300
-    next_placer_settle_at = time.monotonic() + 60  # startup delay
+    # Queue auto-placer (sweep / poll / settle) REMOVED 2026-10-26 (Austin "get rid
+    # of the bet queue and anything that goes with it"); last real placement was
+    # 2026-09-03. Code archived under _archived_bet_queue_20261026/.
     # Per-sport closing-odds capture timers. Worker fires capture only
     # when an imminent tip is detected (see _games_imminent), throttled
     # at _CLV_CAPTURE_INTERVAL_S so a long pre-tip window doesn't burn
@@ -1624,17 +1689,24 @@ def main() -> None:
     next_bb_clv_at = {league: 0.0 for league in _bb_leagues}
     # Hockey framework CLV — AHL/PWHL/AIHL/NZIHL. Each league has its
     # own theScore-backed DB so the loop fans out per-league.
-    _hk_leagues = ("ahl", "pwhl", "aihl", "nzihl")
+    _hk_leagues = ()   # AHL / PWHL / AIHL / NZIHL removed 2026-10-27 (Austin: smaller leagues); NHL has its own path
     next_hk_clv_at = {league: 0.0 for league in _hk_leagues}
     # Tennis CLV — single bucket (no per-tournament split); HR ships
     # one tennis tree containing all ATP+WTA events together.
     next_tennis_clv_at = 0.0
-    # Golf CLV — single bucket fan-out across active tours. Each tour
-    # only fetches HR when one of its picks lacks closing odds.
-    next_golf_clv_at = 0.0
-    # Motorsports CLV — F1 today; IndyCar/NASCAR slot in once their
-    # frameworks register a series config.
-    next_motorsports_clv_at = 0.0
+    # Football CLV -- NFL/CFB in season (UFL spring). Football's
+    # capture lives in engine.football._tracker (own abbreviation
+    # matcher) so it's driven here, not through _capture_closing_odds.
+    next_football_clv_at = 0.0
+    # Core-market CLV -- nhl/nba/mlb. They were dropped from
+    # _POLL_INTERVAL_S (2026-09-23 paper-live retire), orphaning the
+    # _capture_closing_odds() call below (that loop now iterates only
+    # ncaam/afl). Drive their shared tracker_core capture on the
+    # worker cadence here so every core pick gets a stamped close.
+    next_core_clv_at = {s: 0.0 for s in ("nhl", "nba", "mlb")}
+    # Player-props CLV timer -- dedicated ungated capture (see loop
+    # body). Props were the only market without a dedicated capture.
+    next_props_clv_at = 0.0
     # Worker takes ownership of calibration + closing-line prior refits
     # so cron skips don't degrade the model. Stagger the first refit
     # past startup like the roster refresh — backend warmup buffer.
@@ -1645,6 +1717,9 @@ def main() -> None:
     # is always within 24h of the latest eloratings.net snapshot.
     next_elo_refresh_at = time.monotonic() + _REFRESH_STARTUP_DELAY_S
     next_props_gen_at = time.monotonic() + _REFRESH_STARTUP_DELAY_S
+    next_props_settle_at = time.monotonic() + _REFRESH_STARTUP_DELAY_S
+    next_nfl_props_at = time.monotonic() + _REFRESH_STARTUP_DELAY_S
+    next_nba_props_at = time.monotonic() + _REFRESH_STARTUP_DELAY_S
     next_framework_refresh_at = time.monotonic() + _REFRESH_STARTUP_DELAY_S
     next_tennis_refresh_at = time.monotonic() + _REFRESH_STARTUP_DELAY_S
     next_event_log_sync_at = time.monotonic() + _REFRESH_STARTUP_DELAY_S
@@ -1652,19 +1727,16 @@ def main() -> None:
 
     # Bulletproof Phase 2 — 24/7 emission timers.
     next_prematch_at = {sport: (time.monotonic() + _REFRESH_STARTUP_DELAY_S)
-                         for sport in ("mlb", "nba", "nhl")}
+                         for sport in ("mlb", "nba", "nhl") if sport not in _OFF_SPORTS}
     next_tennis_picks_at = time.monotonic() + _REFRESH_STARTUP_DELAY_S
     next_tennis_settle_at = time.monotonic() + _REFRESH_STARTUP_DELAY_S
     next_soccer_ht_at = time.monotonic() + _REFRESH_STARTUP_DELAY_S
     next_football_slate_at = time.monotonic() + _REFRESH_STARTUP_DELAY_S
     next_baseball_fw_slate_at = time.monotonic() + _REFRESH_STARTUP_DELAY_S
-    next_motorsports_settle_at = time.monotonic() + _REFRESH_STARTUP_DELAY_S
 
-    logger.info("live_worker started — NBA state %ss / pbp %ss, "
-                "NHL state %ss / pbp %ss, settle every %ss, "
+    logger.info("live_worker started - live poll sports %s, settle every %ss, "
                 "roster refresh every %ss",
-                _POLL_INTERVAL_S["nba"], _PBP_INTERVAL_S["nba"],
-                _POLL_INTERVAL_S["nhl"], _PBP_INTERVAL_S["nhl"],
+                ",".join(_POLL_INTERVAL_S) or "(none)",
                 _SETTLE_EVERY_S, _REFRESH_EVERY_S)
 
     while _running:
@@ -1734,6 +1806,40 @@ def main() -> None:
                 except Exception as e:
                     logger.warning("derivative settle(%s) failed: %s",
                                    _sport, e)
+                # NHL P1 (period-1) PAPER tracker lives in a SIBLING
+                # table (nhl_p1_paper_picks) that the default derivative
+                # settle above does NOT touch -- it only grades
+                # nhl_derivative_picks. It was never wired with the
+                # documented table= override, so P1 paper picks stopped
+                # settling ~2026-10-04 (49 piled up pending; MintyBot
+                # 2026-10-12). This keeps the period track record current
+                # so the calibration gate can eventually validate periods.
+                if _sport == "nhl":
+                    try:
+                        from engine.derivative_tracker import (
+                            settle_derivative_picks as _sdp, NHL_P1_PAPER_TABLE)
+                        r = _sdp("nhl", table=NHL_P1_PAPER_TABLE)
+                        if isinstance(r, dict) and (r.get("settled") or 0) > 0:
+                            logger.info("P1 paper settle nhl: %s", r)
+                    except Exception as e:
+                        logger.warning("P1 paper settle(nhl) failed: %s", e)
+                # Unified settler (MintyBot 2026-10-21). The shadow-only
+                # NHL markets (Period Spread / Period 3-Way / Regulation
+                # 3-Way) live ONLY in the unified picks table with no
+                # native row, so none of the settlers above touch them.
+                # Run the canonical settler for nhl here so they grade on
+                # the same per-minute cadence (idempotent; only pending).
+                if _sport == "nhl":
+                    try:
+                        from engine.picks_unified import settle_pending as _usettle
+                        from engine.picks_unified._legacy_bridge import (
+                            ensure_adapters_registered as _ear)
+                        _ear()
+                        r = _usettle(sport="nhl")
+                        if isinstance(r, dict) and (r.get("settled") or 0) > 0:
+                            logger.info("unified settle nhl: %s", r)
+                    except Exception as e:
+                        logger.warning("unified settle(nhl) failed: %s", e)
                 try:
                     from engine.pick_of_day import settle_potd
                     r = settle_potd(_sport)
@@ -1772,38 +1878,9 @@ def main() -> None:
 
         if now >= next_refresh_at:
             for sport in _REFRESH_PATHS:
-                _run_refresh(sport)
+                if sport not in _OFF_SPORTS:
+                    _run_refresh(sport)
             next_refresh_at = time.monotonic() + _REFRESH_EVERY_S
-
-        if _placer_available and now >= next_placer_at:
-            try:
-                r = _placer_sweep()   # dry_run=None → follows kill switch
-                if r.get("attempted", 0) > 0:
-                    logger.info("queue placer sweep: %s", r)
-                # Immediately poll for any queued/submitted placements
-                # so terminal state (placed / rejected) lands within
-                # one worker tick of the relay ACK.
-                pr = _placer_poll()
-                if pr.get("refreshed", 0) > 0:
-                    logger.info("queue placer poll: %s", pr)
-            except Exception as _e:
-                logger.warning("queue placer sweep failed: %s", _e)
-            next_placer_at = time.monotonic() + _PLACER_INTERVAL_S
-
-        # Placer settlement — grade placed live-fire rows once their
-        # underlying event resolves. Was a gap: bets placed successfully
-        # sat forever at result=NULL because nothing wrote settle state.
-        if _placer_available and now >= next_placer_settle_at:
-            try:
-                sr = _placer_settle()
-                total_settled = sum(int(b.get("settled", 0) or 0)
-                                     for b in sr.values())
-                if total_settled > 0:
-                    logger.info("queue placer settle: %s", sr)
-            except Exception as _e:
-                logger.warning("queue placer settle failed: %s", _e)
-            next_placer_settle_at = (time.monotonic()
-                                       + _PLACER_SETTLE_INTERVAL_S)
 
         # Closing-odds capture — fire per-sport every minute while any
         # uncaptured pending pick exists for today. The cron path also
@@ -1811,67 +1888,126 @@ def main() -> None:
         # missed the narrow window before HR drops the market. The
         # worker's per-minute heartbeat catches every tip across the
         # full CLV stack: NBA/NHL/MLB/WNBA/NCAAM/AFL (this loop) plus
-        # tennis/soccer/golf/motorsports (separate loops below).
+        # tennis/soccer (separate loops below).
         # NHL CLV was 1.1% pre-fix (#166).
         for sport in _POLL_INTERVAL_S:
             if now >= next_clv_at[sport] and _has_pending_today(sport):
                 _capture_closing_odds(sport)
                 next_clv_at[sport] = time.monotonic() + _CLV_CAPTURE_INTERVAL_S
 
-        # Motorsports CLV — F1 (single-series for now). Cheap fetch
-        # since HR ships one race at a time.
-        if now >= next_motorsports_clv_at:
+        # Football CLV -- per active league. Fires while any scheduled,
+        # ungraded pick still lacks a captured close. The football
+        # capture writes closing_odds + closing_odds_captured_at (own
+        # HR matcher, not routed through _capture_closing_odds). The
+        # /today route-hit path (via _run_football_slate) stays as a
+        # second source that keeps the close fresh until kickoff.
+        if now >= next_football_clv_at:
             try:
-                from engine.motorsports._db import get_conn as _mc
-                pending = _mc("f1").execute(
-                    "SELECT COUNT(*) FROM picks "
-                    "WHERE result IS NULL AND closing_odds IS NULL"
-                ).fetchone()[0]
-                if pending:
-                    from engine.motorsports._clv import capture_all as _ms_cap
-                    res = _ms_cap()
-                    captured = sum(int(v or 0) for v in res.values())
-                    if captured:
-                        logger.info("motorsports CLV: %s -> %d row(s)",
-                                    dict(res), captured)
-            except Exception as e:
-                logger.warning("motorsports CLV crashed: %s", e)
-            next_motorsports_clv_at = time.monotonic() + _CLV_CAPTURE_INTERVAL_S
-
-        # Golf CLV — runs across all 3 tours when any one has a
-        # pending pick without closing odds. HR golf is per-tournament.
-        if now >= next_golf_clv_at:
-            try:
-                from engine.golf._db import get_conn as _gc
-                pending_total = 0
-                for _t in ("pga", "lpga", "kornferry"):
+                from engine.football import active_leagues as _fb_active
+                from engine.football._tracker import (
+                    capture_closing_odds as _fb_capture,
+                    get_conn as _fb_conn,
+                )
+                fb_total = 0
+                for _fb_lg in _fb_active():
                     try:
-                        c = _gc(_t)
-                        pending_total += c.execute(
-                            "SELECT COUNT(*) FROM picks "
-                            "WHERE result IS NULL AND closing_odds IS NULL"
+                        pend = _fb_conn(_fb_lg).execute(
+                            "SELECT COUNT(*) FROM picks p "
+                            "JOIN games g ON g.game_id = p.game_id "
+                            "WHERE p.result IS NULL "
+                            "AND g.status = 'scheduled' "
+                            "AND p.closing_odds IS NULL"
                         ).fetchone()[0]
                     except Exception:
-                        continue
-                if pending_total:
-                    from engine.golf._clv import capture_all as _golf_capture
-                    res = _golf_capture()
-                    total_captured = sum(int(v or 0) for v in res.values())
-                    if total_captured:
-                        logger.info("golf CLV: %s -> %d row(s) captured",
-                                    dict(res), total_captured)
+                        pend = 0
+                    if pend:
+                        try:
+                            fb_total += int(_fb_capture(_fb_lg) or 0)
+                        except Exception as e:
+                            logger.warning("football CLV(%s) crashed: %s",
+                                           _fb_lg, e)
+                if fb_total:
+                    logger.info("football CLV: %d row(s) captured",
+                                fb_total)
             except Exception as e:
-                logger.warning("golf CLV crashed: %s", e)
-            next_golf_clv_at = time.monotonic() + _CLV_CAPTURE_INTERVAL_S
+                logger.warning("football CLV crashed: %s", e)
+            next_football_clv_at = time.monotonic() + _CLV_CAPTURE_INTERVAL_S
+
+        # Core-market CLV -- nhl/nba/mlb. Orphaned from the
+        # _POLL_INTERVAL_S loop above (now ncaam/afl only), so drive
+        # their shared tracker_core capture here. Gated by pending-
+        # today; idempotent + timestamp-stamped.
+        for _core_sport in ("nhl", "nba", "mlb"):
+            if _core_sport in _OFF_SPORTS:
+                continue
+            if now >= next_core_clv_at[_core_sport] \
+                    and _has_pending_today(_core_sport):
+                _capture_closing_odds(_core_sport)
+                next_core_clv_at[_core_sport] = (
+                    time.monotonic() + _CLV_CAPTURE_INTERVAL_S)
+
+        # Player-props CLV -- dedicated capture (2026-10-23). Props were
+        # the only market whose close was captured as a side effect of
+        # pick RE-GENERATION (insert_pick re-sighting), which is gated by
+        # the +EV value filters -- so long-odds / Over-only / marginal
+        # markets (Skater Assists / Goals / Goalie GA) never got a close
+        # while SOG / Points / Saves did. This matches EVERY pending prop
+        # pick to the live HR board by (player, bet_type, line, side) and
+        # writes the current price, ungated. Self-gating + idempotent.
+        if now >= next_props_clv_at:
+            try:
+                from engine.player_props_clv import (
+                    capture_closing_odds as _pp_capture,
+                )
+                pp_total = 0
+                for _pp_sport in ("nhl", "nba", "mlb", "nfl"):
+                    try:
+                        pp_total += int(_pp_capture(_pp_sport) or 0)
+                    except Exception as e:
+                        logger.warning("player-props CLV(%s) crashed: %s",
+                                       _pp_sport, e)
+                # NHL prop line log: stamp HR's current price on every logged
+                # line until puck drop (the picker runs only 1-2x a day), so the
+                # weekly blend refit sees closing prices.
+                try:
+                    from engine.sports.nhl.prop_eval import stamp_prices as _nhl_stamp
+                    _nhl_stamp()
+                except Exception as e:
+                    logger.warning("nhl prop eval stamp crashed: %s", e)
+                try:
+                    from engine.sports.nba.prop_eval import stamp_prices as _nba_stamp
+                    _nba_stamp()
+                except Exception as e:
+                    logger.warning("nba prop eval stamp crashed: %s", e)
+                _run_unified_closing()
+                if pp_total:
+                    logger.info("player-props CLV: %d row(s) captured",
+                                pp_total)
+            except Exception as e:
+                logger.warning("player-props CLV crashed: %s", e)
+            next_props_clv_at = time.monotonic() + _CLV_CAPTURE_INTERVAL_S
 
         # Basketball framework CLV — per-league fan-out. wnba/ncaam/afl
         # are caught here via the basketball._clv adapter instead of the
         # per-sport block at the top of _capture_closing_odds, plus every
         # newly-promoted minor league (germany_bbl/greece_a1/etc) is in
         # scope without further wiring.
+        # The in-season list is re-read every pass (it was frozen at boot, so a league whose
+        # season opened after the last restart -- NCAAM/NCAAW on Nov 1 -- never got CLV).
+        try:
+            from engine.basketball._config import active_leagues as _bb_active
+            _bb_leagues = [s for s in _bb_active() if s != "nba"]
+        except Exception:
+            pass
         for league in _bb_leagues:
-            if now >= next_bb_clv_at[league] \
-                    and _has_pending_today_basketball(league):
+            if now < next_bb_clv_at.get(league, 0.0):
+                continue
+            try:
+                from engine.basketball._config import get_league_config as _bb_cfg
+                _bb_pa = bool(_bb_cfg(league).get("pick_authority"))
+            except Exception:
+                _bb_pa = False
+            if _has_pending_today_basketball(league):
                 try:
                     from engine.basketball._clv import (
                         capture_closing_odds as _bb_capture,
@@ -1885,8 +2021,18 @@ def main() -> None:
                 except Exception as e:
                     logger.warning("basketball CLV(%s) crashed: %s",
                                    league, e)
-                next_bb_clv_at[league] = (
-                    time.monotonic() + _CLV_CAPTURE_INTERVAL_S)
+            if _bb_pa:
+                # Pick Authority shadow lane lives in picks_unified -- close it at each row's
+                # own line (MintyBot 2026-10-26).
+                try:
+                    from engine.basketball._clv import capture_unified_closing as _bb_uclose
+                    n = _bb_uclose(league)
+                    if n:
+                        logger.info("basketball unified CLV %s: %d row(s)", league, n)
+                except Exception as e:
+                    logger.warning("basketball unified CLV(%s) crashed: %s", league, e)
+            next_bb_clv_at[league] = (
+                time.monotonic() + _CLV_CAPTURE_INTERVAL_S)
 
         # Hockey framework CLV — per-league. Same fan-out shape as
         # the basketball framework; uses engine.hockey._clv with the
@@ -1992,6 +2138,23 @@ def main() -> None:
             next_props_gen_at = (time.monotonic()
                                    + _PLAYER_PROPS_CHECK_EVERY_S)
 
+        # NFL props v2: price + eval-log + game-day card lock, every 30 min.
+        if now >= next_nfl_props_at:
+            _run_nfl_props()
+            next_nfl_props_at = time.monotonic() + _NFL_PROPS_EVERY_S
+
+        # NBA props v2: price + eval-log (HR + DK) + game-day card lock, every 30 min.
+        if now >= next_nba_props_at:
+            _run_nba_props()
+            next_nba_props_at = time.monotonic() + _NBA_PROPS_EVERY_S
+
+        # Clock-driven player-prop settle (mlb/nba/nhl/wnba). Grades
+        # pending props without waiting for a human to open the tracker.
+        if now >= next_props_settle_at:
+            _run_player_props_settle()
+            next_props_settle_at = (time.monotonic()
+                                      + _PLAYER_PROPS_SETTLE_EVERY_S)
+
         # Framework-league results refresh — hourly. Refreshes today's
         # slate for in-season WNBA/NCAAM/Euroleague/AHL/PWHL etc.
         if now >= next_framework_refresh_at:
@@ -2000,7 +2163,7 @@ def main() -> None:
                                            + _FRAMEWORK_REFRESH_EVERY_S)
 
         # Tennis schedule refresh — flips completed matches to 'post'.
-        if now >= next_tennis_refresh_at:
+        if False and now >= next_tennis_refresh_at:  # RETIRED 2026-08-09 (Austin): tennis dropped
             _run_tennis_refresh()
             next_tennis_refresh_at = time.monotonic() + _TENNIS_REFRESH_EVERY_S
 
@@ -2022,10 +2185,20 @@ def main() -> None:
                 _run_prematch_picks(sport)
                 next_prematch_at[sport] = (time.monotonic()
                                              + _PREMATCH_PICKS_EVERY_S)
-        # Tennis picks emission (15m) + settle (5m).
-        if now >= next_tennis_picks_at:
+        # Tennis picks emission (15m) — still retired 2026-08-09; tennis
+        # picks are emitted on-demand via the scheduled-slate route.
+        if False and now >= next_tennis_picks_at:  # RETIRED 2026-08-09 (Austin): tennis dropped
             _run_tennis_picks()
             next_tennis_picks_at = time.monotonic() + _TENNIS_PICKS_EVERY_S
+        # Tennis settle (5m) — RE-ENABLED 2026-10-10 (PickMint tennis
+        # parity T0, Part A). The 08-09 "tennis dropped" blanket-disable
+        # silently undid the 2026-05-28 fix this exact loop exists for
+        # (see _run_tennis_settle's docstring: "pending picks rotted").
+        # With tennis back to emitting real picks and no other scheduled
+        # caller of settle_tennis_picks(), settlement had regressed to
+        # 100% lazy/on-navigation again — picks sat pending up to 74h
+        # waiting for someone to open the Tennis tracker sub-tab. Picks
+        # emission + schedule refresh stay off; this flips settle only.
         if now >= next_tennis_settle_at:
             _run_tennis_settle()
             next_tennis_settle_at = (time.monotonic()
@@ -2045,11 +2218,6 @@ def main() -> None:
             _run_baseball_framework_slate()
             next_baseball_fw_slate_at = (time.monotonic()
                                            + _BASEBALL_SLATE_EVERY_S)
-        # Motorsports settle — finalized races whose picks haven't graded.
-        if now >= next_motorsports_settle_at:
-            _run_motorsports_settle()
-            next_motorsports_settle_at = (time.monotonic()
-                                            + _MOTORSPORTS_SETTLE_EVERY_S)
 
         # Sleep until the next due tick across all timers. Cap at 1s
         # so the signal handler responds fast on Ctrl+C.
@@ -2064,12 +2232,14 @@ def main() -> None:
                        next_event_log_sync_at,
                        next_drift_scan_at,
                        next_props_gen_at,
+                       next_props_settle_at,
+                       next_nfl_props_at,
+                       next_nba_props_at,
                        next_framework_refresh_at,
                        next_tennis_picks_at, next_tennis_settle_at,
                        next_soccer_ht_at,
                        next_football_slate_at,
-                       next_baseball_fw_slate_at,
-                       next_motorsports_settle_at])
+                       next_baseball_fw_slate_at])
         sleep_s = max(0.5, min(1.0, min(upcoming) - time.monotonic()))
         time.sleep(sleep_s)
 

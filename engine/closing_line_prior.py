@@ -249,6 +249,13 @@ def _fetch_settled_rows(sport: str) -> dict[str, list[tuple[float, float, int]]]
             from .nhl_db import get_conn
             conn = get_conn()
             table = "live_picks_nhl"
+        elif sport in ("football_nfl", "football_cfb", "football_ufl"):
+            import os as _os, sqlite3 as _sq
+            _lg = sport.split("_", 1)[1]
+            _dbp = _os.path.join(_os.path.dirname(__file__), "..", "data", "football", _lg + ".db")
+            conn = _sq.connect("file:" + _dbp + "?mode=ro", uri=True)
+            conn.row_factory = _sq.Row
+            table = "picks"
         else:
             return rows_by_bt
         sql = (f"SELECT bet_type, model_prob, closing_odds, result "
@@ -272,6 +279,25 @@ def _fetch_settled_rows(sport: str) -> dict[str, list[tuple[float, float, int]]]
     return rows_by_bt
 
 
+def _oos_improvement(rows) -> float | None:
+    """Out-of-sample closing-line-prior improvement: fit the weight on a
+    70%% split, measure brier(model) - brier(posterior) on the held-out
+    30%%. In-sample improvement is >=0 BY CONSTRUCTION (w=1.0 is in the
+    grid), which misled the operator into enabling priors that overfit
+    (audit T2 C). This can honestly be NEGATIVE. None if too few to hold out."""
+    n = len(rows)
+    if n < 2 * _MIN_FIT_SAMPLES:
+        return None
+    cut = int(n * 0.7)
+    train, val = rows[:cut], rows[cut:]
+    if not train or not val:
+        return None
+    w_tr, _ = _fit_weight(train)
+    brier_model_val = _brier(((mp, y) for mp, _, y in val))
+    brier_post_val = _brier(((posterior_prob(mp, mi, w_tr), y) for mp, mi, y in val))
+    return round(brier_model_val - brier_post_val, 4)
+
+
 def fit_sport(sport: str) -> dict:
     """Fit per-bet-type weights for one sport. Bet types with fewer
     than ``_MIN_FIT_SAMPLES`` are skipped — falls back to the per-sport
@@ -290,7 +316,11 @@ def fit_sport(sport: str) -> dict:
         w, brier_post = _fit_weight(rows)
         brier_model = _brier(((mp, y) for mp, _, y in rows))
         brier_market = _brier(((mi, y) for _, mi, y in rows))
-        fitted[bt] = round(w, 3)
+        _oos_bt = _oos_improvement(rows)
+        # Apply the CLV prior ONLY when it improves OUT-OF-SAMPLE (audit T2
+        # C): the in-sample fit is >=0 by construction and overfits. If it
+        # cannot be validated (too few) or does not help OOS, use pure model.
+        fitted[bt] = round(w, 3) if (_oos_bt is not None and _oos_bt > 0) else 1.0
         diagnostics[bt] = {
             "n": len(rows),
             "w": round(w, 3),
@@ -298,17 +328,21 @@ def fit_sport(sport: str) -> dict:
             "brier_market": round(brier_market, 4),
             "brier_posterior": round(brier_post, 4),
             "improvement_vs_model": round(brier_model - brier_post, 4),
+            "improvement_vs_model_oos": _oos_improvement(rows),
         }
     if union:
         w_default, brier_default = _fit_weight(union)
         brier_model_all = _brier(((mp, y) for mp, _, y in union))
-        fitted["_default"] = round(w_default, 3)
+        _oos_def = _oos_improvement(union)
+        fitted["_default"] = (round(w_default, 3)
+                              if (_oos_def is not None and _oos_def > 0) else 1.0)
         diagnostics["_default"] = {
             "n": len(union),
             "w": round(w_default, 3),
             "brier_model": round(brier_model_all, 4),
             "brier_posterior": round(brier_default, 4),
             "improvement_vs_model": round(brier_model_all - brier_default, 4),
+            "improvement_vs_model_oos": _oos_improvement(union),
         }
 
     data = _load()

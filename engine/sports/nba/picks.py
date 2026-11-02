@@ -12,6 +12,7 @@ Used by: NBA Best Bets, NBA Q1 Pick Tracker.
 import logging
 
 from ...config import NBA_BET_RELIABILITY
+from ._market_anchor import anchor as _anchor
 
 logger = logging.getLogger(__name__)
 
@@ -102,14 +103,15 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
         cover_prob = pred["spread_cover_prob"]
         if cover_prob is not None:
             from ...picks_core import score_pick as _score_pick
-            for side_label, prob, side_odds in [
-                (f"{home_abbr} {q1_spread:+.1f} Q1", cover_prob, h_spread_odds),
-                (f"{away_abbr} {-q1_spread:+.1f} Q1", 1 - cover_prob, a_spread_odds),
+            for side_label, prob, side_odds, opp_odds in [
+                (f"{home_abbr} {q1_spread:+.1f} Q1", cover_prob, h_spread_odds, a_spread_odds),
+                (f"{away_abbr} {-q1_spread:+.1f} Q1", 1 - cover_prob, a_spread_odds, h_spread_odds),
             ]:
                 scored = _score_pick({
                     "type": "Q1_SPREAD",
+                    "deriv_market_key": "nba:Q1_SPREAD",
                     "pick": side_label,
-                    "raw_prob": prob,
+                    "raw_prob": _anchor(prob, side_odds, opp_odds, bet_type="Q1_SPREAD", pick=side_label),
                     "odds": side_odds,
                 }, sport="nba", juice_wall=JUICE_WALL)
                 if scored:
@@ -122,14 +124,15 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
         over_prob = pred["over_prob"]
         if over_prob is not None:
             from ...picks_core import score_pick as _score_pick
-            for label, prob, side_odds in [
-                (f"Over {q1_total} Q1", over_prob, over_odds),
-                (f"Under {q1_total} Q1", 1 - over_prob, under_odds),
+            for label, prob, side_odds, opp_odds in [
+                (f"Over {q1_total} Q1", over_prob, over_odds, under_odds),
+                (f"Under {q1_total} Q1", 1 - over_prob, under_odds, over_odds),
             ]:
                 scored = _score_pick({
                     "type": "Q1_TOTAL",
+                    "deriv_market_key": "nba:Q1_TOTAL",
                     "pick": label,
-                    "raw_prob": prob,
+                    "raw_prob": _anchor(prob, side_odds, opp_odds, bet_type="Q1_TOTAL", pick=label),
                     "odds": side_odds,
                 }, sport="nba", juice_wall=JUICE_WALL)
                 if scored:
@@ -153,8 +156,10 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
     if home_ml_odds is not None:
         scored = _score_pick({
             "type": "Q1_ML",
+            "deriv_market_key": "nba:Q1_ML",
             "pick": f"{home_abbr} Q1 ML",
-            "raw_prob": pred["q1_ml_home"],
+            "raw_prob": _anchor(pred["q1_ml_home"], home_ml_odds, away_ml_odds,
+                                bet_type="Q1_ML", pick=f"{home_abbr} Q1 ML"),
             "odds": home_ml_odds,
         }, sport="nba", juice_wall=JUICE_WALL)
         if scored:
@@ -162,8 +167,10 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
     if away_ml_odds is not None:
         scored = _score_pick({
             "type": "Q1_ML",
+            "deriv_market_key": "nba:Q1_ML",
             "pick": f"{away_abbr} Q1 ML",
-            "raw_prob": pred["q1_ml_away"],
+            "raw_prob": _anchor(pred["q1_ml_away"], away_ml_odds, home_ml_odds,
+                                bet_type="Q1_ML", pick=f"{away_abbr} Q1 ML"),
             "odds": away_ml_odds,
         }, sport="nba", juice_wall=JUICE_WALL)
         if scored:
@@ -223,18 +230,19 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
             z = (predicted_margin - (-point)) / q1_std
             home_cover = 0.5 * (1 + math.erf(z / math.sqrt(2)))
         home_cover = max(0.05, min(0.95, home_cover))
-        for side_label, prob, side_odds, side_point in [
+        for side_label, prob, side_odds, opp_odds in [
             (f"{home_abbr} {'+' if point > 0 else ''}{point} Q1",
-             home_cover, home_odds, point),
+             home_cover, home_odds, away_odds),
             (f"{away_abbr} {'+' if -point > 0 else ''}{-point} Q1",
-             1.0 - home_cover, away_odds, -point),
+             1.0 - home_cover, away_odds, home_odds),
         ]:
             if side_odds is None:
                 continue
             scored = _score_pick({
                 "type": "Q1_SPREAD",
+                "deriv_market_key": "nba:Q1_SPREAD",
                 "pick": side_label,
-                "raw_prob": prob,
+                "raw_prob": _anchor(prob, side_odds, opp_odds, bet_type="Q1_SPREAD", pick=side_label),
                 "odds": side_odds,
             }, sport="nba", juice_wall=juice_wall)
             if scored is None:
@@ -260,16 +268,17 @@ def generate_q1_picks(home_abbr: str, away_abbr: str,
         else:
             z = (predicted_total - line) / 8.5
             over_prob = 0.5 * (1 + math.erf(z / math.sqrt(2)))
-        for label, prob, side_odds in [
-            (f"Over {line} Q1", over_prob, over_odds),
-            (f"Under {line} Q1", 1.0 - over_prob, under_odds),
+        for label, prob, side_odds, opp_odds in [
+            (f"Over {line} Q1", over_prob, over_odds, under_odds),
+            (f"Under {line} Q1", 1.0 - over_prob, under_odds, over_odds),
         ]:
             if side_odds is None or abs(side_odds) < 100:
                 continue
             scored = _score_pick({
                 "type": "Q1_TOTAL",
+                "deriv_market_key": "nba:Q1_TOTAL",
                 "pick": label,
-                "raw_prob": prob,
+                "raw_prob": _anchor(prob, side_odds, opp_odds, bet_type="Q1_TOTAL", pick=label),
                 "odds": side_odds,
             }, sport="nba", juice_wall=juice_wall)
             if scored is None:
@@ -421,14 +430,14 @@ def generate_full_picks(home_abbr: str, away_abbr: str,
         cover_prob = work_pred.get("spread_cover_prob")
         if cover_prob is not None:
             from ...picks_core import score_pick as _score_pick
-            for side_label, prob, side_odds in [
-                (f"{home_abbr} {posted_spread:+.1f}", cover_prob, h_spread_odds),
-                (f"{away_abbr} {-posted_spread:+.1f}", 1 - cover_prob, a_spread_odds),
+            for side_label, prob, side_odds, opp_odds in [
+                (f"{home_abbr} {posted_spread:+.1f}", cover_prob, h_spread_odds, a_spread_odds),
+                (f"{away_abbr} {-posted_spread:+.1f}", 1 - cover_prob, a_spread_odds, h_spread_odds),
             ]:
                 scored = _score_pick({
                     "type": "SPREAD",
                     "pick": side_label,
-                    "raw_prob": prob,
+                    "raw_prob": _anchor(prob, side_odds, opp_odds, bet_type="SPREAD", pick=side_label),
                     "odds": side_odds,
                 }, sport="nba", juice_wall=JUICE_WALL)
                 if scored:
@@ -444,14 +453,14 @@ def generate_full_picks(home_abbr: str, away_abbr: str,
         over_prob = work_pred.get("over_prob")
         if over_prob is not None:
             from ...picks_core import score_pick as _score_pick
-            for label, prob, side_odds in [
-                (f"Over {posted_total}", over_prob, over_odds),
-                (f"Under {posted_total}", 1 - over_prob, under_odds),
+            for label, prob, side_odds, opp_odds in [
+                (f"Over {posted_total}", over_prob, over_odds, under_odds),
+                (f"Under {posted_total}", 1 - over_prob, under_odds, over_odds),
             ]:
                 scored = _score_pick({
                     "type": "TOTAL",
                     "pick": label,
-                    "raw_prob": prob,
+                    "raw_prob": _anchor(prob, side_odds, opp_odds, bet_type="TOTAL", pick=label),
                     "odds": side_odds,
                 }, sport="nba", juice_wall=JUICE_WALL)
                 if scored:
@@ -467,7 +476,8 @@ def generate_full_picks(home_abbr: str, away_abbr: str,
         if h_prob is not None:
             scored = _score_pick({
                 "type": "ML", "pick": f"{home_abbr} ML",
-                "raw_prob": h_prob, "odds": home_ml,
+                "raw_prob": _anchor(h_prob, home_ml, away_ml, bet_type="ML", pick=f"{home_abbr} ML"),
+                "odds": home_ml,
             }, sport="nba", juice_wall=JUICE_WALL)
             if scored:
                 picks.append(scored)
@@ -476,7 +486,8 @@ def generate_full_picks(home_abbr: str, away_abbr: str,
         if a_prob is not None:
             scored = _score_pick({
                 "type": "ML", "pick": f"{away_abbr} ML",
-                "raw_prob": a_prob, "odds": away_ml,
+                "raw_prob": _anchor(a_prob, away_ml, home_ml, bet_type="ML", pick=f"{away_abbr} ML"),
+                "odds": away_ml,
             }, sport="nba", juice_wall=JUICE_WALL)
             if scored:
                 picks.append(scored)
@@ -509,16 +520,16 @@ def generate_full_picks(home_abbr: str, away_abbr: str,
             a_alt = alt.get("away_odds")
             # cover prob = sum of margin prob > -point
             cover_p = sum(p for m, p in margin_probs.items() if m > -point)
-            for side_label, prob, side_odds in [
-                (f"{home_abbr} {point:+.1f}", cover_p, h_alt),
-                (f"{away_abbr} {-point:+.1f}", 1 - cover_p, a_alt),
+            for side_label, prob, side_odds, opp_odds in [
+                (f"{home_abbr} {point:+.1f}", cover_p, h_alt, a_alt),
+                (f"{away_abbr} {-point:+.1f}", 1 - cover_p, a_alt, h_alt),
             ]:
                 if side_odds is None:
                     continue
                 scored = _score_pick({
                     "type": "ALT SPREAD",
                     "pick": side_label,
-                    "raw_prob": prob,
+                    "raw_prob": _anchor(prob, side_odds, opp_odds, bet_type="ALT SPREAD", pick=side_label),
                     "odds": side_odds,
                 }, sport="nba", juice_wall=JUICE_WALL)
                 if scored:
@@ -532,20 +543,30 @@ def generate_full_picks(home_abbr: str, away_abbr: str,
             o_alt = alt.get("over_odds")
             u_alt = alt.get("under_odds")
             over_p = sum(p for t, p in total_probs.items() if t > line)
-            for label, prob, side_odds in [
-                (f"Over {line}", over_p, o_alt),
-                (f"Under {line}", 1 - over_p, u_alt),
+            for label, prob, side_odds, opp_odds in [
+                (f"Over {line}", over_p, o_alt, u_alt),
+                (f"Under {line}", 1 - over_p, u_alt, o_alt),
             ]:
                 if side_odds is None:
                     continue
                 scored = _score_pick({
                     "type": "ALT TOTAL",
                     "pick": label,
-                    "raw_prob": prob,
+                    "raw_prob": _anchor(prob, side_odds, opp_odds, bet_type="ALT TOTAL", pick=label),
                     "odds": side_odds,
                 }, sport="nba", juice_wall=JUICE_WALL)
                 if scored:
                     picks.append(scored)
 
     picks.sort(key=lambda p: -p.get("edge", 0))
+    try:
+        from .derivative_picks import _append_team_totals
+        _append_team_totals(picks, pred or {}, odds, home_abbr, away_abbr)
+    except Exception as _e:
+        logger.debug('NBA full team totals failed: %s', _e)
+    try:
+        from .derivative_picks import _append_half_picks
+        _append_half_picks(picks, work_pred or {}, odds, home_abbr, away_abbr)
+    except Exception as _e:
+        logger.debug('NBA halves failed: %s', _e)
     return picks

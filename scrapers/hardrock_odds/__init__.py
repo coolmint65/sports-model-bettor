@@ -455,6 +455,18 @@ _IMPERSONATE_PROFILES = (
     "chrome131", "chrome124", "chrome120", "safari17_0", "firefox133",
 )
 _active_profile: str | None = None
+# CF-block circuit-breaker (2026-10-13 Austin): when HR's Cloudflare starts 403ing
+# EVERY profile, short-circuit ALL fetches for a growing backoff instead of hammering
+# ~40 comps/cycle (which keeps CF's rate-limit hot and stops it clearing). Any 200 resets it.
+_cf_blocked_until: float = 0.0
+_cf_backoff: float = 0.0
+_CF_BACKOFF_MIN = 300.0
+_CF_BACKOFF_MAX = 3600.0
+# Statuses that mean the request got PAST Cloudflare and HR itself answered. The profile
+# loop used to keep rotating on them, so a dead comp (China CBA 700747368356478979: 404 via
+# chrome131) ended on firefox133's CF 403 and tripped the breaker -- blanking every HR fetch
+# in the worker for 5 min, re-tripped by the next CBA call (MintyBot 2026-10-26).
+_HR_DEFINITIVE = (400, 404, 410)
 
 
 def _graphql_post(url: str, body: dict, headers: dict,
@@ -466,7 +478,10 @@ def _graphql_post(url: str, body: dict, headers: dict,
     profiles so a single profile being blocked doesn't take the whole
     scraper offline. urllib path remains as a last-ditch fallback so
     dev boxes without curl_cffi still try (and fail loudly with 403)."""
-    global _active_profile
+    global _active_profile, _cf_blocked_until, _cf_backoff
+    _now = time.time()
+    if _now < _cf_blocked_until:
+        return 0, None, ("CF circuit-open (%ds backoff left; skipping HR fetch)" % int(_cf_blocked_until - _now))
     data = json.dumps(body).encode()
     if _HAS_CURL_CFFI:
         # Prefer the last working profile when known.
@@ -487,7 +502,16 @@ def _graphql_post(url: str, body: dict, headers: dict,
                 )
                 if r.status_code == 200:
                     _active_profile = profile
+                    _cf_backoff = 0.0
+                    _cf_blocked_until = 0.0
                     return r.status_code, r.content, None
+                if r.status_code in _HR_DEFINITIVE:
+                    # Past Cloudflare -- HR itself answered (gone / bad request): stop rotating;
+                    # a later profile's CF 403 must not overwrite this and trip the breaker.
+                    _active_profile = profile
+                    _cf_backoff = 0.0
+                    _cf_blocked_until = 0.0
+                    return r.status_code, r.content, f"HTTP {r.status_code} ({profile})"
                 last_status = r.status_code
                 last_raw = r.content
                 last_err = f"HTTP {r.status_code} ({profile})"
@@ -495,6 +519,10 @@ def _graphql_post(url: str, body: dict, headers: dict,
                 last_err = f"curl_cffi {profile}: {e}"
         # Cache miss — reset so next call starts fresh from the top.
         _active_profile = None
+        if last_status == 403:
+            _cf_backoff = min(max(_cf_backoff * 2.0, _CF_BACKOFF_MIN), _CF_BACKOFF_MAX)
+            _cf_blocked_until = time.time() + _cf_backoff
+            last_err = (last_err or "") + (" [CF breaker: backing off %ds]" % int(_cf_backoff))
         return last_status, last_raw, last_err
     try:
         req = urllib.request.Request(url, data=data, headers=headers, method="POST")
@@ -790,10 +818,14 @@ _DERIVATIVE_MARKET_TYPES: dict[str, str] = {
     "BASEBALL:FT:WTBEI": "extra_innings",      # Game to go into extra innings
     "BASEBALL:FT:INNINGW": "inning_winner",    # 1st inning winner (period=I1)
     "BASEBALL:FT:I1T5W": "f5_winner",          # F5 ML
-    "BASEBALL:FTOT:A:OUEXSO": "team_total_away",
-    "BASEBALL:FTOT:B:OUEXSO": "team_total_home",
-    "BASEBALL:P:A:OU5": "f5_team_total_away",
-    "BASEBALL:P:B:OU5": "f5_team_total_home",
+    # A = participant 0 = HOME, like every other HR selection (MintyBot 2026-10-26: HR's own
+    # market names say so -- "Rays vs Brewers": FTOT:A:OUEXSO "Rays Total Runs", P:A:OU5 "First 5
+    # Innings Rays Total Runs"). These were inverted, so every MLB team total / F5 team total was
+    # priced against the OTHER team's line. Same fix NBA got 2026-05-05.
+    "BASEBALL:FTOT:A:OUEXSO": "team_total_home",
+    "BASEBALL:FTOT:B:OUEXSO": "team_total_away",
+    "BASEBALL:P:A:OU5": "f5_team_total_home",
+    "BASEBALL:P:B:OU5": "f5_team_total_away",
     "BASEBALL:P:OU5": "f5_total",              # Already partially via legacy F5
     "BASEBALL:P:OU": "inning_total",           # Period field carries inning #
     "BASEBALL:P:BTS": "inning_bts",            # Both teams score in inning N
@@ -801,12 +833,18 @@ _DERIVATIVE_MARKET_TYPES: dict[str, str] = {
     "ICE_HOCKEY:FTOT:OE": "total_oe",
     "ICE_HOCKEY:FT:OT": "overtime",
     "ICE_HOCKEY:FT:BTS": "bts_full",
-    "ICE_HOCKEY:FTOT:A:OU": "team_total_away",
-    "ICE_HOCKEY:FTOT:B:OU": "team_total_home",
+    # A = HOME (2026-10-26, HR's market names: "Oilers vs. Red Wings" FTOT:A:OU = "Oilers Total
+    # Goals"). Was inverted -- NHL team totals priced against the other team's line.
+    "ICE_HOCKEY:FTOT:A:OU": "team_total_home",
+    "ICE_HOCKEY:FTOT:B:OU": "team_total_away",
     "ICE_HOCKEY:P:OU": "period_total",
     "ICE_HOCKEY:P:DNB": "period_dnb",
     "ICE_HOCKEY:P:BTS": "period_bts",
     "ICE_HOCKEY:P:NEXTTEAMSCORE": "next_team_score",
+    # ── NHL extra markets (MintyBot 2026-10-18, Austin "do the extra markets") ──
+    "ICE_HOCKEY:FT:AXB": "regulation_3way",   # "Game Winner (Regulation Only)" 3-way
+    "ICE_HOCKEY:P:AXB": "period_3way",        # "Nth Period Result" 3-way (home/tie/away)
+    "ICE_HOCKEY:P:SPRD": "period_spread",     # "Nth Period Spread" (period puck line)
     # ── NBA (Phase 1d) — quarter-level extensions ──
     # HR convention for NBA (verified 2026-05-05 on LAL @ OKC): selection
     # type "A"/"AH" tracks participant position 0 = HOME team. Spread
@@ -1030,6 +1068,8 @@ def _classify_outcome(outcome: dict, away_abbr: str, home_abbr: str,
         dec = _float_line(_pick(outcome, "oddsDecimal", "decimalOdds", "price"))
         if dec is not None:
             american = _decimal_to_american(dec)
+    if american is None:
+        american = _rootidx_to_american(_pick(outcome, "rootIdx", "rootIndex"))
 
     line = _float_line(_pick(outcome, "line", "handicap", "points", "spread", "total"))
     if line is None:
@@ -1072,6 +1112,9 @@ def _classify_outcome(outcome: dict, away_abbr: str, home_abbr: str,
         return "even", american, line
     if label_lower in ("tie", "draw"):
         return "tie", american, line
+    # "None" = no goal scored (NHL period/game "Goal 1" / first-goal markets)
+    if label_lower in ("none", "neither", "no goal", "no goal scored"):
+        return "none", american, line
 
     # ── 2. Team abbreviation matching ──
     # Strip any trailing line numbers from label for matching
@@ -1498,6 +1541,35 @@ def _apply_market(bucket: dict, kind: str, sides: dict, q1: bool,
             out["no_more_odds"] = no_more
         if period_key and out:
             bucket.setdefault("next_team_score", {})[str(period_key)] = out
+    elif kind == "regulation_3way":
+        # NHL full-game 3-way (home / tie / away) in regulation only.
+        out = {}
+        for s in ("home", "away", "tie"):
+            p = sides.get(s, {}).get("price")
+            if p is not None:
+                out[f"{s}_ml"] = p
+        if out:
+            bucket["regulation_3way"] = out
+    elif kind == "period_3way":
+        period_key = sides.get("_period")
+        out = {}
+        for s in ("home", "away", "tie"):
+            p = sides.get(s, {}).get("price")
+            if p is not None:
+                out[f"{s}_ml"] = p
+        if period_key and out:
+            bucket.setdefault("period_3way", {})[str(period_key)] = out
+    elif kind == "period_spread":
+        period_key = sides.get("_period")
+        home_line = sides.get("home", {}).get("line")
+        home_price = sides.get("home", {}).get("price")
+        away_line = sides.get("away", {}).get("line")
+        away_price = sides.get("away", {}).get("price")
+        if period_key and (home_line is not None or away_line is not None):
+            bucket.setdefault("period_spread", {})[str(period_key)] = {
+                "home_point": home_line, "home_odds": home_price,
+                "away_point": away_line, "away_odds": away_price,
+            }
     elif kind in ("q1_team_total_home", "q1_team_total_away"):
         # Same code (P:A:OU / P:B:OU) is used for 1st-half markets —
         # only store when this is actually a Q1 market.
@@ -1926,13 +1998,25 @@ def _juice_score(home_odds: int | None, away_odds: int | None,
     Tiebreak: absolute value of the line. When two lines have identical
     juice (e.g. both -105/-115), the one closer to zero is more likely
     the consensus line the site displays.
+
+    2026-10-26 (Austin: card showed WKU -1.5 +100 / DEL +1.5 -120 while HR displays DEL -1.5 -105 /
+    WKU +1.5 -115): the primary score is now the gap between the two sides' IMPLIED probabilities.
+    The old sum of each price's distance from +/-100 scored +100/-120 and -105/-115 both 20 -- a tie
+    the line tiebreak can't split in a pick'em game (both +/-1.5) -- so whichever pair the feed listed
+    first became the "main" line. Implied gap: .045 vs .023, the displayed main line wins. Every
+    ordering the old score got right (-110/-110 vs +300/-400 alts) is unchanged.
     """
     if home_odds is None or away_odds is None:
         return (9999.0, abs(line) if line is not None else 9999.0)
-    def _dist(odds: int) -> float:
-        return abs(abs(odds) - 100)
-    return (_dist(home_odds) + _dist(away_odds),
-            abs(line) if line is not None else 0.0)
+
+    def _imp(odds) -> float:
+        o = float(odds)
+        return abs(o) / (abs(o) + 100.0) if o < 0 else 100.0 / (o + 100.0)
+    try:
+        gap = abs(_imp(home_odds) - _imp(away_odds))
+    except (TypeError, ValueError, ZeroDivisionError):
+        return (9999.0, abs(line) if line is not None else 9999.0)
+    return (gap, abs(line) if line is not None else 0.0)
 
 
 def _promote_best_primary(bucket: dict) -> None:
@@ -2099,15 +2183,107 @@ def _resolve_comp_ids(sport: str, sports_tree: dict) -> list[str]:
     return out
 
 
+import threading as _threading
+_hr_rate_lock = _threading.Lock()
+_last_hr_req = [0.0]
+_HR_MIN_INTERVAL = 1.5  # min seconds between HR requests (anti-burst: the warm cycle
+                         # fires ~40 league fetches at once which re-flags the IP; spacing
+                         # them ~0.35s keeps a steady rate CF tolerates. MintyBot 2026-10-13.)
+def _rest_get(url, timeout=15.0):
+    """GET a new-REST HR endpoint (2026-10-13 migration) with the same
+    curl_cffi profile rotation + CF circuit-breaker as _graphql_post."""
+    global _active_profile, _cf_blocked_until, _cf_backoff
+    _now = time.time()
+    if _now < _cf_blocked_until:
+        return 0, None, ("CF circuit-open (%ds backoff left; skipping HR fetch)" % int(_cf_blocked_until - _now))
+    headers = _load_headers()
+    with _hr_rate_lock:
+        _since = time.time() - _last_hr_req[0]
+        if _since < _HR_MIN_INTERVAL:
+            time.sleep(_HR_MIN_INTERVAL - _since)
+        _last_hr_req[0] = time.time()
+    if _HAS_CURL_CFFI:
+        order = ((_active_profile,) + tuple(p for p in _IMPERSONATE_PROFILES if p != _active_profile)) if _active_profile else _IMPERSONATE_PROFILES
+        last_err = None; last_status = 0; last_text = None
+        for profile in order:
+            if profile is None:
+                continue
+            try:
+                r = _cc_requests.get(url, headers=headers, impersonate=profile, timeout=timeout)
+                if r.status_code == 200:
+                    _active_profile = profile; _cf_backoff = 0.0; _cf_blocked_until = 0.0
+                    return r.status_code, r.text, None
+                if r.status_code in _HR_DEFINITIVE:
+                    # HR's own answer (comp gone / bad request) -- see _graphql_post.
+                    _active_profile = profile; _cf_backoff = 0.0; _cf_blocked_until = 0.0
+                    return r.status_code, r.text, "HTTP %s (%s)" % (r.status_code, profile)
+                last_status = r.status_code; last_text = r.text; last_err = "HTTP %s (%s)" % (r.status_code, profile)
+            except Exception as e:
+                last_err = "curl_cffi %s: %s" % (profile, e)
+        _active_profile = None
+        if last_status == 403:
+            _cf_backoff = min(max(_cf_backoff * 2.0, _CF_BACKOFF_MIN), _CF_BACKOFF_MAX)
+            _cf_blocked_until = time.time() + _cf_backoff
+            last_err = (last_err or "") + (" [CF breaker: backing off %ds]" % int(_cf_backoff))
+        return last_status, last_text, last_err
+    return 0, None, "no curl_cffi"
+
+import os as _os
+_LADDER_PATH = _os.path.join(_os.path.dirname(__file__), "hardrock-ladder.json")
+_ladder_cache = None
+def _rootidx_to_american(rootidx):
+    """New REST: selections carry rootIdx (index into HR's price ladder), not inline odds."""
+    global _ladder_cache
+    if rootidx is None:
+        return None
+    if _ladder_cache is None:
+        try:
+            with open(_LADDER_PATH, encoding="utf-8") as _fh:
+                _ladder_cache = json.load(_fh)
+        except Exception:
+            _ladder_cache = {}
+    e = _ladder_cache.get(str(rootidx))
+    if not e:
+        return None
+    try:
+        return int(round(float(e.get("moneyline"))))
+    except (ValueError, TypeError):
+        return None
+
+
+def _rootidx_to_decimal(rootidx):
+    """New REST: selections carry rootIdx into HR's price ladder. Return the
+    DECIMAL price -- what the legacy per-sport parsers expect in
+    selection['odds'] (they call _decimal_to_american / float on it)."""
+    global _ladder_cache
+    if rootidx is None:
+        return None
+    if _ladder_cache is None:
+        try:
+            with open(_LADDER_PATH, encoding="utf-8") as _fh:
+                _ladder_cache = json.load(_fh)
+        except Exception:
+            _ladder_cache = {}
+    e = _ladder_cache.get(str(rootidx))
+    if not e:
+        return None
+    try:
+        return float(e.get("decimal"))
+    except (ValueError, TypeError):
+        return None
+
+
 def _fetch_sports_tree() -> tuple[dict, str | None]:
     """One round-trip to discover comp IDs across all sports."""
-    body = _load_sports_query()
-    headers = _load_headers()
-    status, raw, err = _graphql_post(GRAPHQL_URL, body, headers)
+    url = (f"{HARDROCK_HOST}/java-graphql/events/tree"
+           f"?channel=FLORIDA_ONLINE&segment=fl&region=us&language=enus"
+           f"&operationName=GetEventTree")
+    status, raw, err = _rest_get(url)
     if status != 200 or not raw:
         return {}, err or f"HTTP {status}"
     try:
-        return json.loads(raw), None
+        tree = json.loads(raw)
+        return {"data": {"betSync": {"sports": tree.get("sports") or []}}}, None
     except Exception as e:
         return {}, f"json parse: {e}"
 
@@ -2143,13 +2319,10 @@ def _fetch_events_for_comp(comp_id: str) -> tuple[list[dict], str | None]:
         if (now - ts) < ttl:
             return events, err
 
-    body = _load_query()
-    body.setdefault("variables", {})["filters"] = [
-        {"field": "compId", "values": str(comp_id)},
-        {"field": "outright", "value": "false"},
-    ]
-    headers = _load_headers()
-    status, raw, err = _graphql_post(GRAPHQL_URL, body, headers)
+    url = (f"{HARDROCK_HOST}/java-graphql/competitions/{comp_id}/events"
+           f"?channel=FLORIDA_ONLINE&segment=fl&region=us&language=enus"
+           f"&outright=false&includeMarkets=true")
+    status, raw, err = _rest_get(url)
     if status != 200 or not raw:
         _comp_cache[cache_key] = (now, [], err or f"HTTP {status}")
         return [], err or f"HTTP {status}"
@@ -2158,11 +2331,46 @@ def _fetch_events_for_comp(comp_id: str) -> tuple[list[dict], str | None]:
     except Exception as e:
         _comp_cache[cache_key] = (now, [], f"json parse: {e}")
         return [], f"json parse: {e}"
-    events = (data.get("data", {})
-                  .get("betSync", {})
-                  .get("events", {})
-                  .get("data") or [])
+    events = data.get("data") or []
+    # Oct-2026 HR event-shape migration: market selections moved to the
+    # `selections` (plural) key and carry a `rootIdx` (price-ladder index)
+    # instead of an inline decimal `odds`. Normalize back to the legacy shape
+    # every per-sport parser already reads -- alias selections->selection and
+    # rehydrate a decimal `odds` from the ladder -- so the parsers work
+    # unchanged. (MintyBot 2026-10-13)
+    for _ev in events:
+        if not isinstance(_ev, dict):
+            continue
+        for _mkt in (_ev.get("markets") or []):
+            if not isinstance(_mkt, dict):
+                continue
+            _sels = _mkt.get("selections")
+            if _sels is not None and _mkt.get("selection") is None:
+                _mkt["selection"] = _sels
+            for _s in (_mkt.get("selection") or []):
+                # displayed:false = a side HR lists but doesn't offer (most prop
+                # ladders carry a hidden Under). The old GraphQL query filtered
+                # these server-side (nonTradingFilters DISPLAYED); the REST feed
+                # doesn't, so leave them unpriced -- every parser then skips
+                # them. (MintyBot 2026-10-31)
+                if isinstance(_s, dict) and _s.get("displayed") is False:
+                    _s["odds"] = None
+                    continue
+                if (isinstance(_s, dict) and _s.get("odds") is None
+                        and _s.get("rootIdx") is not None):
+                    _dec = _rootidx_to_decimal(_s.get("rootIdx"))
+                    if _dec is not None:
+                        _s["odds"] = _dec
     _comp_cache[cache_key] = (now, events, None)
+    # Odds-warehouse tee (MintyBot 2026-11-01): hand this already-fetched board to a
+    # bounded background writer (warehouse/hr_tee.py). ZERO extra HR requests;
+    # O(1) put_nowait, drops when full, never raises. Kill switch:
+    # data/warehouse/hr_tee.off
+    try:
+        from warehouse import hr_tee as _wh_tee
+        _wh_tee.offer(comp_id, events)
+    except Exception:
+        pass
     return events, None
 
 

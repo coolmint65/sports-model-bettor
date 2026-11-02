@@ -119,6 +119,12 @@ def run_backtest(season: int | None = None, days: int | None = None,
     odds_synthetic_count = 0
 
     results = {
+        "_methodology_warning": (
+            "IN-SAMPLE + UNCALIBRATED (audit T2 C 2.3): baselines read "
+            "through the CURRENT tuned override layer over the same season "
+            "replayed, and edges are scored RAW (no calibrate()/closing-line "
+            "stage the live path applies). This ROI OVERSTATES the true "
+            "out-of-sample edge -- do not treat as a validated estimate."),
         "season": yr,
         "games_tested": 0,
         "games_skipped": 0,

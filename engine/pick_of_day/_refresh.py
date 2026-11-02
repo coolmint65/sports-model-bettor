@@ -14,6 +14,50 @@ Two flavours of refresh, called from the per-sport sync scripts:
     Snapshot the current line as `closing_odds`. Called on every sync
     run; the LAST update before settle_potd() runs is effectively the
     closing line we record for CLV.
+
+2026-10-10 CLV correctness fixes (Austin -- CLV was wrong two independent
+ways, both fixed here):
+
+  (a) Freeze-on-live. This used to overwrite closing_odds on every
+      call with "whatever HR shows right now", with no game-status
+      check -- so a 3-hourly RepriceProps run could stamp a mid-game
+      or post-game price as the "close" (verified: a CFB ML POTD
+      stamped -600 while already FINAL). Now gated through
+      _pregame_status_map(): a pending row only gets a (re)write while
+      its game is still SCHEDULED; once live/final/postponed -- or
+      once the join can't even find a status -- writes freeze so
+      closing_odds holds the last real pre-game price. NHL *and* MLB
+      can't resolve status at all today: their games tables key off
+      each sport's own native id (NHL-API gamePk / MLB Gameday id),
+      not the ESPN-style id POTD stores in `game_id`. That's a real
+      gap, not a bug in this fix -- closing_odds capture is
+      conservatively frozen (stays NULL) for those two sports until a
+      proper id-reconciliation lands. Flagged as a follow-up, not
+      fixed here (don't rabbit-hole it).
+
+  (b) Side + line matching. Separately, the per-sport resolvers below
+      picked the WRONG side's price whenever the picked team was HOME:
+      spread/puck-line/moneyline picks are stored as the full team
+      name ("New York Islanders +1.5"), not an abbreviation, but the
+      old code compared `pick.split()[0]` ("New") against `home_abbr`
+      ("NYI"), and on any mismatch blindly assumed "must be away" --
+      correct only when the picked team happened to actually be away.
+      (Verified against nhl.db: NYI POTD id=79, pick "New York
+      Islanders +1.5" [home, entry -185] stored closing_odds=+140,
+      which is TB's [away] price, not NYI's.) _resolve_pick_side() now
+      matches the pick's team explicitly against BOTH home_abbr and
+      away_abbr (alias-aware, falls back to a full-team-name lookup
+      against the sport's teams table), returning None -- not a guess
+      -- when neither side is a confident match. _spread_price_for_side
+      / _total_price_for_side additionally verify the pick's own line
+      number against the odds board's current line (falling back to
+      alt_spreads/alt_totals if the primary line has since drifted),
+      so a line move can't silently swap in a different number's
+      price either. engine.tracker._helpers._extract_closing_for_pick
+      (used by the main MLB tracker's CLV, outside POTD) has the
+      identical side-matching bug but is NOT touched here -- fixing it
+      is out of this task's scope (bigger blast radius than POTD) and
+      is flagged as a follow-up.
 """
 
 from __future__ import annotations
@@ -228,6 +272,8 @@ def update_potd_closing_odds(sport: str) -> dict:
         "mlb": _resolve_mlb_closing_for_pending,
         "nhl": _resolve_nhl_closing_for_pending,
         "nba": _resolve_nba_closing_for_pending,
+        "nfl": lambda pend: _resolve_football_closing_for_pending(pend, "nfl"),
+        "cfb": lambda pend: _resolve_football_closing_for_pending(pend, "cfb"),
     }
     resolver = builtin_resolvers.get(sport, _resolve_generic_closing_for_pending)
 
@@ -244,7 +290,32 @@ def update_potd_closing_odds(sport: str) -> dict:
         ).fetchall()
         if not pending:
             continue
+        # sqlite3.Row has no .get() -- convert once up front so both the
+        # freeze-gate below and every resolver's dict(row) stay cheap/safe.
+        pending = [dict(p) for p in pending]
         total_pending += len(pending)
+
+        # Freeze-on-live (2026-10-10): only let the resolver (re)write
+        # closing_odds for rows whose game is still SCHEDULED. Once
+        # live/final/postponed -- or once we can't resolve a status at
+        # all -- leave the existing closing_odds exactly as-is; that's
+        # the "last real pre-game price", i.e. the close. See the
+        # module docstring fix (a).
+        status_map = _pregame_status_map(
+            sport, {str(p.get("game_id") or "") for p in pending})
+        pending_pregame = [
+            p for p in pending
+            if status_map.get(str(p.get("game_id") or "")) == "scheduled"
+        ]
+        frozen = len(pending) - len(pending_pregame)
+        if frozen:
+            logger.info(
+                "POTD closing odds (%s/%s): froze %d row(s) already "
+                "live/final/postponed/unresolved -- closing_odds left "
+                "untouched", sport, table, frozen)
+        pending = pending_pregame
+        if not pending:
+            continue
 
         try:
             pairs = resolver(pending)
@@ -283,12 +354,274 @@ def update_potd_closing_odds(sport: str) -> dict:
     return {"updated": updated, "skipped": skipped}
 
 
+_SPORT_GAMES_TABLE = {
+    "mlb": ("games", "mlb_game_id"),
+    "nhl": ("nhl_games", "game_id"),
+    "nba": ("nba_games", "game_id"),
+    "nfl": ("games", "game_id"),
+    "cfb": ("games", "game_id"),
+}
+
+
+def _pregame_status_map(sport: str, game_ids: set[str]) -> dict[str, str]:
+    """Best-effort {game_id: lowercased status} for the given sport,
+    used by the freeze-on-live gate in update_potd_closing_odds.
+
+    Only includes game_ids it could actually resolve to a row -- a
+    missing key means "status unknown", and the caller must treat that
+    the same as "not provably pre-game" (freeze, don't guess). NHL and
+    MLB's games tables key off each sport's own native id (NHL-API
+    gamePk / MLB Gameday id) rather than the ESPN-style id POTD stores
+    in `game_id`, so neither ever resolves here today -- every NHL/MLB
+    row freezes until a real id-reconciliation lands (see the module
+    docstring). That's a known, accepted gap, not a crash."""
+    game_ids = {g for g in game_ids if g}
+    if not game_ids:
+        return {}
+    spec = _SPORT_GAMES_TABLE.get(sport)
+    if not spec:
+        return {}
+    games_table, game_id_col = spec
+    out: dict[str, str] = {}
+    try:
+        conn = _get_conn(sport)
+        placeholders = ",".join("?" * len(game_ids))
+        rows = conn.execute(
+            f"SELECT {game_id_col} AS gid, status FROM {games_table} "
+            f"WHERE {game_id_col} IN ({placeholders})",
+            tuple(game_ids),
+        ).fetchall()
+        for r in rows:
+            out[str(r["gid"])] = (r["status"] or "scheduled").lower()
+    except Exception as e:
+        logger.warning("POTD closing-odds pregame-status lookup failed (%s): %s",
+                       sport, e)
+        return {}
+    return out
+
+
+def _strip_pick_suffix(pick: str) -> str:
+    """Strip a trailing ' Q1' / ' ML' tag and/or signed line number off
+    a side-style pick string, leaving just the team token:
+    "New York Islanders +1.5" -> "New York Islanders"
+    "San Antonio Spurs +3.5 Q1" -> "San Antonio Spurs"
+    "New York Knicks ML" -> "New York Knicks"
+    "NYI +1.5" -> "NYI"      "St. Louis Cardinals" -> "St. Louis Cardinals"
+    """
+    import re
+    s = (pick or "").strip()
+    s = re.sub(r"\s+Q1\s*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\s*[+-]?\d+\.?\d*\s*$", "", s)
+    s = re.sub(r"\s+ML\s*$", "", s, flags=re.IGNORECASE)
+    return s.strip()
+
+
+def _pick_line_value(pick: str) -> float | None:
+    """Pull the trailing signed line number out of a pick string
+    ("New York Islanders +1.5" -> 1.5, "... -0.5 Q1" -> -0.5,
+    "Over 6.5" -> 6.5). None when there's no trailing number to parse."""
+    import re
+    s = (pick or "").strip()
+    s = re.sub(r"\s+Q1\s*$", "", s, flags=re.IGNORECASE)
+    m = re.search(r"([+-]?\d+\.?\d*)\s*$", s)
+    if not m:
+        return None
+    try:
+        return float(m.group(1))
+    except ValueError:
+        return None
+
+
+_SPORT_TEAMS_TABLE = {"mlb": "teams", "nhl": "nhl_teams", "nba": "nba_teams"}
+
+
+def _team_name_for_abbr(abbr: str, sport: str, conn, table: str) -> str:
+    """Full team name for one abbreviation, trying its alias too (e.g.
+    a matchup string may say "TB" while the teams table itself keys
+    Tampa Bay under "TBL" -- confirmed in nhl_teams 2026-10-10)."""
+    if not abbr:
+        return ""
+    try:
+        row = conn.execute(
+            f"SELECT name FROM {table} WHERE abbreviation = ?", (abbr,)
+        ).fetchone()
+        if row and row["name"]:
+            return row["name"]
+    except Exception:
+        return ""
+    try:
+        from ..abbr import alt_abbr
+        alt = alt_abbr(abbr, sport)
+        if alt and alt != abbr:
+            row = conn.execute(
+                f"SELECT name FROM {table} WHERE abbreviation = ?", (alt,)
+            ).fetchone()
+            if row and row["name"]:
+                return row["name"]
+    except Exception:
+        pass
+    return ""
+
+
+def _team_names_for_abbrs(home_abbr: str, away_abbr: str, sport: str) -> dict[str, str]:
+    """{abbreviation: Full Team Name} for the two sides. Used to match
+    a pick stored as a full team name (NHL/MLB/NBA all do this for
+    side-style bets) back to an abbreviation. Best-effort: returns {}
+    (or a partial dict) on any failure so callers fall back to
+    abbreviation-only matching rather than crashing."""
+    table = _SPORT_TEAMS_TABLE.get(sport)
+    if not table or not (home_abbr or away_abbr):
+        return {}
+    try:
+        conn = _get_conn(sport)
+    except Exception:
+        return {}
+    out = {}
+    if home_abbr:
+        out[home_abbr] = _team_name_for_abbr(home_abbr, sport, conn, table)
+    if away_abbr:
+        out[away_abbr] = _team_name_for_abbr(away_abbr, sport, conn, table)
+    return out
+
+
+def _resolve_pick_side(pick: str, home_abbr: str, away_abbr: str,
+                       sport: str) -> str | None:
+    """Which side ('home' / 'away') a side-style pick refers to, or
+    None when neither side can be confidently resolved (fail closed --
+    callers must NOT guess "must be the other one").
+
+    Root-cause fix for the 2026-10-10 NYI closing-odds bug: spread /
+    puck-line / moneyline picks are stored as the full team name
+    ("New York Islanders +1.5"), not the abbreviation, so comparing
+    just the first whitespace token against home_abbr breaks silently
+    ("New" never equals "NYI"). Tries, in order: (1) an abbreviation
+    token match (alias-aware via engine.abbr), (2) a full-team-name
+    match against the sport's teams table."""
+    if not pick or not (home_abbr or away_abbr):
+        return None
+    token = _strip_pick_suffix(pick)
+    tok_head = token.split()[0] if token.split() else token
+
+    def _abbr_eq(a, b):
+        if not a or not b:
+            return False
+        if a.upper() == b.upper():
+            return True
+        try:
+            from ..abbr import alt_abbr
+            return (alt_abbr(a, sport).upper() == b.upper()
+                    or a.upper() == alt_abbr(b, sport).upper())
+        except Exception:
+            return False
+
+    if _abbr_eq(tok_head, home_abbr):
+        return "home"
+    if _abbr_eq(tok_head, away_abbr):
+        return "away"
+
+    names = _team_names_for_abbrs(home_abbr, away_abbr, sport)
+    tok_lower = token.lower()
+    home_name = (names.get(home_abbr) or "").lower()
+    away_name = (names.get(away_abbr) or "").lower()
+
+    # Nickname-only (last word) match first: team-name formatting drifts
+    # a lot between where picks get their text (looks ESPN-sourced, e.g.
+    # "New York Islanders") and a sport's own teams table (nhl_teams
+    # stores NYI as "NY Islanders Islanders" and keys TBL under "TBL",
+    # not "TB" -- confirmed 2026-10-10). The nickname (final word) is
+    # the one part that stays stable across those variants and is,
+    # within a single matchup, always unique to one side.
+    def _last_word(s):
+        parts = s.split() if s else []
+        return parts[-1] if parts else ""
+    tok_last, home_last, away_last = (
+        _last_word(tok_lower), _last_word(home_name), _last_word(away_name))
+    if tok_last and home_last and tok_last == home_last and tok_last != away_last:
+        return "home"
+    if tok_last and away_last and tok_last == away_last and tok_last != home_last:
+        return "away"
+
+    # Full-string fallback (covers single-word names/cities the
+    # nickname check alone wouldn't disambiguate).
+    if home_name and (tok_lower == home_name or tok_lower.startswith(home_name)):
+        return "home"
+    if away_name and (tok_lower == away_name or tok_lower.startswith(away_name)):
+        return "away"
+    return None
+
+
+def _spread_price_for_side(side: str, pick_line: float | None, game_odds: dict,
+                           home_key: str = "home_spread_point",
+                           away_key: str = "away_spread_point",
+                           home_odds_key: str = "home_spread_odds",
+                           away_odds_key: str = "away_spread_odds",
+                           alt_key: str = "alt_spreads") -> int | None:
+    """Price for `side` at exactly `pick_line`. Checks the primary line
+    first, then the alt-lines list (HR keeps the freshest line as
+    primary and appends anything else to `alt_key` when it moves -- see
+    scrapers.hardrock_odds._apply_market). Falls back to the primary
+    price when there's no line to verify against (pick_line is None)
+    OR this market doesn't expose a point field at all -- strictly
+    better than the old code either way, since the SIDE is now right.
+    Returns None (not a guess) when we can see a line was quoted and it
+    genuinely doesn't match anywhere -- that means a real line move and
+    we don't have fresh odds for the pick's actual number."""
+    if side not in ("home", "away") or not game_odds:
+        return None
+    primary_point = game_odds.get(home_key if side == "home" else away_key)
+    primary_odds = game_odds.get(home_odds_key if side == "home" else away_odds_key)
+    if pick_line is None or primary_point is None:
+        return primary_odds
+    try:
+        if abs(float(primary_point) - pick_line) < 0.01:
+            return primary_odds
+    except (TypeError, ValueError):
+        return primary_odds
+    for alt in (game_odds.get(alt_key) or []):
+        point = alt.get("point")
+        if point is None:
+            continue
+        side_point = point if side == "home" else -point
+        if abs(float(side_point) - pick_line) < 0.01:
+            return alt.get("home_odds") if side == "home" else alt.get("away_odds")
+    return None
+
+
+def _total_price_for_side(is_over: bool, pick_line: float | None, game_odds: dict,
+                          line_key: str = "over_under", over_key: str = "over_odds",
+                          under_key: str = "under_odds",
+                          alt_key: str = "alt_totals") -> int | None:
+    """Over/Under price at exactly `pick_line`, mirroring
+    _spread_price_for_side's primary-then-alt-then-fail-closed shape."""
+    if not game_odds:
+        return None
+    primary_line = game_odds.get(line_key)
+    primary_price = game_odds.get(over_key if is_over else under_key)
+    if pick_line is None or primary_line is None:
+        return primary_price
+    try:
+        if abs(float(primary_line) - pick_line) < 0.01:
+            return primary_price
+    except (TypeError, ValueError):
+        return primary_price
+    for alt in (game_odds.get(alt_key) or []):
+        line = alt.get("line")
+        if line is not None and abs(float(line) - pick_line) < 0.01:
+            return alt.get("over_odds") if is_over else alt.get("under_odds")
+    return None
+
+
 # ── Per-sport closing-odds resolvers ──
 
 def _resolve_mlb_closing_for_pending(pending: list) -> list[tuple]:
-    """Per-POTD (id, closing_price) pairs for MLB."""
+    """Per-POTD (id, closing_price) pairs for MLB.
+
+    Was a thin wrapper around engine.tracker._helpers._extract_closing_for_pick;
+    now resolves locally via _mlb_closing_for_bet_type so the POTD-scoped
+    side/line fix doesn't touch that shared helper (it's also used by the
+    main MLB tracker's CLV capture outside POTD -- bigger blast radius
+    than this task, flagged as a follow-up instead; see module docstring)."""
     from ..picks import fetch_real_odds_for_games, match_odds
-    from ..tracker import _extract_closing_for_pick
     all_odds = fetch_real_odds_for_games() or {}
     if not all_odds:
         return [(r["id"], None) for r in pending]
@@ -301,8 +634,8 @@ def _resolve_mlb_closing_for_pending(pending: list) -> list[tuple]:
             out.append((row["id"], None))
             continue
         game_odds = match_odds(h_abbr, a_abbr, all_odds) or {}
-        closing = _extract_closing_for_pick(
-            row["bet_type"], row["pick"], h_abbr, game_odds,
+        closing = _mlb_closing_for_bet_type(
+            row["bet_type"], row["pick"], h_abbr, a_abbr, game_odds,
         ) if game_odds else None
         out.append((row["id"], closing))
     return out
@@ -325,7 +658,7 @@ def _resolve_nhl_closing_for_pending(pending: list) -> list[tuple]:
             h_abbr, a_abbr, all_odds, sport="nhl",
         ) or {}
         closing = _nhl_closing_for_bet_type(
-            row["bet_type"], row["pick"], h_abbr, game_odds,
+            row["bet_type"], row["pick"], h_abbr, a_abbr, game_odds,
         ) if game_odds else None
         out.append((row["id"], closing))
     return out
@@ -354,9 +687,75 @@ def _resolve_nba_closing_for_pending(pending: list) -> list[tuple]:
             h_abbr, a_abbr, all_odds, sport="nba",
         ) or {}
         closing = _nba_closing_for_bet_type(
-            row["bet_type"], row["pick"], h_abbr, game_odds,
+            row["bet_type"], row["pick"], h_abbr, a_abbr, game_odds,
         ) if game_odds else None
         out.append((row["id"], closing))
+    return out
+
+
+def _resolve_football_closing_for_pending(pending: list, league: str) -> list[tuple]:
+    """Per-POTD (id, closing_price) pairs for football (nfl/cfb).
+
+    Mirrors engine.football._tracker.capture_closing_odds but targets the
+    POTD table. The POTD stores ESPN game_ids + abbreviation pick text (same
+    as the football picks table), so join games/teams for the home/away
+    abbrs, pull HR's current price for the pick's side, and return it as the
+    closing. A bridge off picks.closing_odds is unreliable here: football
+    POTDs lock days ahead and the picks-side closing isn't captured until
+    near kickoff, so the matching picks row is usually still NULL. Re-fetching
+    HR's board directly captures the close for the POTD game regardless.
+    (MintyBot 2026-10-07, Austin: "fix CLV".)"""
+    from ..football._odds import fetch_league_odds
+    conn = _get_conn(league)
+    try:
+        odds = fetch_league_odds(league) or {}
+    except Exception as e:
+        logger.warning("football POTD odds fetch failed (%s): %s", league, e)
+        return [(r["id"], None) for r in pending]
+    if not odds:
+        return [(r["id"], None) for r in pending]
+    out = []
+    for row in pending:
+        r = dict(row)
+        g = conn.execute(
+            "SELECT ht.abbreviation AS h, at.abbreviation AS a "
+            "FROM games g LEFT JOIN teams ht ON ht.id = g.home_team_id "
+            "LEFT JOIN teams at ON at.id = g.away_team_id "
+            "WHERE g.game_id = ?",
+            (r["game_id"],),
+        ).fetchone()
+        if not g or not g["h"] or not g["a"]:
+            out.append((r["id"], None))
+            continue
+        h, a = g["h"], g["a"]
+        o = odds.get(f"{a}@{h}")
+        if not o:
+            out.append((r["id"], None))
+            continue
+        bt = (r["bet_type"] or "").upper()
+        pick = (r["pick"] or "").strip()
+        am = None
+        if bt == "ML":
+            am = o.get("home_ml") if pick == h else (o.get("away_ml") if pick == a else None)
+        elif bt == "SPREAD":
+            tok = pick.split()[0] if pick else ""
+            am = o.get("home_spread_odds") if tok == h else (o.get("away_spread_odds") if tok == a else None)
+        elif bt == "TOTAL":
+            pl = pick.lower()
+            am = o.get("over_odds") if pl.startswith("over") else (o.get("under_odds") if pl.startswith("under") else None)
+        if am is None:
+            out.append((r["id"], None))
+            continue
+        try:
+            am = int(am)
+        except (TypeError, ValueError):
+            out.append((r["id"], None))
+            continue
+        # Reject HR market-locked sentinels (matches the football tracker gate).
+        if abs(am) < 100 or abs(am) > 5000:
+            out.append((r["id"], None))
+            continue
+        out.append((r["id"], am))
     return out
 
 
@@ -397,43 +796,189 @@ def _lookup_by_abbr_with_aliases(h_abbr: str, a_abbr: str,
     return {}
 
 
-def _nhl_closing_for_bet_type(bet_type: str, pick: str,
-                               home_abbr: str, game_odds: dict) -> int | None:
-    """Pick out the right NHL price for the pick's bet_type (O/U, PL, ML)."""
+def _nhl_closing_for_bet_type(bet_type: str, pick: str, home_abbr: str,
+                               away_abbr: str, game_odds: dict) -> int | None:
+    """Pick out the right NHL price for the pick's bet_type (O/U, PL,
+    ML), matching the pick's exact side AND (for PL) its exact line --
+    see _resolve_pick_side / _spread_price_for_side. 2026-10-10: the old
+    version compared pick.split()[0] to home_abbr and blindly assumed
+    "away" on any mismatch, which is wrong for every full-team-name PL
+    pick on the home side (e.g. NYI id=79)."""
     if not game_odds:
         return None
     bt = bet_type
     pk = pick or ""
     if bt in ("ml", "ML"):
-        return (game_odds.get("home_ml") if pk == home_abbr
-                else game_odds.get("away_ml"))
+        side = _resolve_pick_side(pk, home_abbr, away_abbr, "nhl")
+        if side == "home":
+            return game_odds.get("home_ml")
+        if side == "away":
+            return game_odds.get("away_ml")
+        return None
     if bt in ("ou", "O/U"):
-        return (game_odds.get("over_odds") if "Over" in pk
-                else game_odds.get("under_odds"))
+        pl = pk.lower()
+        if pl.startswith("over"):
+            return _total_price_for_side(True, _pick_line_value(pk), game_odds)
+        if pl.startswith("under"):
+            return _total_price_for_side(False, _pick_line_value(pk), game_odds)
+        return None
     if bt in ("pl", "PL", "rl", "RL"):
-        pick_team = pk.split()[0] if pk.split() else ""
-        return (game_odds.get("home_spread_odds") if pick_team == home_abbr
-                else game_odds.get("away_spread_odds"))
+        side = _resolve_pick_side(pk, home_abbr, away_abbr, "nhl")
+        if side not in ("home", "away"):
+            return None
+        return _spread_price_for_side(side, _pick_line_value(pk), game_odds)
     return None
 
 
-def _nba_closing_for_bet_type(bet_type: str, pick: str,
-                               home_abbr: str, game_odds: dict) -> int | None:
-    """Pick out the right NBA Q1 price for the pick's bet_type."""
+def _mlb_closing_for_bet_type(bet_type: str, pick: str, home_abbr: str,
+                              away_abbr: str, game_odds: dict) -> int | None:
+    """Pick out the right MLB price for the pick's bet_type, matching
+    side + line explicitly (see module docstring: local POTD-scoped
+    replacement for engine.tracker._helpers._extract_closing_for_pick,
+    which has the identical bug but isn't touched here)."""
+    if not game_odds:
+        return None
+    bt = bet_type
+    pk = pick or ""
+    if bt in ("ml", "ML"):
+        side = _resolve_pick_side(pk, home_abbr, away_abbr, "mlb")
+        if side == "home":
+            return game_odds.get("home_ml")
+        if side == "away":
+            return game_odds.get("away_ml")
+        return None
+    if bt in ("ou", "O/U", "ALT O/U", "ALT TOTAL"):
+        pl = pk.lower()
+        if pl.startswith("over"):
+            return _total_price_for_side(True, _pick_line_value(pk), game_odds)
+        if pl.startswith("under"):
+            return _total_price_for_side(False, _pick_line_value(pk), game_odds)
+        return None
+    if bt in ("rl", "RL", "ALT RL"):
+        side = _resolve_pick_side(pk, home_abbr, away_abbr, "mlb")
+        if side not in ("home", "away"):
+            return None
+        return _spread_price_for_side(side, _pick_line_value(pk), game_odds)
+    if bt in ("nrfi", "1st INN"):
+        # NRFI = inning_totals.I1.under_odds; YRFI = .over_odds (no side
+        # ambiguity -- it's a yes/no market, not team-based).
+        i1 = (game_odds.get("inning_totals") or {}).get("I1") or {}
+        pku = pk.upper()
+        if pku == "NRFI":
+            return i1.get("under_odds")
+        if pku == "YRFI":
+            return i1.get("over_odds")
+        return None
+    if bt == "F5 ML":
+        side = _resolve_pick_side(pk, home_abbr, away_abbr, "mlb")
+        if side == "home":
+            return game_odds.get("f5_home_ml")
+        if side == "away":
+            return game_odds.get("f5_away_ml")
+        return None
+    if bt == "F5 O/U":
+        pl = pk.lower()
+        if pl.startswith("over"):
+            return _total_price_for_side(
+                True, _pick_line_value(pk), game_odds,
+                line_key="f5_over_under", over_key="f5_over_odds",
+                under_key="f5_under_odds", alt_key="f5_alt_totals")
+        if pl.startswith("under"):
+            return _total_price_for_side(
+                False, _pick_line_value(pk), game_odds,
+                line_key="f5_over_under", over_key="f5_over_odds",
+                under_key="f5_under_odds", alt_key="f5_alt_totals")
+        return None
+    if bt == "F5 RL":
+        side = _resolve_pick_side(pk, home_abbr, away_abbr, "mlb")
+        if side not in ("home", "away"):
+            return None
+        return _spread_price_for_side(
+            side, _pick_line_value(pk), game_odds,
+            home_key="f5_home_spread_point", away_key="f5_away_spread_point",
+            home_odds_key="f5_home_spread_odds", away_odds_key="f5_away_spread_odds",
+            alt_key="f5_alt_spreads")
+    return None
+
+
+def _nba_closing_for_bet_type(bet_type: str, pick: str, home_abbr: str,
+                               away_abbr: str, game_odds: dict) -> int | None:
+    """Pick out the right NBA price for the pick's bet_type. Covers both
+    Q1 markets (pick_of_day) and full-game markets (pick_of_day_full --
+    previously unhandled here at all, so full-game NBA POTDs never got
+    a closing_odds; added 2026-10-10 alongside the side-match fix).
+
+    2026-10-10: the old Q1_ML branch also read the FULL-GAME home_ml/
+    away_ml fields instead of q1_home_ml/q1_away_ml -- a second,
+    separate bug (wrong market, not wrong side) fixed in passing since
+    it's immediately adjacent to the side-match fix."""
     if not game_odds:
         return None
     bt = bet_type
     pk = pick or ""
     if bt == "Q1_ML":
-        return (game_odds.get("home_ml") if pk.startswith(home_abbr)
-                else game_odds.get("away_ml"))
+        side = _resolve_pick_side(pk, home_abbr, away_abbr, "nba")
+        if side == "home":
+            return game_odds.get("q1_home_ml")
+        if side == "away":
+            return game_odds.get("q1_away_ml")
+        return None
     if bt == "Q1_SPREAD":
-        pick_home = pk.startswith(home_abbr)
-        return (game_odds.get("q1_spread_home_odds") if pick_home
-                else game_odds.get("q1_spread_away_odds"))
+        side = _resolve_pick_side(pk, home_abbr, away_abbr, "nba")
+        if side not in ("home", "away"):
+            return None
+        pick_line = _pick_line_value(pk)
+        primary_point = game_odds.get("q1_spread")  # home-perspective; away = -point
+        primary_odds = game_odds.get(
+            "q1_spread_home_odds" if side == "home" else "q1_spread_away_odds")
+        if pick_line is None or primary_point is None:
+            return primary_odds
+        try:
+            side_point = float(primary_point) if side == "home" else -float(primary_point)
+            if abs(side_point - pick_line) < 0.01:
+                return primary_odds
+        except (TypeError, ValueError):
+            return primary_odds
+        for alt in (game_odds.get("q1_alt_spreads") or []):
+            point = alt.get("point")
+            if point is None:
+                continue
+            side_point = point if side == "home" else -point
+            if abs(float(side_point) - pick_line) < 0.01:
+                return alt.get("home_odds") if side == "home" else alt.get("away_odds")
+        return None
     if bt == "Q1_TOTAL":
-        return (game_odds.get("q1_over_odds") if "Over" in pk
-                else game_odds.get("q1_under_odds"))
+        pl = pk.lower()
+        if pl.startswith("over"):
+            return _total_price_for_side(
+                True, _pick_line_value(pk), game_odds,
+                line_key="q1_total", over_key="q1_over_odds",
+                under_key="q1_under_odds", alt_key="q1_alt_totals")
+        if pl.startswith("under"):
+            return _total_price_for_side(
+                False, _pick_line_value(pk), game_odds,
+                line_key="q1_total", over_key="q1_over_odds",
+                under_key="q1_under_odds", alt_key="q1_alt_totals")
+        return None
+    if bt == "ML":
+        side = _resolve_pick_side(pk, home_abbr, away_abbr, "nba")
+        if side == "home":
+            return game_odds.get("home_ml")
+        if side == "away":
+            return game_odds.get("away_ml")
+        return None
+    if bt == "SPREAD":
+        side = _resolve_pick_side(pk, home_abbr, away_abbr, "nba")
+        if side not in ("home", "away"):
+            return None
+        return _spread_price_for_side(side, _pick_line_value(pk), game_odds)
+    if bt == "TOTAL":
+        pl = pk.lower()
+        if pl.startswith("over"):
+            return _total_price_for_side(True, _pick_line_value(pk), game_odds)
+        if pl.startswith("under"):
+            return _total_price_for_side(False, _pick_line_value(pk), game_odds)
+        return None
     return None
 
 

@@ -25,7 +25,7 @@ def _fetch_espn_json(url: str) -> dict | None:
     for attempt in range(2):
         try:
             req = urllib.request.Request(url, headers={
-                "User-Agent": "Mozilla/5.0",
+                "User-Agent": "curl/8.4.0",
                 "Accept": "application/json",
             })
             with urllib.request.urlopen(req, timeout=10) as resp:

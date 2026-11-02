@@ -177,6 +177,28 @@ def record_live_pick(sport: str, pick: dict) -> int:
             p_analytical, p_gbm, p_state_mc,
         ),
     )
+    # Shadow-calibration stamp (WNBA, 2026-08-06): record the HONEST
+    # probability/edge at pick time — retro-applying a later fit would be
+    # lookahead. Powers the calibrated-gate paper stream (cal_edge >= 3%
+    # on SPREAD = the dig's one positive finding). Guarded: never breaks
+    # recording (older tables without the columns just skip).
+    # Shadow-calibration stamp — ALL sports (2026-08-06, extended from
+    # wnba-only). The shadow layer self-gates: an unfitted sport::bet_type
+    # returns None -> no stamp. Tables lacking the cal columns just raise
+    # into the except. Never breaks recording.
+    try:
+        from ..derivative_calibration import shadow as _shadow_cal
+        _c = _shadow_cal(sport, pick.get("tour"), bet_type,
+                         pick.get("model_prob"), pick.get("odds"))
+        if _c:
+            conn.execute(
+                f"UPDATE {tbl} SET cal_p = ?, cal_edge = ?, cal_mode = ? "
+                f"WHERE id = ?",
+                (_c.get("cal_p"), _c.get("cal_edge"), _c.get("mode"),
+                 cur.lastrowid),
+            )
+    except Exception:
+        pass
     conn.commit()
     new_id = cur.lastrowid
     logger.info(

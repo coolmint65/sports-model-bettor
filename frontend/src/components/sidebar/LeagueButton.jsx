@@ -1,7 +1,7 @@
 /**
  * LeagueButton — child button inside an expanded sidebar group.
  *
- * Every top-level sport (Basketball / Hockey / Soccer / Motorsports /
+ * Every top-level sport (Basketball / Hockey / Soccer /
  * Baseball) renders these under its expandable parent. Shared shell:
  * active-state highlight, off-season dim + "off" tag, per-league game
  * count badge, hover / focus rings.

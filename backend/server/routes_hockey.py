@@ -68,6 +68,78 @@ def _lock_hockey_live_pick(conn, d: dict, league: str) -> None:
     d["pick_locked"] = True
 
 
+
+
+def _hockey_card_wp(league, pred, odds):
+    """Card % = the Pick Authority's market blend of the model's home win with the de-vigged ML board
+    (Austin 2026-10-26 "Any percentages for any card in any sport, should be that way")."""
+    try:
+        from ._display_cal import market_card_wp
+        p = (pred or {}).get("ml_home")
+        if p is None:
+            p = (pred or {}).get("p_home")
+        return market_card_wp("hockey", league, p, (odds or {}).get("home_ml"), (odds or {}).get("away_ml"))
+    except Exception:
+        return None
+
+
+def _hockey_paper_picks(pred, odds, home_abbr, away_abbr):
+    """PAPER best-of ML/PUCK LINE/TOTAL from the RAW Poisson model (home/away expected goals + sigma),
+    tagged paper, never staked. Mirrors _football_paper_picks; margin/total derived from
+    home_expected/away_expected; puck line is the spread (home_spread_point, usually +/-1.5).
+    OFFSEASON-UNVERIFIED odds keys (NHL had 0 live games 2026-09). Austin 2026-09-18."""
+    import math
+    if not pred or not odds:
+        return []
+    def ncdf(x):
+        return 0.5 * (1 + math.erf(x / math.sqrt(2)))
+    def implied(o):
+        try:
+            o = float(o)
+        except (TypeError, ValueError):
+            return None
+        return (-o) / (-o + 100) if o < 0 else 100 / (o + 100)
+    he, ae = pred.get("home_expected"), pred.get("away_expected")
+    if he is not None and ae is not None:
+        pmargin, ptotal = he - ae, he + ae
+    else:
+        pmargin, ptotal = pred.get("expected_margin"), pred.get("expected_total")
+    sm, st = 2.0, 2.0  # goal-differential + goal-total std ~2 (no per-model std on pred)
+    out = []
+    p_home_ml = pred.get("p_home")
+    if p_home_ml is None:
+        p_home_ml = pred.get("mc_p_home")
+    if p_home_ml is not None and (odds.get("home_ml") is not None or odds.get("away_ml") is not None):
+        if p_home_ml >= 0.5:
+            side, prob, o = (home_abbr or "HOME"), p_home_ml, odds.get("home_ml")
+        else:
+            side, prob, o = (away_abbr or "AWAY"), 1 - p_home_ml, odds.get("away_ml")
+        imp = implied(o)
+        if o is not None and imp is not None:
+            out.append(dict(type="ML", market="ML", pick=side, line=None, prob=round(prob, 4),
+                            odds=o, edge=round((prob - imp) * 100, 1), paper=True, model_value=round(p_home_ml, 3)))
+    line = odds.get("over_under")
+    if ptotal is not None and line is not None and st > 0:
+        p_over = ncdf((ptotal - line) / st)
+        side, prob, o = ("Over", p_over, odds.get("over_odds")) if p_over >= 0.5 else ("Under", 1 - p_over, odds.get("under_odds"))
+        imp = implied(o)
+        if o is not None and imp is not None:
+            out.append(dict(type="TOTAL", market="TOTAL", pick=side, line=line, prob=round(prob, 4),
+                            odds=o, edge=round((prob - imp) * 100, 1), paper=True, model_value=round(ptotal, 1)))
+    hpt = odds.get("home_spread_point")
+    if pmargin is not None and hpt is not None and sm > 0:
+        p_home = ncdf((pmargin - (-hpt)) / sm)
+        if p_home >= 0.5:
+            side, prob, ln, o = (home_abbr or "HOME"), p_home, hpt, odds.get("home_spread_odds")
+        else:
+            side, prob, ln, o = (away_abbr or "AWAY"), 1 - p_home, odds.get("away_spread_point"), odds.get("away_spread_odds")
+        imp = implied(o)
+        if o is not None and imp is not None and ln is not None:
+            out.append(dict(type="PUCK_LINE", market="PUCK_LINE", pick=side, line=ln, prob=round(prob, 4),
+                            odds=o, edge=round((prob - imp) * 100, 1), paper=True, model_value=round(pmargin, 1)))
+    return out
+
+
 @router.get("/api/hockey/leagues")
 def api_hockey_leagues() -> dict:
     """Per-league metadata for the sidebar nav. Mirrors
@@ -128,8 +200,22 @@ def _count_today_games(league: str, today_str: str) -> int:
         return 0
 
 
+from backend.server._slate_cache import SlateCache
+_HOCKEY_CACHE = SlateCache("hockey")
+
+
 @router.get("/api/hockey/{league}/today")
 def api_hockey_today(league: str) -> dict:
+    from engine.hockey import HOCKEY_LEAGUE_REGISTRY
+    if league not in HOCKEY_LEAGUE_REGISTRY:
+        return {"error": f"unknown league {league!r}"}
+    if league == "nhl":
+        return {"error": "NHL uses /api/nhl/best-bets — don't route here"}
+    return _HOCKEY_CACHE.serve((league,), lambda: _compute_api_hockey_today(league),
+                               {"league": league, "games": [], "loading": True})
+
+
+def _compute_api_hockey_today(league: str) -> dict:
     """Today's slate for ``league`` with per-game predictions + HR odds.
 
     NHL goes through its existing /api/nhl/best-bets endpoint (heavy
@@ -274,10 +360,19 @@ def api_hockey_today(league: str) -> dict:
         best = picks[0] if picks else None
         d["prediction"] = pred
         d["odds"] = odds
+        d["card_win_prob"] = _hockey_card_wp(league, pred, odds)
         d["picks"] = [best] if best else []
         d["best_pick"] = best
+        try:  # card's best lean (Austin 2026-10-26) -- no proven-edge gate in these leagues yet
+            from engine.selection import select_lean as _select_lean
+            d["card_lean"] = _select_lean("hockey", league, picks)
+        except Exception:
+            d["card_lean"] = None
         # Lock the pre-puck-drop pick once the game flips to live.
         _lock_hockey_live_pick(conn, d, league)
+        d["paper_picks"] = _hockey_paper_picks(pred, odds, d.get("home_short"), d.get("away_short"))  # Austin 2026-09-18
+        from ._livefreeze import freeze_live_paper
+        freeze_live_paper(d, league)
         games.append(d)
 
     # Surface HR-only events (theScore lags behind on AHL playoff
@@ -375,8 +470,14 @@ def api_hockey_today(league: str) -> dict:
         best = picks_stub[0] if picks_stub else None
         stub["prediction"] = pred
         stub["odds"] = hr_odds
+        stub["card_win_prob"] = _hockey_card_wp(league, pred, hr_odds)
         stub["picks"] = [best] if best else []
         stub["best_pick"] = best
+        try:
+            from engine.selection import select_lean as _select_lean
+            stub["card_lean"] = _select_lean("hockey", league, picks_stub)
+        except Exception:
+            stub["card_lean"] = None
         games.append(stub)
 
     cfg = HOCKEY_LEAGUE_REGISTRY[league]
@@ -624,7 +725,8 @@ def api_hockey_potd(league: str) -> dict:
     if potd:
         return potd
     if bets:
-        potd = get_or_create_potd(league, bets, view="q1")
+        potd = get_or_create_potd(league, bets, view="q1",
+                                  db_sport="hockey", league=league)
         return potd or {"message": "No qualifying picks today",
                           "sport": league}
     return {"message": "No slate available", "sport": league}

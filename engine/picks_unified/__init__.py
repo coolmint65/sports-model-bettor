@@ -26,6 +26,7 @@ from ._game_key import GameKey
 from ._recorder import record_pick, record_picks
 from ._settler import settle_pending, settle_pick
 from ._reader import list_picks, get_summary, get_pick_by_id
+from ._shadow_slate import record_shadow_slate
 
 __all__ = [
     "Pick", "Scope", "Variant", "Result",
@@ -33,4 +34,5 @@ __all__ = [
     "record_pick", "record_picks",
     "settle_pending", "settle_pick",
     "list_picks", "get_summary", "get_pick_by_id",
+    "record_shadow_slate",
 ]

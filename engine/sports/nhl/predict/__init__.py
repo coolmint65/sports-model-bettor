@@ -11,7 +11,7 @@ faceoff dominance, form, and home/away splits.
 
 import math
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from ....data import load_team, list_teams, get_league_averages
 from ...._tz import et_today_str
 
@@ -657,8 +657,11 @@ _live_stats_cache: dict | None = None
 _live_stats_time: float = 0
 _club_stats_cache: dict = {}   # Per-team club stats (PP%, PK%, SV%, shots, faceoff)
 _club_stats_time: float = 0
-_b2b_cache: dict = {}
-_b2b_cache_time: float = 0
+# NOTE: the old ESPN-scoreboard-backed _b2b_cache/_b2b_cache_time (keyed
+# only by team_abbr, valid for a single wall-clock "today") was removed
+# 2026-09-30 along with the ESPN fetch in _check_back_to_back -- see that
+# function's docstring. B2B is now a cheap local-DB lookup keyed by the
+# game's own date, so no separate cache is needed.
 
 
 # NHL franchise team IDs used by the club-stats endpoint
@@ -857,91 +860,128 @@ def _ensure_club_stats_loaded() -> None:
     _club_stats_time = _time.time()
 
 
-def _check_back_to_back(team_abbr: str) -> float:
-    """Check if team played yesterday or recently. Returns xG multiplier.
+def _resolve_b2b_date(game_date) -> date:
+    """Normalize `game_date` to the ET calendar date used for back-to-back
+    lookups.
 
-    Back-to-back: 0.95 (5% penalty)
-    3-in-4 nights: 0.97 (3% penalty)
-    Rest advantage (2+ days off): 1.02 (2% bonus)
+    Accepts a `date`, a `datetime`, an ESPN-style UTC ISO string (e.g.
+    '2026-10-05T00:00Z'), a plain 'YYYY-MM-DD' string (already ET -- e.g.
+    our own nhl_games.date column), or None (defaults to today).
+
+    A tz-aware value is converted to US/Eastern before the date portion is
+    taken, so a 10pm ET game -- stored as an early-UTC-next-day timestamp
+    -- resolves to the correct calendar night. Mirrors
+    routes_nhl._et_game_date. Never raises: any unparseable input falls
+    back to today.
     """
-    import time as _time
-    global _b2b_cache, _b2b_cache_time
+    if game_date is None:
+        return datetime.now().date()
+    if isinstance(game_date, datetime):
+        dt = game_date
+        if dt.tzinfo is not None:
+            try:
+                from zoneinfo import ZoneInfo
+                dt = dt.astimezone(ZoneInfo("America/New_York"))
+            except Exception:
+                pass
+        return dt.date()
+    if isinstance(game_date, date):
+        return game_date
+    if isinstance(game_date, str):
+        s = game_date.strip()
+        if not s:
+            return datetime.now().date()
+        if "T" not in s:
+            # Plain YYYY-MM-DD -- already an ET calendar date.
+            try:
+                return datetime.strptime(s[:10], "%Y-%m-%d").date()
+            except ValueError:
+                return datetime.now().date()
+        try:
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            if dt.tzinfo is not None:
+                try:
+                    from zoneinfo import ZoneInfo
+                    dt = dt.astimezone(ZoneInfo("America/New_York"))
+                except Exception:
+                    pass
+            return dt.date()
+        except ValueError:
+            return datetime.now().date()
+    return datetime.now().date()
 
+
+def _check_back_to_back(team_abbr: str, game_date=None) -> float:
+    """Rest/fatigue xG multiplier for `team_abbr` entering `game_date`.
+
+    FIXED 2026-09-30: this used to check ESPN's scoreboard for
+    wall-clock today-1 / today-2 on every call, so on the 7-day-lookahead
+    best-bets board every FUTURE game of a team that had played recently
+    got badged B2B regardless of how many days actually separated that
+    recent game from the game being scored (e.g. FLA @ ANA on 10/4 showed
+    away_b2b=True off FLA's most recent game even though that game was
+    10/1 -- three days earlier). Now evaluated against the LOCAL schedule
+    (nhl_games) relative to `game_date` itself, not whenever the
+    prediction happens to run. The date window intentionally includes
+    scheduled/live games (not just 'final') -- on a lookahead board both
+    the target game and its "prior" games within the window are usually
+    still unplayed at prediction time, and the fixture date is already
+    known.
+
+    `game_date` may be a date/datetime/ISO-or-YYYY-MM-DD string. None
+    (default) evaluates against today, preserving pre-fix callers.
+
+    Back-to-back (played the calendar day before): 0.95 (5% penalty)
+    3-in-4 nights (2+ games in the prior 3 days): 0.97 (3% penalty)
+    Rest advantage (nearest prior game >=2 days back): 1.02 (2% bonus)
+    No prior game in the 4-day lookback window (e.g. season opener): 1.0
+    """
     if _BACKTEST_MODE:
         return 1.0
 
-    # Cache the yesterday + day-before scoreboard for 30 min
-    if _b2b_cache and (_time.time() - _b2b_cache_time) < 1800:
-        return _b2b_cache.get(team_abbr, 1.0)
-
-    import json
-    import urllib.error
-    import urllib.request
-
     try:
-        today = datetime.now().date()
-        teams_yesterday: set[str] = set()
-        teams_day_before: set[str] = set()
+        gdate = _resolve_b2b_date(game_date)
 
-        for days_ago, target_set in [(1, teams_yesterday), (2, teams_day_before)]:
-            check_date = today - timedelta(days=days_ago)
-            espn_date = check_date.strftime("%Y%m%d")
-            url = (
-                "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl"
-                f"/scoreboard?dates={espn_date}"
-            )
-            req = urllib.request.Request(url, headers={
-                "User-Agent": "Mozilla/5.0",
-                "Accept": "application/json",
-            })
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode())
+        from ..db import get_conn, get_nhl_team_by_abbr
 
-            for event in data.get("events", []):
-                for comp in event.get("competitions", []):
-                    for team_entry in comp.get("competitors", []):
-                        t = team_entry.get("team", {})
-                        abbr = t.get("abbreviation", "")
-                        if abbr:
-                            target_set.add(abbr)
+        team = get_nhl_team_by_abbr(team_abbr)
+        if not team:
+            return 1.0
+        team_id = team["id"]
 
-        # Build multiplier map for all teams
-        result: dict[str, float] = {}
-        all_abbrs = teams_yesterday | teams_day_before
-        for abbr in all_abbrs:
-            if abbr in teams_yesterday:
-                # Played yesterday = back-to-back
-                result[abbr] = 0.95
-            elif abbr in teams_day_before:
-                # Played 2 days ago but not yesterday -- check 3-in-4
-                # If they also played yesterday that's already caught above.
-                # 3-in-4 is approximated as: played day-before but not yesterday
-                # (a lighter fatigue signal).
-                pass  # No penalty -- 1 day rest is normal in NHL
+        conn = get_conn()
+        gdate_s = gdate.isoformat()
+        window_start_s = (gdate - timedelta(days=4)).isoformat()
+        rows = conn.execute(
+            "SELECT date FROM nhl_games "
+            "WHERE (home_team_id = ? OR away_team_id = ?) "
+            "  AND date < ? AND date >= ? "
+            "ORDER BY date DESC",
+            (team_id, team_id, gdate_s, window_start_s),
+        ).fetchall()
+        if not rows:
+            return 1.0  # No prior game in the window -- neutral (e.g. season opener)
 
-        # 3-in-4: played both yesterday AND day-before-yesterday
-        for abbr in teams_yesterday & teams_day_before:
-            result[abbr] = 0.95  # Already penalized as b2b, keep same
+        gaps = []
+        for r in rows:
+            try:
+                gaps.append((gdate - _resolve_b2b_date(r[0])).days)
+            except Exception:
+                continue
+        if not gaps:
+            return 1.0
 
-        # Rest advantage: didn't play in either of the last 2 days
-        # We only know about teams that DID play; for any team not in either
-        # set, they've had 2+ days off.  We'll store a positive factor.
-        # But we can only do this for teams we know about -- live standings
-        # gives us all abbreviations.
-        try:
-            live_stats = _get_live_team_stats()
-            for abbr in live_stats:
-                if abbr not in teams_yesterday and abbr not in teams_day_before:
-                    result[abbr] = 1.02  # 2% rest bonus
-        except Exception:
-            pass
+        nearest_gap = min(gaps)
+        if nearest_gap <= 1:
+            return 0.95  # back-to-back
+        if sum(1 for g in gaps if g <= 3) >= 2:
+            return 0.97  # 3-in-4
+        if nearest_gap >= 2:
+            return 1.02  # rest advantage
+        return 1.0
 
-        _b2b_cache = result
-        _b2b_cache_time = _time.time()
-        return result.get(team_abbr, 1.0)
-
-    except (urllib.error.URLError, json.JSONDecodeError, KeyError, OSError) as e:
-        logger.debug("Back-to-back check failed: %s", e)
+    except Exception as e:
+        logger.debug("Back-to-back check failed for %s: %s", team_abbr, e)
         return 1.0
 
 
@@ -1049,7 +1089,8 @@ def _build_factors_with_ranks(home, away, hs, as_,
 def predict_matchup(home_key: str, away_key: str,
                     home_goalie_id: int | None = None,
                     away_goalie_id: int | None = None,
-                    backtest: bool = False) -> dict | None:
+                    backtest: bool = False,
+                    game_date=None) -> dict | None:
     """
     Run full NHL matchup prediction.
 
@@ -1058,6 +1099,12 @@ def predict_matchup(home_key: str, away_key: str,
         away_key: team JSON file stem (e.g. "maple_leafs")
         home_goalie_id: optional starting goalie ID for home team
         away_goalie_id: optional starting goalie ID for away team
+        game_date: the actual game's date (date/datetime/ISO or
+            YYYY-MM-DD string). Threaded into the back-to-back/rest
+            check so it's judged relative to THIS game rather than
+            wall-clock today -- matters on the 7-day-lookahead board,
+            which predicts future-dated games. None (default) evaluates
+            against today, same as before this parameter existed.
 
     Returns prediction dict or None on failure.
     """
@@ -1070,17 +1117,66 @@ def predict_matchup(home_key: str, away_key: str,
     if backtest:
         _BACKTEST_MODE = True
     try:
-        return _predict_matchup_inner(home_key, away_key,
-                                       home_goalie_id, away_goalie_id,
-                                       backtest=backtest)
+        result = _predict_matchup_inner(home_key, away_key,
+                                         home_goalie_id, away_goalie_id,
+                                         backtest=backtest, game_date=game_date)
     finally:
         _BACKTEST_MODE = _prev_backtest_mode
+    if result and not backtest:
+        result = _apply_ratings(result, game_date)
+    return result
+
+
+# Market-facing fields the ratings model owns (MintyBot 2026-10-26). The factor model above
+# still supplies the display context (records, rest, injuries, goalies, factors, h2h).
+_RATINGS_KEYS = ("expected_score", "total", "spread", "win_prob", "regulation",
+                 "regulation_draw_prob", "regulation_tie_prob", "puck_line", "spread_cover",
+                 "margin_probs", "total_probs", "over_under", "periods", "first_period",
+                 "correct_scores", "dist", "ratings")
+
+
+def _apply_ratings(result: dict, game_date=None) -> dict:
+    """Price every NHL market off engine.sports.nhl._ratings (config NHL_MODEL="ratings").
+
+    The factor model's own market numbers were unusable (home-win .23-.69, totals 3-18 goals;
+    October 2026 moneyline log-loss .70 vs .656 for the ratings model and .650 for the DK
+    close), so they are kept only under ``factor_model`` for reference. If the ratings model
+    can't price the game, ``model`` stays "factor" and the pickers emit nothing for it."""
+    try:
+        from ....config import NHL_MODEL
+    except Exception:
+        NHL_MODEL = "ratings"
+    if NHL_MODEL != "ratings":
+        return result
+    home = (result.get("home") or {}).get("abbreviation")
+    away = (result.get("away") or {}).get("abbreviation")
+    try:
+        from .._ratings import predict as _ratings_predict
+        r = _ratings_predict(home, away, game_date)
+    except Exception as e:
+        logger.warning("NHL ratings predict failed for %s @ %s: %s", away, home, e)
+        r = None
+    if not r:
+        result["model"] = "factor"
+        return result
+    result["factor_model"] = {k: result.get(k) for k in ("win_prob", "total", "expected_score")}
+    for k in _RATINGS_KEYS:
+        result[k] = r[k]
+    result["model"] = "ratings"
+    try:
+        result["confidence"] = _nhl_prediction_confidence(
+            (result.get("home") or {}).get("record", ""), (result.get("away") or {}).get("record", ""),
+            r["win_prob"]["home"], r["win_prob"]["away"])
+    except Exception:
+        pass
+    return result
 
 
 def _predict_matchup_inner(home_key: str, away_key: str,
                             home_goalie_id: int | None = None,
                             away_goalie_id: int | None = None,
-                            backtest: bool = False) -> dict | None:
+                            backtest: bool = False,
+                            game_date=None) -> dict | None:
     home = load_team(LEAGUE, home_key)
     away = load_team(LEAGUE, away_key)
     if not home or not away:
@@ -1534,18 +1630,25 @@ def _predict_matchup_inner(home_key: str, away_key: str,
     h_b2b = 1.0
     a_b2b = 1.0
     if h_abbr_b2b and not backtest:
-        h_b2b = _check_back_to_back(h_abbr_b2b)
+        h_b2b = _check_back_to_back(h_abbr_b2b, game_date=game_date)
         home_xg *= h_b2b
         if h_b2b < 1.0:
             # Tired team also concedes more
             away_xg *= (1 + (1 - h_b2b) * 0.5)
     if a_abbr_b2b and not backtest:
-        a_b2b = _check_back_to_back(a_abbr_b2b)
+        a_b2b = _check_back_to_back(a_abbr_b2b, game_date=game_date)
         away_xg *= a_b2b
         if a_b2b < 1.0:
             home_xg *= (1 + (1 - a_b2b) * 0.5)
 
     # Store rest/fatigue info for display
+    # home_rest_tier / away_rest_tier (added 2026-10-22, MintyBot): the UI badges
+    # ANY fatigue state as "B2B", even when the real signal is "3 games in 4
+    # nights" (0.97 factor) rather than a true back-to-back (0.95 factor). These
+    # string tiers let the frontend show the correct label without touching the
+    # xG adjustment math above. 'rested' also covers the neutral/no-prior-game
+    # case (factor==1.0) but that's harmless -- callers only consult the tier
+    # when home_b2b/away_b2b is already true.
     rest_data = {
         "home_b2b": h_b2b < 1.0,
         "away_b2b": a_b2b < 1.0,
@@ -1553,6 +1656,8 @@ def _predict_matchup_inner(home_key: str, away_key: str,
         "away_rest_advantage": a_b2b > 1.0,
         "home_factor": round(h_b2b, 4),
         "away_factor": round(a_b2b, 4),
+        "home_rest_tier": ('b2b' if h_b2b <= 0.96 else ('3in4' if h_b2b < 1.0 else 'rested')),
+        "away_rest_tier": ('b2b' if a_b2b <= 0.96 else ('3in4' if a_b2b < 1.0 else 'rested')),
     }
 
     # ── Granular factors (Factors 1-12) ──────────────────────────
@@ -1847,6 +1952,8 @@ def _predict_matchup_inner(home_key: str, away_key: str,
     # sweet spot instead of clipping it flat.
     from ....config import NHL_WIN_PROB_FLOOR, NHL_WIN_PROB_CAP
     from ....win_prob import compress_win_prob
+    _p_home_ml_raw = p_home_ml   # pre-compression win; anchors the PL re-scale below
+    _p_away_ml_raw = p_away_ml
     p_home_ml = compress_win_prob(p_home_ml, NHL_WIN_PROB_FLOOR, NHL_WIN_PROB_CAP)
     p_away_ml = 1.0 - p_home_ml
 
@@ -1904,6 +2011,21 @@ def _predict_matchup_inner(home_key: str, away_key: str,
             granular_data["away_blowout_pl_adj"] = round(blowout_adj, 4)
     except Exception as e:
         logger.debug("Factor 8 puck line adjustment failed: %s", e)
+
+    # Re-anchor the puck line to the COMPRESSED win prob (Austin 2026-10-08).
+    # p_home_ml is compressed toward 0.5 to tame overconfidence, but -1.5 was
+    # left on the raw uncompressed matrix, so P(-1.5) could EXCEED P(win) --
+    # impossible (winning by 2+ is a subset of winning; the OTT -1.5 0.76 vs
+    # 0.68-win ghost). Express -1.5 as the raw conditional P(by2+ | win) and
+    # scale by the compressed win prob so the two stay consistent and the
+    # invariant P(-1.5) <= P(win) holds for every game. Legit -1.5s (ratio well
+    # below 1) barely move; only the impossible ones get pulled back.
+    _rh = min(1.0, p_home_m15 / _p_home_ml_raw) if _p_home_ml_raw > 1e-9 else 0.0
+    _ra = min(1.0, p_away_m15 / _p_away_ml_raw) if _p_away_ml_raw > 1e-9 else 0.0
+    p_home_m15 = p_home_ml * _rh
+    p_away_m15 = p_away_ml * _ra
+    p_away_p15 = 1.0 - p_home_m15
+    p_home_p15 = 1.0 - p_away_m15
 
     # Clamp puck line probabilities to valid range
     p_home_m15 = max(0.0, min(1.0, p_home_m15))
